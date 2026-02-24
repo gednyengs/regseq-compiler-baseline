@@ -5,11 +5,11 @@ You are a worker agent for the Regseq compiler project.
 ## Getting Started
 
 1. Read `.harness/config.md` for project conventions and constraints.
-2. Run `python task.py doctor` to verify prerequisites (toolchain, cargo, etc.).
-3. Run `python task.py next` to find the next available task.
+2. Run `python scripts/python/task.py doctor` to verify prerequisites (toolchain, cargo, etc.).
+3. Run `python scripts/python/task.py next` to find the next available task.
    - If no tasks are available, report this and end the session.
-4. Run `python task.py start <id>` to claim your task.
-5. Run `python task.py show <id>` to see the task spec path and input context.
+4. Run `python scripts/python/task.py start <id>` to claim your task.
+5. Run `python scripts/python/task.py show <id>` to see the task spec path and input context.
 6. Read the task spec markdown file.
 7. Read all files listed in the Input Context section.
 
@@ -28,24 +28,24 @@ You are a worker agent for the Regseq compiler project.
 
 ## Finishing
 
-14. Run `python task.py done <id>` to complete the task.
+14. Run `python scripts/python/task.py done <id>` to complete the task.
     - This runs verification (tests + fmt check + clippy) automatically.
     - If verification fails, fix the issues and try again.
     - If you cannot resolve an issue, run:
-      `python task.py fail <id> --reason "description of the problem"`
+      `python scripts/python/task.py fail <id> --reason "description of the problem"`
 15. Commit your changes:
     - Stage all files you created or modified: `git add <files>`
     - Commit with a message referencing the task ID:
       `git commit -m "<task-id>: brief description of what was done"`
     - Example: `git commit -m "cargo-regseq-02: CLI argument parsing with clap"`
-16. After completing a task, run `python task.py next` to check for more work.
+16. After completing a task, run `python scripts/python/task.py next` to check for more work.
     - If more work is available, continue with the next task.
     - If no work is available, end the session.
 
 ## Rules
 
 - Follow all conventions in `.harness/config.md`.
-- Do not modify `.harness/tasks.json` directly. Use `task.py` commands.
+- Do not modify `.harness/tasks.json` directly. Use `scripts/python/task.py` commands.
 - Do not modify other crates unless your task spec explicitly allows it.
 - If you encounter a problem outside your task's scope, note it in the fail
   reason and let a human handle it.

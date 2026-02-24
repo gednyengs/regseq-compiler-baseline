@@ -2,15 +2,15 @@
 """Regseq compiler harness -- task management CLI.
 
 Usage:
-    python task.py next                     Find next available task
-    python task.py show <id>                Show task details
-    python task.py start <id>               Mark task as in_progress
-    python task.py done <id>                Run verification and mark done
-    python task.py fail <id> --reason "…"   Mark task as failed
-    python task.py status                   Show summary table
-    python task.py list [--status <s>]      List tasks with optional filter
-    python task.py blocked                  Show tasks with unmet dependencies
-    python task.py doctor                   Check prerequisites
+    python scripts/python/task.py next                     Find next available task
+    python scripts/python/task.py show <id>                Show task details
+    python scripts/python/task.py start <id>               Mark task as in_progress
+    python scripts/python/task.py done <id>                Run verification and mark done
+    python scripts/python/task.py fail <id> --reason "…"   Mark task as failed
+    python scripts/python/task.py status                   Show summary table
+    python scripts/python/task.py list [--status <s>]      List tasks with optional filter
+    python scripts/python/task.py blocked                  Show tasks with unmet dependencies
+    python scripts/python/task.py doctor                   Check prerequisites
 """
 
 import argparse
@@ -24,7 +24,7 @@ import tomllib
 from datetime import datetime, timezone
 from pathlib import Path
 
-REPO_ROOT = Path(__file__).parent
+REPO_ROOT = Path(__file__).parent.parent.parent
 TASKS_FILE = REPO_ROOT / ".harness" / "tasks.json"
 LOGS_DIR = REPO_ROOT / "logs" / "verify"
 TAIL_LINES = 50
@@ -93,7 +93,7 @@ def cmd_next(args: argparse.Namespace) -> None:
         if task["status"] == "pending" and deps_met(task, status_map):
             print(f"NEXT_TASK: {task['id']}")
             print(f"SPEC: {task['spec']}")
-            print(f"ACTION: Run `python task.py start {task['id']}` then read the spec file.")
+            print(f"ACTION: Run `python scripts/python/task.py start {task['id']}` then read the spec file.")
             return
 
     print("NO_TASKS_AVAILABLE: All pending tasks have unmet dependencies or all tasks are done.")
@@ -112,7 +112,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     result = find_task(data, args.id)
     if result is None:
         print(f"ERROR: Task '{args.id}' not found.")
-        print("ACTION: Run `python task.py list` to see available task IDs.")
+        print("ACTION: Run `python scripts/python/task.py list` to see available task IDs.")
         sys.exit(1)
 
     group, task = result
@@ -137,7 +137,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     result = find_task(data, args.id)
     if result is None:
         print(f"ERROR: Task '{args.id}' not found.")
-        print("ACTION: Run `python task.py list` to see available task IDs.")
+        print("ACTION: Run `python scripts/python/task.py list` to see available task IDs.")
         sys.exit(1)
 
     _, task = result
@@ -153,7 +153,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         print(f"ERROR: Cannot start '{args.id}'. Dependencies not met.")
         for d in unmet:
             print(f"  - {d} [{status_map.get(d, 'unknown')}]")
-        print("ACTION: Run `python task.py next` to find a task with all dependencies met.")
+        print("ACTION: Run `python scripts/python/task.py next` to find a task with all dependencies met.")
         sys.exit(1)
 
     task["status"] = "in_progress"
@@ -316,10 +316,10 @@ def cmd_done(args: argparse.Namespace) -> None:
         task["fail_reason"] = None
         save_tasks(data)
         print(f"DONE: {args.id}")
-        print("ACTION: Run `python task.py next` for your next task, or end session if none.")
+        print("ACTION: Run `python scripts/python/task.py next` for your next task, or end session if none.")
     else:
         print(f"BLOCKED: {args.id} -- verification failed.")
-        print("ACTION: Fix the failing checks and run `python task.py done " + args.id + "` again.")
+        print("ACTION: Fix the failing checks and run `python scripts/python/task.py done " + args.id + "` again.")
 
 
 def cmd_fail(args: argparse.Namespace) -> None:
@@ -396,7 +396,7 @@ def cmd_blocked(args: argparse.Namespace) -> None:
 
     if not blocked:
         print("NO_BLOCKED_TASKS: All pending tasks have their dependencies met.")
-        print("ACTION: Run `python task.py next` to find available work.")
+        print("ACTION: Run `python scripts/python/task.py next` to find available work.")
         return
 
     print("BLOCKED_TASKS:")

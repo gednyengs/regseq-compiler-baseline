@@ -33,7 +33,7 @@ The workspace contains 8 crates. See each crate's `README.md` for its purpose:
 - Define public API signatures (with `todo!()` bodies) first, then write tests
   against them, then implement. This ensures tests compile before implementation.
 - Run `cargo test -p <crate>` after changes to verify your work.
-- Verification on `task.py done` runs three checks in order:
+- Verification on `scripts/python/task.py done` runs three checks in order:
   1. `cargo test --workspace` -- all tests must pass
   2. `cargo fmt --check --workspace` -- code must be formatted
   3. `cargo clippy --workspace -- -D warnings` -- no clippy warnings
