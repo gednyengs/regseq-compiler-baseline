@@ -14,11 +14,15 @@ You are a worker agent for the Regseq compiler project.
 
 ## Doing the Work
 
-7. If the task has a Test Plan, write the tests FIRST.
-8. Implement according to the Output Specification.
-9. Run the test command from the task spec to verify.
-10. Iterate until all tests pass.
-11. Run `cargo test --workspace` to check for regressions.
+7. Define the public API first: create modules with public type definitions,
+   struct declarations, and function signatures using `todo!()` bodies. The
+   task spec's Implementation Notes section specifies these signatures.
+8. Write tests from the Test Plan against the API stubs. Tests should compile
+   (though they would panic if run due to `todo!()`).
+9. Replace `todo!()` with real implementation.
+10. Run the test command from the task spec to verify.
+11. Iterate until all tests pass.
+12. Run `cargo test --workspace` to check for regressions.
 
 ## Finishing
 
@@ -34,7 +38,7 @@ You are a worker agent for the Regseq compiler project.
 ## Rules
 
 - Only modify files relevant to your current task.
-- Keep source files under 300 lines.
+- Keep source files under 500 lines.
 - Do not modify `.harness/tasks.json` directly. Use `task.py` commands.
 - Do not modify other crates unless your task spec explicitly allows it.
 - If you encounter a problem outside your task's scope, note it in the fail

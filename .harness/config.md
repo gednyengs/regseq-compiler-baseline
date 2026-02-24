@@ -29,7 +29,8 @@ The workspace contains 8 crates. See each crate's `README.md` for its purpose:
 ## Testing Requirements
 
 - Every new public function or type must have at least one test.
-- Write tests BEFORE implementation when the task spec provides a test plan.
+- Define public API signatures (with `todo!()` bodies) first, then write tests
+  against them, then implement. This ensures tests compile before implementation.
 - Run `cargo test -p <crate>` after changes to verify your work.
 - Run `cargo test --workspace` before marking a task done to check for regressions.
 - Run `cargo clippy --workspace` before marking a task done.
