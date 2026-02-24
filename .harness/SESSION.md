@@ -31,7 +31,12 @@ You are a worker agent for the Regseq compiler project.
     - If verification fails, fix the issues and try again.
     - If you cannot resolve an issue, run:
       `python task.py fail <id> --reason "description of the problem"`
-13. After completing a task, run `python task.py next` to check for more work.
+13. Commit your changes:
+    - Stage all files you created or modified: `git add <files>`
+    - Commit with a message referencing the task ID:
+      `git commit -m "<task-id>: brief description of what was done"`
+    - Example: `git commit -m "cargo-regseq-02: CLI argument parsing with clap"`
+14. After completing a task, run `python task.py next` to check for more work.
     - If more work is available, continue with the next task.
     - If no work is available, end the session.
 
