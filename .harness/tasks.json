@@ -1,0 +1,53 @@
+{
+  "groups": [
+    {
+      "id": "cargo-regseq",
+      "name": "cargo-regseq CLI",
+      "tasks": [
+        {
+          "id": "cargo-regseq-01",
+          "name": "Crate initialization",
+          "spec": ".harness/tasks/cargo-regseq/01-crate-init.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "cargo-regseq-02",
+          "name": "CLI argument parsing",
+          "spec": ".harness/tasks/cargo-regseq/02-cli-args.md",
+          "status": "pending",
+          "depends_on": [
+            "cargo-regseq-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "cargo-regseq-03",
+          "name": "Toolchain and sysroot detection",
+          "spec": ".harness/tasks/cargo-regseq/03-toolchain-detection.md",
+          "status": "pending",
+          "depends_on": [
+            "cargo-regseq-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "cargo-regseq-04",
+          "name": "Cargo invocation with RUSTC_WRAPPER",
+          "spec": ".harness/tasks/cargo-regseq/04-cargo-invocation.md",
+          "status": "pending",
+          "depends_on": [
+            "cargo-regseq-02",
+            "cargo-regseq-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
+    }
+  ]
+}
