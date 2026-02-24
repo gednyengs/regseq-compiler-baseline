@@ -10,15 +10,24 @@ Usage:
     python task.py status                   Show summary table
     python task.py list [--status <s>]      List tasks with optional filter
     python task.py blocked                  Show tasks with unmet dependencies
+    python task.py doctor                   Check prerequisites
 """
 
 import argparse
 import json
+import os
+import shutil
 import subprocess
 import sys
+import tempfile
+import tomllib
+from datetime import datetime, timezone
 from pathlib import Path
 
-TASKS_FILE = Path(__file__).parent / ".harness" / "tasks.json"
+REPO_ROOT = Path(__file__).parent
+TASKS_FILE = REPO_ROOT / ".harness" / "tasks.json"
+LOGS_DIR = REPO_ROOT / "logs" / "verify"
+TAIL_LINES = 50
 
 
 def load_tasks() -> dict:
@@ -27,9 +36,22 @@ def load_tasks() -> dict:
 
 
 def save_tasks(data: dict) -> None:
-    with open(TASKS_FILE, "w") as f:
-        json.dump(data, f, indent=2)
-        f.write("\n")
+    """Write tasks atomically: write to temp file then os.replace()."""
+    tmp_fd, tmp_path = tempfile.mkstemp(
+        dir=TASKS_FILE.parent, suffix=".tmp", prefix="tasks-"
+    )
+    try:
+        with os.fdopen(tmp_fd, "w") as f:
+            json.dump(data, f, indent=2)
+            f.write("\n")
+        os.replace(tmp_path, TASKS_FILE)
+    except BaseException:
+        # Clean up temp file on any failure (including KeyboardInterrupt)
+        try:
+            os.unlink(tmp_path)
+        except OSError:
+            pass
+        raise
 
 
 def find_task(data: dict, task_id: str) -> tuple[dict, dict] | None:
@@ -80,7 +102,8 @@ def cmd_next(args: argparse.Namespace) -> None:
         print("BLOCKED_TASKS:")
         for t in blocked:
             unmet = [d for d in t.get("depends_on", []) if status_map.get(d) != "done"]
-            print(f"  - {t['id']} (blocked by: {', '.join(f'{d} [{status_map.get(d, 'unknown')}]' for d in unmet)})")
+            unmet_strs = [f"{d} [{status_map.get(d, 'unknown')}]" for d in unmet]
+            print(f"  - {t['id']} (blocked by: {', '.join(unmet_strs)})")
     print("ACTION: End session. No work available.")
 
 
@@ -140,50 +163,132 @@ def cmd_start(args: argparse.Namespace) -> None:
     print(f"ACTION: Read {task['spec']} for your task specification.")
 
 
-def run_verification() -> tuple[bool, list[str]]:
-    """Run cargo test and clippy. Return (passed, messages)."""
+def workspace_has_members() -> bool:
+    """Use cargo metadata to check if workspace has at least one package."""
+    try:
+        result = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+            capture_output=True, text=True, timeout=30, cwd=REPO_ROOT
+        )
+        if result.returncode != 0:
+            return False
+        metadata = json.loads(result.stdout)
+        return len(metadata.get("packages", [])) > 0
+    except (subprocess.TimeoutExpired, json.JSONDecodeError, FileNotFoundError):
+        return False
+
+
+def tail_lines(text: str, n: int) -> list[str]:
+    """Return last n non-empty lines of text."""
+    lines = text.strip().split("\n")
+    return lines[-n:]
+
+
+def persist_log(task_id: str, entries: list[dict]) -> Path:
+    """Write full verification log and return its path."""
+    LOGS_DIR.mkdir(parents=True, exist_ok=True)
+    ts = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
+    log_path = LOGS_DIR / f"{task_id}-{ts}.log"
+    with open(log_path, "w") as f:
+        for entry in entries:
+            f.write(f"=== {entry['command']} ===\n")
+            f.write(f"exit_code: {entry['exit_code']}\n")
+            f.write(f"cwd: {entry.get('cwd', 'N/A')}\n\n")
+            if entry.get("stdout"):
+                f.write("--- stdout ---\n")
+                f.write(entry["stdout"])
+                f.write("\n")
+            if entry.get("stderr"):
+                f.write("--- stderr ---\n")
+                f.write(entry["stderr"])
+                f.write("\n")
+            f.write("\n")
+    return log_path
+
+
+def run_step(cmd: list[str], label: str) -> dict:
+    """Run a verification step and return structured result."""
+    result = subprocess.run(
+        cmd, capture_output=True, text=True, timeout=300, cwd=REPO_ROOT
+    )
+    return {
+        "command": label,
+        "cmd": cmd,
+        "exit_code": result.returncode,
+        "stdout": result.stdout,
+        "stderr": result.stderr,
+        "cwd": str(REPO_ROOT),
+        "passed": result.returncode == 0,
+    }
+
+
+def format_failure(step: dict) -> list[str]:
+    """Format a failed verification step for console output."""
+    lines = []
+    lines.append(f"  EXIT_CODE: {step['exit_code']}")
+    stdout_tail = tail_lines(step["stdout"], TAIL_LINES) if step["stdout"].strip() else []
+    stderr_tail = tail_lines(step["stderr"], TAIL_LINES) if step["stderr"].strip() else []
+    if stdout_tail:
+        lines.append("  --- stdout (last lines) ---")
+        for line in stdout_tail:
+            lines.append(f"  {line}")
+    if stderr_tail:
+        lines.append("  --- stderr (last lines) ---")
+        for line in stderr_tail:
+            lines.append(f"  {line}")
+    return lines
+
+
+def run_verification(task_id: str) -> tuple[bool, list[str]]:
+    """Run cargo test, fmt check, and clippy. Return (passed, messages)."""
     messages = []
     passed = True
+    log_entries = []
 
-    # Check if workspace has any members
-    try:
-        with open("Cargo.toml") as f:
-            content = f.read()
-        if 'members = []' in content:
-            messages.append("VERIFICATION: Workspace has no members. Skipping cargo checks.")
-            return True, messages
-    except FileNotFoundError:
-        messages.append("VERIFICATION: No Cargo.toml found. Skipping cargo checks.")
+    if not workspace_has_members():
+        messages.append("VERIFICATION: Workspace has no packages. Skipping cargo checks.")
         return True, messages
 
     # cargo test
-    result = subprocess.run(
-        ["cargo", "test", "--workspace"],
-        capture_output=True, text=True, timeout=300
-    )
-    if result.returncode == 0:
+    step = run_step(["cargo", "test", "--workspace"], "cargo test --workspace")
+    log_entries.append(step)
+    if step["passed"]:
         messages.append("VERIFICATION: cargo test --workspace... PASSED")
     else:
         passed = False
         messages.append("VERIFICATION: cargo test --workspace... FAILED")
-        stderr_lines = result.stderr.strip().split("\n")
-        # Show last 20 lines of output for context
-        for line in stderr_lines[-20:]:
-            messages.append(f"  {line}")
+        messages.extend(format_failure(step))
+
+    # cargo fmt --check
+    step = run_step(
+        ["cargo", "fmt", "--check", "--workspace"],
+        "cargo fmt --check --workspace"
+    )
+    log_entries.append(step)
+    if step["passed"]:
+        messages.append("VERIFICATION: cargo fmt --check --workspace... PASSED")
+    else:
+        passed = False
+        messages.append("VERIFICATION: cargo fmt --check --workspace... FAILED")
+        messages.extend(format_failure(step))
 
     # cargo clippy
-    result = subprocess.run(
+    step = run_step(
         ["cargo", "clippy", "--workspace", "--", "-D", "warnings"],
-        capture_output=True, text=True, timeout=300
+        "cargo clippy --workspace -- -D warnings"
     )
-    if result.returncode == 0:
+    log_entries.append(step)
+    if step["passed"]:
         messages.append("VERIFICATION: cargo clippy --workspace... PASSED")
     else:
         passed = False
         messages.append("VERIFICATION: cargo clippy --workspace... FAILED")
-        stderr_lines = result.stderr.strip().split("\n")
-        for line in stderr_lines[-20:]:
-            messages.append(f"  {line}")
+        messages.extend(format_failure(step))
+
+    # Persist full log
+    log_path = persist_log(task_id, log_entries)
+    if not passed:
+        messages.append(f"VERIFICATION_LOG: Full output at {log_path}")
 
     return passed, messages
 
@@ -202,7 +307,7 @@ def cmd_done(args: argparse.Namespace) -> None:
         print("ACTION: Only tasks with status 'in_progress' can be completed.")
         sys.exit(1)
 
-    passed, messages = run_verification()
+    passed, messages = run_verification(args.id)
     for msg in messages:
         print(msg)
 
@@ -300,6 +405,109 @@ def cmd_blocked(args: argparse.Namespace) -> None:
         print(f"  - {t['id']}: blocked by {deps_str}")
 
 
+def cmd_doctor(args: argparse.Namespace) -> None:
+    """Check that all prerequisites are installed and configured."""
+    ok = True
+    pinned_toolchain = None
+
+    def check(label: str, cmd: list[str]) -> bool:
+        try:
+            result = subprocess.run(
+                cmd, capture_output=True, text=True, timeout=15, cwd=REPO_ROOT
+            )
+            version = result.stdout.strip().split("\n")[0]
+            if result.returncode == 0:
+                print(f"  OK: {label}: {version}")
+                return True
+            else:
+                print(f"  FAIL: {label}: command returned exit code {result.returncode}")
+                return False
+        except FileNotFoundError:
+            print(f"  FAIL: {label}: not found. Install it and ensure it is on PATH.")
+            return False
+        except subprocess.TimeoutExpired:
+            print(f"  FAIL: {label}: timed out")
+            return False
+
+    print("DOCTOR: Checking prerequisites...")
+
+    ok = check("python", [sys.executable, "--version"]) and ok
+    ok = check("rustup", ["rustup", "--version"]) and ok
+    ok = check("cargo", ["cargo", "--version"]) and ok
+    ok = check("rustc", ["rustc", "--version"]) and ok
+
+    # Check toolchain file is respected
+    toolchain_file = REPO_ROOT / "rust-toolchain.toml"
+    if toolchain_file.exists():
+        try:
+            with open(toolchain_file, "rb") as f:
+                data = tomllib.load(f)
+            pinned_toolchain = data.get("toolchain", {}).get("channel")
+        except (OSError, tomllib.TOMLDecodeError):
+            print("  FAIL: rust-toolchain.toml: could not parse pinned channel")
+            ok = False
+
+        try:
+            result = subprocess.run(
+                ["rustup", "show", "active-toolchain"],
+                capture_output=True, text=True, timeout=15, cwd=REPO_ROOT
+            )
+            active = result.stdout.strip().split("\n")[0]
+            print(f"  OK: active toolchain: {active}")
+            if pinned_toolchain:
+                active_short = active.split()[0]
+                if not active_short.startswith(pinned_toolchain):
+                    print(f"  FAIL: active toolchain '{active_short}' does not match pinned '{pinned_toolchain}'")
+                    ok = False
+                else:
+                    print(f"  OK: toolchain matches pinned '{pinned_toolchain}'")
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            print("  FAIL: could not determine active toolchain")
+            ok = False
+    else:
+        print("  WARNING: rust-toolchain.toml not found in repo root")
+
+    # Check cargo metadata works
+    try:
+        result = subprocess.run(
+            ["cargo", "metadata", "--format-version", "1", "--no-deps"],
+            capture_output=True, text=True, timeout=30, cwd=REPO_ROOT
+        )
+        if result.returncode == 0:
+            metadata = json.loads(result.stdout)
+            n = len(metadata.get("packages", []))
+            print(f"  OK: cargo metadata: {n} package(s) in workspace")
+        else:
+            print("  FAIL: cargo metadata failed")
+            stderr_tail = result.stderr.strip().split("\n")[-5:]
+            for line in stderr_tail:
+                print(f"    {line}")
+            ok = False
+    except (FileNotFoundError, subprocess.TimeoutExpired, json.JSONDecodeError):
+        print("  FAIL: cargo metadata failed")
+        ok = False
+
+    # Check cargo fmt is available
+    if shutil.which("rustfmt") or shutil.which("cargo-fmt"):
+        print("  OK: rustfmt: available")
+    else:
+        print("  FAIL: rustfmt: not found. Run `rustup component add rustfmt`")
+        ok = False
+
+    # Check cargo clippy is available
+    if shutil.which("cargo-clippy"):
+        print("  OK: clippy: available")
+    else:
+        print("  FAIL: clippy: not found. Run `rustup component add clippy`")
+        ok = False
+
+    if ok:
+        print("DOCTOR: All checks passed.")
+    else:
+        print("DOCTOR: Some checks failed. Fix the issues above before starting work.")
+        sys.exit(1)
+
+
 def main() -> None:
     parser = argparse.ArgumentParser(description="Regseq compiler harness task manager")
     subparsers = parser.add_subparsers(dest="command", required=True)
@@ -327,6 +535,8 @@ def main() -> None:
 
     subparsers.add_parser("blocked", help="Show blocked tasks")
 
+    subparsers.add_parser("doctor", help="Check prerequisites")
+
     args = parser.parse_args()
 
     commands = {
@@ -338,6 +548,7 @@ def main() -> None:
         "status": cmd_status,
         "list": cmd_list,
         "blocked": cmd_blocked,
+        "doctor": cmd_doctor,
     }
     commands[args.command](args)
 

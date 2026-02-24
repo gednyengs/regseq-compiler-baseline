@@ -22,7 +22,8 @@ The workspace contains 8 crates. See each crate's `README.md` for its purpose:
   approaching this limit.
 - Only modify files relevant to your task.
 - Write doc comments on all public types and functions.
-- Use `thiserror` for error types. Use `anyhow` only in binary crates.
+- Use `thiserror` for error types in library crates. Use `anyhow` only in
+  binary crate top-level orchestration (e.g., `main.rs`, `run()`).
 - No unicode symbols in documentation or comments.
 - No author attributions in commit messages.
 
@@ -32,16 +33,12 @@ The workspace contains 8 crates. See each crate's `README.md` for its purpose:
 - Define public API signatures (with `todo!()` bodies) first, then write tests
   against them, then implement. This ensures tests compile before implementation.
 - Run `cargo test -p <crate>` after changes to verify your work.
-- Run `cargo test --workspace` before marking a task done to check for regressions.
-- Run `cargo clippy --workspace` before marking a task done.
+- Verification on `task.py done` runs three checks in order:
+  1. `cargo test --workspace` -- all tests must pass
+  2. `cargo fmt --check --workspace` -- code must be formatted
+  3. `cargo clippy --workspace -- -D warnings` -- no clippy warnings
+- Run `cargo fmt` before completing a task to avoid fmt check failures.
 
-## Task Workflow
+## Workflow
 
-1. Run `python task.py next` to find your assigned task.
-2. Run `python task.py start <id>` to claim it.
-3. Read the task spec markdown file for full instructions.
-4. Read all files listed in the task's Input Context section.
-5. Implement according to the Output Specification.
-6. Write tests from the Test Plan.
-7. Iterate until tests pass.
-8. Run `python task.py done <id>` to complete (runs verification automatically).
+See `.harness/SESSION.md` for the step-by-step worker procedure.
