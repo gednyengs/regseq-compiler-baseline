@@ -4,9 +4,12 @@ use clap::Parser;
 use thiserror::Error;
 
 pub mod cli;
+pub mod invoke;
 pub mod toolchain;
 
 use crate::cli::CargoCli;
+use crate::invoke::invoke_cargo;
+use crate::toolchain::ToolchainInfo;
 
 /// Error type for `cargo-regseq`.
 #[derive(Debug, Error)]
@@ -29,10 +32,10 @@ pub fn run() -> Result<(), Error> {
     let CargoCli::Regseq(cli) = CargoCli::parse();
     cli.validate()?;
 
+    let cargo_args = cli.cargo_args.clone();
+    let color = cli.color;
     let options = cli.into_compiler_options();
-    let options_json = serde_json::to_string_pretty(&options)
-        .map_err(|error| Error::Validation(format!("failed to serialize options: {error}")))?;
-    eprintln!("regseq options: {options_json}");
+    let toolchain = ToolchainInfo::detect()?;
 
-    Ok(())
+    invoke_cargo(&options, &toolchain, &cargo_args, color)
 }

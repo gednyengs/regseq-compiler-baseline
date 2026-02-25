@@ -107,7 +107,7 @@ fn detect_driver() -> Result<PathBuf, Error> {
 
     let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
     Err(Error::Toolchain(format!(
-        "could not find '{}' via REGSEQ_DRIVER, next to cargo-regseq ({}), or on PATH via `which`; stderr: {}",
+        "could not find '{}' via REGSEQ_DRIVER, next to cargo-regseq ({}), or on PATH via `which`; build/install regseq-driver first (for example: `cargo build -p regseq-driver`); stderr: {}",
         driver_binary_name(),
         sibling.display(),
         if stderr.is_empty() {
