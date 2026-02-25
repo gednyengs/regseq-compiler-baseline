@@ -20,6 +20,7 @@ pub fn build_cargo_command(
 
     let mut command = Command::new("cargo");
     command.arg("check");
+    command.env_remove("CARGO_PRIMARY_PACKAGE");
     command.env("RUSTC_WRAPPER", &toolchain.driver);
     command.env("REGSEQ_OPTIONS", options_json);
     command.env("REGSEQ_SYSROOT", &toolchain.sysroot);
@@ -27,6 +28,11 @@ pub fn build_cargo_command(
     if !cargo_args_contain_color(cargo_args) {
         command.arg("--color");
         command.arg(color.to_string());
+    }
+
+    if !cargo_args_contain_target(cargo_args) {
+        command.arg("--target");
+        command.arg(&toolchain.host);
     }
 
     command.args(cargo_args);
@@ -63,4 +69,10 @@ fn cargo_args_contain_color(cargo_args: &[String]) -> bool {
     cargo_args
         .iter()
         .any(|arg| arg == "--color" || arg.starts_with("--color="))
+}
+
+fn cargo_args_contain_target(cargo_args: &[String]) -> bool {
+    cargo_args
+        .iter()
+        .any(|arg| arg == "--target" || arg.starts_with("--target="))
 }

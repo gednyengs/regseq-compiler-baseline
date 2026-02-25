@@ -1,0 +1,134 @@
+/// Parsed command-line arguments for the driver.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct DriverArgs {
+    /// Path to the rustc binary (from RUSTC_WRAPPER invocation).
+    /// None if invoked directly (not as a wrapper).
+    pub rustc_path: Option<String>,
+    /// Arguments to pass to rustc.
+    pub rustc_args: Vec<String>,
+}
+
+impl DriverArgs {
+    /// Parse process arguments (including argv\[0\]) into driver arguments.
+    pub fn parse_from(args: &[String]) -> Self {
+        let mut iter = args.iter();
+        let _binary_name = iter.next();
+        let Some(first) = iter.next() else {
+            return Self {
+                rustc_path: None,
+                rustc_args: Vec::new(),
+            };
+        };
+
+        if first.starts_with('-') {
+            let mut rustc_args = Vec::with_capacity(args.len().saturating_sub(1));
+            rustc_args.push(first.clone());
+            rustc_args.extend(iter.cloned());
+            Self {
+                rustc_path: None,
+                rustc_args,
+            }
+        } else {
+            Self {
+                rustc_path: Some(first.clone()),
+                rustc_args: iter.cloned().collect(),
+            }
+        }
+    }
+
+    /// Determine whether the current invocation should run passthrough rustc
+    /// behavior or the regseq pipeline.
+    pub fn dispatch(&self) -> DriverMode {
+        DispatchSignals::from_env(&self.rustc_args).mode()
+    }
+}
+
+/// Driver execution mode selected by dispatch.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum DriverMode {
+    /// Forward to rustc unchanged (cargo probe, dependency, etc.).
+    Passthrough,
+    /// Run the regseq compilation pipeline.
+    Regseq,
+}
+
+/// Signals used to select the driver execution mode.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct DispatchSignals {
+    /// Whether arguments contain cargo probe flags (`--print*` or `-vV`).
+    pub has_print_query: bool,
+    /// Whether arguments contain `--target`.
+    pub has_target: bool,
+    /// Whether `CARGO_PRIMARY_PACKAGE` is present in the environment.
+    pub has_cargo_primary_package: bool,
+    /// Whether `REGSEQ_OPTIONS` is present in the environment.
+    pub has_regseq_options: bool,
+}
+
+impl DispatchSignals {
+    /// Build dispatch signals from rustc arguments and explicit env-presence values.
+    pub fn from_rustc_args(
+        rustc_args: &[String],
+        has_cargo_primary_package: bool,
+        has_regseq_options: bool,
+    ) -> Self {
+        Self {
+            has_print_query: has_print_query(rustc_args),
+            has_target: has_arg(rustc_args, "--target"),
+            has_cargo_primary_package,
+            has_regseq_options,
+        }
+    }
+
+    /// Build dispatch signals from rustc arguments and process environment.
+    pub fn from_env(rustc_args: &[String]) -> Self {
+        Self::from_rustc_args(
+            rustc_args,
+            std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some(),
+            std::env::var_os("REGSEQ_OPTIONS").is_some(),
+        )
+    }
+
+    /// Resolve the final driver mode from dispatch signals.
+    pub fn mode(&self) -> DriverMode {
+        if self.has_print_query {
+            return DriverMode::Passthrough;
+        }
+        if !self.has_target {
+            return DriverMode::Passthrough;
+        }
+        if !self.has_cargo_primary_package {
+            return DriverMode::Passthrough;
+        }
+        if !self.has_regseq_options {
+            return DriverMode::Passthrough;
+        }
+
+        DriverMode::Regseq
+    }
+}
+
+/// Check if an argument flag is present (e.g., "--target", "-vV").
+pub fn has_arg(args: &[String], flag: &str) -> bool {
+    let with_equals = format!("{flag}=");
+    args.iter()
+        .any(|arg| arg == flag || arg.starts_with(&with_equals))
+}
+
+/// Get the value of an argument (supports --arg=value and --arg value).
+pub fn arg_value<'a>(args: &'a [String], flag: &str) -> Option<&'a str> {
+    let with_equals = format!("{flag}=");
+    for (index, arg) in args.iter().enumerate() {
+        if let Some(value) = arg.strip_prefix(&with_equals) {
+            return Some(value);
+        }
+        if arg == flag {
+            return args.get(index + 1).map(String::as_str);
+        }
+    }
+    None
+}
+
+fn has_print_query(args: &[String]) -> bool {
+    has_arg(args, "-vV") || has_arg(args, "--print")
+}

@@ -1,0 +1,3 @@
+# Minimal platform definition for end-to-end testing.
+[platform]
+name = "test-platform"

@@ -73,6 +73,55 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "cargo-regseq-05",
+          "name": "Force --target and clean inherited env",
+          "spec": ".harness/tasks/cargo-regseq/05-target-and-env-setup.md",
+          "status": "done",
+          "depends_on": [
+            "cargo-regseq-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
+    },
+    {
+      "id": "regseq-driver",
+      "name": "regseq-driver compiler wrapper",
+      "tasks": [
+        {
+          "id": "regseq-driver-01",
+          "name": "Crate initialization",
+          "spec": ".harness/tasks/regseq-driver/01-crate-init.md",
+          "status": "done",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-02",
+          "name": "Dispatch logic and passthrough",
+          "spec": ".harness/tasks/regseq-driver/02-dispatch-and-passthrough.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-03",
+          "name": "Configuration and compiler setup",
+          "spec": ".harness/tasks/regseq-driver/03-config-and-compiler-setup.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-02",
+            "regseq-config-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     }

@@ -1,0 +1,11 @@
+[package]
+name = "regseq-driver"
+version = "0.1.0"
+edition = "2021"
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[dependencies]
+regseq-config = { path = "../regseq-config" }
+serde_json = "1"

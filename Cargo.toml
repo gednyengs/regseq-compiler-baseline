@@ -1,3 +1,11 @@
 [workspace]
 resolver = "2"
-members = ["crates/cargo-regseq", "crates/regseq-config"]
+members = [
+    "crates/cargo-regseq",
+    "crates/regseq-config",
+    "crates/regseq-driver",
+    "tests/e2e",
+]
+exclude = [
+    "tests/fixtures/minimal-driver",
+]

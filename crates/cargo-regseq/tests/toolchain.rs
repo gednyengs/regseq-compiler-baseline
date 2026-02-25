@@ -97,6 +97,17 @@ fn detect_uses_regseq_driver_env_var() {
 }
 
 #[test]
+fn detect_populates_host_triple() {
+    let _guard = env_lock().lock().unwrap_or_else(|error| error.into_inner());
+    let driver = NamedTempFile::new().expect("temporary driver");
+    let driver_path = driver.path().to_string_lossy().to_string();
+    let _set_driver = EnvVarRestore::set("REGSEQ_DRIVER", &driver_path);
+
+    let info = ToolchainInfo::detect().expect("detection should succeed");
+    assert!(!info.host.trim().is_empty());
+}
+
+#[test]
 #[ignore = "requires an isolated process environment without rustup on PATH"]
 fn detect_errors_when_rustup_unavailable() {
     let error = ToolchainInfo::detect().expect_err("detection should fail");

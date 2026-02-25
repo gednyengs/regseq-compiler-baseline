@@ -12,6 +12,8 @@ pub struct ToolchainInfo {
     pub sysroot: PathBuf,
     /// Path to the regseq-driver binary.
     pub driver: PathBuf,
+    /// Host triple (e.g., "x86_64-unknown-linux-gnu").
+    pub host: String,
 }
 
 impl ToolchainInfo {
@@ -19,11 +21,13 @@ impl ToolchainInfo {
     pub fn detect() -> Result<ToolchainInfo, Error> {
         let rustc = detect_rustc()?;
         let sysroot = detect_sysroot(&rustc)?;
+        let host = detect_host(&rustc)?;
         let driver = detect_driver()?;
         Ok(Self {
             rustc,
             sysroot,
             driver,
+            host,
         })
     }
 }
@@ -57,6 +61,20 @@ fn detect_sysroot(rustc: &Path) -> Result<PathBuf, Error> {
     }
 
     Ok(sysroot)
+}
+
+fn detect_host(rustc: &Path) -> Result<String, Error> {
+    let stdout = run_checked_command(Command::new(rustc).arg("-vV"), "rustc -vV")?;
+    let host = stdout
+        .lines()
+        .find_map(|line| line.strip_prefix("host: "))
+        .map(str::trim)
+        .filter(|host| !host.is_empty())
+        .map(ToOwned::to_owned)
+        .ok_or_else(|| {
+            Error::Toolchain("`rustc -vV` output missing non-empty `host: ...` line".to_string())
+        })?;
+    Ok(host)
 }
 
 fn detect_driver() -> Result<PathBuf, Error> {
