@@ -4,6 +4,7 @@ use clap::Parser;
 use thiserror::Error;
 
 pub mod cli;
+pub mod toolchain;
 
 use crate::cli::CargoCli;
 
