@@ -1,6 +1,32 @@
 {
   "groups": [
     {
+      "id": "regseq-config",
+      "name": "regseq-config shared types",
+      "tasks": [
+        {
+          "id": "regseq-config-01",
+          "name": "Crate initialization",
+          "spec": ".harness/tasks/regseq-config/01-crate-init.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-config-02",
+          "name": "Shared compiler option types",
+          "spec": ".harness/tasks/regseq-config/02-shared-cli-types.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-config-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
+    },
+    {
       "id": "cargo-regseq",
       "name": "cargo-regseq CLI",
       "tasks": [
@@ -19,7 +45,8 @@
           "spec": ".harness/tasks/cargo-regseq/02-cli-args.md",
           "status": "pending",
           "depends_on": [
-            "cargo-regseq-01"
+            "cargo-regseq-01",
+            "regseq-config-02"
           ],
           "artifacts": [],
           "fail_reason": null

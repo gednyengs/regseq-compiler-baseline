@@ -4,9 +4,9 @@ Cargo subcommand that orchestrates the Regseq compilation flow.
 
 ## Responsibilities
 
-- Parse CLI arguments: `cargo regseq build --target-os <linux|zephyr> --platform-file <path>`
+- Parse CLI arguments: `cargo regseq --target-os <linux|zephyr> --platform-file <path> [OPTIONS]`
 - Detect the pinned nightly toolchain and locate the `regseq-driver` binary
-- Set `RUSTC_WRAPPER=regseq-driver` and invoke `cargo build` with proper environment
+- Set `RUSTC_WRAPPER=regseq-driver` and invoke `cargo check` with proper environment
 - Separate Regseq-specific arguments from pass-through cargo arguments
 
 ## Binary

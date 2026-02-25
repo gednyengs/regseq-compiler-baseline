@@ -11,7 +11,6 @@ Implement toolchain and sysroot detection for cargo-regseq. The tool needs to:
 
 Read before starting:
 - crates/cargo-regseq/src/lib.rs
-- crates/cargo-regseq/src/cli.rs
 - crates/cargo-regseq/README.md
 - rust-toolchain.toml
 
