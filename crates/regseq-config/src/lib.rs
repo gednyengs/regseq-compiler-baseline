@@ -3,9 +3,12 @@
 //! This crate is intentionally rustc-independent so configuration and model
 //! types can be reused across `cargo-regseq`, drivers, analyses, and backends.
 
-use thiserror::Error;
+pub mod emit;
+pub mod options;
+pub mod param;
+pub mod types;
 
-/// Placeholder error type for `regseq-config`.
-#[derive(Debug, Error)]
-#[error("regseq-config error")]
-pub struct Error;
+pub use emit::{EmitParseError, EmitSpec};
+pub use options::CompilerOptions;
+pub use param::{validate_dotted_ident, ParamParseError, ParamScope, RegseqParam};
+pub use types::{ColorChoice, DumpStage, LogLevel, ParseEnumError, TargetOs};

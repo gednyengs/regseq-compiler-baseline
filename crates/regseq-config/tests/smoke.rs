@@ -1,7 +1,7 @@
-use regseq_config::Error;
+use regseq_config::TargetOs;
 
 #[test]
 fn crate_can_be_imported() {
-    let error = Error;
-    assert_eq!(error.to_string(), "regseq-config error");
+    let os = TargetOs::Linux;
+    assert_eq!(os.to_string(), "linux");
 }

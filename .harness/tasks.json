@@ -17,7 +17,7 @@
           "id": "regseq-config-02",
           "name": "Shared compiler option types",
           "spec": ".harness/tasks/regseq-config/02-shared-cli-types.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-config-01"
           ],
