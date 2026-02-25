@@ -1,3 +1,3 @@
 [workspace]
 resolver = "2"
-members = ["crates/cargo-regseq"]
+members = ["crates/cargo-regseq", "crates/regseq-config"]

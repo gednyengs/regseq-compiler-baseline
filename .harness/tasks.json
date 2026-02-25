@@ -8,7 +8,7 @@
           "id": "regseq-config-01",
           "name": "Crate initialization",
           "spec": ".harness/tasks/regseq-config/01-crate-init.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
