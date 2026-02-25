@@ -43,7 +43,7 @@
           "id": "cargo-regseq-02",
           "name": "CLI argument parsing",
           "spec": ".harness/tasks/cargo-regseq/02-cli-args.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "cargo-regseq-01",
             "regseq-config-02"
