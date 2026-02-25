@@ -35,7 +35,7 @@ The workspace contains 8 crates. See each crate's `README.md` for its purpose:
 - Run `cargo test -p <crate>` after changes to verify your work.
 - Verification on `scripts/python/task.py done` runs three checks in order:
   1. `cargo test --workspace` -- all tests must pass
-  2. `cargo fmt --check --workspace` -- code must be formatted
+  2. `cargo fmt --all -- --check` -- code must be formatted
   3. `cargo clippy --workspace -- -D warnings` -- no clippy warnings
 - Run `cargo fmt` before completing a task to avoid fmt check failures.
 

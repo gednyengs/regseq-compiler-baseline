@@ -8,7 +8,7 @@
           "id": "cargo-regseq-01",
           "name": "Crate initialization",
           "spec": ".harness/tasks/cargo-regseq/01-crate-init.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null

@@ -261,15 +261,15 @@ def run_verification(task_id: str) -> tuple[bool, list[str]]:
 
     # cargo fmt --check
     step = run_step(
-        ["cargo", "fmt", "--check", "--workspace"],
-        "cargo fmt --check --workspace"
+        ["cargo", "fmt", "--all", "--", "--check"],
+        "cargo fmt --all -- --check"
     )
     log_entries.append(step)
     if step["passed"]:
-        messages.append("VERIFICATION: cargo fmt --check --workspace... PASSED")
+        messages.append("VERIFICATION: cargo fmt --all -- --check... PASSED")
     else:
         passed = False
-        messages.append("VERIFICATION: cargo fmt --check --workspace... FAILED")
+        messages.append("VERIFICATION: cargo fmt --all -- --check... FAILED")
         messages.extend(format_failure(step))
 
     # cargo clippy

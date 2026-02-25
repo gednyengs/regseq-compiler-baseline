@@ -1,0 +1,8 @@
+[package]
+name = "cargo-regseq"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+clap = { version = "4.5.40", features = ["derive"] }
+thiserror = "2.0.17"
