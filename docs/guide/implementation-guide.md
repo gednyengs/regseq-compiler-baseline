@@ -276,7 +276,7 @@ current compiler workspace:
 5. `crates/cargo-regseq/README.md`
 6. `crates/regseq-config/README.md`
 7. `crates/regseq-driver/README.md`
-8. `docs/experiments/mir-structured-codegen.md`
+8. `docs/experiments/mir-structured-codegen/report.md`
 
 Supplementary reference:
 
@@ -306,7 +306,9 @@ What exists:
   - `RUSTC_WRAPPER` orchestration
   - `REGSEQ_OPTIONS` serialization/deserialization
   - rustc callback setup
-- a MIR/HIR-to-C experiment in `regseq-driver/src/experiment`
+- a MIR/HIR-to-C experiment (archived in
+  `docs/experiments/mir-structured-codegen/`) that validated the pipeline
+  architecture for C code generation -- see section 3.2
 - passing workspace tests for the implemented crates
 
 What does **not** exist yet in real code:
@@ -344,6 +346,30 @@ This means harness tasks should assume:
   conventions
 - debug artifacts are first-class validation outputs, but C emission is the
   primary generated driver artifact for this scope
+
+### 3.2 Prior codegen experiment
+
+An early experiment on branch `experiment/mir-structured-codegen` validated
+a **MIR-primary with HIR decoration** pipeline for generating readable C
+from Rust MIR. The full report, archived source, and evidence are at:
+
+    docs/experiments/mir-structured-codegen/report.md
+
+The experiment used fictional DSL constructs (not the real validated Regseq
+constructs), but it validated the pipeline architecture and algorithms that
+apply directly to production codegen:
+
+- MIR extraction into a rustc-independent representation
+- CFG structuring (DFS back-edge detection, loop body computation,
+  forward-only BFS merge-point detection, recursive descent emission)
+- Expression folding (unit removal, checked arithmetic collapsing,
+  single-use temporary inlining, dead store elimination)
+- HIR-decorated C emission with source variable names and type mappings
+
+Cold sessions working on `regseq-backends` or lowering tasks should read
+this report before designing the C emission pipeline. The archived source
+in `docs/experiments/mir-structured-codegen/src/` contains reference
+implementations of the structuring and folding algorithms.
 
 ## 4. Non-goals
 
