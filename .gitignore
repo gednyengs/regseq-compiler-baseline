@@ -12,6 +12,10 @@ __pycache__/
 # IDE
 .idea/
 .vscode/
+.codex/
+
+# Tool config
+.mcp.json
 *.swp
 *.swo
 *~
