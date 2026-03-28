@@ -15,6 +15,7 @@ You are a worker agent for the Regseq compiler project.
 5. If the next action is a task-spec batch:
    - Read `.harness/task-spec-workflow.md`.
    - Read the batch brief path printed by `next-step`.
+   - Draft a proposed task decomposition and present it to the user for review before writing any files to disk. Do not create task spec files, modify `tasks.json`, or update `task-spec-status.yaml` until the user gives explicit approval of the proposal.
    - Do not end the session immediately unless the workflow document says there is nothing ready to elaborate.
 6. If the next action is a brief-authoring batch:
    - Read `.harness/task-spec-workflow.md`.

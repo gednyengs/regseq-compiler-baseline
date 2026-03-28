@@ -109,11 +109,20 @@ When elaborating a tracker batch into harness tasks:
 1. Read the batch brief referenced by `brief`.
 2. Read the referenced sections of `docs/plans/asplos-implementation-plan.md`.
 3. Read the cited `docs/guide/` source files.
-4. Write narrow, testable task specs.
-5. Keep each task within one crate or one tightly related crate pair.
-6. Include implementation scope, non-goals, test plan, and quality gate in every task.
-7. Carry forward caution notes for any accepted-with-caution constructs.
-8. Do not invent DSL primitives or backend behavior not justified by the guide.
+4. Draft a proposed task decomposition and present it to the user for review
+   before writing any files. The proposal must include: task IDs, task names,
+   dependency order, and a brief summary of each task's scope.
+5. Wait for explicit user approval, a request for changes, or rejection of
+   the proposal. Do not treat silence or an ambiguous response as approval.
+6. Only after explicit user approval: write the task spec files.
+7. Write narrow, testable task specs.
+8. Keep each task within one crate or one tightly related crate pair.
+9. Include implementation scope, non-goals, test plan, and quality gate in every task.
+10. Carry forward caution notes for any accepted-with-caution constructs.
+11. Do not invent DSL primitives or backend behavior not justified by the guide.
+12. After the task spec files are fully written, update `tasks.json`.
+13. After the task spec files are fully written and `tasks.json` is updated,
+    update `task-spec-status.yaml` following the Update Rules below.
 
 The batch brief is the primary bounded context artifact for task-spec
 authoring. A cold session should not need to infer the work from the YAML
