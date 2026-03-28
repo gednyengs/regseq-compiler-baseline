@@ -2,15 +2,16 @@
 """Regseq compiler harness -- task management CLI.
 
 Usage:
-    python scripts/python/task.py next                     Find next available task
-    python scripts/python/task.py show <id>                Show task details
-    python scripts/python/task.py start <id>               Mark task as in_progress
-    python scripts/python/task.py done <id>                Run verification and mark done
-    python scripts/python/task.py fail <id> --reason "…"   Mark task as failed
-    python scripts/python/task.py status                   Show summary table
-    python scripts/python/task.py list [--status <s>]      List tasks with optional filter
-    python scripts/python/task.py blocked                  Show tasks with unmet dependencies
-    python scripts/python/task.py doctor                   Check prerequisites
+    uv run python scripts/python/task.py next                     Find next available executable task
+    uv run python scripts/python/task.py next-step                Determine the next executable or task-spec action
+    uv run python scripts/python/task.py show <id>                Show task details
+    uv run python scripts/python/task.py start <id>               Mark task as in_progress
+    uv run python scripts/python/task.py done <id>                Run verification and mark done
+    uv run python scripts/python/task.py fail <id> --reason "…"   Mark task as failed
+    uv run python scripts/python/task.py status                   Show summary table
+    uv run python scripts/python/task.py list [--status <s>]      List tasks with optional filter
+    uv run python scripts/python/task.py blocked                  Show tasks with unmet dependencies
+    uv run python scripts/python/task.py doctor                   Check prerequisites
 """
 
 import argparse
@@ -26,6 +27,7 @@ from pathlib import Path
 
 REPO_ROOT = Path(__file__).parent.parent.parent
 TASKS_FILE = REPO_ROOT / ".harness" / "tasks.json"
+TASK_SPEC_STATUS_FILE = REPO_ROOT / ".harness" / "task-spec-status.yaml"
 LOGS_DIR = REPO_ROOT / "logs" / "verify"
 TAIL_LINES = 50
 
@@ -93,7 +95,7 @@ def cmd_next(args: argparse.Namespace) -> None:
         if task["status"] == "pending" and deps_met(task, status_map):
             print(f"NEXT_TASK: {task['id']}")
             print(f"SPEC: {task['spec']}")
-            print(f"ACTION: Run `python scripts/python/task.py start {task['id']}` then read the spec file.")
+            print(f"ACTION: Run `uv run python scripts/python/task.py start {task['id']}` then read the spec file.")
             return
 
     print("NO_TASKS_AVAILABLE: All pending tasks have unmet dependencies or all tasks are done.")
@@ -104,7 +106,105 @@ def cmd_next(args: argparse.Namespace) -> None:
             unmet = [d for d in t.get("depends_on", []) if status_map.get(d) != "done"]
             unmet_strs = [f"{d} [{status_map.get(d, 'unknown')}]" for d in unmet]
             print(f"  - {t['id']} (blocked by: {', '.join(unmet_strs)})")
-    print("ACTION: End session. No work available.")
+    print("ACTION: Run `uv run python scripts/python/task.py next-step` to determine whether a task-spec batch is ready.")
+
+
+def load_task_spec_status() -> dict:
+    try:
+        import yaml
+    except ModuleNotFoundError:
+        print("ERROR: PyYAML is not installed.")
+        print("ACTION: Run `uv sync` or invoke the harness with `uv run python scripts/python/task.py ...`.")
+        sys.exit(1)
+
+    if not TASK_SPEC_STATUS_FILE.exists():
+        print(f"ERROR: Task-spec tracker not found at {TASK_SPEC_STATUS_FILE}.")
+        sys.exit(1)
+
+    with open(TASK_SPEC_STATUS_FILE) as f:
+        data = yaml.safe_load(f)
+
+    if not isinstance(data, dict) or not isinstance(data.get("items"), list):
+        print("ERROR: Task-spec tracker is malformed. Expected a top-level mapping with an `items` list.")
+        sys.exit(1)
+
+    return data
+
+
+def task_spec_status_map(data: dict) -> dict[str, str]:
+    return {item["id"]: item["status"] for item in data["items"]}
+
+
+def task_spec_deps_met(item: dict, status_map: dict[str, str]) -> bool:
+    for dep_id in item.get("depends_on", []):
+        if status_map.get(dep_id) != "tasked":
+            return False
+    return True
+
+
+def first_ready_task_spec_batch(data: dict) -> tuple[dict | None, list[dict]]:
+    status_map = task_spec_status_map(data)
+    ready = []
+    for item in data["items"]:
+        if item["status"] == "ready_to_elaborate" and task_spec_deps_met(item, status_map):
+            ready.append(item)
+    return (ready[0] if ready else None, ready)
+
+
+def brief_exists(item: dict) -> bool:
+    brief = item.get("brief")
+    if not brief:
+        return False
+    return (REPO_ROOT / brief).exists()
+
+
+def cmd_next_step(args: argparse.Namespace) -> None:
+    data = load_tasks()
+    status_map = task_status_map(data)
+
+    for task in all_tasks(data):
+        if task["status"] == "pending" and deps_met(task, status_map):
+            print("NEXT_ACTION: EXECUTABLE_TASK")
+            print(f"TASK_ID: {task['id']}")
+            print(f"SPEC: {task['spec']}")
+            print(f"ACTION: Run `uv run python scripts/python/task.py start {task['id']}` then read the spec file.")
+            return
+
+    tracker = load_task_spec_status()
+    item, ready_items = first_ready_task_spec_batch(tracker)
+    if item is not None:
+        next_action = "TASK_SPEC_BATCH" if brief_exists(item) else "BRIEF_AUTHORING_BATCH"
+        print(f"NEXT_ACTION: {next_action}")
+        print(f"TRACKER_ID: {item['id']}")
+        print(f"PHASE: {item['phase']}")
+        print(f"TITLE: {item['title']}")
+        if item.get("brief"):
+            label = "BRIEF" if brief_exists(item) else "EXPECTED_BRIEF"
+            print(f"{label}: {item['brief']}")
+        if item.get("target_harness_groups"):
+            print(f"TARGET_HARNESS_GROUPS: {', '.join(item['target_harness_groups'])}")
+        if item.get("source_refs"):
+            print(f"SOURCE_REFS: {', '.join(item['source_refs'])}")
+        print(f"SUMMARY: {item['summary']}")
+        if item.get("spec_authoring_notes"):
+            print("SPEC_AUTHORING_NOTES:")
+            for note in item["spec_authoring_notes"]:
+                print(f"  - {note}")
+        if len(ready_items) > 1:
+            print(f"WARNING: {len(ready_items)} task-spec batches are marked ready. Using the first listed item.")
+        if next_action == "TASK_SPEC_BATCH":
+            print("ACTION: Read `.harness/task-spec-workflow.md`, then elaborate this batch into harness task specs and update `.harness/task-spec-status.yaml`.")
+        else:
+            print("ACTION: Read `.harness/task-spec-workflow.md`, create the missing brief using `.harness/spec-batches/BRIEF_TEMPLATE.md`, then update `.harness/task-spec-status.yaml`.")
+        return
+
+    print("NO_NEXT_ACTION: No executable task and no dependency-satisfied task-spec batch are ready.")
+    blocked = [item for item in tracker["items"] if item["status"] == "not_ready"]
+    if blocked:
+        print("TASK_SPEC_BATCHES_WAITING_ON_DEPENDENCIES:")
+        for item in blocked[:10]:
+            print(f"  - {item['id']}: depends_on={', '.join(item.get('depends_on', [])) or 'none'}")
+    print("ACTION: End session or ask a human to review the task-spec tracker.")
 
 
 def cmd_show(args: argparse.Namespace) -> None:
@@ -112,7 +212,7 @@ def cmd_show(args: argparse.Namespace) -> None:
     result = find_task(data, args.id)
     if result is None:
         print(f"ERROR: Task '{args.id}' not found.")
-        print("ACTION: Run `python scripts/python/task.py list` to see available task IDs.")
+        print("ACTION: Run `uv run python scripts/python/task.py list` to see available task IDs.")
         sys.exit(1)
 
     group, task = result
@@ -137,7 +237,7 @@ def cmd_start(args: argparse.Namespace) -> None:
     result = find_task(data, args.id)
     if result is None:
         print(f"ERROR: Task '{args.id}' not found.")
-        print("ACTION: Run `python scripts/python/task.py list` to see available task IDs.")
+        print("ACTION: Run `uv run python scripts/python/task.py list` to see available task IDs.")
         sys.exit(1)
 
     _, task = result
@@ -153,7 +253,7 @@ def cmd_start(args: argparse.Namespace) -> None:
         print(f"ERROR: Cannot start '{args.id}'. Dependencies not met.")
         for d in unmet:
             print(f"  - {d} [{status_map.get(d, 'unknown')}]")
-        print("ACTION: Run `python scripts/python/task.py next` to find a task with all dependencies met.")
+        print("ACTION: Run `uv run python scripts/python/task.py next-step` to find the next executable or task-spec action.")
         sys.exit(1)
 
     task["status"] = "in_progress"
@@ -316,10 +416,10 @@ def cmd_done(args: argparse.Namespace) -> None:
         task["fail_reason"] = None
         save_tasks(data)
         print(f"DONE: {args.id}")
-        print("ACTION: Run `python scripts/python/task.py next` for your next task, or end session if none.")
+        print("ACTION: Run `uv run python scripts/python/task.py next-step` for your next action, or end session if none.")
     else:
         print(f"BLOCKED: {args.id} -- verification failed.")
-        print("ACTION: Fix the failing checks and run `python scripts/python/task.py done " + args.id + "` again.")
+        print("ACTION: Fix the failing checks and run `uv run python scripts/python/task.py done " + args.id + "` again.")
 
 
 def cmd_fail(args: argparse.Namespace) -> None:
@@ -396,7 +496,7 @@ def cmd_blocked(args: argparse.Namespace) -> None:
 
     if not blocked:
         print("NO_BLOCKED_TASKS: All pending tasks have their dependencies met.")
-        print("ACTION: Run `python scripts/python/task.py next` to find available work.")
+        print("ACTION: Run `uv run python scripts/python/task.py next-step` to find the next action.")
         return
 
     print("BLOCKED_TASKS:")
@@ -432,9 +532,17 @@ def cmd_doctor(args: argparse.Namespace) -> None:
     print("DOCTOR: Checking prerequisites...")
 
     ok = check("python", [sys.executable, "--version"]) and ok
+    ok = check("uv", ["uv", "--version"]) and ok
     ok = check("rustup", ["rustup", "--version"]) and ok
     ok = check("cargo", ["cargo", "--version"]) and ok
     ok = check("rustc", ["rustc", "--version"]) and ok
+
+    try:
+        import yaml  # noqa: F401
+        print("  OK: PyYAML: import succeeded")
+    except ModuleNotFoundError:
+        print("  FAIL: PyYAML: not found. Run `uv sync` to install Python dependencies.")
+        ok = False
 
     # Check toolchain file is respected
     toolchain_file = REPO_ROOT / "rust-toolchain.toml"
@@ -513,6 +621,7 @@ def main() -> None:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     subparsers.add_parser("next", help="Find next available task")
+    subparsers.add_parser("next-step", help="Determine the next executable or task-spec action")
 
     show_parser = subparsers.add_parser("show", help="Show task details")
     show_parser.add_argument("id", help="Task ID")
@@ -541,6 +650,7 @@ def main() -> None:
 
     commands = {
         "next": cmd_next,
+        "next-step": cmd_next_step,
         "show": cmd_show,
         "start": cmd_start,
         "done": cmd_done,

@@ -6,15 +6,19 @@ You are working on the Regseq compiler: a custom Rust compiler toolchain that
 reads Regseq driver specifications (Rust files with `#[rseq::*]` annotations)
 and generates OS-specific C device drivers for Linux and Zephyr.
 
-The workspace contains 8 crates. See each crate's `README.md` for its purpose:
+Current active workspace members:
 - `cargo-regseq` -- cargo subcommand (CLI, toolchain, orchestration)
-- `regseq` -- public facade for driver authors (types, traits, macro re-exports)
-- `regseq-macros` -- procedural macros (`register_bitfields!`, etc.)
+- `regseq-config` -- shared configuration types (no rustc dependency)
 - `regseq-driver` -- rustc wrapper (HIR/MIR extraction, pipeline orchestration)
+- `tests/e2e` -- end-to-end test workspace member
+
+Planned implementation crates for the ASPLOS track:
+- `regseq` -- public facade for driver authors
+- `regseq-macros` -- procedural macros (`register_bitfields!`, etc.)
+- `regseq-model` -- rustc-independent declaration and binding models
 - `regseq-analysis` -- static analysis passes
 - `regseq-backends` -- C code generation backends (Linux, Zephyr)
-- `regseq-config` -- shared configuration types (no rustc dependency)
-- `regseq-diagnostics` -- shared diagnostics engine (no rustc dependency)
+- `regseq-diagnostics` -- shared diagnostics engine
 
 ## Coding Conventions
 
@@ -41,4 +45,4 @@ The workspace contains 8 crates. See each crate's `README.md` for its purpose:
 
 ## Workflow
 
-See `.harness/SESSION.md` for the step-by-step worker procedure.
+Use `uv run python scripts/python/task.py next-step` to determine the next action. See `.harness/SESSION.md` for the worker bootstrap and `.harness/task-spec-workflow.md` for the fallback task-spec authoring workflow used when no executable harness tasks exist.

@@ -1,0 +1,428 @@
+version: 1
+purpose: >
+  Tracks harness task-spec authoring progress for the ASPLOS implementation
+  plan. This file is used only when there are no executable harness tasks
+  available in .harness/tasks.json.
+
+workflow:
+  - Check .harness/tasks.json first. If any task is pending or in_progress, do not use this file.
+  - Use this file only to decide what harness task spec or task batch should be authored next.
+  - Update item status here when a spec batch has been elaborated into real harness tasks.
+  - Do not use this file to track implementation execution status.
+
+status_definitions:
+  not_ready: Dependencies are not yet elaborated into harness tasks.
+  ready_to_elaborate: This is the next task-spec batch that should be turned into harness tasks.
+  in_elaboration: A task-spec batch is currently being drafted or reviewed.
+  tasked: The corresponding harness task specs have been created.
+  blocked: The task-spec batch cannot yet be authored due to an external decision or missing input.
+
+items:
+  - id: phase-a-01
+    phase: A
+    title: Workspace activation and crate-topology decisions
+    brief: .harness/spec-batches/phase-a-01.md
+    status: ready_to_elaborate
+    depends_on: []
+    target_harness_groups:
+      - regseq-facade
+      - regseq-macros
+      - regseq-model
+      - regseq-analysis
+      - regseq-backends
+      - regseq-diagnostics
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/implementation-guide.md
+      - Cargo.toml
+    summary: >
+      Add missing implementation crates to the workspace, establish the crate
+      topology from the implementation plan, and make the workspace ready for
+      later API-first tasks.
+    spec_authoring_notes:
+      - Resolve workspace membership changes before any DSL or extractor task specs are written.
+      - "Preserve the plan's topology decision: regseq-model owns rustc-independent models; regseq-driver owns extraction."
+      - Keep Linux and Zephyr as separate task groups even if they share regseq-backends.
+    generated_task_ids: []
+
+  - id: phase-a-02
+    phase: A
+    title: Harness group expansion for implementation work
+    brief: .harness/spec-batches/phase-a-02.md
+    status: not_ready
+    depends_on:
+      - phase-a-01
+    target_harness_groups:
+      - regseq-facade
+      - regseq-macros
+      - regseq-model
+      - regseq-lowering
+      - regseq-linux-backend
+      - regseq-zephyr-backend
+      - track-a-pl011
+      - track-a-e1000
+      - track-a-validation
+      - track-a-eval
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/implementation-guide.md
+      - .harness/tasks.json
+    summary: >
+      Expand the harness metadata and task-group layout so later implementation
+      task specs have stable homes.
+    spec_authoring_notes:
+      - This batch should author task-group structure, not implementation tasks inside those groups.
+      - Keep naming consistent with the implementation plan unless a stronger naming reason exists.
+    generated_task_ids: []
+
+  - id: phase-b-01
+    phase: B
+    title: regseq facade PL011-core resource types and traits
+    brief: .harness/spec-batches/phase-b-01.md
+    status: not_ready
+    depends_on:
+      - phase-a-01
+      - phase-a-02
+    target_harness_groups:
+      - regseq-facade
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/construct-catalog.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for the initial facade surface: PL011-core resource
+      wrappers, marker types, and traits for lifecycle, serial, register
+      access, clock, interrupt, synchronization, firmware property access,
+      and power management.
+    spec_authoring_notes:
+      - This is facade-only surface work; do not pull extractor logic into these task specs.
+      - Keep the subset PL011-core and defer E1000-only constructs.
+      - Serial/UART operations should be explicit in the actual harness tasks.
+    generated_task_ids: []
+
+  - id: phase-b-02
+    phase: B
+    title: regseq facade intrinsic stubs for PL011-core fixtures
+    brief: .harness/spec-batches/phase-b-02.md
+    status: not_ready
+    depends_on:
+      - phase-b-01
+    target_harness_groups:
+      - regseq-facade
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/construct-catalog.md
+    summary: >
+      Author task specs for the minimum intrinsic surface needed by PL011-core
+      fixtures, including logging and timed-delay stubs if required.
+    spec_authoring_notes:
+      - Treat these as compile-time authoring support first, not lowering commitments.
+      - Do not include E1000 intrinsics in this batch.
+    generated_task_ids: []
+
+  - id: phase-b-03
+    phase: B
+    title: regseq-macros core attributes and register_bitfields surface
+    brief: .harness/spec-batches/phase-b-03.md
+    status: not_ready
+    depends_on:
+      - phase-a-01
+      - phase-a-02
+    target_harness_groups:
+      - regseq-macros
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/construct-catalog.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for the macro layer: core `#[rseq::...]` attributes
+      used by the PL011-core slice and the `register_bitfields!` declarative
+      surface for register blocks.
+    spec_authoring_notes:
+      - "`register_bitfields!` should be its own explicit task or task pair, not buried in generic macro work."
+      - Keep attribute parsing tasks separate from register block macro tasks when possible.
+    generated_task_ids: []
+
+  - id: phase-b-04
+    phase: B
+    title: regseq-model declaration model for PL011-core constructs
+    brief: .harness/spec-batches/phase-b-04.md
+    status: not_ready
+    depends_on:
+      - phase-a-01
+      - phase-a-02
+      - phase-b-01
+      - phase-b-03
+    target_harness_groups:
+      - regseq-model
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/construct-catalog.md
+      - docs/guide/open-issues.md
+    summary: >
+      Author task specs for the rustc-independent internal declaration model
+      covering the PL011-core subset, including operation classes, properties,
+      and caution-construct metadata.
+    spec_authoring_notes:
+      - Synchronization must be modeled as type-driven specification data.
+      - Driver Lifecycle owns driver_name and compatible; consumers read from that declaration site.
+    generated_task_ids: []
+
+  - id: phase-b-05
+    phase: B
+    title: regseq-model Layer 2 platform-binding format and parser
+    brief: .harness/spec-batches/phase-b-05.md
+    status: not_ready
+    depends_on:
+      - phase-a-01
+      - phase-a-02
+      - phase-b-04
+    target_harness_groups:
+      - regseq-model
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/implementation-guide.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for the Layer 2 binding format, the rustc-independent
+      binding model, and the parser or loader for deployment-specific inputs.
+    spec_authoring_notes:
+      - This batch must define the format before PL011 binding fixtures are tasked.
+      - Keep binding parsing separate from extraction logic.
+    generated_task_ids: []
+
+  - id: phase-b-06
+    phase: B
+    title: regseq-driver extraction and Layer 1 plus Layer 2 join bootstrap
+    brief: .harness/spec-batches/phase-b-06.md
+    status: not_ready
+    depends_on:
+      - phase-b-01
+      - phase-b-02
+      - phase-b-03
+      - phase-b-04
+      - phase-b-05
+    target_harness_groups:
+      - regseq-driver
+      - regseq-model
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/implementation-guide.md
+      - docs/guide/open-issues.md
+    summary: >
+      Author task specs for HIR extraction of PL011-core declarations in
+      regseq-driver, serialization of extracted artifacts, and the join path
+      that combines extracted Layer 1 data with parsed Layer 2 binding data.
+    spec_authoring_notes:
+      - Extraction tasks must stay in regseq-driver, not regseq-model.
+      - The join artifact should be reviewable and stable enough for snapshots.
+    generated_task_ids: []
+
+  - id: phase-b-07
+    phase: B
+    title: PL011-core compile fixtures and extraction snapshots
+    brief: .harness/spec-batches/phase-b-07.md
+    status: not_ready
+    depends_on:
+      - phase-b-06
+    target_harness_groups:
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for compile-only PL011-core fixtures, extraction
+      snapshot coverage, and joined-artifact tests.
+    spec_authoring_notes:
+      - These are validation tasks for the Phase B slice, not the real PL011 spec crate yet.
+    generated_task_ids: []
+
+  - id: phase-c-01
+    phase: C
+    title: PL011 spec crate scaffold and register block definition
+    brief: .harness/spec-batches/phase-c-01.md
+    status: not_ready
+    depends_on:
+      - phase-b-06
+      - phase-b-07
+    target_harness_groups:
+      - track-a-pl011
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/pl011-spec-outline.md
+      - docs/guide/device-coverage.md
+    summary: >
+      Author task specs for the first real PL011 spec crate, including
+      register block definition and core driver declarations.
+    spec_authoring_notes:
+      - Keep the first real PL011 slice minimal and semantic.
+      - Optional DMA, reset, pinctrl, timer, and atomic expansion should be separate later batches.
+    generated_task_ids: []
+
+  - id: phase-c-02
+    phase: C
+    title: PL011 binding fixtures and join validation
+    brief: .harness/spec-batches/phase-c-02.md
+    status: not_ready
+    depends_on:
+      - phase-b-05
+      - phase-c-01
+    target_harness_groups:
+      - track-a-pl011
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for concrete PL011 binding fixtures and tests that
+      validate Layer 1 plus Layer 2 joins before lowering begins.
+    spec_authoring_notes:
+      - This batch should exercise clock, interrupt, firmware-property, and other deployment-specific facts.
+    generated_task_ids: []
+
+  - id: phase-c-03
+    phase: C
+    title: PL011 extraction fidelity and artifact reviewability
+    brief: .harness/spec-batches/phase-c-03.md
+    status: not_ready
+    depends_on:
+      - phase-c-01
+      - phase-c-02
+    target_harness_groups:
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/device-coverage.md
+      - docs/guide/open-issues.md
+    summary: >
+      Author task specs for extraction-fidelity tests, joined-artifact
+      snapshots, and reviewer-facing artifact stability for the real PL011
+      spec.
+    spec_authoring_notes:
+      - Include caution-focused checks for any caution constructs present in the chosen PL011 slice.
+    generated_task_ids: []
+
+  - id: phase-d-01
+    phase: D
+    title: PL011 Linux lowering and backend task batch
+    brief: .harness/spec-batches/phase-d-01.md
+    status: not_ready
+    depends_on:
+      - phase-c-03
+    target_harness_groups:
+      - regseq-lowering
+      - regseq-linux-backend
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/lowering-contract.md
+      - docs/experiments/mir-structured-codegen/report.md
+    summary: >
+      Author the first lowering-oriented task batch for PL011 Linux output,
+      including lowering-manifest work, backend emission, and smoke validation.
+    spec_authoring_notes:
+      - Linux first. Do not couple Zephyr work into the same batch.
+    generated_task_ids: []
+
+  - id: phase-d-02
+    phase: D
+    title: PL011 Zephyr lowering and validation task batch
+    brief: .harness/spec-batches/phase-d-02.md
+    status: not_ready
+    depends_on:
+      - phase-d-01
+    target_harness_groups:
+      - regseq-lowering
+      - regseq-zephyr-backend
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/lowering-contract.md
+      - docs/experiments/mir-structured-codegen/report.md
+    summary: >
+      Author the Zephyr follow-up task batch for PL011 after Linux lowering stabilizes.
+    spec_authoring_notes:
+      - Keep structural validation separate from Linux-first bring-up concerns.
+    generated_task_ids: []
+
+  - id: phase-e-01
+    phase: E
+    title: E1000 DSL and extraction expansion task batch
+    brief: .harness/spec-batches/phase-e-01.md
+    status: not_ready
+    depends_on:
+      - phase-d-02
+    target_harness_groups:
+      - regseq-facade
+      - regseq-macros
+      - regseq-model
+      - track-a-e1000
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/e1000-spec-outline.md
+      - docs/guide/device-coverage.md
+    summary: >
+      Author the E1000 expansion task batch, including PCI, network, params,
+      deferred work, hardware reset, atomic operations, and richer DMA usage.
+    spec_authoring_notes:
+      - Keep NAPI and similar Linux mechanism choices out of the DSL surface.
+    generated_task_ids: []
+
+  - id: phase-f-01
+    phase: F
+    title: E1000 Linux lowering and benchmark-readiness batch
+    brief: .harness/spec-batches/phase-f-01.md
+    status: not_ready
+    depends_on:
+      - phase-e-01
+    target_harness_groups:
+      - regseq-lowering
+      - regseq-linux-backend
+      - track-a-eval
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/lowering-contract.md
+      - docs/experiments/mir-structured-codegen/report.md
+    summary: >
+      Author the Linux-first E1000 lowering batch with buildability and
+      benchmark-readiness as the main goals.
+    spec_authoring_notes:
+      - Keep Zephyr follow-up separate.
+    generated_task_ids: []
+
+  - id: phase-f-02
+    phase: F
+    title: E1000 Zephyr lowering follow-up batch
+    brief: .harness/spec-batches/phase-f-02.md
+    status: not_ready
+    depends_on:
+      - phase-f-01
+    target_harness_groups:
+      - regseq-lowering
+      - regseq-zephyr-backend
+      - track-a-eval
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/lowering-contract.md
+      - docs/experiments/mir-structured-codegen/report.md
+    summary: >
+      Author the Zephyr follow-up lowering batch for the supported E1000 subset.
+    generated_task_ids: []
+
+  - id: phase-g-01
+    phase: G
+    title: Evaluation packaging and report-generation batch
+    brief: .harness/spec-batches/phase-g-01.md
+    status: not_ready
+    depends_on:
+      - phase-f-02
+    target_harness_groups:
+      - track-a-eval
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/guide/implementation-guide.md
+    summary: >
+      Author the paper-facing evaluation and packaging task batch once
+      implementation and validation outputs exist.
+    generated_task_ids: []
