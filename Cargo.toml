@@ -5,6 +5,7 @@ members = [
     "crates/regseq-config",
     "crates/regseq-diagnostics",
     "crates/regseq-driver",
+    "crates/regseq-macros",
     "crates/regseq-model",
     "tests/e2e",
 ]
