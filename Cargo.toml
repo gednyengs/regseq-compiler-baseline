@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/cargo-regseq",
     "crates/regseq-config",
+    "crates/regseq-diagnostics",
     "crates/regseq-driver",
     "tests/e2e",
 ]
