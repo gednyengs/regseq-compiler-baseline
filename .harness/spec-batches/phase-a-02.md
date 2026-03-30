@@ -23,6 +23,7 @@ Read before drafting task specs:
 - `.harness/spec-batches/phase-a-01.md`
 - `docs/plans/asplos-implementation-plan.md`
 - `docs/guide/implementation-guide.md`
+- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
 
 ## Output Specification
 
@@ -59,6 +60,15 @@ Expected target groups:
 Keep naming aligned with the implementation plan unless there is a strong
 reason to do otherwise.
 
+This batch defines only stable harness homes. It must not preserve or
+reintroduce the older Phase B/C sequencing assumptions. Downstream task
+batches should follow the revised plan shape:
+
+- frontend closure tasks first
+- internal model and join tasks after frontend closure
+
+Group layout should remain broad enough to host that revised sequence cleanly.
+
 ## Non-Goals
 
 Do not include:
@@ -67,6 +77,7 @@ Do not include:
   to make the harness metadata valid
 - DSL surface work
 - extraction work
+- normalized model or join work
 - PL011 or E1000 spec work
 - lowering or backend logic
 

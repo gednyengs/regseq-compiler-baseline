@@ -224,6 +224,41 @@
           "fail_reason": null
         }
       ]
+    },
+    {
+      "id": "regseq-lowering",
+      "name": "regseq lowering infrastructure",
+      "tasks": []
+    },
+    {
+      "id": "regseq-linux-backend",
+      "name": "regseq Linux backend",
+      "tasks": []
+    },
+    {
+      "id": "regseq-zephyr-backend",
+      "name": "regseq Zephyr backend",
+      "tasks": []
+    },
+    {
+      "id": "track-a-pl011",
+      "name": "PL011 artifact device track",
+      "tasks": []
+    },
+    {
+      "id": "track-a-e1000",
+      "name": "E1000 artifact device track",
+      "tasks": []
+    },
+    {
+      "id": "track-a-validation",
+      "name": "validation and test evidence",
+      "tasks": []
+    },
+    {
+      "id": "track-a-eval",
+      "name": "evaluation packaging",
+      "tasks": []
     }
   ]
 }

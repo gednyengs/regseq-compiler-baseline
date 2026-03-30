@@ -55,7 +55,7 @@ items:
     phase: A
     title: Harness group expansion for implementation work
     brief: .harness/spec-batches/phase-a-02.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-a-01
     target_harness_groups:
@@ -81,232 +81,282 @@ items:
       - Keep naming consistent with the implementation plan unless a stronger naming reason exists.
     generated_task_ids: []
 
-  - id: phase-b-01
-    phase: B
-    title: regseq facade PL011-core resource types and traits
-    brief: .harness/spec-batches/phase-b-01.md
-    status: not_ready
+  - id: phase-a-03
+    phase: A
+    title: Phase B and C tracker realignment for the frontend-first plan
+    brief: .harness/spec-batches/phase-a-03.md
+    status: tasked
     depends_on:
       - phase-a-01
       - phase-a-02
+    target_harness_groups: []
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - .harness/task-spec-workflow.md
+      - .harness/task-spec-status.yaml
+    summary: >
+      Rewrite the Phase B and Phase C tracker items and missing brief set so
+      downstream task authoring follows frontend closure first, then internal
+      model and join, using the accepted PL011 compiler collateral as the
+      primary PL011 planning input.
+    spec_authoring_notes:
+      - This is tracker and brief maintenance only; do not author executable harness tasks in this batch.
+      - Update stale Phase B and Phase C batches before any new Phase B authoring begins.
+      - Preserve the stable group layout added in phase-a-02 while correcting downstream sequencing and source references.
+    generated_task_ids: []
+
+  - id: phase-b-01
+    phase: B
+    title: regseq facade PL011-core resource wrappers and callback traits
+    brief: .harness/spec-batches/phase-b-01.md
+    status: ready_to_elaborate
+    depends_on:
+      - phase-a-01
+      - phase-a-02
+      - phase-a-03
     target_harness_groups:
       - regseq-facade
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/construct-catalog.md
-      - docs/guide/pl011-spec-outline.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
+      - docs/pl011-compiler-collateral/constructs/
     summary: >
-      Author task specs for the initial facade surface: PL011-core resource
-      wrappers, marker types, and traits for lifecycle, serial, register
-      access, clock, interrupt, synchronization, firmware property access,
-      and power management.
+      Author task specs for the initial `regseq` facade surface needed for
+      PL011 frontend closure: typed resource wrappers, marker types, and
+      callback traits for the accepted PL011-core construct subset.
     spec_authoring_notes:
-      - This is facade-only surface work; do not pull extractor logic into these task specs.
-      - Keep the subset PL011-core and defer E1000-only constructs.
-      - Serial/UART operations should be explicit in the actual harness tasks.
+      - This is facade-only surface work; do not pull extractor logic, normalized model work, or join logic into these task specs.
+      - Use the accepted PL011 compiler collateral as the primary task-authoring input for wrapper families, callback-family names, and property spelling.
+      - Keep the subset PL011-core and defer the accepted second-pass Phase B expansion constructs unless they are required as compile stubs.
     generated_task_ids: []
 
   - id: phase-b-02
     phase: B
-    title: regseq facade intrinsic stubs for PL011-core fixtures
+    title: regseq-macros register_bitfields and helper macro surface
     brief: .harness/spec-batches/phase-b-02.md
     status: not_ready
     depends_on:
       - phase-b-01
     target_harness_groups:
-      - regseq-facade
+      - regseq-macros
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/construct-catalog.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/constructs/register-access.md
+      - docs/pl011-compiler-collateral/constructs/serial-uart-management.md
     summary: >
-      Author task specs for the minimum intrinsic surface needed by PL011-core
-      fixtures, including logging and timed-delay stubs if required.
+      Author task specs for the macro layer needed by the PL011 frontend
+      slice, centered on `register_bitfields!` and any additional accepted
+      non-attribute helper macros.
     spec_authoring_notes:
-      - Treat these as compile-time authoring support first, not lowering commitments.
-      - Do not include E1000 intrinsics in this batch.
+      - Do not assign ownership of inert `#[rseq::...]` tool attributes to `regseq-macros`; those remain compiler-registered and extracted through `regseq-driver`.
+      - Keep `register_bitfields!` explicit and separable from any smaller helper macros that support the same frontend slice.
+      - This batch is still frontend-only authoring support; do not pull lowering behavior into macro task specs.
     generated_task_ids: []
 
   - id: phase-b-03
     phase: B
-    title: regseq-macros register_bitfields and helper macro surface
+    title: regseq facade intrinsic stubs for PL011-core frontend support
     brief: .harness/spec-batches/phase-b-03.md
     status: not_ready
     depends_on:
-      - phase-a-01
-      - phase-a-02
+      - phase-b-01
     target_harness_groups:
-      - regseq-macros
+      - regseq-facade
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/construct-catalog.md
-      - docs/guide/pl011-spec-outline.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/constructs/diagnostic-logging.md
+      - docs/pl011-compiler-collateral/constructs/timed-cpu-delay-and-sleep.md
     summary: >
-      Author task specs for the macro layer: `register_bitfields!` and any
-      additional helper macros needed by the PL011-core slice. Do not assign
-      ownership of inert `#[rseq::...]` tool attributes to `regseq-macros`.
+      Author task specs for the minimum intrinsic surface needed to make the
+      accepted PL011 frontend slice authorable, including logging and
+      timed-delay stubs only where the frontend evidence requires them.
     spec_authoring_notes:
-      - "`register_bitfields!` should be its own explicit task or task pair, not buried in generic macro work."
-      - "`#[rseq::...]` attributes are inert tool attributes registered by `regseq-driver`; task this recognition and extraction work outside `regseq-macros`."
-      - Keep helper macro tasks separate from register block macro tasks when possible.
+      - Treat these as authoring-support intrinsics first, not lowering commitments.
+      - Keep the intrinsic surface minimal and tied to accepted compiler collateral; do not speculate beyond what the PL011 frontend slice needs.
+      - Do not include E1000-only intrinsic work in this batch.
     generated_task_ids: []
 
   - id: phase-b-04
     phase: B
-    title: regseq-model declaration model for PL011-core constructs
+    title: PL011-core spec crate scaffold and core frontend evidence
     brief: .harness/spec-batches/phase-b-04.md
-    status: not_ready
-    depends_on:
-      - phase-a-01
-      - phase-a-02
-      - phase-b-01
-      - phase-b-03
-    target_harness_groups:
-      - regseq-model
-    source_refs:
-      - docs/plans/asplos-implementation-plan.md
-      - docs/guide/construct-catalog.md
-      - docs/guide/open-issues.md
-    summary: >
-      Author task specs for the rustc-independent internal declaration model
-      covering the PL011-core subset, including operation classes, properties,
-      and caution-construct metadata.
-    spec_authoring_notes:
-      - Synchronization must be modeled as type-driven specification data.
-      - Driver Lifecycle owns driver_name and compatible; consumers read from that declaration site.
-    generated_task_ids: []
-
-  - id: phase-b-05
-    phase: B
-    title: regseq-model Layer 2 platform-binding format and parser
-    brief: .harness/spec-batches/phase-b-05.md
-    status: not_ready
-    depends_on:
-      - phase-a-01
-      - phase-a-02
-      - phase-b-04
-    target_harness_groups:
-      - regseq-model
-    source_refs:
-      - docs/plans/asplos-implementation-plan.md
-      - docs/guide/implementation-guide.md
-      - docs/guide/pl011-spec-outline.md
-    summary: >
-      Author task specs for the Layer 2 binding format, the rustc-independent
-      binding model, and the parser or loader for deployment-specific inputs.
-    spec_authoring_notes:
-      - This batch must define the format before PL011 binding fixtures are tasked.
-      - Keep binding parsing separate from extraction logic.
-    generated_task_ids: []
-
-  - id: phase-b-06
-    phase: B
-    title: regseq-driver extraction and Layer 1 plus Layer 2 join bootstrap
-    brief: .harness/spec-batches/phase-b-06.md
     status: not_ready
     depends_on:
       - phase-b-01
       - phase-b-02
       - phase-b-03
+    target_harness_groups:
+      - track-a-pl011
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for the first real PL011-facing spec crate that proves
+      the accepted frontend surface is real: register definitions, core driver
+      declarations, and a minimal frontend slice over the accepted PL011-core
+      subset.
+    spec_authoring_notes:
+      - This batch belongs to frontend closure, not internal model work.
+      - Keep the first PL011 slice minimal but real; use fixture work only where it isolates narrow frontend cases.
+      - Driver Lifecycle remains the declaration site for `driver_name` and `compatible`; later consumers must not redeclare them elsewhere.
+    generated_task_ids: []
+
+  - id: phase-b-05
+    phase: B
+    title: regseq-model Layer 2 binding format, parser, and validation
+    brief: .harness/spec-batches/phase-b-05.md
+    status: not_ready
+    depends_on:
+      - phase-b-04
+    target_harness_groups:
+      - regseq-model
+      - track-a-validation
+    source_refs:
+      - docs/plans/asplos-implementation-plan.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
+      - docs/guide/pl011-spec-outline.md
+    summary: >
+      Author task specs for the Layer 2 binding file format, parser, and
+      validation support needed by frontend closure, without committing yet to
+      the final normalized binding model.
+    spec_authoring_notes:
+      - Keep Layer 2 format/parser work separate from extraction logic and separate from the later normalized binding model in Phase C.
+      - Include the minimal Layer 1/Layer 2 boundary-compatibility shape checks required by the plan, but do not define the final join here.
+      - Use the accepted PL011 compiler collateral and the PL011 outline only for the supported subset, not as a license to widen the binding contract.
+    generated_task_ids: []
+
+  - id: phase-b-06
+    phase: B
+    title: regseq-driver attribute recognition, raw extraction, and raw-artifact serialization
+    brief: .harness/spec-batches/phase-b-06.md
+    status: not_ready
+    depends_on:
       - phase-b-04
       - phase-b-05
     target_harness_groups:
       - regseq-driver
-      - regseq-model
+      - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/implementation-guide.md
-      - docs/guide/open-issues.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
+      - docs/pl011-compiler-collateral/constructs/
     summary: >
-      Author task specs for HIR extraction of PL011-core declarations in
-      regseq-driver, serialization of extracted artifacts, and the join path
-      that combines extracted Layer 1 data with parsed Layer 2 binding data.
+      Author task specs for inert attribute recognition, raw HIR/MIR
+      extraction of the accepted PL011 frontend slice, and serialization of a
+      reviewable raw extraction artifact keyed by construct identity.
     spec_authoring_notes:
-      - Extraction tasks must stay in regseq-driver, not regseq-model.
-      - The join artifact should be reviewable and stable enough for snapshots.
+      - Extraction tasks must stay in `regseq-driver`, not `regseq-model`.
+      - Preserve operation-class distinctions, type-driven choices, declaration order where relevant, and intrinsic call-site capture in the raw artifact.
+      - Do not introduce normalized join logic here; the output boundary for this batch is the raw artifact.
     generated_task_ids: []
 
   - id: phase-b-07
     phase: B
-    title: PL011-core compile fixtures and extraction snapshots
+    title: frontend closure validation, boundary compatibility, and deferred Phase B expansion
     brief: .harness/spec-batches/phase-b-07.md
     status: not_ready
     depends_on:
       - phase-b-06
     target_harness_groups:
+      - track-a-pl011
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
       - docs/guide/pl011-spec-outline.md
     summary: >
-      Author task specs for compile-only PL011-core fixtures, extraction
-      snapshot coverage, and joined-artifact tests.
+      Author task specs for frontend-closure validation: raw-artifact snapshot
+      coverage, Layer 1/Layer 2 boundary compatibility checks, caution-focused
+      extraction QC, and any deferred-but-still-Phase-B PL011 constructs needed
+      to complete the accepted frontend baseline.
     spec_authoring_notes:
-      - These are validation tasks for the Phase B slice, not the real PL011 spec crate yet.
+      - Keep this batch in Phase B. Deferred frontend constructs do not move into Phase C simply because they arrive in a second pass.
+      - Validation should target the raw artifact and frontend boundary, not the final joined model.
+      - Use `track-a-pl011` as the primary real-device evidence and add narrower fixtures only where they isolate frontend edge cases.
     generated_task_ids: []
 
   - id: phase-c-01
     phase: C
-    title: PL011 spec crate scaffold and register block definition
+    title: regseq-model normalized declaration model for the supported PL011 slice
     brief: .harness/spec-batches/phase-c-01.md
     status: not_ready
     depends_on:
-      - phase-b-06
       - phase-b-07
     target_harness_groups:
-      - track-a-pl011
+      - regseq-model
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/pl011-spec-outline.md
-      - docs/guide/device-coverage.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
+      - docs/guide/implementation-guide.md
     summary: >
-      Author task specs for the first real PL011 spec crate, including
-      register block definition and core driver declarations.
+      Author task specs for the normalized declaration model that turns the raw
+      extraction artifact for the supported PL011 slice into stable
+      rustc-independent internal types.
     spec_authoring_notes:
-      - Keep the first real PL011 slice minimal and semantic.
-      - Optional DMA, reset, pinctrl, timer, and atomic expansion should be separate later batches.
+      - This is the start of internal model work. Use what raw extraction actually produces; do not assume a normalized shape that outruns the raw artifact.
+      - Preserve construct ownership, operation classes, type-driven properties, and source traceability.
+      - Keep binding-model and join concerns out of this batch.
     generated_task_ids: []
 
   - id: phase-c-02
     phase: C
-    title: PL011 binding fixtures and join validation
+    title: regseq-model normalized binding model and Layer 1 plus Layer 2 join
     brief: .harness/spec-batches/phase-c-02.md
     status: not_ready
     depends_on:
-      - phase-b-05
       - phase-c-01
+      - phase-b-05
     target_harness_groups:
-      - track-a-pl011
+      - regseq-model
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/pl011-spec-outline.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
+      - docs/guide/implementation-guide.md
     summary: >
-      Author task specs for concrete PL011 binding fixtures and tests that
-      validate Layer 1 plus Layer 2 joins before lowering begins.
+      Author task specs for the normalized binding model and the real join path
+      that combines normalized Layer 1 and Layer 2 data into a reviewable
+      joined artifact for the supported PL011 slice.
     spec_authoring_notes:
-      - This batch should exercise clock, interrupt, firmware-property, and other deployment-specific facts.
+      - Keep the join boundary explicit and reviewable.
+      - Do not widen the accepted Layer 2 contract while building the normalized binding model.
+      - Use concrete PL011 binding fixtures to prove the join, but keep frontend redesign out of scope unless raw extraction exposed a proven mismatch.
     generated_task_ids: []
 
   - id: phase-c-03
     phase: C
-    title: PL011 extraction fidelity and artifact reviewability
+    title: analysis bootstrap, joined-artifact validation, and lowering-input stability
     brief: .harness/spec-batches/phase-c-03.md
     status: not_ready
     depends_on:
-      - phase-c-01
       - phase-c-02
     target_harness_groups:
+      - regseq-analysis
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/device-coverage.md
+      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/pl011-compiler-collateral/compiler-constraints.md
       - docs/guide/open-issues.md
     summary: >
-      Author task specs for extraction-fidelity tests, joined-artifact
-      snapshots, and reviewer-facing artifact stability for the real PL011
-      spec.
+      Author task specs for the minimum analysis/bootstrap checks over the
+      normalized PL011 slice, reviewer-facing joined-artifact validation, and
+      the stability contract needed before Phase D lowering begins.
     spec_authoring_notes:
-      - Include caution-focused checks for any caution constructs present in the chosen PL011 slice.
+      - This is the last Phase C gate before lowering-oriented task authoring.
+      - Include caution-focused checks for any caution constructs present in the supported PL011 slice.
+      - The output should be a stable joined-artifact/lowering-input contract, not backend work.
     generated_task_ids: []
 
   - id: phase-d-01
