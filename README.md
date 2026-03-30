@@ -15,7 +15,10 @@ Regseq operates on a three-layer model:
   Rust: register layouts, interrupt intent, DMA structure, synchronization,
   parameters, and lifecycle behavior. Uses `#[rseq::*]` attributes, resource
   types, traits, and compiler-recognized intrinsics. Captures *what* the
-  device needs, not *how* any particular OS provides it.
+  device needs, not *how* any particular OS provides it. The `rseq`
+  attribute namespace is a compiler-registered custom tool namespace, kept
+  separate from the `regseq` crate namespace used for helper macros and
+  facade types.
 
 - **Layer 2 -- Platform Binding.** Board- and SoC-specific integration data:
   MMIO base addresses, IRQ routing, clock/reset hookups, BAR assignments.

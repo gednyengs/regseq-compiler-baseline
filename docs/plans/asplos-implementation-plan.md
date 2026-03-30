@@ -28,6 +28,11 @@ Use the construct catalog and lowering contract as the authority for:
 - operation classes
 - declarable properties
 - lowering responsibilities
+Use the PL011 compiler collateral package as the primary operational planning
+input for PL011 compiler work:
+- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
+- `docs/pl011-compiler-collateral/compiler-constraints.md`
+- `docs/pl011-compiler-collateral/constructs/`
 Use the spec outlines only to decide:
 - which validated constructs appear in PL011 and E1000
 - what the first implementation slices should contain
@@ -48,11 +53,12 @@ This track does not target:
 ### 2.3 Sequencing Rule
 Overall sequencing is:
 1. workspace activation
-2. DSL surface
-3. declaration model and extraction
-4. PL011 end-to-end
-5. E1000 end-to-end
-6. paper-facing evaluation
+2. frontend closure
+3. internal model and join
+4. PL011 lowering and validation
+5. E1000 specification, extraction, and model closure
+6. E1000 lowering and validation
+7. paper-facing evaluation
    
 Within lowering phases, sequencing is:
 1. Linux first
@@ -77,6 +83,8 @@ The following constructs require explicit QC notes in this plan and in any resul
 - Timed Delay
 - Deferred Work
 These are not blockers, but they require stronger extraction and lowering tests than ordinary constructs.
+For PL011-core frontend closure, these constructs also require extraction-level
+QC, not just lowering-level QC.
 
 ## 3. Current Baseline
 The current workspace already has a functioning bootstrap path for:
@@ -92,25 +100,30 @@ The current workspace does not yet have real crate implementations for:
 Those crate directories already exist, but they are not yet live workspace members with implementation code. Workspace activation is therefore real implementation work, not clerical setup.
 The current implementation plan resolves crate topology as follows:
 - `regseq`: public Layer 1 facade for driver authors
-- `regseq-macros`: proc macros and declarative register-surface macros, including `register_bitfields!`
+- `regseq-macros`: helper proc macros and declarative register-surface macros,
+  including `register_bitfields!`; inert `#[rseq::...]` tool attributes are
+  registered by `regseq-driver`, not provided by proc macros
 - `regseq-model`: new rustc-independent crate for declaration models, platform binding models, joined lowering inputs, serialization, and debug artifacts
 - `regseq-driver`: rustc-linked extraction crate; owns HIR/MIR collection and joins extracted Layer 1 data with parsed Layer 2 binding data before lowering
 - `regseq-analysis`: analysis and validation passes over rustc-independent models
 - `regseq-backends`: single crate with per-OS modules for now; Linux and Zephyr remain separate task groups even if they share one crate
 - `regseq-diagnostics`: shared diagnostics and reporting support
+`regseq-model` work therefore spans two different planning stages:
+- Phase B for Layer 2 format/parser support and raw-artifact serialization helpers
+- Phase C for normalized declaration/binding models and joined lowering inputs
 Backend crates should stay unified initially. Split them only if a later phase shows the single-crate backend layout is blocking task isolation or dependency hygiene.
 Later lowering and backend tasks should also treat `docs/experiments/mir-structured-codegen/report.md` as required reference material for MIR extraction shape, CFG structuring, expression folding, and decorated C emission.
 
 ## 4. Phase Overview
-| Phase | Name                                 | Primary Goal                                                  | Main Output                                   |
-| ----- | ------------------------------------ | ------------------------------------------------------------- | --------------------------------------------- |
-| A     | Workspace Activation                 | turn the bootstrap workspace into an implementation workspace | live crates, task groups, compiler layering   |
-| B     | DSL Surface and Extraction Bootstrap | make a PL011-core Regseq surface compile and extract          | facade, macros, model, extractor              |
-| C     | PL011 Specification and Extraction   | validate the first real device spec and extraction path       | PL011 spec crate and extracted model          |
-| D     | PL011 Lowering and Validation        | prove one full end-to-end device path                         | generated PL011 Linux and Zephyr artifacts    |
-| E     | E1000 Specification and Extraction   | expand to the richer device and its constructs                | E1000 spec crate and extracted model          |
-| F     | E1000 Lowering and Validation        | prove the richer device can lower and build                   | generated E1000 Linux and Zephyr artifacts    |
-| G     | Evaluation Packaging                 | assemble paper-facing evidence                                | comparison tables, metrics, benchmark outputs |
+| Phase | Name                                 | Primary Goal                                                  | Main Output                                                |
+| ----- | ------------------------------------ | ------------------------------------------------------------- | ---------------------------------------------------------- |
+| A     | Workspace Activation                 | turn the bootstrap workspace into an implementation workspace | live crates, task groups, compiler layering                |
+| B     | Frontend Closure                     | make the accepted PL011 frontend compile, parse, and extract | compiling PL011 surface, parsed bindings, raw extraction artifact |
+| C     | Internal Model and Join              | turn raw frontend capture into stable compiler inputs         | normalized model, binding model, joined artifact           |
+| D     | PL011 Lowering and Validation        | prove one full end-to-end device path                         | generated PL011 Linux and Zephyr artifacts                 |
+| E     | E1000 Specification, Extraction, and Model Closure | expand the compiler pipeline to the richer device and its constructs | E1000 spec crate and joined model artifact                 |
+| F     | E1000 Lowering and Validation        | prove the richer device can lower and build                   | generated E1000 Linux and Zephyr artifacts                 |
+| G     | Evaluation Packaging                 | assemble paper-facing evidence                                | comparison tables, metrics, benchmark outputs              |
 
 ## 5. Phase A: Workspace Activation
 
@@ -165,27 +178,35 @@ Phase A should decompose into narrow setup tasks such as:
 ### Exit Criteria
 Phase A is complete when all required crates are live workspace members, the workspace builds cleanly, harness groups exist for the implementation stream, and later phases can create API-first tasks without restructuring the workspace again.
 
-## 6. Phase B: DSL Surface and Extraction Bootstrap
-Phase B should not be treated as facade-only work. It should be split into two workstreams.
+## 6. Phase B: Frontend Closure
 
-### Phase B1 Objective
-Create a compile-only PL011-core Regseq surface in Rust.
+### Objective
+Close the accepted PL011 frontend end-to-end:
+- the accepted Layer 1 DSL surface compiles
+- Layer 2 platform files parse and validate
+- the compiler can find and extract accepted PL011 primitives from HIR/MIR
+- extraction emits a reviewable raw artifact
 
-### Phase B2 Objective
-Create the declaration model and extractor support needed to turn that surface into a reviewable internal artifact.
+This phase should close frontend capture without requiring the final normalized
+internal model, analysis stack, or lowering design to be complete first.
 
 ### Scope
-In scope for the first Phase B slice:
+In scope:
 - PL011-core constructs only
-- compile-only authoring support
-- declaration modeling
-- extraction bootstrap
-- extracted-model artifact emission for the supported subset
+- authorable Layer 1 facade and helper macro support
+- inert `#[rseq::...]` tool-attribute recognition in the compiler path
+- Layer 2 platform-binding file format plus parser and validator
+- raw HIR/MIR extraction of accepted primitives
+- raw extraction artifact emission
+- PL011 spec and fixture coverage sufficient to prove frontend closure
   
-Out of scope for the first Phase B slice:
+Out of scope:
+- normalized rustc-independent declaration-model design
+- normalized binding-model design
+- full Layer 1 + Layer 2 join logic
+- analysis passes beyond extraction-level validation
+- lowering and backend realization
 - E1000-specific constructs
-- final lowering
-- full dual-device syntax closure
 - performance-sensitive backend decisions
   
 ### PL011-Core Construct Subset
@@ -201,7 +222,8 @@ The initial supported subset should include:
 Allowed as stubs if needed by the PL011 fixture:
 - Diagnostic Logging intrinsics
 - Timed Delay intrinsics
-Explicitly deferred until after PL011 extraction works:
+Deferred from the initial PL011-core pass, but still within Phase B before full
+frontend closure:
 - DMA optional channels
 - Hardware Reset
 - Pin/GPIO
@@ -211,100 +233,133 @@ Explicitly deferred until after PL011 extraction works:
 - Bus Resource Management
 - Parameter Registration
 - Deferred Work
+These constructs should be pulled into a second Phase B expansion pass once the
+core PL011 frontend path is proven. They do not move to Phase C, because
+Phase C is reserved for normalized model, join, and analysis work.
   
 ### Requirements
-1. The facade crate must provide real public types for the supported resources and traits.
-2. The macro crate must provide only the attribute and declarative surface needed by the supported subset.
-3. The API surface must align exactly with validated construct and property names from the guide.
-4. The extractor must preserve operation-class distinctions: driver-facing trait operations, driver-invoked intrinsics, and compiler-managed operations.
-5. The model must represent type-driven specification choices, especially synchronization types and their protected data types.
-6. The extractor must treat `driver_name` and `compatible` as declared by Driver Lifecycle and consumed elsewhere, not redeclared.
-7. The extracted-model artifact must be serializable and reviewable.
-8. Phase B2 must define the Layer 2 platform binding artifact format, the rustc-independent Rust model for that artifact, and the join boundary where extracted Layer 1 declarations are combined with parsed Layer 2 data.
+1. The facade crate must provide real public types for the supported resources, wrappers, and traits.
+2. The macro crate must provide only the helper-macro and declarative surface needed by the supported subset.
+3. The frontend surface must align with the accepted PL011 compiler collateral and validated construct/property names from the guide.
+4. The Layer 2 platform-binding format must be defined, parsed, and validated without requiring the final normalized binding model.
+5. The extractor must preserve operation-class distinctions: driver-facing trait operations, driver-invoked intrinsics, and compiler-managed operations.
+6. The extractor must preserve type-driven specification choices, especially synchronization types, optional resources, and protected-data type parameters.
+7. The extractor must treat `driver_name` and `compatible` as declared by Driver Lifecycle and consumed elsewhere, not redeclared.
+8. The raw extraction artifact must be serializable, reviewable, and keyed by construct identity.
+9. The raw extraction artifact schema must preserve enough structure for later internal work:
+   - operation classes
+   - typed properties and generic choices
+   - declaration order where later lifecycle work depends on it
+   - intrinsic call sites and source context
+10. Phase B must include a minimal Layer 1 / Layer 2 boundary compatibility check proving that parsed bindings and raw extraction outputs can be related without yet defining the final joined model.
+This constrains what Phase B must capture, not the final normalized model shape.
    
 ### Task Description
 Phase B should decompose into task groups such as:
-- facade resource marker types
-- facade traits for lifecycle, serial, register access, clock, and interrupt
+- facade resource marker types and typed wrappers
+- facade traits for lifecycle, serial, power management, and other supported callback families
 - intrinsic stubs for log and delay if required by fixtures
-- macro support for `#[rseq::driver]`, `#[rseq::device_class]`, `#[rseq::mmio]`, `#[rseq::interrupt]`, `#[rseq::clock]`, `#[rseq::property]`, `#[rseq::pm]`, and `register_bitfields!`
-- declaration-model types for supported constructs
-- platform-binding model types and file schema definition
-- binding parser and loader for Layer 2 input
-- extractor collection for supported item kinds
-- Layer 1 + Layer 2 join logic prior to lowering
-- extracted-model serialization and snapshot tests
+- helper macro support for `register_bitfields!` and any additional
+  non-attribute helper macros needed by the PL011-core slice
+- Layer 2 file-schema definition plus binding parser and validator
+- extraction and semantic handling of inert `#[rseq::driver]`,
+  `#[rseq::device_class]`, `#[rseq::mmio]`, `#[rseq::interrupt]`,
+  `#[rseq::clock]`, `#[rseq::property]`, and `#[rseq::pm]` tool attributes
+- construct-by-construct collection for supported item kinds from HIR/MIR
+- raw extraction artifact serialization and snapshot tests
+- `track-a-pl011` spec-crate work as the primary evidence that the accepted
+  frontend surface and extraction paths are real, not only synthetic fixtures
+- fixture work where needed to isolate narrow frontend cases before the full
+  PL011 slice is assembled
   
 ### Outputs
 - live `regseq` facade crate
 - live `regseq-macros` crate
-- live `regseq-model` crate
-- compile-only PL011-core fixture support
-- internal declaration model for the supported subset
-- platform binding format and parser for the supported subset
+- compile-capable PL011-core frontend support
+- `track-a-pl011` spec crate for the first real frontend slice
+- platform-binding format and parser/validator for the supported subset
 - extraction support in `regseq-driver`
-- joined Layer 1 and Layer 2 model ready for later lowering
-- extracted-model debug artifact for supported fixtures
+- raw extraction debug artifact for supported fixtures/specs
+- PL011 binding fixture inputs and frontend closure notes
   
 ### Test Strategy
-- compile-only fixture tests for the supported DSL forms
-- macro parsing tests for all supported attributes
+- compile tests for the supported DSL forms and the first real PL011-facing frontend slice
+- macro parsing tests for all supported helper macros
 - `register_bitfields!` parsing and expansion tests
 - type-shape tests for resource wrappers and traits
-- binding parser tests for representative Layer 2 inputs
-- extraction tests asserting expected declarations, expected properties, operation classes, synchronization metadata, and successful Layer 1 + Layer 2 joins
-- snapshot tests for the extracted-model artifact
+- binding parser and validation tests for representative Layer 2 inputs
+- extraction tests asserting expected declarations, expected properties,
+  operation classes, synchronization metadata, declaration ordering where
+  relevant, and intrinsic call-site capture
+- extraction-level QC tests for caution constructs present in the PL011-core slice
+- a minimal Layer 1 / Layer 2 boundary compatibility smoke test
+- snapshot tests for the raw extraction artifact
   
 ### Exit Criteria
-Phase B is complete when a PL011-core fixture compiles through the Regseq surface, the extractor produces a stable internal model for that fixture, and no unsupported primitives were invented to make the fixture compile.
+Phase B is complete when the accepted PL011 frontend slice, including the
+deferred Phase B expansion constructs needed by the PL011 baseline, compiles,
+representative Layer 2 bindings parse and validate, extraction captures the
+expected PL011 primitives into a stable raw artifact, the raw artifact is
+reviewable and traceable back to source, and no unsupported primitives were
+invented to make the frontend compile.
 
-## 7. Phase C: PL011 Specification and Extraction
+## 7. Phase C: Internal Model and Join
 ### Objective
-Author the first real device specification in scope and validate that the extraction path handles a real driver, not just compile-only fixtures.
+Turn raw frontend capture into stable compiler inputs by defining the normalized
+internal model, the normalized binding model, the Layer 1 + Layer 2 join path,
+and the first analysis/validation passes needed before lowering begins.
 
 ### Scope
 In scope:
-- PL011 spec crate
-- PL011 platform binding instances using the already-defined binding format
-- extraction coverage for validated PL011 construct-bearing behavior
+- normalized declaration-model types
+- normalized platform-binding model types
+- Layer 1 + Layer 2 join logic
+- joined-artifact serialization
+- analysis and validation bootstrap over normalized models
 Out of scope:
-- final generated driver correctness
+- backend lowering and emission
 - E1000 support
-- full optional PL011 feature coverage on day one if not needed for the validated slice
+- broad surface redesign unless raw extraction reveals a proven mismatch
   
 ### Requirements
-1. The PL011 spec crate must express the validated PL011 slice without inventing new primitives.
-2. The spec must remain at the semantic level and not encode Linux- or Zephyr-specific API choices.
-3. The extraction path must cover the supported PL011 constructs and their declared properties.
-4. The extracted-model artifact must be suitable for human review.
-5. The PL011 spec must be joinable with a real Layer 2 binding instance before lowering work starts.
-6. Any caution construct implemented in the chosen slice must carry explicit QC notes and tests.
+1. The normalized declaration model must be informed by what raw extraction actually produces, rather than assumed in advance.
+2. The normalized model must preserve construct ownership, operation classes, type-driven properties, and source traceability from the raw artifact.
+3. The normalized binding model must represent the accepted Layer 2 file format without widening the frontend contract.
+4. The join boundary must combine extracted Layer 1 data with parsed Layer 2 data into a reviewable joined artifact.
+5. Phase C must establish the minimum analysis and validation passes needed to confirm model completeness and consistency for the PL011 slice.
+6. The joined artifact must be stable enough to serve as the input contract for lowering work in Phase D.
    
 ### Task Description
 Phase C should decompose into:
-- PL011 crate scaffolding and fixture integration
-- PL011 binding fixtures that exercise clock, interrupt, firmware-property, and other deployment-specific inputs
-- register block declaration work
-- lifecycle and device-class declaration work
-- interrupt, clock, property, and synchronization extraction coverage
-- optional expansion tasks for DMA, reset, pinctrl, timer, or atomic only after the minimal spec extracts cleanly
+- normalized declaration-model types for the supported constructs
+- normalized binding-model types for the supported Layer 2 subset
+- join logic that combines raw extraction output with parsed binding data
+- joined-artifact serialization and snapshot coverage
+- analysis/bootstrap checks for operation-class integrity, property completeness,
+  synchronization metadata, and cross-construct ownership consistency
+- optional refinement tasks if raw extraction reveals a proven mismatch that
+  must be resolved before lowering
   
 ### Outputs
-- `track-a-pl011` spec crate
-- PL011 binding fixture set
-- extracted PL011 model artifact
+- normalized declaration model for the supported PL011 slice
+- normalized binding model for the supported Layer 2 subset
 - joined PL011 lowering-input artifact
-- extraction comparison notes against expected PL011 construct usage
+- joined-artifact snapshots
+- model and join comparison notes against expected PL011 construct usage
   
 ### Test Strategy
-- compile tests for the PL011 spec crate
-- binding parse and join tests for PL011 fixture inputs
-- extraction tests keyed to PL011 expected declarations
-- snapshot tests for extracted and joined PL011 model artifacts
+- normalization tests from raw extraction into the declaration model
+- binding-model tests over accepted Layer 2 parsed inputs
+- join tests keyed to PL011 expected declarations and binding data
+- snapshot tests for joined PL011 artifacts
 - focused tests for caution constructs present in the chosen PL011 slice
   
 ### Exit Criteria
-Phase C is complete when the PL011 spec compiles against the real Regseq surface, extraction captures the expected PL011 declarations and properties, a real PL011 binding instance joins cleanly with the spec, and reviewers can inspect serialized extracted and joined artifacts and trace them back to source inputs.
+Phase C is complete when the raw extraction artifact normalizes cleanly into the
+internal model, a real PL011 binding instance joins cleanly with that model,
+reviewers can inspect the joined artifact and trace it back to frontend inputs,
+and the joined artifact is stable enough to serve as the lowering input for
+Phase D.
 
 ## 8. Phase D: PL011 Lowering and Validation
 
@@ -329,7 +384,7 @@ Out of scope:
 - paper benchmark packaging
   
 ### Requirements
-1. Lowering must preserve the validated construct-bearing behavior of the extracted PL011 model.
+1. Lowering must preserve the validated construct-bearing behavior of the joined PL011 model.
 2. Compiler-managed work from the lowering contract must appear in the generated output where applicable.
 3. Linux output must be build-oriented first, with QEMU or equivalent smoke validation.
 4. Zephyr output must be structurally compatible with Zephyr's static build model.
@@ -353,7 +408,7 @@ Phase D should decompose into:
 - smoke validation evidence
   
 ### Test Strategy
-- lowering unit tests over extracted PL011 models
+- lowering unit tests over joined PL011 models
 - backend snapshot or golden-structure tests
 - integration tests that assert presence of required structural features
 - environment-backed smoke tests in QEMU or equivalent
@@ -361,16 +416,18 @@ Phase D should decompose into:
 ### Exit Criteria
 Phase D is complete when PL011 lowers to Linux output that is structurally correct and buildable, PL011 lowers to Zephyr output after Linux stabilization, and no validated PL011 construct-bearing behavior is missing from the supported slice.
 
-## 9. Phase E: E1000 Specification and Extraction
+## 9. Phase E: E1000 Specification, Extraction, and Model Closure
 
 ### Objective
-Extend the Regseq surface and extraction path to cover the richer, performance-sensitive E1000 device.
+Extend the Regseq frontend, model, and extraction path to cover the richer,
+performance-sensitive E1000 device and produce lowering-ready joined artifacts.
 
 ### Scope
 In scope:
 - E1000 spec crate
 - E1000-only construct expansion
 - extraction support for richer DMA, PCI, parameters, network, deferred work, hardware reset, and atomic-operation behavior
+- normalized model and join support for the E1000 slice
 Out of scope:
 - benchmark packaging
 - broad abstraction redesign unless a validated mismatch is discovered
@@ -380,27 +437,33 @@ Out of scope:
 2. The added surface must cover Bus Resource Management, Network Interface Management, Parameter Registration, Deferred Work, Hardware Reset, Atomic Operations, and richer DMA usage.
 3. The spec must remain semantic and must not encode Linux mechanisms like NAPI as first-class DSL constructs.
 4. Runtime parameters and compiler-managed preamble behavior must be represented explicitly in the model.
+5. Phase E should follow the same frontend-to-model sequencing used for PL011:
+   frontend capture first, then normalized model and join closure.
    
 ### Task Description
 Phase E should decompose into:
 - E1000-specific facade expansion
-- E1000-specific extractor and model expansion
+- E1000-specific extractor expansion
+- E1000-specific model and join expansion
 - E1000 spec crate authoring
 - extraction tests for PCI, DMA ring declarations, params, interrupts, network operations, deferred work, hardware reset, and atomic state
   
 ### Outputs
 - `track-a-e1000` spec crate
-- extracted E1000 model artifact
-- extraction comparison notes for E1000 constructs
+- joined E1000 model artifact
+- extraction and model comparison notes for E1000 constructs
   
 ### Test Strategy
 - compile tests for the E1000 spec
 - extraction tests for the new construct set
-- snapshot tests for extracted E1000 artifacts
+- snapshot tests for extracted and joined E1000 artifacts
 - caution tests for parameter registration, deferred work, logging, synchronization, and timed delay
   
 ### Exit Criteria
-Phase E is complete when the E1000 spec compiles and extracts against the real Regseq surface and the extracted model captures the validated DMA, network, interrupt, parameter, reset, and atomic structure needed for lowering.
+Phase E is complete when the E1000 spec compiles and extracts against the real
+Regseq surface, the normalized and joined E1000 model captures the validated
+DMA, network, interrupt, parameter, reset, and atomic structure needed for
+lowering, and the richer device still fits the PL011-proven pipeline shape.
 
 ## 10. Phase F: E1000 Lowering and Validation
 
@@ -447,7 +510,7 @@ Phase F should decompose into:
 - benchmark-ready environment outputs
   
 ### Test Strategy
-- lowering tests over extracted E1000 models
+- lowering tests over joined E1000 models
 - backend structure tests for emitted C
 - Linux build integration tests
 - smoke tests in virtualized environments
@@ -510,7 +573,8 @@ Each phase should contribute to a layered test stack.
   
 ### Integration Level
 - compile-only spec fixtures
-- extractor-to-model tests
+- extractor-to-raw-artifact tests
+- raw-artifact-to-model tests
 - model-to-lowering tests
 - backend structure tests
   
@@ -531,8 +595,10 @@ When converting this plan into harness tasks:
 3. Every task must cite the specific guide artifacts it draws from.
 4. Every task must include implementation scope, explicit non-goals, a test plan, and a quality gate.
 5. Caution constructs must include an explicit QC note in the task text.
-6. Do not create E1000-facing worker tasks until PL011 extraction is established.
-7. Do not combine Linux-first lowering work and Zephyr follow-up into one oversized task.
+6. Do not create E1000-facing worker tasks until PL011 frontend closure is established.
+7. Do not let normalized model, join, or analysis tasks block frontend-closure task authoring.
+8. Use the accepted PL011 compiler collateral as the primary task-authoring input for PL011 compiler tasks.
+9. Do not combine Linux-first lowering work and Zephyr follow-up into one oversized task.
    
 ## 14. Immediate Next Planning Output
 The next artifact after this plan should be a harness task breakdown for:

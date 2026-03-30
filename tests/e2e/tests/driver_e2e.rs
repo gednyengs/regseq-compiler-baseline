@@ -33,10 +33,7 @@ fn build_driver() -> PathBuf {
         .current_dir(workspace_root())
         .status()
         .expect("failed to run cargo build");
-    assert!(
-        status.success(),
-        "cargo build -p regseq-driver failed"
-    );
+    assert!(status.success(), "cargo build -p regseq-driver failed");
 
     workspace_root().join("target/debug/regseq-driver")
 }

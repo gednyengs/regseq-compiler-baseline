@@ -22,7 +22,7 @@ items:
     phase: A
     title: Workspace activation and crate-topology decisions
     brief: .harness/spec-batches/phase-a-01.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on: []
     target_harness_groups:
       - regseq-facade
@@ -43,13 +43,19 @@ items:
       - Resolve workspace membership changes before any DSL or extractor task specs are written.
       - "Preserve the plan's topology decision: regseq-model owns rustc-independent models; regseq-driver owns extraction."
       - Keep Linux and Zephyr as separate task groups even if they share regseq-backends.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-diagnostics-01
+      - regseq-model-01
+      - regseq-macros-01
+      - regseq-analysis-01
+      - regseq-backends-01
+      - regseq-facade-01
 
   - id: phase-a-02
     phase: A
     title: Harness group expansion for implementation work
     brief: .harness/spec-batches/phase-a-02.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-a-01
     target_harness_groups:
@@ -122,7 +128,7 @@ items:
 
   - id: phase-b-03
     phase: B
-    title: regseq-macros core attributes and register_bitfields surface
+    title: regseq-macros register_bitfields and helper macro surface
     brief: .harness/spec-batches/phase-b-03.md
     status: not_ready
     depends_on:
@@ -135,12 +141,13 @@ items:
       - docs/guide/construct-catalog.md
       - docs/guide/pl011-spec-outline.md
     summary: >
-      Author task specs for the macro layer: core `#[rseq::...]` attributes
-      used by the PL011-core slice and the `register_bitfields!` declarative
-      surface for register blocks.
+      Author task specs for the macro layer: `register_bitfields!` and any
+      additional helper macros needed by the PL011-core slice. Do not assign
+      ownership of inert `#[rseq::...]` tool attributes to `regseq-macros`.
     spec_authoring_notes:
       - "`register_bitfields!` should be its own explicit task or task pair, not buried in generic macro work."
-      - Keep attribute parsing tasks separate from register block macro tasks when possible.
+      - "`#[rseq::...]` attributes are inert tool attributes registered by `regseq-driver`; task this recognition and extraction work outside `regseq-macros`."
+      - Keep helper macro tasks separate from register block macro tasks when possible.
     generated_task_ids: []
 
   - id: phase-b-04

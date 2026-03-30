@@ -5,6 +5,8 @@ Public facade crate for driver authors.
 ## Responsibilities
 
 - Re-export procedural macros from `regseq-macros` (e.g., `register_bitfields!`)
+- Surface the user-facing Layer 1 API alongside the compiler-recognized
+  `#[rseq::...]` tool attributes
 - Host runtime marker traits that macros expand against (e.g., `Lifecycle`, `Serial`)
 - Provide DSL types used in driver specs: `ReadWrite<T,R>`, `ReadOnly<T,R>`,
   `WriteOnly<T,R>`, `Reserved<T>`, `Mmio<T>`, `Interrupt`, `Clock`, `ResetLine`,
@@ -20,6 +22,10 @@ Driver spec crates depend on this crate:
 [dependencies]
 regseq = { path = "../regseq" }
 ```
+
+The `#[rseq::...]` attribute namespace is not provided by proc macros from
+this crate. It is registered by the compiler wrapper as a custom tool
+namespace so the attributes remain inert and extractable during compilation.
 
 ## Dependencies
 

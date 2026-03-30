@@ -5,7 +5,9 @@ Procedural macros used in Regseq driver specifications.
 ## Responsibilities
 
 - `register_bitfields!` macro: defines register layouts with typed bitfield access
-- Any future proc macros needed by driver specs
+- Any future helper proc macros needed by driver specs
+- Does not own `#[rseq::...]` attributes; those are inert custom tool
+  attributes registered by the compiler wrapper
 
 ## Crate Type
 
