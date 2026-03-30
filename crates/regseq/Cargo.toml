@@ -1,0 +1,7 @@
+[package]
+name = "regseq"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+regseq-macros = { path = "../regseq-macros" }
