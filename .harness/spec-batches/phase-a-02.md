@@ -22,8 +22,8 @@ Read before drafting task specs:
 - `.harness/tasks.json`
 - `.harness/spec-batches/phase-a-01.md`
 - `docs/plans/asplos-implementation-plan.md`
-- `docs/guide/implementation-guide.md`
-- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
+- `archive/guide/implementation-guide.md`
+- `docs/compiler-collateral/compiler-baseline-overview.md`
 
 ## Output Specification
 

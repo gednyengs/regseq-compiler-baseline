@@ -23,16 +23,16 @@ Read before starting:
 - `.harness/task-spec-status.yaml`
 - `.harness/tasks.json`
 - `docs/plans/asplos-implementation-plan.md`
-- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
-- `docs/pl011-compiler-collateral/compiler-constraints.md`
-- `docs/pl011-compiler-collateral/constructs/driver-lifecycle.md`
-- `docs/pl011-compiler-collateral/constructs/register-access.md`
-- `docs/pl011-compiler-collateral/constructs/serial-uart-management.md`
-- `docs/pl011-compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
-- `docs/pl011-compiler-collateral/constructs/peripheral-clock-management.md`
-- `docs/pl011-compiler-collateral/constructs/synchronization.md`
-- `docs/pl011-compiler-collateral/constructs/firmware-property-access.md`
-- `docs/pl011-compiler-collateral/constructs/device-power-state-management.md`
+- `docs/compiler-collateral/compiler-baseline-overview.md`
+- `docs/compiler-collateral/compiler-constraints.md`
+- `docs/compiler-collateral/constructs/driver-lifecycle.md`
+- `docs/compiler-collateral/constructs/register-access.md`
+- `docs/compiler-collateral/constructs/serial-uart-management.md`
+- `docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
+- `docs/compiler-collateral/constructs/peripheral-clock-management.md`
+- `docs/compiler-collateral/constructs/synchronization.md`
+- `docs/compiler-collateral/constructs/firmware-property-access.md`
+- `docs/compiler-collateral/constructs/device-power-state-management.md`
 
 ## Output Specification
 

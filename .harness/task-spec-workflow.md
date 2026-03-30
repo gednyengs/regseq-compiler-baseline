@@ -108,7 +108,9 @@ When elaborating a tracker batch into harness tasks:
 
 1. Read the batch brief referenced by `brief`.
 2. Read the referenced sections of `docs/plans/asplos-implementation-plan.md`.
-3. Read the cited `docs/guide/` source files.
+3. Read the cited source files, which may live under `docs/compiler-collateral/`
+   for current compiler handoff material or `archive/guide/` for archived
+   authority material.
 4. Draft a proposed task decomposition and present it to the user for review
    before writing any files. The proposal must include: task IDs, task names,
    dependency order, and a brief summary of each task's scope.
@@ -119,7 +121,8 @@ When elaborating a tracker batch into harness tasks:
 8. Keep each task within one crate or one tightly related crate pair.
 9. Include implementation scope, non-goals, test plan, and quality gate in every task.
 10. Carry forward caution notes for any accepted-with-caution constructs.
-11. Do not invent DSL primitives or backend behavior not justified by the guide.
+11. Do not invent DSL primitives or backend behavior not justified by the cited
+    authority or compiler-collateral sources.
 12. After the task spec files are fully written, update `tasks.json`.
 13. After the task spec files are fully written and `tasks.json` is updated,
     update `task-spec-status.yaml` following the Update Rules below.

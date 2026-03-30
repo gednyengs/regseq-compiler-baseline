@@ -33,8 +33,8 @@ Read before starting:
 - `.harness/spec-batches/phase-a-01.md`
 - `.harness/spec-batches/phase-a-02.md`
 - `docs/plans/asplos-implementation-plan.md`
-- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
-- `docs/pl011-compiler-collateral/compiler-constraints.md`
+- `docs/compiler-collateral/compiler-baseline-overview.md`
+- `docs/compiler-collateral/compiler-constraints.md`
 
 ## Output Specification
 

@@ -23,10 +23,10 @@ Read before starting:
 - `.harness/task-spec-status.yaml`
 - `.harness/tasks.json`
 - `docs/plans/asplos-implementation-plan.md`
-- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
-- `docs/pl011-compiler-collateral/constructs/register-access.md`
-- `docs/pl011-compiler-collateral/constructs/serial-uart-management.md`
-- `docs/pl011-compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
+- `docs/compiler-collateral/compiler-baseline-overview.md`
+- `docs/compiler-collateral/constructs/register-access.md`
+- `docs/compiler-collateral/constructs/serial-uart-management.md`
+- `docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
 
 ## Output Specification
 

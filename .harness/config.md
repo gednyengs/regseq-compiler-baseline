@@ -8,17 +8,19 @@ and generates OS-specific C device drivers for Linux and Zephyr.
 
 Current active workspace members:
 - `cargo-regseq` -- cargo subcommand (CLI, toolchain, orchestration)
+- `regseq` -- public Layer 1 facade for driver authors
+- `regseq-analysis` -- static analysis and validation passes over rustc-independent models
+- `regseq-backends` -- shared lowering/backend crate with Linux and Zephyr modules
 - `regseq-config` -- shared configuration types (no rustc dependency)
+- `regseq-diagnostics` -- shared diagnostics engine
 - `regseq-driver` -- rustc wrapper (HIR/MIR extraction, pipeline orchestration)
+- `regseq-macros` -- helper macro crate, including `register_bitfields!`
+- `regseq-model` -- rustc-independent declaration, binding, and joined-artifact models
 - `tests/e2e` -- end-to-end test workspace member
 
-Planned implementation crates for the ASPLOS track:
-- `regseq` -- public facade for driver authors
-- `regseq-macros` -- procedural macros (`register_bitfields!`, etc.)
-- `regseq-model` -- rustc-independent declaration and binding models
-- `regseq-analysis` -- static analysis passes
-- `regseq-backends` -- C code generation backends (Linux, Zephyr)
-- `regseq-diagnostics` -- shared diagnostics engine
+Active implementation stream notes:
+- inert `#[rseq::...]` tool attributes are registered by `regseq-driver`, not provided by `regseq-macros`
+- `regseq-backends` remains a single crate for now, even though Linux and Zephyr are separate harness task groups
 
 ## Coding Conventions
 

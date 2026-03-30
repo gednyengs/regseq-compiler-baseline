@@ -26,7 +26,7 @@ Read before drafting task specs:
 - `README.md`
 - `Cargo.toml`
 - `docs/plans/asplos-implementation-plan.md`
-- `docs/guide/implementation-guide.md`
+- `archive/guide/implementation-guide.md`
 
 ## Output Specification
 

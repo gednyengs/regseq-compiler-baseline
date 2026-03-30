@@ -24,10 +24,10 @@ Read before starting:
 - `.harness/task-spec-status.yaml`
 - `.harness/tasks.json`
 - `docs/plans/asplos-implementation-plan.md`
-- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
-- `docs/pl011-compiler-collateral/compiler-constraints.md`
-- `docs/guide/pl011-spec-outline.md`
-- `docs/guide/open-issues.md`
+- `docs/compiler-collateral/compiler-baseline-overview.md`
+- `docs/compiler-collateral/compiler-constraints.md`
+- `archive/guide/pl011-spec-outline.md`
+- `archive/guide/open-issues.md`
 
 ## Output Specification
 

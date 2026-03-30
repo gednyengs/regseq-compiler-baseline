@@ -33,7 +33,7 @@ items:
       - regseq-diagnostics
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/implementation-guide.md
+      - archive/guide/implementation-guide.md
       - Cargo.toml
     summary: >
       Add missing implementation crates to the workspace, establish the crate
@@ -71,7 +71,7 @@ items:
       - track-a-eval
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/implementation-guide.md
+      - archive/guide/implementation-guide.md
       - .harness/tasks.json
     summary: >
       Expand the harness metadata and task-group layout so later implementation
@@ -92,7 +92,7 @@ items:
     target_harness_groups: []
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
       - .harness/task-spec-workflow.md
       - .harness/task-spec-status.yaml
     summary: >
@@ -119,9 +119,9 @@ items:
       - regseq-facade
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/pl011-compiler-collateral/constructs/
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - docs/compiler-collateral/constructs/
     summary: >
       Author task specs for the initial `regseq` facade surface needed for
       PL011 frontend closure: typed resource wrappers, marker types, and
@@ -143,9 +143,9 @@ items:
       - regseq-macros
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/constructs/register-access.md
-      - docs/pl011-compiler-collateral/constructs/serial-uart-management.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/constructs/register-access.md
+      - docs/compiler-collateral/constructs/serial-uart-management.md
     summary: >
       Author task specs for the macro layer needed by the PL011 frontend
       slice, centered on `register_bitfields!` and any additional accepted
@@ -167,9 +167,9 @@ items:
       - regseq-facade
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/constructs/diagnostic-logging.md
-      - docs/pl011-compiler-collateral/constructs/timed-cpu-delay-and-sleep.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/constructs/diagnostic-logging.md
+      - docs/compiler-collateral/constructs/timed-cpu-delay-and-sleep.md
     summary: >
       Author task specs for the minimum intrinsic surface needed to make the
       accepted PL011 frontend slice authorable, including logging and
@@ -193,9 +193,9 @@ items:
       - track-a-pl011
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/guide/pl011-spec-outline.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - archive/guide/pl011-spec-outline.md
     summary: >
       Author task specs for the first real PL011-facing spec crate that proves
       the accepted frontend surface is real: register definitions, core driver
@@ -219,9 +219,9 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/guide/pl011-spec-outline.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - archive/guide/pl011-spec-outline.md
     summary: >
       Author task specs for the Layer 2 binding file format, parser, and
       validation support needed by frontend closure, without committing yet to
@@ -245,9 +245,9 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/pl011-compiler-collateral/constructs/
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - docs/compiler-collateral/constructs/
     summary: >
       Author task specs for inert attribute recognition, raw HIR/MIR
       extraction of the accepted PL011 frontend slice, and serialization of a
@@ -270,9 +270,9 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/guide/pl011-spec-outline.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - archive/guide/pl011-spec-outline.md
     summary: >
       Author task specs for frontend-closure validation: raw-artifact snapshot
       coverage, Layer 1/Layer 2 boundary compatibility checks, caution-focused
@@ -295,9 +295,9 @@ items:
       - regseq-model
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/guide/implementation-guide.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - archive/guide/implementation-guide.md
     summary: >
       Author task specs for the normalized declaration model that turns the raw
       extraction artifact for the supported PL011 slice into stable
@@ -321,9 +321,9 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/guide/implementation-guide.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - archive/guide/implementation-guide.md
     summary: >
       Author task specs for the normalized binding model and the real join path
       that combines normalized Layer 1 and Layer 2 data into a reviewable
@@ -346,9 +346,9 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/pl011-compiler-collateral/compiler-baseline-overview.md
-      - docs/pl011-compiler-collateral/compiler-constraints.md
-      - docs/guide/open-issues.md
+      - docs/compiler-collateral/compiler-baseline-overview.md
+      - docs/compiler-collateral/compiler-constraints.md
+      - archive/guide/open-issues.md
     summary: >
       Author task specs for the minimum analysis/bootstrap checks over the
       normalized PL011 slice, reviewer-facing joined-artifact validation, and
@@ -372,7 +372,7 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/lowering-contract.md
+      - archive/guide/lowering-contract.md
       - docs/experiments/mir-structured-codegen/report.md
     summary: >
       Author the first lowering-oriented task batch for PL011 Linux output,
@@ -394,7 +394,7 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/lowering-contract.md
+      - archive/guide/lowering-contract.md
       - docs/experiments/mir-structured-codegen/report.md
     summary: >
       Author the Zephyr follow-up task batch for PL011 after Linux lowering stabilizes.
@@ -417,8 +417,8 @@ items:
       - track-a-validation
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/e1000-spec-outline.md
-      - docs/guide/device-coverage.md
+      - archive/guide/e1000-spec-outline.md
+      - archive/guide/device-coverage.md
     summary: >
       Author the E1000 expansion task batch, including PCI, network, params,
       deferred work, hardware reset, atomic operations, and richer DMA usage.
@@ -439,7 +439,7 @@ items:
       - track-a-eval
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/lowering-contract.md
+      - archive/guide/lowering-contract.md
       - docs/experiments/mir-structured-codegen/report.md
     summary: >
       Author the Linux-first E1000 lowering batch with buildability and
@@ -461,7 +461,7 @@ items:
       - track-a-eval
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/lowering-contract.md
+      - archive/guide/lowering-contract.md
       - docs/experiments/mir-structured-codegen/report.md
     summary: >
       Author the Zephyr follow-up lowering batch for the supported E1000 subset.
@@ -478,7 +478,7 @@ items:
       - track-a-eval
     source_refs:
       - docs/plans/asplos-implementation-plan.md
-      - docs/guide/implementation-guide.md
+      - archive/guide/implementation-guide.md
     summary: >
       Author the paper-facing evaluation and packaging task batch once
       implementation and validation outputs exist.

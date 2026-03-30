@@ -1,18 +1,18 @@
 # ASPLOS Implementation Plan
 Status: derived execution plan for compiler implementation work.
-This document translates the frozen planning material in `docs/guide/` into an operational implementation plan that can be used to create harness task groups and worker-ready task specs.
+This document translates the frozen planning material in `archive/guide/` into an operational implementation plan that can be used to create harness task groups and worker-ready task specs.
 This document is not the source of truth for construct boundaries, operations, properties, or lowering semantics. The authoritative sources remain:
-- `docs/guide/implementation-guide.md`
-- `docs/guide/construct-catalog.md`
-- `docs/guide/lowering-contract.md`
-- `docs/guide/device-coverage.md`
-- `docs/guide/open-issues.md`
-- `docs/guide/pl011-spec-outline.md`
-- `docs/guide/e1000-spec-outline.md`
-- `docs/guide/artifact-manifest.md`
+- `archive/guide/implementation-guide.md`
+- `archive/guide/construct-catalog.md`
+- `archive/guide/lowering-contract.md`
+- `archive/guide/device-coverage.md`
+- `archive/guide/open-issues.md`
+- `archive/guide/pl011-spec-outline.md`
+- `archive/guide/e1000-spec-outline.md`
+- `archive/guide/artifact-manifest.md`
 
 ## 1. Purpose
-This plan bridges the gap between the frozen handoff in `docs/guide/`, the current compiler baseline, and the harness task system under `.harness/tasks/`.
+This plan bridges the gap between the frozen handoff in `archive/guide/`, the current compiler baseline, and the harness task system under `.harness/tasks/`.
 It should be used to:
 - define implementation phases in operational terms
 - identify concrete requirements and outputs for each phase
@@ -30,9 +30,9 @@ Use the construct catalog and lowering contract as the authority for:
 - lowering responsibilities
 Use the PL011 compiler collateral package as the primary operational planning
 input for PL011 compiler work:
-- `docs/pl011-compiler-collateral/compiler-baseline-overview.md`
-- `docs/pl011-compiler-collateral/compiler-constraints.md`
-- `docs/pl011-compiler-collateral/constructs/`
+- `docs/compiler-collateral/compiler-baseline-overview.md`
+- `docs/compiler-collateral/compiler-constraints.md`
+- `docs/compiler-collateral/constructs/`
 Use the spec outlines only to decide:
 - which validated constructs appear in PL011 and E1000
 - what the first implementation slices should contain
