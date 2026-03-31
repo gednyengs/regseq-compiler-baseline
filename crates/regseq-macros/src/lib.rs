@@ -10,6 +10,7 @@
 
 use proc_macro::TokenStream;
 
+mod ordered;
 mod register_bitfields;
 
 /// Declare register bitfield layouts for typed register access.
@@ -36,4 +37,14 @@ mod register_bitfields;
 pub fn register_bitfields(input: TokenStream) -> TokenStream {
     let parsed = syn::parse_macro_input!(input as register_bitfields::RegisterBitfields);
     parsed.expand().into()
+}
+
+/// Bracket a block of register operations with ordering barriers.
+///
+/// `ordered!` is syntax sugar that expands into canonical barrier intrinsic
+/// calls around the user-supplied block. The final expression value is
+/// preserved.
+#[proc_macro]
+pub fn ordered(input: TokenStream) -> TokenStream {
+    ordered::expand(input.into()).into()
 }

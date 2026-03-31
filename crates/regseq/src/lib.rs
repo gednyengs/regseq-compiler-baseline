@@ -24,5 +24,6 @@ pub use error::RegseqError;
 pub use irq::{Interrupt, IrqResult};
 pub use mmio::Mmio;
 pub use registers::{Field, FieldValue, ReadOnly, ReadWrite, Reserved, WriteOnly};
+pub use regseq_macros::ordered;
 pub use sync::{Completion, Guard, IrqSpinLock, Mutex, SpinLock};
 pub use time::Duration;
