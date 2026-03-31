@@ -139,7 +139,7 @@
           "id": "regseq-driver-05",
           "name": "Callback-context baseline scaffolding",
           "spec": ".harness/tasks/regseq-driver/05-callback-context-baseline-scaffolding.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-04"
           ],
