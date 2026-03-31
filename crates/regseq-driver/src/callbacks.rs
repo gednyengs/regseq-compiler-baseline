@@ -40,12 +40,14 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &rustc_interface::interface::Compiler,
-        _tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
         eprintln!(
             "regseq-driver: reached after_analysis for target_os={:?}",
             self.options.target_os,
         );
+        let identities = crate::extract::extract_driver_identities(tcx);
+        eprintln!("regseq-driver: identity extraction: {identities:?}");
         rustc_driver::Compilation::Stop
     }
 }

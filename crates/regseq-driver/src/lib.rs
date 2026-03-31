@@ -1,12 +1,15 @@
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_driver;
+extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
 
 pub mod args;
 mod callbacks;
+pub mod extract;
 pub use callbacks::RegseqCallbacks;
 
 const BUG_REPORT_URL: &str = "https://github.com/gednyengs/regseq-compiler-v2/issues";

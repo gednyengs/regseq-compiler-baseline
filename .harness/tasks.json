@@ -127,7 +127,7 @@
           "id": "regseq-driver-04",
           "name": "Driver identity attribute capture",
           "spec": ".harness/tasks/regseq-driver/04-driver-identity-attribute-capture.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-03",
             "regseq-facade-02"
