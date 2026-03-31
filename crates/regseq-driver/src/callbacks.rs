@@ -53,6 +53,19 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         eprintln!("regseq-driver: register access extraction: {register_surface:?}");
         let interrupt_surface = crate::extract::interrupts::extract_interrupt_surface(tcx);
         eprintln!("regseq-driver: interrupt extraction: {interrupt_surface:?}");
+        let isr_handler_names: std::collections::HashSet<String> = match &interrupt_surface {
+            Ok(surface) => surface
+                .isr_bindings
+                .iter()
+                .map(|b| b.handler_name.clone())
+                .collect(),
+            Err(_) => std::collections::HashSet::new(),
+        };
+        let sync_surface = crate::extract::synchronization::extract_synchronization_surface(
+            tcx,
+            &isr_handler_names,
+        );
+        eprintln!("regseq-driver: synchronization extraction: {sync_surface:?}");
         rustc_driver::Compilation::Stop
     }
 }

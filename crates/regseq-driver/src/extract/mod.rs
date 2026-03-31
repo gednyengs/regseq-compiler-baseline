@@ -2,3 +2,4 @@ pub(crate) mod callback_context;
 pub(crate) mod driver_identity;
 pub(crate) mod interrupts;
 pub(crate) mod register_access;
+pub(crate) mod synchronization;
