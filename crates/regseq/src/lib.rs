@@ -7,3 +7,11 @@
 //! by the compiler wrapper (`regseq-driver`), not proc macros exported by this
 //! facade. The `rseq` attribute namespace is distinct from the `regseq` crate
 //! namespace.
+
+mod error;
+mod irq;
+mod time;
+
+pub use error::RegseqError;
+pub use irq::IrqResult;
+pub use time::Duration;

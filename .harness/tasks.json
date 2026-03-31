@@ -122,6 +122,29 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-04",
+          "name": "Driver identity attribute capture",
+          "spec": ".harness/tasks/regseq-driver/04-driver-identity-attribute-capture.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-03",
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-05",
+          "name": "Callback-context baseline scaffolding",
+          "spec": ".harness/tasks/regseq-driver/05-callback-context-baseline-scaffolding.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -219,6 +242,17 @@
           "status": "done",
           "depends_on": [
             "regseq-macros-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-02",
+          "name": "Shared support and result types",
+          "spec": ".harness/tasks/regseq-facade/02-shared-support-and-result-types.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-01"
           ],
           "artifacts": [],
           "fail_reason": null
