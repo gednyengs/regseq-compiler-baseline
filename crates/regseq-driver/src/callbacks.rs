@@ -51,6 +51,8 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let register_surface =
             crate::extract::register_access::extract_register_access_surface(tcx);
         eprintln!("regseq-driver: register access extraction: {register_surface:?}");
+        let interrupt_surface = crate::extract::interrupts::extract_interrupt_surface(tcx);
+        eprintln!("regseq-driver: interrupt extraction: {interrupt_surface:?}");
         rustc_driver::Compilation::Stop
     }
 }
