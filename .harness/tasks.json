@@ -145,6 +145,21 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-06",
+          "name": "Register/MMIO frontend capture scaffolding",
+          "spec": ".harness/tasks/regseq-driver/06-register-mmio-frontend-capture-scaffolding.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-05",
+            "regseq-facade-03",
+            "regseq-facade-04",
+            "regseq-facade-05",
+            "regseq-macros-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -188,6 +203,18 @@
           "spec": ".harness/tasks/regseq-macros/01-crate-init.md",
           "status": "done",
           "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-macros-02",
+          "name": "Register bitfields helper macro",
+          "spec": ".harness/tasks/regseq-macros/02-register-bitfields-helper-macro.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-macros-01",
+            "regseq-facade-04"
+          ],
           "artifacts": [],
           "fail_reason": null
         }
@@ -253,6 +280,39 @@
           "status": "done",
           "depends_on": [
             "regseq-facade-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-03",
+          "name": "MMIO resource surface",
+          "spec": ".harness/tasks/regseq-facade/03-mmio-resource-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-04",
+          "name": "Register support types and access wrappers",
+          "spec": ".harness/tasks/regseq-facade/04-register-support-types-and-access-wrappers.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-05",
+          "name": "Register polling intrinsic surface",
+          "spec": ".harness/tasks/regseq-facade/05-register-polling-intrinsic-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
           ],
           "artifacts": [],
           "fail_reason": null

@@ -1,17 +1,18 @@
-# Spec Batch: phase-b-04 - PL011-core spec crate scaffold and core frontend evidence
+# Spec Batch: phase-b-04 - core trait callback surfaces
 
 ## Description
 
 Author the fourth Phase B batch for the ASPLOS implementation stream. This is
 task-spec authoring work, not executable implementation work.
 
-This batch should define the first real `track-a-pl011` tasks that prove the
-accepted frontend surface is real and not only synthetic fixture coverage. The
-tasks should cover a minimal PL011-facing spec crate with register definitions
-and core driver declarations over the accepted PL011-core subset.
+This batch should define the accepted callback-family contracts used by the
+early PL011 frontend slice. The output should cover `Lifecycle`, `Serial`,
+optional `SerialConsole`, and `PowerManagement` only where the accepted PL011
+baseline requires it.
 
-The output should establish the primary real-device frontend evidence used by
-later extraction and validation work.
+The output should make callback contracts authorable and analyzable on top of
+the earlier shared foundations, without yet moving into the full real-PL011
+assembly batch.
 
 ## Input Context
 
@@ -25,6 +26,9 @@ Read before starting:
 - `docs/plans/asplos-implementation-plan.md`
 - `docs/compiler-collateral/compiler-baseline-overview.md`
 - `docs/compiler-collateral/compiler-constraints.md`
+- `docs/compiler-collateral/constructs/driver-lifecycle.md`
+- `docs/compiler-collateral/constructs/serial-uart-management.md`
+- `docs/compiler-collateral/constructs/device-power-state-management.md`
 - `archive/guide/pl011-spec-outline.md`
 - `archive/guide/device-coverage.md`
 
@@ -32,53 +36,53 @@ Read before starting:
 
 Create or modify:
 
-- `.harness/tasks/track-a-pl011/`
+- `.harness/tasks/regseq-facade/`
+- `.harness/tasks/regseq-driver/`
 - `.harness/tasks.json`
 
 Update when done:
 
 - `.harness/task-spec-status.yaml`
 
-The output of this batch should be executable harness task specs for the
-`track-a-pl011` group.
+The output of this batch should be executable harness task specs for the core
+trait callback surfaces across the appropriate groups.
 
 ## Implementation Notes
 
 Follow these fixed decisions:
 
-- this batch belongs to frontend closure, not internal model work
-- keep the first PL011 slice minimal but real
-- use the accepted facade, macro, and intrinsic surfaces already introduced by
-  earlier Phase B batches
-- keep optional or deferred constructs out unless the accepted PL011 baseline
-  requires them to complete frontend closure
-- treat `track-a-pl011` as primary evidence; add narrow synthetic fixtures only
-  when they isolate a specific frontend edge
+- treat callback traits as shared frontend contracts that build on the earlier
+  shared foundations
+- use only accepted callback-family names and signatures from the compiler
+  collateral
+- keep structural driver attributes in their earlier batch
+- keep method bodies and tests frontend-oriented, with enough reachability to
+  support later extraction tasks
+- include `PowerManagement` only if it is part of the accepted early PL011 slice
 
 Task decomposition should separate:
 
-- basic spec-crate scaffold and compile path
-- register block / bitfield declarations
-- core driver declarations over the accepted subset
+- lifecycle surfaces
+- serial callback surfaces
+- optional console or power-management surfaces only where accepted
 
 ## Non-Goals
 
 Do not include:
 
-- raw extraction tasks
-- normalized model tasks
-- Layer 2 parser or join work
-- lowering or backend logic
-- E1000-facing spec work
+- MMIO/register foundations already covered by `phase-b-02`
+- synchronization and interrupt shared extensions already covered by `phase-b-03`
+- real PL011 slice assembly
+- normalized model, join, lowering, or E1000 work
 
 ## Acceptance Criteria
 
 This batch is complete when:
 
-- one or more executable task specs exist under `.harness/tasks/track-a-pl011/`
-- the tasks define a real PL011-facing frontend slice rather than validation-only fixtures
-- the first PL011 slice remains minimal and frontend-oriented
-- `tasks.json` references the new task IDs under `track-a-pl011`
+- one or more executable task specs exist under the callback-surface target groups
+- accepted callback-family traits are explicitly represented with stable signatures
+- the task specs keep callback contracts separate from later real-PL011 assembly work
+- `tasks.json` references the new task IDs under the appropriate groups
 - `phase-b-04` can be marked `tasked`
 
 ## Update Instructions

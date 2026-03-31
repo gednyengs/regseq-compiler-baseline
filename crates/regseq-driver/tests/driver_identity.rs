@@ -1,13 +1,18 @@
 #![feature(rustc_private)]
 
+extern crate rustc_ast;
 extern crate rustc_driver;
+extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
 
 use std::sync::{Arc, Mutex, Once};
 
-use regseq_driver::extract::{extract_driver_identities, DriverIdentity, DriverIdentityError};
+#[path = "../src/extract/driver_identity.rs"]
+mod driver_identity;
+
+use driver_identity::{extract_driver_identities, DriverIdentity, DriverIdentityError};
 
 type ExtractionResult = Result<Vec<DriverIdentity>, DriverIdentityError>;
 
@@ -188,4 +193,38 @@ fn reject_malformed_driver_attribute() {
         result,
         Err(DriverIdentityError::MalformedAttribute(_))
     ));
+}
+
+#[test]
+fn reject_duplicate_driver_name_key_within_single_attribute() {
+    let source = r#"
+        #[rseq::driver(name = "a", name = "b", compatible = ["arm,pl011"])]
+        #[rseq::device_class(serial)]
+        pub struct Pl011;
+    "#;
+
+    let result = compile_and_extract(source, "duplicate_name_key");
+    assert_eq!(
+        result,
+        Err(DriverIdentityError::DuplicateAttribute("name".into()))
+    );
+}
+
+#[test]
+fn reject_duplicate_compatible_key_within_single_attribute() {
+    let source = r#"
+        #[rseq::driver(
+            name = "pl011-uart",
+            compatible = ["arm,pl011"],
+            compatible = ["arm,sbsa-uart"]
+        )]
+        #[rseq::device_class(serial)]
+        pub struct Pl011;
+    "#;
+
+    let result = compile_and_extract(source, "duplicate_compatible_key");
+    assert_eq!(
+        result,
+        Err(DriverIdentityError::DuplicateAttribute("compatible".into()))
+    );
 }

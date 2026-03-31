@@ -1,6 +1,9 @@
 #![feature(rustc_private)]
 
-use regseq_driver::extract::CallbackContext;
+#[path = "../src/extract/callback_context.rs"]
+mod callback_context;
+
+use callback_context::CallbackContext;
 
 #[test]
 fn round_trip_through_short_labels() {
@@ -44,11 +47,4 @@ fn from_short_label_rejects_unknown() {
     assert_eq!(CallbackContext::from_short_label("X"), None);
     assert_eq!(CallbackContext::from_short_label("f"), None);
     assert_eq!(CallbackContext::from_short_label(""), None);
-}
-
-#[test]
-fn importable_from_extract_module() {
-    // Verify the type is accessible through the public extract module path.
-    let ctx: regseq_driver::extract::CallbackContext = CallbackContext::FrameworkManaged;
-    assert_eq!(ctx, CallbackContext::FrameworkManaged);
 }

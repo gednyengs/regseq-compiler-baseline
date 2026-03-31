@@ -1,18 +1,18 @@
-# Spec Batch: phase-b-07 - frontend closure validation, boundary compatibility, and deferred Phase B expansion
+# Spec Batch: phase-b-07 - Layer 2 binding format and property capture
 
 ## Description
 
 Author the seventh Phase B batch for the ASPLOS implementation stream. This is
 task-spec authoring work, not executable implementation work.
 
-This batch should define the validation and completion tasks needed to finish
-frontend closure for the accepted PL011 baseline. That includes raw-artifact
-snapshot coverage, Layer 1/Layer 2 boundary compatibility checks,
-caution-focused extraction QC, and any deferred-but-still-Phase-B PL011
-construct work needed to finish the accepted frontend scope.
-
-The output should close Phase B without moving deferred frontend constructs into
+This batch should define the Layer 2 binding contract for the accepted PL011
+frontend slice. The output should cover the file shape, parser, validation path,
+and the PL011-relevant property capture needed before real join logic begins in
 Phase C.
+
+The output should treat firmware-property capture as a mixed Layer 1 / Layer 2
+frontier while keeping the final normalized binding model and join work out of
+scope.
 
 ## Input Context
 
@@ -33,7 +33,7 @@ Read before starting:
 
 Create or modify:
 
-- `.harness/tasks/track-a-pl011/`
+- `.harness/tasks/regseq-model/`
 - `.harness/tasks/track-a-validation/`
 - `.harness/tasks.json`
 
@@ -41,28 +41,29 @@ Update when done:
 
 - `.harness/task-spec-status.yaml`
 
-The output of this batch should be executable harness task specs for frontend
-closure completion.
+The output of this batch should be executable harness task specs for the Layer 2
+binding contract across the appropriate groups.
 
 ## Implementation Notes
 
 Follow these fixed decisions:
 
-- keep this batch in Phase B
-- validate against the raw artifact and frontend boundary, not the final joined model
-- use `track-a-pl011` as the main real-device evidence
-- add narrow validation fixtures only where they isolate frontend edge cases
-- include stronger QC for caution constructs present in the supported slice
-- if deferred Phase B constructs are required, keep them bounded to frontend
-  closure and do not let them spill into normalized model work
+- keep Layer 2 capture separate from the later normalized binding model and
+  Layer 1 + Layer 2 join logic in Phase C
+- keep the supported subset bounded to the accepted PL011 frontend slice
+- include the limited boundary compatibility checks required to prove the input
+  contract, but do not define the final join here
+- treat firmware-property capture as a mixed Layer 1 / Layer 2 frontier
+- use validation tasks only where they prove parser behavior or the accepted
+  input contract
 
 ## Non-Goals
 
 Do not include:
 
-- normalized declaration-model work
-- normalized binding-model work
-- join logic
+- raw-artifact closure work
+- real PL011 slice assembly
+- normalized model or join work
 - backend lowering
 - E1000 expansion
 
@@ -70,10 +71,9 @@ Do not include:
 
 This batch is complete when:
 
-- one or more executable task specs exist under `.harness/tasks/track-a-pl011/`
-  and/or `.harness/tasks/track-a-validation/`
-- the task specs explicitly target frontend-closure completion
-- any deferred construct work is kept in Phase B and justified by the accepted frontend baseline
+- one or more executable task specs exist under the Layer 2 target groups
+- the Layer 2 file shape, parser, validation path, and property capture are explicitly represented
+- the task specs keep this work separate from normalized binding-model and join work
 - `tasks.json` references the new task IDs under the appropriate groups
 - `phase-b-07` can be marked `tasked`
 

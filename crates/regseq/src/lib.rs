@@ -10,8 +10,13 @@
 
 mod error;
 mod irq;
+mod mmio;
+pub mod poll;
+mod registers;
 mod time;
 
 pub use error::RegseqError;
 pub use irq::IrqResult;
+pub use mmio::Mmio;
+pub use registers::{Field, FieldValue, ReadOnly, ReadWrite, Reserved, WriteOnly};
 pub use time::Duration;

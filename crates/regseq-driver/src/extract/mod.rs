@@ -1,5 +1,3 @@
-mod callback_context;
-mod driver_identity;
-
-pub use callback_context::CallbackContext;
-pub use driver_identity::{extract_driver_identities, DriverIdentity, DriverIdentityError};
+pub(crate) mod callback_context;
+pub(crate) mod driver_identity;
+pub(crate) mod register_access;

@@ -6,6 +6,7 @@
 /// - `F` -- framework-managed entry (e.g. `Lifecycle::init`, `Lifecycle::deinit`)
 /// - `S` -- subsystem-serialized entry (e.g. `Serial::port_open`)
 /// - `H` -- explicit handler-managed entry (e.g. bound ISR handlers)
+#[allow(dead_code)]
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum CallbackContext {
     /// Framework-managed entry. The framework guarantees safe entry conditions.
@@ -18,6 +19,7 @@ pub enum CallbackContext {
     HandlerManaged,
 }
 
+#[allow(dead_code)]
 impl CallbackContext {
     /// The accepted short label used by diagnostics and snapshots.
     pub fn short_label(&self) -> &'static str {

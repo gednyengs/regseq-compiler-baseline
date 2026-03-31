@@ -1,0 +1,7 @@
+[workspace]
+resolver = "2"
+members = [
+    "exp01-regseq",
+    "exp01-regseq-macros",
+]
+

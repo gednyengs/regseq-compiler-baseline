@@ -1,17 +1,19 @@
-# Spec Batch: phase-b-05 - regseq-model Layer 2 binding format, parser, and validation
+# Spec Batch: phase-b-05 - core typed-resource wrappers and standalone facade intrinsics
 
 ## Description
 
 Author the fifth Phase B batch for the ASPLOS implementation stream. This is
 task-spec authoring work, not executable implementation work.
 
-This batch should define the frontend-side Layer 2 tasks needed for the
-accepted PL011 slice: file format, parser, and validation support for the
-supported binding inputs.
+This batch should define the remaining shared typed-resource wrappers beyond
+MMIO, such as `Clock` and other accepted resource carriers that are broadly
+reused by the PL011 frontend slice, along with any standalone facade intrinsics
+such as logging and timed-delay surfaces that are needed before real frontend
+assembly becomes realistic.
 
-The output should keep this work explicitly pre-normalization. The batch is
-about the accepted binding input contract and its immediate validation path, not
-the final normalized binding model used later in Phase C.
+The output should keep this work explicitly on the Layer 1 frontend side. These
+wrappers should become available before real PL011 assembly and before Layer 2
+binding work, but they should not reopen MMIO/register foundations.
 
 ## Input Context
 
@@ -25,57 +27,62 @@ Read before starting:
 - `docs/plans/asplos-implementation-plan.md`
 - `docs/compiler-collateral/compiler-baseline-overview.md`
 - `docs/compiler-collateral/compiler-constraints.md`
-- `archive/guide/pl011-spec-outline.md`
+- `docs/compiler-collateral/constructs/peripheral-clock-management.md`
+- `docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
+- `docs/compiler-collateral/constructs/synchronization.md`
+- `docs/compiler-collateral/constructs/diagnostic-logging.md`
+- `docs/compiler-collateral/constructs/timed-cpu-delay-and-sleep.md`
 - `archive/guide/implementation-guide.md`
 
 ## Output Specification
 
 Create or modify:
 
-- `.harness/tasks/regseq-model/`
-- `.harness/tasks/track-a-validation/`
+- `.harness/tasks/regseq-facade/`
+- `.harness/tasks/regseq-driver/`
 - `.harness/tasks.json`
 
 Update when done:
 
 - `.harness/task-spec-status.yaml`
 
-The output of this batch should be executable harness task specs, primarily for
-`regseq-model`, with validation tasks only where they are necessary to prove the
-accepted binding contract.
+The output of this batch should be executable harness task specs for the shared
+typed-resource wrapper and standalone-intrinsic extension across the appropriate
+groups.
 
 ## Implementation Notes
 
 Follow these fixed decisions:
 
-- keep Layer 2 format/parser work separate from extraction logic
-- keep Layer 2 format/parser work separate from the later normalized binding
-  model
-- include the minimal boundary-compatibility checks required by the plan
-- do not define the final join in this batch
+- keep this batch to typed resource carriers and standalone facade intrinsics
+  that are not structurally tied to MMIO/registers, synchronization, or
+  callback traits
+- do not reopen MMIO/register foundations from `phase-b-02`
+- add only the wrappers and standalone intrinsics that are broadly reused by the
+  accepted PL011 slice
+- keep this work separate from the later Layer 2 parser/binding contract
 - keep the supported subset bounded to the PL011 frontend slice
 
-If validation tasks are needed, keep them focused on parser behavior and the
-accepted Layer 2 boundary contract.
+If compiler-facing capture tasks are needed, keep them focused on the immediate
+frontend shape of these wrappers and intrinsics rather than on normalized
+models.
 
 ## Non-Goals
 
 Do not include:
 
-- raw extraction tasks
-- normalized declaration-model work
-- normalized binding-model work
-- real join logic
-- lowering or backend work
-- E1000 binding expansion
+- Layer 2 parser or binding work
+- normalized model or join work
+- backend or lowering work
+- E1000-facing wrapper expansion
 
 ## Acceptance Criteria
 
 This batch is complete when:
 
-- one or more executable task specs exist under `.harness/tasks/regseq-model/`
-- any supporting validation tasks are narrowly scoped to the Layer 2 boundary
-- the task specs keep parser/validation work separate from normalized model/join work
+- one or more executable task specs exist under the typed-resource wrapper target groups
+- shared wrappers beyond MMIO and any accepted standalone facade intrinsics are explicitly represented
+- the task specs keep this work separate from MMIO/register foundations and from Layer 2 capture
 - `tasks.json` references the new task IDs under the appropriate groups
 - `phase-b-05` can be marked `tasked`
 

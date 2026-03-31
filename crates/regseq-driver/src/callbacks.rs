@@ -46,8 +46,11 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             "regseq-driver: reached after_analysis for target_os={:?}",
             self.options.target_os,
         );
-        let identities = crate::extract::extract_driver_identities(tcx);
+        let identities = crate::extract::driver_identity::extract_driver_identities(tcx);
         eprintln!("regseq-driver: identity extraction: {identities:?}");
+        let register_surface =
+            crate::extract::register_access::extract_register_access_surface(tcx);
+        eprintln!("regseq-driver: register access extraction: {register_surface:?}");
         rustc_driver::Compilation::Stop
     }
 }

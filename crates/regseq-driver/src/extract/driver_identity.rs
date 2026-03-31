@@ -133,11 +133,17 @@ fn parse_driver_attr(
 
         match key.as_str() {
             "name" => {
+                if driver_name.is_some() {
+                    return Err(DriverIdentityError::DuplicateAttribute("name".into()));
+                }
                 let val = extract_string_literal(trees[i])
                     .ok_or_else(|| malformed("name must be a string literal"))?;
                 driver_name = Some(val);
             }
             "compatible" => {
+                if compatible.is_some() {
+                    return Err(DriverIdentityError::DuplicateAttribute("compatible".into()));
+                }
                 let list = extract_string_list(trees[i])?;
                 compatible = Some(list);
             }

@@ -1,17 +1,19 @@
-# Spec Batch: phase-b-03 - regseq facade intrinsic stubs for PL011-core frontend support
+# Spec Batch: phase-b-03 - synchronization and interrupt shared extension
 
 ## Description
 
 Author the third Phase B batch for the ASPLOS implementation stream. This is
 task-spec authoring work, not executable implementation work.
 
-This batch should define the minimal intrinsic-surface task set needed to make
-the accepted PL011 frontend slice authorable. The main expected candidates are
-the accepted logging and timed-delay surfaces, and only if the frontend
-evidence actually requires them.
+This batch should define the shared interrupt and synchronization substrate used
+across later frontend slices. The output should cover interrupt wrappers and
+metadata, bound-handler capture forms, the synchronization primitives needed
+before later callback and real-PL011 slices can be authored cleanly, and the
+deferred `regseq::ordered!` register-ordering macro surface.
 
-The result should be a bounded set of facade tasks that provide compile-time
-authoring support without making premature lowering commitments.
+The result should be a bounded set of facade and driver tasks that establish the
+shared concurrency and handler-binding substrate without drifting into full
+construct completion for every interrupt-using feature.
 
 ## Input Context
 
@@ -25,43 +27,50 @@ Read before starting:
 - `docs/plans/asplos-implementation-plan.md`
 - `docs/compiler-collateral/compiler-baseline-overview.md`
 - `docs/compiler-collateral/compiler-constraints.md`
-- `docs/compiler-collateral/constructs/diagnostic-logging.md`
-- `docs/compiler-collateral/constructs/timed-cpu-delay-and-sleep.md`
+- `docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
+- `docs/compiler-collateral/constructs/synchronization.md`
 
 ## Output Specification
 
 Create or modify:
 
 - `.harness/tasks/regseq-facade/`
+- `.harness/tasks/regseq-driver/`
 - `.harness/tasks.json`
 
 Update when done:
 
 - `.harness/task-spec-status.yaml`
 
-The output of this batch should be executable harness task specs for the
-`regseq-facade` group.
+The output of this batch should be executable harness task specs for the shared
+interrupt and synchronization extension across the appropriate groups.
 
 ## Implementation Notes
 
 Follow these fixed decisions:
 
-- treat these as authoring-support intrinsics first
-- keep the intrinsic surface minimal
-- use only accepted intrinsic semantics from the compiler collateral
+- keep this batch focused on shared interrupt and synchronization foundations
+- use the accepted handler-binding model from the compiler collateral
+- keep synchronization type-driven
+- assign the deferred `regseq::ordered!` user-facing ordering surface to this batch
+- include only the shared interrupt and synchronization surfaces required by the
+  accepted PL011 slice
 - do not commit lowering behavior in this batch
-- do not pull E1000-only intrinsic surfaces into this batch
 
-If the accepted PL011 frontend slice can compile without one of the candidate
-intrinsic families, omit it from this batch rather than speculating.
+Typical decomposition should separate:
+
+- interrupt wrappers and handler-facing types
+- bound-handler metadata and method-form capture
+- synchronization wrappers and guard surfaces
+- register-ordering macro surface and its bounded compiler-facing recognition
 
 ## Non-Goals
 
 Do not include:
 
-- facade wrapper or callback-family trait work already covered by `phase-b-01`
-- macro work
-- extractor or raw-artifact work
+- MMIO/register work already covered by `phase-b-02`
+- callback-family trait work
+- unrelated declarative property work
 - normalized model or join work
 - lowering contracts or backend behavior
 
@@ -69,10 +78,10 @@ Do not include:
 
 This batch is complete when:
 
-- one or more executable task specs exist under `.harness/tasks/regseq-facade/`
-- the intrinsic surface is explicitly bounded to accepted frontend needs
-- the task specs clearly avoid making lowering commitments
-- `tasks.json` references the new task IDs under `regseq-facade`
+- one or more executable task specs exist under the shared interrupt/synchronization target groups
+- interrupt wrappers, bound-handler forms, synchronization primitives, and the deferred `regseq::ordered!` surface are explicitly represented
+- the task specs keep this work bounded to shared substrate concerns
+- `tasks.json` references the new task IDs under the appropriate groups
 - `phase-b-03` can be marked `tasked`
 
 ## Update Instructions

@@ -1,17 +1,17 @@
-# Spec Batch: phase-b-06 - regseq-driver attribute recognition, raw extraction, and raw-artifact serialization
+# Spec Batch: phase-b-06 - declarative compiler-managed frontend surfaces
 
 ## Description
 
 Author the sixth Phase B batch for the ASPLOS implementation stream. This is
 task-spec authoring work, not executable implementation work.
 
-This batch should define the `regseq-driver` extraction tasks needed to close
-frontend capture for the accepted PL011 slice. The tasks should cover inert
-attribute recognition, raw HIR/MIR extraction, operation-class preservation,
-and serialization of the raw extraction artifact.
+This batch should define the declarative compiler-managed frontend surfaces used
+by the accepted PL011 slice. The output should cover accepted property and
+power-management metadata, along with any closely related compiler-facing
+surfaces that carry intent without introducing new callback or wrapper APIs.
 
-The output boundary for this batch is the raw artifact. It must not drift into
-normalized model or join work.
+The output should make these declarations authorable and capturable without
+drifting into Layer 2 parsing, normalized models, or final join logic.
 
 ## Input Context
 
@@ -32,55 +32,53 @@ Read before starting:
 
 Create or modify:
 
+- `.harness/tasks/regseq-facade/`
 - `.harness/tasks/regseq-driver/`
-- `.harness/tasks/track-a-validation/`
 - `.harness/tasks.json`
 
 Update when done:
 
 - `.harness/task-spec-status.yaml`
 
-The output of this batch should be executable harness task specs, primarily for
-`regseq-driver`, with validation tasks only where needed to prove raw-artifact
-capture quality.
+The output of this batch should be executable harness task specs for the
+declarative compiler-managed surfaces across the appropriate groups.
 
 ## Implementation Notes
 
 Follow these fixed decisions:
 
-- extraction stays in `regseq-driver`
-- preserve operation classes in the raw artifact
-- preserve type-driven choices and generic/resource shape where the collateral
-  requires them
-- preserve declaration order where later lifecycle behavior depends on it
-- preserve intrinsic call-site capture and source traceability
-- key the raw artifact by construct identity
-- do not introduce normalized model or join work in this batch
+- keep this batch focused on declarative metadata whose meaning is primarily
+  compiler-managed
+- include accepted property and power-management declaration forms only where
+  they are part of the supported PL011 slice
+- reuse earlier shared foundations and wrapper carriers where these declarations
+  attach to items or fields
+- do not introduce Layer 2 parser work, normalized models, or join logic here
 
-Decompose into narrow extraction tasks such as:
+Decompose into narrow tasks such as:
 
-- inert attribute recognition
-- construct-family extraction
-- raw-artifact serialization/debug output
-- extraction-level validation and snapshots
+- property declaration surfaces
+- power-management metadata surfaces
+- driver-side capture tasks only where needed to make these declarations
+  visible to later analysis/model work
 
 ## Non-Goals
 
 Do not include:
 
-- normalized declaration-model tasks
-- normalized binding-model tasks
-- Layer 1 + Layer 2 join logic
+- Layer 2 parser and property-binding work
+- normalized model and join work
+- raw-artifact closure work
 - backend lowering
-- E1000 extraction work
+- E1000 expansion
 
 ## Acceptance Criteria
 
 This batch is complete when:
 
-- one or more executable task specs exist under `.harness/tasks/regseq-driver/`
-- any supporting validation tasks are raw-artifact oriented
-- the task specs make the raw-artifact boundary explicit
+- one or more executable task specs exist under the declarative-surface target groups
+- property and power-management metadata surfaces are explicitly represented
+- the task specs keep this work declarative and compiler-managed
 - `tasks.json` references the new task IDs under the appropriate groups
 - `phase-b-06` can be marked `tasked`
 
