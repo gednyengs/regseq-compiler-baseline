@@ -175,17 +175,19 @@ items:
     phase: B
     title: synchronization and interrupt shared extension
     brief: .harness/spec-batches/phase-b-03.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-02
     target_harness_groups:
       - regseq-facade
+      - regseq-macros
       - regseq-driver
     source_refs:
       - docs/plans/asplos-implementation-plan.md
       - docs/compiler-collateral/compiler-baseline-overview.md
       - docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md
       - docs/compiler-collateral/constructs/synchronization.md
+      - docs/compiler-collateral/constructs/register-access.md
       - docs/compiler-collateral/compiler-constraints.md
     summary: >
       Author task specs for the shared interrupt and synchronization substrate:
@@ -197,13 +199,20 @@ items:
       - Use the accepted handler-binding model from the compiler collateral; do not collapse these surfaces into callback traits.
       - Include synchronization surfaces only where they are shared prerequisites for later frontend slices.
       - "regseq::ordered! is assigned to this batch as the deferred user-facing ordering surface excluded from phase-b-02."
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-facade-06
+      - regseq-facade-07
+      - regseq-driver-07
+      - regseq-facade-08
+      - regseq-driver-08
+      - regseq-macros-03
+      - regseq-driver-09
 
   - id: phase-b-04
     phase: B
     title: core trait callback surfaces
     brief: .harness/spec-batches/phase-b-04.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-03
     target_harness_groups:

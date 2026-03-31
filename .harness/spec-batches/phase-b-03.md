@@ -29,12 +29,15 @@ Read before starting:
 - `docs/compiler-collateral/compiler-constraints.md`
 - `docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md`
 - `docs/compiler-collateral/constructs/synchronization.md`
+- `docs/compiler-collateral/constructs/register-access.md`
+- `docs/discussions/regseq-intrinsics/regseq-intrinsics-discussion.md`
 
 ## Output Specification
 
 Create or modify:
 
 - `.harness/tasks/regseq-facade/`
+- `.harness/tasks/regseq-macros/`
 - `.harness/tasks/regseq-driver/`
 - `.harness/tasks.json`
 
@@ -43,7 +46,8 @@ Update when done:
 - `.harness/task-spec-status.yaml`
 
 The output of this batch should be executable harness task specs for the shared
-interrupt and synchronization extension across the appropriate groups.
+interrupt and synchronization extension across the appropriate facade, macro,
+and driver groups.
 
 ## Implementation Notes
 
@@ -59,6 +63,7 @@ Follow these fixed decisions:
 
 Typical decomposition should separate:
 
+- canonical intrinsic-home normalization needed by this shared substrate
 - interrupt wrappers and handler-facing types
 - bound-handler metadata and method-form capture
 - synchronization wrappers and guard surfaces

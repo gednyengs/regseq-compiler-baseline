@@ -160,6 +160,43 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-07",
+          "name": "Interrupt resource and ISR capture",
+          "spec": ".harness/tasks/regseq-driver/07-interrupt-resource-and-isr-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-05",
+            "regseq-facade-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-08",
+          "name": "Synchronization capture and context-legality baseline",
+          "spec": ".harness/tasks/regseq-driver/08-synchronization-capture-and-context-legality-baseline.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-07",
+            "regseq-facade-08"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-09",
+          "name": "Ordered frontend recognition",
+          "spec": ".harness/tasks/regseq-driver/09-ordered-frontend-recognition.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-06",
+            "regseq-facade-06",
+            "regseq-macros-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -214,6 +251,18 @@
           "depends_on": [
             "regseq-macros-01",
             "regseq-facade-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-macros-03",
+          "name": "Ordered register-ordering macro",
+          "spec": ".harness/tasks/regseq-macros/03-ordered-register-ordering-macro.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-macros-01",
+            "regseq-facade-06"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -310,6 +359,39 @@
           "id": "regseq-facade-05",
           "name": "Register polling intrinsic surface",
           "spec": ".harness/tasks/regseq-facade/05-register-polling-intrinsic-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-06",
+          "name": "Intrinsic namespace normalization and ordering anchors",
+          "spec": ".harness/tasks/regseq-facade/06-intrinsic-namespace-normalization-and-ordering-anchors.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-07",
+          "name": "Interrupt resource and dispatch surface",
+          "spec": ".harness/tasks/regseq-facade/07-interrupt-resource-and-dispatch-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-08",
+          "name": "Synchronization wrapper baseline",
+          "spec": ".harness/tasks/regseq-facade/08-synchronization-wrapper-baseline.md",
           "status": "done",
           "depends_on": [
             "regseq-facade-02"
