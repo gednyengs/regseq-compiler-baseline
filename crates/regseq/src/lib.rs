@@ -1,3 +1,6 @@
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
 //! Public DSL facade for Regseq driver authors.
 //!
 //! Driver specifications depend on this crate to access helper macros such as
@@ -9,6 +12,7 @@
 //! namespace.
 
 mod error;
+pub mod intrinsics;
 mod irq;
 mod mmio;
 pub mod poll;
