@@ -374,7 +374,7 @@ items:
     phase: B
     title: raw-artifact and frontend-closure validation
     brief: .harness/spec-batches/phase-b-09.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-08
     target_harness_groups:
@@ -395,13 +395,17 @@ items:
       - This batch closes Phase B. Its validation target is the raw artifact and frontend boundary, not the final joined model.
       - Use the real PL011 slice as the main evidence source and add targeted validation fixtures only where they isolate a frontend edge.
       - Keep deferred frontend work in Phase B only if it is necessary to complete the accepted frontend baseline.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-driver-19
+      - track-a-pl011-04
+      - track-a-validation-02
+      - track-a-validation-03
 
   - id: phase-c-01
     phase: C
     title: regseq-model normalized declaration model for the supported PL011 slice
     brief: .harness/spec-batches/phase-c-01.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-09
     target_harness_groups:

@@ -308,6 +308,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-19",
+          "name": "Raw frontend artifact emission for frontend closure",
+          "spec": ".harness/tasks/regseq-driver/19-raw-frontend-artifact-emission.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-18",
+            "regseq-model-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -711,6 +723,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "track-a-pl011-04",
+          "name": "PL011 raw frontend artifact snapshot and review proof",
+          "spec": ".harness/tasks/track-a-pl011/04-pl011-raw-frontend-artifact-snapshot.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-pl011-03",
+            "regseq-driver-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -731,6 +755,29 @@
           "depends_on": [
             "regseq-driver-17",
             "regseq-model-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-02",
+          "name": "Caution-focused PL011 frontend QC",
+          "spec": ".harness/tasks/track-a-validation/02-caution-focused-pl011-frontend-qc.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-03",
+          "name": "Minimal PL011 Layer 1 / Layer 2 compatibility proof",
+          "spec": ".harness/tasks/track-a-validation/03-pl011-minimal-layer1-layer2-compatibility.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-pl011-04",
+            "track-a-validation-01"
           ],
           "artifacts": [],
           "fail_reason": null
