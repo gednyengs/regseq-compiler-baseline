@@ -12,4 +12,6 @@ pub(crate) mod register_access;
 pub(crate) mod reset;
 pub(crate) mod synchronization;
 #[allow(dead_code)]
+pub(crate) mod timed_delay;
+#[allow(dead_code)]
 pub(crate) mod traits;
