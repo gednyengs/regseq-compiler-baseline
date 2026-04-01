@@ -365,7 +365,7 @@
           "id": "regseq-model-04",
           "name": "[properties] section capture and parser-side validation",
           "spec": ".harness/tasks/regseq-model/04-properties-section-capture-and-parser-side-validation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-03"
           ],

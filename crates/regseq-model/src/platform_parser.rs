@@ -26,6 +26,13 @@ pub enum PlatformParseError {
         /// Human-readable description of the expected type.
         expected: &'static str,
     },
+    /// A property value uses an unsupported TOML value kind.
+    UnsupportedPropertyValue {
+        /// The property key containing the unsupported value.
+        key: String,
+        /// The TOML type name that is not supported.
+        toml_type: &'static str,
+    },
     /// Failed to read the platform file from disk.
     IoError(String),
 }
@@ -37,6 +44,12 @@ impl fmt::Display for PlatformParseError {
             Self::MissingKey(key) => write!(f, "missing required key: {key}"),
             Self::WrongType { key, expected } => {
                 write!(f, "key `{key}` has wrong type, expected {expected}")
+            }
+            Self::UnsupportedPropertyValue { key, toml_type } => {
+                write!(
+                    f,
+                    "property `{key}` has unsupported value type `{toml_type}`"
+                )
             }
             Self::IoError(msg) => write!(f, "I/O error: {msg}"),
         }
@@ -79,7 +92,7 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
 
     // Extract `[properties]` section if present.
     let properties = match table.get("properties") {
-        Some(toml::Value::Table(t)) => parse_properties(t),
+        Some(toml::Value::Table(t)) => parse_properties(t)?,
         Some(_) => {
             return Err(PlatformParseError::WrongType {
                 key: "properties",
@@ -151,14 +164,58 @@ fn extract_required_string(
 }
 
 /// Parse `[properties]` entries into a flat list of `PropertyEntry`.
-fn parse_properties(table: &toml::Table) -> Vec<PropertyEntry> {
+///
+/// Applies strict value-kind validation: only integer, boolean, string,
+/// list, and table values are accepted. Float and datetime TOML values
+/// are rejected.
+fn parse_properties(table: &toml::Table) -> Result<Vec<PropertyEntry>, PlatformParseError> {
     table
         .iter()
-        .map(|(key, value)| PropertyEntry {
-            key: key.clone(),
-            value: convert_value(value),
+        .map(|(key, value)| {
+            let converted = convert_property_value(key, value)?;
+            Ok(PropertyEntry {
+                key: key.clone(),
+                value: converted,
+            })
         })
         .collect()
+}
+
+/// Convert a TOML value into a `PlatformValue` with strict property validation.
+///
+/// Rejects unsupported TOML value kinds (float, datetime) for property entries.
+fn convert_property_value(
+    key: &str,
+    value: &toml::Value,
+) -> Result<PlatformValue, PlatformParseError> {
+    match value {
+        toml::Value::Integer(i) => Ok(PlatformValue::Integer(*i)),
+        toml::Value::Boolean(b) => Ok(PlatformValue::Boolean(*b)),
+        toml::Value::String(s) => Ok(PlatformValue::String(s.clone())),
+        toml::Value::Array(arr) => {
+            let items: Result<Vec<_>, _> =
+                arr.iter().map(|v| convert_property_value(key, v)).collect();
+            Ok(PlatformValue::List(items?))
+        }
+        toml::Value::Table(t) => {
+            let map: Result<BTreeMap<_, _>, _> = t
+                .iter()
+                .map(|(k, v)| {
+                    let converted = convert_property_value(key, v)?;
+                    Ok((k.clone(), converted))
+                })
+                .collect();
+            Ok(PlatformValue::Table(map?))
+        }
+        toml::Value::Float(_) => Err(PlatformParseError::UnsupportedPropertyValue {
+            key: key.to_string(),
+            toml_type: "float",
+        }),
+        toml::Value::Datetime(_) => Err(PlatformParseError::UnsupportedPropertyValue {
+            key: key.to_string(),
+            toml_type: "datetime",
+        }),
+    }
 }
 
 /// Classify a top-level section as either construct-owned or unknown.
