@@ -284,6 +284,30 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-17",
+          "name": "Firmware property declaration capture",
+          "spec": ".harness/tasks/regseq-driver/17-firmware-property-declaration-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-04",
+            "regseq-facade-17"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-18",
+          "name": "PM gate capture and structural validation",
+          "spec": ".harness/tasks/regseq-driver/18-pm-gate-capture-and-structural-validation.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-11",
+            "regseq-facade-18"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -571,6 +595,28 @@
           "status": "done",
           "depends_on": [
             "regseq-facade-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-17",
+          "name": "Firmware property declaration surface",
+          "spec": ".harness/tasks/regseq-facade/17-firmware-property-declaration-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-18",
+          "name": "PM gate declaration surface",
+          "spec": ".harness/tasks/regseq-facade/18-pm-gate-declaration-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-11"
           ],
           "artifacts": [],
           "fail_reason": null

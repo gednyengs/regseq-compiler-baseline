@@ -286,7 +286,7 @@ items:
     phase: B
     title: declarative compiler-managed frontend surfaces
     brief: .harness/spec-batches/phase-b-06.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-05
     target_harness_groups:
@@ -306,13 +306,17 @@ items:
       - Keep this batch focused on declarative surfaces whose main meaning is extracted and analyzed by the compiler, not on new imperative APIs.
       - Reuse the earlier shared foundations and typed resource carriers where those declarations attach to fields or driver items.
       - Do not mix in Layer 2 parser work or normalized join logic here.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-facade-17
+      - regseq-driver-17
+      - regseq-facade-18
+      - regseq-driver-18
 
   - id: phase-b-07
     phase: B
     title: Layer 2 binding format and property capture
     brief: .harness/spec-batches/phase-b-07.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-06
     target_harness_groups:
