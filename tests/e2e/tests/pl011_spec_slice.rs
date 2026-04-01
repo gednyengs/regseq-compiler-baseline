@@ -190,6 +190,40 @@ fn pl011_fixture_register_descriptors_are_extracted() {
 }
 
 #[test]
+#[ignore]
+fn pl011_fixture_driver_identity_is_extracted() {
+    let stderr = run_regseq_driver();
+
+    assert!(
+        stderr.contains("pl011-spec-slice"),
+        "Expected driver name 'pl011-spec-slice' in extraction output, got:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore]
+fn pl011_fixture_wrapper_call_sites_from_callbacks() {
+    let stderr = run_regseq_driver();
+
+    // Wrapper call sites are tracked by the function that directly contains
+    // the register read/write. The trait callbacks delegate to helpers.
+    for fn_name in &[
+        "disable_uart",
+        "enable_uart",
+        "set_baud_rate",
+        "configure_line_control",
+        "tx_byte",
+        "rx_char",
+        "tx_ready",
+    ] {
+        assert!(
+            stderr.contains(&format!("containing_fn: \"{fn_name}\"")),
+            "Expected wrapper call-site evidence from '{fn_name}', got:\n{stderr}"
+        );
+    }
+}
+
+#[test]
 fn pl011_fixture_platform_toml_parses() {
     let path = fixture_path().join("platform.toml");
     let file =

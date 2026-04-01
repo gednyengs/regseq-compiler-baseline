@@ -703,7 +703,7 @@
           "id": "track-a-pl011-03",
           "name": "Polling driver slice and Layer 2 property fixture",
           "spec": ".harness/tasks/track-a-pl011/03-polling-driver-slice-and-layer2-fixture.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "track-a-pl011-02",
             "regseq-driver-10",
