@@ -1,4 +1,6 @@
 pub(crate) mod callback_context;
+#[allow(dead_code)]
+pub(crate) mod clock;
 pub(crate) mod driver_identity;
 pub(crate) mod interrupts;
 #[allow(dead_code)]
