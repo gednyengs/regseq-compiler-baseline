@@ -382,8 +382,14 @@ fn register_descriptor_facts_reachable() {
     let wlen = lcrh.fields.iter().find(|f| f.field_name == "WLEN").unwrap();
     assert_eq!(wlen.offset, 5);
     assert_eq!(wlen.width, 2);
-    assert!(wlen.named_values.iter().any(|v| v.name == "WLEN_5" && v.value == 0));
-    assert!(wlen.named_values.iter().any(|v| v.name == "WLEN_8" && v.value == 3));
+    assert!(wlen
+        .named_values
+        .iter()
+        .any(|v| v.name == "WLEN_5" && v.value == 0));
+    assert!(wlen
+        .named_values
+        .iter()
+        .any(|v| v.name == "WLEN_8" && v.value == 3));
 }
 
 // ---------------------------------------------------------------------------

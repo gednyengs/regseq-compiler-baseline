@@ -11,6 +11,7 @@
 //! facade. The `rseq` attribute namespace is distinct from the `regseq` crate
 //! namespace.
 
+mod clock;
 mod error;
 pub mod intrinsics;
 mod irq;
@@ -23,6 +24,7 @@ mod serial;
 pub mod sync;
 mod time;
 
+pub use clock::Clock;
 pub use error::RegseqError;
 pub use irq::{Interrupt, IrqResult};
 pub use lifecycle::Lifecycle;

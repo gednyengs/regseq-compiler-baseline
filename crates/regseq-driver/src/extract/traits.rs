@@ -327,7 +327,11 @@ fn is_mut_ref_self(decl: &rustc_hir::FnDecl<'_>) -> bool {
     }
 }
 
-fn matches_extra_param<'tcx>(tcx: TyCtxt<'tcx>, decl: &FnDecl<'tcx>, expected: ExtraParamSpec) -> bool {
+fn matches_extra_param<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    decl: &FnDecl<'tcx>,
+    expected: ExtraParamSpec,
+) -> bool {
     let Some(extra_inputs) = decl.inputs.get(1..) else {
         return matches!(expected, ExtraParamSpec::None);
     };
@@ -337,16 +341,18 @@ fn matches_extra_param<'tcx>(tcx: TyCtxt<'tcx>, decl: &FnDecl<'tcx>, expected: E
         ExtraParamSpec::RefNamed(name) => {
             extra_inputs.len() == 1 && matches_ref_named(tcx, &extra_inputs[0], name)
         }
-        ExtraParamSpec::RefStr => {
-            extra_inputs.len() == 1 && matches_ref_str(tcx, &extra_inputs[0])
-        }
+        ExtraParamSpec::RefStr => extra_inputs.len() == 1 && matches_ref_str(tcx, &extra_inputs[0]),
         ExtraParamSpec::Primitive(name) => {
             extra_inputs.len() == 1 && matches_primitive(&extra_inputs[0], name)
         }
     }
 }
 
-fn matches_return_spec<'tcx>(tcx: TyCtxt<'tcx>, output: &FnRetTy<'tcx>, expected: ReturnSpec) -> bool {
+fn matches_return_spec<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    output: &FnRetTy<'tcx>,
+    expected: ReturnSpec,
+) -> bool {
     match expected {
         ReturnSpec::Unit => is_unit_return(output),
         ReturnSpec::ResultUnitRegseqError => matches_result_unit_regseq_error(tcx, output),

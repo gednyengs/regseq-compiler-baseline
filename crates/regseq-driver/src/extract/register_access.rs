@@ -464,7 +464,8 @@ impl<'tcx> Visitor<'tcx> for CallSiteVisitor<'tcx> {
                     "set" => Some(WrapperMethod::Set),
                     _ => None,
                 };
-                if let Some(method) = method.filter(|m| self.is_known_wrapper_method(receiver, *m)) {
+                if let Some(method) = method.filter(|m| self.is_known_wrapper_method(receiver, *m))
+                {
                     self.wrapper_sites.push(WrapperCallSite {
                         method,
                         containing_fn: self.current_fn.clone(),
