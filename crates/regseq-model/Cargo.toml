@@ -6,6 +6,7 @@ edition = "2021"
 [dependencies]
 regseq-config = { path = "../regseq-config" }
 serde = { version = "1", features = ["derive"] }
+toml = "0.8"
 
 [dev-dependencies]
 serde_json = "1"

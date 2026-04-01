@@ -354,7 +354,7 @@
           "id": "regseq-model-03",
           "name": "TOML platform-file parser and section preservation",
           "spec": ".harness/tasks/regseq-model/03-toml-platform-file-parser-and-section-preservation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-02"
           ],

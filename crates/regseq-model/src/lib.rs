@@ -9,3 +9,4 @@
 //! the driver's join logic.
 
 pub mod platform;
+pub mod platform_parser;
