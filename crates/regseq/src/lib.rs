@@ -18,6 +18,7 @@ mod lifecycle;
 mod mmio;
 pub mod poll;
 mod registers;
+mod serial;
 pub mod sync;
 mod time;
 
@@ -27,5 +28,6 @@ pub use lifecycle::Lifecycle;
 pub use mmio::Mmio;
 pub use registers::{Field, FieldValue, ReadOnly, ReadWrite, Reserved, WriteOnly};
 pub use regseq_macros::ordered;
+pub use serial::{RxChar, Serial, SerialConfig, SerialConsole};
 pub use sync::{Completion, Guard, IrqSpinLock, Mutex, SpinLock};
 pub use time::Duration;
