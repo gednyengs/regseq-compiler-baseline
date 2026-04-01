@@ -1,0 +1,350 @@
+{
+  "driver_name": "pl011-spec-slice",
+  "target_os": "linux",
+  "identity": {
+    "driver_name": "pl011-spec-slice",
+    "compatible": [
+      "arm,pl011"
+    ],
+    "device_class": "serial"
+  },
+  "register_access": {
+    "register_blocks": [
+      {
+        "name": "Pl011Registers",
+        "fields": [
+          {
+            "name": "dr",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "_reserved0",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "fr",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "_reserved1",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "ibrd",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "fbrd",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "lcr_h",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          },
+          {
+            "name": "cr",
+            "access_width": null,
+            "endian": null,
+            "side_effects": null,
+            "hw_updates": null
+          }
+        ]
+      }
+    ],
+    "mmio_fields": [
+      {
+        "field_name": "regs",
+        "mmio_id": "uart_regs",
+        "register_block_type": "Pl011Registers"
+      }
+    ],
+    "wrapper_call_sites": [
+      {
+        "method": "write",
+        "containing_fn": "disable_uart"
+      },
+      {
+        "method": "write",
+        "containing_fn": "enable_uart"
+      },
+      {
+        "method": "write",
+        "containing_fn": "set_baud_rate"
+      },
+      {
+        "method": "write",
+        "containing_fn": "set_baud_rate"
+      },
+      {
+        "method": "write",
+        "containing_fn": "configure_line_control"
+      },
+      {
+        "method": "write",
+        "containing_fn": "tx_byte"
+      },
+      {
+        "method": "read",
+        "containing_fn": "rx_char"
+      },
+      {
+        "method": "read",
+        "containing_fn": "rx_char"
+      },
+      {
+        "method": "read",
+        "containing_fn": "tx_ready"
+      }
+    ],
+    "poll_call_sites": [],
+    "register_descriptors": [
+      {
+        "register_module": "DR_REG",
+        "fields": [
+          {
+            "field_name": "DATA",
+            "offset": 0,
+            "width": 8,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "register_module": "FR_REG",
+        "fields": [
+          {
+            "field_name": "TXFF",
+            "offset": 5,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "field_name": "RXFE",
+            "offset": 4,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "register_module": "IBRD_REG",
+        "fields": [
+          {
+            "field_name": "BAUD_DIVINT",
+            "offset": 0,
+            "width": 16,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "register_module": "FBRD_REG",
+        "fields": [
+          {
+            "field_name": "BAUD_DIVFRAC",
+            "offset": 0,
+            "width": 6,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "register_module": "LCRH_REG",
+        "fields": [
+          {
+            "field_name": "WLEN",
+            "offset": 5,
+            "width": 2,
+            "named_values": [
+              {
+                "name": "WLEN_8",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "field_name": "FEN",
+            "offset": 4,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "SET",
+                "value": 1
+              },
+              {
+                "name": "CLEAR",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "register_module": "CR_REG",
+        "fields": [
+          {
+            "field_name": "UARTEN",
+            "offset": 0,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "SET",
+                "value": 1
+              },
+              {
+                "name": "CLEAR",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "field_name": "TXE",
+            "offset": 8,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "SET",
+                "value": 1
+              },
+              {
+                "name": "CLEAR",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "field_name": "RXE",
+            "offset": 9,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "SET",
+                "value": 1
+              },
+              {
+                "name": "CLEAR",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      }
+    ]
+  },
+  "trait_callbacks": {
+    "lifecycle_impls": [
+      {
+        "driver_type": "Pl011SpecSlice",
+        "context": "F"
+      }
+    ],
+    "serial_impls": [
+      {
+        "driver_type": "Pl011SpecSlice",
+        "context": "S"
+      }
+    ],
+    "serial_console_impls": [],
+    "power_management_impls": []
+  },
+  "firmware_properties": {
+    "fields": [
+      {
+        "driver_type": "Pl011SpecSlice",
+        "field_name": "reg_io_width",
+        "field_type": "u32",
+        "property_id": "reg-io-width",
+        "default_literal": "4",
+        "vendor_prefix": null,
+        "required": true
+      },
+      {
+        "driver_type": "Pl011SpecSlice",
+        "field_name": "current_speed",
+        "field_type": "Option<u32>",
+        "property_id": "current-speed",
+        "default_literal": null,
+        "vendor_prefix": null,
+        "required": false
+      }
+    ],
+    "lints": [
+      {
+        "kind": "RequiredWithDefault",
+        "driver_type": "Pl011SpecSlice",
+        "field_name": "reg_io_width",
+        "property_id": "reg-io-width"
+      }
+    ]
+  },
+  "clock": {
+    "fields": [
+      {
+        "field_name": "clock",
+        "clock_id": "uart_clk",
+        "required": false
+      }
+    ],
+    "call_sites": []
+  },
+  "reset": {
+    "fields": [
+      {
+        "field_name": "reset",
+        "required": false
+      }
+    ],
+    "call_sites": []
+  },
+  "pinctrl": {
+    "fields": [
+      {
+        "field_name": "pinctrl",
+        "required": false,
+        "pinctrl_id": "uart_pins"
+      }
+    ],
+    "call_sites": []
+  },
+  "interrupts": {
+    "resources": [],
+    "isr_bindings": []
+  },
+  "synchronization": {
+    "sync_fields": [],
+    "lock_operations": [],
+    "completion_operations": [],
+    "guard_scopes": []
+  },
+  "timed_delay": {
+    "call_sites": [],
+    "duration_ctors": []
+  },
+  "logging": {
+    "call_sites": []
+  },
+  "pm_gate": {
+    "gates": []
+  }
+}

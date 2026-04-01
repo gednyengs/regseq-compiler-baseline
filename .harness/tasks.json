@@ -728,7 +728,7 @@
           "id": "track-a-pl011-04",
           "name": "PL011 raw frontend artifact snapshot and review proof",
           "spec": ".harness/tasks/track-a-pl011/04-pl011-raw-frontend-artifact-snapshot.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "track-a-pl011-03",
             "regseq-driver-19"
