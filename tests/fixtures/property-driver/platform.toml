@@ -1,0 +1,11 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[properties]
+reg-io-width = 4
+current-speed = 115200
+fifo-size = 32

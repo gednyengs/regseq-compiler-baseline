@@ -1,0 +1,9 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[properties]
+voltage = 3.3

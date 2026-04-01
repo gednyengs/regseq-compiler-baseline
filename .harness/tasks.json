@@ -689,7 +689,7 @@
           "id": "track-a-validation-01",
           "name": "Layer 2 platform-file fixtures and boundary smoke",
           "spec": ".harness/tasks/track-a-validation/01-layer2-platform-file-fixtures-and-boundary-smoke.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-17",
             "regseq-model-04"

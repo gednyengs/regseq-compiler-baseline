@@ -1,0 +1,20 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[properties]
+reg-io-width = 4
+
+[mmio.uart_regs]
+base = "0x09000000"
+size = 4096
+
+[interrupt.combined_irq]
+trigger_type = "level_high"
+shared = false
+
+[clock.uart_clk]
+default_frequency = 48000000

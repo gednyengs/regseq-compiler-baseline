@@ -1,0 +1,4 @@
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
