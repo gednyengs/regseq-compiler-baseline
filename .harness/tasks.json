@@ -691,7 +691,7 @@
           "id": "track-a-pl011-02",
           "name": "Register schema and MMIO surface for the polling slice",
           "spec": ".harness/tasks/track-a-pl011/02-register-schema-and-mmio-surface.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "track-a-pl011-01",
             "regseq-driver-06"

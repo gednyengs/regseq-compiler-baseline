@@ -91,9 +91,8 @@ fn make_options_json(fixture: &Path) -> String {
     .to_string()
 }
 
-#[test]
-#[ignore]
-fn pl011_fixture_compiles_through_regseq_driver() {
+/// Run the fixture through regseq-driver as RUSTC_WRAPPER and return stderr.
+fn run_regseq_driver() -> String {
     let driver = build_driver();
     assert!(
         driver.exists(),
@@ -122,17 +121,71 @@ fn pl011_fixture_compiles_through_regseq_driver() {
         .output()
         .expect("failed to run cargo check with regseq-driver");
 
-    let stderr = String::from_utf8_lossy(&output.stderr);
-
-    assert!(
-        stderr.contains("regseq-driver: reached after_analysis for target_os="),
-        "Expected 'reached after_analysis' in stderr, got:\n{stderr}"
-    );
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
 
     assert!(
         output.status.success(),
         "cargo check failed with status {}:\n{stderr}",
         output.status
+    );
+
+    stderr
+}
+
+#[test]
+#[ignore]
+fn pl011_fixture_compiles_through_regseq_driver() {
+    let stderr = run_regseq_driver();
+
+    assert!(
+        stderr.contains("regseq-driver: reached after_analysis for target_os="),
+        "Expected 'reached after_analysis' in stderr, got:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore]
+fn pl011_fixture_register_block_is_extracted() {
+    let stderr = run_regseq_driver();
+
+    assert!(
+        stderr.contains("Pl011Registers"),
+        "Expected register block name 'Pl011Registers' in extraction output, got:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore]
+fn pl011_fixture_mmio_field_is_extracted() {
+    let stderr = run_regseq_driver();
+
+    assert!(
+        stderr.contains("regs") && stderr.contains("Pl011Registers"),
+        "Expected MMIO field 'regs' with 'Pl011Registers' in extraction output, got:\n{stderr}"
+    );
+
+    assert!(
+        stderr.contains("uart_regs"),
+        "Expected MMIO id 'uart_regs' in extraction output, got:\n{stderr}"
+    );
+}
+
+#[test]
+#[ignore]
+fn pl011_fixture_register_descriptors_are_extracted() {
+    let stderr = run_regseq_driver();
+
+    assert!(
+        stderr.contains("DR_REG"),
+        "Expected register descriptor 'DR_REG' in extraction output, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("FR_REG"),
+        "Expected register descriptor 'FR_REG' in extraction output, got:\n{stderr}"
+    );
+    assert!(
+        stderr.contains("LCRH_REG"),
+        "Expected register descriptor 'LCRH_REG' in extraction output, got:\n{stderr}"
     );
 }
 
