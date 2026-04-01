@@ -316,7 +316,7 @@ items:
     phase: B
     title: Layer 2 binding format and property capture
     brief: .harness/spec-batches/phase-b-07.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-06
     target_harness_groups:
@@ -336,13 +336,17 @@ items:
       - Keep Layer 2 capture separate from the later normalized binding model and join logic in Phase C.
       - Treat firmware-property capture as a mixed Layer 1 / Layer 2 frontier and keep the accepted subset tight.
       - Include only the boundary compatibility checks needed to prove the accepted input contract.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-model-02
+      - regseq-model-03
+      - regseq-model-04
+      - track-a-validation-01
 
   - id: phase-b-08
     phase: B
     title: real PL011 frontend slice assembly
     brief: .harness/spec-batches/phase-b-08.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-07
     target_harness_groups:

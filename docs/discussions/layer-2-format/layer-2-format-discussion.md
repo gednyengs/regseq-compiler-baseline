@@ -115,6 +115,7 @@ The strongest direction is a sectioned format where each section groups
 
 For example:
 
+- `[platform]`
 - `[properties]`
 - sections for MMIO, interrupt, clock, reset, pinctrl, serial deployment
   capabilities, and so on
@@ -126,6 +127,58 @@ Reasons:
 - it reduces ambiguity about which subsystem owns which field
 - it fits the accepted rule that Layer 1 and Layer 2 are joined by explicit
   construct-local identifiers rather than by one giant flat namespace
+
+The leading implication is:
+
+- do **not** use one generic heterogeneous resource bag as the main file model
+- prefer construct-owned sections whose fields match accepted construct-local
+  Layer 2 facts
+
+### 4a. Do we want a small `[platform]` header?
+
+**Working answer**
+
+Probably yes, but keep it lightweight.
+
+The strongest current direction is to allow a small top-level platform metadata
+ section for facts such as:
+
+- board / deployment label
+- architecture
+- optional descriptive metadata needed for fixture review
+
+This section should remain descriptive rather than authoritative for decisions
+ already made elsewhere in the toolchain.
+
+For example:
+
+- target OS is already selected by the compiler invocation path
+- driver identity already lives in Layer 1 declarations
+
+So a `[platform]` section may exist for readability and fixture organization,
+ but it should not duplicate or override the compiler’s primary configuration
+ authorities.
+
+### 4b. What is the initial required `[platform]` contract?
+
+**Working answer**
+
+For the initial B-07 subset, the following should be required:
+
+- top-level `version`
+- `[platform]`
+- `platform.os`
+- `platform.board`
+- `platform.arch`
+
+This gives the initial file shape:
+
+- a stable schema/version marker
+- enough deployment metadata to make fixtures concrete and reviewable
+
+The current working assumption is:
+
+- omission of these keys is a schema error in B-07 parser/validation work
 
 ### 5. What is the first required section for B-07?
 
@@ -243,12 +296,206 @@ If one concrete syntax is chosen in B-07, it should be treated as the accepted
 But the discussion at this stage should focus first on the **information model**
  and section boundaries, then on the concrete syntax.
 
+### 11. What is the leading concrete syntax?
+
+**Working answer**
+
+The current leading candidate is **TOML**.
+
+Reasons:
+
+- human-readable
+- deterministic
+- easy to diff in reviewed fixtures
+- naturally supports sectioned documents such as:
+  - `[platform]`
+  - `[properties]`
+  - future construct-owned sections
+- already fits the current operational intuition around a checked-in platform
+  file
+
+This is still a design direction, not yet the final B-07 contract, but TOML is
+ now the most plausible default unless a stronger reason appears to choose
+ otherwise.
+
+### 12. How should Layer 2 joins be keyed?
+
+**Working answer**
+
+Layer 2 should preserve the accepted mixed join model:
+
+- explicit-id join where the Layer 1 construct declares an explicit binding id
+- field-name join where that is the accepted construct-local pattern
+
+This means the Layer 2 file should not force one universal join style.
+
+Examples:
+
+- firmware properties join by explicit property id
+- some resource families may join by explicit `id = "..."`
+- reset or pinctrl-style constructs may still rely on field-name join by
+  default when that is the accepted construct-local rule
+
+So the file format should be designed around **construct-owned join semantics**,
+ not around one global joining convention.
+
+### 13. What should B-07 do with future sections it does not yet validate?
+
+**Working answer**
+
+B-07 should accept placeholder future sections without semantically validating
+ them yet.
+
+That means:
+
+- syntactically valid future sections may be parsed and preserved
+- B-07 does not need to implement construct-local semantic validation for those
+  sections yet
+- those sections should not block B-07 unless they are syntactically malformed
+
+This lets the file/container shape acknowledge future growth without forcing
+ B-07 to fully close every future Layer 2 construct section.
+
+### 14. What small parsed model should B-07 keep?
+
+**Working answer**
+
+B-07 should keep a small parsed platform-file model, but not the final
+ normalized binding model from Phase C.
+
+The leading working shape is:
+
+- `PlatformFile`
+  - `version`
+  - `platform: PlatformHeader`
+  - `properties`
+  - `construct_sections`
+  - `unknown_sections`
+- `PlatformHeader`
+  - `os`
+  - `board`
+  - `arch`
+- `PropertyEntry`
+  - property key
+  - parsed value
+- `ConstructSection`
+  - section kind/name
+  - section key/id where applicable
+  - parsed raw values
+- `UnknownSection`
+  - section path/name
+  - parsed raw values
+
+Important boundary:
+
+- this is a Phase-B parsed artifact model
+- it exists to support parser behavior, validation, and boundary checks
+- it is **not** the final normalized binding model
+
+### 15. What value kinds are in scope for the initial parser?
+
+**Working answer**
+
+The initial parser should support:
+
+- scalar values:
+  - integer
+  - boolean
+  - string
+- aggregate values:
+  - list
+  - table/map
+
+This is enough to support:
+
+- `[properties]`
+- lightweight `[platform]`
+- future construct-owned sections that may need lists or nested tables
+
+### 16. What boundary checks belong to B-07?
+
+**Working answer**
+
+B-07 parser/validation work should enforce only:
+
+- platform-file schema rules
+- parser rules
+- section-local rules for supported sections such as `[properties]`
+
+B-07 should **not** enforce:
+
+- cross-layer visibility checks against Layer 1 declarations
+- Rust-type compatibility checks against driver fields
+- final required-property completeness
+- final Layer 1 + Layer 2 join semantics
+
+Those are later compiler checks after the platform file has been parsed.
+
+## Synthesized Template
+
+The following template reflects the current leading direction for the initial
+ Layer 2 platform file shape:
+
+```toml
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[properties]
+reg-io-width = 4
+current-speed = 115200
+
+# Future construct-owned sections:
+#
+# [mmio.uart_regs]
+# base = "..."
+# size = 0x1000
+#
+# [interrupt.combined_irq]
+# trigger_type = "level_high"
+# shared = false
+#
+# [clock.uart_clk]
+# default_frequency = 48000000
+#
+# [reset.reset]
+# reset_line_id = "uart-reset"
+# reset_shared = false
+#
+# [pinctrl.pinctrl]
+# pin_states = ["default", "sleep"]
+```
+
+What this template is trying to show:
+
+- `version` gives the file a stable schema/version marker
+- `[platform]` is part of the required initial contract and carries deployment
+  metadata, including:
+  - `os`
+  - `board`
+  - `arch`
+- `[properties]` is the first fully implemented section for B-07
+- future sections are construct-owned rather than folded into one generic
+  resource namespace
+- future sections may be accepted and preserved before they are fully
+  semantically validated
+- section keys should follow the accepted construct-local join rule:
+  - explicit ids where the construct has them
+  - field-name join where that is the accepted pattern
+
+This template is a discussion artifact, not yet the final B-07 contract.
+
 ## Current Leading Direction
 
 The strongest current direction is:
 
 - one Layer 2 platform file per device instance/deployment unit
+- TOML as the leading concrete syntax
 - human-readable, text-based format
+- required initial `version` and `[platform]` contract
 - sectioned by construct/resource family
 - B-07 fully implements:
   - file/container shape
@@ -257,6 +504,16 @@ The strongest current direction is:
   - the limited Layer 1 / Layer 2 boundary checks needed for the accepted
     firmware-property frontier
 - broader normalized binding-model design remains deferred to Phase C
+
+The strongest structure direction is:
+
+- `[properties]` is the first fully implemented section
+- future resource/deployment sections should be construct-owned rather than
+  grouped inside one generic resource bag
+- future sections may be accepted and preserved before they are semantically
+  validated
+- Layer 2 keys should follow the accepted construct-local join rule, not a
+  forced universal naming convention
 
 ## B-07 Boundary
 
@@ -292,6 +549,12 @@ The first implemented section may be `[properties]`, but the container should
 
 The parser should parse and validate Layer 2 input. It should not silently
  perform the final semantic join.
+
+### 4. Reintroducing a monolithic resource bag
+
+Even if future sections cover many resource families, the file should stay
+ organized by construct ownership and section-local validation, not collapse
+ back into one heterogeneous resource namespace.
 
 ## Questions to Revisit Before Writing B-07 Task Specs
 

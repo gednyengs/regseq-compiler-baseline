@@ -1,3 +1,5 @@
+#![feature(rustc_private)]
+
 //! Boundary smoke tests for the Layer 1 / Layer 2 property-id vocabulary.
 //!
 //! These tests prove the Layer 2 platform-file parser works against the
@@ -5,10 +7,122 @@
 //! driver can be related to parsed Layer 2 property entries without
 //! implementing the final join model.
 
+extern crate rustc_ast;
+extern crate rustc_driver;
+extern crate rustc_hir;
+extern crate rustc_interface;
+extern crate rustc_middle;
+extern crate rustc_session;
+
 use regseq_model::platform::PlatformValue;
 use regseq_model::platform_parser::{parse_platform_file_path, parse_platform_file_str};
 use std::collections::HashSet;
 use std::path::{Path, PathBuf};
+use std::sync::{Arc, Mutex, Once};
+
+#[path = "../../../crates/regseq-driver/src/extract/property.rs"]
+mod property;
+
+use property::{extract_property_surface, PropertyError, PropertySurface};
+
+type ExtractionResult = Result<PropertySurface, PropertyError>;
+
+static INIT: Once = Once::new();
+static COMPILER_LOCK: Mutex<()> = Mutex::new(());
+
+fn init_rustc() {
+    INIT.call_once(|| {
+        let early_dcx =
+            rustc_session::EarlyDiagCtxt::new(rustc_session::config::ErrorOutputType::default());
+        rustc_driver::init_rustc_env_logger(&early_dcx);
+    });
+}
+
+fn get_sysroot() -> String {
+    let output = std::process::Command::new("rustc")
+        .arg("--print")
+        .arg("sysroot")
+        .output()
+        .expect("failed to run rustc --print sysroot");
+    String::from_utf8(output.stdout).unwrap().trim().to_string()
+}
+
+fn compile_and_extract_property_surface(source: &str, test_name: &str) -> ExtractionResult {
+    let _lock = COMPILER_LOCK.lock().unwrap();
+    init_rustc();
+
+    let test_dir = std::env::temp_dir()
+        .join("regseq-e2e-tests")
+        .join(test_name);
+    if test_dir.exists() {
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+    std::fs::create_dir_all(&test_dir).unwrap();
+
+    let src_path = test_dir.join("test_input.rs");
+    std::fs::write(&src_path, source).unwrap();
+
+    let sysroot = get_sysroot();
+    let result: Arc<Mutex<Option<ExtractionResult>>> = Arc::new(Mutex::new(None));
+
+    struct ExtractCallbacks {
+        result: Arc<Mutex<Option<ExtractionResult>>>,
+    }
+
+    impl rustc_driver::Callbacks for ExtractCallbacks {
+        fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+            config.opts.unstable_opts.no_codegen = true;
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push("feature(register_tool)".to_string());
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push("register_tool(rseq)".to_string());
+        }
+
+        fn after_analysis<'tcx>(
+            &mut self,
+            _compiler: &rustc_interface::interface::Compiler,
+            tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        ) -> rustc_driver::Compilation {
+            *self.result.lock().unwrap() = Some(extract_property_surface(tcx));
+            rustc_driver::Compilation::Stop
+        }
+    }
+
+    let mut callbacks = ExtractCallbacks {
+        result: result.clone(),
+    };
+
+    let args = vec![
+        "rustc".to_string(),
+        src_path.to_str().unwrap().to_string(),
+        "--sysroot".to_string(),
+        sysroot,
+        "--edition".to_string(),
+        "2021".to_string(),
+        "--crate-type".to_string(),
+        "lib".to_string(),
+        "--out-dir".to_string(),
+        test_dir.to_str().unwrap().to_string(),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let extracted = result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("after_analysis should have been called");
+
+    std::fs::remove_dir_all(&test_dir).ok();
+
+    extracted
+}
 
 fn fixtures_root() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR"))
@@ -107,23 +221,11 @@ fn unsupported_property_value_fixture_is_rejected() {
 // Layer 1 / Layer 2 boundary smoke
 // ---------------------------------------------------------------------------
 
-/// Extract property ids declared in a Layer 1 fixture source file by
-/// scanning for `#[rseq::property(id = "...")]` patterns.
-///
-/// This is a lightweight text-based extraction for smoke-test purposes.
-/// Production property extraction uses the real rustc/HIR path in
-/// `regseq-driver`.
 fn extract_layer1_property_ids(source: &str) -> HashSet<String> {
-    let mut ids = HashSet::new();
-    for line in source.lines() {
-        if let Some(start) = line.find("id = \"") {
-            let after = &line[start + 6..];
-            if let Some(end) = after.find('"') {
-                ids.insert(after[..end].to_string());
-            }
-        }
-    }
-    ids
+    let surface =
+        compile_and_extract_property_surface(source, "platform_file_boundary_property_fixture")
+            .expect("Layer 1 property fixture should extract");
+    surface.fields.into_iter().map(|f| f.property_id).collect()
 }
 
 #[test]
