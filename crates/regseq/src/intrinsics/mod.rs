@@ -5,3 +5,4 @@
 /// (e.g., `regseq::poll::until`) are compatibility aliases.
 pub mod register_access;
 pub mod sync;
+pub mod timed_delay;

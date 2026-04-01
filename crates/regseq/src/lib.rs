@@ -12,6 +12,7 @@
 //! namespace.
 
 mod clock;
+pub mod delay;
 mod error;
 pub mod intrinsics;
 mod irq;
