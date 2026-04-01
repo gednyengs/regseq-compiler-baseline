@@ -212,7 +212,7 @@ items:
     phase: B
     title: core trait callback surfaces
     brief: .harness/spec-batches/phase-b-04.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-03
     target_harness_groups:
@@ -233,13 +233,18 @@ items:
       - Treat callback traits as shared frontend contracts that sit on top of the earlier shared foundations.
       - Keep structural driver attributes in their earlier batch; this batch is about callback surfaces and their compiler reachability.
       - Use only the accepted trait families from the compiler collateral and keep method signatures stable for later analysis.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-facade-09
+      - regseq-facade-10
+      - regseq-driver-10
+      - regseq-facade-11
+      - regseq-driver-11
 
   - id: phase-b-05
     phase: B
     title: core typed-resource wrappers and standalone facade intrinsics
     brief: .harness/spec-batches/phase-b-05.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-04
     target_harness_groups:

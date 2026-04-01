@@ -118,7 +118,7 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
     extracted
 }
 
-const FIXTURE_PREAMBLE: &str = r#"
+const FIXTURE_TYPES: &str = r#"
     #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     pub enum RegseqError {
         InvalidParameter,
@@ -129,6 +129,19 @@ const FIXTURE_PREAMBLE: &str = r#"
     pub struct SerialConfig { _private: () }
     pub struct RxChar { _private: () }
 "#;
+
+fn regseq_module(defs: &str) -> String {
+    format!(
+        r#"
+        pub mod regseq {{
+            {FIXTURE_TYPES}
+            {defs}
+        }}
+
+        use regseq::*;
+    "#
+    )
+}
 
 const LIFECYCLE_TRAIT: &str = r#"
     pub trait Lifecycle {
@@ -167,14 +180,14 @@ const PM_TRAIT: &str = r#"
 
 #[test]
 fn recognize_lifecycle_impl() {
+    let regseq = regseq_module(LIFECYCLE_TRAIT);
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {LIFECYCLE_TRAIT}
+        {regseq}
 
         pub struct Pl011;
 
-        impl Lifecycle for Pl011 {{
+        impl regseq::Lifecycle for Pl011 {{
             fn init(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn deinit(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -192,14 +205,14 @@ fn recognize_lifecycle_impl() {
 
 #[test]
 fn recognize_serial_impl() {
+    let regseq = regseq_module(SERIAL_TRAIT);
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {SERIAL_TRAIT}
+        {regseq}
 
         pub struct Pl011;
 
-        impl Serial for Pl011 {{
+        impl regseq::Serial for Pl011 {{
             fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn port_close(&mut self) {{}}
             fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
@@ -221,14 +234,14 @@ fn recognize_serial_impl() {
 
 #[test]
 fn recognize_serial_console_independently() {
+    let regseq = regseq_module(SERIAL_CONSOLE_TRAIT);
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {SERIAL_CONSOLE_TRAIT}
+        {regseq}
 
         pub struct Pl011;
 
-        impl SerialConsole for Pl011 {{
+        impl regseq::SerialConsole for Pl011 {{
             fn console_write(&mut self, _text: &str) {{}}
         }}
     "#
@@ -247,18 +260,21 @@ fn recognize_serial_console_independently() {
 
 #[test]
 fn reject_lifecycle_wrong_return_type() {
-    let source = format!(
+    let regseq = regseq_module(
         r#"
-        {FIXTURE_PREAMBLE}
-
-        pub trait Lifecycle {{
+        pub trait Lifecycle {
             fn init(&mut self) -> bool;
             fn deinit(&mut self) -> Result<(), RegseqError>;
-        }}
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
 
         pub struct Dev;
 
-        impl Lifecycle for Dev {{
+        impl regseq::Lifecycle for Dev {{
             fn init(&mut self) -> bool {{ true }}
             fn deinit(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -277,18 +293,21 @@ fn reject_lifecycle_wrong_return_type() {
 
 #[test]
 fn reject_lifecycle_wrong_receiver() {
-    let source = format!(
+    let regseq = regseq_module(
         r#"
-        {FIXTURE_PREAMBLE}
-
-        pub trait Lifecycle {{
+        pub trait Lifecycle {
             fn init(&self) -> Result<(), RegseqError>;
             fn deinit(&self) -> Result<(), RegseqError>;
-        }}
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
 
         pub struct Dev;
 
-        impl Lifecycle for Dev {{
+        impl regseq::Lifecycle for Dev {{
             fn init(&self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn deinit(&self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -311,21 +330,21 @@ fn reject_lifecycle_wrong_receiver() {
 
 #[test]
 fn callback_contexts_correct() {
+    let regseq = regseq_module(&format!(
+        "{LIFECYCLE_TRAIT}\n{SERIAL_TRAIT}\n{SERIAL_CONSOLE_TRAIT}"
+    ));
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {LIFECYCLE_TRAIT}
-        {SERIAL_TRAIT}
-        {SERIAL_CONSOLE_TRAIT}
+        {regseq}
 
         pub struct Dev;
 
-        impl Lifecycle for Dev {{
+        impl regseq::Lifecycle for Dev {{
             fn init(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn deinit(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
 
-        impl Serial for Dev {{
+        impl regseq::Serial for Dev {{
             fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn port_close(&mut self) {{}}
             fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
@@ -334,7 +353,7 @@ fn callback_contexts_correct() {
             fn tx_ready(&mut self) -> bool {{ true }}
         }}
 
-        impl SerialConsole for Dev {{
+        impl regseq::SerialConsole for Dev {{
             fn console_write(&mut self, _text: &str) {{}}
         }}
     "#
@@ -367,22 +386,25 @@ fn callback_contexts_correct() {
 
 #[test]
 fn reject_serial_rx_char_returning_bool() {
-    let source = format!(
+    let regseq = regseq_module(
         r#"
-        {FIXTURE_PREAMBLE}
-
-        pub trait Serial {{
+        pub trait Serial {
             fn port_open(&mut self) -> Result<(), RegseqError>;
             fn port_close(&mut self);
             fn configure(&mut self, config: &SerialConfig) -> Result<(), RegseqError>;
             fn tx_byte(&mut self, byte: u8);
             fn rx_char(&mut self) -> bool;
             fn tx_ready(&mut self) -> bool;
-        }}
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
 
         pub struct Dev;
 
-        impl Serial for Dev {{
+        impl regseq::Serial for Dev {{
             fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn port_close(&mut self) {{}}
             fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
@@ -405,22 +427,25 @@ fn reject_serial_rx_char_returning_bool() {
 
 #[test]
 fn reject_serial_tx_ready_returning_option() {
-    let source = format!(
+    let regseq = regseq_module(
         r#"
-        {FIXTURE_PREAMBLE}
-
-        pub trait Serial {{
+        pub trait Serial {
             fn port_open(&mut self) -> Result<(), RegseqError>;
             fn port_close(&mut self);
             fn configure(&mut self, config: &SerialConfig) -> Result<(), RegseqError>;
             fn tx_byte(&mut self, byte: u8);
             fn rx_char(&mut self) -> Option<RxChar>;
             fn tx_ready(&mut self) -> Option<RxChar>;
-        }}
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
 
         pub struct Dev;
 
-        impl Serial for Dev {{
+        impl regseq::Serial for Dev {{
             fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn port_close(&mut self) {{}}
             fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
@@ -441,20 +466,122 @@ fn reject_serial_tx_ready_returning_option() {
     );
 }
 
+#[test]
+fn reject_serial_configure_wrong_param_type() {
+    let regseq = regseq_module(
+        r#"
+        pub trait Serial {
+            fn port_open(&mut self) -> Result<(), RegseqError>;
+            fn port_close(&mut self);
+            fn configure(&mut self, config: u32) -> Result<(), RegseqError>;
+            fn tx_byte(&mut self, byte: u8);
+            fn rx_char(&mut self) -> Option<RxChar>;
+            fn tx_ready(&mut self) -> bool;
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::Serial for Dev {{
+            fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn port_close(&mut self) {{}}
+            fn configure(&mut self, _config: u32) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn tx_byte(&mut self, _byte: u8) {{}}
+            fn rx_char(&mut self) -> Option<RxChar> {{ None }}
+            fn tx_ready(&mut self) -> bool {{ true }}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "serial_configure_wrong_param");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidSignature {
+            trait_name: "Serial".into(),
+            method: "configure".into(),
+        })
+    );
+}
+
+#[test]
+fn reject_lifecycle_wrong_error_type() {
+    let regseq = regseq_module(
+        r#"
+        pub enum OtherError { Bad }
+
+        pub trait Lifecycle {
+            fn init(&mut self) -> Result<(), OtherError>;
+            fn deinit(&mut self) -> Result<(), OtherError>;
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::Lifecycle for Dev {{
+            fn init(&mut self) -> Result<(), OtherError> {{ Err(OtherError::Bad) }}
+            fn deinit(&mut self) -> Result<(), OtherError> {{ Err(OtherError::Bad) }}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "lifecycle_wrong_error_type");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidReturnType {
+            trait_name: "Lifecycle".into(),
+            method: "init".into(),
+        })
+    );
+}
+
+#[test]
+fn ignore_non_regseq_same_name_trait() {
+    let source = r#"
+        #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+        pub enum RegseqError { GenericFailure }
+
+        pub trait Lifecycle {
+            fn init(&mut self) -> Result<(), RegseqError>;
+            fn deinit(&mut self) -> Result<(), RegseqError>;
+        }
+
+        pub struct Dev;
+
+        impl Lifecycle for Dev {
+            fn init(&mut self) -> Result<(), RegseqError> { Ok(()) }
+            fn deinit(&mut self) -> Result<(), RegseqError> { Ok(()) }
+        }
+    "#;
+
+    let surface = compile_and_extract(source, "ignore_non_regseq_same_name_trait").unwrap();
+    assert!(surface.lifecycle_impls.is_empty());
+    assert!(surface.serial_impls.is_empty());
+    assert!(surface.serial_console_impls.is_empty());
+    assert!(surface.power_management_impls.is_empty());
+}
+
 // ---------------------------------------------------------------------------
 // Test 7: PowerManagement impls recognized
 // ---------------------------------------------------------------------------
 
 #[test]
 fn recognize_power_management_impl() {
+    let regseq = regseq_module(PM_TRAIT);
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {PM_TRAIT}
+        {regseq}
 
         pub struct Pl011;
 
-        impl PowerManagement for Pl011 {{
+        impl regseq::PowerManagement for Pl011 {{
             fn suspend(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn resume(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -472,18 +599,21 @@ fn recognize_power_management_impl() {
 
 #[test]
 fn reject_pm_wrong_return_type() {
-    let source = format!(
+    let regseq = regseq_module(
         r#"
-        {FIXTURE_PREAMBLE}
-
-        pub trait PowerManagement {{
+        pub trait PowerManagement {
             fn suspend(&mut self) -> bool;
             fn resume(&mut self) -> Result<(), RegseqError>;
-        }}
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
 
         pub struct Dev;
 
-        impl PowerManagement for Dev {{
+        impl regseq::PowerManagement for Dev {{
             fn suspend(&mut self) -> bool {{ true }}
             fn resume(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -502,18 +632,21 @@ fn reject_pm_wrong_return_type() {
 
 #[test]
 fn reject_pm_wrong_receiver() {
-    let source = format!(
+    let regseq = regseq_module(
         r#"
-        {FIXTURE_PREAMBLE}
-
-        pub trait PowerManagement {{
+        pub trait PowerManagement {
             fn suspend(&self) -> Result<(), RegseqError>;
             fn resume(&self) -> Result<(), RegseqError>;
-        }}
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
 
         pub struct Dev;
 
-        impl PowerManagement for Dev {{
+        impl regseq::PowerManagement for Dev {{
             fn suspend(&self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn resume(&self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -536,14 +669,14 @@ fn reject_pm_wrong_receiver() {
 
 #[test]
 fn pm_callback_context_is_f() {
+    let regseq = regseq_module(PM_TRAIT);
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {PM_TRAIT}
+        {regseq}
 
         pub struct Dev;
 
-        impl PowerManagement for Dev {{
+        impl regseq::PowerManagement for Dev {{
             fn suspend(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn resume(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}
@@ -564,14 +697,14 @@ fn pm_callback_context_is_f() {
 
 #[test]
 fn pm_trait_is_optional() {
+    let regseq = regseq_module(LIFECYCLE_TRAIT);
     let source = format!(
         r#"
-        {FIXTURE_PREAMBLE}
-        {LIFECYCLE_TRAIT}
+        {regseq}
 
         pub struct Dev;
 
-        impl Lifecycle for Dev {{
+        impl regseq::Lifecycle for Dev {{
             fn init(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
             fn deinit(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
         }}

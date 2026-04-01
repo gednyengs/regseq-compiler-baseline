@@ -197,6 +197,31 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-10",
+          "name": "Lifecycle and serial trait capture",
+          "spec": ".harness/tasks/regseq-driver/10-lifecycle-and-serial-trait-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-05",
+            "regseq-facade-09",
+            "regseq-facade-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-11",
+          "name": "PowerManagement trait capture",
+          "spec": ".harness/tasks/regseq-driver/11-power-management-trait-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-10",
+            "regseq-facade-11"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -392,6 +417,39 @@
           "id": "regseq-facade-08",
           "name": "Synchronization wrapper baseline",
           "spec": ".harness/tasks/regseq-facade/08-synchronization-wrapper-baseline.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-09",
+          "name": "Lifecycle trait surface",
+          "spec": ".harness/tasks/regseq-facade/09-lifecycle-trait-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-10",
+          "name": "Serial trait surfaces",
+          "spec": ".harness/tasks/regseq-facade/10-serial-trait-surfaces.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-11",
+          "name": "PowerManagement trait surface",
+          "spec": ".harness/tasks/regseq-facade/11-power-management-trait-surface.md",
           "status": "done",
           "depends_on": [
             "regseq-facade-02"

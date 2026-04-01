@@ -1,4 +1,5 @@
-use rustc_hir::{FnRetTy, ImplItemKind, ItemKind};
+use rustc_hir::def::Res;
+use rustc_hir::{FnDecl, FnRetTy, GenericArg, ImplItemKind, ItemKind, QPath, TyKind};
 use rustc_middle::ty::TyCtxt;
 
 use super::callback_context::CallbackContext;
@@ -53,6 +54,7 @@ pub enum TraitError {
     MissingMethod { trait_name: String, method: String },
     InvalidReturnType { trait_name: String, method: String },
     InvalidReceiver { trait_name: String, method: String },
+    InvalidSignature { trait_name: String, method: String },
 }
 
 // ---------------------------------------------------------------------------
@@ -60,69 +62,89 @@ pub enum TraitError {
 // ---------------------------------------------------------------------------
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum ReturnShape {
+enum ReturnSpec {
     Unit,
-    Result,
-    Option,
+    ResultUnitRegseqError,
+    OptionRxChar,
     Bool,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum ExtraParamSpec {
+    None,
+    RefNamed(&'static str),
+    RefStr,
+    Primitive(&'static str),
 }
 
 struct MethodSpec {
     name: &'static str,
-    return_shape: ReturnShape,
+    extra_param: ExtraParamSpec,
+    return_spec: ReturnSpec,
 }
 
 const LIFECYCLE_METHODS: &[MethodSpec] = &[
     MethodSpec {
         name: "init",
-        return_shape: ReturnShape::Result,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::ResultUnitRegseqError,
     },
     MethodSpec {
         name: "deinit",
-        return_shape: ReturnShape::Result,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::ResultUnitRegseqError,
     },
 ];
 
 const SERIAL_METHODS: &[MethodSpec] = &[
     MethodSpec {
         name: "port_open",
-        return_shape: ReturnShape::Result,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::ResultUnitRegseqError,
     },
     MethodSpec {
         name: "port_close",
-        return_shape: ReturnShape::Unit,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::Unit,
     },
     MethodSpec {
         name: "configure",
-        return_shape: ReturnShape::Result,
+        extra_param: ExtraParamSpec::RefNamed("regseq::SerialConfig"),
+        return_spec: ReturnSpec::ResultUnitRegseqError,
     },
     MethodSpec {
         name: "tx_byte",
-        return_shape: ReturnShape::Unit,
+        extra_param: ExtraParamSpec::Primitive("u8"),
+        return_spec: ReturnSpec::Unit,
     },
     MethodSpec {
         name: "rx_char",
-        return_shape: ReturnShape::Option,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::OptionRxChar,
     },
     MethodSpec {
         name: "tx_ready",
-        return_shape: ReturnShape::Bool,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::Bool,
     },
 ];
 
 const SERIAL_CONSOLE_METHODS: &[MethodSpec] = &[MethodSpec {
     name: "console_write",
-    return_shape: ReturnShape::Unit,
+    extra_param: ExtraParamSpec::RefStr,
+    return_spec: ReturnSpec::Unit,
 }];
 
 const PM_METHODS: &[MethodSpec] = &[
     MethodSpec {
         name: "suspend",
-        return_shape: ReturnShape::Result,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::ResultUnitRegseqError,
     },
     MethodSpec {
         name: "resume",
-        return_shape: ReturnShape::Result,
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::ResultUnitRegseqError,
     },
 ];
 
@@ -148,38 +170,37 @@ pub fn extract_trait_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<TraitSurface, Tr
             continue;
         };
 
-        let Some(last_seg) = trait_ref.trait_ref.path.segments.last() else {
+        let Some(canonical_path) = extract_trait_identity(tcx, trait_ref.trait_ref.path) else {
             continue;
         };
-        let trait_name = last_seg.ident.name.as_str();
 
         let Some(driver_type) = extract_self_type_name(impl_block.self_ty) else {
             continue;
         };
 
-        match trait_name {
-            "Lifecycle" => {
+        match canonical_path.as_str() {
+            "regseq::Lifecycle" => {
                 validate_methods(tcx, impl_block, "Lifecycle", LIFECYCLE_METHODS)?;
                 lifecycle_impls.push(LifecycleImpl {
                     driver_type,
                     context: CallbackContext::FrameworkManaged,
                 });
             }
-            "Serial" => {
+            "regseq::Serial" => {
                 validate_methods(tcx, impl_block, "Serial", SERIAL_METHODS)?;
                 serial_impls.push(SerialImpl {
                     driver_type,
                     context: CallbackContext::SubsystemSerialized,
                 });
             }
-            "SerialConsole" => {
+            "regseq::SerialConsole" => {
                 validate_methods(tcx, impl_block, "SerialConsole", SERIAL_CONSOLE_METHODS)?;
                 serial_console_impls.push(SerialConsoleImpl {
                     driver_type,
                     context: CallbackContext::SubsystemSerialized,
                 });
             }
-            "PowerManagement" => {
+            "regseq::PowerManagement" => {
                 validate_methods(tcx, impl_block, "PowerManagement", PM_METHODS)?;
                 power_management_impls.push(PowerManagementImpl {
                     driver_type,
@@ -241,7 +262,14 @@ fn validate_methods<'tcx>(
             });
         }
 
-        if !matches_return_shape(&sig.decl.output, spec.return_shape) {
+        if !matches_extra_param(tcx, sig.decl, spec.extra_param) {
+            return Err(TraitError::InvalidSignature {
+                trait_name: trait_name.to_string(),
+                method: spec.name.to_string(),
+            });
+        }
+
+        if !matches_return_spec(tcx, &sig.decl.output, spec.return_spec) {
             return Err(TraitError::InvalidReturnType {
                 trait_name: trait_name.to_string(),
                 method: spec.name.to_string(),
@@ -266,6 +294,28 @@ fn extract_self_type_name(ty: &rustc_hir::Ty<'_>) -> Option<String> {
     }
 }
 
+fn extract_trait_identity<'tcx>(tcx: TyCtxt<'tcx>, path: &rustc_hir::Path<'tcx>) -> Option<String> {
+    let def_id = match path.res {
+        Res::Def(_, def_id) => def_id,
+        _ => return None,
+    };
+    let def_path = tcx.def_path_str(def_id);
+
+    let canonical = if def_path.ends_with("regseq::Lifecycle") {
+        Some("regseq::Lifecycle")
+    } else if def_path.ends_with("regseq::Serial") {
+        Some("regseq::Serial")
+    } else if def_path.ends_with("regseq::SerialConsole") {
+        Some("regseq::SerialConsole")
+    } else if def_path.ends_with("regseq::PowerManagement") {
+        Some("regseq::PowerManagement")
+    } else {
+        None
+    }?;
+
+    Some(canonical.to_string())
+}
+
 fn is_mut_ref_self(decl: &rustc_hir::FnDecl<'_>) -> bool {
     if decl.inputs.is_empty() {
         return false;
@@ -277,12 +327,31 @@ fn is_mut_ref_self(decl: &rustc_hir::FnDecl<'_>) -> bool {
     }
 }
 
-fn matches_return_shape(output: &FnRetTy<'_>, expected: ReturnShape) -> bool {
+fn matches_extra_param<'tcx>(tcx: TyCtxt<'tcx>, decl: &FnDecl<'tcx>, expected: ExtraParamSpec) -> bool {
+    let Some(extra_inputs) = decl.inputs.get(1..) else {
+        return matches!(expected, ExtraParamSpec::None);
+    };
+
     match expected {
-        ReturnShape::Unit => is_unit_return(output),
-        ReturnShape::Result => is_named_return(output, "Result"),
-        ReturnShape::Option => is_named_return(output, "Option"),
-        ReturnShape::Bool => is_named_return(output, "bool"),
+        ExtraParamSpec::None => extra_inputs.is_empty(),
+        ExtraParamSpec::RefNamed(name) => {
+            extra_inputs.len() == 1 && matches_ref_named(tcx, &extra_inputs[0], name)
+        }
+        ExtraParamSpec::RefStr => {
+            extra_inputs.len() == 1 && matches_ref_str(tcx, &extra_inputs[0])
+        }
+        ExtraParamSpec::Primitive(name) => {
+            extra_inputs.len() == 1 && matches_primitive(&extra_inputs[0], name)
+        }
+    }
+}
+
+fn matches_return_spec<'tcx>(tcx: TyCtxt<'tcx>, output: &FnRetTy<'tcx>, expected: ReturnSpec) -> bool {
+    match expected {
+        ReturnSpec::Unit => is_unit_return(output),
+        ReturnSpec::ResultUnitRegseqError => matches_result_unit_regseq_error(tcx, output),
+        ReturnSpec::OptionRxChar => matches_option_named(tcx, output, "regseq::RxChar"),
+        ReturnSpec::Bool => is_named_return(output, "bool"),
     }
 }
 
@@ -308,5 +377,113 @@ fn is_named_return(output: &FnRetTy<'_>, name: &str) -> bool {
                 false
             }
         }
+    }
+}
+
+fn matches_result_unit_regseq_error<'tcx>(tcx: TyCtxt<'tcx>, output: &FnRetTy<'tcx>) -> bool {
+    let FnRetTy::Return(ty) = output else {
+        return false;
+    };
+    let TyKind::Path(QPath::Resolved(_, path)) = &ty.kind else {
+        return false;
+    };
+    let Some(last) = path.segments.last() else {
+        return false;
+    };
+    if last.ident.name.as_str() != "Result" {
+        return false;
+    }
+    let rustc_hir::GenericArgs { args, .. } = match last.args {
+        Some(args) => args,
+        None => return false,
+    };
+    if args.len() != 2 {
+        return false;
+    }
+    let unit_ok = match &args[0] {
+        GenericArg::Type(ty) => matches!(&ty.kind, TyKind::Tup(elems) if elems.is_empty()),
+        _ => false,
+    };
+    let err_ok = match &args[1] {
+        GenericArg::Type(ty) => path_matches_suffix(tcx, *ty, "regseq::RegseqError"),
+        _ => false,
+    };
+    unit_ok && err_ok
+}
+
+fn matches_option_named<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    output: &FnRetTy<'tcx>,
+    expected_inner: &str,
+) -> bool {
+    let FnRetTy::Return(ty) = output else {
+        return false;
+    };
+    let TyKind::Path(QPath::Resolved(_, path)) = &ty.kind else {
+        return false;
+    };
+    let Some(last) = path.segments.last() else {
+        return false;
+    };
+    if last.ident.name.as_str() != "Option" {
+        return false;
+    }
+    let rustc_hir::GenericArgs { args, .. } = match last.args {
+        Some(args) => args,
+        None => return false,
+    };
+    if args.len() != 1 {
+        return false;
+    }
+    match &args[0] {
+        GenericArg::Type(ty) => path_matches_suffix(tcx, *ty, expected_inner),
+        _ => false,
+    }
+}
+
+fn matches_ref_named<'tcx>(tcx: TyCtxt<'tcx>, ty: &rustc_hir::Ty<'tcx>, expected: &str) -> bool {
+    let TyKind::Ref(_, inner) = &ty.kind else {
+        return false;
+    };
+    path_matches_suffix(tcx, inner.ty, expected)
+}
+
+fn matches_ref_str<'tcx>(_: TyCtxt<'tcx>, ty: &rustc_hir::Ty<'tcx>) -> bool {
+    let TyKind::Ref(_, inner) = &ty.kind else {
+        return false;
+    };
+    matches_primitive(inner.ty, "str")
+}
+
+fn matches_primitive(ty: &rustc_hir::Ty<'_>, expected: &str) -> bool {
+    match &ty.kind {
+        TyKind::Path(QPath::Resolved(_, path)) => path
+            .segments
+            .last()
+            .map(|s| s.ident.name.as_str() == expected)
+            .unwrap_or(false),
+        _ => false,
+    }
+}
+
+fn path_matches_suffix<'tcx, A>(
+    tcx: TyCtxt<'tcx>,
+    ty: &rustc_hir::Ty<'tcx, A>,
+    expected_suffix: &str,
+) -> bool {
+    match &ty.kind {
+        TyKind::Path(QPath::Resolved(_, path)) => match path.res {
+            Res::Def(_, def_id) => tcx.def_path_str(def_id).ends_with(expected_suffix),
+            _ => {
+                let segments = path
+                    .segments
+                    .iter()
+                    .map(|seg| seg.ident.name.as_str())
+                    .collect::<Vec<_>>()
+                    .join("::");
+                segments.ends_with(expected_suffix)
+            }
+        },
+        _ => false,
     }
 }
