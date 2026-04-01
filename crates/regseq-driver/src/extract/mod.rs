@@ -5,3 +5,5 @@ pub(crate) mod interrupts;
 pub(crate) mod ordering;
 pub(crate) mod register_access;
 pub(crate) mod synchronization;
+#[allow(dead_code)]
+pub(crate) mod traits;
