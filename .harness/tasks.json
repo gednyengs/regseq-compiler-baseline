@@ -674,7 +674,45 @@
     {
       "id": "track-a-pl011",
       "name": "PL011 artifact device track",
-      "tasks": []
+      "tasks": [
+        {
+          "id": "track-a-pl011-01",
+          "name": "Spec crate scaffold and compiler path",
+          "spec": ".harness/tasks/track-a-pl011/01-spec-crate-scaffold-and-compiler-path.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-04",
+            "regseq-model-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-pl011-02",
+          "name": "Register schema and MMIO surface for the polling slice",
+          "spec": ".harness/tasks/track-a-pl011/02-register-schema-and-mmio-surface.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-pl011-01",
+            "regseq-driver-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-pl011-03",
+          "name": "Polling driver slice and Layer 2 property fixture",
+          "spec": ".harness/tasks/track-a-pl011/03-polling-driver-slice-and-layer2-fixture.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-pl011-02",
+            "regseq-driver-10",
+            "regseq-driver-17"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
     },
     {
       "id": "track-a-e1000",

@@ -346,7 +346,7 @@ items:
     phase: B
     title: real PL011 frontend slice assembly
     brief: .harness/spec-batches/phase-b-08.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-07
     target_harness_groups:
@@ -365,13 +365,16 @@ items:
       - Keep this batch frontend-only and centered on a narrow but real PL011 slice.
       - Use `track-a-pl011` as the primary evidence stream and add narrow fixtures only where they isolate a specific frontend edge.
       - Do not move raw-artifact closure, normalized model work, or lowering work into this batch.
-    generated_task_ids: []
+    generated_task_ids:
+      - track-a-pl011-01
+      - track-a-pl011-02
+      - track-a-pl011-03
 
   - id: phase-b-09
     phase: B
     title: raw-artifact and frontend-closure validation
     brief: .harness/spec-batches/phase-b-09.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-08
     target_harness_groups:
