@@ -13,6 +13,7 @@ pub struct TraitSurface {
     pub lifecycle_impls: Vec<LifecycleImpl>,
     pub serial_impls: Vec<SerialImpl>,
     pub serial_console_impls: Vec<SerialConsoleImpl>,
+    pub power_management_impls: Vec<PowerManagementImpl>,
 }
 
 /// Extracted `impl Lifecycle for DriverType`.
@@ -32,6 +33,13 @@ pub struct SerialImpl {
 /// Extracted `impl SerialConsole for DriverType`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct SerialConsoleImpl {
+    pub driver_type: String,
+    pub context: CallbackContext,
+}
+
+/// Extracted `impl PowerManagement for DriverType`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PowerManagementImpl {
     pub driver_type: String,
     pub context: CallbackContext,
 }
@@ -107,6 +115,17 @@ const SERIAL_CONSOLE_METHODS: &[MethodSpec] = &[MethodSpec {
     return_shape: ReturnShape::Unit,
 }];
 
+const PM_METHODS: &[MethodSpec] = &[
+    MethodSpec {
+        name: "suspend",
+        return_shape: ReturnShape::Result,
+    },
+    MethodSpec {
+        name: "resume",
+        return_shape: ReturnShape::Result,
+    },
+];
+
 // ---------------------------------------------------------------------------
 // Main extraction entry point
 // ---------------------------------------------------------------------------
@@ -116,6 +135,7 @@ pub fn extract_trait_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<TraitSurface, Tr
     let mut lifecycle_impls = Vec::new();
     let mut serial_impls = Vec::new();
     let mut serial_console_impls = Vec::new();
+    let mut power_management_impls = Vec::new();
 
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
@@ -159,6 +179,13 @@ pub fn extract_trait_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<TraitSurface, Tr
                     context: CallbackContext::SubsystemSerialized,
                 });
             }
+            "PowerManagement" => {
+                validate_methods(tcx, impl_block, "PowerManagement", PM_METHODS)?;
+                power_management_impls.push(PowerManagementImpl {
+                    driver_type,
+                    context: CallbackContext::FrameworkManaged,
+                });
+            }
             _ => {}
         }
     }
@@ -167,6 +194,7 @@ pub fn extract_trait_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<TraitSurface, Tr
         lifecycle_impls,
         serial_impls,
         serial_console_impls,
+        power_management_impls,
     })
 }
 

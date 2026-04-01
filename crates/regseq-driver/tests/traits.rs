@@ -154,6 +154,13 @@ const SERIAL_CONSOLE_TRAIT: &str = r#"
     }
 "#;
 
+const PM_TRAIT: &str = r#"
+    pub trait PowerManagement {
+        fn suspend(&mut self) -> Result<(), RegseqError>;
+        fn resume(&mut self) -> Result<(), RegseqError>;
+    }
+"#;
+
 // ---------------------------------------------------------------------------
 // Test 1: Lifecycle impls recognized
 // ---------------------------------------------------------------------------
@@ -432,4 +439,146 @@ fn reject_serial_tx_ready_returning_option() {
             method: "tx_ready".into(),
         })
     );
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: PowerManagement impls recognized
+// ---------------------------------------------------------------------------
+
+#[test]
+fn recognize_power_management_impl() {
+    let source = format!(
+        r#"
+        {FIXTURE_PREAMBLE}
+        {PM_TRAIT}
+
+        pub struct Pl011;
+
+        impl PowerManagement for Pl011 {{
+            fn suspend(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn resume(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+        }}
+    "#
+    );
+
+    let surface = compile_and_extract(&source, "pm_recognized").unwrap();
+    assert_eq!(surface.power_management_impls.len(), 1);
+    assert_eq!(surface.power_management_impls[0].driver_type, "Pl011");
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: Wrong PM signatures rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reject_pm_wrong_return_type() {
+    let source = format!(
+        r#"
+        {FIXTURE_PREAMBLE}
+
+        pub trait PowerManagement {{
+            fn suspend(&mut self) -> bool;
+            fn resume(&mut self) -> Result<(), RegseqError>;
+        }}
+
+        pub struct Dev;
+
+        impl PowerManagement for Dev {{
+            fn suspend(&mut self) -> bool {{ true }}
+            fn resume(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "pm_wrong_return");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidReturnType {
+            trait_name: "PowerManagement".into(),
+            method: "suspend".into(),
+        })
+    );
+}
+
+#[test]
+fn reject_pm_wrong_receiver() {
+    let source = format!(
+        r#"
+        {FIXTURE_PREAMBLE}
+
+        pub trait PowerManagement {{
+            fn suspend(&self) -> Result<(), RegseqError>;
+            fn resume(&self) -> Result<(), RegseqError>;
+        }}
+
+        pub struct Dev;
+
+        impl PowerManagement for Dev {{
+            fn suspend(&self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn resume(&self) -> Result<(), RegseqError> {{ Ok(()) }}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "pm_wrong_receiver");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidReceiver {
+            trait_name: "PowerManagement".into(),
+            method: "suspend".into(),
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 9: PM callback context is F
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pm_callback_context_is_f() {
+    let source = format!(
+        r#"
+        {FIXTURE_PREAMBLE}
+        {PM_TRAIT}
+
+        pub struct Dev;
+
+        impl PowerManagement for Dev {{
+            fn suspend(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn resume(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+        }}
+    "#
+    );
+
+    let surface = compile_and_extract(&source, "pm_context").unwrap();
+    assert_eq!(
+        surface.power_management_impls[0].context,
+        CallbackContext::FrameworkManaged
+    );
+    assert_eq!(surface.power_management_impls[0].context.short_label(), "F");
+}
+
+// ---------------------------------------------------------------------------
+// Test 10: PowerManagement is optional from trait-capture perspective
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pm_trait_is_optional() {
+    let source = format!(
+        r#"
+        {FIXTURE_PREAMBLE}
+        {LIFECYCLE_TRAIT}
+
+        pub struct Dev;
+
+        impl Lifecycle for Dev {{
+            fn init(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn deinit(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+        }}
+    "#
+    );
+
+    let surface = compile_and_extract(&source, "pm_optional").unwrap();
+    assert_eq!(surface.lifecycle_impls.len(), 1);
+    assert!(surface.power_management_impls.is_empty());
 }
