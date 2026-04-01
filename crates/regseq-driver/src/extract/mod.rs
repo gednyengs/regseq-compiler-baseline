@@ -5,6 +5,8 @@ pub(crate) mod driver_identity;
 pub(crate) mod interrupts;
 #[allow(dead_code)]
 pub(crate) mod ordering;
+#[allow(dead_code)]
+pub(crate) mod pinctrl;
 pub(crate) mod register_access;
 #[allow(dead_code)]
 pub(crate) mod reset;
