@@ -112,7 +112,7 @@ The current implementation plan resolves crate topology as follows:
 - Phase B for Layer 2 format/parser support and raw-artifact serialization helpers
 - Phase C for normalized declaration/binding models and joined lowering inputs
 Backend crates should stay unified initially. Split them only if a later phase shows the single-crate backend layout is blocking task isolation or dependency hygiene.
-Later lowering and backend tasks should also treat `docs/experiments/mir-structured-codegen/report.md` as required reference material for MIR extraction shape, CFG structuring, expression folding, and decorated C emission.
+Later lowering and backend tasks should also treat `experiments/mir-structured-codegen/report.md` as required reference material for MIR extraction shape, CFG structuring, expression folding, and decorated C emission.
 
 ## 4. Phase Overview
 | Phase | Name                                 | Primary Goal                                                  | Main Output                                                |

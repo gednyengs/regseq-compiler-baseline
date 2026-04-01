@@ -22,7 +22,7 @@ cleaner MIR signal than ordinary `Result<T, RegseqError>`.
 From the repo root:
 
 ```sh
-rustc docs/discussions/regseq-error/experiments/regseq_result_mir_experiment.rs \
+rustc experiments/regseq-error/regseq_result_mir_experiment.rs \
   --crate-type lib \
   -Zunpretty=mir
 ```
@@ -30,7 +30,7 @@ rustc docs/discussions/regseq-error/experiments/regseq_result_mir_experiment.rs 
 To narrow the output:
 
 ```sh
-rustc docs/discussions/regseq-error/experiments/regseq_result_mir_experiment.rs \
+rustc experiments/regseq-error/regseq_result_mir_experiment.rs \
   --crate-type lib \
   -Zunpretty=mir | rg -n "explicit_authored_error|wrapper_mediated_error|native_status_passthrough|RegseqResult|branch|from_residual|enable_native"
 ```

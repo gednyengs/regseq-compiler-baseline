@@ -222,6 +222,68 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-12",
+          "name": "Clock resource and wrapper capture",
+          "spec": ".harness/tasks/regseq-driver/12-clock-resource-and-wrapper-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-06",
+            "regseq-facade-12"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-13",
+          "name": "ResetLine resource and wrapper capture",
+          "spec": ".harness/tasks/regseq-driver/13-resetline-resource-and-wrapper-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-06",
+            "regseq-facade-13"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-14",
+          "name": "PinCtrl resource and wrapper capture",
+          "spec": ".harness/tasks/regseq-driver/14-pinctrl-resource-and-wrapper-capture.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-06",
+            "regseq-facade-14"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-15",
+          "name": "Timed-delay capture and legality baseline",
+          "spec": ".harness/tasks/regseq-driver/15-timed-delay-capture-and-legality-baseline.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-07",
+            "regseq-driver-10",
+            "regseq-facade-15"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-16",
+          "name": "Diagnostic logging recognition",
+          "spec": ".harness/tasks/regseq-driver/16-diagnostic-logging-recognition.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-07",
+            "regseq-driver-10",
+            "regseq-facade-16"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -453,6 +515,62 @@
           "status": "done",
           "depends_on": [
             "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-12",
+          "name": "Clock wrapper surface",
+          "spec": ".harness/tasks/regseq-facade/12-clock-wrapper-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-13",
+          "name": "ResetLine wrapper surface",
+          "spec": ".harness/tasks/regseq-facade/13-resetline-wrapper-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-14",
+          "name": "PinCtrl wrapper surface",
+          "spec": ".harness/tasks/regseq-facade/14-pinctrl-wrapper-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-15",
+          "name": "Timed-delay intrinsic surface",
+          "spec": ".harness/tasks/regseq-facade/15-timed-delay-intrinsic-surface.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-02",
+            "regseq-facade-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-16",
+          "name": "Diagnostic logging anchors and re-exports",
+          "spec": ".harness/tasks/regseq-facade/16-diagnostic-logging-anchors-and-reexports.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-06"
           ],
           "artifacts": [],
           "fail_reason": null

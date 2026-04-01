@@ -244,7 +244,7 @@ items:
     phase: B
     title: core typed-resource wrappers and standalone facade intrinsics
     brief: .harness/spec-batches/phase-b-05.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-b-04
     target_harness_groups:
@@ -255,26 +255,38 @@ items:
       - docs/compiler-collateral/compiler-baseline-overview.md
       - docs/compiler-collateral/compiler-constraints.md
       - docs/compiler-collateral/constructs/peripheral-clock-management.md
+      - docs/compiler-collateral/constructs/hardware-reset-sequencing-and-post-reset-polling.md
+      - docs/compiler-collateral/constructs/pin-controller-and-gpio-configuration.md
       - docs/compiler-collateral/constructs/device-interrupt-setup-and-handling.md
       - docs/compiler-collateral/constructs/synchronization.md
       - docs/compiler-collateral/constructs/diagnostic-logging.md
       - docs/compiler-collateral/constructs/timed-cpu-delay-and-sleep.md
     summary: >
       Author task specs for the remaining shared typed-resource wrappers beyond
-      MMIO, along with any standalone facade intrinsics such as logging and
-      timed-delay surfaces that the accepted PL011 slice needs before real
-      frontend assembly becomes realistic.
+      MMIO, along with any standalone facade intrinsics and lightweight facade
+      macro surfaces such as logging and timed-delay APIs that the accepted
+      full PL011 slice needs before real frontend assembly becomes realistic.
     spec_authoring_notes:
       - Keep this batch to typed resource carriers and standalone facade intrinsics that are not structurally tied to MMIO/registers, synchronization, or callback traits.
       - Do not reopen MMIO/register foundations here; build on the earlier shared extension instead.
-      - Add only the wrappers and standalone intrinsics that are broadly reused by the accepted PL011 slice.
-    generated_task_ids: []
+      - Add only the wrappers, lightweight facade macro surfaces, and standalone intrinsics that are broadly reused by the accepted full PL011 slice.
+    generated_task_ids:
+      - regseq-facade-12
+      - regseq-driver-12
+      - regseq-facade-13
+      - regseq-driver-13
+      - regseq-facade-14
+      - regseq-driver-14
+      - regseq-facade-15
+      - regseq-driver-15
+      - regseq-facade-16
+      - regseq-driver-16
 
   - id: phase-b-06
     phase: B
     title: declarative compiler-managed frontend surfaces
     brief: .harness/spec-batches/phase-b-06.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-b-05
     target_harness_groups:
@@ -463,7 +475,7 @@ items:
     source_refs:
       - docs/plans/asplos-implementation-plan.md
       - archive/guide/lowering-contract.md
-      - docs/experiments/mir-structured-codegen/report.md
+      - experiments/mir-structured-codegen/report.md
     summary: >
       Author the first lowering-oriented task batch for PL011 Linux output,
       including lowering-manifest work, backend emission, and smoke validation.
@@ -485,7 +497,7 @@ items:
     source_refs:
       - docs/plans/asplos-implementation-plan.md
       - archive/guide/lowering-contract.md
-      - docs/experiments/mir-structured-codegen/report.md
+      - experiments/mir-structured-codegen/report.md
     summary: >
       Author the Zephyr follow-up task batch for PL011 after Linux lowering stabilizes.
     spec_authoring_notes:
@@ -530,7 +542,7 @@ items:
     source_refs:
       - docs/plans/asplos-implementation-plan.md
       - archive/guide/lowering-contract.md
-      - docs/experiments/mir-structured-codegen/report.md
+      - experiments/mir-structured-codegen/report.md
     summary: >
       Author the Linux-first E1000 lowering batch with buildability and
       benchmark-readiness as the main goals.
@@ -552,7 +564,7 @@ items:
     source_refs:
       - docs/plans/asplos-implementation-plan.md
       - archive/guide/lowering-contract.md
-      - docs/experiments/mir-structured-codegen/report.md
+      - experiments/mir-structured-codegen/report.md
     summary: >
       Author the Zephyr follow-up lowering batch for the supported E1000 subset.
     generated_task_ids: []

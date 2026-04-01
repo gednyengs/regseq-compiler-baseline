@@ -1,0 +1,8 @@
+[package]
+name = "exp01-regseq"
+version = "0.1.0"
+edition = "2021"
+
+[lib]
+name = "exp01_regseq"
+path = "src/lib.rs"

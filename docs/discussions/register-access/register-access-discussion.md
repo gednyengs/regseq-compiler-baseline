@@ -619,7 +619,7 @@ predictable, not opaque.
 
 The first isolated experiment under:
 
-- `docs/discussions/register-access/experiments/exp01`
+- `experiments/register-access/exp01`
 
 validated that the current preferred machinery model is mechanically coherent
 in a minimal Rust prototype.
