@@ -7,3 +7,5 @@
 //! This crate has no rustc dependency. It is the central data-structure crate
 //! for the compiler pipeline, consumed by analysis passes, backends, and
 //! the driver's join logic.
+
+pub mod platform;

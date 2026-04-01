@@ -338,6 +338,39 @@
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-02",
+          "name": "Layer 2 platform-file schema and parsed artifact",
+          "spec": ".harness/tasks/regseq-model/02-layer2-platform-file-schema-and-parsed-artifact.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-03",
+          "name": "TOML platform-file parser and section preservation",
+          "spec": ".harness/tasks/regseq-model/03-toml-platform-file-parser-and-section-preservation.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-04",
+          "name": "[properties] section capture and parser-side validation",
+          "spec": ".harness/tasks/regseq-model/04-properties-section-capture-and-parser-side-validation.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -651,7 +684,20 @@
     {
       "id": "track-a-validation",
       "name": "validation and test evidence",
-      "tasks": []
+      "tasks": [
+        {
+          "id": "track-a-validation-01",
+          "name": "Layer 2 platform-file fixtures and boundary smoke",
+          "spec": ".harness/tasks/track-a-validation/01-layer2-platform-file-fixtures-and-boundary-smoke.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-17",
+            "regseq-model-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
     },
     {
       "id": "track-a-eval",
