@@ -3,6 +3,7 @@
 /// All function-like Regseq intrinsics have their canonical home under
 /// `regseq::intrinsics::{construct}::{intrinsic}`. Other public paths
 /// (e.g., `regseq::poll::until`) are compatibility aliases.
+pub mod diagnostic_logging;
 pub mod register_access;
 pub mod sync;
 pub mod timed_delay;

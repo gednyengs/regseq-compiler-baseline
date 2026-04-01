@@ -17,6 +17,7 @@ mod error;
 pub mod intrinsics;
 mod irq;
 mod lifecycle;
+pub mod log;
 mod mmio;
 mod pinctrl;
 pub mod poll;
