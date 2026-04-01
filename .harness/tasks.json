@@ -774,7 +774,7 @@
           "id": "track-a-validation-03",
           "name": "Minimal PL011 Layer 1 / Layer 2 compatibility proof",
           "spec": ".harness/tasks/track-a-validation/03-pl011-minimal-layer1-layer2-compatibility.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "track-a-pl011-04",
             "track-a-validation-01"
