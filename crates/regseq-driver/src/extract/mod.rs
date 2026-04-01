@@ -6,6 +6,8 @@ pub(crate) mod interrupts;
 #[allow(dead_code)]
 pub(crate) mod ordering;
 pub(crate) mod register_access;
+#[allow(dead_code)]
+pub(crate) mod reset;
 pub(crate) mod synchronization;
 #[allow(dead_code)]
 pub(crate) mod traits;
