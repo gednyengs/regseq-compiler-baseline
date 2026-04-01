@@ -679,7 +679,7 @@
           "id": "track-a-pl011-01",
           "name": "Spec crate scaffold and compiler path",
           "spec": ".harness/tasks/track-a-pl011/01-spec-crate-scaffold-and-compiler-path.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-04",
             "regseq-model-04"
