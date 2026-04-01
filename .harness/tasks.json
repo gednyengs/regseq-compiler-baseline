@@ -763,7 +763,7 @@
           "id": "track-a-validation-02",
           "name": "Caution-focused PL011 frontend QC",
           "spec": ".harness/tasks/track-a-validation/02-caution-focused-pl011-frontend-qc.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "track-a-pl011-04"
           ],
