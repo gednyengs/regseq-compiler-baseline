@@ -313,7 +313,7 @@
           "id": "regseq-driver-19",
           "name": "Raw frontend artifact emission for frontend closure",
           "spec": ".harness/tasks/regseq-driver/19-raw-frontend-artifact-emission.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-18",
             "regseq-model-04"

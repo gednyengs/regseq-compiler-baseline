@@ -9,7 +9,8 @@ extern crate rustc_session;
 
 pub mod args;
 mod callbacks;
-mod extract;
+pub(crate) mod extract;
+pub mod raw_artifact;
 pub use callbacks::RegseqCallbacks;
 
 const BUG_REPORT_URL: &str = "https://github.com/gednyengs/regseq-compiler-v2/issues";

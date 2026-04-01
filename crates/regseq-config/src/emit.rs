@@ -29,6 +29,8 @@ pub enum EmitSpec {
         /// Output path, or None for default location.
         path: Option<PathBuf>,
     },
+    /// Emit the raw frontend artifact (pre-normalized extraction snapshot).
+    RawArtifact,
 }
 
 impl FromStr for EmitSpec {
@@ -53,6 +55,7 @@ impl FromStr for EmitSpec {
                 analysis_name: subtype.map(ToString::to_string),
                 path: value.map(PathBuf::from),
             }),
+            "raw-artifact" => Ok(Self::RawArtifact),
             _ => Err(EmitParseError::UnknownType(base_type.to_string())),
         }
     }
@@ -81,6 +84,7 @@ impl fmt::Display for EmitSpec {
                 analysis_name: Some(name),
                 path: Some(path),
             } => write!(f, "analysis.{name}={}", path.to_string_lossy()),
+            Self::RawArtifact => f.write_str("raw-artifact"),
         }
     }
 }
