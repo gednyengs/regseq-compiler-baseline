@@ -9,6 +9,8 @@ pub(crate) mod logging;
 pub(crate) mod ordering;
 #[allow(dead_code)]
 pub(crate) mod pinctrl;
+#[allow(dead_code)]
+pub(crate) mod property;
 pub(crate) mod register_access;
 #[allow(dead_code)]
 pub(crate) mod reset;
