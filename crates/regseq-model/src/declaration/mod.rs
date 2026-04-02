@@ -11,9 +11,11 @@
 
 pub mod build_context;
 pub mod callbacks;
+pub mod normalize;
 pub mod operations;
 pub mod properties;
 pub mod provenance;
+pub mod raw_input;
 pub mod registers;
 pub mod resources;
 pub mod synchronization;
@@ -46,6 +48,9 @@ pub use synchronization::{
 };
 
 pub mod driver;
+
+pub use normalize::{normalize, normalize_from_json, NormalizeError, NormalizeFromJsonError};
+pub use raw_input::RawArtifactInput;
 
 /// Top-level normalized declaration model.
 ///
