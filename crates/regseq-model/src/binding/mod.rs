@@ -12,6 +12,7 @@
 
 pub mod header;
 pub mod join_key;
+pub mod normalize;
 pub mod properties;
 pub mod provenance;
 pub mod resources;
@@ -19,6 +20,7 @@ pub mod resources;
 // Re-export top-level types for convenience.
 pub use header::BindingHeader;
 pub use join_key::JoinKey;
+pub use normalize::{normalize, BindingNormalizeError};
 pub use properties::PropertyBinding;
 pub use provenance::BindingProvenance;
 pub use resources::{ClockBinding, InterruptBinding, MmioBinding, PinCtrlBinding, ResetBinding};
