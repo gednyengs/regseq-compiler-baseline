@@ -907,7 +907,7 @@
           "id": "track-a-validation-05",
           "name": "PL011 joined-artifact proof",
           "spec": ".harness/tasks/track-a-validation/05-pl011-joined-artifact-proof.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-10",
             "track-a-pl011-05"
