@@ -1,4 +1,4 @@
-# Spec Batch: phase-c-01 - regseq-model normalized declaration model for the supported PL011 slice
+# Spec Batch: phase-c-01 - regseq-model normalized declaration model for the supported PL011 frontend
 
 ## Description
 
@@ -7,7 +7,7 @@ task-spec authoring work, not executable implementation work.
 
 This batch should define the `regseq-model` tasks that normalize the raw
 extraction artifact into stable rustc-independent declaration-model types for
-the supported PL011 slice.
+the supported PL011 frontend.
 
 The output should make the beginning of internal-model work explicit and should
 be driven by what raw extraction actually produces, not by a precomputed model
@@ -50,7 +50,8 @@ Follow these fixed decisions:
   source traceability
 - keep normalized declaration-model work separate from the normalized binding
   model and from join logic
-- keep the supported slice bounded to the accepted PL011 frontend closure output
+- keep the supported frontend bounded to the accepted PL011 frontend closure
+  output
 
 Task decomposition should reflect clear declaration-model responsibilities
 rather than frontend extraction or backend concerns.

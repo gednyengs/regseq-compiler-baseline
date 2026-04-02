@@ -437,9 +437,9 @@ items:
 
   - id: phase-c-01
     phase: C
-    title: regseq-model normalized declaration model for the supported PL011 slice
+    title: regseq-model normalized declaration model for the supported PL011 frontend
     brief: .harness/spec-batches/phase-c-01.md
-    status: not_ready
+    status: tasked
     depends_on:
       - phase-b-09
       - phase-b-10
@@ -452,19 +452,22 @@ items:
       - archive/guide/implementation-guide.md
     summary: >
       Author task specs for the normalized declaration model that turns the raw
-      extraction artifact for the supported PL011 slice into stable
+      extraction artifact for the supported PL011 frontend into stable
       rustc-independent internal types.
     spec_authoring_notes:
       - This is the start of internal model work. Use what raw extraction actually produces; do not assume a normalized shape that outruns the raw artifact.
       - Preserve construct ownership, operation classes, type-driven properties, and source traceability.
       - Keep binding-model and join concerns out of this batch.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-model-05
+      - regseq-model-06
+      - regseq-model-07
 
   - id: phase-c-02
     phase: C
     title: regseq-model normalized binding model and Layer 1 plus Layer 2 join
     brief: .harness/spec-batches/phase-c-02.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-c-01
       - phase-b-07

@@ -395,6 +395,43 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-05",
+          "name": "Declaration-model schema and boundaries",
+          "spec": ".harness/tasks/regseq-model/05-declaration-model-schema-and-boundaries.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-04",
+            "regseq-driver-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-06",
+          "name": "Raw frontend artifact to declaration-model normalization",
+          "spec": ".harness/tasks/regseq-model/06-raw-frontend-artifact-to-declaration-model-normalization.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-05",
+            "regseq-driver-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-07",
+          "name": "Declaration-model reviewability and traversal baseline",
+          "spec": ".harness/tasks/regseq-model/07-declaration-model-reviewability-and-traversal-baseline.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-06",
+            "track-a-pl011-04",
+            "track-a-pl011-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
