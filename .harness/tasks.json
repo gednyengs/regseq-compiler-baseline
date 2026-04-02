@@ -432,6 +432,41 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-08",
+          "name": "Binding-model schema and boundaries",
+          "spec": ".harness/tasks/regseq-model/08-binding-model-schema-and-boundaries.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-04",
+            "regseq-model-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-09",
+          "name": "Parsed platform artifact to binding-model normalization",
+          "spec": ".harness/tasks/regseq-model/09-parsed-platform-artifact-to-binding-model-normalization.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-08"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-10",
+          "name": "Declaration-binding join and joined-artifact baseline",
+          "spec": ".harness/tasks/regseq-model/10-declaration-binding-join-and-joined-artifact-baseline.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-07",
+            "regseq-model-09"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -863,6 +898,18 @@
           "depends_on": [
             "regseq-facade-19",
             "regseq-driver-20",
+            "track-a-pl011-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-05",
+          "name": "PL011 joined-artifact proof",
+          "spec": ".harness/tasks/track-a-validation/05-pl011-joined-artifact-proof.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-10",
             "track-a-pl011-05"
           ],
           "artifacts": [],
