@@ -460,7 +460,7 @@
           "id": "regseq-model-10",
           "name": "Declaration-binding join and joined-artifact baseline",
           "spec": ".harness/tasks/regseq-model/10-declaration-binding-join-and-joined-artifact-baseline.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-07",
             "regseq-model-09"
