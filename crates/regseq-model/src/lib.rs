@@ -8,6 +8,7 @@
 //! for the compiler pipeline, consumed by analysis passes, backends, and
 //! the driver's join logic.
 
+pub mod declaration;
 pub mod platform;
 pub mod platform_parser;
 pub mod properties;
