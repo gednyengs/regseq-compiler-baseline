@@ -467,7 +467,7 @@ items:
     phase: C
     title: regseq-model normalized binding model and Layer 1 plus Layer 2 join
     brief: .harness/spec-batches/phase-c-02.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-c-01
       - phase-b-07
@@ -487,13 +487,17 @@ items:
       - Keep the join boundary explicit and reviewable.
       - Do not widen the accepted Layer 2 contract while building the normalized binding model.
       - Use concrete PL011 binding fixtures to prove the join, but keep frontend redesign out of scope unless raw extraction exposed a proven mismatch.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-model-08
+      - regseq-model-09
+      - regseq-model-10
+      - track-a-validation-05
 
   - id: phase-c-03
     phase: C
     title: analysis bootstrap, joined-artifact validation, and lowering-input stability
     brief: .harness/spec-batches/phase-c-03.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-c-02
     target_harness_groups:
