@@ -19,6 +19,7 @@ pub mod raw_input;
 pub mod registers;
 pub mod resources;
 pub mod synchronization;
+pub mod traversal;
 
 // Re-export top-level types for convenience.
 pub use build_context::DeclarationBuildContext;
@@ -51,6 +52,7 @@ pub mod driver;
 
 pub use normalize::{normalize, normalize_from_json, NormalizeError, NormalizeFromJsonError};
 pub use raw_input::RawArtifactInput;
+pub use traversal::FamilyCallSite;
 
 /// Top-level normalized declaration model.
 ///
