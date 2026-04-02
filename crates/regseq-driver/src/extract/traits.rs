@@ -73,7 +73,7 @@ enum ReturnSpec {
 enum ExtraParamSpec {
     None,
     RefNamed(&'static str),
-    RefStr,
+    RefSlicePrimitive(&'static str),
     Primitive(&'static str),
 }
 
@@ -127,11 +127,31 @@ const SERIAL_METHODS: &[MethodSpec] = &[
         extra_param: ExtraParamSpec::None,
         return_spec: ReturnSpec::Bool,
     },
+    MethodSpec {
+        name: "tx_empty",
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::Bool,
+    },
+    MethodSpec {
+        name: "flush_rx_fifo",
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::Unit,
+    },
+    MethodSpec {
+        name: "flush_tx_fifo",
+        extra_param: ExtraParamSpec::None,
+        return_spec: ReturnSpec::Unit,
+    },
+    MethodSpec {
+        name: "send_break",
+        extra_param: ExtraParamSpec::Primitive("bool"),
+        return_spec: ReturnSpec::Unit,
+    },
 ];
 
 const SERIAL_CONSOLE_METHODS: &[MethodSpec] = &[MethodSpec {
     name: "console_write",
-    extra_param: ExtraParamSpec::RefStr,
+    extra_param: ExtraParamSpec::RefSlicePrimitive("u8"),
     return_spec: ReturnSpec::Unit,
 }];
 
@@ -341,7 +361,9 @@ fn matches_extra_param<'tcx>(
         ExtraParamSpec::RefNamed(name) => {
             extra_inputs.len() == 1 && matches_ref_named(tcx, &extra_inputs[0], name)
         }
-        ExtraParamSpec::RefStr => extra_inputs.len() == 1 && matches_ref_str(tcx, &extra_inputs[0]),
+        ExtraParamSpec::RefSlicePrimitive(elem) => {
+            extra_inputs.len() == 1 && matches_ref_slice_primitive(&extra_inputs[0], elem)
+        }
         ExtraParamSpec::Primitive(name) => {
             extra_inputs.len() == 1 && matches_primitive(&extra_inputs[0], name)
         }
@@ -454,11 +476,14 @@ fn matches_ref_named<'tcx>(tcx: TyCtxt<'tcx>, ty: &rustc_hir::Ty<'tcx>, expected
     path_matches_suffix(tcx, inner.ty, expected)
 }
 
-fn matches_ref_str<'tcx>(_: TyCtxt<'tcx>, ty: &rustc_hir::Ty<'tcx>) -> bool {
+fn matches_ref_slice_primitive(ty: &rustc_hir::Ty<'_>, expected_elem: &str) -> bool {
     let TyKind::Ref(_, inner) = &ty.kind else {
         return false;
     };
-    matches_primitive(inner.ty, "str")
+    let TyKind::Slice(elem_ty) = &inner.ty.kind else {
+        return false;
+    };
+    matches_primitive(elem_ty, expected_elem)
 }
 
 fn matches_primitive(ty: &rustc_hir::Ty<'_>, expected: &str) -> bool {

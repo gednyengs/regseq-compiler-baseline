@@ -138,4 +138,30 @@ impl Serial for Pl011SpecSlice {
         // TX is ready when the TX FIFO is not full.
         self.regs.fr.read(FR_REG::TXFF::FIELD) == 0
     }
+
+    fn tx_empty(&mut self) -> bool {
+        // Transmit is fully complete when BUSY is clear.
+        self.regs.fr.read(FR_REG::BUSY::FIELD) == 0
+    }
+
+    fn flush_rx_fifo(&mut self) {
+        // Drain the receive FIFO by reading until empty.
+        while self.regs.fr.read(FR_REG::RXFE::FIELD) == 0 {
+            let _ = self.regs.dr.read(DR_REG::DATA::FIELD);
+        }
+    }
+
+    fn flush_tx_fifo(&mut self) {
+        // Purge the TX FIFO by toggling FIFO enable off and on.
+        self.regs.lcr_h.modify(LCRH_REG::FEN::CLEAR);
+        self.regs.lcr_h.modify(LCRH_REG::FEN::SET);
+    }
+
+    fn send_break(&mut self, on: bool) {
+        if on {
+            self.regs.lcr_h.modify(LCRH_REG::BRK::SET);
+        } else {
+            self.regs.lcr_h.modify(LCRH_REG::BRK::CLEAR);
+        }
+    }
 }

@@ -15,7 +15,10 @@ fn readonly_has_read_method() {
     fn assert_read_compiles(reg: &ReadOnly<u32, TestReg>, field: Field<u32, TestReg>) {
         let _: u32 = reg.read(field);
     }
-    let _ = assert_read_compiles;
+    fn assert_read_raw_compiles(reg: &ReadOnly<u32, TestReg>) {
+        let _: u32 = reg.read_raw();
+    }
+    let _ = (assert_read_compiles, assert_read_raw_compiles);
 }
 
 #[test]
@@ -32,7 +35,10 @@ fn writeonly_has_write_and_set_methods() {
 
 #[test]
 fn readwrite_has_all_four_methods() {
-    // Verify read, write, modify, set method signatures compile on ReadWrite<T, R>.
+    // Verify read_raw, read, write, modify, set method signatures compile on ReadWrite<T, R>.
+    fn assert_read_raw(reg: &ReadWrite<u32, TestReg>) {
+        let _: u32 = reg.read_raw();
+    }
     fn assert_read(reg: &ReadWrite<u32, TestReg>, field: Field<u32, TestReg>) {
         let _: u32 = reg.read(field);
     }
@@ -45,7 +51,13 @@ fn readwrite_has_all_four_methods() {
     fn assert_set(reg: &ReadWrite<u32, TestReg>, values: FieldValue<u32, TestReg>) {
         reg.set(values);
     }
-    let _ = (assert_read, assert_write, assert_modify, assert_set);
+    let _ = (
+        assert_read_raw,
+        assert_read,
+        assert_write,
+        assert_modify,
+        assert_set,
+    );
 }
 
 #[test]

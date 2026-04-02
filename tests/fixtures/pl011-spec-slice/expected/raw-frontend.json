@@ -115,6 +115,34 @@
       {
         "method": "read",
         "containing_fn": "tx_ready"
+      },
+      {
+        "method": "read",
+        "containing_fn": "tx_empty"
+      },
+      {
+        "method": "read",
+        "containing_fn": "flush_rx_fifo"
+      },
+      {
+        "method": "read",
+        "containing_fn": "flush_rx_fifo"
+      },
+      {
+        "method": "modify",
+        "containing_fn": "flush_tx_fifo"
+      },
+      {
+        "method": "modify",
+        "containing_fn": "flush_tx_fifo"
+      },
+      {
+        "method": "modify",
+        "containing_fn": "send_break"
+      },
+      {
+        "method": "modify",
+        "containing_fn": "send_break"
       }
     ],
     "poll_call_sites": [],
@@ -142,6 +170,12 @@
           {
             "field_name": "RXFE",
             "offset": 4,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "field_name": "BUSY",
+            "offset": 3,
             "width": 1,
             "named_values": []
           }
@@ -186,6 +220,21 @@
           {
             "field_name": "FEN",
             "offset": 4,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "SET",
+                "value": 1
+              },
+              {
+                "name": "CLEAR",
+                "value": 0
+              }
+            ]
+          },
+          {
+            "field_name": "BRK",
+            "offset": 0,
             "width": 1,
             "named_values": [
               {

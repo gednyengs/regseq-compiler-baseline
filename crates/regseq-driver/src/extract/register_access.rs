@@ -46,6 +46,7 @@ pub struct MmioFieldDecl {
 /// An accepted wrapper-method name.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum WrapperMethod {
+    ReadRaw,
     Read,
     Write,
     Modify,
@@ -458,6 +459,7 @@ impl<'tcx> Visitor<'tcx> for CallSiteVisitor<'tcx> {
         match expr.kind {
             ExprKind::MethodCall(segment, receiver, _, _) => {
                 let method = match segment.ident.name.as_str() {
+                    "read_raw" => Some(WrapperMethod::ReadRaw),
                     "read" => Some(WrapperMethod::Read),
                     "write" => Some(WrapperMethod::Write),
                     "modify" => Some(WrapperMethod::Modify),
@@ -493,7 +495,7 @@ impl<'tcx> CallSiteVisitor<'tcx> {
     ) -> bool {
         let receiver_ty = self.typeck_results.expr_ty(receiver);
         match wrapper_type_name(self.tcx, receiver_ty).as_deref() {
-            Some("ReadOnly") => matches!(method, WrapperMethod::Read),
+            Some("ReadOnly") => matches!(method, WrapperMethod::ReadRaw | WrapperMethod::Read),
             Some("WriteOnly") => matches!(method, WrapperMethod::Write | WrapperMethod::Set),
             Some("ReadWrite") => true,
             _ => false,

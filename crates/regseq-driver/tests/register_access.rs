@@ -143,6 +143,7 @@ const FIXTURE_PREAMBLE: &str = r#"
 
     pub struct ReadWrite<T, R> { _v: T, _r: PhantomData<R> }
     impl<T: Default, R> ReadWrite<T, R> {
+        pub fn read_raw(&self) -> T { Default::default() }
         pub fn read(&self, _field: Field<T, R>) -> T { Default::default() }
         pub fn write(&self, _v: FieldValue<T, R>) {}
         pub fn modify(&self, _v: FieldValue<T, R>) {}
@@ -151,6 +152,7 @@ const FIXTURE_PREAMBLE: &str = r#"
 
     pub struct ReadOnly<T, R> { _v: T, _r: PhantomData<R> }
     impl<T: Default, R> ReadOnly<T, R> {
+        pub fn read_raw(&self) -> T { Default::default() }
         pub fn read(&self, _field: Field<T, R>) -> T { Default::default() }
     }
 
@@ -273,6 +275,7 @@ fn recognize_wrapper_method_call_sites() {
 
         impl Device {{
             pub fn example(&self) {{
+                let _ = self.regs.dr.read_raw();
                 let _ = self.regs.dr.read(REG::VALUE::FIELD);
                 self.regs.dr.write(REG::VALUE::SET);
                 self.regs.dr.modify(REG::VALUE::SET);
@@ -289,7 +292,11 @@ fn recognize_wrapper_method_call_sites() {
 
     let surface = compile_and_extract(&source, "wrapper_methods").unwrap();
 
-    assert_eq!(surface.wrapper_call_sites.len(), 4);
+    assert_eq!(surface.wrapper_call_sites.len(), 5);
+    assert!(surface
+        .wrapper_call_sites
+        .iter()
+        .any(|s| s.method == WrapperMethod::ReadRaw));
     assert!(surface
         .wrapper_call_sites
         .iter()

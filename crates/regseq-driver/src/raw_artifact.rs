@@ -178,6 +178,7 @@ impl From<&WrapperCallSite> for RawWrapperCallSite {
     fn from(s: &WrapperCallSite) -> Self {
         Self {
             method: match s.method {
+                WrapperMethod::ReadRaw => "read_raw",
                 WrapperMethod::Read => "read",
                 WrapperMethod::Write => "write",
                 WrapperMethod::Modify => "modify",

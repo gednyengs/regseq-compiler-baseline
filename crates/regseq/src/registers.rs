@@ -86,6 +86,11 @@ pub struct ReadOnly<T, R> {
 }
 
 impl<T: Copy, R> ReadOnly<T, R> {
+    /// Read the full raw register value in one hardware operation.
+    pub fn read_raw(&self) -> T {
+        unimplemented!("facade stub: lowered by the compiler backend")
+    }
+
     /// Read the value of the given field from this register.
     pub fn read(&self, _field: Field<T, R>) -> T {
         unimplemented!("facade stub: lowered by the compiler backend")
@@ -125,6 +130,11 @@ pub struct ReadWrite<T, R> {
 }
 
 impl<T: Copy, R> ReadWrite<T, R> {
+    /// Read the full raw register value in one hardware operation.
+    pub fn read_raw(&self) -> T {
+        unimplemented!("facade stub: lowered by the compiler backend")
+    }
+
     /// Read the value of the given field from this register.
     pub fn read(&self, _field: Field<T, R>) -> T {
         unimplemented!("facade stub: lowered by the compiler backend")

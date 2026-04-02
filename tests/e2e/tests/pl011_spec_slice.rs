@@ -241,6 +241,10 @@ fn pl011_fixture_wrapper_call_sites_from_callbacks() {
         "tx_byte",
         "rx_char",
         "tx_ready",
+        "tx_empty",
+        "flush_rx_fifo",
+        "flush_tx_fifo",
+        "send_break",
     ] {
         assert!(
             stderr.contains(&format!("containing_fn: \"{fn_name}\"")),

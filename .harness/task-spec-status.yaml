@@ -401,13 +401,48 @@ items:
       - track-a-validation-02
       - track-a-validation-03
 
+  - id: phase-b-10
+    phase: B
+    title: serial device-class v1 alignment
+    brief: .harness/spec-batches/phase-b-10.md
+    status: tasked
+    depends_on:
+      - phase-b-09
+    target_harness_groups:
+      - regseq-facade
+      - regseq-driver
+      - track-a-validation
+      - track-a-pl011
+    source_refs:
+      - docs/discussions/device-class-serial/serial-device-class-spec.md
+      - docs/discussions/device-class-serial/serial-os-support-matrix.md
+      - .harness/tasks/regseq-facade/10-serial-trait-surfaces.md
+      - .harness/tasks/regseq-driver/10-lifecycle-and-serial-trait-capture.md
+      - crates/regseq/src/serial.rs
+      - crates/regseq-driver/src/extract/traits.rs
+      - tests/fixtures/pl011-full-spec/src/driver.rs
+    summary: >
+      Author task specs for aligning the compiler-facing serial device-class
+      surface with the authoritative v1 Serial device-class spec before Phase C
+      declaration-model work begins.
+    spec_authoring_notes:
+      - Treat the device-class serial spec as authoritative where it differs from the earlier Phase B serial baseline.
+      - Keep the batch narrowly focused on serial contract alignment, not on reopening serial taxonomy or adding RS-485 / DMA / new extension traits.
+      - Ensure Phase C does not normalize the outdated six-method serial contract.
+    generated_task_ids:
+      - regseq-facade-19
+      - regseq-driver-20
+      - track-a-validation-04
+      - track-a-pl011-05
+
   - id: phase-c-01
     phase: C
     title: regseq-model normalized declaration model for the supported PL011 slice
     brief: .harness/spec-batches/phase-c-01.md
-    status: ready_to_elaborate
+    status: not_ready
     depends_on:
       - phase-b-09
+      - phase-b-10
     target_harness_groups:
       - regseq-model
     source_refs:

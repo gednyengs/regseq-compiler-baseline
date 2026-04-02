@@ -10,7 +10,8 @@ register_bitfields! [
 
     FR_REG [
         TXFF OFFSET(5) NUMBITS(1) [],
-        RXFE OFFSET(4) NUMBITS(1) []
+        RXFE OFFSET(4) NUMBITS(1) [],
+        BUSY OFFSET(3) NUMBITS(1) []
     ],
 
     IBRD_REG [
@@ -26,6 +27,10 @@ register_bitfields! [
             WLEN_8 = 0b11
         ],
         FEN OFFSET(4) NUMBITS(1) [
+            SET = 1,
+            CLEAR = 0
+        ],
+        BRK OFFSET(0) NUMBITS(1) [
             SET = 1,
             CLEAR = 0
         ]

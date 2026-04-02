@@ -293,6 +293,60 @@ fn qc_flag_register_access_evidence() {
         .filter(|(method, func)| method == "read" && func == "tx_ready")
         .collect();
     assert!(!fr_reads.is_empty(), "expected read site in tx_ready (FR)");
+
+    // tx_empty reads FR (BUSY flag)
+    let tx_empty_reads: Vec<_> = sites
+        .iter()
+        .filter(|(method, func)| method == "read" && func == "tx_empty")
+        .collect();
+    assert!(
+        !tx_empty_reads.is_empty(),
+        "expected read site in tx_empty (FR)"
+    );
+}
+
+#[test]
+fn qc_v1_fifo_flush_register_access_evidence() {
+    let artifact = load_raw_artifact();
+    let sites = wrapper_sites(&artifact);
+
+    // flush_rx_fifo reads DR/FR to drain the FIFO
+    let flush_rx_reads: Vec<_> = sites
+        .iter()
+        .filter(|(method, func)| {
+            (method == "read" || method == "modify") && func == "flush_rx_fifo"
+        })
+        .collect();
+    assert!(
+        !flush_rx_reads.is_empty(),
+        "expected register access in flush_rx_fifo"
+    );
+
+    // flush_tx_fifo modifies LCR_H (FEN toggle)
+    let flush_tx_mods: Vec<_> = sites
+        .iter()
+        .filter(|(method, func)| method == "modify" && func == "flush_tx_fifo")
+        .collect();
+    assert!(
+        !flush_tx_mods.is_empty(),
+        "expected modify site in flush_tx_fifo (LCR_H)"
+    );
+}
+
+#[test]
+fn qc_v1_send_break_register_access_evidence() {
+    let artifact = load_raw_artifact();
+    let sites = wrapper_sites(&artifact);
+
+    // send_break modifies LCR_H (BRK bit)
+    let brk_mods: Vec<_> = sites
+        .iter()
+        .filter(|(method, func)| method == "modify" && func == "send_break")
+        .collect();
+    assert!(
+        !brk_mods.is_empty(),
+        "expected modify site in send_break (LCR_H)"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -396,4 +450,54 @@ fn qc_cr_reg_descriptor_has_uarten_txe_rxe() {
     assert!(field_names.contains(&"UARTEN"));
     assert!(field_names.contains(&"TXE"));
     assert!(field_names.contains(&"RXE"));
+}
+
+#[test]
+fn qc_fr_reg_descriptor_has_busy_field() {
+    let artifact = load_raw_artifact();
+    let descriptors = artifact["register_access"]["register_descriptors"]
+        .as_array()
+        .unwrap();
+
+    let fr = descriptors
+        .iter()
+        .find(|d| d["register_module"] == "FR_REG")
+        .expect("FR_REG descriptor should be present");
+
+    let field_names: Vec<&str> = fr["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["field_name"].as_str().unwrap())
+        .collect();
+
+    assert!(
+        field_names.contains(&"BUSY"),
+        "FR_REG should have BUSY field for tx_empty"
+    );
+}
+
+#[test]
+fn qc_lcrh_reg_descriptor_has_brk_field() {
+    let artifact = load_raw_artifact();
+    let descriptors = artifact["register_access"]["register_descriptors"]
+        .as_array()
+        .unwrap();
+
+    let lcrh = descriptors
+        .iter()
+        .find(|d| d["register_module"] == "LCRH_REG")
+        .expect("LCRH_REG descriptor should be present");
+
+    let field_names: Vec<&str> = lcrh["fields"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["field_name"].as_str().unwrap())
+        .collect();
+
+    assert!(
+        field_names.contains(&"BRK"),
+        "LCRH_REG should have BRK field for send_break"
+    );
 }

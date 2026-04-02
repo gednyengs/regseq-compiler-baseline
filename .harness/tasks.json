@@ -320,6 +320,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-20",
+          "name": "Serial v1 trait capture alignment",
+          "spec": ".harness/tasks/regseq-driver/20-serial-v1-trait-capture-alignment.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-10",
+            "regseq-facade-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -665,6 +677,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-19",
+          "name": "Serial v1 device-class surface alignment",
+          "spec": ".harness/tasks/regseq-facade/19-serial-v1-device-class-surface-alignment.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -735,6 +758,19 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "track-a-pl011-05",
+          "name": "PL011 serial v1 conformance update",
+          "spec": ".harness/tasks/track-a-pl011/05-serial-v1-conformance-update.md",
+          "status": "done",
+          "depends_on": [
+            "track-a-pl011-04",
+            "regseq-facade-19",
+            "regseq-driver-20"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -778,6 +814,19 @@
           "depends_on": [
             "track-a-pl011-04",
             "track-a-validation-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-04",
+          "name": "Serial device-class v1 regression update",
+          "spec": ".harness/tasks/track-a-validation/04-serial-device-class-v1-regression-update.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-19",
+            "regseq-driver-20",
+            "track-a-pl011-05"
           ],
           "artifacts": [],
           "fail_reason": null

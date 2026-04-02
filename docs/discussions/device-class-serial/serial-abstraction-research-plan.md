@@ -1,5 +1,11 @@
 # Serial Abstraction Research Plan
 
+> Note:
+> This document is retained as supporting research context.
+> For compiler-facing decisions, use
+> [serial-device-class-spec.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/device-class-serial/serial-device-class-spec.md)
+> as the current authority.
+
 ## Purpose
 
 This note captures a research-oriented plan for moving beyond the current

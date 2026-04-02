@@ -158,12 +158,16 @@ const SERIAL_TRAIT: &str = r#"
         fn tx_byte(&mut self, byte: u8);
         fn rx_char(&mut self) -> Option<RxChar>;
         fn tx_ready(&mut self) -> bool;
+        fn tx_empty(&mut self) -> bool;
+        fn flush_rx_fifo(&mut self);
+        fn flush_tx_fifo(&mut self);
+        fn send_break(&mut self, on: bool);
     }
 "#;
 
 const SERIAL_CONSOLE_TRAIT: &str = r#"
     pub trait SerialConsole {
-        fn console_write(&mut self, text: &str);
+        fn console_write(&mut self, bytes: &[u8]);
     }
 "#;
 
@@ -219,6 +223,10 @@ fn recognize_serial_impl() {
             fn tx_byte(&mut self, _byte: u8) {{}}
             fn rx_char(&mut self) -> Option<RxChar> {{ None }}
             fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
         }}
     "#
     );
@@ -242,7 +250,7 @@ fn recognize_serial_console_independently() {
         pub struct Pl011;
 
         impl regseq::SerialConsole for Pl011 {{
-            fn console_write(&mut self, _text: &str) {{}}
+            fn console_write(&mut self, _bytes: &[u8]) {{}}
         }}
     "#
     );
@@ -351,10 +359,14 @@ fn callback_contexts_correct() {
             fn tx_byte(&mut self, _byte: u8) {{}}
             fn rx_char(&mut self) -> Option<RxChar> {{ None }}
             fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
         }}
 
         impl regseq::SerialConsole for Dev {{
-            fn console_write(&mut self, _text: &str) {{}}
+            fn console_write(&mut self, _bytes: &[u8]) {{}}
         }}
     "#
     );
@@ -395,6 +407,10 @@ fn reject_serial_rx_char_returning_bool() {
             fn tx_byte(&mut self, byte: u8);
             fn rx_char(&mut self) -> bool;
             fn tx_ready(&mut self) -> bool;
+            fn tx_empty(&mut self) -> bool;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+            fn send_break(&mut self, on: bool);
         }
     "#,
     );
@@ -411,6 +427,10 @@ fn reject_serial_rx_char_returning_bool() {
             fn tx_byte(&mut self, _byte: u8) {{}}
             fn rx_char(&mut self) -> bool {{ false }}
             fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
         }}
     "#
     );
@@ -436,6 +456,10 @@ fn reject_serial_tx_ready_returning_option() {
             fn tx_byte(&mut self, byte: u8);
             fn rx_char(&mut self) -> Option<RxChar>;
             fn tx_ready(&mut self) -> Option<RxChar>;
+            fn tx_empty(&mut self) -> bool;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+            fn send_break(&mut self, on: bool);
         }
     "#,
     );
@@ -452,6 +476,10 @@ fn reject_serial_tx_ready_returning_option() {
             fn tx_byte(&mut self, _byte: u8) {{}}
             fn rx_char(&mut self) -> Option<RxChar> {{ None }}
             fn tx_ready(&mut self) -> Option<RxChar> {{ None }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
         }}
     "#
     );
@@ -477,6 +505,10 @@ fn reject_serial_configure_wrong_param_type() {
             fn tx_byte(&mut self, byte: u8);
             fn rx_char(&mut self) -> Option<RxChar>;
             fn tx_ready(&mut self) -> bool;
+            fn tx_empty(&mut self) -> bool;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+            fn send_break(&mut self, on: bool);
         }
     "#,
     );
@@ -493,6 +525,10 @@ fn reject_serial_configure_wrong_param_type() {
             fn tx_byte(&mut self, _byte: u8) {{}}
             fn rx_char(&mut self) -> Option<RxChar> {{ None }}
             fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
         }}
     "#
     );
@@ -714,4 +750,239 @@ fn pm_trait_is_optional() {
     let surface = compile_and_extract(&source, "pm_optional").unwrap();
     assert_eq!(surface.lifecycle_impls.len(), 1);
     assert!(surface.power_management_impls.is_empty());
+}
+
+// ---------------------------------------------------------------------------
+// Test 11: Missing v1 Serial methods rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reject_serial_missing_tx_empty() {
+    let regseq = regseq_module(
+        r#"
+        pub trait Serial {
+            fn port_open(&mut self) -> Result<(), RegseqError>;
+            fn port_close(&mut self);
+            fn configure(&mut self, config: &SerialConfig) -> Result<(), RegseqError>;
+            fn tx_byte(&mut self, byte: u8);
+            fn rx_char(&mut self) -> Option<RxChar>;
+            fn tx_ready(&mut self) -> bool;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+            fn send_break(&mut self, on: bool);
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::Serial for Dev {{
+            fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn port_close(&mut self) {{}}
+            fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn tx_byte(&mut self, _byte: u8) {{}}
+            fn rx_char(&mut self) -> Option<RxChar> {{ None }}
+            fn tx_ready(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "serial_missing_tx_empty");
+    assert_eq!(
+        result,
+        Err(TraitError::MissingMethod {
+            trait_name: "Serial".into(),
+            method: "tx_empty".into(),
+        })
+    );
+}
+
+#[test]
+fn reject_serial_missing_send_break() {
+    let regseq = regseq_module(
+        r#"
+        pub trait Serial {
+            fn port_open(&mut self) -> Result<(), RegseqError>;
+            fn port_close(&mut self);
+            fn configure(&mut self, config: &SerialConfig) -> Result<(), RegseqError>;
+            fn tx_byte(&mut self, byte: u8);
+            fn rx_char(&mut self) -> Option<RxChar>;
+            fn tx_ready(&mut self) -> bool;
+            fn tx_empty(&mut self) -> bool;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::Serial for Dev {{
+            fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn port_close(&mut self) {{}}
+            fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn tx_byte(&mut self, _byte: u8) {{}}
+            fn rx_char(&mut self) -> Option<RxChar> {{ None }}
+            fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "serial_missing_send_break");
+    assert_eq!(
+        result,
+        Err(TraitError::MissingMethod {
+            trait_name: "Serial".into(),
+            method: "send_break".into(),
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 12: Wrong signatures for v1 Serial methods rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reject_serial_tx_empty_wrong_return() {
+    let regseq = regseq_module(
+        r#"
+        pub trait Serial {
+            fn port_open(&mut self) -> Result<(), RegseqError>;
+            fn port_close(&mut self);
+            fn configure(&mut self, config: &SerialConfig) -> Result<(), RegseqError>;
+            fn tx_byte(&mut self, byte: u8);
+            fn rx_char(&mut self) -> Option<RxChar>;
+            fn tx_ready(&mut self) -> bool;
+            fn tx_empty(&mut self) -> Option<RxChar>;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+            fn send_break(&mut self, on: bool);
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::Serial for Dev {{
+            fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn port_close(&mut self) {{}}
+            fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn tx_byte(&mut self, _byte: u8) {{}}
+            fn rx_char(&mut self) -> Option<RxChar> {{ None }}
+            fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> Option<RxChar> {{ None }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: bool) {{}}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "serial_tx_empty_wrong_return");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidReturnType {
+            trait_name: "Serial".into(),
+            method: "tx_empty".into(),
+        })
+    );
+}
+
+#[test]
+fn reject_serial_send_break_wrong_param() {
+    let regseq = regseq_module(
+        r#"
+        pub trait Serial {
+            fn port_open(&mut self) -> Result<(), RegseqError>;
+            fn port_close(&mut self);
+            fn configure(&mut self, config: &SerialConfig) -> Result<(), RegseqError>;
+            fn tx_byte(&mut self, byte: u8);
+            fn rx_char(&mut self) -> Option<RxChar>;
+            fn tx_ready(&mut self) -> bool;
+            fn tx_empty(&mut self) -> bool;
+            fn flush_rx_fifo(&mut self);
+            fn flush_tx_fifo(&mut self);
+            fn send_break(&mut self, on: u8);
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::Serial for Dev {{
+            fn port_open(&mut self) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn port_close(&mut self) {{}}
+            fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError> {{ Ok(()) }}
+            fn tx_byte(&mut self, _byte: u8) {{}}
+            fn rx_char(&mut self) -> Option<RxChar> {{ None }}
+            fn tx_ready(&mut self) -> bool {{ true }}
+            fn tx_empty(&mut self) -> bool {{ true }}
+            fn flush_rx_fifo(&mut self) {{}}
+            fn flush_tx_fifo(&mut self) {{}}
+            fn send_break(&mut self, _on: u8) {{}}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "serial_send_break_wrong_param");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidSignature {
+            trait_name: "Serial".into(),
+            method: "send_break".into(),
+        })
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 13: SerialConsole with byte-slice signature recognized
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reject_serial_console_old_str_signature() {
+    let regseq = regseq_module(
+        r#"
+        pub trait SerialConsole {
+            fn console_write(&mut self, text: &str);
+        }
+    "#,
+    );
+    let source = format!(
+        r#"
+        {regseq}
+
+        pub struct Dev;
+
+        impl regseq::SerialConsole for Dev {{
+            fn console_write(&mut self, _text: &str) {{}}
+        }}
+    "#
+    );
+
+    let result = compile_and_extract(&source, "serial_console_old_str_sig");
+    assert_eq!(
+        result,
+        Err(TraitError::InvalidSignature {
+            trait_name: "SerialConsole".into(),
+            method: "console_write".into(),
+        })
+    );
 }

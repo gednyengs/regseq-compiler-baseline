@@ -1,5 +1,13 @@
 # Serial/UART Management
 
+> Status note:
+> This document remains the broad construct-level baseline for accepted
+> Serial/UART compiler scope. Compiler-facing implementation decisions for the
+> Serial device class are now refined in
+> [serial-device-class-spec.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/device-class-serial/serial-device-class-spec.md).
+> Where this construct doc and the device-class serial spec differ, the
+> device-class serial spec is authoritative for implementation.
+
 ## Purpose
 
 `Serial/UART Management` is the accepted device-class construct for UART

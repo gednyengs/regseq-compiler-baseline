@@ -4,6 +4,16 @@ This directory is the working area for defining the full PL011 Regseq spec we
 intend to carry through the compiler pipeline and, ultimately, the research
 evaluation flow.
 
+For this version of the full PL011 target, we are intentionally pinning the
+spec to a single concrete ARM PL011 configuration. We are not trying to model
+family-wide variant selection, revision dispatch, or quirk/erratum machinery in
+this version of the spec.
+
+For the same reason, we are also not forcing variant-specific PM behavior into
+the current target. The corpus evidence shows that meaningful PM participation
+for PL011 is variant-driven rather than part of the generic `arm,pl011`
+frontend.
+
 Use this discussion area to:
 
 - enumerate the full accepted PL011 construct set

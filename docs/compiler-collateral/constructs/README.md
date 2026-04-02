@@ -19,6 +19,12 @@ Each construct doc should let a compiler implementer answer:
 - who lowers them
 - what dependencies and constraints matter
 
+Some constructs may also have narrower device-class refinement docs under
+`docs/discussions/` when later compiler-facing work needs a more precise
+contract than the broad construct baseline. When such a refinement is marked
+authoritative for implementation, keep the construct doc as the broad accepted
+scope reference and implement from the refinement where they differ.
+
 ## Recommended Section Template
 
 Use this shape for each construct document:

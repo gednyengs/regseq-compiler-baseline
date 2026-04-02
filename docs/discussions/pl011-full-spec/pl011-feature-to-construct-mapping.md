@@ -40,7 +40,7 @@ These are the features evidenced across Linux, FreeBSD, and Zephyr in
 | UART enable/disable sequencing | Register Access, Driver Lifecycle, Serial/UART | `covered-now` | Present through `CR` writes in helper/callback paths. |
 | RX-path error handling | Register Access, Serial/UART | `needs-phase-b-expansion` | Accepted taxonomy can express it, but the current slice does not yet model RX error inspection/propagation. |
 | Interrupt mask lifecycle | Device Interrupt Setup and Handling, Register Access | `needs-phase-b-expansion` | Requires `IMSC` / status / clear-path register handling and a real interrupt path in the slice. |
-| Variant / revision handling | Firmware Property Access, Bus Resource Management, compiler-managed fallback logic | `needs-phase-b-expansion` | This is part of the accepted PL011 baseline, but currently absent from the real slice. It may be partly compiler-managed and partly property/bus-driven. |
+| Variant / revision handling | Firmware Property Access, Bus Resource Management, compiler-managed fallback logic | `later-extension` | Intentionally deferred for the current single-variant ARM PL011 target. It should not shape the declaration model in this version unless a mandatory feature forces it back in. |
 
 ## Maximal feature set evidenced in the corpus
 
@@ -116,7 +116,8 @@ normalization:
 - PM gate and `PowerManagement`
 - real clock/reset/pinctrl participation where already accepted
 - RX error handling
-- variant/revision handling, at least in the authored/frontend-visible form
+- variant/revision handling is intentionally deferred for the current
+  single-variant ARM PL011 target
 
 ### Optional but desirable
 
