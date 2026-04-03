@@ -44,28 +44,30 @@ Target OS backends are Linux (primary) and Zephyr (secondary).
 
 ## Workspace layout
 
-Current active workspace members:
+Current workspace members:
 
 ```
 crates/
-  cargo-regseq/   Cargo subcommand: CLI, toolchain detection, orchestration
-  regseq-config/  Shared configuration types (no rustc dependency)
-  regseq-driver/  rustc wrapper: HIR/MIR extraction, pipeline orchestration
+  cargo-regseq/        Cargo subcommand: CLI, toolchain detection, orchestration
+  regseq/              Public Layer 1 facade for driver authors
+  regseq-analysis/     Analysis/bootstrap over normalized models
+  regseq-backends/     Backend crate for Linux/Zephyr lowering work
+  regseq-config/       Shared configuration and CLI types
+  regseq-diagnostics/  Shared diagnostics support
+  regseq-driver/       rustc wrapper: frontend extraction and raw artifacts
+  regseq-macros/       Proc macros and register-surface helpers
+  regseq-model/        Rustc-independent declaration/binding/joined IR
 tests/
-  e2e/            End-to-end test workspace member
+  e2e/                 End-to-end test workspace member
 ```
 
-Planned implementation crates for the ASPLOS track:
+Important maturity note:
 
-```
-crates/
-  regseq/             Public DSL facade for driver authors
-  regseq-macros/      Procedural macros and register-surface macros
-  regseq-model/       Rustc-independent declaration and binding models
-  regseq-analysis/    Static analysis passes over internal models
-  regseq-backends/    C code generation backends (Linux, Zephyr)
-  regseq-diagnostics/ Shared diagnostics engine
-```
+- `regseq`, `regseq-driver`, `regseq-model`, and `regseq-analysis` are active
+  compiler pipeline crates.
+- `regseq-backends` exists, but Phase D lowering/emission work is still the
+  next major step; do not assume Linux/Zephyr backend logic is already
+  implemented there.
 
 ## Toolchain
 
@@ -122,7 +124,11 @@ workflow from the codebase layout alone. Use this order:
 5. If the next action is an executable harness task, do that task and follow `.harness/SESSION.md`.
 6. If the next action is `TASK_SPEC_BATCH`, read `.harness/task-spec-workflow.md`, then read the brief path printed by `next-step`.
 7. If the next action is `BRIEF_AUTHORING_BATCH`, read `.harness/task-spec-workflow.md`, then create the missing brief using `.harness/spec-batches/BRIEF_TEMPLATE.md`.
-8. Read the guide documents under `docs/guide/` and the implementation plan at `docs/plans/asplos-implementation-plan.md` only as directed by the task spec, batch brief, or workflow files.
+8. Read [docs/handoff.md](docs/handoff.md) for the current authority map and
+   repo state.
+9. Read the implementation plan at `docs/plans/asplos-implementation-plan.md`
+   and the frozen planning docs under `archive/guide/` only as directed by the
+   task spec, batch brief, or workflow files.
 
 Priority rule:
 
@@ -130,22 +136,37 @@ Priority rule:
 - task-spec authoring is only the fallback mode when no executable tasks exist
 - do not use `.harness/task-spec-status.yaml` to track implementation execution progress
 
-## Guide documents
+## Planning documents
 
-Detailed planning and handoff documents live in `docs/guide/`:
+The current live authority chain is:
 
-- `implementation-guide.md` -- phased implementation plan and design rules
-- `construct-catalog.md` -- validated construct inventory (19 active constructs)
-- `lowering-contract.md` -- per-construct lowering rules for each OS backend
-- `device-coverage.md` -- PL011/E1000 construct coverage mapping
-- `artifact-manifest.md` -- frozen research artifacts accepted for this scope
-- `pl011-spec-outline.md` -- PL011 specification outline
-- `e1000-spec-outline.md` -- E1000 specification outline
-- `open-issues.md` -- known open design questions
+- `docs/handoff.md`
+- `.harness/`
+- `docs/plans/asplos-implementation-plan.md`
+- `docs/compiler-collateral/`
+- targeted refinement notes under `docs/discussions/`
 
-Derived execution planning documents live in `docs/plans/`:
+Frozen planning and research baseline documents live under `archive/guide/`,
+including:
 
-- `asplos-implementation-plan.md` -- operational phase breakdown used to create harness tasks from the frozen guide documents
+- `implementation-guide.md`
+- `lowering-contract.md`
+- `device-coverage.md`
+- `artifact-manifest.md`
+- `pl011-spec-outline.md`
+- `e1000-spec-outline.md`
+- `open-issues.md`
+
+Current refinement/decision docs that matter in day-to-day work include:
+
+- `docs/discussions/device-class-serial/serial-device-class-spec.md`
+- `docs/discussions/pl011-full-spec/`
+- `docs/discussions/regseq-model/`
+- `docs/discussions/regseq-analysis/`
+- `docs/discussions/evaluation-environment/`
+
+Use `docs/handoff.md` to decide which of these are currently authoritative and
+which are supporting or historical only.
 
 ## Quick start
 
@@ -162,6 +183,6 @@ cargo test --workspace
 # Determine the next action for a cold session
 uv run python scripts/python/task.py next-step
 
-# Run the codegen experiment
-./scripts/run-codegen-experiment.sh
+# Read the current repo handoff before starting new work
+sed -n '1,220p' docs/handoff.md
 ```
