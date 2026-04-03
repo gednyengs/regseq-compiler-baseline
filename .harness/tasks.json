@@ -525,6 +525,31 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-analysis-02",
+          "name": "Analysis input and lowering bootstrap",
+          "spec": ".harness/tasks/regseq-analysis/02-analysis-input-and-lowering-bootstrap.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-analysis-01",
+            "regseq-model-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-analysis-03",
+          "name": "Lowering-input readiness and consistency checks",
+          "spec": ".harness/tasks/regseq-analysis/03-lowering-input-readiness-and-consistency-checks.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-analysis-02",
+            "track-a-pl011-05",
+            "track-a-validation-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -911,6 +936,18 @@
           "depends_on": [
             "regseq-model-10",
             "track-a-pl011-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-06",
+          "name": "PL011 lowering-input stability proof",
+          "spec": ".harness/tasks/track-a-validation/06-pl011-lowering-input-stability-proof.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-analysis-03",
+            "track-a-validation-05"
           ],
           "artifacts": [],
           "fail_reason": null

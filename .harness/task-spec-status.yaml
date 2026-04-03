@@ -497,7 +497,7 @@ items:
     phase: C
     title: analysis bootstrap, joined-artifact validation, and lowering-input stability
     brief: .harness/spec-batches/phase-c-03.md
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - phase-c-02
     target_harness_groups:
@@ -516,13 +516,16 @@ items:
       - This is the last Phase C gate before lowering-oriented task authoring.
       - Include caution-focused checks for any caution constructs present in the supported PL011 slice.
       - The output should be a stable joined-artifact/lowering-input contract, not backend work.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-analysis-02
+      - regseq-analysis-03
+      - track-a-validation-06
 
   - id: phase-d-01
     phase: D
     title: PL011 Linux lowering and backend task batch
     brief: .harness/spec-batches/phase-d-01.md
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - phase-c-03
     target_harness_groups:
