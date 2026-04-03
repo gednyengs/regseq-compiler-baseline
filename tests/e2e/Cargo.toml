@@ -5,5 +5,6 @@ edition = "2021"
 publish = false
 
 [dev-dependencies]
+regseq-analysis = { path = "../../crates/regseq-analysis" }
 regseq-model = { path = "../../crates/regseq-model" }
 serde_json = "1"
