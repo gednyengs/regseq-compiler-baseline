@@ -5,5 +5,7 @@
 //! models before lowering begins.
 
 pub mod input;
+pub mod readiness;
 
 pub use input::{AnalysisInput, ResourceJoinSummary};
+pub use readiness::{check_readiness, FindingSeverity, ReadinessFinding, ReadinessReport};
