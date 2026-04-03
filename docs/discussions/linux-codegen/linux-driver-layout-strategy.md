@@ -94,20 +94,24 @@ Cons:
 
 ## Recommended First Strategy
 
-Use a constrained version of Option A first:
+Use a constrained multi-file out-of-tree layout:
 
-- generate a single primary Linux translation unit per driver
-- generate the lowering-manifest or equivalent debug artifact beside it
+- keep one fixed backend-owned Linux integration/scaffold fileset
+- partition the remaining generated implementation files by authored
+  source-module provenance
 - generate deterministic build metadata needed for an out-of-tree module build
 - avoid handwritten per-driver wrapper glue in the first iteration
 
-This gives the backend one stable, inspectable artifact boundary:
+This preserves a stable, inspectable artifact boundary:
 
-1. joined PL011 lowering input
+1. joined lowering input
 2. lowering manifest
-3. generated Linux module-oriented output
+3. generated Linux integration/scaffold fileset
+4. generated source-module-partitioned implementation filesets
 
-That is the cleanest shape for early Phase D work.
+This is a better first Phase D shape than a single large generated C file
+because it keeps debug locality high for both humans and LLM agents while still
+keeping the Linux integration boundary explicit and backend-owned.
 
 ## Recommended Artifact Boundary
 
@@ -130,33 +134,54 @@ device-specific glue for:
 - serial device-class hookup
 - per-driver Makefile/Kbuild authoring
 
+One explicit split is required:
+
+- the Linux integration/registration shell stays in a fixed backend-owned
+  fileset
+- lowered device implementation is partitioned by authored source-module
+  provenance
+
+This means authored source modules influence the final generated file layout,
+but do not control the OS-integration scaffold itself.
+
 ## Recommended Generated File Set
 
 The first output layout should look roughly like:
 
 ```text
 <output-root>/linux/<driver-id>/
-  regseq_<driver-id>.c
+  regseq_<driver-id>_module.c
+  regseq_<driver-id>_shared.h
+  <module-a>.c
+  <module-a>.h
+  <module-b>.c
+  <module-b>.h
   regseq_<driver-id>.manifest.json
   Makefile
   Kbuild
 ```
 
-Optional only if the emitter truly needs it:
+Where:
 
-```text
-<output-root>/linux/<driver-id>/
-  regseq_<driver-id>_internal.h
-```
+- `regseq_<driver-id>_module.c` is the fixed backend-owned Linux integration
+  unit
+- `regseq_<driver-id>_shared.h` is optional but recommended when common state,
+  shared declarations, or cross-unit Linux-facing helper declarations need a
+  deterministic home
+- `<module-x>.c/.h` pairs are generated from authored top-level source-module
+  provenance when those modules own meaningful lowered content
 
-The default should stay as close as possible to one reviewable C file plus one
-reviewable manifest.
+The backend should not emit empty or trivial module pairs purely because a Rust
+module exists. The partitioning rule should be provenance-based but still
+filtered by whether that module actually owns emitted content.
 
 ## Generated Versus Handwritten Boundary
 
 Generated:
 
-- driver-specific Linux C source
+- driver-specific Linux integration/scaffold source
+- driver-specific implementation units grouped by source-module provenance
+- driver-specific headers for cross-unit access where needed
 - driver-specific registration boilerplate
 - driver-specific build metadata
 - driver-specific debug/manifest artifacts
@@ -191,12 +216,24 @@ artifact shape stabilizes.
 
 For the first PL011 Linux path:
 
-- emit `platform_driver`-style registration directly
-- emit module metadata directly
+- emit `platform_driver`-style registration directly in the backend-owned
+  integration fileset
+- emit module metadata directly in the backend-owned integration fileset
 - keep Linux includes and macros backend-owned rather than hidden in
   handwritten wrapper files
 - keep cleanup paths explicit and reviewable, even if later helper factoring is
   introduced
+
+The generated module partitioning rule should be:
+
+1. one fixed backend-owned scaffold/integration fileset is always emitted
+2. remaining implementation files are grouped by authored top-level source
+   module provenance
+3. shared declarations go either into the owning module header or the shared
+   backend-owned header
+
+This rule is deterministic and compiler-friendly because it depends on explicit
+authored provenance rather than backend heuristics about "good" file splits.
 
 If a shared Linux support layer becomes necessary, it should be:
 
@@ -219,11 +256,13 @@ This note does not settle:
 
 Phase D Linux task authoring should assume:
 
-1. one generated primary C file per driver
-2. one generated lowering-manifest or equivalent debug artifact beside it
-3. generated Makefile/Kbuild for out-of-tree module bring-up
-4. no handwritten per-driver wrapper glue
-5. platform-driver registration emitted directly by the Linux backend
+1. one fixed generated Linux integration/scaffold fileset per driver
+2. zero or more generated implementation filesets derived from authored
+   top-level source-module provenance
+3. one generated lowering-manifest or equivalent debug artifact beside them
+4. generated Makefile/Kbuild for out-of-tree module bring-up
+5. no handwritten per-driver wrapper glue
+6. platform-driver registration emitted directly by the Linux backend
 
 This is the best first shape for PL011 Linux lowering, backend debugging, and
 LLM-agent iteration on Ubuntu.
