@@ -34,5 +34,6 @@ Follow-on notes in this directory should define:
 
 Current repo-local notes:
 
-- [qemu-relative-evaluation-strategy.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/evaluation-environment/qemu-relative-evaluation-strategy.md)
-- [qemu-relative-evaluation-runbook.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/evaluation-environment/qemu-relative-evaluation-runbook.md)
+- [qemu-relative-evaluation-strategy.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/qemu-relative-evaluation-strategy.md)
+- [qemu-relative-evaluation-runbook.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/qemu-relative-evaluation-runbook.md)
+- [qemu-kvm-simple-linux-driver-smoke-baseline.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/qemu-kvm-simple-linux-driver-smoke-baseline.md)
