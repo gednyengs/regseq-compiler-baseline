@@ -39,7 +39,7 @@ pub struct CallbackImplDecl {
 }
 
 /// Typed callback family identity.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub enum CallbackFamily {
     /// Driver lifecycle (init, deinit).
     Lifecycle,
