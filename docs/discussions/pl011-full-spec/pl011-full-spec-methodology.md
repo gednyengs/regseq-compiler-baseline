@@ -1,7 +1,11 @@
 # PL011 Full Spec Methodology
 
-This note records the methodology for defining the fuller PL011 Regseq spec
-target before resuming Phase C model work.
+This note records the methodology that was used to define the fuller PL011
+Regseq spec target.
+
+It should now be read primarily as historical process context. The current
+concrete target fixture already exists at `tests/fixtures/pl011-full-spec/`,
+and Phase C is complete in the current repo state.
 
 ## Why this methodology
 
@@ -38,11 +42,12 @@ checked-in proof fixture separate:
 
 - `tests/fixtures/pl011-spec-slice/`
 
-The stable roles are:
+The stable roles were and remain:
 
 - `pl011-spec-slice`: accepted, narrow, already-proven Phase B evidence fixture
-- `pl011-full-spec`: exploratory but real full-target fixture used to discover
-  what the fuller PL011 frontend requires
+- `pl011-full-spec`: the fuller target fixture that was used to discover what
+  the richer PL011 frontend required and now serves as the concrete full-PL011
+  target fixture
 
 ## Workflow
 
@@ -184,13 +189,13 @@ accumulation of partial ideas.
 
 This methodology is still frontend-first.
 
-It is intended to stabilize:
+It was intended to stabilize:
 
 - the fuller PL011 Layer 1 surface
 - the fuller PL011 Layer 2 expectations
 - the construct set that the declaration model in Phase C must actually absorb
 
-It is not yet for:
+It was not intended for:
 
 - normalized model design
 - Layer 1 + Layer 2 join logic
@@ -206,11 +211,12 @@ By the time this process is complete, we should have:
   reopening Phase B
 - a much safer starting point for Phase C normalized declaration-model work
 
-## Practical next move
+## Current interpretation
 
-Initialize:
+That initialization/growth work has already happened. The practical use of this
+note now is:
 
-- `tests/fixtures/pl011-full-spec/`
-
-with a minimal external-style Cargo project and an empty `src/lib.rs`, then
-grow it feature by feature from there.
+- understand why the full-spec fixture contains the features it does
+- understand which deferrals were intentional
+- avoid reintroducing deferred variant- or PM-specific PL011 behavior by
+  accident during lowering planning

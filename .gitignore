@@ -22,6 +22,7 @@ __pycache__/
 
 # Verification logs (machine-generated)
 /logs/verify/
+/output/
 
 # OS
 .DS_Store

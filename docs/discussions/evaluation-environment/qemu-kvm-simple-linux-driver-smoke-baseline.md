@@ -88,6 +88,12 @@ Acceptable first-pass artifact-transfer mechanisms:
 
 This baseline does not need the final comparative networking topology yet.
 
+This baseline also does not have to settle the final PL011 kernel-control
+story by itself. But if the baseline is intended to feed directly into PL011
+smoke work, it is preferable to keep the host-side scripting, artifact
+transfer, and guest-log capture workflow compatible with the later
+project-controlled `arm64` kernel approach.
+
 ## Recommended Smoke Loop
 
 The first proven loop should be:
@@ -172,4 +178,8 @@ Before finalizing PL011 Linux smoke-validation task specs, the project should:
    runbook
 
 After that, PL011-specific smoke validation can reuse the same host and guest
-workflow rather than inventing it at the same time as backend debugging.
+workflow rather than inventing it at the same time as backend debugging. See
+also:
+
+- [pl011-linux-smoke-contract.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/pl011-linux-smoke-contract.md)
+- [pl011-project-controlled-kernel-strategy.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/pl011-project-controlled-kernel-strategy.md)

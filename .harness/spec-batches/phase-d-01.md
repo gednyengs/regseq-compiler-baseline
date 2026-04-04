@@ -13,8 +13,8 @@ validation path without coupling Zephyr follow-up work into the same batch.
 
 The concrete outcome should be a small executable task set that lets later
 workers implement one reviewable path from the existing Phase C joined artifact
-to generated PL011 Linux collateral, with a required lowering-manifest or
-equivalent debug artifact and a realistic Ubuntu/QEMU-oriented validation loop.
+to generated PL011 Linux collateral, with a typed portable lowering plan,
+typed Linux backend plan, and a realistic Ubuntu/QEMU-oriented validation loop.
 
 ## Input Context
 
@@ -35,8 +35,11 @@ Read before starting:
 - `docs/discussions/evaluation-environment/qemu-relative-evaluation-strategy.md`
 - `docs/discussions/evaluation-environment/qemu-relative-evaluation-runbook.md`
 - `docs/discussions/evaluation-environment/qemu-kvm-simple-linux-driver-smoke-baseline.md`
+- `docs/discussions/evaluation-environment/pl011-linux-smoke-contract.md`
 - `docs/discussions/linux-codegen/README.md`
 - `docs/discussions/linux-codegen/linux-driver-layout-strategy.md`
+- `docs/discussions/linux-codegen/lowering-plan-interface-boundary.md`
+- `docs/discussions/linux-codegen/pl011-linux-first-slice.md`
 - `tests/e2e/tests/pl011_lowering_input_stability.rs`
 - `.harness/tasks/regseq-analysis/03-lowering-input-readiness-and-consistency-checks.md`
 - `.harness/tasks/track-a-validation/06-pl011-lowering-input-stability-proof.md`
@@ -69,14 +72,20 @@ Follow these fixed decisions:
 - Keep `regseq-lowering` and `regseq-linux-backend` as distinct harness groups
   even if both land in `crates/regseq-backends/`.
 - The first supported PL011 Linux slice should cover the already-validated
-  PL011 behavior needed for Phase D: lifecycle/probe registration, serial
-  device-class integration, MMIO/register realization, interrupt registration,
-  firmware-property reads, clock/reset/pinctrl handling, synchronization
-  realization, logging, and timed polling/delay where the current declaration
-  and readiness evidence already justify them.
-- Require a reviewable lowering-manifest or equivalent debug artifact before or
-  alongside backend emission. Later backend tasks should consume a stable
-  lowering boundary rather than re-reading joined artifacts ad hoc.
+  PL011 behavior fixed by `tests/fixtures/pl011-full-spec` and
+  `docs/discussions/linux-codegen/pl011-linux-first-slice.md`: lifecycle/probe
+  registration, serial device-class integration, MMIO/register realization,
+  interrupt registration, firmware-property reads, clock/reset/pinctrl
+  handling, synchronization realization, logging, and timed polling/delay
+  where the current declaration and readiness evidence already justify them.
+- Later backend tasks should consume a stable typed lowering boundary rather
+  than re-reading joined artifacts ad hoc.
+- Use a portable `DriverLoweringPlan` and an OS-specific `LinuxBackendPlan` as
+  the planning split. Do not describe Linux-specific realization structures as
+  the global lowering contract.
+- A generated JSON lowering-manifest or other external debug artifact may be
+  added later if it proves useful, but it is not required for the first Linux
+  compile/build/smoke bring-up.
 - Use `archive/guide/lowering-contract.md` as the authority for compiler-owned
   Linux realization responsibilities, especially:
   - Driver Lifecycle
@@ -103,8 +112,17 @@ Follow these fixed decisions:
   host and should target a deterministic Linux build/smoke loop. The default
   first integration mode should be out-of-tree module style unless a cited
   reason requires tighter kernel-tree integration.
+- The compiler's default generated output root should be repo-relative
+  `output/linux/<driver-id>/`. If evaluation workflows need a copy in
+  `~/regseq-eval/generated/`, that location should be treated as a consumer or
+  archive location rather than the primary compiler output root.
+- The first PL011 smoke-validation contract should follow
+  `docs/discussions/evaluation-environment/pl011-linux-smoke-contract.md`:
+  Ubuntu 24.04 host, QEMU `aarch64` `virt` guest, TCG acceptable for first
+  smoke when KVM is unsuitable, and compile/build plus module-load,
+  registration, and probe-if-available as the first smoke gate.
 - Keep the batch narrow and decomposed. A typical split should separate:
-  - shared lowering-manifest and boundary work
+  - shared typed lowering-boundary work
   - PL011-to-Linux lowering realization from the stable input contract
   - Linux backend emission/rendering
   - PL011 Linux build and smoke validation proof
@@ -135,8 +153,8 @@ This batch is complete when:
 - executable harness task specs exist under `.harness/tasks/regseq-lowering/`,
   `.harness/tasks/regseq-linux-backend/`, and any needed
   `.harness/tasks/track-a-validation/` entries
-- the task split clearly establishes a lowering-manifest or equivalent debug
-  artifact boundary for PL011 Linux lowering
+- the task split clearly establishes a portable typed lowering-plan boundary
+  and a Linux backend-plan boundary for PL011 Linux lowering
 - the task specs cover Linux-only lowering realization and Linux backend
   emission for the supported PL011 slice
 - at least one validation task spec covers build-oriented proof and the first

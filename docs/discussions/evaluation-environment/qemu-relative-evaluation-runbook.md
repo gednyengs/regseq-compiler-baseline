@@ -3,7 +3,7 @@
 ## Purpose
 
 This runbook is the executable companion to
-[qemu-relative-evaluation-strategy.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/evaluation-environment/qemu-relative-evaluation-strategy.md).
+[qemu-relative-evaluation-strategy.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/qemu-relative-evaluation-strategy.md).
 
 It is written for this repo's actual intended workflow:
 
@@ -52,7 +52,7 @@ Recommended subdirectories:
 
 - `images/`: guest disk images
 - `kernel-src/`: Linux kernel trees
-- `generated/`: Regseq-emitted target artifacts
+- `generated/`: copied or archived Regseq-emitted target artifacts
 - `results/`: logs, metrics, snapshots
 - `scripts/`: helper scripts
 
@@ -168,6 +168,38 @@ Reason:
 This is also the better first setup for agent-driven development because it
 provides the tightest regenerate/build/error/fix cycle.
 
+## Compiler Output Contract
+
+The compiler's default generated output root should be repo-relative:
+
+- `output/linux/<driver-id>/`
+
+That directory is the primary regenerate/build/debug artifact root during
+compiler development.
+
+If the Ubuntu evaluation workspace needs a copy, mirror selected generated
+artifacts into:
+
+- `~/regseq-eval/generated/`
+
+But that evaluation workspace should be treated as a consumer/archive location,
+not as the canonical compiler output root.
+
+## Kernel Provenance Contract
+
+For the PL011 smoke path, the kernel used by the guest should come from a
+project-controlled `arm64` kernel tree on the Ubuntu host.
+
+That same tree should also be the authoritative out-of-tree module build
+target. In practice:
+
+- the host maintains a pinned `arm64` kernel tree under `~/regseq-eval/kernel-src/`
+- QEMU boots that kernel directly
+- generated PL011 modules build against that same kernel tree via `KDIR`
+
+This avoids trying to recover matching headers from a guest distro kernel after
+the fact and gives the project control over device-binding behavior.
+
 ## Device Notes
 
 ### E1000
@@ -182,9 +214,33 @@ Recommended DUT path:
 
 Recommended DUT path:
 
-- QEMU-based Linux guest using the modeled PL011 environment
+- QEMU `aarch64` `virt` Linux guest using the modeled PL011 environment
 - use the same relative-comparison philosophy as E1000
 - do not block on sourcing physical PrimeCell hardware
+- allow TCG for the first PL011 smoke path when host/guest architecture makes
+  KVM unsuitable
+- prefer a project-controlled `arm64` kernel over a guest distro kernel for
+  the PL011 smoke path
+
+For host-side build preparation, assume:
+
+- `gcc-aarch64-linux-gnu`
+- `g++-aarch64-linux-gnu`
+- an `arm64` kernel build tree prepared for external module builds
+
+Canonical module-build shape:
+
+```bash
+make \
+  ARCH=arm64 \
+  CROSS_COMPILE=aarch64-linux-gnu- \
+  KDIR=$HOME/regseq-eval/kernel-src/pl011-arm64
+```
+
+See also:
+
+- [pl011-linux-smoke-contract.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/pl011-linux-smoke-contract.md)
+- [pl011-project-controlled-kernel-strategy.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/pl011-project-controlled-kernel-strategy.md)
 
 ## Metrics
 
@@ -248,6 +304,7 @@ Recommended:
 1. decide the first concrete DUT workflow for Linux backend bring-up
    - likely out-of-tree module
 2. define the initial PL011 smoke-validation loop
+   - with a project-controlled `arm64` kernel tree
 3. define the initial E1000 smoke-validation loop
 4. script the benchmark and artifact-capture process under Ubuntu
 

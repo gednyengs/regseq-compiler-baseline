@@ -152,6 +152,18 @@ This keeps the methodology aligned with E1000:
 - same host-side validation environment
 - same relative-comparison framing
 
+For the first PL011 smoke path, the environment should prefer a
+project-controlled `arm64` kernel tree over a guest distro kernel. That gives
+the project control over:
+
+- the module-build target headers/tree
+- the guest kernel ABI
+- whether a competing in-kernel PL011 driver claims the emulated device first
+
+See also:
+
+- [pl011-project-controlled-kernel-strategy.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/evaluation-environment/pl011-project-controlled-kernel-strategy.md)
+
 ## Validation Layers
 
 The evaluation strategy should separate three layers:

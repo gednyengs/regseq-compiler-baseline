@@ -47,7 +47,8 @@ treated as the mandatory PL011 core:
 5. interrupt status, mask, acknowledge, and service lifecycle
 6. UART enable/disable sequencing
 7. receive-path error detection and reporting
-8. revision / variant-aware configuration where required by the device
+8. revision / variant-aware configuration is evidenced in the broader corpus,
+   but remains deferred for the current single-variant ARM PL011 target
 
 These form the minimum cross-OS PL011 hardware surface that Regseq
 should model directly.
@@ -73,9 +74,10 @@ unified spec as optional features or conditional properties:
 12. board / SoC-specific quirk hooks and variant-specific register
     behavior
 
-These should not all be mandatory for every generated driver, but they
-should be expressible in the unified spec so that one backend can
-benefit from feature evidence discovered in another.
+These should not all be mandatory for every generated driver. For the current
+concrete full-spec fixture, variant/revision/quirk machinery and PM-aware
+behavior remain intentionally deferred even though they are evidenced in the
+broader corpus.
 
 ## 3. Features that should stay out of the unified hardware spec
 
@@ -153,7 +155,8 @@ Examples:
 
 The safest design stance is:
 
-- use the common three-OS baseline as the non-negotiable core
+- use the common three-OS baseline as the non-negotiable hardware core, while
+  allowing the concrete target fixture to defer variant/revision machinery
 - add Linux- and Zephyr-only features as optional spec-visible
   capabilities
 - avoid baking FreeBSD's current omissions into the unified spec as if

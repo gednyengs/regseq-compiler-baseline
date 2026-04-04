@@ -1,13 +1,16 @@
 # PL011 Full Spec Status
 
-This note tracks the incremental build-out of the exploratory full-PL011
+This note tracks the build-out of the concrete full-PL011
 fixture at:
 
-- [pl011-full-spec](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec)
+- [pl011-full-spec](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec)
 
-It is intentionally lightweight. Its purpose is to prevent drift while we grow
-the fixture feature by feature using the methodology in
-[pl011-full-spec-methodology.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/pl011-full-spec/pl011-full-spec-methodology.md).
+It is intentionally lightweight. Its purpose is to prevent drift between the
+target fixture and the surrounding discussion docs.
+
+The methodology note remains useful historical context for how the fixture was
+grown, but this status file should reflect the current target fixture as it
+exists now.
 
 ## Scope boundary
 
@@ -28,26 +31,26 @@ the fixture feature by feature using the methodology in
 ### Base declarations
 
 - `captured` PL011 register descriptors in
-  [registers.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/registers.rs)
+  [registers.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/registers.rs)
 - `captured` `Pl011Registers` register block in
-  [registers.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/registers.rs)
+  [registers.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/registers.rs)
 - `captured` driver identity for `Pl011FullSpec` in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` `Mmio<Pl011Registers>` field in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` `current-speed` property with default `115200` in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` `fifo-size` property with default `32` in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` `Interrupt` resource in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 
 ### Polling serial bring-up
 
 - `captured` `Lifecycle` implementation in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` polling `Serial` implementation in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` helper sequencing for:
   - UART disable/enable
   - FIFO disable
@@ -56,11 +59,30 @@ the fixture feature by feature using the methodology in
   - interrupt mask/clear hygiene
   - explicit ordered sequencing for the divisor/latch/enable sub-sequence
   in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` polling TX via `FR.TXFF` and `DR` in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 - `captured` polling RX emptiness check via `FR.RXFE` and `DR` read in
-  [driver.rs](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/tests/fixtures/pl011-full-spec/src/driver.rs)
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+
+### Interrupt-driven and richer bring-up participation
+
+- `captured` RX-path error inspection and `RxChar` error propagation in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+- `captured` interrupt-driven service path via `#[rseq::isr]` in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+- `captured` interrupt mask / status / clear register participation through
+  `IMSC`, `MIS`, and `ICR` in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+- `captured` optional clock participation in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+- `captured` optional reset participation in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+- `captured` optional pinctrl participation in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
+- `captured` richer serial hooks `flush_rx_fifo`, `flush_tx_fifo`, and
+  `send_break` in
+  [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs)
 
 ## Roadmap status
 
@@ -89,7 +111,11 @@ the fixture feature by feature using the methodology in
 - `deferred`
 
 9. Optional richer serial features
-- `pending`
+- `captured` in part
+  - break control is captured
+  - FIFO flush hooks are captured
+  - flow control, modem-control/status, and `SerialConsole` remain outside the
+    current target fixture
 
 10. DMA
 - `pending`
