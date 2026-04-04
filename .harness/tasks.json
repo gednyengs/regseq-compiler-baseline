@@ -343,6 +343,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-22",
+          "name": "Authored callback and helper body extraction",
+          "spec": ".harness/tasks/regseq-driver/22-authored-callback-and-helper-body-extraction.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-19",
+            "regseq-driver-20"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -501,6 +513,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-13",
+          "name": "Authored body schema and normalization",
+          "spec": ".harness/tasks/regseq-model/13-authored-body-schema-and-normalization.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-22",
+            "regseq-model-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -593,6 +617,18 @@
           "depends_on": [
             "regseq-analysis-03",
             "regseq-model-12"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-analysis-05",
+          "name": "Authored body capture and supported-subset validation",
+          "spec": ".harness/tasks/regseq-analysis/05-authored-body-capture-and-supported-subset-validation.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-analysis-03",
+            "regseq-model-13"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -878,12 +914,13 @@
           "id": "regseq-lowering-04",
           "name": "PL011 serial, lifecycle, and ISR behavior lowering",
           "spec": ".harness/tasks/regseq-lowering/04-pl011-serial-lifecycle-and-isr-behavior-lowering.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
-            "regseq-lowering-03"
+            "regseq-lowering-03",
+            "regseq-analysis-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": "Current behavior lowering still synthesizes PL011 callback/helper logic instead of consuming captured authored bodies, and the canonical portable behavior representation is still too ambiguous."
         }
       ]
     },
@@ -1077,7 +1114,7 @@
           "spec": ".harness/tasks/track-a-validation/07-pl011-linux-generated-build-and-second-uart-smoke-proof.md",
           "status": "pending",
           "depends_on": [
-            "regseq-linux-backend-02"
+            "track-a-validation-11"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -1108,9 +1145,20 @@
           "id": "track-a-validation-10",
           "name": "PL011 full-spec lowering completeness and backend-independence proof",
           "spec": ".harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-lowering-04"
+          ],
+          "artifacts": [],
+          "fail_reason": "The current proof passed despite synthesized PL011 behavior in lowering and insufficient regression coverage for backend/lowering hardcoding."
+        },
+        {
+          "id": "track-a-validation-11",
+          "name": "Generated PL011 Linux module host-build proof",
+          "spec": ".harness/tasks/track-a-validation/11-generated-pl011-linux-module-host-build-proof.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-linux-backend-02"
           ],
           "artifacts": [],
           "fail_reason": null

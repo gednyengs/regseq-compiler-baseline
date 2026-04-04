@@ -11,15 +11,13 @@ use regseq_model::declaration::operations::{DelayIntrinsic, LogLevel};
 use regseq_model::declaration::raw_input::*;
 use regseq_model::declaration::registers::WrapperMethod;
 use regseq_model::declaration::synchronization::SyncFieldKind;
-use regseq_model::declaration::{normalize, DeclarationModel};
+use regseq_model::declaration::{normalize, BusType, DeclarationModel};
 
 // ---- 1. Declaration-model output is deterministic ----
 
 #[test]
 fn spec_slice_normalization_is_deterministic() {
-    let json = include_str!(
-        "../../../tests/fixtures/pl011-spec-slice/regseq-out/drivers/pl011-spec-slice.raw.json"
-    );
+    let json = include_str!("../../../tests/fixtures/pl011-spec-slice/expected/raw-frontend.json");
     let model_a = normalize_from_json(json).unwrap();
     let model_b = normalize_from_json(json).unwrap();
     assert_eq!(model_a, model_b);
@@ -27,9 +25,7 @@ fn spec_slice_normalization_is_deterministic() {
 
 #[test]
 fn serialized_output_is_deterministic() {
-    let json = include_str!(
-        "../../../tests/fixtures/pl011-spec-slice/regseq-out/drivers/pl011-spec-slice.raw.json"
-    );
+    let json = include_str!("../../../tests/fixtures/pl011-spec-slice/expected/raw-frontend.json");
     let model = normalize_from_json(json).unwrap();
     let json_a = serde_json::to_string_pretty(&model).unwrap();
     let json_b = serde_json::to_string_pretty(&model).unwrap();
@@ -43,6 +39,7 @@ fn spec_slice_model_has_expected_driver_identity() {
     let model = load_spec_slice();
     assert_eq!(model.driver.driver_name, "pl011-spec-slice");
     assert_eq!(model.driver.compatible, vec!["arm,pl011"]);
+    assert_eq!(model.driver.bus, Some(BusType::Amba));
     assert_eq!(model.driver.provenance.raw_family, "identity");
 }
 
@@ -281,9 +278,7 @@ fn rich_model_serialized_output_is_deterministic() {
 // ---- Helpers ----
 
 fn load_spec_slice() -> DeclarationModel {
-    let json = include_str!(
-        "../../../tests/fixtures/pl011-spec-slice/regseq-out/drivers/pl011-spec-slice.raw.json"
-    );
+    let json = include_str!("../../../tests/fixtures/pl011-spec-slice/expected/raw-frontend.json");
     normalize_from_json(json).expect("spec-slice normalization failed")
 }
 
@@ -300,6 +295,7 @@ fn make_rich_input() -> RawArtifactInput {
             driver_name: "test-driver".into(),
             compatible: vec!["arm,pl011".into()],
             device_class: "serial_uart".into(),
+            bus: Some("amba".into()),
         }),
         register_access: Some(RawRegisterAccessInput {
             register_blocks: vec![RawRegisterBlockInput {
@@ -455,5 +451,6 @@ fn make_rich_input() -> RawArtifactInput {
                 has_pm_impl: true,
             }],
         }),
+        bodies: None,
     }
 }

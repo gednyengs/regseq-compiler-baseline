@@ -17,18 +17,17 @@ use regseq_model::declaration::resources::{
     ClockMethod, InterruptFieldShape, IsrBindTarget, ResetMethod,
 };
 use regseq_model::declaration::synchronization::{CompletionMethod, SyncFieldKind};
-use regseq_model::declaration::DeviceClass;
+use regseq_model::declaration::{BusType, DeviceClass};
 
 // ---- 1. Representative raw artifact normalizes successfully ----
 
 #[test]
 fn pl011_spec_slice_fixture_normalizes() {
-    let json = include_str!(
-        "../../../tests/fixtures/pl011-spec-slice/regseq-out/drivers/pl011-spec-slice.raw.json"
-    );
+    let json = include_str!("../../../tests/fixtures/pl011-spec-slice/expected/raw-frontend.json");
     let model = normalize_from_json(json).expect("normalization should succeed");
     assert_eq!(model.driver.driver_name, "pl011-spec-slice");
     assert_eq!(model.driver.compatible, vec!["arm,pl011"]);
+    assert_eq!(model.driver.bus, Some(BusType::Amba));
     assert_eq!(model.build_context.target_os, "linux");
 }
 
@@ -206,6 +205,76 @@ fn device_class_normalized_to_typed_enum() {
 }
 
 #[test]
+fn bus_type_normalized_to_typed_enum() {
+    let input = make_rich_input();
+    let model = normalize(&input).unwrap();
+    assert_eq!(model.driver.bus, Some(BusType::Amba));
+}
+
+#[test]
+fn absent_bus_normalizes_to_none() {
+    let input = RawArtifactInput {
+        driver_name: "no-bus".into(),
+        target_os: "linux".into(),
+        identity: Some(RawIdentityInput {
+            driver_name: "no-bus".into(),
+            compatible: vec![],
+            device_class: "serial_uart".into(),
+            bus: None,
+        }),
+        register_access: None,
+        trait_callbacks: None,
+        firmware_properties: None,
+        clock: None,
+        reset: None,
+        pinctrl: None,
+        interrupts: None,
+        synchronization: None,
+        timed_delay: None,
+        logging: None,
+        pm_gate: None,
+        bodies: None,
+    };
+    let model = normalize(&input).unwrap();
+    assert_eq!(model.driver.bus, None);
+}
+
+#[test]
+fn unrecognized_bus_value_returns_error() {
+    let input = RawArtifactInput {
+        driver_name: "bad-bus".into(),
+        target_os: "linux".into(),
+        identity: Some(RawIdentityInput {
+            driver_name: "bad-bus".into(),
+            compatible: vec![],
+            device_class: "serial_uart".into(),
+            bus: Some("usb".into()),
+        }),
+        register_access: None,
+        trait_callbacks: None,
+        firmware_properties: None,
+        clock: None,
+        reset: None,
+        pinctrl: None,
+        interrupts: None,
+        synchronization: None,
+        timed_delay: None,
+        logging: None,
+        pm_gate: None,
+        bodies: None,
+    };
+    let err = normalize(&input).unwrap_err();
+    assert_eq!(
+        err,
+        NormalizeError::UnrecognizedTag {
+            family: "identity",
+            field: "bus",
+            value: "usb".into(),
+        }
+    );
+}
+
+#[test]
 fn interrupt_field_shape_normalized() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -288,6 +357,7 @@ fn absent_families_normalize_to_empty() {
             driver_name: "minimal".into(),
             compatible: vec![],
             device_class: "serial_uart".into(),
+            bus: None,
         }),
         register_access: None,
         trait_callbacks: None,
@@ -300,6 +370,7 @@ fn absent_families_normalize_to_empty() {
         timed_delay: None,
         logging: None,
         pm_gate: None,
+        bodies: None,
     };
     let model = normalize(&input).unwrap();
     assert!(model.registers.blocks.is_empty());
@@ -334,6 +405,7 @@ fn missing_identity_returns_error() {
         timed_delay: None,
         logging: None,
         pm_gate: None,
+        bodies: None,
     };
     let err = normalize(&input).unwrap_err();
     assert_eq!(err, NormalizeError::MissingIdentity);
@@ -455,6 +527,7 @@ fn make_rich_input() -> RawArtifactInput {
             driver_name: "test-driver".into(),
             compatible: vec!["arm,pl011".into()],
             device_class: "serial_uart".into(),
+            bus: Some("amba".into()),
         }),
         register_access: Some(RawRegisterAccessInput {
             register_blocks: vec![RawRegisterBlockInput {
@@ -621,5 +694,6 @@ fn make_rich_input() -> RawArtifactInput {
                 has_pm_impl: true,
             }],
         }),
+        bodies: None,
     }
 }

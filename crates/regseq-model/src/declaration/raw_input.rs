@@ -24,6 +24,8 @@ pub struct RawArtifactInput {
     pub timed_delay: Option<RawTimedDelaySurfaceInput>,
     pub logging: Option<RawLoggingSurfaceInput>,
     pub pm_gate: Option<RawPmGateSurfaceInput>,
+    #[serde(default)]
+    pub bodies: Option<RawBodySurfaceInput>,
 }
 
 // ---- Identity ----
@@ -33,6 +35,9 @@ pub struct RawIdentityInput {
     pub driver_name: String,
     pub compatible: Vec<String>,
     pub device_class: String,
+    /// Portable bus/fabric identity from `#[rseq::driver(bus = "...")]`.
+    #[serde(default)]
+    pub bus: Option<String>,
 }
 
 // ---- Register access ----
@@ -329,4 +334,190 @@ pub struct RawPmGateInput {
 pub struct RawPmGatePropertiesInput {
     pub idle: bool,
     pub wakeup_capable: bool,
+}
+
+// ---- Bodies ----
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawBodySurfaceInput {
+    pub functions: Vec<RawExtractedFnInput>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawExtractedFnInput {
+    pub name: String,
+    pub kind: RawFnKindInput,
+    pub receiver: String,
+    pub params: Vec<RawFnParamInput>,
+    #[serde(default)]
+    pub return_type: Option<String>,
+    pub body: RawBodyExprInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "type")]
+pub enum RawFnKindInput {
+    Callback {
+        trait_name: String,
+        method_name: String,
+    },
+    Isr,
+    Helper,
+    FreeFunction,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawFnParamInput {
+    pub name: String,
+    pub ty: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum RawBodyStmtInput {
+    Expr {
+        expr: RawBodyExprInput,
+    },
+    Semi {
+        expr: RawBodyExprInput,
+    },
+    Let {
+        name: String,
+        mutable: bool,
+        #[serde(default)]
+        ty: Option<String>,
+        #[serde(default)]
+        init: Option<RawBodyExprInput>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawMatchArmInput {
+    pub pattern: String,
+    #[serde(default)]
+    pub guard: Option<RawBodyExprInput>,
+    pub body: RawBodyExprInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawStructFieldInput {
+    pub name: String,
+    pub value: RawBodyExprInput,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum RawBodyExprInput {
+    Block {
+        stmts: Vec<RawBodyStmtInput>,
+        #[serde(default)]
+        expr: Option<Box<RawBodyExprInput>>,
+    },
+    MethodCall {
+        receiver: Box<RawBodyExprInput>,
+        method: String,
+        #[serde(default)]
+        type_args: Vec<String>,
+        args: Vec<RawBodyExprInput>,
+    },
+    Call {
+        path: String,
+        #[serde(default)]
+        type_args: Vec<String>,
+        args: Vec<RawBodyExprInput>,
+    },
+    Field {
+        base: Box<RawBodyExprInput>,
+        name: String,
+    },
+    Path {
+        path: String,
+    },
+    LitInt {
+        value: String,
+        #[serde(default)]
+        suffix: Option<String>,
+    },
+    LitBool {
+        value: bool,
+    },
+    LitStr {
+        value: String,
+    },
+    Binary {
+        op: String,
+        lhs: Box<RawBodyExprInput>,
+        rhs: Box<RawBodyExprInput>,
+    },
+    Unary {
+        op: String,
+        operand: Box<RawBodyExprInput>,
+    },
+    Cast {
+        expr: Box<RawBodyExprInput>,
+        ty: String,
+    },
+    If {
+        cond: Box<RawBodyExprInput>,
+        then_branch: Box<RawBodyExprInput>,
+        #[serde(default)]
+        else_branch: Option<Box<RawBodyExprInput>>,
+    },
+    Loop {
+        body: Box<RawBodyExprInput>,
+    },
+    Return {
+        #[serde(default)]
+        expr: Option<Box<RawBodyExprInput>>,
+    },
+    Try {
+        expr: Box<RawBodyExprInput>,
+    },
+    Ref {
+        mutable: bool,
+        expr: Box<RawBodyExprInput>,
+    },
+    Assign {
+        target: Box<RawBodyExprInput>,
+        value: Box<RawBodyExprInput>,
+    },
+    AssignOp {
+        op: String,
+        target: Box<RawBodyExprInput>,
+        value: Box<RawBodyExprInput>,
+    },
+    Tuple {
+        elements: Vec<RawBodyExprInput>,
+    },
+    Array {
+        elements: Vec<RawBodyExprInput>,
+    },
+    Index {
+        base: Box<RawBodyExprInput>,
+        index: Box<RawBodyExprInput>,
+    },
+    Struct {
+        path: String,
+        fields: Vec<RawStructFieldInput>,
+        #[serde(default)]
+        base: Option<Box<RawBodyExprInput>>,
+    },
+    Closure {
+        params: Vec<String>,
+        body: Box<RawBodyExprInput>,
+    },
+    Match {
+        scrutinee: Box<RawBodyExprInput>,
+        arms: Vec<RawMatchArmInput>,
+    },
+    Break {
+        #[serde(default)]
+        expr: Option<Box<RawBodyExprInput>>,
+    },
+    Continue,
+    Unsupported {
+        hir_kind: String,
+        #[serde(default)]
+        span_text: Option<String>,
+    },
 }

@@ -1,5 +1,9 @@
 use serde::{Deserialize, Serialize};
 
+use crate::extract::body::{
+    BinOp, BodyExpr, BodyStmt, BodySurface, ExtractedFn, FnKind, FnParam, MatchArm, Receiver,
+    UnaryOp,
+};
 use crate::extract::callback_context::CallbackContext;
 use crate::extract::clock::{ClockCallSite, ClockField, ClockMethod, ClockSurface};
 use crate::extract::driver_identity::DriverIdentity;
@@ -67,6 +71,9 @@ pub struct RawFrontendArtifact {
     pub logging: Option<RawLoggingSurface>,
     /// PM gate facts.
     pub pm_gate: Option<RawPmGateSurface>,
+    /// Extracted function body surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bodies: Option<RawBodySurface>,
 }
 
 // ---------------------------------------------------------------------------
@@ -78,6 +85,9 @@ pub struct RawDriverIdentity {
     pub driver_name: String,
     pub compatible: Vec<String>,
     pub device_class: String,
+    /// Portable bus/fabric identity from `#[rseq::driver(bus = "...")]`.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub bus: Option<String>,
 }
 
 impl From<&DriverIdentity> for RawDriverIdentity {
@@ -86,6 +96,7 @@ impl From<&DriverIdentity> for RawDriverIdentity {
             driver_name: id.driver_name.clone(),
             compatible: id.compatible.clone(),
             device_class: id.device_class.clone(),
+            bus: id.bus.clone(),
         }
     }
 }
@@ -888,6 +899,445 @@ impl From<&PmGateProperties> for RawPmGateProperties {
             wakeup_capable: p.wakeup_capable,
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Body surface
+// ---------------------------------------------------------------------------
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawBodySurface {
+    pub functions: Vec<RawExtractedFn>,
+}
+
+impl From<&BodySurface> for RawBodySurface {
+    fn from(s: &BodySurface) -> Self {
+        Self {
+            functions: s.functions.iter().map(RawExtractedFn::from).collect(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawExtractedFn {
+    pub name: String,
+    pub kind: RawFnKind,
+    pub receiver: String,
+    pub params: Vec<RawFnParam>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
+    pub body: RawBodyExpr,
+}
+
+impl From<&ExtractedFn> for RawExtractedFn {
+    fn from(f: &ExtractedFn) -> Self {
+        Self {
+            name: f.name.clone(),
+            kind: RawFnKind::from(&f.kind),
+            receiver: receiver_label(&f.receiver),
+            params: f.params.iter().map(RawFnParam::from).collect(),
+            return_type: f.return_type.clone(),
+            body: RawBodyExpr::from(&f.body),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "type")]
+pub enum RawFnKind {
+    Callback {
+        trait_name: String,
+        method_name: String,
+    },
+    Isr,
+    Helper,
+    FreeFunction,
+}
+
+impl From<&FnKind> for RawFnKind {
+    fn from(k: &FnKind) -> Self {
+        match k {
+            FnKind::Callback {
+                trait_name,
+                method_name,
+            } => Self::Callback {
+                trait_name: trait_name.clone(),
+                method_name: method_name.clone(),
+            },
+            FnKind::Isr => Self::Isr,
+            FnKind::Helper => Self::Helper,
+            FnKind::FreeFunction => Self::FreeFunction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawFnParam {
+    pub name: String,
+    pub ty: String,
+}
+
+impl From<&FnParam> for RawFnParam {
+    fn from(p: &FnParam) -> Self {
+        Self {
+            name: p.name.clone(),
+            ty: p.ty.clone(),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum RawBodyStmt {
+    Expr {
+        expr: RawBodyExpr,
+    },
+    Semi {
+        expr: RawBodyExpr,
+    },
+    Let {
+        name: String,
+        mutable: bool,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        ty: Option<String>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        init: Option<RawBodyExpr>,
+    },
+}
+
+impl From<&BodyStmt> for RawBodyStmt {
+    fn from(s: &BodyStmt) -> Self {
+        match s {
+            BodyStmt::Expr(e) => Self::Expr {
+                expr: RawBodyExpr::from(e),
+            },
+            BodyStmt::Semi(e) => Self::Semi {
+                expr: RawBodyExpr::from(e),
+            },
+            BodyStmt::Let {
+                name,
+                mutable,
+                ty,
+                init,
+            } => Self::Let {
+                name: name.clone(),
+                mutable: *mutable,
+                ty: ty.clone(),
+                init: init.as_ref().map(RawBodyExpr::from),
+            },
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawMatchArm {
+    pub pattern: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub guard: Option<RawBodyExpr>,
+    pub body: RawBodyExpr,
+}
+
+impl From<&MatchArm> for RawMatchArm {
+    fn from(arm: &MatchArm) -> Self {
+        Self {
+            pattern: arm.pattern.clone(),
+            guard: arm.guard.as_ref().map(RawBodyExpr::from),
+            body: RawBodyExpr::from(&arm.body),
+        }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind")]
+pub enum RawBodyExpr {
+    Block {
+        stmts: Vec<RawBodyStmt>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expr: Option<Box<RawBodyExpr>>,
+    },
+    MethodCall {
+        receiver: Box<RawBodyExpr>,
+        method: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        type_args: Vec<String>,
+        args: Vec<RawBodyExpr>,
+    },
+    Call {
+        path: String,
+        #[serde(default, skip_serializing_if = "Vec::is_empty")]
+        type_args: Vec<String>,
+        args: Vec<RawBodyExpr>,
+    },
+    Field {
+        base: Box<RawBodyExpr>,
+        name: String,
+    },
+    Path {
+        path: String,
+    },
+    LitInt {
+        value: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        suffix: Option<String>,
+    },
+    LitBool {
+        value: bool,
+    },
+    LitStr {
+        value: String,
+    },
+    Binary {
+        op: String,
+        lhs: Box<RawBodyExpr>,
+        rhs: Box<RawBodyExpr>,
+    },
+    Unary {
+        op: String,
+        operand: Box<RawBodyExpr>,
+    },
+    Cast {
+        expr: Box<RawBodyExpr>,
+        ty: String,
+    },
+    If {
+        cond: Box<RawBodyExpr>,
+        then_branch: Box<RawBodyExpr>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        else_branch: Option<Box<RawBodyExpr>>,
+    },
+    Loop {
+        body: Box<RawBodyExpr>,
+    },
+    Return {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expr: Option<Box<RawBodyExpr>>,
+    },
+    Try {
+        expr: Box<RawBodyExpr>,
+    },
+    Ref {
+        mutable: bool,
+        expr: Box<RawBodyExpr>,
+    },
+    Assign {
+        target: Box<RawBodyExpr>,
+        value: Box<RawBodyExpr>,
+    },
+    AssignOp {
+        op: String,
+        target: Box<RawBodyExpr>,
+        value: Box<RawBodyExpr>,
+    },
+    Tuple {
+        elements: Vec<RawBodyExpr>,
+    },
+    Array {
+        elements: Vec<RawBodyExpr>,
+    },
+    Index {
+        base: Box<RawBodyExpr>,
+        index: Box<RawBodyExpr>,
+    },
+    Struct {
+        path: String,
+        fields: Vec<RawStructField>,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        base: Option<Box<RawBodyExpr>>,
+    },
+    Closure {
+        params: Vec<String>,
+        body: Box<RawBodyExpr>,
+    },
+    Match {
+        scrutinee: Box<RawBodyExpr>,
+        arms: Vec<RawMatchArm>,
+    },
+    Break {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        expr: Option<Box<RawBodyExpr>>,
+    },
+    Continue,
+    Unsupported {
+        hir_kind: String,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        span_text: Option<String>,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+pub struct RawStructField {
+    pub name: String,
+    pub value: RawBodyExpr,
+}
+
+impl From<&BodyExpr> for RawBodyExpr {
+    fn from(e: &BodyExpr) -> Self {
+        match e {
+            BodyExpr::Block { stmts, expr } => Self::Block {
+                stmts: stmts.iter().map(RawBodyStmt::from).collect(),
+                expr: expr.as_ref().map(|e| Box::new(Self::from(e.as_ref()))),
+            },
+            BodyExpr::MethodCall {
+                receiver,
+                method,
+                type_args,
+                args,
+            } => Self::MethodCall {
+                receiver: Box::new(Self::from(receiver.as_ref())),
+                method: method.clone(),
+                type_args: type_args.clone(),
+                args: args.iter().map(Self::from).collect(),
+            },
+            BodyExpr::Call {
+                path,
+                type_args,
+                args,
+            } => Self::Call {
+                path: path.clone(),
+                type_args: type_args.clone(),
+                args: args.iter().map(Self::from).collect(),
+            },
+            BodyExpr::Field { base, name } => Self::Field {
+                base: Box::new(Self::from(base.as_ref())),
+                name: name.clone(),
+            },
+            BodyExpr::Path(p) => Self::Path { path: p.clone() },
+            BodyExpr::LitInt { value, suffix } => Self::LitInt {
+                value: value.clone(),
+                suffix: suffix.clone(),
+            },
+            BodyExpr::LitBool(v) => Self::LitBool { value: *v },
+            BodyExpr::LitStr(v) => Self::LitStr { value: v.clone() },
+            BodyExpr::Binary { op, lhs, rhs } => Self::Binary {
+                op: binop_label(op),
+                lhs: Box::new(Self::from(lhs.as_ref())),
+                rhs: Box::new(Self::from(rhs.as_ref())),
+            },
+            BodyExpr::Unary { op, operand } => Self::Unary {
+                op: unaryop_label(op),
+                operand: Box::new(Self::from(operand.as_ref())),
+            },
+            BodyExpr::Cast { expr, ty } => Self::Cast {
+                expr: Box::new(Self::from(expr.as_ref())),
+                ty: ty.clone(),
+            },
+            BodyExpr::If {
+                cond,
+                then_branch,
+                else_branch,
+            } => Self::If {
+                cond: Box::new(Self::from(cond.as_ref())),
+                then_branch: Box::new(Self::from(then_branch.as_ref())),
+                else_branch: else_branch
+                    .as_ref()
+                    .map(|e| Box::new(Self::from(e.as_ref()))),
+            },
+            BodyExpr::Loop { body } => Self::Loop {
+                body: Box::new(Self::from(body.as_ref())),
+            },
+            BodyExpr::Return(opt) => Self::Return {
+                expr: opt.as_ref().map(|e| Box::new(Self::from(e.as_ref()))),
+            },
+            BodyExpr::Try(inner) => Self::Try {
+                expr: Box::new(Self::from(inner.as_ref())),
+            },
+            BodyExpr::Ref { mutable, expr } => Self::Ref {
+                mutable: *mutable,
+                expr: Box::new(Self::from(expr.as_ref())),
+            },
+            BodyExpr::Assign { target, value } => Self::Assign {
+                target: Box::new(Self::from(target.as_ref())),
+                value: Box::new(Self::from(value.as_ref())),
+            },
+            BodyExpr::AssignOp { op, target, value } => Self::AssignOp {
+                op: binop_label(op),
+                target: Box::new(Self::from(target.as_ref())),
+                value: Box::new(Self::from(value.as_ref())),
+            },
+            BodyExpr::Tuple(elems) => Self::Tuple {
+                elements: elems.iter().map(Self::from).collect(),
+            },
+            BodyExpr::Array(elems) => Self::Array {
+                elements: elems.iter().map(Self::from).collect(),
+            },
+            BodyExpr::Index { base, index } => Self::Index {
+                base: Box::new(Self::from(base.as_ref())),
+                index: Box::new(Self::from(index.as_ref())),
+            },
+            BodyExpr::Struct { path, fields, base } => Self::Struct {
+                path: path.clone(),
+                fields: fields
+                    .iter()
+                    .map(|(n, v)| RawStructField {
+                        name: n.clone(),
+                        value: Self::from(v),
+                    })
+                    .collect(),
+                base: base.as_ref().map(|e| Box::new(Self::from(e.as_ref()))),
+            },
+            BodyExpr::Closure { params, body } => Self::Closure {
+                params: params.clone(),
+                body: Box::new(Self::from(body.as_ref())),
+            },
+            BodyExpr::Match { scrutinee, arms } => Self::Match {
+                scrutinee: Box::new(Self::from(scrutinee.as_ref())),
+                arms: arms.iter().map(RawMatchArm::from).collect(),
+            },
+            BodyExpr::Break(opt) => Self::Break {
+                expr: opt.as_ref().map(|e| Box::new(Self::from(e.as_ref()))),
+            },
+            BodyExpr::Continue => Self::Continue,
+            BodyExpr::Unsupported {
+                hir_kind,
+                span_text,
+            } => Self::Unsupported {
+                hir_kind: hir_kind.clone(),
+                span_text: span_text.clone(),
+            },
+        }
+    }
+}
+
+fn receiver_label(r: &Receiver) -> String {
+    match r {
+        Receiver::None => "none",
+        Receiver::Ref => "ref",
+        Receiver::RefMut => "ref_mut",
+    }
+    .to_string()
+}
+
+fn binop_label(op: &BinOp) -> String {
+    match op {
+        BinOp::Add => "+",
+        BinOp::Sub => "-",
+        BinOp::Mul => "*",
+        BinOp::Div => "/",
+        BinOp::Rem => "%",
+        BinOp::And => "&&",
+        BinOp::Or => "||",
+        BinOp::BitAnd => "&",
+        BinOp::BitOr => "|",
+        BinOp::BitXor => "^",
+        BinOp::Shl => "<<",
+        BinOp::Shr => ">>",
+        BinOp::Eq => "==",
+        BinOp::Ne => "!=",
+        BinOp::Lt => "<",
+        BinOp::Le => "<=",
+        BinOp::Gt => ">",
+        BinOp::Ge => ">=",
+    }
+    .to_string()
+}
+
+fn unaryop_label(op: &UnaryOp) -> String {
+    match op {
+        UnaryOp::Neg => "-",
+        UnaryOp::Not => "!",
+        UnaryOp::Deref => "*",
+    }
+    .to_string()
 }
 
 // ---------------------------------------------------------------------------

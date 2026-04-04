@@ -111,6 +111,10 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let logging_surface = crate::extract::logging::extract_logging_surface(tcx);
         eprintln!("regseq-driver: logging extraction: {logging_surface:?}");
 
+        // --- body extraction ---
+        let body_surface = crate::extract::body::extract_body_surface(tcx);
+        eprintln!("regseq-driver: body extraction: {body_surface:?}");
+
         // --- PM gate (requires trait surface for PM impl types) ---
         let pm_impl_types: std::collections::HashSet<String> = trait_surface
             .as_ref()
@@ -140,6 +144,7 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
                         timed_delay: &timed_delay_surface,
                         logging: &logging_surface,
                         pm: &pm_surface,
+                        body: &body_surface,
                     };
                     let artifact = build_raw_artifact(primary, &self.options, &ex);
                     if let Err(e) = emit_raw_artifact(&artifact, &self.options.output_dir) {
@@ -189,6 +194,7 @@ struct ExtractionResults<'a> {
     logging:
         &'a Result<crate::extract::logging::LoggingSurface, crate::extract::logging::LoggingError>,
     pm: &'a Result<crate::extract::pm::PmGateSurface, crate::extract::pm::PmError>,
+    body: &'a Result<crate::extract::body::BodySurface, crate::extract::body::BodyError>,
 }
 
 fn build_raw_artifact(
@@ -217,6 +223,7 @@ fn build_raw_artifact(
         timed_delay: ex.timed_delay.as_ref().ok().map(RawTimedDelaySurface::from),
         logging: ex.logging.as_ref().ok().map(RawLoggingSurface::from),
         pm_gate: ex.pm.as_ref().ok().map(RawPmGateSurface::from),
+        bodies: ex.body.as_ref().ok().map(RawBodySurface::from),
     }
 }
 

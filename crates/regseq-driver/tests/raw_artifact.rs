@@ -12,6 +12,7 @@ fn sample_artifact() -> RawFrontendArtifact {
             driver_name: "pl011-spec-slice".to_string(),
             compatible: vec!["arm,pl011".to_string()],
             device_class: "serial".to_string(),
+            bus: Some("amba".to_string()),
         }),
         register_access: Some(RawRegisterAccessSurface {
             register_blocks: vec![RawRegisterBlockDecl {
@@ -117,6 +118,131 @@ fn sample_artifact() -> RawFrontendArtifact {
         timed_delay: None,
         logging: None,
         pm_gate: None,
+        bodies: None,
+    }
+}
+
+fn sample_body_surface() -> RawBodySurface {
+    RawBodySurface {
+        functions: vec![
+            RawExtractedFn {
+                name: "init".to_string(),
+                kind: RawFnKind::Callback {
+                    trait_name: "Lifecycle".to_string(),
+                    method_name: "init".to_string(),
+                },
+                receiver: "ref_mut".to_string(),
+                params: vec![],
+                return_type: Some("Result<(), RegseqError>".to_string()),
+                body: RawBodyExpr::Block {
+                    stmts: vec![RawBodyStmt::Semi {
+                        expr: RawBodyExpr::MethodCall {
+                            receiver: Box::new(RawBodyExpr::Path {
+                                path: "self".to_string(),
+                            }),
+                            method: "disable_uart".to_string(),
+                            type_args: vec![],
+                            args: vec![],
+                        },
+                    }],
+                    expr: Some(Box::new(RawBodyExpr::Call {
+                        path: "Ok".to_string(),
+                        type_args: vec![],
+                        args: vec![RawBodyExpr::Tuple { elements: vec![] }],
+                    })),
+                },
+            },
+            RawExtractedFn {
+                name: "disable_uart".to_string(),
+                kind: RawFnKind::Helper,
+                receiver: "ref_mut".to_string(),
+                params: vec![],
+                return_type: None,
+                body: RawBodyExpr::Block {
+                    stmts: vec![RawBodyStmt::Semi {
+                        expr: RawBodyExpr::MethodCall {
+                            receiver: Box::new(RawBodyExpr::Field {
+                                base: Box::new(RawBodyExpr::Field {
+                                    base: Box::new(RawBodyExpr::Path {
+                                        path: "self".to_string(),
+                                    }),
+                                    name: "regs".to_string(),
+                                }),
+                                name: "cr".to_string(),
+                            }),
+                            method: "write".to_string(),
+                            type_args: vec![],
+                            args: vec![RawBodyExpr::Binary {
+                                op: "+".to_string(),
+                                lhs: Box::new(RawBodyExpr::Path {
+                                    path: "CR_REG::UARTEN::DISABLED".to_string(),
+                                }),
+                                rhs: Box::new(RawBodyExpr::Path {
+                                    path: "CR_REG::TXE::DISABLED".to_string(),
+                                }),
+                            }],
+                        },
+                    }],
+                    expr: None,
+                },
+            },
+            RawExtractedFn {
+                name: "handle_irq".to_string(),
+                kind: RawFnKind::Isr,
+                receiver: "ref_mut".to_string(),
+                params: vec![],
+                return_type: Some("IrqResult".to_string()),
+                body: RawBodyExpr::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(RawBodyExpr::Path {
+                        path: "IrqResult::NotHandled".to_string(),
+                    })),
+                },
+            },
+            RawExtractedFn {
+                name: "field_val".to_string(),
+                kind: RawFnKind::FreeFunction,
+                receiver: "none".to_string(),
+                params: vec![
+                    RawFnParam {
+                        name: "field".to_string(),
+                        ty: "Field<u32, R>".to_string(),
+                    },
+                    RawFnParam {
+                        name: "raw".to_string(),
+                        ty: "u32".to_string(),
+                    },
+                ],
+                return_type: Some("FieldValue<u32, R>".to_string()),
+                body: RawBodyExpr::Block {
+                    stmts: vec![],
+                    expr: Some(Box::new(RawBodyExpr::Call {
+                        path: "FieldValue::new".to_string(),
+                        type_args: vec![],
+                        args: vec![
+                            RawBodyExpr::Field {
+                                base: Box::new(RawBodyExpr::Path {
+                                    path: "field".to_string(),
+                                }),
+                                name: "mask".to_string(),
+                            },
+                            RawBodyExpr::Binary {
+                                op: "<<".to_string(),
+                                lhs: Box::new(RawBodyExpr::Path {
+                                    path: "raw".to_string(),
+                                }),
+                                rhs: Box::new(RawBodyExpr::Field {
+                                    base: Box::new(RawBodyExpr::Path {
+                                        path: "field".to_string(),
+                                    }),
+                                    name: "shift".to_string(),
+                                }),
+                            },
+                        ],
+                    })),
+                },
+            },
+        ],
     }
 }
 
@@ -145,6 +271,46 @@ fn raw_artifact_preserves_driver_identity() {
     assert_eq!(id.driver_name, "pl011-spec-slice");
     assert_eq!(id.compatible, vec!["arm,pl011"]);
     assert_eq!(id.device_class, "serial");
+    assert_eq!(id.bus.as_deref(), Some("amba"));
+}
+
+#[test]
+fn raw_artifact_bus_field_in_json() {
+    let artifact = sample_artifact();
+    let json = serde_json::to_string_pretty(&artifact).expect("serialize");
+    assert!(json.contains("\"bus\": \"amba\""));
+}
+
+#[test]
+fn raw_artifact_identity_without_bus_omits_field() {
+    let artifact = RawFrontendArtifact {
+        driver_name: "no-bus-driver".to_string(),
+        target_os: "linux".to_string(),
+        identity: Some(RawDriverIdentity {
+            driver_name: "no-bus-driver".to_string(),
+            compatible: vec!["vendor,dev".to_string()],
+            device_class: "serial".to_string(),
+            bus: None,
+        }),
+        register_access: None,
+        trait_callbacks: None,
+        firmware_properties: None,
+        clock: None,
+        reset: None,
+        pinctrl: None,
+        interrupts: None,
+        synchronization: None,
+        timed_delay: None,
+        logging: None,
+        pm_gate: None,
+        bodies: None,
+    };
+
+    let json = serde_json::to_string_pretty(&artifact).expect("serialize");
+    assert!(!json.contains("\"bus\""));
+
+    let decoded: RawFrontendArtifact = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(decoded.identity.as_ref().unwrap().bus, None);
 }
 
 #[test]
@@ -242,6 +408,7 @@ fn raw_artifact_empty_family_serializes_cleanly() {
         timed_delay: None,
         logging: None,
         pm_gate: None,
+        bodies: None,
     };
 
     let json = serde_json::to_string(&artifact).expect("serialize");
@@ -278,4 +445,137 @@ fn emit_raw_artifact_to_temp_dir() {
     assert_eq!(decoded, artifact);
 
     let _ = std::fs::remove_dir_all(&tmp);
+}
+
+// ---------------------------------------------------------------------------
+// Body surface tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn raw_artifact_body_surface_round_trips() {
+    let body = sample_body_surface();
+    let json = serde_json::to_string_pretty(&body).expect("serialize");
+    let decoded: RawBodySurface = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(body, decoded);
+}
+
+#[test]
+fn raw_artifact_body_captures_callback() {
+    let body = sample_body_surface();
+    let init_fn = body.functions.iter().find(|f| f.name == "init").unwrap();
+    assert!(matches!(
+        &init_fn.kind,
+        RawFnKind::Callback {
+            trait_name,
+            method_name,
+        } if trait_name == "Lifecycle" && method_name == "init"
+    ));
+    assert_eq!(init_fn.receiver, "ref_mut");
+}
+
+#[test]
+fn raw_artifact_body_captures_helper() {
+    let body = sample_body_surface();
+    let helper = body
+        .functions
+        .iter()
+        .find(|f| f.name == "disable_uart")
+        .unwrap();
+    assert!(matches!(&helper.kind, RawFnKind::Helper));
+    assert_eq!(helper.receiver, "ref_mut");
+}
+
+#[test]
+fn raw_artifact_body_captures_isr() {
+    let body = sample_body_surface();
+    let isr = body
+        .functions
+        .iter()
+        .find(|f| f.name == "handle_irq")
+        .unwrap();
+    assert!(matches!(&isr.kind, RawFnKind::Isr));
+    assert!(isr.return_type.as_deref() == Some("IrqResult"));
+}
+
+#[test]
+fn raw_artifact_body_captures_free_function() {
+    let body = sample_body_surface();
+    let free_fn = body
+        .functions
+        .iter()
+        .find(|f| f.name == "field_val")
+        .unwrap();
+    assert!(matches!(&free_fn.kind, RawFnKind::FreeFunction));
+    assert_eq!(free_fn.receiver, "none");
+    assert_eq!(free_fn.params.len(), 2);
+    assert_eq!(free_fn.params[0].name, "field");
+    assert_eq!(free_fn.params[1].name, "raw");
+}
+
+#[test]
+fn raw_artifact_body_preserves_nested_exprs() {
+    let body = sample_body_surface();
+    let helper = body
+        .functions
+        .iter()
+        .find(|f| f.name == "disable_uart")
+        .unwrap();
+
+    // Body should be a Block with a Semi statement containing a MethodCall on self.regs.cr
+    let RawBodyExpr::Block { stmts, .. } = &helper.body else {
+        panic!("expected Block");
+    };
+    assert_eq!(stmts.len(), 1);
+
+    let RawBodyStmt::Semi { expr } = &stmts[0] else {
+        panic!("expected Semi");
+    };
+    let RawBodyExpr::MethodCall {
+        receiver, method, ..
+    } = expr
+    else {
+        panic!("expected MethodCall");
+    };
+    assert_eq!(method, "write");
+
+    // Receiver should be self.regs.cr (Field > Field > Path)
+    let RawBodyExpr::Field { base, name } = receiver.as_ref() else {
+        panic!("expected Field");
+    };
+    assert_eq!(name, "cr");
+    let RawBodyExpr::Field { base: inner, name } = base.as_ref() else {
+        panic!("expected inner Field");
+    };
+    assert_eq!(name, "regs");
+    assert!(matches!(inner.as_ref(), RawBodyExpr::Path { path } if path == "self"));
+}
+
+#[test]
+fn raw_artifact_body_unsupported_preserved() {
+    let unsupported = RawBodyExpr::Unsupported {
+        hir_kind: "Yield".to_string(),
+        span_text: Some("yield value".to_string()),
+    };
+    let json = serde_json::to_string_pretty(&unsupported).expect("serialize");
+    let decoded: RawBodyExpr = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(unsupported, decoded);
+    assert!(json.contains("\"hir_kind\": \"Yield\""));
+    assert!(json.contains("\"span_text\": \"yield value\""));
+}
+
+#[test]
+fn raw_artifact_absent_bodies_is_none() {
+    let artifact = sample_artifact();
+    assert!(artifact.bodies.is_none());
+}
+
+#[test]
+fn raw_artifact_with_bodies_round_trips() {
+    let mut artifact = sample_artifact();
+    artifact.bodies = Some(sample_body_surface());
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let decoded: RawFrontendArtifact = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(artifact, decoded);
+    assert!(decoded.bodies.is_some());
+    assert_eq!(decoded.bodies.as_ref().unwrap().functions.len(), 4);
 }

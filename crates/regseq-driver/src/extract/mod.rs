@@ -1,3 +1,5 @@
+#[allow(dead_code)]
+pub(crate) mod body;
 pub(crate) mod callback_context;
 #[allow(dead_code)]
 pub(crate) mod clock;
