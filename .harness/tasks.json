@@ -1108,7 +1108,7 @@
           "id": "track-a-validation-10",
           "name": "PL011 full-spec lowering completeness and backend-independence proof",
           "spec": ".harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-04"
           ],
