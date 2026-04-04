@@ -9,12 +9,13 @@ use regseq_analysis::AnalysisInput;
 use regseq_model::declaration::callbacks::CallbackFamily;
 
 use super::plan::{
-    AcquisitionStep, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry, CallbackInventory,
-    ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity, DriverLoweringPlan,
-    InterruptObligation, LockScopeObligation, LoweringAction, MmioObligation, PinCtrlObligation,
-    PollObligation, PropertyObligation, RegisterAccessObligation, RegisterBlockObligation,
-    RegisterObligations, ResetObligation, ResourceKind, ResourceObligations, ResourcePolicy,
-    SyncFieldObligation, SynchronizationObligations, TeardownStep,
+    AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry,
+    CallbackInventory, ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity,
+    DriverLoweringPlan, InterruptObligation, LockScopeObligation, LoweringAction, MmioObligation,
+    PinCtrlObligation, PollObligation, PropertyObligation, RegisterAccessObligation,
+    RegisterBlockObligation, RegisterDescriptorInfo, RegisterObligations, ResetObligation,
+    ResourceKind, ResourceObligations, ResourcePolicy, SyncFieldObligation,
+    SynchronizationObligations, TeardownStep,
 };
 
 /// Errors that can occur during portable lowering plan construction.
@@ -390,6 +391,7 @@ fn build_register_obligations(input: &AnalysisInput) -> RegisterObligations {
         .map(|b| RegisterBlockObligation {
             name: b.name.clone(),
             field_count: b.fields.len(),
+            field_names: b.fields.iter().map(|f| f.name.clone()).collect(),
             provenance: b.provenance.clone(),
         })
         .collect();
@@ -413,10 +415,28 @@ fn build_register_obligations(input: &AnalysisInput) -> RegisterObligations {
         })
         .collect();
 
+    let descriptors = input
+        .register_descriptors()
+        .iter()
+        .map(|d| RegisterDescriptorInfo {
+            register_name: d.register_module.clone(),
+            bit_fields: d
+                .fields
+                .iter()
+                .map(|f| BitFieldInfo {
+                    name: f.field_name.clone(),
+                    offset: f.offset,
+                    width: f.width,
+                })
+                .collect(),
+        })
+        .collect();
+
     RegisterObligations {
         blocks,
         access_sites,
         poll_sites,
+        descriptors,
     }
 }
 

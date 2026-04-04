@@ -884,7 +884,7 @@
           "id": "regseq-linux-backend-02",
           "name": "PL011 Linux driver emission for supported slice",
           "spec": ".harness/tasks/regseq-linux-backend/02-pl011-linux-driver-emission-for-supported-slice.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-linux-backend-01"
           ],

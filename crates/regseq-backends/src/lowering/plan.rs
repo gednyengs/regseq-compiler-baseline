@@ -320,6 +320,8 @@ pub struct RegisterObligations {
     pub access_sites: Vec<RegisterAccessObligation>,
     /// Poll sites across all callbacks.
     pub poll_sites: Vec<PollObligation>,
+    /// Register descriptor bitfield definitions.
+    pub descriptors: Vec<RegisterDescriptorInfo>,
 }
 
 /// A register block the driver declares and uses.
@@ -329,8 +331,30 @@ pub struct RegisterBlockObligation {
     pub name: String,
     /// Register field count in this block.
     pub field_count: usize,
+    /// Individual register field names in declared order.
+    pub field_names: Vec<String>,
     /// Provenance.
     pub provenance: Provenance,
+}
+
+/// Bitfield descriptor for a single register module.
+#[derive(Debug, Clone)]
+pub struct RegisterDescriptorInfo {
+    /// Register module name (e.g. "DR_REG", "FR_REG").
+    pub register_name: String,
+    /// Bitfield definitions within this register.
+    pub bit_fields: Vec<BitFieldInfo>,
+}
+
+/// A single bitfield within a register descriptor.
+#[derive(Debug, Clone)]
+pub struct BitFieldInfo {
+    /// Field name (e.g. "DATA", "TXFF").
+    pub name: String,
+    /// Bit offset within the register.
+    pub offset: u32,
+    /// Width in bits.
+    pub width: u32,
 }
 
 /// A register access site that needs lowering.

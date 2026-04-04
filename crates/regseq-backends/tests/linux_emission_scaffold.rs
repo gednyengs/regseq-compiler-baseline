@@ -439,8 +439,8 @@ fn module_integration_contains_amba_registration() {
         "should use amba_driver for PL011"
     );
     assert!(
-        content.contains("module_amba_driver"),
-        "should use module_amba_driver macro"
+        content.contains("amba_driver_register"),
+        "should use amba_driver_register for serial + AMBA"
     );
     assert!(
         content.contains("MODULE_LICENSE"),
@@ -514,7 +514,7 @@ fn register_header_has_block_reference() {
         .expect("register helpers");
     let content = std::fs::read_to_string(&regs.path).expect("read");
 
-    assert!(content.contains("Pl011Registers"));
+    assert!(content.contains("PL011_DR"), "register offset defines");
     assert!(content.contains("#ifndef"), "include guard");
 }
 
@@ -594,4 +594,157 @@ fn module_integration_uses_correct_includes_for_amba() {
     assert!(content.contains("#include <linux/serial_core.h>"));
     assert!(content.contains("#include <linux/module.h>"));
     assert!(!content.contains("platform_device.h"));
+}
+
+// ---- New tests for real emission content ----
+
+#[test]
+fn module_has_uart_ops_definition() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    assert!(content.contains("struct uart_ops"), "uart_ops struct");
+    assert!(content.contains("tx_empty"), "tx_empty op");
+    assert!(content.contains("start_tx"), "start_tx op");
+    assert!(content.contains("stop_tx"), "stop_tx op");
+    assert!(content.contains("startup"), "startup op");
+    assert!(content.contains("shutdown"), "shutdown op");
+    assert!(content.contains("set_termios"), "set_termios op");
+}
+
+#[test]
+fn module_has_uart_driver_definition() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    assert!(content.contains("struct uart_driver"), "uart_driver struct");
+    assert!(
+        content.contains("uart_register_driver"),
+        "uart registration"
+    );
+    assert!(content.contains("uart_unregister_driver"), "uart cleanup");
+}
+
+#[test]
+fn module_has_isr_handler() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    assert!(content.contains("irqreturn_t"), "ISR return type");
+    assert!(content.contains("irq_handler"), "ISR function");
+    assert!(content.contains("IRQ_HANDLED"), "IRQ_HANDLED");
+    assert!(content.contains("IRQ_NONE"), "IRQ_NONE");
+    assert!(content.contains("PL011_MIS"), "reads MIS register");
+}
+
+#[test]
+fn module_has_register_accessors() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    assert!(content.contains("readl("), "readl call");
+    assert!(content.contains("writel("), "writel call");
+    assert!(content.contains("reg_read"), "read accessor");
+    assert!(content.contains("reg_write"), "write accessor");
+    assert!(content.contains("reg_modify"), "modify accessor");
+}
+
+#[test]
+fn register_header_has_pl011_offsets() {
+    let (_dir, set) = emit_to_tempdir();
+    let regs = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::RegisterHelpers)
+        .expect("register helpers");
+    let content = std::fs::read_to_string(&regs.path).expect("read");
+
+    assert!(content.contains("PL011_DR"), "DR offset");
+    assert!(content.contains("PL011_FR"), "FR offset");
+    assert!(content.contains("PL011_CR"), "CR offset");
+    assert!(content.contains("PL011_IMSC"), "IMSC offset");
+    assert!(content.contains("PL011_MIS"), "MIS offset");
+    assert!(content.contains("PL011_ICR"), "ICR offset");
+    assert!(content.contains("0x000"), "DR at offset 0");
+    assert!(content.contains("0x018"), "FR at offset 0x018");
+}
+
+#[test]
+fn register_header_has_convenience_defines() {
+    let (_dir, set) = emit_to_tempdir();
+    let regs = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::RegisterHelpers)
+        .expect("register helpers");
+    let content = std::fs::read_to_string(&regs.path).expect("read");
+
+    assert!(content.contains("PL011_LCRH_WLEN_8"), "word length 8");
+    assert!(content.contains("PL011_LCRH_FEN"), "FIFO enable");
+    assert!(content.contains("PL011_CR_UARTEN"), "UART enable");
+    assert!(content.contains("PL011_CR_TXE"), "TX enable");
+    assert!(content.contains("PL011_CR_RXE"), "RX enable");
+}
+
+#[test]
+fn shared_header_has_property_fields() {
+    let (_dir, set) = emit_to_tempdir();
+    let header = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::SharedHeader)
+        .expect("shared header");
+    let content = std::fs::read_to_string(&header.path).expect("read");
+
+    assert!(content.contains("current_speed"), "property field");
+}
+
+#[test]
+fn module_has_module_init_exit() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    assert!(content.contains("module_init("), "module_init");
+    assert!(content.contains("module_exit("), "module_exit");
+}
+
+#[test]
+fn probe_has_real_api_calls() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    assert!(content.contains("devm_kzalloc("), "allocates driver data");
+    assert!(content.contains("IS_ERR("), "error checking");
+    assert!(content.contains("PTR_ERR("), "error propagation");
+    assert!(content.contains("amba_set_drvdata("), "sets driver data");
 }
