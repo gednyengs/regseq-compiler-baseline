@@ -214,8 +214,9 @@ fn pl011_binding() -> BindingModel {
 }
 
 fn make_input(decl: DeclarationModel, binding: BindingModel) -> AnalysisInput {
+    let bus_binding = binding.bus.clone();
     let joined = perform_join(&decl, &binding).expect("join should succeed");
-    AnalysisInput::new(decl, joined)
+    AnalysisInput::new(decl, joined, bus_binding)
 }
 
 // ---- Test 1: baseline PL011 readiness succeeds ----
@@ -473,4 +474,113 @@ fn network_device_class_does_not_require_serial() {
         .errors()
         .iter()
         .any(|f| f.category == "callback_integrity" && f.message.contains("serial")));
+}
+
+// ---- Bus consistency checks ----
+
+#[test]
+fn bus_mismatch_reported_as_error() {
+    use regseq_model::binding::BusBinding;
+    use regseq_model::declaration::driver::BusType;
+
+    let decl = pl011_decl(); // bus = Some(Amba)
+    let binding = pl011_binding();
+    let bus = BusBinding {
+        bus_type: BusType::Pci,
+        amba_id: None,
+        revision: None,
+        provenance: BindingProvenance::new("bus"),
+    };
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    let input = AnalysisInput::new(decl, joined, Some(bus));
+    let report = check_readiness(&input);
+
+    let bus_errors: Vec<_> = report
+        .errors()
+        .into_iter()
+        .filter(|f| f.category == "bus_consistency")
+        .collect();
+    assert_eq!(bus_errors.len(), 1);
+    assert!(bus_errors[0].message.contains("amba"));
+    assert!(bus_errors[0].message.contains("pci"));
+}
+
+#[test]
+fn bus_consistent_reported_as_info() {
+    use regseq_model::binding::BusBinding;
+    use regseq_model::declaration::driver::BusType;
+
+    let decl = pl011_decl(); // bus = Some(Amba)
+    let binding = pl011_binding();
+    let bus = BusBinding {
+        bus_type: BusType::Amba,
+        amba_id: Some(0x00041011),
+        revision: Some(3),
+        provenance: BindingProvenance::new("bus"),
+    };
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    let input = AnalysisInput::new(decl, joined, Some(bus));
+    let report = check_readiness(&input);
+
+    let bus_infos: Vec<_> = report
+        .infos()
+        .into_iter()
+        .filter(|f| f.category == "bus_consistency")
+        .collect();
+    assert!(
+        bus_infos
+            .iter()
+            .any(|f| f.message.contains("amba") && f.message.contains("consistent")),
+        "expected info about bus consistency, got: {bus_infos:?}"
+    );
+}
+
+#[test]
+fn missing_layer2_bus_with_layer1_bus_reported_as_caution() {
+    let decl = pl011_decl(); // bus = Some(Amba)
+    let binding = pl011_binding(); // bus = None
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    let input = AnalysisInput::new(decl, joined, None);
+    let report = check_readiness(&input);
+
+    let bus_cautions: Vec<_> = report
+        .cautions()
+        .into_iter()
+        .filter(|f| f.category == "bus_consistency")
+        .collect();
+    assert!(
+        bus_cautions
+            .iter()
+            .any(|f| f.message.contains("no [bus] section")),
+        "expected caution about missing Layer 2 bus, got: {bus_cautions:?}"
+    );
+}
+
+#[test]
+fn amba_without_amba_id_reported_as_caution() {
+    use regseq_model::binding::BusBinding;
+    use regseq_model::declaration::driver::BusType;
+
+    let decl = pl011_decl(); // bus = Some(Amba)
+    let binding = pl011_binding();
+    let bus = BusBinding {
+        bus_type: BusType::Amba,
+        amba_id: None,
+        revision: None,
+        provenance: BindingProvenance::new("bus"),
+    };
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    let input = AnalysisInput::new(decl, joined, Some(bus));
+    let report = check_readiness(&input);
+
+    let amba_cautions: Vec<_> = report
+        .cautions()
+        .into_iter()
+        .filter(|f| f.category == "bus_consistency" && f.message.contains("amba_id"))
+        .collect();
+    assert_eq!(
+        amba_cautions.len(),
+        1,
+        "expected caution about missing amba_id"
+    );
 }

@@ -13,7 +13,9 @@
 
 use std::collections::BTreeSet;
 
+use regseq_model::binding::BusBinding;
 use regseq_model::declaration::callbacks::{CallbackDeclSet, CallbackFamily, CallbackImplDecl};
+use regseq_model::declaration::driver::BusType;
 use regseq_model::declaration::operations::{
     DurationCtorSiteDecl, LogCallSiteDecl, LoggingDeclSet, PmGateDecl, PmGateDeclSet,
     TimedDelayCallSiteDecl, TimedDelayDeclSet,
@@ -43,12 +45,22 @@ use regseq_model::joined::{
 pub struct AnalysisInput {
     decl: DeclarationModel,
     joined: JoinedArtifact,
+    bus_binding: Option<BusBinding>,
 }
 
 impl AnalysisInput {
-    /// Create a new analysis input from a declaration model and its joined artifact.
-    pub fn new(decl: DeclarationModel, joined: JoinedArtifact) -> Self {
-        Self { decl, joined }
+    /// Create a new analysis input from a declaration model, its joined artifact,
+    /// and an optional Layer 2 bus binding.
+    pub fn new(
+        decl: DeclarationModel,
+        joined: JoinedArtifact,
+        bus_binding: Option<BusBinding>,
+    ) -> Self {
+        Self {
+            decl,
+            joined,
+            bus_binding,
+        }
     }
 
     /// Borrow the underlying declaration model.
@@ -59,6 +71,20 @@ impl AnalysisInput {
     /// Borrow the underlying joined artifact.
     pub fn joined(&self) -> &JoinedArtifact {
         &self.joined
+    }
+
+    // ----------------------------------------------------------------
+    // Bus identity and metadata
+    // ----------------------------------------------------------------
+
+    /// Return the Layer 1 authored bus identity, if declared.
+    pub fn bus_identity(&self) -> Option<&BusType> {
+        self.decl.driver.bus.as_ref()
+    }
+
+    /// Return the Layer 2 normalized bus binding, if present.
+    pub fn bus_binding(&self) -> Option<&BusBinding> {
+        self.bus_binding.as_ref()
     }
 
     // ----------------------------------------------------------------

@@ -42,6 +42,11 @@ os = "linux"
 board = "raspberry-pi-4"
 arch = "aarch64"
 
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+
 [properties]
 reg-io-width = 4
 current-speed = 115200
@@ -76,8 +81,9 @@ fn load_pl011_binding() -> binding::BindingModel {
 fn make_pl011_analysis_input() -> AnalysisInput {
     let decl = load_pl011_decl();
     let binding = load_pl011_binding();
+    let bus_binding = binding.bus.clone();
     let joined = perform_join(&decl, &binding).expect("join should succeed");
-    AnalysisInput::new(decl, joined)
+    AnalysisInput::new(decl, joined, bus_binding)
 }
 
 // ---------------------------------------------------------------------------
@@ -392,4 +398,65 @@ fn pl011_readiness_report_snapshot() {
     assert!(snapshot.contains("serial"));
     assert!(snapshot.contains("properties"));
     assert!(snapshot.contains("mmio"));
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: PL011 bus identity and metadata visible through analysis
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pl011_bus_identity_is_amba() {
+    let input = make_pl011_analysis_input();
+    let bus = input
+        .bus_identity()
+        .expect("PL011 should have bus identity");
+    assert_eq!(
+        *bus,
+        regseq_model::declaration::driver::BusType::Amba,
+        "PL011 bus should be amba"
+    );
+}
+
+#[test]
+fn pl011_bus_binding_carries_amba_metadata() {
+    let input = make_pl011_analysis_input();
+    let bb = input
+        .bus_binding()
+        .expect("PL011 should have bus binding from enriched TOML");
+    assert_eq!(
+        bb.bus_type,
+        regseq_model::declaration::driver::BusType::Amba
+    );
+    assert_eq!(bb.amba_id, Some(0x00041011));
+    assert_eq!(bb.revision, Some(3));
+}
+
+#[test]
+fn pl011_bus_consistency_in_readiness() {
+    let input = make_pl011_analysis_input();
+    let report = check_readiness(&input);
+
+    // With matching Layer 1 (amba) and Layer 2 (amba), expect no bus errors.
+    let bus_errors: Vec<_> = report
+        .errors()
+        .into_iter()
+        .filter(|f| f.category == "bus_consistency")
+        .collect();
+    assert!(
+        bus_errors.is_empty(),
+        "PL011 bus should be consistent, got errors: {bus_errors:?}"
+    );
+
+    // Should have an info finding about bus consistency.
+    let bus_infos: Vec<_> = report
+        .infos()
+        .into_iter()
+        .filter(|f| f.category == "bus_consistency")
+        .collect();
+    assert!(
+        bus_infos
+            .iter()
+            .any(|f| f.message.contains("amba") && f.message.contains("consistent")),
+        "expected bus consistency info, got: {bus_infos:?}"
+    );
 }

@@ -304,8 +304,9 @@ fn pl011_binding() -> BindingModel {
 fn make_analysis_input() -> AnalysisInput {
     let decl = pl011_decl();
     let binding = pl011_binding();
+    let bus_binding = binding.bus.clone();
     let joined = perform_join(&decl, &binding).expect("join should succeed");
-    AnalysisInput::new(decl, joined)
+    AnalysisInput::new(decl, joined, bus_binding)
 }
 
 fn make_portable_plan() -> DriverLoweringPlan {

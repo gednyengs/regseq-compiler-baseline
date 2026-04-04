@@ -303,7 +303,7 @@ fn make_analysis_input() -> AnalysisInput {
     let decl = rich_pl011_decl();
     let binding = pl011_binding();
     let joined = perform_join(&decl, &binding).expect("join should succeed");
-    AnalysisInput::new(decl, joined)
+    AnalysisInput::new(decl, joined, None)
 }
 
 // ---- Test 1: bootstrap wrapping ----
@@ -401,7 +401,7 @@ fn partial_join_outcomes_queryable() {
     // baud_rate has a binding: joined
     let binding = pl011_binding();
     let joined = perform_join(&decl, &binding).unwrap();
-    let input = AnalysisInput::new(decl, joined);
+    let input = AnalysisInput::new(decl, joined, None);
 
     let summary = input.property_join_summary();
     assert_eq!(summary.joined_complete, 1);
@@ -418,7 +418,7 @@ fn incomplete_binding_outcomes_queryable() {
     binding.interrupts[0].shared = None;
 
     let joined = perform_join(&decl, &binding).unwrap();
-    let input = AnalysisInput::new(decl, joined);
+    let input = AnalysisInput::new(decl, joined, None);
 
     let summary = input.interrupt_join_summary();
     assert!(summary.has_incomplete());
@@ -431,7 +431,7 @@ fn unmatched_facts_remain_queryable() {
     let decl = rich_pl011_decl();
     let binding = pl011_binding();
     let joined = perform_join(&decl, &binding).unwrap();
-    let input = AnalysisInput::new(decl, joined);
+    let input = AnalysisInput::new(decl, joined, None);
 
     // Binding-only: no "fifo_depth" in this fixture, but hw_flow_control is decl-only.
     assert_eq!(input.joined().properties_decl_only.len(), 1);
@@ -646,4 +646,45 @@ fn full_set_accessors_delegate_correctly() {
     assert_eq!(input.properties().fields.len(), 2);
     assert_eq!(input.callbacks().lifecycle_impls.len(), 1);
     assert_eq!(input.resources().mmio.len(), 1);
+}
+
+// ---- Bus identity and metadata exposure ----
+
+#[test]
+fn bus_identity_exposed_from_declaration() {
+    let input = make_analysis_input();
+    // The rich PL011 decl has bus = Some(BusType::Amba).
+    let bus = input
+        .bus_identity()
+        .expect("bus identity should be present");
+    assert_eq!(*bus, regseq_model::declaration::driver::BusType::Amba);
+}
+
+#[test]
+fn bus_binding_exposed_when_provided() {
+    use regseq_model::binding::BindingProvenance;
+    use regseq_model::binding::BusBinding;
+    use regseq_model::declaration::driver::BusType;
+
+    let decl = rich_pl011_decl();
+    let binding = pl011_binding();
+    let bus = BusBinding {
+        bus_type: BusType::Amba,
+        amba_id: Some(0x00041011),
+        revision: Some(3),
+        provenance: BindingProvenance::new("bus"),
+    };
+    let joined = perform_join(&decl, &binding).unwrap();
+    let input = AnalysisInput::new(decl, joined, Some(bus));
+
+    let bb = input.bus_binding().expect("bus binding should be present");
+    assert_eq!(bb.bus_type, BusType::Amba);
+    assert_eq!(bb.amba_id, Some(0x00041011));
+    assert_eq!(bb.revision, Some(3));
+}
+
+#[test]
+fn bus_binding_is_none_when_not_provided() {
+    let input = make_analysis_input();
+    assert!(input.bus_binding().is_none());
 }

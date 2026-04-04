@@ -14,7 +14,7 @@ use std::collections::BTreeSet;
 
 use crate::input::{AnalysisInput, ResourceJoinSummary};
 use regseq_model::declaration::callbacks::CallbackFamily;
-use regseq_model::declaration::driver::DeviceClass;
+use regseq_model::declaration::driver::{BusType, DeviceClass};
 use regseq_model::declaration::properties::PropertyLintDecl;
 
 /// Expected callback families per device class.
@@ -128,6 +128,7 @@ pub fn check_readiness(input: &AnalysisInput) -> ReadinessReport {
     check_resource_join_completeness(input, &mut findings);
     check_interrupt_authority(input, &mut findings);
     check_resource_optionality(input, &mut findings);
+    check_bus_consistency(input, &mut findings);
 
     findings.sort();
 
@@ -334,6 +335,89 @@ fn check_resource_optionality(input: &AnalysisInput, findings: &mut Vec<Readines
                     ),
                 });
             }
+        }
+    }
+}
+
+/// Check bus identity and metadata consistency.
+fn check_bus_consistency(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
+    let decl_bus = input.bus_identity();
+    let binding_bus = input.bus_binding();
+
+    match (decl_bus, binding_bus) {
+        (Some(l1), Some(l2)) => {
+            // Both layers present: check consistency.
+            if *l1 != l2.bus_type {
+                findings.push(ReadinessFinding {
+                    severity: FindingSeverity::Error,
+                    category: "bus_consistency",
+                    message: format!(
+                        "Layer 1 declares bus '{}' but Layer 2 specifies '{}'",
+                        l1.as_str(),
+                        l2.bus_type.as_str(),
+                    ),
+                });
+            } else {
+                findings.push(ReadinessFinding {
+                    severity: FindingSeverity::Info,
+                    category: "bus_consistency",
+                    message: format!(
+                        "bus '{}' consistent across Layer 1 and Layer 2",
+                        l1.as_str(),
+                    ),
+                });
+            }
+
+            // Check required metadata for the bus family.
+            check_bus_required_metadata(&l2.bus_type, l2.amba_id, findings);
+        }
+        (Some(l1), None) => {
+            // Layer 1 declares bus but no Layer 2 bus section.
+            findings.push(ReadinessFinding {
+                severity: FindingSeverity::Caution,
+                category: "bus_consistency",
+                message: format!(
+                    "Layer 1 declares bus '{}' but no [bus] section in Layer 2",
+                    l1.as_str(),
+                ),
+            });
+        }
+        (None, Some(l2)) => {
+            // Layer 2 has bus section but no Layer 1 declaration.
+            findings.push(ReadinessFinding {
+                severity: FindingSeverity::Caution,
+                category: "bus_consistency",
+                message: format!(
+                    "Layer 2 specifies bus '{}' but no bus declared in Layer 1",
+                    l2.bus_type.as_str(),
+                ),
+            });
+        }
+        (None, None) => {
+            // No bus info on either side -- not an error, just info.
+        }
+    }
+}
+
+/// Check that required family-specific bus metadata is present.
+fn check_bus_required_metadata(
+    bus_type: &BusType,
+    amba_id: Option<i64>,
+    findings: &mut Vec<ReadinessFinding>,
+) {
+    match bus_type {
+        BusType::Amba => {
+            if amba_id.is_none() {
+                findings.push(ReadinessFinding {
+                    severity: FindingSeverity::Caution,
+                    category: "bus_consistency",
+                    message: "AMBA bus family present but amba_id is missing in Layer 2".into(),
+                });
+            }
+        }
+        BusType::Pci | BusType::Integrated => {
+            // PCI and integrated families do not have required metadata
+            // in the current accepted baseline.
         }
     }
 }
