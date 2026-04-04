@@ -24,6 +24,7 @@ The unified PL011 spec should include:
 - driver-author decisions that the compiler cannot infer
 - optional capabilities that are real hardware or integration features
   evidenced in at least one corpus driver
+- the portable bus/fabric identity when it is part of the true device identity
 
 The unified PL011 spec should exclude:
 
@@ -128,6 +129,42 @@ Examples:
 - optional modem-control availability
 - optional quirk flags or variant selectors
 
+### B1. Driver identity and bus attachment
+
+For the current unified PL011 target, the authored identity should retain both:
+
+- the concrete firmware-facing compatible identity
+- the portable bus/fabric identity
+
+Recommended authored shape:
+
+```rust
+#[rseq::driver(
+    name = "pl011",
+    compatible = ["arm,pl011"],
+    bus = "amba"
+)]
+```
+
+Interpretation:
+
+- `compatible = ["arm,pl011"]` remains the concrete device identity used by
+  firmware-facing matching paths
+- `bus = "amba"` expresses that PL011 is not merely a generic integrated MMIO
+  UART, but an ARM AMBA / PrimeCell-family device
+
+This is stronger than treating PL011 as a generic `integrated` device because
+the AMBA/PrimeCell identity is materially relevant to:
+
+- stock Linux realization shape
+- AMBA revision / FIFO-depth fallback considerations
+- later benchmarking against the stock `amba-pl011` path
+
+At the same time, the authored Layer 1 spec should not carry deployment-level
+AMBA binding numbers directly. AMBA deployment facts such as peripheral ID or
+revision should live in Layer 2 bus metadata rather than as generic firmware
+properties.
+
 ### C. Optional integration capabilities
 
 Examples:
@@ -150,6 +187,7 @@ Examples:
 - generate synchronization patterns
 - route optional features through the target framework
 - handle compiler-managed startup / teardown sequencing
+- map the portable bus identity into each target OS's native registration model
 
 ## 5. Practical interpretation for the compiler team
 
@@ -161,6 +199,11 @@ The safest design stance is:
   capabilities
 - avoid baking FreeBSD's current omissions into the unified spec as if
   they were hardware limitations
+- treat PL011 as `bus = "amba"` rather than as a merely generic integrated
+  device
+- retain `compatible = ["arm,pl011"]` alongside `bus = "amba"` because bus
+  family and concrete firmware-facing device identity are complementary, not
+  interchangeable
 
 That means the unified spec should be **maximal-but-structured**, not
 minimal and not a naive union.

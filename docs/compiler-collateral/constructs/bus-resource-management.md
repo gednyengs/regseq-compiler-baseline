@@ -2,9 +2,10 @@
 
 ## Purpose
 
-`Bus Resource Management` defines the explicit bus-identity declaration,
-optional PCI BAR declaration, PCI-conditional config-space intrinsics, and the
-compiler-managed bus-resource acquisition steps that other constructs depend on.
+`Bus Resource Management` defines the explicit portable attachment/fabric
+identity declaration, bus-family-specific binding metadata, optional PCI BAR
+declaration, PCI-conditional config-space intrinsics, and the compiler-managed
+bus-resource acquisition steps that other constructs depend on.
 
 This is a declarative and compiler-managed construct. It has no trait or Track
 B surface.
@@ -22,8 +23,10 @@ B surface.
 
 ### Layer 2
 
-This construct has no direct Layer 2 declarations. It is consumed by other
-resource constructs that join through `bus_type` and bus-handle context.
+| Input | Role |
+|---|---|
+| `bus.type` | deployment-side confirmation/refinement of the portable bus family |
+| bus-family-specific metadata | deployment-side identity/binding facts such as AMBA or PCI details |
 
 ### Compiler-managed
 
@@ -45,6 +48,22 @@ Stable bus declaration:
 struct MyDriver { /* ... */ }
 ```
 
+Portable bus taxonomy:
+
+- `integrated`: firmware-described integrated/on-chip device with no stronger
+  bus identity
+- `amba`: ARM AMBA / PrimeCell-family device
+- `pci`: PCI / PCIe enumerated device
+- future families may include `i2c`, `spi`, `usb`, and `virtio`
+
+Accepted taxonomy rules:
+
+- `platform` is not the preferred portable taxonomy term
+- Linux `platform_driver` is an OS-specific realization of portable
+  `integrated`
+- `amba` and `pci` remain portable bus/fabric identities rather than Linux-only
+  registration choices
+
 Stable PCI BAR declaration:
 
 ```rust
@@ -59,6 +78,44 @@ Accepted decisions:
 - `bus_type` is an explicit Layer 1 property, not inferred ambient context
 - `bar_index` is a field-level property consumed by `Register Access`
 - the compiler-internal bus handle is not a separate driver-surface primitive
+- `bus_type` is a portable attachment/fabric identity, not an OS-native driver
+  registration label
+
+### Layer 2 baseline
+
+Layer 2 should provide a dedicated structured bus section rather than forcing
+bus identity details into generic firmware properties.
+
+Representative examples:
+
+```toml
+[bus]
+type = "integrated"
+firmware = "devicetree"
+```
+
+```toml
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+```
+
+```toml
+[bus]
+type = "pci"
+vendor_id = 0x8086
+device_id = 0x100e
+```
+
+Accepted Layer 2 decisions:
+
+- Layer 1 declares the authored portable bus family
+- Layer 2 supplies deployment-side bus metadata for that family
+- bus identity details should not be modeled as ordinary `[properties]` values
+  unless they are genuinely driver-visible runtime properties
+- bus metadata participates in driver-level lowering decisions rather than
+  per-resource joins
 
 ### Intrinsic baseline
 
@@ -95,6 +152,10 @@ Required extraction validations:
 - `set_bus_master` is only emitted when DMA-capable declarations are present
 - `get_resource_handle` remains available even when the driver does not use
   PCI-only operations directly
+- reject unknown `bus_type` values
+- reject Layer 1 / Layer 2 bus-family conflicts when a dedicated Layer 2 bus
+  section is present
+- validate family-specific Layer 2 keys against the selected `bus_type`
 
 ## Lowering Baseline
 
@@ -102,6 +163,8 @@ Lowering ownership:
 
 - config-space intrinsics: backend lowers to target bus APIs
 - bus enable/claim/mastering/bus-handle setup: compiler-generated
+- bus-type-to-OS-registration mapping: backend-owned realization driven by the
+  portable `bus_type` plus Layer 2 deployment facts
 
 ### Generated lifecycle phase table
 
@@ -119,6 +182,12 @@ Accepted lowering notes:
 - PCI-specific generated steps remain conditional on `bus_type`
 - `get_resource_handle` is the accepted home for compiler-internal bus handle
   population
+- Linux realization examples:
+  - `integrated` -> `platform_driver`
+  - `amba` -> `amba_driver`
+  - `pci` -> `pci_driver`
+- other OSes may realize the same portable `bus_type` through different native
+  registration mechanisms
 
 ## Cross-Construct Dependencies
 
@@ -139,10 +208,14 @@ Depends on:
 ## Constraints and Caveats
 
 - Keep `bus_type` explicit in Layer 1.
+- Prefer portable taxonomy terms such as `integrated` over Linux-native labels
+  such as `platform`.
 - Do not reintroduce `bus_device_handle` as a separate driver-surface
   primitive.
 - Keep PCI-only operations structurally conditioned by `bus_type`.
 - Preserve `get_resource_handle` as the source of compiler-internal bus context.
+- Keep bus-family deployment facts in a dedicated Layer 2 bus section rather
+  than overloading generic firmware properties.
 
 ## Representative Examples
 
@@ -154,12 +227,28 @@ struct E1000 {
 }
 ```
 
+```rust
+#[rseq::driver(name = "pl011", compatible = ["arm,pl011"], bus = "amba")]
+struct Pl011 {
+    #[rseq::mmio(id = "uart_regs")]
+    regs: Mmio<Pl011Registers>,
+}
+```
+
 ## Implementation Checklist
 
 - Recognize `bus_type` from `#[rseq::driver(...)]`.
+- Implement the accepted portable bus taxonomy, starting with:
+  - `integrated`
+  - `amba`
+  - `pci`
 - Recognize `bar_index` on BAR-backed MMIO fields.
+- Add normalized Layer 2 bus-section support for family-specific deployment
+  metadata.
 - Lower config-space intrinsics only on valid bus families.
 - Emit `enable_device`, `claim_regions`, `set_bus_master`, and
   `get_resource_handle` at the accepted points.
+- Map portable `bus_type` into OS-native driver-registration mechanisms during
+  backend realization rather than baking Linux terms into the portable model.
 - Preserve compiler-internal bus handle context for downstream resource
   lowering.
