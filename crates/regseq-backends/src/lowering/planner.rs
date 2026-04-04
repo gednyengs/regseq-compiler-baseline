@@ -8,6 +8,7 @@
 use regseq_analysis::AnalysisInput;
 use regseq_model::declaration::callbacks::CallbackFamily;
 
+use super::behavior_planner::build_behavior_plan;
 use super::plan::{
     AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry,
     CallbackInventory, ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity,
@@ -61,6 +62,7 @@ pub fn build_driver_lowering_plan(
     let register_obligations = build_register_obligations(input);
     let synchronization = build_sync_obligations(input);
     let callback_actions = build_callback_actions(input);
+    let behavior = build_behavior_plan(input);
 
     Ok(DriverLoweringPlan {
         identity,
@@ -72,6 +74,7 @@ pub fn build_driver_lowering_plan(
         register_obligations,
         synchronization,
         callback_actions,
+        behavior,
     })
 }
 

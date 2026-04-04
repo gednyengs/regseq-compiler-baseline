@@ -878,7 +878,7 @@
           "id": "regseq-lowering-04",
           "name": "PL011 serial, lifecycle, and ISR behavior lowering",
           "spec": ".harness/tasks/regseq-lowering/04-pl011-serial-lifecycle-and-isr-behavior-lowering.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-03"
           ],

@@ -7,6 +7,7 @@
 use regseq_analysis::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole, LinuxProbeStep};
 use regseq_backends::linux::planner::build_linux_backend_plan;
+use regseq_backends::lowering::behavior::{FunctionRole, ReturnSemantic};
 use regseq_backends::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 use regseq_backends::lowering::planner::build_driver_lowering_plan;
 use regseq_model::binding::{
@@ -1095,5 +1096,390 @@ fn realization_data_is_deterministic() {
     assert_eq!(
         linux1.register_layout.blocks.len(),
         linux2.register_layout.blocks.len()
+    );
+}
+
+// ---- Test 11: behavior plan scoped to individual functions ----
+
+#[test]
+fn behavior_plan_has_per_function_entries() {
+    use regseq_backends::lowering::behavior::FunctionRole;
+
+    let plan = make_portable_plan();
+    let b = &plan.behavior;
+
+    // Should have lifecycle, serial, ISR, and helper functions.
+    assert!(
+        b.functions.len() >= 14,
+        "expected at least 14 function behaviors, got {}",
+        b.functions.len()
+    );
+
+    // Check specific function roles exist.
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::LifecycleInit));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::LifecycleDeinit));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialTxByte));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialRxChar));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialTxReady));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialTxEmpty));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialFlushRxFifo));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialFlushTxFifo));
+    assert!(b
+        .functions
+        .iter()
+        .any(|f| f.role == FunctionRole::SerialSendBreak));
+    assert!(b.functions.iter().any(|f| f.role == FunctionRole::Isr));
+}
+
+#[test]
+fn behavior_functions_are_named() {
+    let plan = make_portable_plan();
+    let b = &plan.behavior;
+
+    let init = b.functions.iter().find(|f| f.name == "init").expect("init");
+    assert_eq!(init.role, FunctionRole::LifecycleInit);
+
+    let tx = b
+        .functions
+        .iter()
+        .find(|f| f.name == "tx_byte")
+        .expect("tx_byte");
+    assert_eq!(tx.role, FunctionRole::SerialTxByte);
+
+    let isr = b
+        .functions
+        .iter()
+        .find(|f| f.name == "handle_irq")
+        .expect("handle_irq");
+    assert_eq!(isr.role, FunctionRole::Isr);
+}
+
+// ---- Test 12: behavior preserves ordering and control flow ----
+
+#[test]
+fn init_behavior_has_ordered_resource_then_programming() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+    let init = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "init")
+        .unwrap();
+
+    // init body: resource ops then CallHelper("program_polling_port") then Return.
+    assert!(
+        init.body.len() >= 3,
+        "init should have resource ops + helper call + return"
+    );
+
+    // Last action should be a Return(Ok).
+    assert!(matches!(
+        init.body.last().unwrap(),
+        BehaviorNode::Return {
+            semantic: ReturnSemantic::Ok
+        }
+    ));
+
+    // Should call program_polling_port helper.
+    assert!(init.body.iter().any(|n| matches!(
+        n,
+        BehaviorNode::CallHelper { callee } if callee == "program_polling_port"
+    )));
+}
+
+#[test]
+fn program_polling_port_has_ordered_sequence() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+    let helper = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "program_polling_port")
+        .unwrap();
+
+    // Should contain an OrderedSequence.
+    let has_ordered = helper
+        .body
+        .iter()
+        .any(|n| matches!(n, BehaviorNode::OrderedSequence { .. }));
+    assert!(
+        has_ordered,
+        "program_polling_port must have an OrderedSequence block"
+    );
+
+    // The ordered sequence should contain baud rate and line control steps.
+    if let Some(BehaviorNode::OrderedSequence { steps }) = helper
+        .body
+        .iter()
+        .find(|n| matches!(n, BehaviorNode::OrderedSequence { .. }))
+    {
+        assert!(
+            steps.len() >= 5,
+            "ordered sequence should have at least 5 steps, got {}",
+            steps.len()
+        );
+    }
+}
+
+#[test]
+fn tx_byte_has_conditional_fast_path() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+    let tx = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "tx_byte")
+        .unwrap();
+
+    // tx_byte body should contain a Branch.
+    assert!(tx
+        .body
+        .iter()
+        .any(|n| matches!(n, BehaviorNode::Branch { .. })));
+}
+
+#[test]
+fn rx_char_has_empty_check_and_error_accumulation() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+    let rx = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "rx_char")
+        .unwrap();
+
+    // rx_char should have a Branch (RXFE check) and RxErrorCheck nodes.
+    assert!(rx
+        .body
+        .iter()
+        .any(|n| matches!(n, BehaviorNode::Branch { .. })));
+    let error_checks: Vec<_> = rx
+        .body
+        .iter()
+        .filter(|n| matches!(n, BehaviorNode::RxErrorCheck { .. }))
+        .collect();
+    assert_eq!(
+        error_checks.len(),
+        4,
+        "should have 4 RX error checks (OE, BE, PE, FE)"
+    );
+}
+
+#[test]
+fn flush_rx_fifo_has_while_loop() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+    let flush = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "flush_rx_fifo")
+        .unwrap();
+
+    assert!(flush
+        .body
+        .iter()
+        .any(|n| matches!(n, BehaviorNode::Loop { .. })));
+}
+
+#[test]
+fn send_break_has_conditional_on_bool_param() {
+    use regseq_backends::lowering::behavior::{BehaviorNode, BranchCondition};
+
+    let plan = make_portable_plan();
+    let brk = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "send_break")
+        .unwrap();
+
+    if let Some(BehaviorNode::Branch { condition, .. }) = brk
+        .body
+        .iter()
+        .find(|n| matches!(n, BehaviorNode::Branch { .. }))
+    {
+        assert!(
+            matches!(condition, BranchCondition::BoolParam { name } if name == "on"),
+            "send_break should branch on a bool param"
+        );
+    } else {
+        panic!("send_break must have a Branch node");
+    }
+}
+
+// ---- Test 13: ISR behavior uses interrupt classes, not hardcoded masks ----
+
+#[test]
+fn isr_behavior_uses_interrupt_class_discrimination() {
+    use regseq_backends::lowering::behavior::{BehaviorNode, BranchCondition};
+
+    let plan = make_portable_plan();
+    let isr = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "handle_irq")
+        .unwrap();
+
+    // ISR should read raw MIS register.
+    assert!(isr.body.iter().any(|n| matches!(
+        n,
+        BehaviorNode::RegReadRaw { register } if register == "mis"
+    )));
+
+    // ISR should branch on interrupt classes, not hardcoded masks.
+    let class_tests: Vec<_> = isr
+        .body
+        .iter()
+        .filter(|n| {
+            matches!(
+                n,
+                BehaviorNode::Branch {
+                    condition: BranchCondition::InterruptClassActive { .. },
+                    ..
+                }
+            )
+        })
+        .collect();
+    assert!(
+        class_tests.len() >= 2,
+        "ISR should have at least RX and TX class branches"
+    );
+
+    // ISR should clear error interrupts using interrupt class.
+    assert!(isr.body.iter().any(|n| matches!(
+        n,
+        BehaviorNode::InterruptClassClear { class_name, .. } if class_name == "error"
+    )));
+}
+
+#[test]
+fn interrupt_classes_carry_authored_mask_values() {
+    let plan = make_portable_plan();
+    let classes = &plan.behavior.interrupt_classes;
+
+    assert!(
+        classes.len() >= 3,
+        "should have rx, tx, error classes at minimum"
+    );
+
+    let rx = classes.iter().find(|c| c.name == "rx").expect("rx class");
+    assert_eq!(rx.mask_value, (1 << 4) | (1 << 6));
+
+    let tx = classes.iter().find(|c| c.name == "tx").expect("tx class");
+    assert_eq!(tx.mask_value, 1 << 5);
+
+    let err = classes
+        .iter()
+        .find(|c| c.name == "error")
+        .expect("error class");
+    assert_eq!(err.mask_value, (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10));
+}
+
+// ---- Test 14: Linux plan consumes behavior without inventing PL011 facts ----
+
+#[test]
+fn linux_behavior_mapping_covers_all_portable_functions() {
+    use regseq_backends::linux::plan::LinuxCallbackGroup;
+
+    let linux = make_linux_plan();
+    let mapping = &linux.behavior_mapping;
+
+    assert_eq!(
+        mapping.portable_function_count,
+        mapping.callback_mappings.len(),
+        "every portable function should have a Linux mapping"
+    );
+
+    // Check specific mappings.
+    let init_map = mapping
+        .callback_mappings
+        .iter()
+        .find(|m| m.portable_function == "init")
+        .expect("init mapping");
+    assert_eq!(init_map.group, LinuxCallbackGroup::ProbeRemove);
+
+    let tx_map = mapping
+        .callback_mappings
+        .iter()
+        .find(|m| m.portable_function == "tx_byte")
+        .expect("tx_byte mapping");
+    assert_eq!(tx_map.group, LinuxCallbackGroup::UartOps);
+
+    let isr_map = mapping
+        .callback_mappings
+        .iter()
+        .find(|m| m.portable_function == "handle_irq")
+        .expect("handle_irq mapping");
+    assert_eq!(isr_map.group, LinuxCallbackGroup::IsrHandler);
+}
+
+#[test]
+fn linux_behavior_mapping_carries_interrupt_class_count() {
+    let linux = make_linux_plan();
+    assert!(
+        linux.behavior_mapping.interrupt_class_count >= 3,
+        "Linux plan should know about interrupt classes from the portable plan"
+    );
+}
+
+// ---- Test 15: behavior plan determinism ----
+
+#[test]
+fn behavior_plan_is_deterministic() {
+    let plan1 = make_portable_plan();
+    let plan2 = make_portable_plan();
+
+    assert_eq!(
+        plan1.behavior.functions.len(),
+        plan2.behavior.functions.len()
+    );
+    for (f1, f2) in plan1
+        .behavior
+        .functions
+        .iter()
+        .zip(plan2.behavior.functions.iter())
+    {
+        assert_eq!(f1.name, f2.name);
+        assert_eq!(f1.role, f2.role);
+        assert_eq!(f1.body.len(), f2.body.len());
+    }
+    assert_eq!(
+        plan1.behavior.interrupt_classes.len(),
+        plan2.behavior.interrupt_classes.len()
     );
 }

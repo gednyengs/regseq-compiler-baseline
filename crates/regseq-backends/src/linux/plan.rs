@@ -37,6 +37,8 @@ pub struct LinuxBackendPlan {
     pub property_realization: Vec<LinuxPropertyRealization>,
     /// Deployment metadata for optional resource families.
     pub deployment_metadata: LinuxDeploymentMetadata,
+    /// Mapping from portable function behaviors to Linux callbacks.
+    pub behavior_mapping: LinuxBehaviorMapping,
 }
 
 // ---------------------------------------------------------------------------
@@ -386,4 +388,46 @@ pub struct LinuxPinCtrlEntry {
     pub required: bool,
     /// Available pin states from the deployment binding.
     pub states: Option<Vec<String>>,
+}
+
+// ---------------------------------------------------------------------------
+// Behavior mapping
+// ---------------------------------------------------------------------------
+
+/// Mapping from portable function behaviors to Linux callbacks.
+///
+/// Tells the emitter which portable function maps to which Linux
+/// callback without the emitter needing device-specific knowledge.
+#[derive(Debug, Clone)]
+pub struct LinuxBehaviorMapping {
+    /// Per-function callback mappings.
+    pub callback_mappings: Vec<LinuxCallbackMapping>,
+    /// Number of functions in the portable behavior plan.
+    pub portable_function_count: usize,
+    /// Number of interrupt classes available from the portable plan.
+    pub interrupt_class_count: usize,
+}
+
+/// Mapping for a single portable function to its Linux callback.
+#[derive(Debug, Clone)]
+pub struct LinuxCallbackMapping {
+    /// Function name from the portable behavior plan.
+    pub portable_function: String,
+    /// Linux callback name for emission.
+    pub linux_callback: String,
+    /// Which Linux callback group this belongs to.
+    pub group: LinuxCallbackGroup,
+}
+
+/// Group of Linux callbacks.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum LinuxCallbackGroup {
+    /// Probe/remove callbacks.
+    ProbeRemove,
+    /// uart_ops callbacks.
+    UartOps,
+    /// ISR handler.
+    IsrHandler,
+    /// Internal helper (not a direct Linux callback).
+    Helper,
 }

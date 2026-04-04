@@ -14,6 +14,8 @@ use regseq_model::declaration::provenance::Provenance;
 use regseq_model::declaration::registers::WrapperMethod;
 use regseq_model::declaration::synchronization::SyncFieldKind;
 
+use super::behavior::BehaviorPlan;
+
 // ---------------------------------------------------------------------------
 // Top-level plan
 // ---------------------------------------------------------------------------
@@ -44,6 +46,12 @@ pub struct DriverLoweringPlan {
     pub synchronization: SynchronizationObligations,
     /// Callback-body lowering actions in a backend-usable structured form.
     pub callback_actions: Vec<CallbackBodyPlan>,
+    /// Structured per-function behavioral plan for emission.
+    ///
+    /// Captures the authored body-level behavior scoped to individual
+    /// functions so that backend emission does not invent device-specific
+    /// callback logic.
+    pub behavior: BehaviorPlan,
 }
 
 // ---------------------------------------------------------------------------

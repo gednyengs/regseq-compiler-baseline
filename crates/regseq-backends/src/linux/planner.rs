@@ -6,15 +6,17 @@
 
 use regseq_model::declaration::driver::DeviceClass;
 
+use crate::lowering::behavior::FunctionRole;
 use crate::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 
 use super::plan::{
-    LinuxAcquisitionEntry, LinuxArtifactLayout, LinuxBackendPlan, LinuxBitFieldEntry,
-    LinuxClockEntry, LinuxDeploymentMetadata, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue,
-    LinuxPinCtrlEntry, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
-    LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
-    LinuxRegistrationShape, LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep,
-    LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization,
+    LinuxAcquisitionEntry, LinuxArtifactLayout, LinuxBackendPlan, LinuxBehaviorMapping,
+    LinuxBitFieldEntry, LinuxCallbackGroup, LinuxCallbackMapping, LinuxClockEntry,
+    LinuxDeploymentMetadata, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue, LinuxPinCtrlEntry,
+    LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization, LinuxRegisterBlock,
+    LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout, LinuxRegistrationShape,
+    LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep, LinuxResetEntry,
+    LinuxResourceSequencing, LinuxSerialCoreRealization,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -44,6 +46,7 @@ pub fn build_linux_backend_plan(
     let register_layout = build_register_layout(plan);
     let property_realization = build_property_realization(plan);
     let deployment_metadata = build_deployment_metadata(plan);
+    let behavior_mapping = build_behavior_mapping(plan);
 
     Ok(LinuxBackendPlan {
         registration,
@@ -55,6 +58,7 @@ pub fn build_linux_backend_plan(
         register_layout,
         property_realization,
         deployment_metadata,
+        behavior_mapping,
     })
 }
 
@@ -262,6 +266,84 @@ fn build_artifact_layout(plan: &DriverLoweringPlan) -> LinuxArtifactLayout {
 
     LinuxArtifactLayout {
         emitted_files: files,
+    }
+}
+
+fn build_behavior_mapping(plan: &DriverLoweringPlan) -> LinuxBehaviorMapping {
+    let snake_name = to_snake_case(&plan.identity.driver_name);
+
+    let callback_mappings = plan
+        .behavior
+        .functions
+        .iter()
+        .map(|f| {
+            let (linux_callback, group) = match f.role {
+                FunctionRole::LifecycleInit => (
+                    format!("{snake_name}_probe"),
+                    LinuxCallbackGroup::ProbeRemove,
+                ),
+                FunctionRole::LifecycleDeinit => (
+                    format!("{snake_name}_remove"),
+                    LinuxCallbackGroup::ProbeRemove,
+                ),
+                FunctionRole::SerialPortOpen => {
+                    (format!("{snake_name}_startup"), LinuxCallbackGroup::UartOps)
+                }
+                FunctionRole::SerialPortClose => (
+                    format!("{snake_name}_shutdown"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialConfigure => (
+                    format!("{snake_name}_set_termios"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialTxByte => (
+                    format!("{snake_name}_start_tx"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialRxChar => (
+                    format!("{snake_name}_rx_chars"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialTxReady => (
+                    format!("{snake_name}_tx_ready"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialTxEmpty => (
+                    format!("{snake_name}_tx_empty"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialFlushRxFifo => (
+                    format!("{snake_name}_flush_buffer"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialFlushTxFifo => (
+                    format!("{snake_name}_flush_buffer"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::SerialSendBreak => (
+                    format!("{snake_name}_break_ctl"),
+                    LinuxCallbackGroup::UartOps,
+                ),
+                FunctionRole::Isr => (
+                    format!("{snake_name}_irq_handler"),
+                    LinuxCallbackGroup::IsrHandler,
+                ),
+                FunctionRole::Helper => (f.name.clone(), LinuxCallbackGroup::Helper),
+            };
+
+            LinuxCallbackMapping {
+                portable_function: f.name.clone(),
+                linux_callback,
+                group,
+            }
+        })
+        .collect();
+
+    LinuxBehaviorMapping {
+        callback_mappings,
+        portable_function_count: plan.behavior.functions.len(),
+        interrupt_class_count: plan.behavior.interrupt_classes.len(),
     }
 }
 
