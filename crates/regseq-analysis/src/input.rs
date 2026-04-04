@@ -14,6 +14,7 @@
 use std::collections::BTreeSet;
 
 use regseq_model::binding::BusBinding;
+use regseq_model::declaration::bodies::{collect_call_targets, BodyDeclSet, FnBodyDecl};
 use regseq_model::declaration::callbacks::{CallbackDeclSet, CallbackFamily, CallbackImplDecl};
 use regseq_model::declaration::driver::BusType;
 use regseq_model::declaration::operations::{
@@ -402,6 +403,80 @@ impl AnalysisInput {
     /// Return all PM gate declarations.
     pub fn pm_gates(&self) -> &[PmGateDecl] {
         self.decl.pm_gates()
+    }
+
+    // ----------------------------------------------------------------
+    // Authored body capture
+    // ----------------------------------------------------------------
+
+    /// Borrow the full body declaration set.
+    pub fn bodies(&self) -> &BodyDeclSet {
+        &self.decl.bodies
+    }
+
+    /// Return all callback function bodies.
+    pub fn callback_bodies(&self) -> Vec<&FnBodyDecl> {
+        self.decl.bodies.callbacks()
+    }
+
+    /// Return all helper function bodies.
+    pub fn helper_bodies(&self) -> Vec<&FnBodyDecl> {
+        self.decl.bodies.helpers()
+    }
+
+    /// Return all ISR function bodies.
+    pub fn isr_bodies(&self) -> Vec<&FnBodyDecl> {
+        self.decl.bodies.isrs()
+    }
+
+    /// Return all free function bodies.
+    pub fn free_function_bodies(&self) -> Vec<&FnBodyDecl> {
+        self.decl.bodies.free_functions()
+    }
+
+    /// Look up a function body by name.
+    pub fn body_by_name(&self, name: &str) -> Option<&FnBodyDecl> {
+        self.decl.bodies.by_name(name)
+    }
+
+    /// Compute the set of helper and free-function names transitively
+    /// reachable from callbacks and ISRs through call edges.
+    pub fn reachable_helper_names(&self) -> BTreeSet<String> {
+        let non_callback_names: BTreeSet<String> = self
+            .decl
+            .bodies
+            .functions
+            .iter()
+            .filter(|f| f.is_helper() || f.is_free_function())
+            .map(|f| f.name.clone())
+            .collect();
+
+        let mut reachable = BTreeSet::new();
+        let mut worklist: Vec<String> = Vec::new();
+
+        // Seed from callbacks and ISRs.
+        for f in &self.decl.bodies.functions {
+            if f.is_callback() || f.is_isr() {
+                for t in collect_call_targets(&f.body) {
+                    if non_callback_names.contains(&t) && reachable.insert(t.clone()) {
+                        worklist.push(t);
+                    }
+                }
+            }
+        }
+
+        // Transitive closure through helpers and free functions.
+        while let Some(name) = worklist.pop() {
+            if let Some(func) = self.decl.bodies.by_name(&name) {
+                for t in collect_call_targets(&func.body) {
+                    if non_callback_names.contains(&t) && reachable.insert(t.clone()) {
+                        worklist.push(t);
+                    }
+                }
+            }
+        }
+
+        reachable
     }
 }
 

@@ -625,7 +625,7 @@
           "id": "regseq-analysis-05",
           "name": "Authored body capture and supported-subset validation",
           "spec": ".harness/tasks/regseq-analysis/05-authored-body-capture-and-supported-subset-validation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-analysis-03",
             "regseq-model-13"
