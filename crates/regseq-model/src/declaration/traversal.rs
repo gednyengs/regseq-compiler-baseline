@@ -4,6 +4,7 @@
 //! without destroying construct ownership. They return references with
 //! family/construct context rather than flattening into one global bag.
 
+use super::bodies::{BodyDeclSet, FnBodyDecl};
 use super::callbacks::CallbackImplDecl;
 use super::operations::{
     DurationCtorSiteDecl, LogCallSiteDecl, PmGateDecl, TimedDelayCallSiteDecl,
@@ -244,5 +245,20 @@ impl DeclarationModel {
         fns.sort();
         fns.dedup();
         fns
+    }
+
+    /// Return the body declaration set.
+    pub fn body_decls(&self) -> &BodyDeclSet {
+        &self.bodies
+    }
+
+    /// Return all function body declarations.
+    pub fn all_fn_bodies(&self) -> &[FnBodyDecl] {
+        &self.bodies.functions
+    }
+
+    /// Look up a function body by name.
+    pub fn fn_body_by_name(&self, name: &str) -> Option<&FnBodyDecl> {
+        self.bodies.by_name(name)
     }
 }

@@ -9,6 +9,7 @@
 //! as-is and does not assume Layer 2 binding data, join results, or backend
 //! lowering strategies.
 
+pub mod bodies;
 pub mod build_context;
 pub mod callbacks;
 pub mod normalize;
@@ -22,9 +23,12 @@ pub mod synchronization;
 pub mod traversal;
 
 // Re-export top-level types for convenience.
+pub use bodies::{
+    BodyDeclSet, BodyExpr, BodyStmt, FnBodyDecl, FnKind, FnParamDecl, MatchArm, StructFieldExpr,
+};
 pub use build_context::DeclarationBuildContext;
 pub use callbacks::{CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl};
-pub use driver::{DeviceClass, DriverDecl};
+pub use driver::{BusType, DeviceClass, DriverDecl};
 pub use operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LogArgKind, LogCallSiteDecl,
     LogLevel, LoggingDeclSet, PmGateDecl, PmGateDeclSet, PmGateProperties, TimedDelayCallSiteDecl,
@@ -80,6 +84,8 @@ pub struct DeclarationModel {
     pub logging: LoggingDeclSet,
     /// PM gate declaration-side evidence.
     pub pm_gate: PmGateDeclSet,
+    /// Authored function body declarations (callbacks, helpers, ISR).
+    pub bodies: BodyDeclSet,
     /// Build-context metadata (target_os etc.), separate from declaration identity.
     pub build_context: DeclarationBuildContext,
 }

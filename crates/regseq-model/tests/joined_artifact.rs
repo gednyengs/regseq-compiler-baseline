@@ -14,11 +14,11 @@ use regseq_model::declaration::resources::{
     ResetFieldDecl, ResourceDeclSet,
 };
 use regseq_model::declaration::{
-    BusType, DeviceClass, LoggingDeclSet, PmGateDeclSet, PropertyDeclSet, PropertyFieldDecl,
-    RegisterDeclSet, SynchronizationDeclSet, TimedDelayDeclSet,
+    BodyDeclSet, CallbackDeclSet, DeclarationBuildContext, DeclarationModel, DriverDecl,
 };
 use regseq_model::declaration::{
-    CallbackDeclSet, DeclarationBuildContext, DeclarationModel, DriverDecl,
+    BusType, DeviceClass, LoggingDeclSet, PmGateDeclSet, PropertyDeclSet, PropertyFieldDecl,
+    RegisterDeclSet, SynchronizationDeclSet, TimedDelayDeclSet,
 };
 use regseq_model::joined::{perform_join, JoinOutcome, JoinedArtifact};
 use regseq_model::platform::PlatformValue;
@@ -131,6 +131,7 @@ fn pl011_decl() -> DeclarationModel {
         },
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
+        bodies: BodyDeclSet { functions: vec![] },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },

@@ -5,9 +5,12 @@
 //! Normalization is deterministic, local, and does not introduce join logic
 //! or hidden raw-artifact prerequisites.
 
+use super::bodies::{
+    BodyDeclSet, BodyExpr, BodyStmt, FnBodyDecl, FnKind, FnParamDecl, MatchArm, StructFieldExpr,
+};
 use super::build_context::DeclarationBuildContext;
 use super::callbacks::{CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl};
-use super::driver::{DeviceClass, DriverDecl};
+use super::driver::{BusType, DeviceClass, DriverDecl};
 use super::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LogArgKind, LogCallSiteDecl,
     LogLevel, LoggingDeclSet, PmGateDecl, PmGateDeclSet, PmGateProperties, TimedDelayCallSiteDecl,
@@ -72,10 +75,23 @@ pub fn normalize(input: &RawArtifactInput) -> Result<DeclarationModel, Normalize
         .as_ref()
         .ok_or(NormalizeError::MissingIdentity)?;
 
+    let bus = identity
+        .bus
+        .as_deref()
+        .map(|s| {
+            BusType::from_raw(s).ok_or(NormalizeError::UnrecognizedTag {
+                family: "identity",
+                field: "bus",
+                value: s.to_string(),
+            })
+        })
+        .transpose()?;
+
     let driver = DriverDecl {
         driver_name: identity.driver_name.clone(),
         compatible: identity.compatible.clone(),
         device_class: DeviceClass::from_raw(&identity.device_class),
+        bus,
         provenance: Provenance::new("identity"),
     };
 
@@ -91,6 +107,7 @@ pub fn normalize(input: &RawArtifactInput) -> Result<DeclarationModel, Normalize
     let timed_delay = normalize_timed_delay(input)?;
     let logging = normalize_logging(input)?;
     let pm_gate = normalize_pm_gate(input);
+    let bodies = normalize_bodies(input);
 
     Ok(DeclarationModel {
         driver,
@@ -102,6 +119,7 @@ pub fn normalize(input: &RawArtifactInput) -> Result<DeclarationModel, Normalize
         timed_delay,
         logging,
         pm_gate,
+        bodies,
         build_context,
     })
 }
@@ -757,4 +775,211 @@ fn normalize_pm_gate(input: &RawArtifactInput) -> PmGateDeclSet {
         .collect();
 
     PmGateDeclSet { gates }
+}
+
+// ---------------------------------------------------------------------------
+// Body normalization
+// ---------------------------------------------------------------------------
+
+fn normalize_bodies(input: &RawArtifactInput) -> BodyDeclSet {
+    let Some(raw_bodies) = &input.bodies else {
+        return BodyDeclSet { functions: vec![] };
+    };
+
+    let functions = raw_bodies
+        .functions
+        .iter()
+        .map(|f| FnBodyDecl {
+            name: f.name.clone(),
+            kind: normalize_fn_kind(&f.kind),
+            receiver: f.receiver.clone(),
+            params: f
+                .params
+                .iter()
+                .map(|p| FnParamDecl {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                })
+                .collect(),
+            return_type: f.return_type.clone(),
+            body: normalize_body_expr(&f.body),
+            provenance: Provenance::new("bodies").with_containing_item(f.name.clone()),
+        })
+        .collect();
+
+    BodyDeclSet { functions }
+}
+
+fn normalize_fn_kind(raw: &super::raw_input::RawFnKindInput) -> FnKind {
+    match raw {
+        super::raw_input::RawFnKindInput::Callback {
+            trait_name,
+            method_name,
+        } => FnKind::Callback {
+            trait_name: trait_name.clone(),
+            method_name: method_name.clone(),
+        },
+        super::raw_input::RawFnKindInput::Isr => FnKind::Isr,
+        super::raw_input::RawFnKindInput::Helper => FnKind::Helper,
+        super::raw_input::RawFnKindInput::FreeFunction => FnKind::FreeFunction,
+    }
+}
+
+fn normalize_body_expr(raw: &super::raw_input::RawBodyExprInput) -> BodyExpr {
+    use super::raw_input::RawBodyExprInput as R;
+    match raw {
+        R::Block { stmts, expr } => BodyExpr::Block {
+            stmts: stmts.iter().map(normalize_body_stmt).collect(),
+            expr: expr.as_ref().map(|e| Box::new(normalize_body_expr(e))),
+        },
+        R::MethodCall {
+            receiver,
+            method,
+            type_args,
+            args,
+        } => BodyExpr::MethodCall {
+            receiver: Box::new(normalize_body_expr(receiver)),
+            method: method.clone(),
+            type_args: type_args.clone(),
+            args: args.iter().map(normalize_body_expr).collect(),
+        },
+        R::Call {
+            path,
+            type_args,
+            args,
+        } => BodyExpr::Call {
+            path: path.clone(),
+            type_args: type_args.clone(),
+            args: args.iter().map(normalize_body_expr).collect(),
+        },
+        R::Field { base, name } => BodyExpr::Field {
+            base: Box::new(normalize_body_expr(base)),
+            name: name.clone(),
+        },
+        R::Path { path } => BodyExpr::Path { path: path.clone() },
+        R::LitInt { value, suffix } => BodyExpr::LitInt {
+            value: value.clone(),
+            suffix: suffix.clone(),
+        },
+        R::LitBool { value } => BodyExpr::LitBool { value: *value },
+        R::LitStr { value } => BodyExpr::LitStr {
+            value: value.clone(),
+        },
+        R::Binary { op, lhs, rhs } => BodyExpr::Binary {
+            op: op.clone(),
+            lhs: Box::new(normalize_body_expr(lhs)),
+            rhs: Box::new(normalize_body_expr(rhs)),
+        },
+        R::Unary { op, operand } => BodyExpr::Unary {
+            op: op.clone(),
+            operand: Box::new(normalize_body_expr(operand)),
+        },
+        R::Cast { expr, ty } => BodyExpr::Cast {
+            expr: Box::new(normalize_body_expr(expr)),
+            ty: ty.clone(),
+        },
+        R::If {
+            cond,
+            then_branch,
+            else_branch,
+        } => BodyExpr::If {
+            cond: Box::new(normalize_body_expr(cond)),
+            then_branch: Box::new(normalize_body_expr(then_branch)),
+            else_branch: else_branch
+                .as_ref()
+                .map(|e| Box::new(normalize_body_expr(e))),
+        },
+        R::Loop { body } => BodyExpr::Loop {
+            body: Box::new(normalize_body_expr(body)),
+        },
+        R::Return { expr } => BodyExpr::Return {
+            expr: expr.as_ref().map(|e| Box::new(normalize_body_expr(e))),
+        },
+        R::Try { expr } => BodyExpr::Try {
+            expr: Box::new(normalize_body_expr(expr)),
+        },
+        R::Ref { mutable, expr } => BodyExpr::Ref {
+            mutable: *mutable,
+            expr: Box::new(normalize_body_expr(expr)),
+        },
+        R::Assign { target, value } => BodyExpr::Assign {
+            target: Box::new(normalize_body_expr(target)),
+            value: Box::new(normalize_body_expr(value)),
+        },
+        R::AssignOp { op, target, value } => BodyExpr::AssignOp {
+            op: op.clone(),
+            target: Box::new(normalize_body_expr(target)),
+            value: Box::new(normalize_body_expr(value)),
+        },
+        R::Tuple { elements } => BodyExpr::Tuple {
+            elements: elements.iter().map(normalize_body_expr).collect(),
+        },
+        R::Array { elements } => BodyExpr::Array {
+            elements: elements.iter().map(normalize_body_expr).collect(),
+        },
+        R::Index { base, index } => BodyExpr::Index {
+            base: Box::new(normalize_body_expr(base)),
+            index: Box::new(normalize_body_expr(index)),
+        },
+        R::Struct { path, fields, base } => BodyExpr::Struct {
+            path: path.clone(),
+            fields: fields
+                .iter()
+                .map(|f| StructFieldExpr {
+                    name: f.name.clone(),
+                    value: normalize_body_expr(&f.value),
+                })
+                .collect(),
+            base: base.as_ref().map(|b| Box::new(normalize_body_expr(b))),
+        },
+        R::Closure { params, body } => BodyExpr::Closure {
+            params: params.clone(),
+            body: Box::new(normalize_body_expr(body)),
+        },
+        R::Match { scrutinee, arms } => BodyExpr::Match {
+            scrutinee: Box::new(normalize_body_expr(scrutinee)),
+            arms: arms
+                .iter()
+                .map(|a| MatchArm {
+                    pattern: a.pattern.clone(),
+                    guard: a.guard.as_ref().map(normalize_body_expr),
+                    body: normalize_body_expr(&a.body),
+                })
+                .collect(),
+        },
+        R::Break { expr } => BodyExpr::Break {
+            expr: expr.as_ref().map(|e| Box::new(normalize_body_expr(e))),
+        },
+        R::Continue => BodyExpr::Continue,
+        R::Unsupported {
+            hir_kind,
+            span_text,
+        } => BodyExpr::Unsupported {
+            hir_kind: hir_kind.clone(),
+            span_text: span_text.clone(),
+        },
+    }
+}
+
+fn normalize_body_stmt(raw: &super::raw_input::RawBodyStmtInput) -> BodyStmt {
+    use super::raw_input::RawBodyStmtInput as S;
+    match raw {
+        S::Expr { expr } => BodyStmt::Expr {
+            expr: normalize_body_expr(expr),
+        },
+        S::Semi { expr } => BodyStmt::Semi {
+            expr: normalize_body_expr(expr),
+        },
+        S::Let {
+            name,
+            mutable,
+            ty,
+            init,
+        } => BodyStmt::Let {
+            name: name.clone(),
+            mutable: *mutable,
+            ty: ty.clone(),
+            init: init.as_ref().map(normalize_body_expr),
+        },
+    }
 }

@@ -38,7 +38,8 @@ use regseq_model::declaration::synchronization::{
     SyncFieldKind, SynchronizationDeclSet,
 };
 use regseq_model::declaration::{
-    BusType as ModelBusType, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
+    BodyDeclSet, BusType as ModelBusType, DeclarationBuildContext, DeclarationModel, DeviceClass,
+    DriverDecl,
 };
 use regseq_model::joined::perform_join;
 use regseq_model::platform::PlatformValue;
@@ -247,6 +248,7 @@ fn pl011_decl() -> DeclarationModel {
                 provenance: Provenance::new("pm_gate"),
             }],
         },
+        bodies: BodyDeclSet { functions: vec![] },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },

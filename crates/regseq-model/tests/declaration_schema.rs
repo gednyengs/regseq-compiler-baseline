@@ -22,6 +22,7 @@ fn driver_decl_constructs_with_device_class() {
         driver_name: "pl011".into(),
         compatible: vec!["arm,pl011".into()],
         device_class: DeviceClass::SerialUart,
+        bus: Some(BusType::Amba),
         provenance: Provenance::new("identity"),
     };
     assert_eq!(driver.device_class, DeviceClass::SerialUart);
@@ -85,6 +86,7 @@ fn driver_decl_has_provenance() {
         driver_name: "pl011".into(),
         compatible: vec![],
         device_class: DeviceClass::SerialUart,
+        bus: None,
         provenance: Provenance::new("identity")
             .with_source_file("src/lib.rs")
             .with_containing_item("Pl011Driver"),
@@ -453,6 +455,7 @@ fn make_minimal_model() -> DeclarationModel {
             driver_name: "pl011".into(),
             compatible: vec!["arm,pl011".into()],
             device_class: DeviceClass::SerialUart,
+            bus: Some(BusType::Amba),
             provenance: Provenance::new("identity"),
         },
         resources: ResourceDeclSet {
@@ -502,6 +505,7 @@ fn make_minimal_model() -> DeclarationModel {
         },
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
+        bodies: BodyDeclSet { functions: vec![] },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },

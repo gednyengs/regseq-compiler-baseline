@@ -518,7 +518,7 @@
           "id": "regseq-model-13",
           "name": "Authored body schema and normalization",
           "spec": ".harness/tasks/regseq-model/13-authored-body-schema-and-normalization.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-22",
             "regseq-model-07"

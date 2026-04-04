@@ -35,7 +35,7 @@ use regseq_model::declaration::resources::{
 };
 use regseq_model::declaration::synchronization::SynchronizationDeclSet;
 use regseq_model::declaration::{
-    DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
+    BodyDeclSet, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
 };
 use regseq_model::joined::perform_join;
 use regseq_model::platform::PlatformValue;
@@ -215,6 +215,7 @@ fn pl011_decl() -> DeclarationModel {
         },
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
+        bodies: BodyDeclSet { functions: vec![] },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },
