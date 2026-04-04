@@ -24,6 +24,8 @@ pub struct PlatformFile {
     pub platform: PlatformHeader,
     /// Firmware property entries keyed by property id.
     pub properties: Vec<PropertyEntry>,
+    /// Parsed `[bus]` section, if present.
+    pub bus: Option<BusSection>,
     /// Construct-owned sections that are preserved but may not yet be
     /// semantically validated.
     pub construct_sections: Vec<ConstructSection>,
@@ -70,6 +72,20 @@ pub struct ConstructSection {
     /// Optional binding key within the construct family (e.g. `"uart_regs"`).
     pub section_key: Option<String>,
     /// Raw parsed key-value pairs from this section.
+    pub values: BTreeMap<String, PlatformValue>,
+}
+
+/// Parsed `[bus]` section from the platform file.
+///
+/// Contains the deployment-side bus family confirmation and any
+/// family-specific metadata keys. The `bus_type` string is the raw
+/// value from the TOML `type` key; typed validation happens during
+/// binding normalization.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BusSection {
+    /// Bus family type string (e.g. `"amba"`, `"pci"`, `"integrated"`).
+    pub bus_type: String,
+    /// Family-specific key-value pairs (excluding `type`).
     pub values: BTreeMap<String, PlatformValue>,
 }
 

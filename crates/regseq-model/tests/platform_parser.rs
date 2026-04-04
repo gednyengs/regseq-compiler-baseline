@@ -235,3 +235,135 @@ arch = "arm"
         }
     );
 }
+
+// ---- Bus section parsing tests ----
+
+#[test]
+fn bus_section_parses_as_typed_section_not_unknown() {
+    let input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+"#;
+    let file = parse_platform_file_str(input).expect("should parse");
+    assert!(file.bus.is_some(), "bus section should be parsed");
+    assert!(
+        file.unknown_sections.is_empty(),
+        "bus should not appear in unknown sections"
+    );
+    let bus = file.bus.unwrap();
+    assert_eq!(bus.bus_type, "amba");
+    assert_eq!(
+        bus.values.get("amba_id"),
+        Some(&PlatformValue::Integer(0x00041011))
+    );
+    assert_eq!(bus.values.get("revision"), Some(&PlatformValue::Integer(3)));
+}
+
+#[test]
+fn bus_section_with_integrated_type_parses() {
+    let input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+type = "integrated"
+firmware = "devicetree"
+"#;
+    let file = parse_platform_file_str(input).expect("should parse");
+    let bus = file.bus.expect("bus should be present");
+    assert_eq!(bus.bus_type, "integrated");
+    assert_eq!(
+        bus.values.get("firmware"),
+        Some(&PlatformValue::String("devicetree".into()))
+    );
+}
+
+#[test]
+fn bus_section_with_pci_type_parses() {
+    let input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "x86_64"
+
+[bus]
+type = "pci"
+vendor_id = 0x8086
+device_id = 0x100e
+"#;
+    let file = parse_platform_file_str(input).expect("should parse");
+    let bus = file.bus.expect("bus should be present");
+    assert_eq!(bus.bus_type, "pci");
+    assert_eq!(
+        bus.values.get("vendor_id"),
+        Some(&PlatformValue::Integer(0x8086))
+    );
+    assert_eq!(
+        bus.values.get("device_id"),
+        Some(&PlatformValue::Integer(0x100e))
+    );
+}
+
+#[test]
+fn bus_section_missing_type_is_rejected() {
+    let input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+amba_id = 0x00041011
+"#;
+    let err = parse_platform_file_str(input).unwrap_err();
+    assert_eq!(err, PlatformParseError::MissingKey("bus.type"));
+}
+
+#[test]
+fn absent_bus_section_produces_none() {
+    let file = parse_platform_file_str(MINIMAL_VALID).expect("should parse");
+    assert!(file.bus.is_none());
+}
+
+#[test]
+fn pl011_fixture_with_bus_section_parses() {
+    let input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+
+[properties]
+reg-io-width = 4
+current-speed = 115200
+"#;
+    let file = parse_platform_file_str(input).expect("should parse");
+    let bus = file.bus.expect("bus should be present");
+    assert_eq!(bus.bus_type, "amba");
+    assert_eq!(file.properties.len(), 2);
+    assert!(file.unknown_sections.is_empty());
+}

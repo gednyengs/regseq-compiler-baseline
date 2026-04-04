@@ -23,7 +23,7 @@ use regseq_model::declaration::resources::{
 };
 use regseq_model::declaration::synchronization::SynchronizationDeclSet;
 use regseq_model::declaration::{
-    DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
+    BusType, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
 };
 use regseq_model::joined::perform_join;
 use regseq_model::platform::PlatformValue;
@@ -36,6 +36,7 @@ fn pl011_decl() -> DeclarationModel {
             driver_name: "Pl011Driver".into(),
             compatible: vec!["arm,pl011".into()],
             device_class: DeviceClass::SerialUart,
+            bus: Some(BusType::Amba),
             provenance: Provenance::new("identity"),
         },
         resources: ResourceDeclSet {
@@ -208,6 +209,7 @@ fn pl011_binding() -> BindingModel {
             pin_states: Some(vec!["default".into(), "sleep".into()]),
             provenance: BindingProvenance::new("pinctrl").with_section_key("uart_pins"),
         }],
+        bus: None,
     }
 }
 

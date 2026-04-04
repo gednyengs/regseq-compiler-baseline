@@ -21,6 +21,7 @@ fn minimal_platform_file() -> PlatformFile {
             arch: "aarch64".into(),
         },
         properties: vec![],
+        bus: None,
         construct_sections: vec![],
         unknown_sections: vec![],
     }
@@ -109,6 +110,7 @@ fn rich_platform_file() -> PlatformFile {
                 },
             },
         ],
+        bus: None,
         unknown_sections: vec![UnknownSection {
             section_path: vec!["custom".into()],
             values: {
@@ -125,7 +127,7 @@ fn rich_platform_file() -> PlatformFile {
 #[test]
 fn minimal_platform_file_normalizes() {
     let pf = minimal_platform_file();
-    let model = normalize(&pf, None).expect("normalization should succeed");
+    let model = normalize(&pf, None, None).expect("normalization should succeed");
 
     assert_eq!(model.header.version, "1");
     assert_eq!(model.header.os, "linux");
@@ -142,7 +144,8 @@ fn minimal_platform_file_normalizes() {
 #[test]
 fn rich_platform_file_normalizes() {
     let pf = rich_platform_file();
-    let model = normalize(&pf, Some("pl011.platform.toml")).expect("normalization should succeed");
+    let model =
+        normalize(&pf, Some("pl011.platform.toml"), None).expect("normalization should succeed");
 
     assert_eq!(model.properties.len(), 2);
     assert_eq!(model.mmio.len(), 1);
@@ -157,7 +160,7 @@ fn rich_platform_file_normalizes() {
 #[test]
 fn all_accepted_sections_are_mapped() {
     let pf = rich_platform_file();
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
 
     // MMIO
     assert_eq!(
@@ -209,7 +212,7 @@ fn all_accepted_sections_are_mapped() {
 #[test]
 fn property_values_survive_normalization() {
     let pf = rich_platform_file();
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
 
     let baud = model
         .properties
@@ -237,7 +240,7 @@ fn aggregate_property_values_survive_normalization() {
         ]),
     });
 
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
     let dma = model
         .properties
         .iter()
@@ -251,7 +254,7 @@ fn aggregate_property_values_survive_normalization() {
 #[test]
 fn join_keys_survive_normalization() {
     let pf = rich_platform_file();
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
 
     // Explicit-id join keys
     assert_eq!(model.mmio[0].join_key.value(), "uart_regs");
@@ -269,7 +272,7 @@ fn join_keys_survive_normalization() {
 #[test]
 fn provenance_survives_normalization() {
     let pf = rich_platform_file();
-    let model = normalize(&pf, Some("pl011.platform.toml")).unwrap();
+    let model = normalize(&pf, Some("pl011.platform.toml"), None).unwrap();
 
     // Header provenance
     assert_eq!(model.header.provenance.section_kind, "platform");
@@ -326,7 +329,7 @@ fn provenance_survives_normalization() {
 #[test]
 fn provenance_without_source_file_has_none() {
     let pf = rich_platform_file();
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
 
     assert!(model.header.provenance.source_file.is_none());
     assert!(model.mmio[0].provenance.source_file.is_none());
@@ -337,7 +340,7 @@ fn provenance_without_source_file_has_none() {
 #[test]
 fn absent_sections_remain_absent() {
     let pf = minimal_platform_file();
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
 
     assert!(model.properties.is_empty());
     assert!(model.mmio.is_empty());
@@ -351,7 +354,7 @@ fn absent_sections_remain_absent() {
 fn unknown_sections_are_not_normalized() {
     let pf = rich_platform_file();
     // The rich fixture has an unknown section; it should not appear in the model.
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
 
     // Only accepted families should be populated.
     assert_eq!(model.mmio.len(), 1);
@@ -375,7 +378,7 @@ fn unrecognized_construct_section_kinds_are_skipped() {
         },
     });
 
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
     // DMA is not an accepted section for this batch.
     assert!(model.mmio.is_empty());
     assert!(model.interrupts.is_empty());
@@ -395,7 +398,7 @@ fn missing_section_key_is_an_error() {
         values: BTreeMap::new(),
     });
 
-    let err = normalize(&pf, None).unwrap_err();
+    let err = normalize(&pf, None, None).unwrap_err();
     assert_eq!(
         err,
         BindingNormalizeError::MissingSectionKey {
@@ -409,8 +412,8 @@ fn missing_section_key_is_an_error() {
 #[test]
 fn normalization_is_deterministic() {
     let pf = rich_platform_file();
-    let model1 = normalize(&pf, Some("pl011.platform.toml")).unwrap();
-    let model2 = normalize(&pf, Some("pl011.platform.toml")).unwrap();
+    let model1 = normalize(&pf, Some("pl011.platform.toml"), None).unwrap();
+    let model2 = normalize(&pf, Some("pl011.platform.toml"), None).unwrap();
 
     assert_eq!(model1, model2);
 
@@ -435,7 +438,7 @@ fn partial_construct_section_normalizes_with_none_fields() {
         },
     });
 
-    let model = normalize(&pf, None).unwrap();
+    let model = normalize(&pf, None, None).unwrap();
     assert_eq!(model.interrupts.len(), 1);
     assert_eq!(model.interrupts[0].trigger_type.as_deref(), Some("edge"));
     assert!(model.interrupts[0].trigger_polarity.is_none());
@@ -480,7 +483,8 @@ pin_states = ["default", "sleep"]
 
     let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
         .expect("parse should succeed");
-    let model = normalize(&pf, Some("test.platform.toml")).expect("normalization should succeed");
+    let model =
+        normalize(&pf, Some("test.platform.toml"), None).expect("normalization should succeed");
 
     assert_eq!(model.header.os, "linux");
     assert_eq!(model.header.board, "qemu-virt");
@@ -495,4 +499,230 @@ pin_states = ["default", "sleep"]
     let json = serde_json::to_string_pretty(&model).unwrap();
     let roundtrip: BindingModel = serde_json::from_str(&json).unwrap();
     assert_eq!(model, roundtrip);
+}
+
+// ---- Bus section normalization tests ----
+
+#[test]
+fn amba_bus_section_normalizes_successfully() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let model = normalize(&pf, None, None).expect("normalization should succeed");
+
+    let bus = model.bus.expect("bus binding should be present");
+    assert_eq!(
+        bus.bus_type,
+        regseq_model::declaration::driver::BusType::Amba
+    );
+    assert_eq!(bus.amba_id, Some(0x00041011));
+    assert_eq!(bus.revision, Some(3));
+    assert_eq!(bus.provenance.section_kind, "bus");
+}
+
+#[test]
+fn amba_bus_with_declaration_match_normalizes() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let decl_bus = regseq_model::declaration::driver::BusType::Amba;
+    let model = normalize(&pf, None, Some(&decl_bus)).expect("normalization should succeed");
+
+    let bus = model.bus.expect("bus binding should be present");
+    assert_eq!(
+        bus.bus_type,
+        regseq_model::declaration::driver::BusType::Amba
+    );
+}
+
+#[test]
+fn bus_type_mismatch_is_rejected() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let decl_bus = regseq_model::declaration::driver::BusType::Pci;
+    let err = normalize(&pf, None, Some(&decl_bus)).unwrap_err();
+    assert_eq!(
+        err,
+        BindingNormalizeError::BusTypeMismatch {
+            layer1: "pci".into(),
+            layer2: "amba".into(),
+        }
+    );
+}
+
+#[test]
+fn unrecognized_bus_type_is_rejected() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+type = "usb"
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let err = normalize(&pf, None, None).unwrap_err();
+    assert_eq!(
+        err,
+        BindingNormalizeError::UnrecognizedBusType {
+            bus_type: "usb".into(),
+        }
+    );
+}
+
+#[test]
+fn invalid_family_specific_key_is_rejected() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+vendor_id = 0x8086
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let err = normalize(&pf, None, None).unwrap_err();
+    assert_eq!(
+        err,
+        BindingNormalizeError::InvalidBusKey {
+            key: "vendor_id".into(),
+            bus_type: "amba".into(),
+        }
+    );
+}
+
+#[test]
+fn pl011_fixture_with_amba_bus_normalizes_deterministically() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+
+[properties]
+reg-io-width = 4
+current-speed = 115200
+
+[mmio.uart_regs]
+base = 150994944
+size = 4096
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let decl_bus = regseq_model::declaration::driver::BusType::Amba;
+    let model1 = normalize(&pf, Some("pl011.platform.toml"), Some(&decl_bus))
+        .expect("normalization should succeed");
+    let model2 = normalize(&pf, Some("pl011.platform.toml"), Some(&decl_bus))
+        .expect("normalization should succeed");
+
+    assert_eq!(model1, model2);
+
+    let bus = model1.bus.as_ref().expect("bus should be present");
+    assert_eq!(
+        bus.bus_type,
+        regseq_model::declaration::driver::BusType::Amba
+    );
+    assert_eq!(bus.amba_id, Some(0x00041011));
+    assert_eq!(bus.revision, Some(3));
+    assert_eq!(
+        bus.provenance.source_file.as_deref(),
+        Some("pl011.platform.toml")
+    );
+
+    // JSON round-trip.
+    let json = serde_json::to_string_pretty(&model1).unwrap();
+    let roundtrip: BindingModel = serde_json::from_str(&json).unwrap();
+    assert_eq!(model1, roundtrip);
+}
+
+#[test]
+fn absent_bus_section_normalizes_to_none() {
+    let pf = minimal_platform_file();
+    let model = normalize(&pf, None, None).unwrap();
+    assert!(model.bus.is_none());
+}
+
+#[test]
+fn bus_normalization_without_declaration_skips_consistency_check() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "test-board"
+arch = "aarch64"
+
+[bus]
+type = "pci"
+vendor_id = 0x8086
+device_id = 0x100e
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    // No declaration bus provided -- consistency check is skipped.
+    let model = normalize(&pf, None, None).expect("normalization should succeed");
+    let bus = model.bus.expect("bus should be present");
+    assert_eq!(
+        bus.bus_type,
+        regseq_model::declaration::driver::BusType::Pci
+    );
 }

@@ -14,11 +14,11 @@ use regseq_model::declaration::resources::{
     ResetFieldDecl, ResourceDeclSet,
 };
 use regseq_model::declaration::{
-    CallbackDeclSet, DeclarationBuildContext, DeclarationModel, DriverDecl,
+    BusType, DeviceClass, LoggingDeclSet, PmGateDeclSet, PropertyDeclSet, PropertyFieldDecl,
+    RegisterDeclSet, SynchronizationDeclSet, TimedDelayDeclSet,
 };
 use regseq_model::declaration::{
-    DeviceClass, LoggingDeclSet, PmGateDeclSet, PropertyDeclSet, PropertyFieldDecl,
-    RegisterDeclSet, SynchronizationDeclSet, TimedDelayDeclSet,
+    CallbackDeclSet, DeclarationBuildContext, DeclarationModel, DriverDecl,
 };
 use regseq_model::joined::{perform_join, JoinOutcome, JoinedArtifact};
 use regseq_model::platform::PlatformValue;
@@ -30,6 +30,7 @@ fn pl011_decl() -> DeclarationModel {
             driver_name: "Pl011Driver".into(),
             compatible: vec!["arm,pl011".into()],
             device_class: DeviceClass::SerialUart,
+            bus: Some(BusType::Amba),
             provenance: Provenance::new("identity"),
         },
         resources: ResourceDeclSet {
@@ -188,6 +189,7 @@ fn pl011_binding() -> BindingModel {
             pin_states: Some(vec!["default".into(), "sleep".into()]),
             provenance: BindingProvenance::new("pinctrl").with_section_key("uart_pins"),
         }],
+        bus: None,
     }
 }
 
@@ -563,6 +565,7 @@ fn empty_binding_produces_all_decl_only() {
         clocks: vec![],
         resets: vec![],
         pinctrl: vec![],
+        bus: None,
     };
 
     let artifact = perform_join(&decl, &binding).unwrap();

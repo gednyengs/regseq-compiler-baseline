@@ -7,8 +7,10 @@
 
 use std::fmt;
 
-use crate::platform::{ConstructSection, PlatformFile, PlatformValue};
+use crate::declaration::driver::BusType;
+use crate::platform::{BusSection, ConstructSection, PlatformFile, PlatformValue};
 
+use super::bus::BusBinding;
 use super::header::BindingHeader;
 use super::join_key::JoinKey;
 use super::properties::PropertyBinding;
@@ -24,6 +26,26 @@ pub enum BindingNormalizeError {
         /// The construct family (e.g. `"mmio"`).
         section_kind: String,
     },
+    /// The Layer 2 `[bus]` section specifies an unrecognized bus type.
+    UnrecognizedBusType {
+        /// The unrecognized bus type string.
+        bus_type: String,
+    },
+    /// The Layer 1 and Layer 2 bus types do not match.
+    BusTypeMismatch {
+        /// Bus type declared in Layer 1.
+        layer1: String,
+        /// Bus type specified in Layer 2.
+        layer2: String,
+    },
+    /// A family-specific key in the `[bus]` section is not valid for the
+    /// selected bus family.
+    InvalidBusKey {
+        /// The invalid key name.
+        key: String,
+        /// The bus family that does not accept this key.
+        bus_type: String,
+    },
 }
 
 impl fmt::Display for BindingNormalizeError {
@@ -35,6 +57,18 @@ impl fmt::Display for BindingNormalizeError {
                     "construct section `{section_kind}` is missing its section key"
                 )
             }
+            Self::UnrecognizedBusType { bus_type } => {
+                write!(f, "unrecognized bus type `{bus_type}` in [bus] section")
+            }
+            Self::BusTypeMismatch { layer1, layer2 } => {
+                write!(
+                    f,
+                    "bus type mismatch: Layer 1 declares `{layer1}` but Layer 2 specifies `{layer2}`"
+                )
+            }
+            Self::InvalidBusKey { key, bus_type } => {
+                write!(f, "key `{key}` is not valid for bus family `{bus_type}`")
+            }
         }
     }
 }
@@ -45,12 +79,22 @@ impl std::error::Error for BindingNormalizeError {}
 ///
 /// The optional `source_file` parameter is attached to provenance records
 /// for traceability back to the original platform file on disk.
+///
+/// When `declaration_bus` is provided, the normalizer validates that the
+/// Layer 2 bus type matches the Layer 1 declaration. Pass `None` to skip
+/// cross-layer bus consistency checking.
 pub fn normalize(
     pf: &PlatformFile,
     source_file: Option<&str>,
+    declaration_bus: Option<&BusType>,
 ) -> Result<BindingModel, BindingNormalizeError> {
     let header = normalize_header(pf, source_file);
     let properties = normalize_properties(pf, source_file);
+
+    let bus = match &pf.bus {
+        Some(bus_section) => Some(normalize_bus(bus_section, source_file, declaration_bus)?),
+        None => None,
+    };
 
     let mut mmio = Vec::new();
     let mut interrupts = Vec::new();
@@ -80,6 +124,7 @@ pub fn normalize(
         clocks,
         resets,
         pinctrl,
+        bus,
     })
 }
 
@@ -254,5 +299,68 @@ fn normalize_pinctrl(
         join_key: JoinKey::ExplicitId(key.to_string()),
         pin_states: extract_string_list(&section.values, "pin_states"),
         provenance: make_provenance(section, source_file),
+    })
+}
+
+/// Return the set of accepted family-specific keys for a given bus type.
+fn accepted_bus_keys(bus_type: &BusType) -> &'static [&'static str] {
+    match bus_type {
+        BusType::Amba => &["amba_id", "revision"],
+        BusType::Pci => &["vendor_id", "device_id"],
+        BusType::Integrated => &["firmware"],
+    }
+}
+
+/// Validate that all keys in the bus section are accepted for the given family.
+fn validate_bus_keys(
+    bus_section: &BusSection,
+    bus_type: &BusType,
+) -> Result<(), BindingNormalizeError> {
+    let accepted = accepted_bus_keys(bus_type);
+    for key in bus_section.values.keys() {
+        if !accepted.contains(&key.as_str()) {
+            return Err(BindingNormalizeError::InvalidBusKey {
+                key: key.clone(),
+                bus_type: bus_type.as_str().to_string(),
+            });
+        }
+    }
+    Ok(())
+}
+
+fn normalize_bus(
+    bus_section: &BusSection,
+    source_file: Option<&str>,
+    declaration_bus: Option<&BusType>,
+) -> Result<BusBinding, BindingNormalizeError> {
+    let bus_type = BusType::from_raw(&bus_section.bus_type).ok_or_else(|| {
+        BindingNormalizeError::UnrecognizedBusType {
+            bus_type: bus_section.bus_type.clone(),
+        }
+    })?;
+
+    // Layer 1 / Layer 2 consistency check.
+    if let Some(decl_bus) = declaration_bus {
+        if *decl_bus != bus_type {
+            return Err(BindingNormalizeError::BusTypeMismatch {
+                layer1: decl_bus.as_str().to_string(),
+                layer2: bus_type.as_str().to_string(),
+            });
+        }
+    }
+
+    // Validate family-specific keys.
+    validate_bus_keys(bus_section, &bus_type)?;
+
+    let mut prov = BindingProvenance::new("bus");
+    if let Some(sf) = source_file {
+        prov = prov.with_source_file(sf);
+    }
+
+    Ok(BusBinding {
+        bus_type,
+        amba_id: extract_integer(&bus_section.values, "amba_id"),
+        revision: extract_integer(&bus_section.values, "revision"),
+        provenance: prov,
     })
 }

@@ -92,6 +92,7 @@ fn representative_platform_file_preserves_all_sections() {
                 value: PlatformValue::Integer(115200),
             },
         ],
+        bus: None,
         construct_sections: vec![ConstructSection {
             section_kind: "mmio".into(),
             section_key: Some("uart_regs".into()),
@@ -151,6 +152,7 @@ fn serialization_round_trip() {
             key: "reg-io-width".into(),
             value: PlatformValue::Integer(4),
         }],
+        bus: None,
         construct_sections: vec![],
         unknown_sections: vec![],
     };

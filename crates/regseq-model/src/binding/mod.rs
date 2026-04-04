@@ -10,6 +10,7 @@
 //! backend lowering strategies. It is well-formed independently of the
 //! declaration IR.
 
+pub mod bus;
 pub mod header;
 pub mod join_key;
 pub mod normalize;
@@ -18,6 +19,7 @@ pub mod provenance;
 pub mod resources;
 
 // Re-export top-level types for convenience.
+pub use bus::BusBinding;
 pub use header::BindingHeader;
 pub use join_key::JoinKey;
 pub use normalize::{normalize, BindingNormalizeError};
@@ -52,4 +54,6 @@ pub struct BindingModel {
     pub resets: Vec<ResetBinding>,
     /// Normalized pin controller binding entries from `[pinctrl.{id}]` sections.
     pub pinctrl: Vec<PinCtrlBinding>,
+    /// Normalized bus binding from the `[bus]` section, if present.
+    pub bus: Option<BusBinding>,
 }

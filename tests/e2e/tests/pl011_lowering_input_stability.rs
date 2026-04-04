@@ -69,7 +69,7 @@ pin_states = ["default", "sleep"]
 fn load_pl011_binding() -> binding::BindingModel {
     let pf = platform_parser::parse_platform_file_str(PL011_ENRICHED_PLATFORM_TOML)
         .expect("platform TOML should parse");
-    binding::normalize(&pf, Some("pl011-spec-slice/platform.toml"))
+    binding::normalize(&pf, Some("pl011-spec-slice/platform.toml"), None)
         .expect("binding normalization should succeed")
 }
 

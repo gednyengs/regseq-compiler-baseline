@@ -33,6 +33,7 @@ fn binding_model_constructs_with_all_families() {
         clocks: vec![],
         resets: vec![],
         pinctrl: vec![],
+        bus: None,
     };
 
     assert_eq!(model.header.version, "1");
@@ -85,6 +86,7 @@ fn section_families_are_structurally_distinct() {
             pin_states: Some(vec!["default".into(), "sleep".into()]),
             provenance: BindingProvenance::new("pinctrl").with_section_key("uart_pins"),
         }],
+        bus: None,
     };
 
     // Each family is independently accessible and non-empty.
@@ -151,6 +153,7 @@ fn header_is_separate_from_resource_entries() {
         clocks: vec![],
         resets: vec![],
         pinctrl: vec![],
+        bus: None,
     };
 
     // Header metadata lives on its own struct, not mixed into properties.
@@ -337,6 +340,7 @@ fn binding_model_serializes_deterministically() {
         clocks: vec![],
         resets: vec![],
         pinctrl: vec![],
+        bus: None,
     };
 
     let json = serde_json::to_string_pretty(&model).expect("serialize");

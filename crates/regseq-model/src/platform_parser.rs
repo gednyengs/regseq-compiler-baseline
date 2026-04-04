@@ -6,7 +6,8 @@
 //! premature semantic validation.
 
 use crate::platform::{
-    ConstructSection, PlatformFile, PlatformHeader, PlatformValue, PropertyEntry, UnknownSection,
+    BusSection, ConstructSection, PlatformFile, PlatformHeader, PlatformValue, PropertyEntry,
+    UnknownSection,
 };
 use std::collections::BTreeMap;
 use std::fmt;
@@ -102,13 +103,25 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
         None => Vec::new(),
     };
 
+    // Extract `[bus]` section if present.
+    let bus = match table.get("bus") {
+        Some(toml::Value::Table(t)) => Some(parse_bus_section(t)?),
+        Some(_) => {
+            return Err(PlatformParseError::WrongType {
+                key: "bus",
+                expected: "table",
+            })
+        }
+        None => None,
+    };
+
     // Classify remaining sections.
     let mut construct_sections = Vec::new();
     let mut unknown_sections = Vec::new();
 
     for (key, value) in &table {
         match key.as_str() {
-            "version" | "platform" | "properties" => continue,
+            "version" | "platform" | "properties" | "bus" => continue,
             _ => {}
         }
 
@@ -126,6 +139,7 @@ pub fn parse_platform_file_str(input: &str) -> Result<PlatformFile, PlatformPars
         version,
         platform,
         properties,
+        bus,
         construct_sections,
         unknown_sections,
     })
@@ -216,6 +230,24 @@ fn convert_property_value(
             toml_type: "datetime",
         }),
     }
+}
+
+/// Parse the `[bus]` section into a `BusSection`.
+///
+/// Requires a `type` string key. Remaining keys are preserved as
+/// family-specific values for downstream normalization/validation.
+fn parse_bus_section(table: &toml::Table) -> Result<BusSection, PlatformParseError> {
+    let bus_type = extract_required_string(table, "bus.type", "type")?;
+
+    let mut values = BTreeMap::new();
+    for (key, value) in table {
+        if key == "type" {
+            continue;
+        }
+        values.insert(key.clone(), convert_value(value));
+    }
+
+    Ok(BusSection { bus_type, values })
 }
 
 /// Classify a top-level section as either construct-owned or unknown.
