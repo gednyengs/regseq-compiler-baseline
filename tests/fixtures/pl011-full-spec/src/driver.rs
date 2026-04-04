@@ -29,7 +29,7 @@ impl PinState for DefaultState {}
 pub struct SleepState;
 impl PinState for SleepState {}
 
-#[rseq::driver(name = "pl011-full-spec", compatible = ["arm,pl011"])]
+#[rseq::driver(name = "pl011-full-spec", compatible = ["arm,pl011"], bus = "amba")]
 #[rseq::device_class(serial)]
 pub struct Pl011FullSpec {
     #[rseq::mmio(id = "uart_regs")]

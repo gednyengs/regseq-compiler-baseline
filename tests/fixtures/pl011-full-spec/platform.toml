@@ -5,4 +5,30 @@ os = "linux"
 board = "raspberry-pi-4"
 arch = "aarch64"
 
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+
 [properties]
+current-speed = 115200
+fifo-size = 32
+
+[mmio.uart_regs]
+base = 0x09000000
+size = 4096
+
+[interrupt.uart_irq]
+trigger_type = "level"
+trigger_polarity = "high"
+shared = false
+
+[clock.uart_clk]
+default_frequency = 48000000
+
+[reset.reset]
+reset_line_id = "uart_rst0"
+reset_shared = false
+
+[pinctrl.uart_pins]
+pin_states = ["default", "sleep"]
