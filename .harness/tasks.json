@@ -862,6 +862,28 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-03",
+          "name": "PL011 register, resource, and property realization lowering",
+          "spec": ".harness/tasks/regseq-lowering/03-pl011-register-resource-and-property-realization-lowering.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-lowering-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-04",
+          "name": "PL011 serial, lifecycle, and ISR behavior lowering",
+          "spec": ".harness/tasks/regseq-lowering/04-pl011-serial-lifecycle-and-isr-behavior-lowering.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -884,12 +906,14 @@
           "id": "regseq-linux-backend-02",
           "name": "PL011 Linux driver emission for supported slice",
           "spec": ".harness/tasks/regseq-linux-backend/02-pl011-linux-driver-emission-for-supported-slice.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
-            "regseq-linux-backend-01"
+            "regseq-linux-backend-01",
+            "regseq-lowering-04",
+            "track-a-validation-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": "Current backend emission still hardcodes PL011-specific facts and does not yet consume the authored full-spec behavior purely from lowered plans."
         }
       ]
     },
@@ -1076,6 +1100,17 @@
           "status": "done",
           "depends_on": [
             "regseq-analysis-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-10",
+          "name": "PL011 full-spec lowering completeness and backend-independence proof",
+          "spec": ".harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-04"
           ],
           "artifacts": [],
           "fail_reason": null

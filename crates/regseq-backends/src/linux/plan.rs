@@ -31,6 +31,12 @@ pub struct LinuxBackendPlan {
     pub resource_acquisition: LinuxResourceSequencing,
     /// Emitted-file layout decisions.
     pub artifact_layout: LinuxArtifactLayout,
+    /// Register layout for register-helper emission.
+    pub register_layout: LinuxRegisterLayout,
+    /// Per-property realization details for emission.
+    pub property_realization: Vec<LinuxPropertyRealization>,
+    /// Deployment metadata for optional resource families.
+    pub deployment_metadata: LinuxDeploymentMetadata,
 }
 
 // ---------------------------------------------------------------------------
@@ -235,4 +241,149 @@ pub enum LinuxFileRole {
     Makefile,
     /// Kbuild fragment.
     KbuildFragment,
+}
+
+// ---------------------------------------------------------------------------
+// Register layout for emission
+// ---------------------------------------------------------------------------
+
+/// Linux register layout data for register-helper emission.
+///
+/// Carries enough structural metadata that the emitter can produce
+/// per-register byte-offset defines and per-bitfield mask/shift macros
+/// without a hardcoded PL011 offset table.
+#[derive(Debug, Clone)]
+pub struct LinuxRegisterLayout {
+    /// Register blocks with per-field byte offsets.
+    pub blocks: Vec<LinuxRegisterBlock>,
+    /// Register descriptors with bitfield and named-value details.
+    pub descriptors: Vec<LinuxRegisterDescriptor>,
+}
+
+/// A register block with per-field structural metadata.
+#[derive(Debug, Clone)]
+pub struct LinuxRegisterBlock {
+    /// Block type name (e.g. "Pl011Registers").
+    pub block_name: String,
+    /// Register fields with computed byte offsets.
+    pub fields: Vec<LinuxRegisterFieldEntry>,
+}
+
+/// A single register field with its computed byte offset.
+#[derive(Debug, Clone)]
+pub struct LinuxRegisterFieldEntry {
+    /// Register name (e.g. "dr", "fr").
+    pub name: String,
+    /// Byte offset within the register block.
+    pub byte_offset: u32,
+    /// Access width in bytes (e.g. 4 for a 32-bit register).
+    pub access_width_bytes: u32,
+}
+
+/// A register descriptor with bitfield details for emission.
+#[derive(Debug, Clone)]
+pub struct LinuxRegisterDescriptor {
+    /// Register module name (e.g. "DR_REG").
+    pub register_name: String,
+    /// Bitfield entries.
+    pub bit_fields: Vec<LinuxBitFieldEntry>,
+}
+
+/// A single bitfield entry for Linux emission.
+#[derive(Debug, Clone)]
+pub struct LinuxBitFieldEntry {
+    /// Field name (e.g. "DATA", "TXFF").
+    pub name: String,
+    /// Bit offset within the register.
+    pub bit_offset: u32,
+    /// Bit width.
+    pub bit_width: u32,
+    /// Named values (enum variants), if any.
+    pub named_values: Vec<LinuxNamedValue>,
+}
+
+/// A named value (enum variant) for a bitfield.
+#[derive(Debug, Clone)]
+pub struct LinuxNamedValue {
+    /// Symbolic name (e.g. "EIGHT_BITS").
+    pub name: String,
+    /// Numeric value.
+    pub value: u32,
+}
+
+// ---------------------------------------------------------------------------
+// Property realization
+// ---------------------------------------------------------------------------
+
+/// Linux-specific property realization details.
+///
+/// Carries enough information for the emitter to generate
+/// `device_property_read_*` calls with correct types and defaults.
+#[derive(Debug, Clone)]
+pub struct LinuxPropertyRealization {
+    /// Property identifier (e.g. "current-speed").
+    pub property_id: String,
+    /// Destination field name on the driver struct.
+    pub field_name: String,
+    /// C type string for the emitted read call (e.g. "u32").
+    pub c_type: String,
+    /// Whether the property is required.
+    pub required: bool,
+    /// Default literal from the declaration, if any.
+    pub default_literal: Option<String>,
+    /// Linux API for reading this property (e.g. "device_property_read_u32").
+    pub linux_read_api: String,
+}
+
+// ---------------------------------------------------------------------------
+// Deployment metadata
+// ---------------------------------------------------------------------------
+
+/// Deployment metadata for optional resource families.
+///
+/// Carries clock, reset, and pinctrl facts from the joined/binding
+/// layer so that emission does not need to re-read raw frontend models.
+#[derive(Debug, Clone)]
+pub struct LinuxDeploymentMetadata {
+    /// Clock deployment entries.
+    pub clocks: Vec<LinuxClockEntry>,
+    /// Reset deployment entries.
+    pub resets: Vec<LinuxResetEntry>,
+    /// Pin controller deployment entries.
+    pub pinctrl: Vec<LinuxPinCtrlEntry>,
+}
+
+/// Clock deployment metadata for Linux emission.
+#[derive(Debug, Clone)]
+pub struct LinuxClockEntry {
+    /// Clock identifier.
+    pub clock_id: String,
+    /// Whether the clock is required.
+    pub required: bool,
+    /// Default frequency in Hz from the deployment binding, if supplied.
+    pub default_frequency_hz: Option<i64>,
+}
+
+/// Reset deployment metadata for Linux emission.
+#[derive(Debug, Clone)]
+pub struct LinuxResetEntry {
+    /// Field name on the driver struct.
+    pub field_name: String,
+    /// Whether the reset is required.
+    pub required: bool,
+    /// Reset line identifier from the deployment binding.
+    pub reset_line_id: Option<String>,
+    /// Whether the reset line is shared.
+    pub shared: Option<bool>,
+}
+
+/// Pin controller deployment metadata for Linux emission.
+#[derive(Debug, Clone)]
+pub struct LinuxPinCtrlEntry {
+    /// Field name on the driver struct.
+    pub field_name: String,
+    /// Whether the pinctrl is required.
+    pub required: bool,
+    /// Available pin states from the deployment binding.
+    pub states: Option<Vec<String>>,
 }

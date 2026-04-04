@@ -9,9 +9,12 @@ use regseq_model::declaration::driver::DeviceClass;
 use crate::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 
 use super::plan::{
-    LinuxAcquisitionEntry, LinuxArtifactLayout, LinuxBackendPlan, LinuxEmittedFile, LinuxFileRole,
-    LinuxProbeOrchestration, LinuxProbeStep, LinuxRegistrationShape, LinuxReleaseEntry,
-    LinuxRemoveOrchestration, LinuxRemoveStep, LinuxResourceSequencing, LinuxSerialCoreRealization,
+    LinuxAcquisitionEntry, LinuxArtifactLayout, LinuxBackendPlan, LinuxBitFieldEntry,
+    LinuxClockEntry, LinuxDeploymentMetadata, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue,
+    LinuxPinCtrlEntry, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
+    LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
+    LinuxRegistrationShape, LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep,
+    LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -38,6 +41,9 @@ pub fn build_linux_backend_plan(
     let remove = build_remove(plan);
     let resource_acquisition = build_resource_sequencing(plan);
     let artifact_layout = build_artifact_layout(plan);
+    let register_layout = build_register_layout(plan);
+    let property_realization = build_property_realization(plan);
+    let deployment_metadata = build_deployment_metadata(plan);
 
     Ok(LinuxBackendPlan {
         registration,
@@ -46,6 +52,9 @@ pub fn build_linux_backend_plan(
         remove,
         resource_acquisition,
         artifact_layout,
+        register_layout,
+        property_realization,
+        deployment_metadata,
     })
 }
 
@@ -253,6 +262,124 @@ fn build_artifact_layout(plan: &DriverLoweringPlan) -> LinuxArtifactLayout {
 
     LinuxArtifactLayout {
         emitted_files: files,
+    }
+}
+
+fn build_register_layout(plan: &DriverLoweringPlan) -> LinuxRegisterLayout {
+    let blocks = plan
+        .register_obligations
+        .blocks
+        .iter()
+        .map(|b| LinuxRegisterBlock {
+            block_name: b.name.clone(),
+            fields: b
+                .register_fields
+                .iter()
+                .map(|f| LinuxRegisterFieldEntry {
+                    name: f.name.clone(),
+                    byte_offset: f.byte_offset,
+                    access_width_bytes: f.access_width.unwrap_or(32) / 8,
+                })
+                .collect(),
+        })
+        .collect();
+
+    let descriptors = plan
+        .register_obligations
+        .descriptors
+        .iter()
+        .map(|d| LinuxRegisterDescriptor {
+            register_name: d.register_name.clone(),
+            bit_fields: d
+                .bit_fields
+                .iter()
+                .map(|f| LinuxBitFieldEntry {
+                    name: f.name.clone(),
+                    bit_offset: f.offset,
+                    bit_width: f.width,
+                    named_values: f
+                        .named_values
+                        .iter()
+                        .map(|nv| LinuxNamedValue {
+                            name: nv.name.clone(),
+                            value: nv.value,
+                        })
+                        .collect(),
+                })
+                .collect(),
+        })
+        .collect();
+
+    LinuxRegisterLayout {
+        blocks,
+        descriptors,
+    }
+}
+
+fn build_property_realization(plan: &DriverLoweringPlan) -> Vec<LinuxPropertyRealization> {
+    plan.resources
+        .properties
+        .iter()
+        .map(|p| {
+            let linux_read_api = match p.field_type.as_str() {
+                "u8" => "device_property_read_u8",
+                "u16" => "device_property_read_u16",
+                "u32" => "device_property_read_u32",
+                "u64" => "device_property_read_u64",
+                "bool" => "device_property_read_bool",
+                _ => "device_property_read_u32",
+            };
+            LinuxPropertyRealization {
+                property_id: p.property_id.clone(),
+                field_name: p.field_name.clone(),
+                c_type: p.field_type.clone(),
+                required: p.required,
+                default_literal: p.default_literal.clone(),
+                linux_read_api: linux_read_api.into(),
+            }
+        })
+        .collect()
+}
+
+fn build_deployment_metadata(plan: &DriverLoweringPlan) -> LinuxDeploymentMetadata {
+    let clocks = plan
+        .resources
+        .clocks
+        .iter()
+        .map(|c| LinuxClockEntry {
+            clock_id: c.clock_id.clone(),
+            required: c.required,
+            default_frequency_hz: c.default_frequency,
+        })
+        .collect();
+
+    let resets = plan
+        .resources
+        .resets
+        .iter()
+        .map(|r| LinuxResetEntry {
+            field_name: r.field_name.clone(),
+            required: r.required,
+            reset_line_id: r.reset_line_id.clone(),
+            shared: r.reset_shared,
+        })
+        .collect();
+
+    let pinctrl = plan
+        .resources
+        .pinctrl
+        .iter()
+        .map(|p| LinuxPinCtrlEntry {
+            field_name: p.field_name.clone(),
+            required: p.required,
+            states: p.pin_states.clone(),
+        })
+        .collect();
+
+    LinuxDeploymentMetadata {
+        clocks,
+        resets,
+        pinctrl,
     }
 }
 

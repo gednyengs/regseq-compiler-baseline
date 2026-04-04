@@ -12,10 +12,10 @@ use super::plan::{
     AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry,
     CallbackInventory, ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity,
     DriverLoweringPlan, InterruptObligation, LockScopeObligation, LoweringAction, MmioObligation,
-    PinCtrlObligation, PollObligation, PropertyObligation, RegisterAccessObligation,
-    RegisterBlockObligation, RegisterDescriptorInfo, RegisterObligations, ResetObligation,
-    ResourceKind, ResourceObligations, ResourcePolicy, SyncFieldObligation,
-    SynchronizationObligations, TeardownStep,
+    NamedValueInfo, PinCtrlObligation, PollObligation, PropertyObligation,
+    RegisterAccessObligation, RegisterBlockObligation, RegisterDescriptorInfo, RegisterFieldInfo,
+    RegisterObligations, ResetObligation, ResourceKind, ResourceObligations, ResourcePolicy,
+    SyncFieldObligation, SynchronizationObligations, TeardownStep,
 };
 
 /// Errors that can occur during portable lowering plan construction.
@@ -194,6 +194,11 @@ fn build_resource_obligations(
         .fields
         .iter()
         .map(|c| {
+            let default_frequency = joined
+                .clocks_joined
+                .iter()
+                .find(|j| j.clock_id == c.clock_id)
+                .and_then(|j| j.default_frequency);
             let policy = if c.required {
                 ResourcePolicy::Required
             } else {
@@ -203,6 +208,7 @@ fn build_resource_obligations(
                 field_name: c.field_name.clone(),
                 clock_id: c.clock_id.clone(),
                 required: c.required,
+                default_frequency,
                 policy,
                 provenance: c.provenance.clone(),
             }
@@ -215,6 +221,12 @@ fn build_resource_obligations(
         .fields
         .iter()
         .map(|r| {
+            let joined_reset = joined
+                .resets_joined
+                .iter()
+                .find(|j| j.field_name == r.field_name);
+            let reset_line_id = joined_reset.and_then(|j| j.reset_line_id.clone());
+            let reset_shared = joined_reset.and_then(|j| j.reset_shared);
             let policy = if r.required {
                 ResourcePolicy::Required
             } else {
@@ -223,6 +235,8 @@ fn build_resource_obligations(
             ResetObligation {
                 field_name: r.field_name.clone(),
                 required: r.required,
+                reset_line_id,
+                reset_shared,
                 policy,
                 provenance: r.provenance.clone(),
             }
@@ -235,6 +249,11 @@ fn build_resource_obligations(
         .fields
         .iter()
         .map(|p| {
+            let joined_pin = joined.pinctrl_joined.iter().find(|j| {
+                j.field_name == p.field_name
+                    || p.pinctrl_id.as_ref().is_some_and(|id| j.field_name == *id)
+            });
+            let pin_states = joined_pin.and_then(|j| j.pin_states.clone());
             let policy = if p.required {
                 ResourcePolicy::Required
             } else {
@@ -243,6 +262,8 @@ fn build_resource_obligations(
             PinCtrlObligation {
                 field_name: p.field_name.clone(),
                 required: p.required,
+                pinctrl_id: p.pinctrl_id.clone(),
+                pin_states,
                 policy,
                 provenance: p.provenance.clone(),
             }
@@ -282,10 +303,16 @@ fn build_bus_identity(input: &AnalysisInput) -> Result<BusIdentity, LoweringPlan
         .and_then(|b| b.amba_id)
         .map(|id| id as u32);
 
+    let amba_revision = input
+        .bus_binding()
+        .and_then(|b| b.revision)
+        .map(|r| r as u32);
+
     Ok(BusIdentity {
         bus_type,
         compatible: compatible.to_vec(),
         amba_id,
+        amba_revision,
     })
 }
 
@@ -388,11 +415,28 @@ fn build_register_obligations(input: &AnalysisInput) -> RegisterObligations {
     let blocks = input
         .register_blocks()
         .iter()
-        .map(|b| RegisterBlockObligation {
-            name: b.name.clone(),
-            field_count: b.fields.len(),
-            field_names: b.fields.iter().map(|f| f.name.clone()).collect(),
-            provenance: b.provenance.clone(),
+        .map(|b| {
+            let mut byte_offset = 0u32;
+            let register_fields = b
+                .fields
+                .iter()
+                .map(|f| {
+                    let field_offset = byte_offset;
+                    let stride = f.access_width.unwrap_or(32) / 8;
+                    byte_offset += stride;
+                    RegisterFieldInfo {
+                        name: f.name.clone(),
+                        access_width: f.access_width,
+                        byte_offset: field_offset,
+                    }
+                })
+                .collect();
+            RegisterBlockObligation {
+                name: b.name.clone(),
+                field_count: b.fields.len(),
+                register_fields,
+                provenance: b.provenance.clone(),
+            }
         })
         .collect();
 
@@ -427,6 +471,14 @@ fn build_register_obligations(input: &AnalysisInput) -> RegisterObligations {
                     name: f.field_name.clone(),
                     offset: f.offset,
                     width: f.width,
+                    named_values: f
+                        .named_values
+                        .iter()
+                        .map(|nv| NamedValueInfo {
+                            name: nv.name.clone(),
+                            value: nv.value,
+                        })
+                        .collect(),
                 })
                 .collect(),
         })

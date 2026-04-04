@@ -178,6 +178,8 @@ pub struct ClockObligation {
     pub clock_id: String,
     /// Whether the clock is required.
     pub required: bool,
+    /// Default frequency in Hz from the deployment binding, if supplied.
+    pub default_frequency: Option<i64>,
     /// Resource acquisition policy.
     pub policy: ResourcePolicy,
     /// Provenance.
@@ -191,6 +193,10 @@ pub struct ResetObligation {
     pub field_name: String,
     /// Whether the reset is required.
     pub required: bool,
+    /// Reset line identifier from the deployment binding, if present.
+    pub reset_line_id: Option<String>,
+    /// Whether the reset line is shared, from the deployment binding.
+    pub reset_shared: Option<bool>,
     /// Resource acquisition policy.
     pub policy: ResourcePolicy,
     /// Provenance.
@@ -204,6 +210,10 @@ pub struct PinCtrlObligation {
     pub field_name: String,
     /// Whether the pinctrl is required.
     pub required: bool,
+    /// Pin controller identifier from the declaration, if present.
+    pub pinctrl_id: Option<String>,
+    /// Available pin states from the deployment binding (e.g. `["default", "sleep"]`).
+    pub pin_states: Option<Vec<String>>,
     /// Resource acquisition policy.
     pub policy: ResourcePolicy,
     /// Provenance.
@@ -219,6 +229,8 @@ pub struct BusIdentity {
     pub compatible: Vec<String>,
     /// AMBA peripheral ID, if this is an AMBA bus device.
     pub amba_id: Option<u32>,
+    /// AMBA revision, if this is an AMBA bus device.
+    pub amba_revision: Option<u32>,
 }
 
 /// Inferred bus type for the device.
@@ -331,10 +343,27 @@ pub struct RegisterBlockObligation {
     pub name: String,
     /// Register field count in this block.
     pub field_count: usize,
-    /// Individual register field names in declared order.
-    pub field_names: Vec<String>,
+    /// Structural register field metadata in declared order.
+    ///
+    /// Each entry carries the field name, access width, and a computed byte
+    /// offset derived from the declared layout order. This is enough for
+    /// backend emission to produce per-register byte offsets without a
+    /// hardcoded offset table.
+    pub register_fields: Vec<RegisterFieldInfo>,
     /// Provenance.
     pub provenance: Provenance,
+}
+
+/// Structural metadata for a single register field within a block.
+#[derive(Debug, Clone)]
+pub struct RegisterFieldInfo {
+    /// Field name (e.g. "dr", "fr").
+    pub name: String,
+    /// Access width in bits, if declared (e.g. 32).
+    pub access_width: Option<u32>,
+    /// Byte offset within the register block, computed from the declared
+    /// field order and access widths.
+    pub byte_offset: u32,
 }
 
 /// Bitfield descriptor for a single register module.
@@ -355,6 +384,17 @@ pub struct BitFieldInfo {
     pub offset: u32,
     /// Width in bits.
     pub width: u32,
+    /// Named values (enum variants) for this bitfield, if any.
+    pub named_values: Vec<NamedValueInfo>,
+}
+
+/// A named value (enum variant) within a bitfield.
+#[derive(Debug, Clone)]
+pub struct NamedValueInfo {
+    /// Symbolic name (e.g. "EIGHT_BITS", "ENABLED").
+    pub name: String,
+    /// Numeric value.
+    pub value: u32,
 }
 
 /// A register access site that needs lowering.

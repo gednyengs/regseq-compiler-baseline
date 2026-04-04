@@ -25,7 +25,7 @@ use regseq_model::declaration::properties::{PropertyDeclSet, PropertyFieldDecl};
 use regseq_model::declaration::provenance::Provenance;
 use regseq_model::declaration::registers::{
     RegisterBlockDecl, RegisterDeclSet, RegisterDescriptorDecl, RegisterDescriptorFieldDecl,
-    RegisterFieldDecl, WrapperCallSiteDecl, WrapperMethod,
+    RegisterFieldDecl, RegisterNamedValueDecl, WrapperCallSiteDecl, WrapperMethod,
 };
 use regseq_model::declaration::resources::{
     ClockCallSiteDecl, ClockDeclSet, ClockFieldDecl, ClockMethod, InterruptBindingHints,
@@ -271,6 +271,50 @@ fn pl011_full_spec_decl() -> DeclarationModel {
                             offset: 3,
                             width: 1,
                             named_values: vec![],
+                        },
+                    ],
+                    provenance: Provenance::new("register_access"),
+                },
+                RegisterDescriptorDecl {
+                    register_module: "LCRH_REG".into(),
+                    fields: vec![
+                        RegisterDescriptorFieldDecl {
+                            field_name: "WLEN".into(),
+                            offset: 5,
+                            width: 2,
+                            named_values: vec![
+                                RegisterNamedValueDecl {
+                                    name: "FIVE_BITS".into(),
+                                    value: 0b00,
+                                },
+                                RegisterNamedValueDecl {
+                                    name: "SIX_BITS".into(),
+                                    value: 0b01,
+                                },
+                                RegisterNamedValueDecl {
+                                    name: "SEVEN_BITS".into(),
+                                    value: 0b10,
+                                },
+                                RegisterNamedValueDecl {
+                                    name: "EIGHT_BITS".into(),
+                                    value: 0b11,
+                                },
+                            ],
+                        },
+                        RegisterDescriptorFieldDecl {
+                            field_name: "FEN".into(),
+                            offset: 4,
+                            width: 1,
+                            named_values: vec![
+                                RegisterNamedValueDecl {
+                                    name: "DISABLED".into(),
+                                    value: 0,
+                                },
+                                RegisterNamedValueDecl {
+                                    name: "ENABLED".into(),
+                                    value: 1,
+                                },
+                            ],
                         },
                     ],
                     provenance: Provenance::new("register_access"),
@@ -776,4 +820,280 @@ fn linux_plan_is_deterministic() {
     );
     assert_eq!(linux1.probe.steps.len(), linux2.probe.steps.len());
     assert_eq!(linux1.remove.steps.len(), linux2.remove.steps.len());
+}
+
+// ---- Test 6: register layout carries offsets and bitfield info ----
+
+#[test]
+fn portable_plan_register_fields_carry_byte_offsets() {
+    let plan = make_portable_plan();
+    let block = &plan.register_obligations.blocks[0];
+    assert_eq!(block.name, "Pl011Registers");
+    assert_eq!(block.register_fields.len(), 10);
+
+    // First field (dr) at offset 0.
+    assert_eq!(block.register_fields[0].name, "dr");
+    assert_eq!(block.register_fields[0].byte_offset, 0);
+    assert_eq!(block.register_fields[0].access_width, Some(32));
+
+    // Second field (fr) at offset 4 (sequential 32-bit stride).
+    assert_eq!(block.register_fields[1].name, "fr");
+    assert_eq!(block.register_fields[1].byte_offset, 4);
+
+    // Last field (icr) at offset 36.
+    assert_eq!(block.register_fields[9].name, "icr");
+    assert_eq!(block.register_fields[9].byte_offset, 36);
+}
+
+#[test]
+fn portable_plan_bitfield_descriptors_preserve_offsets_and_widths() {
+    let plan = make_portable_plan();
+    let dr = plan
+        .register_obligations
+        .descriptors
+        .iter()
+        .find(|d| d.register_name == "DR_REG")
+        .expect("should have DR_REG descriptor");
+
+    let data_field = dr
+        .bit_fields
+        .iter()
+        .find(|f| f.name == "DATA")
+        .expect("DATA field");
+    assert_eq!(data_field.offset, 0);
+    assert_eq!(data_field.width, 8);
+
+    let oe_field = dr
+        .bit_fields
+        .iter()
+        .find(|f| f.name == "OE")
+        .expect("OE field");
+    assert_eq!(oe_field.offset, 11);
+    assert_eq!(oe_field.width, 1);
+}
+
+#[test]
+fn portable_plan_bitfield_named_values_preserved() {
+    let plan = make_portable_plan();
+    let lcrh = plan
+        .register_obligations
+        .descriptors
+        .iter()
+        .find(|d| d.register_name == "LCRH_REG")
+        .expect("should have LCRH_REG descriptor");
+
+    let wlen = lcrh
+        .bit_fields
+        .iter()
+        .find(|f| f.name == "WLEN")
+        .expect("WLEN field");
+    assert_eq!(wlen.offset, 5);
+    assert_eq!(wlen.width, 2);
+    assert_eq!(wlen.named_values.len(), 4);
+
+    let eight_bits = wlen
+        .named_values
+        .iter()
+        .find(|nv| nv.name == "EIGHT_BITS")
+        .expect("EIGHT_BITS value");
+    assert_eq!(eight_bits.value, 0b11);
+
+    let fen = lcrh
+        .bit_fields
+        .iter()
+        .find(|f| f.name == "FEN")
+        .expect("FEN field");
+    assert_eq!(fen.named_values.len(), 2);
+}
+
+// ---- Test 7: property plans preserve field names, types, and defaults ----
+
+#[test]
+fn portable_plan_property_field_names_and_types() {
+    let plan = make_portable_plan();
+
+    let speed = plan
+        .resources
+        .properties
+        .iter()
+        .find(|p| p.property_id == "current-speed")
+        .expect("current-speed");
+    assert_eq!(speed.field_name, "current_speed");
+    assert_eq!(speed.field_type, "u32");
+    assert!(speed.required);
+    assert_eq!(speed.default_literal.as_deref(), Some("115200"));
+
+    let fifo = plan
+        .resources
+        .properties
+        .iter()
+        .find(|p| p.property_id == "fifo-size")
+        .expect("fifo-size");
+    assert_eq!(fifo.field_name, "fifo_size");
+    assert_eq!(fifo.field_type, "u32");
+    assert!(fifo.required);
+    assert_eq!(fifo.default_literal.as_deref(), Some("32"));
+}
+
+// ---- Test 8: clock/reset/pinctrl deployment metadata preserved ----
+
+#[test]
+fn portable_plan_clock_carries_default_frequency() {
+    let plan = make_portable_plan();
+    let clock = &plan.resources.clocks[0];
+    assert_eq!(clock.clock_id, "uart_clk");
+    assert!(!clock.required);
+    assert_eq!(clock.default_frequency, Some(48_000_000));
+}
+
+#[test]
+fn portable_plan_reset_carries_deployment_metadata() {
+    let plan = make_portable_plan();
+    let reset = &plan.resources.resets[0];
+    assert_eq!(reset.field_name, "reset");
+    assert!(!reset.required);
+    assert_eq!(reset.reset_line_id.as_deref(), Some("uart_rst0"));
+    assert_eq!(reset.reset_shared, Some(false));
+}
+
+#[test]
+fn portable_plan_pinctrl_carries_states() {
+    let plan = make_portable_plan();
+    let pin = &plan.resources.pinctrl[0];
+    assert_eq!(pin.field_name, "pinctrl");
+    assert!(!pin.required);
+    assert_eq!(pin.pinctrl_id.as_deref(), Some("uart_pins"));
+    assert_eq!(
+        pin.pin_states.as_deref(),
+        Some(vec!["default".to_string(), "sleep".to_string()].as_slice())
+    );
+}
+
+#[test]
+fn portable_plan_bus_identity_carries_amba_revision() {
+    let plan = make_portable_plan();
+    assert_eq!(plan.resources.bus_identity.amba_id, Some(0x00041011));
+    assert_eq!(plan.resources.bus_identity.amba_revision, Some(3));
+}
+
+// ---- Test 9: Linux plan carries realization data without raw model access ----
+
+#[test]
+fn linux_plan_register_layout_carries_offsets() {
+    let linux = make_linux_plan();
+    assert_eq!(linux.register_layout.blocks.len(), 1);
+
+    let block = &linux.register_layout.blocks[0];
+    assert_eq!(block.block_name, "Pl011Registers");
+    assert_eq!(block.fields.len(), 10);
+    assert_eq!(block.fields[0].name, "dr");
+    assert_eq!(block.fields[0].byte_offset, 0);
+    assert_eq!(block.fields[0].access_width_bytes, 4);
+}
+
+#[test]
+fn linux_plan_register_descriptors_carry_named_values() {
+    let linux = make_linux_plan();
+    let lcrh = linux
+        .register_layout
+        .descriptors
+        .iter()
+        .find(|d| d.register_name == "LCRH_REG")
+        .expect("LCRH_REG");
+
+    let wlen = lcrh
+        .bit_fields
+        .iter()
+        .find(|f| f.name == "WLEN")
+        .expect("WLEN");
+    assert_eq!(wlen.bit_offset, 5);
+    assert_eq!(wlen.bit_width, 2);
+    assert_eq!(wlen.named_values.len(), 4);
+}
+
+#[test]
+fn linux_plan_property_realization_carries_api_and_defaults() {
+    let linux = make_linux_plan();
+    assert_eq!(linux.property_realization.len(), 2);
+
+    let speed = linux
+        .property_realization
+        .iter()
+        .find(|p| p.property_id == "current-speed")
+        .expect("current-speed");
+    assert_eq!(speed.field_name, "current_speed");
+    assert_eq!(speed.c_type, "u32");
+    assert_eq!(speed.linux_read_api, "device_property_read_u32");
+    assert_eq!(speed.default_literal.as_deref(), Some("115200"));
+}
+
+#[test]
+fn linux_plan_deployment_metadata_carries_clock_frequency() {
+    let linux = make_linux_plan();
+    assert_eq!(linux.deployment_metadata.clocks.len(), 1);
+
+    let clock = &linux.deployment_metadata.clocks[0];
+    assert_eq!(clock.clock_id, "uart_clk");
+    assert!(!clock.required);
+    assert_eq!(clock.default_frequency_hz, Some(48_000_000));
+}
+
+#[test]
+fn linux_plan_deployment_metadata_carries_reset_info() {
+    let linux = make_linux_plan();
+    assert_eq!(linux.deployment_metadata.resets.len(), 1);
+
+    let reset = &linux.deployment_metadata.resets[0];
+    assert_eq!(reset.field_name, "reset");
+    assert!(!reset.required);
+    assert_eq!(reset.reset_line_id.as_deref(), Some("uart_rst0"));
+    assert_eq!(reset.shared, Some(false));
+}
+
+#[test]
+fn linux_plan_deployment_metadata_carries_pinctrl_states() {
+    let linux = make_linux_plan();
+    assert_eq!(linux.deployment_metadata.pinctrl.len(), 1);
+
+    let pin = &linux.deployment_metadata.pinctrl[0];
+    assert_eq!(pin.field_name, "pinctrl");
+    assert!(!pin.required);
+    assert_eq!(
+        pin.states.as_deref(),
+        Some(vec!["default".to_string(), "sleep".to_string()].as_slice())
+    );
+}
+
+// ---- Test 10: realization data determinism ----
+
+#[test]
+fn realization_data_is_deterministic() {
+    let plan1 = make_portable_plan();
+    let plan2 = make_portable_plan();
+
+    // Register field offsets are deterministic.
+    assert_eq!(
+        plan1.register_obligations.blocks[0].register_fields.len(),
+        plan2.register_obligations.blocks[0].register_fields.len()
+    );
+    for (f1, f2) in plan1.register_obligations.blocks[0]
+        .register_fields
+        .iter()
+        .zip(plan2.register_obligations.blocks[0].register_fields.iter())
+    {
+        assert_eq!(f1.name, f2.name);
+        assert_eq!(f1.byte_offset, f2.byte_offset);
+    }
+
+    // Linux property realization is deterministic.
+    let linux1 = make_linux_plan();
+    let linux2 = make_linux_plan();
+    assert_eq!(
+        linux1.property_realization.len(),
+        linux2.property_realization.len()
+    );
+    assert_eq!(
+        linux1.register_layout.blocks.len(),
+        linux2.register_layout.blocks.len()
+    );
 }
