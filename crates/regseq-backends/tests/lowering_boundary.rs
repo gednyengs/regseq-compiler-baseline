@@ -8,7 +8,7 @@ use regseq_analysis::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
-use regseq_backends::lowering::planner::build_driver_lowering_plan;
+use regseq_backends::lowering::planner::{build_driver_lowering_plan, LoweringPlanError};
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, ClockBinding, InterruptBinding, JoinKey,
     MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
@@ -339,6 +339,23 @@ fn analysis_input_reaches_portable_plan() {
     let plan = plan.unwrap();
     assert_eq!(plan.identity.driver_name, "Pl011Driver");
     assert_eq!(plan.identity.compatible, vec!["arm,pl011"]);
+}
+
+#[test]
+fn analysis_input_without_explicit_bus_is_rejected() {
+    let mut decl = pl011_decl();
+    decl.driver.bus = None;
+
+    let binding = pl011_binding();
+    let bus_binding = binding.bus.clone();
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    let input = AnalysisInput::new(decl, joined, bus_binding);
+
+    let err = build_driver_lowering_plan(&input).expect_err("missing bus should fail");
+    assert!(matches!(
+        err,
+        LoweringPlanError::MissingBusIdentity { driver_name } if driver_name == "Pl011Driver"
+    ));
 }
 
 // ---- Test 3: LinuxBackendPlan is typed separately from DriverLoweringPlan ----

@@ -20,6 +20,12 @@ use super::plan::{
 /// Errors that can occur during portable lowering plan construction.
 #[derive(Debug, thiserror::Error)]
 pub enum LoweringPlanError {
+    /// The declaration model does not carry an explicit portable bus identity.
+    #[error("missing explicit bus identity for driver '{driver_name}'")]
+    MissingBusIdentity {
+        /// Driver name missing its explicit bus declaration.
+        driver_name: String,
+    },
     /// A required resource is missing from the joined artifact.
     #[error("missing required resource: {family} '{id}'")]
     MissingResource {
@@ -47,7 +53,7 @@ pub fn build_driver_lowering_plan(
 ) -> Result<DriverLoweringPlan, LoweringPlanError> {
     let identity = build_identity(input);
     let callbacks = build_callback_inventory(input);
-    let resources = build_resource_obligations(input);
+    let resources = build_resource_obligations(input)?;
     let acquisition_order = build_acquisition_order(&resources);
     let teardown_order = build_teardown_order(&acquisition_order);
     let device_class_roles = build_device_class_roles(input);
@@ -108,7 +114,9 @@ fn build_callback_inventory(input: &AnalysisInput) -> CallbackInventory {
     }
 }
 
-fn build_resource_obligations(input: &AnalysisInput) -> ResourceObligations {
+fn build_resource_obligations(
+    input: &AnalysisInput,
+) -> Result<ResourceObligations, LoweringPlanError> {
     let decl = input.declaration();
     let joined = input.joined();
 
@@ -240,9 +248,9 @@ fn build_resource_obligations(input: &AnalysisInput) -> ResourceObligations {
         })
         .collect();
 
-    let bus_identity = build_bus_identity(input);
+    let bus_identity = build_bus_identity(input)?;
 
-    ResourceObligations {
+    Ok(ResourceObligations {
         mmio,
         interrupts,
         properties,
@@ -250,39 +258,34 @@ fn build_resource_obligations(input: &AnalysisInput) -> ResourceObligations {
         resets,
         pinctrl,
         bus_identity,
-    }
+    })
 }
 
-/// Build the bus identity from the explicit declaration bus when available,
-/// falling back to compatible-string inference.
-fn build_bus_identity(input: &AnalysisInput) -> BusIdentity {
+/// Build the bus identity from the explicit declaration bus.
+fn build_bus_identity(input: &AnalysisInput) -> Result<BusIdentity, LoweringPlanError> {
     let compatible = &input.declaration().driver.compatible;
 
-    let bus_type = match input.bus_identity() {
-        Some(regseq_model::declaration::driver::BusType::Integrated) => BusType::Platform,
-        Some(regseq_model::declaration::driver::BusType::Amba) => BusType::Amba,
-        Some(regseq_model::declaration::driver::BusType::Pci) => BusType::Pci,
-        None => infer_bus_from_compatible(compatible),
-    };
-    BusIdentity {
+    let bus_type =
+        match input
+            .bus_identity()
+            .ok_or_else(|| LoweringPlanError::MissingBusIdentity {
+                driver_name: input.declaration().driver.driver_name.clone(),
+            })? {
+            regseq_model::declaration::driver::BusType::Integrated => BusType::Platform,
+            regseq_model::declaration::driver::BusType::Amba => BusType::Amba,
+            regseq_model::declaration::driver::BusType::Pci => BusType::Pci,
+        };
+
+    let amba_id = input
+        .bus_binding()
+        .and_then(|b| b.amba_id)
+        .map(|id| id as u32);
+
+    Ok(BusIdentity {
         bus_type,
         compatible: compatible.to_vec(),
-    }
-}
-
-/// Fallback bus inference from compatible strings when no explicit bus
-/// identity is declared.
-fn infer_bus_from_compatible(compatible: &[String]) -> BusType {
-    if compatible
-        .iter()
-        .any(|c| c.contains("primecell") || c == "arm,pl011")
-    {
-        BusType::Amba
-    } else if compatible.iter().any(|c| c.contains("pci")) {
-        BusType::Pci
-    } else {
-        BusType::Platform
-    }
+        amba_id,
+    })
 }
 
 /// Build acquisition ordering: clocks -> resets -> pinctrl -> mmio -> properties -> interrupts.

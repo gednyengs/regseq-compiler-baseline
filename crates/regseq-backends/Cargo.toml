@@ -4,6 +4,11 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
+regseq-analysis = { path = "../regseq-analysis" }
 regseq-config = { path = "../regseq-config" }
 regseq-diagnostics = { path = "../regseq-diagnostics" }
 regseq-model = { path = "../regseq-model" }
+thiserror = "2"
+
+[dev-dependencies]
+tempfile = "3"

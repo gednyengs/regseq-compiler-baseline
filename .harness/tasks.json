@@ -332,6 +332,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-21",
+          "name": "Driver bus attribute extraction",
+          "spec": ".harness/tasks/regseq-driver/21-driver-bus-attribute-extraction.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -467,6 +478,29 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-11",
+          "name": "Declaration-model bus identity normalization",
+          "spec": ".harness/tasks/regseq-model/11-declaration-model-bus-identity-normalization.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-21"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-12",
+          "name": "Layer 2 bus section parsing and binding normalization",
+          "spec": ".harness/tasks/regseq-model/12-layer2-bus-section-parsing-and-binding-normalization.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-11",
+            "track-a-validation-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -547,6 +581,18 @@
             "regseq-analysis-02",
             "track-a-pl011-05",
             "track-a-validation-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-analysis-04",
+          "name": "Analysis bootstrap exposure for bus identity and metadata",
+          "spec": ".harness/tasks/regseq-analysis/04-analysis-bootstrap-exposure-for-bus-identity-and-metadata.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-analysis-03",
+            "regseq-model-12"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -791,12 +837,61 @@
     {
       "id": "regseq-lowering",
       "name": "regseq lowering infrastructure",
-      "tasks": []
+      "tasks": [
+        {
+          "id": "regseq-lowering-01",
+          "name": "Lowering module scaffold and typed plan boundary",
+          "spec": ".harness/tasks/regseq-lowering/01-lowering-module-scaffold-and-typed-plan-boundary.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-analysis-03",
+            "regseq-backends-01",
+            "track-a-validation-09"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-02",
+          "name": "PL011 supported-slice lowering into plans",
+          "spec": ".harness/tasks/regseq-lowering/02-pl011-supported-slice-lowering-into-plans.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-lowering-01",
+            "track-a-validation-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
     },
     {
       "id": "regseq-linux-backend",
       "name": "regseq Linux backend",
-      "tasks": []
+      "tasks": [
+        {
+          "id": "regseq-linux-backend-01",
+          "name": "Linux artifact layout and backend emission scaffold",
+          "spec": ".harness/tasks/regseq-linux-backend/01-linux-artifact-layout-and-backend-emission-scaffold.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-lowering-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-02",
+          "name": "PL011 Linux driver emission for supported slice",
+          "spec": ".harness/tasks/regseq-linux-backend/02-pl011-linux-driver-emission-for-supported-slice.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-linux-backend-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
     },
     {
       "id": "regseq-zephyr-backend",
@@ -948,6 +1043,39 @@
           "depends_on": [
             "regseq-analysis-03",
             "track-a-validation-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-07",
+          "name": "PL011 Linux generated build and second-UART smoke proof",
+          "spec": ".harness/tasks/track-a-validation/07-pl011-linux-generated-build-and-second-uart-smoke-proof.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-linux-backend-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-08",
+          "name": "PL011 second-UART hot-path functional comparison scaffold",
+          "spec": ".harness/tasks/track-a-validation/08-pl011-second-uart-hot-path-functional-comparison-scaffold.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-validation-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-09",
+          "name": "PL011 bus identity end-to-end proof",
+          "spec": ".harness/tasks/track-a-validation/09-pl011-bus-identity-end-to-end-proof.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-analysis-04"
           ],
           "artifacts": [],
           "fail_reason": null

@@ -710,7 +710,9 @@ fn linux_plan_artifact_layout() {
         .map(|f| &f.role)
         .collect();
     assert!(roles.contains(&&LinuxFileRole::DriverMain));
+    assert!(roles.contains(&&LinuxFileRole::SharedHeader));
     assert!(roles.contains(&&LinuxFileRole::Makefile));
+    assert!(roles.contains(&&LinuxFileRole::KbuildFragment));
     assert!(roles.contains(&&LinuxFileRole::RegisterHelpers));
 }
 
