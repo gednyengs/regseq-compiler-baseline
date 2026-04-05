@@ -1,17 +1,24 @@
-//! Tests for authored body capture exposure and supported-subset validation.
+//! Tests for MIR body capture exposure and supported-subset validation.
 //!
-//! Verifies that AnalysisInput exposes per-function body data, computes
-//! helper reachability, and that body readiness validation catches
-//! missing, unsupported, and provenance-deficient body features.
+//! Verifies that AnalysisInput exposes per-function MIR body data,
+//! computes helper reachability from MIR call edges, and that body
+//! readiness validation catches missing, unsupported, and
+//! provenance-deficient MIR features.
 
 use regseq_analysis::{check_body_readiness, AnalysisInput};
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, InterruptBinding, JoinKey, MmioBinding,
     PropertyBinding,
 };
-use regseq_model::declaration::bodies::{BodyDeclSet, BodyExpr, BodyStmt, FnBodyDecl, FnKind};
+use regseq_model::declaration::bodies::BodyDeclSet;
 use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
+};
+use regseq_model::declaration::mir_body::{
+    FnKind, FnParamDecl, MirBasicBlockData, MirBody, MirBodyDeclSet, MirConstValue, MirConstant,
+    MirFnBodyDecl, MirLocalDecl, MirMutability, MirOperand, MirPlace, MirProjectionElem,
+    MirQueryFlavor, MirRvalue, MirSourceInfo, MirSourceScope, MirStatement, MirStatementKind,
+    MirSwitchTargets, MirTerminator, MirTerminatorKind, MirTy, MirUnwindAction,
 };
 use regseq_model::declaration::operations::{LoggingDeclSet, PmGateDeclSet, TimedDelayDeclSet};
 use regseq_model::declaration::properties::{PropertyDeclSet, PropertyFieldDecl};
@@ -23,17 +30,432 @@ use regseq_model::declaration::resources::{
 };
 use regseq_model::declaration::synchronization::SynchronizationDeclSet;
 use regseq_model::declaration::{
-    BusType, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl, FnParamDecl,
+    BusType, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
 };
 use regseq_model::joined::perform_join;
 use regseq_model::platform::PlatformValue;
 
-// ---- Fixture builders ----
+// ---- MIR fixture helpers ----
 
-/// Build a minimal declaration model with body data for testing.
-///
-/// Uses generic device-neutral names to avoid PL011-specific coupling.
-fn decl_with_bodies(bodies: BodyDeclSet) -> DeclarationModel {
+fn src_info() -> MirSourceInfo {
+    MirSourceInfo {
+        scope: 0,
+        span: Some("test".into()),
+    }
+}
+
+/// A local variable declaration.
+fn local_decl(index: u32, ty: MirTy, name: Option<&str>) -> MirLocalDecl {
+    MirLocalDecl {
+        index,
+        ty,
+        mutability: MirMutability::Mut,
+        name: name.map(|s| s.into()),
+    }
+}
+
+/// A minimal MIR body with just a Return terminator.
+fn trivial_mir_body() -> MirBody {
+    MirBody {
+        local_decls: vec![local_decl(0, MirTy::Tuple { elements: vec![] }, None)],
+        arg_count: 0,
+        basic_blocks: vec![MirBasicBlockData {
+            statements: vec![],
+            terminator: Some(MirTerminator {
+                source_info: src_info(),
+                kind: MirTerminatorKind::Return,
+            }),
+            is_cleanup: false,
+        }],
+        source_scopes: vec![MirSourceScope {
+            index: 0,
+            name: None,
+        }],
+    }
+}
+
+/// A MIR body with a Call to a helper followed by Return.
+fn calling_mir_body(callee_path: &str) -> MirBody {
+    MirBody {
+        local_decls: vec![
+            local_decl(0, MirTy::Tuple { elements: vec![] }, None),
+            local_decl(1, MirTy::Tuple { elements: vec![] }, Some("_tmp")),
+        ],
+        arg_count: 0,
+        basic_blocks: vec![
+            MirBasicBlockData {
+                statements: vec![],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::Call {
+                        func: MirOperand::Constant {
+                            constant: MirConstant {
+                                ty: MirTy::FnDef {
+                                    path: callee_path.into(),
+                                    args: vec![],
+                                },
+                                value: MirConstValue::ZeroSized,
+                            },
+                        },
+                        args: vec![],
+                        destination: MirPlace {
+                            local: 1,
+                            projection: vec![],
+                        },
+                        target: Some(1),
+                        unwind: MirUnwindAction::Continue,
+                    },
+                }),
+                is_cleanup: false,
+            },
+            MirBasicBlockData {
+                statements: vec![],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::Return,
+                }),
+                is_cleanup: false,
+            },
+        ],
+        source_scopes: vec![MirSourceScope {
+            index: 0,
+            name: None,
+        }],
+    }
+}
+
+/// A MIR body exhibiting fallible control flow (`?`-style pattern):
+/// Discriminant assignment followed by SwitchInt, with a cleanup block.
+fn fallible_mir_body() -> MirBody {
+    MirBody {
+        local_decls: vec![
+            local_decl(
+                0,
+                MirTy::Adt {
+                    path: "core::result::Result".into(),
+                    args: vec![
+                        MirTy::Tuple { elements: vec![] },
+                        MirTy::Adt {
+                            path: "RegseqError".into(),
+                            args: vec![],
+                        },
+                    ],
+                },
+                None,
+            ),
+            local_decl(
+                1,
+                MirTy::Adt {
+                    path: "core::result::Result".into(),
+                    args: vec![
+                        MirTy::Tuple { elements: vec![] },
+                        MirTy::Adt {
+                            path: "RegseqError".into(),
+                            args: vec![],
+                        },
+                    ],
+                },
+                Some("_result"),
+            ),
+            local_decl(
+                2,
+                MirTy::Uint {
+                    uint_ty: regseq_model::declaration::mir_body::MirUintTy::U8,
+                },
+                Some("_discr"),
+            ),
+        ],
+        arg_count: 0,
+        basic_blocks: vec![
+            // bb0: call that returns Result, then goto bb1
+            MirBasicBlockData {
+                statements: vec![],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::Call {
+                        func: MirOperand::Constant {
+                            constant: MirConstant {
+                                ty: MirTy::FnDef {
+                                    path: "some_fallible_op".into(),
+                                    args: vec![],
+                                },
+                                value: MirConstValue::ZeroSized,
+                            },
+                        },
+                        args: vec![],
+                        destination: MirPlace {
+                            local: 1,
+                            projection: vec![],
+                        },
+                        target: Some(1),
+                        unwind: MirUnwindAction::Cleanup { target: 3 },
+                    },
+                }),
+                is_cleanup: false,
+            },
+            // bb1: Discriminant + SwitchInt (the ? pattern)
+            MirBasicBlockData {
+                statements: vec![MirStatement {
+                    source_info: src_info(),
+                    kind: MirStatementKind::Assign {
+                        place: MirPlace {
+                            local: 2,
+                            projection: vec![],
+                        },
+                        rvalue: Box::new(MirRvalue::Discriminant {
+                            place: MirPlace {
+                                local: 1,
+                                projection: vec![],
+                            },
+                        }),
+                    },
+                }],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::SwitchInt {
+                        discr: MirOperand::Copy {
+                            place: MirPlace {
+                                local: 2,
+                                projection: vec![],
+                            },
+                        },
+                        targets: MirSwitchTargets {
+                            values: vec![0],
+                            targets: vec![2, 4],
+                        },
+                    },
+                }),
+                is_cleanup: false,
+            },
+            // bb2: success path → Return
+            MirBasicBlockData {
+                statements: vec![],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::Return,
+                }),
+                is_cleanup: false,
+            },
+            // bb3: cleanup block
+            MirBasicBlockData {
+                statements: vec![],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::UnwindResume,
+                }),
+                is_cleanup: true,
+            },
+            // bb4: error path → Drop + Return
+            MirBasicBlockData {
+                statements: vec![],
+                terminator: Some(MirTerminator {
+                    source_info: src_info(),
+                    kind: MirTerminatorKind::Drop {
+                        place: MirPlace {
+                            local: 1,
+                            projection: vec![],
+                        },
+                        target: 2,
+                        unwind: MirUnwindAction::Cleanup { target: 3 },
+                        replace: false,
+                    },
+                }),
+                is_cleanup: false,
+            },
+        ],
+        source_scopes: vec![MirSourceScope {
+            index: 0,
+            name: Some("init".into()),
+        }],
+    }
+}
+
+/// Build a MIR callback body declaration.
+fn mir_callback(
+    trait_name: &str,
+    method_name: &str,
+    body: MirBody,
+    helpers: Vec<&str>,
+) -> MirFnBodyDecl {
+    MirFnBodyDecl {
+        name: method_name.into(),
+        def_path: format!("TestDriver::{}::{}", trait_name, method_name),
+        kind: FnKind::Callback {
+            trait_name: trait_name.into(),
+            method_name: method_name.into(),
+        },
+        receiver: "ref_mut".into(),
+        params: vec![],
+        return_type: Some("Result<(), RegseqError>".into()),
+        body,
+        helper_calls: helpers.into_iter().map(|s| s.into()).collect(),
+        provenance: Provenance::new("mir_bodies").with_containing_item(method_name),
+    }
+}
+
+/// Build a MIR helper body declaration.
+fn mir_helper(name: &str, body: MirBody, helpers: Vec<&str>) -> MirFnBodyDecl {
+    MirFnBodyDecl {
+        name: name.into(),
+        def_path: format!("TestDriver::{}", name),
+        kind: FnKind::Helper,
+        receiver: "ref_mut".into(),
+        params: vec![],
+        return_type: None,
+        body,
+        helper_calls: helpers.into_iter().map(|s| s.into()).collect(),
+        provenance: Provenance::new("mir_bodies").with_containing_item(name),
+    }
+}
+
+/// Build a MIR ISR body declaration.
+fn mir_isr(name: &str, body: MirBody, helpers: Vec<&str>) -> MirFnBodyDecl {
+    MirFnBodyDecl {
+        name: name.into(),
+        def_path: format!("TestDriver::{}", name),
+        kind: FnKind::Isr,
+        receiver: "ref_mut".into(),
+        params: vec![],
+        return_type: Some("IrqResult".into()),
+        body,
+        helper_calls: helpers.into_iter().map(|s| s.into()).collect(),
+        provenance: Provenance::new("mir_bodies").with_containing_item(name),
+    }
+}
+
+/// Build a MIR free function body declaration.
+fn mir_free_fn(name: &str, params: Vec<(&str, &str)>, body: MirBody) -> MirFnBodyDecl {
+    MirFnBodyDecl {
+        name: name.into(),
+        def_path: format!("crate::{}", name),
+        kind: FnKind::FreeFunction,
+        receiver: "none".into(),
+        params: params
+            .into_iter()
+            .map(|(n, t)| FnParamDecl {
+                name: n.into(),
+                ty: t.into(),
+            })
+            .collect(),
+        return_type: None,
+        body,
+        helper_calls: vec![],
+        provenance: Provenance::new("mir_bodies").with_containing_item(name),
+    }
+}
+
+/// Build a representative set of MIR bodies.
+fn representative_mir_bodies() -> MirBodyDeclSet {
+    MirBodyDeclSet {
+        functions: vec![
+            // Lifecycle::init calls setup_device, has fallible pattern
+            mir_callback(
+                "Lifecycle",
+                "init",
+                fallible_mir_body(),
+                vec!["setup_device"],
+            ),
+            // Lifecycle::deinit calls shutdown_device
+            mir_callback(
+                "Lifecycle",
+                "deinit",
+                calling_mir_body("TestDriver::shutdown_device"),
+                vec!["shutdown_device"],
+            ),
+            // Serial::tx_byte — leaf callback
+            mir_callback("Serial", "tx_byte", trivial_mir_body(), vec![]),
+            // ISR: handle_irq calls service_rx
+            mir_isr(
+                "handle_irq",
+                calling_mir_body("TestDriver::service_rx"),
+                vec!["service_rx"],
+            ),
+            // Helper: setup_device calls configure_hw (transitive)
+            mir_helper(
+                "setup_device",
+                calling_mir_body("TestDriver::configure_hw"),
+                vec!["configure_hw"],
+            ),
+            // Helper: shutdown_device — leaf
+            mir_helper("shutdown_device", trivial_mir_body(), vec![]),
+            // Helper: configure_hw — leaf (transitively reachable)
+            mir_helper("configure_hw", trivial_mir_body(), vec![]),
+            // Helper: service_rx — reachable from ISR
+            mir_helper("service_rx", trivial_mir_body(), vec![]),
+            // Free function: compute_divisor
+            mir_free_fn(
+                "compute_divisor",
+                vec![("clock_hz", "u32"), ("baud", "u32")],
+                MirBody {
+                    local_decls: vec![
+                        local_decl(
+                            0,
+                            MirTy::Uint {
+                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            },
+                            None,
+                        ),
+                        local_decl(
+                            1,
+                            MirTy::Uint {
+                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            },
+                            Some("clock_hz"),
+                        ),
+                        local_decl(
+                            2,
+                            MirTy::Uint {
+                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            },
+                            Some("baud"),
+                        ),
+                    ],
+                    arg_count: 2,
+                    basic_blocks: vec![MirBasicBlockData {
+                        statements: vec![MirStatement {
+                            source_info: src_info(),
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace {
+                                    local: 0,
+                                    projection: vec![],
+                                },
+                                rvalue: Box::new(MirRvalue::BinaryOp {
+                                    op: regseq_model::declaration::mir_body::MirBinOp::Div,
+                                    lhs: MirOperand::Copy {
+                                        place: MirPlace {
+                                            local: 1,
+                                            projection: vec![],
+                                        },
+                                    },
+                                    rhs: MirOperand::Copy {
+                                        place: MirPlace {
+                                            local: 2,
+                                            projection: vec![],
+                                        },
+                                    },
+                                }),
+                            },
+                        }],
+                        terminator: Some(MirTerminator {
+                            source_info: src_info(),
+                            kind: MirTerminatorKind::Return,
+                        }),
+                        is_cleanup: false,
+                    }],
+                    source_scopes: vec![MirSourceScope {
+                        index: 0,
+                        name: Some("compute_divisor".into()),
+                    }],
+                },
+            ),
+        ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    }
+}
+
+// ---- Declaration model builder ----
+
+fn decl_with_mir_bodies(mir_bodies: MirBodyDeclSet) -> DeclarationModel {
     DeclarationModel {
         driver: DriverDecl {
             driver_name: "TestDriver".into(),
@@ -124,7 +546,8 @@ fn decl_with_bodies(bodies: BodyDeclSet) -> DeclarationModel {
         },
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
-        bodies,
+        bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies,
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },
@@ -166,261 +589,27 @@ fn minimal_binding() -> BindingModel {
     }
 }
 
-fn make_input(bodies: BodyDeclSet) -> AnalysisInput {
-    let decl = decl_with_bodies(bodies);
+fn make_input(mir_bodies: MirBodyDeclSet) -> AnalysisInput {
+    let decl = decl_with_mir_bodies(mir_bodies);
     let binding = minimal_binding();
     let joined = perform_join(&decl, &binding).expect("join should succeed");
     AnalysisInput::new(decl, joined, None)
 }
 
-// ---- Body expression helpers ----
-
-/// A simple method call: `self.method_name()`.
-fn self_method_call(method: &str) -> BodyExpr {
-    BodyExpr::MethodCall {
-        receiver: Box::new(BodyExpr::Path {
-            path: "self".into(),
-        }),
-        method: method.into(),
-        type_args: vec![],
-        args: vec![],
-    }
-}
-
-/// `Ok(())` expression.
-fn ok_unit() -> BodyExpr {
-    BodyExpr::Call {
-        path: "Ok".into(),
-        type_args: vec![],
-        args: vec![BodyExpr::Tuple { elements: vec![] }],
-    }
-}
-
-/// A block with semicolon statements and an optional trailing expr.
-fn block(stmts: Vec<BodyExpr>, trailing: Option<BodyExpr>) -> BodyExpr {
-    BodyExpr::Block {
-        stmts: stmts
-            .into_iter()
-            .map(|expr| BodyStmt::Semi { expr })
-            .collect(),
-        expr: trailing.map(Box::new),
-    }
-}
-
-/// Build a callback body declaration.
-fn callback_body(trait_name: &str, method_name: &str, body: BodyExpr) -> FnBodyDecl {
-    FnBodyDecl {
-        name: method_name.into(),
-        kind: FnKind::Callback {
-            trait_name: trait_name.into(),
-            method_name: method_name.into(),
-        },
-        receiver: "&mut self".into(),
-        params: vec![],
-        return_type: Some("Result<(), RegseqError>".into()),
-        body,
-        provenance: Provenance::new("bodies").with_containing_item(method_name),
-    }
-}
-
-/// Build a helper body declaration.
-fn helper_body(name: &str, body: BodyExpr) -> FnBodyDecl {
-    FnBodyDecl {
-        name: name.into(),
-        kind: FnKind::Helper,
-        receiver: "&mut self".into(),
-        params: vec![],
-        return_type: None,
-        body,
-        provenance: Provenance::new("bodies").with_containing_item(name),
-    }
-}
-
-/// Build an ISR body declaration.
-fn isr_body(name: &str, body: BodyExpr) -> FnBodyDecl {
-    FnBodyDecl {
-        name: name.into(),
-        kind: FnKind::Isr,
-        receiver: "&mut self".into(),
-        params: vec![],
-        return_type: Some("IrqResult".into()),
-        body,
-        provenance: Provenance::new("bodies").with_containing_item(name),
-    }
-}
-
-/// Build a free function body declaration.
-fn free_fn_body(name: &str, params: Vec<(&str, &str)>, body: BodyExpr) -> FnBodyDecl {
-    FnBodyDecl {
-        name: name.into(),
-        kind: FnKind::FreeFunction,
-        receiver: "none".into(),
-        params: params
-            .into_iter()
-            .map(|(n, t)| FnParamDecl {
-                name: n.into(),
-                ty: t.into(),
-            })
-            .collect(),
-        return_type: None,
-        body,
-        provenance: Provenance::new("bodies").with_containing_item(name),
-    }
-}
-
-/// Build a representative set of bodies with callbacks, helpers, ISR.
-fn representative_bodies() -> BodyDeclSet {
-    BodyDeclSet {
-        functions: vec![
-            // Lifecycle::init calls setup_device
-            callback_body(
-                "Lifecycle",
-                "init",
-                block(
-                    vec![BodyExpr::Try {
-                        expr: Box::new(self_method_call("setup_device")),
-                    }],
-                    Some(ok_unit()),
-                ),
-            ),
-            // Lifecycle::deinit calls shutdown_device
-            callback_body(
-                "Lifecycle",
-                "deinit",
-                block(vec![self_method_call("shutdown_device")], Some(ok_unit())),
-            ),
-            // Serial::tx_byte -- no helper calls
-            callback_body(
-                "Serial",
-                "tx_byte",
-                block(
-                    vec![BodyExpr::MethodCall {
-                        receiver: Box::new(BodyExpr::Field {
-                            base: Box::new(BodyExpr::Path {
-                                path: "self".into(),
-                            }),
-                            name: "regs".into(),
-                        }),
-                        method: "write".into(),
-                        type_args: vec![],
-                        args: vec![BodyExpr::Path {
-                            path: "byte".into(),
-                        }],
-                    }],
-                    None,
-                ),
-            ),
-            // ISR: handle_irq calls service_rx
-            isr_body(
-                "handle_irq",
-                block(
-                    vec![self_method_call("service_rx")],
-                    Some(BodyExpr::Path {
-                        path: "IrqResult::Handled".into(),
-                    }),
-                ),
-            ),
-            // Helper: setup_device calls configure_hw (transitive)
-            helper_body(
-                "setup_device",
-                block(vec![self_method_call("configure_hw")], None),
-            ),
-            // Helper: shutdown_device -- leaf
-            helper_body(
-                "shutdown_device",
-                block(
-                    vec![BodyExpr::MethodCall {
-                        receiver: Box::new(BodyExpr::Field {
-                            base: Box::new(BodyExpr::Path {
-                                path: "self".into(),
-                            }),
-                            name: "regs".into(),
-                        }),
-                        method: "write".into(),
-                        type_args: vec![],
-                        args: vec![BodyExpr::LitInt {
-                            value: "0".into(),
-                            suffix: None,
-                        }],
-                    }],
-                    None,
-                ),
-            ),
-            // Helper: configure_hw -- leaf helper (transitively reachable)
-            helper_body(
-                "configure_hw",
-                block(
-                    vec![BodyExpr::MethodCall {
-                        receiver: Box::new(BodyExpr::Field {
-                            base: Box::new(BodyExpr::Path {
-                                path: "self".into(),
-                            }),
-                            name: "regs".into(),
-                        }),
-                        method: "write".into(),
-                        type_args: vec![],
-                        args: vec![BodyExpr::LitInt {
-                            value: "1".into(),
-                            suffix: None,
-                        }],
-                    }],
-                    None,
-                ),
-            ),
-            // Helper: service_rx -- reachable from ISR
-            helper_body(
-                "service_rx",
-                block(
-                    vec![BodyExpr::MethodCall {
-                        receiver: Box::new(BodyExpr::Field {
-                            base: Box::new(BodyExpr::Path {
-                                path: "self".into(),
-                            }),
-                            name: "regs".into(),
-                        }),
-                        method: "read".into(),
-                        type_args: vec![],
-                        args: vec![],
-                    }],
-                    None,
-                ),
-            ),
-            // Free function: compute_divisor (reachable from setup_device if we add
-            // a call, but here standalone for coverage of the free function kind)
-            free_fn_body(
-                "compute_divisor",
-                vec![("clock_hz", "u32"), ("baud", "u32")],
-                BodyExpr::Binary {
-                    op: "/".into(),
-                    lhs: Box::new(BodyExpr::Path {
-                        path: "clock_hz".into(),
-                    }),
-                    rhs: Box::new(BodyExpr::Path {
-                        path: "baud".into(),
-                    }),
-                },
-            ),
-        ],
-    }
-}
-
 // ============================================================
-// Test 1: AnalysisInput exposes per-function authored body capture
+// Test 1: AnalysisInput exposes per-function MIR body capture
 // ============================================================
 
 #[test]
-fn bodies_exposed_through_analysis_input() {
-    let input = make_input(representative_bodies());
-
-    assert!(!input.bodies().functions.is_empty());
-    assert_eq!(input.bodies().functions.len(), 9);
+fn mir_bodies_exposed_through_analysis_input() {
+    let input = make_input(representative_mir_bodies());
+    assert_eq!(input.mir_bodies().functions.len(), 9);
 }
 
 #[test]
-fn callback_bodies_filtered_correctly() {
-    let input = make_input(representative_bodies());
-    let cbs = input.callback_bodies();
-
+fn mir_callback_bodies_filtered_correctly() {
+    let input = make_input(representative_mir_bodies());
+    let cbs = input.mir_callback_bodies();
     assert_eq!(cbs.len(), 3);
     assert!(cbs.iter().all(|b| b.is_callback()));
 
@@ -431,57 +620,58 @@ fn callback_bodies_filtered_correctly() {
 }
 
 #[test]
-fn helper_bodies_filtered_correctly() {
-    let input = make_input(representative_bodies());
-    let helpers = input.helper_bodies();
-
+fn mir_helper_bodies_filtered_correctly() {
+    let input = make_input(representative_mir_bodies());
+    let helpers = input.mir_helper_bodies();
     assert_eq!(helpers.len(), 4);
     assert!(helpers.iter().all(|b| b.is_helper()));
 }
 
 #[test]
-fn isr_bodies_filtered_correctly() {
-    let input = make_input(representative_bodies());
-    let isrs = input.isr_bodies();
-
+fn mir_isr_bodies_filtered_correctly() {
+    let input = make_input(representative_mir_bodies());
+    let isrs = input.mir_isr_bodies();
     assert_eq!(isrs.len(), 1);
     assert_eq!(isrs[0].name, "handle_irq");
-    assert!(isrs[0].is_isr());
 }
 
 #[test]
-fn free_function_bodies_filtered_correctly() {
-    let input = make_input(representative_bodies());
-    let ffs = input.free_function_bodies();
-
+fn mir_free_function_bodies_filtered_correctly() {
+    let input = make_input(representative_mir_bodies());
+    let ffs = input.mir_free_function_bodies();
     assert_eq!(ffs.len(), 1);
     assert_eq!(ffs[0].name, "compute_divisor");
-    assert!(ffs[0].is_free_function());
 }
 
 #[test]
-fn body_by_name_lookup() {
-    let input = make_input(representative_bodies());
+fn mir_body_by_name_lookup() {
+    let input = make_input(representative_mir_bodies());
 
-    let init = input.body_by_name("init").expect("init should exist");
+    let init = input.mir_body_by_name("init").expect("init should exist");
     assert!(init.is_callback());
 
     let helper = input
-        .body_by_name("setup_device")
+        .mir_body_by_name("setup_device")
         .expect("setup_device should exist");
     assert!(helper.is_helper());
 
-    assert!(input.body_by_name("nonexistent").is_none());
+    assert!(input.mir_body_by_name("nonexistent").is_none());
+}
+
+#[test]
+fn mir_query_flavor_accessible() {
+    let input = make_input(representative_mir_bodies());
+    assert_eq!(*input.mir_query_flavor(), MirQueryFlavor::DropsElaborated);
 }
 
 // ============================================================
-// Test 2: reachable helpers from the supported slice are visible
+// Test 2: reachable helpers from MIR call edges
 // ============================================================
 
 #[test]
-fn reachable_helpers_from_callbacks() {
-    let input = make_input(representative_bodies());
-    let reachable = input.reachable_helper_names();
+fn mir_reachable_helpers_from_callbacks() {
+    let input = make_input(representative_mir_bodies());
+    let reachable = input.mir_reachable_helper_names();
 
     // Directly called from callbacks:
     assert!(reachable.contains("setup_device"));
@@ -493,19 +683,18 @@ fn reachable_helpers_from_callbacks() {
 }
 
 #[test]
-fn unreachable_free_function_not_in_reachable_set() {
-    let input = make_input(representative_bodies());
-    let reachable = input.reachable_helper_names();
-
-    // compute_divisor is not called by any callback or ISR in this fixture.
+fn mir_unreachable_free_function_not_in_reachable_set() {
+    let input = make_input(representative_mir_bodies());
+    let reachable = input.mir_reachable_helper_names();
+    // compute_divisor is not called by any callback or ISR.
     assert!(!reachable.contains("compute_divisor"));
 }
 
 #[test]
-fn transitive_reachability_works() {
+fn mir_transitive_reachability_works() {
+    let input = make_input(representative_mir_bodies());
+    let reachable = input.mir_reachable_helper_names();
     // configure_hw is only reachable via setup_device (called by init).
-    let input = make_input(representative_bodies());
-    let reachable = input.reachable_helper_names();
     assert!(reachable.contains("configure_hw"));
 }
 
@@ -514,8 +703,8 @@ fn transitive_reachability_works() {
 // ============================================================
 
 #[test]
-fn clean_bodies_pass_validation() {
-    let input = make_input(representative_bodies());
+fn clean_mir_bodies_pass_validation() {
+    let input = make_input(representative_mir_bodies());
     let report = check_body_readiness(&input);
 
     assert!(!report.has_errors());
@@ -526,106 +715,78 @@ fn clean_bodies_pass_validation() {
 }
 
 #[test]
-fn missing_callback_bodies_detected() {
-    // Declare Lifecycle and Serial families but provide no bodies.
-    let input = make_input(BodyDeclSet { functions: vec![] });
+fn missing_callback_mir_bodies_detected() {
+    let input = make_input(MirBodyDeclSet {
+        functions: vec![],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    });
     let report = check_body_readiness(&input);
 
     assert!(report.has_errors());
-    let errors = report.errors();
-    // Both Lifecycle and Serial families missing bodies.
-    let body_coverage_errors: Vec<_> = errors
+    let body_coverage_errors: Vec<_> = report
+        .errors()
         .iter()
         .filter(|f| f.category == "body_coverage")
+        .cloned()
         .collect();
+    // Both Lifecycle and Serial families missing bodies.
     assert_eq!(body_coverage_errors.len(), 2);
 }
 
 #[test]
-fn reachable_helper_count_excludes_absent_callees() {
-    // Callback calls helper_a which calls helper_b, but helper_b has no
-    // body in the set. Reachable helpers only includes functions that
-    // exist in the body set.
-    let bodies = BodyDeclSet {
-        functions: vec![
-            callback_body(
-                "Lifecycle",
-                "init",
-                block(vec![self_method_call("helper_a")], Some(ok_unit())),
-            ),
-            callback_body("Serial", "tx_byte", block(vec![], None)),
-            helper_body("helper_a", block(vec![self_method_call("helper_b")], None)),
-            // helper_b is NOT in the body set.
-        ],
-    };
-
-    let input = make_input(bodies);
-    let report = check_body_readiness(&input);
-
-    // helper_a is reachable and has a body; helper_b is absent.
-    assert!(!report.has_errors());
-    assert_eq!(report.reachable_helper_count, 1);
-}
-
-#[test]
-fn unsupported_nodes_surfaced() {
-    let bodies = BodyDeclSet {
-        functions: vec![
-            callback_body(
-                "Lifecycle",
-                "init",
-                block(
-                    vec![BodyExpr::Unsupported {
-                        hir_kind: "InlineAsm".into(),
-                        span_text: Some("asm!(...)".into()),
-                    }],
-                    Some(ok_unit()),
-                ),
-            ),
-            callback_body("Serial", "tx_byte", block(vec![], None)),
-        ],
-    };
+fn unsupported_mir_statement_surfaced() {
+    let mut bodies = representative_mir_bodies();
+    // Inject an unsupported statement into init's body.
+    bodies.functions[0].body.basic_blocks[0]
+        .statements
+        .push(MirStatement {
+            source_info: src_info(),
+            kind: MirStatementKind::Unsupported {
+                description: "FakeIntrinsic".into(),
+            },
+        });
 
     let input = make_input(bodies);
     let report = check_body_readiness(&input);
 
     assert!(report.has_cautions());
     assert_eq!(report.unsupported_node_count, 1);
-
     let cautions = report.cautions();
-    let unsupported_findings: Vec<_> = cautions
+    assert!(cautions
         .iter()
-        .filter(|f| f.category == "unsupported_construct")
-        .collect();
-    assert_eq!(unsupported_findings.len(), 1);
-    assert!(unsupported_findings[0].message.contains("InlineAsm"));
-    assert!(unsupported_findings[0].message.contains("init"));
+        .any(|f| f.message.contains("FakeIntrinsic") && f.message.contains("init")));
 }
 
 #[test]
-fn nested_unsupported_nodes_found() {
-    // Unsupported node nested inside an if-then branch.
-    let bodies = BodyDeclSet {
+fn unsupported_mir_terminator_surfaced() {
+    let bodies = MirBodyDeclSet {
         functions: vec![
-            callback_body(
+            mir_callback(
                 "Lifecycle",
                 "init",
-                BodyExpr::Block {
-                    stmts: vec![BodyStmt::Semi {
-                        expr: BodyExpr::If {
-                            cond: Box::new(BodyExpr::LitBool { value: true }),
-                            then_branch: Box::new(BodyExpr::Unsupported {
-                                hir_kind: "Yield".into(),
-                                span_text: None,
-                            }),
-                            else_branch: None,
-                        },
+                MirBody {
+                    local_decls: vec![local_decl(0, MirTy::Tuple { elements: vec![] }, None)],
+                    arg_count: 0,
+                    basic_blocks: vec![MirBasicBlockData {
+                        statements: vec![],
+                        terminator: Some(MirTerminator {
+                            source_info: src_info(),
+                            kind: MirTerminatorKind::Unsupported {
+                                description: "CoroutineDrop".into(),
+                            },
+                        }),
+                        is_cleanup: false,
                     }],
-                    expr: Some(Box::new(ok_unit())),
+                    source_scopes: vec![MirSourceScope {
+                        index: 0,
+                        name: None,
+                    }],
                 },
+                vec![],
             ),
-            callback_body("Serial", "tx_byte", block(vec![], None)),
+            mir_callback("Serial", "tx_byte", trivial_mir_body(), vec![]),
         ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
     };
 
     let input = make_input(bodies);
@@ -635,47 +796,249 @@ fn nested_unsupported_nodes_found() {
     let cautions = report.cautions();
     assert!(cautions
         .iter()
-        .any(|f| f.message.contains("Yield") && f.message.contains("init")));
+        .any(|f| f.message.contains("CoroutineDrop") && f.message.contains("init")));
+}
+
+#[test]
+fn unsupported_rvalue_surfaced() {
+    let bodies = MirBodyDeclSet {
+        functions: vec![
+            mir_callback(
+                "Lifecycle",
+                "init",
+                MirBody {
+                    local_decls: vec![
+                        local_decl(0, MirTy::Tuple { elements: vec![] }, None),
+                        local_decl(
+                            1,
+                            MirTy::Uint {
+                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            },
+                            None,
+                        ),
+                    ],
+                    arg_count: 0,
+                    basic_blocks: vec![MirBasicBlockData {
+                        statements: vec![MirStatement {
+                            source_info: src_info(),
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace {
+                                    local: 1,
+                                    projection: vec![],
+                                },
+                                rvalue: Box::new(MirRvalue::Unsupported {
+                                    description: "ThreadLocalRef".into(),
+                                }),
+                            },
+                        }],
+                        terminator: Some(MirTerminator {
+                            source_info: src_info(),
+                            kind: MirTerminatorKind::Return,
+                        }),
+                        is_cleanup: false,
+                    }],
+                    source_scopes: vec![MirSourceScope {
+                        index: 0,
+                        name: None,
+                    }],
+                },
+                vec![],
+            ),
+            mir_callback("Serial", "tx_byte", trivial_mir_body(), vec![]),
+        ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    };
+
+    let input = make_input(bodies);
+    let report = check_body_readiness(&input);
+
+    assert_eq!(report.unsupported_node_count, 1);
+    assert!(report
+        .cautions()
+        .iter()
+        .any(|f| f.message.contains("ThreadLocalRef")));
+}
+
+#[test]
+fn unsupported_projection_surfaced() {
+    let bodies = MirBodyDeclSet {
+        functions: vec![
+            mir_callback(
+                "Lifecycle",
+                "init",
+                MirBody {
+                    local_decls: vec![
+                        local_decl(0, MirTy::Tuple { elements: vec![] }, None),
+                        local_decl(
+                            1,
+                            MirTy::Uint {
+                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            },
+                            None,
+                        ),
+                    ],
+                    arg_count: 0,
+                    basic_blocks: vec![MirBasicBlockData {
+                        statements: vec![MirStatement {
+                            source_info: src_info(),
+                            kind: MirStatementKind::Assign {
+                                place: MirPlace {
+                                    local: 1,
+                                    projection: vec![],
+                                },
+                                rvalue: Box::new(MirRvalue::Use {
+                                    operand: MirOperand::Copy {
+                                        place: MirPlace {
+                                            local: 0,
+                                            projection: vec![MirProjectionElem::Unsupported {
+                                                description: "WackyProjection".into(),
+                                            }],
+                                        },
+                                    },
+                                }),
+                            },
+                        }],
+                        terminator: Some(MirTerminator {
+                            source_info: src_info(),
+                            kind: MirTerminatorKind::Return,
+                        }),
+                        is_cleanup: false,
+                    }],
+                    source_scopes: vec![MirSourceScope {
+                        index: 0,
+                        name: None,
+                    }],
+                },
+                vec![],
+            ),
+            mir_callback("Serial", "tx_byte", trivial_mir_body(), vec![]),
+        ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    };
+
+    let input = make_input(bodies);
+    let report = check_body_readiness(&input);
+
+    assert_eq!(report.unsupported_node_count, 1);
+    assert!(report
+        .cautions()
+        .iter()
+        .any(|f| f.message.contains("WackyProjection")));
 }
 
 // ============================================================
-// Test 4: body data remains traceable to authored source/provenance
+// Test 4: cleanup/drop semantics visible in analysis data
 // ============================================================
 
 #[test]
-fn provenance_present_on_all_bodies() {
-    let input = make_input(representative_bodies());
+fn cleanup_blocks_visible_in_report() {
+    let input = make_input(representative_mir_bodies());
+    let report = check_body_readiness(&input);
 
-    for func in &input.bodies().functions {
-        assert_eq!(func.provenance.raw_family, "bodies");
+    // fallible_mir_body has 1 cleanup block and 1 Drop terminator.
+    assert!(report.mir_form_summary.cleanup_block_count >= 1);
+    assert!(report.mir_form_summary.drop_terminator_count >= 1);
+}
+
+#[test]
+fn cleanup_blocks_visible_directly() {
+    let input = make_input(representative_mir_bodies());
+
+    let init = input.mir_body_by_name("init").unwrap();
+    let cleanup_count = init
+        .body
+        .basic_blocks
+        .iter()
+        .filter(|bb| bb.is_cleanup)
+        .count();
+    assert!(
+        cleanup_count >= 1,
+        "init should have cleanup blocks from ?-desugaring"
+    );
+}
+
+#[test]
+fn drop_terminators_visible_directly() {
+    let input = make_input(representative_mir_bodies());
+
+    let init = input.mir_body_by_name("init").unwrap();
+    let drop_count = init
+        .body
+        .basic_blocks
+        .iter()
+        .filter_map(|bb| bb.terminator.as_ref())
+        .filter(|t| matches!(t.kind, MirTerminatorKind::Drop { .. }))
+        .count();
+    assert!(drop_count >= 1, "init should have Drop terminators");
+}
+
+#[test]
+fn unwind_cleanup_edges_visible() {
+    let input = make_input(representative_mir_bodies());
+
+    let init = input.mir_body_by_name("init").unwrap();
+    let has_cleanup_edge = init
+        .body
+        .basic_blocks
+        .iter()
+        .filter_map(|bb| bb.terminator.as_ref())
+        .any(|t| match &t.kind {
+            MirTerminatorKind::Call { unwind, .. }
+            | MirTerminatorKind::Drop { unwind, .. }
+            | MirTerminatorKind::Assert { unwind, .. } => {
+                matches!(unwind, MirUnwindAction::Cleanup { .. })
+            }
+            _ => false,
+        });
+    assert!(has_cleanup_edge, "init should have Cleanup unwind edges");
+}
+
+// ============================================================
+// Test 5: body data remains traceable to authored source/provenance
+// ============================================================
+
+#[test]
+fn mir_provenance_present_on_all_bodies() {
+    let input = make_input(representative_mir_bodies());
+
+    for func in &input.mir_bodies().functions {
+        assert_eq!(
+            func.provenance.raw_family, "mir_bodies",
+            "function '{}' should have mir_bodies provenance",
+            func.name,
+        );
         assert!(
             func.provenance.containing_item.is_some(),
             "function '{}' should have containing_item provenance",
             func.name,
         );
-        assert_eq!(
-            func.provenance.containing_item.as_deref(),
-            Some(func.name.as_str()),
+        assert!(
+            !func.def_path.is_empty(),
+            "function '{}' should have a non-empty def_path",
+            func.name,
         );
     }
 }
 
 #[test]
 fn empty_provenance_produces_caution() {
-    let bodies = BodyDeclSet {
+    let bodies = MirBodyDeclSet {
         functions: vec![
-            callback_body("Lifecycle", "init", block(vec![], Some(ok_unit()))),
-            callback_body("Serial", "tx_byte", block(vec![], None)),
-            FnBodyDecl {
+            mir_callback("Lifecycle", "init", trivial_mir_body(), vec![]),
+            mir_callback("Serial", "tx_byte", trivial_mir_body(), vec![]),
+            MirFnBodyDecl {
                 name: "bad_provenance".into(),
+                def_path: "".into(), // empty
                 kind: FnKind::Helper,
-                receiver: "&mut self".into(),
+                receiver: "ref_mut".into(),
                 params: vec![],
                 return_type: None,
-                body: block(vec![], None),
+                body: trivial_mir_body(),
+                helper_calls: vec![],
                 provenance: Provenance::new(""), // empty raw_family
             },
         ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
     };
 
     let input = make_input(bodies);
@@ -686,29 +1049,75 @@ fn empty_provenance_produces_caution() {
         .iter()
         .filter(|f| f.category == "body_provenance")
         .collect();
-    assert_eq!(prov_findings.len(), 1);
-    assert!(prov_findings[0].message.contains("bad_provenance"));
+    // Should have findings for both empty raw_family and empty def_path.
+    assert!(prov_findings.len() >= 2);
+    assert!(prov_findings
+        .iter()
+        .any(|f| f.message.contains("bad_provenance") && f.message.contains("raw_family")));
+    assert!(prov_findings
+        .iter()
+        .any(|f| f.message.contains("bad_provenance") && f.message.contains("def_path")));
 }
 
 // ============================================================
-// Test 5: no analysis-local manual reconstruction needed
+// Test 6: fallible control-flow patterns validated deterministically
 // ============================================================
 
 #[test]
-fn body_data_comes_from_model_not_analysis() {
-    // The body data accessible through AnalysisInput is the exact same
-    // data stored in DeclarationModel.bodies. Analysis does not
-    // reconstruct or synthesize body trees.
-    let bodies = representative_bodies();
+fn fallible_patterns_detected() {
+    let input = make_input(representative_mir_bodies());
+    let report = check_body_readiness(&input);
+
+    // init has a fallible pattern (Discriminant + SwitchInt).
+    assert!(report.mir_form_summary.fallible_pattern_count >= 1);
+}
+
+#[test]
+fn fallible_pattern_finding_present() {
+    let input = make_input(representative_mir_bodies());
+    let report = check_body_readiness(&input);
+
+    let infos: Vec<_> = report
+        .findings
+        .iter()
+        .filter(|f| f.category == "fallible_pattern")
+        .collect();
+    assert!(!infos.is_empty());
+    assert!(infos.iter().any(|f| f.message.contains("init")));
+}
+
+#[test]
+fn no_false_fallible_pattern_on_trivial_body() {
+    // A trivial body with just Return should not trigger fallible detection.
+    let bodies = MirBodyDeclSet {
+        functions: vec![
+            mir_callback("Lifecycle", "init", trivial_mir_body(), vec![]),
+            mir_callback("Serial", "tx_byte", trivial_mir_body(), vec![]),
+        ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    };
+
+    let input = make_input(bodies);
+    let report = check_body_readiness(&input);
+
+    assert_eq!(report.mir_form_summary.fallible_pattern_count, 0);
+}
+
+// ============================================================
+// Test 7: no analysis-local manual reconstruction needed
+// ============================================================
+
+#[test]
+fn mir_body_data_comes_from_model_not_analysis() {
+    let bodies = representative_mir_bodies();
     let expected_count = bodies.functions.len();
     let expected_names: Vec<String> = bodies.functions.iter().map(|f| f.name.clone()).collect();
 
     let input = make_input(bodies);
 
-    // The AnalysisInput body accessors delegate to the model.
-    assert_eq!(input.bodies().functions.len(), expected_count);
+    assert_eq!(input.mir_bodies().functions.len(), expected_count);
     let actual_names: Vec<String> = input
-        .bodies()
+        .mir_bodies()
         .functions
         .iter()
         .map(|f| f.name.clone())
@@ -717,8 +1126,8 @@ fn body_data_comes_from_model_not_analysis() {
 }
 
 #[test]
-fn body_readiness_report_counts_are_correct() {
-    let input = make_input(representative_bodies());
+fn mir_body_readiness_report_counts_are_correct() {
+    let input = make_input(representative_mir_bodies());
     let report = check_body_readiness(&input);
 
     assert_eq!(report.callback_body_count, 3);
@@ -730,9 +1139,11 @@ fn body_readiness_report_counts_are_correct() {
 }
 
 #[test]
-fn empty_bodies_with_no_callbacks_is_not_error() {
-    // If no callback families are declared, empty bodies is fine.
-    let mut decl = decl_with_bodies(BodyDeclSet { functions: vec![] });
+fn empty_mir_bodies_with_no_callbacks_is_not_error() {
+    let mut decl = decl_with_mir_bodies(MirBodyDeclSet {
+        functions: vec![],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    });
     decl.callbacks = CallbackDeclSet {
         lifecycle_impls: vec![],
         serial_impls: vec![],
@@ -744,7 +1155,6 @@ fn empty_bodies_with_no_callbacks_is_not_error() {
     let input = AnalysisInput::new(decl, joined, None);
 
     let report = check_body_readiness(&input);
-    // No callback families present, so no body coverage errors.
     let body_errors: Vec<_> = report
         .errors()
         .iter()
@@ -756,11 +1166,49 @@ fn empty_bodies_with_no_callbacks_is_not_error() {
 
 #[test]
 fn report_determinism() {
-    let input1 = make_input(representative_bodies());
-    let input2 = make_input(representative_bodies());
+    let input1 = make_input(representative_mir_bodies());
+    let input2 = make_input(representative_mir_bodies());
 
     let report1 = check_body_readiness(&input1);
     let report2 = check_body_readiness(&input2);
 
     assert_eq!(report1, report2);
+}
+
+// ============================================================
+// MIR form summary explicit-subset tests
+// ============================================================
+
+#[test]
+fn mir_form_summary_enumerates_statement_kinds() {
+    let input = make_input(representative_mir_bodies());
+    let report = check_body_readiness(&input);
+    let summary = &report.mir_form_summary;
+
+    assert!(summary.query_flavor_valid);
+    // The representative bodies include Assign statements.
+    assert!(summary.statement_kinds.contains_key("Assign"));
+}
+
+#[test]
+fn mir_form_summary_enumerates_terminator_kinds() {
+    let input = make_input(representative_mir_bodies());
+    let report = check_body_readiness(&input);
+    let summary = &report.mir_form_summary;
+
+    assert!(summary.terminator_kinds.contains_key("Return"));
+    assert!(summary.terminator_kinds.contains_key("Call"));
+    assert!(summary.terminator_kinds.contains_key("SwitchInt"));
+    assert!(summary.terminator_kinds.contains_key("Drop"));
+    assert!(summary.terminator_kinds.contains_key("UnwindResume"));
+}
+
+#[test]
+fn mir_form_summary_enumerates_rvalue_kinds() {
+    let input = make_input(representative_mir_bodies());
+    let report = check_body_readiness(&input);
+    let summary = &report.mir_form_summary;
+
+    assert!(summary.rvalue_kinds.contains_key("Discriminant"));
+    assert!(summary.rvalue_kinds.contains_key("BinaryOp"));
 }

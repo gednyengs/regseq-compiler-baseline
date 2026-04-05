@@ -12,6 +12,11 @@ use regseq_model::binding::{
 use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
+use regseq_model::declaration::mir_body::{
+    FnKind as MirFnKind, MirBasicBlockData, MirBody, MirBodyDeclSet, MirFnBodyDecl, MirLocalDecl,
+    MirMutability, MirQueryFlavor, MirSourceInfo, MirSourceScope, MirTerminator, MirTerminatorKind,
+    MirTy,
+};
 use regseq_model::declaration::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LogCallSiteDecl, LogLevel,
     LoggingDeclSet, PmGateDecl, PmGateDeclSet, PmGateProperties, TimedDelayCallSiteDecl,
@@ -246,6 +251,10 @@ fn rich_pl011_decl() -> DeclarationModel {
             }],
         },
         bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies: MirBodyDeclSet {
+            functions: vec![],
+            query_flavor: MirQueryFlavor::DropsElaborated,
+        },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },
@@ -688,4 +697,127 @@ fn bus_binding_exposed_when_provided() {
 fn bus_binding_is_none_when_not_provided() {
     let input = make_analysis_input();
     assert!(input.bus_binding().is_none());
+}
+
+// ---- MIR body accessor tests ----
+
+fn trivial_mir_body() -> MirBody {
+    MirBody {
+        local_decls: vec![MirLocalDecl {
+            index: 0,
+            ty: MirTy::Tuple { elements: vec![] },
+            mutability: MirMutability::Mut,
+            name: None,
+        }],
+        arg_count: 0,
+        basic_blocks: vec![MirBasicBlockData {
+            statements: vec![],
+            terminator: Some(MirTerminator {
+                source_info: MirSourceInfo {
+                    scope: 0,
+                    span: Some("test".into()),
+                },
+                kind: MirTerminatorKind::Return,
+            }),
+            is_cleanup: false,
+        }],
+        source_scopes: vec![MirSourceScope {
+            index: 0,
+            name: None,
+        }],
+    }
+}
+
+fn make_analysis_input_with_mir() -> AnalysisInput {
+    let mut decl = rich_pl011_decl();
+    decl.mir_bodies = MirBodyDeclSet {
+        functions: vec![
+            MirFnBodyDecl {
+                name: "init".into(),
+                def_path: "Pl011Driver::Lifecycle::init".into(),
+                kind: MirFnKind::Callback {
+                    trait_name: "Lifecycle".into(),
+                    method_name: "init".into(),
+                },
+                receiver: "ref_mut".into(),
+                params: vec![],
+                return_type: Some("Result<(), RegseqError>".into()),
+                body: trivial_mir_body(),
+                helper_calls: vec!["setup_device".into()],
+                provenance: Provenance::new("mir_bodies").with_containing_item("init"),
+            },
+            MirFnBodyDecl {
+                name: "tx_byte".into(),
+                def_path: "Pl011Driver::Serial::tx_byte".into(),
+                kind: MirFnKind::Callback {
+                    trait_name: "Serial".into(),
+                    method_name: "tx_byte".into(),
+                },
+                receiver: "ref_mut".into(),
+                params: vec![],
+                return_type: None,
+                body: trivial_mir_body(),
+                helper_calls: vec![],
+                provenance: Provenance::new("mir_bodies").with_containing_item("tx_byte"),
+            },
+            MirFnBodyDecl {
+                name: "setup_device".into(),
+                def_path: "Pl011Driver::setup_device".into(),
+                kind: MirFnKind::Helper,
+                receiver: "ref_mut".into(),
+                params: vec![],
+                return_type: None,
+                body: trivial_mir_body(),
+                helper_calls: vec![],
+                provenance: Provenance::new("mir_bodies").with_containing_item("setup_device"),
+            },
+        ],
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    };
+    let binding = pl011_binding();
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    AnalysisInput::new(decl, joined, None)
+}
+
+#[test]
+fn mir_bodies_accessible_through_bootstrap() {
+    let input = make_analysis_input_with_mir();
+    assert_eq!(input.mir_bodies().functions.len(), 3);
+}
+
+#[test]
+fn mir_callback_bodies_queryable() {
+    let input = make_analysis_input_with_mir();
+    let cbs = input.mir_callback_bodies();
+    assert_eq!(cbs.len(), 2);
+    assert!(cbs.iter().all(|b| b.is_callback()));
+}
+
+#[test]
+fn mir_helper_bodies_queryable() {
+    let input = make_analysis_input_with_mir();
+    let helpers = input.mir_helper_bodies();
+    assert_eq!(helpers.len(), 1);
+    assert_eq!(helpers[0].name, "setup_device");
+}
+
+#[test]
+fn mir_body_by_name_queryable() {
+    let input = make_analysis_input_with_mir();
+    assert!(input.mir_body_by_name("init").is_some());
+    assert!(input.mir_body_by_name("nonexistent").is_none());
+}
+
+#[test]
+fn mir_query_flavor_queryable() {
+    let input = make_analysis_input_with_mir();
+    assert_eq!(*input.mir_query_flavor(), MirQueryFlavor::DropsElaborated);
+}
+
+#[test]
+fn mir_reachable_helpers_from_callback_calls() {
+    let input = make_analysis_input_with_mir();
+    let reachable = input.mir_reachable_helper_names();
+    assert!(reachable.contains("setup_device"));
+    assert_eq!(reachable.len(), 1);
 }

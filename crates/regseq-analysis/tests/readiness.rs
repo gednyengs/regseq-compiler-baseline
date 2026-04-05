@@ -12,6 +12,7 @@ use regseq_model::binding::{
 use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
+use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
 use regseq_model::declaration::operations::{LoggingDeclSet, PmGateDeclSet, TimedDelayDeclSet};
 use regseq_model::declaration::properties::{PropertyDeclSet, PropertyFieldDecl, PropertyLintDecl};
 use regseq_model::declaration::provenance::Provenance;
@@ -153,6 +154,10 @@ fn pl011_decl() -> DeclarationModel {
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
         bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies: MirBodyDeclSet {
+            functions: vec![],
+            query_flavor: MirQueryFlavor::DropsElaborated,
+        },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },

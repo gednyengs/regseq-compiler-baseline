@@ -8,6 +8,6 @@ pub mod body_readiness;
 pub mod input;
 pub mod readiness;
 
-pub use body_readiness::{check_body_readiness, BodyFinding, BodyReadinessReport};
+pub use body_readiness::{check_body_readiness, BodyFinding, BodyReadinessReport, MirFormSummary};
 pub use input::{AnalysisInput, ResourceJoinSummary};
 pub use readiness::{check_readiness, FindingSeverity, ReadinessFinding, ReadinessReport};

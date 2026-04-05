@@ -7,6 +7,7 @@ use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, ClockBinding, InterruptBinding, JoinKey,
     MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
 };
+use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
 use regseq_model::declaration::provenance::Provenance;
 use regseq_model::declaration::resources::{
     ClockDeclSet, ClockFieldDecl, InterruptBindingHints, InterruptDeclSet, InterruptFieldShape,
@@ -132,6 +133,10 @@ fn pl011_decl() -> DeclarationModel {
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
         bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies: MirBodyDeclSet {
+            functions: vec![],
+            query_flavor: MirQueryFlavor::DropsElaborated,
+        },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },

@@ -1145,12 +1145,12 @@
           "id": "track-a-validation-10",
           "name": "PL011 full-spec lowering completeness and backend-independence proof",
           "spec": ".harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-04"
           ],
           "artifacts": [],
-          "fail_reason": "The current proof passed despite synthesized PL011 behavior in lowering and insufficient regression coverage for backend/lowering hardcoding."
+          "fail_reason": null
         },
         {
           "id": "track-a-validation-11",

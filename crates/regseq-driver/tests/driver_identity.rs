@@ -127,6 +127,76 @@ fn extract_valid_driver_identity() {
     assert_eq!(identities[0].driver_name, "pl011-uart");
     assert_eq!(identities[0].compatible, vec!["arm,pl011", "arm,sbsa-uart"]);
     assert_eq!(identities[0].device_class, "serial");
+    assert_eq!(identities[0].bus, None);
+}
+
+#[test]
+fn extract_driver_identity_with_bus_amba() {
+    let source = r#"
+        #[rseq::driver(name = "pl011-uart", compatible = ["arm,pl011"], bus = "amba")]
+        #[rseq::device_class(serial)]
+        pub struct Pl011;
+    "#;
+
+    let identities = compile_and_extract(source, "bus_amba").unwrap();
+    assert_eq!(identities.len(), 1);
+    assert_eq!(identities[0].driver_name, "pl011-uart");
+    assert_eq!(identities[0].compatible, vec!["arm,pl011"]);
+    assert_eq!(identities[0].bus, Some("amba".to_string()));
+}
+
+#[test]
+fn extract_driver_identity_with_bus_pci() {
+    let source = r#"
+        #[rseq::driver(name = "e1000", compatible = ["intel,e1000"], bus = "pci")]
+        #[rseq::device_class(serial)]
+        pub struct E1000;
+    "#;
+
+    let identities = compile_and_extract(source, "bus_pci").unwrap();
+    assert_eq!(identities[0].bus, Some("pci".to_string()));
+}
+
+#[test]
+fn extract_driver_identity_with_bus_integrated() {
+    let source = r#"
+        #[rseq::driver(name = "simple-uart", compatible = ["vendor,uart"], bus = "integrated")]
+        #[rseq::device_class(serial)]
+        pub struct SimpleUart;
+    "#;
+
+    let identities = compile_and_extract(source, "bus_integrated").unwrap();
+    assert_eq!(identities[0].bus, Some("integrated".to_string()));
+}
+
+#[test]
+fn reject_duplicate_bus_key() {
+    let source = r#"
+        #[rseq::driver(name = "pl011", compatible = ["arm,pl011"], bus = "amba", bus = "pci")]
+        #[rseq::device_class(serial)]
+        pub struct Pl011;
+    "#;
+
+    let result = compile_and_extract(source, "duplicate_bus");
+    assert_eq!(
+        result,
+        Err(DriverIdentityError::DuplicateAttribute("bus".into()))
+    );
+}
+
+#[test]
+fn reject_unknown_bus_value() {
+    let source = r#"
+        #[rseq::driver(name = "pl011", compatible = ["arm,pl011"], bus = "usb")]
+        #[rseq::device_class(serial)]
+        pub struct Pl011;
+    "#;
+
+    let result = compile_and_extract(source, "unknown_bus");
+    assert_eq!(
+        result,
+        Err(DriverIdentityError::UnknownBusValue("usb".to_string()))
+    );
 }
 
 #[test]

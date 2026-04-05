@@ -19,7 +19,7 @@ fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R> {
 pub struct DefaultState;
 impl PinState for DefaultState {}
 
-#[rseq::driver(name = "pl011-spec-slice", compatible = ["arm,pl011"])]
+#[rseq::driver(name = "pl011-spec-slice", compatible = ["arm,pl011"], bus = "amba")]
 #[rseq::device_class(serial)]
 pub struct Pl011SpecSlice {
     #[rseq::mmio(id = "uart_regs")]

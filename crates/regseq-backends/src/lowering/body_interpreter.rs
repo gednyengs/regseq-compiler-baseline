@@ -852,7 +852,7 @@ fn interpret_return_semantic(_ctx: &InterpreterContext, expr: &BodyExpr) -> Retu
             if is_ok_unit_call(path, args) {
                 ReturnSemantic::Ok
             } else if path == "Some" {
-                ReturnSemantic::SomeRxChar
+                ReturnSemantic::SomeValue
             } else {
                 ReturnSemantic::Void
             }
@@ -866,7 +866,7 @@ fn interpret_return_semantic(_ctx: &InterpreterContext, expr: &BodyExpr) -> Retu
             _ => ReturnSemantic::Void,
         },
         BodyExpr::LitBool { value } => ReturnSemantic::Bool(*value),
-        BodyExpr::If { .. } => ReturnSemantic::ConditionalIrqResult,
+        BodyExpr::If { .. } => ReturnSemantic::ConditionalResult,
         _ => ReturnSemantic::Void,
     }
 }

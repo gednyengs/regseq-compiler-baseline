@@ -3,6 +3,9 @@ use rustc_ast::tokenstream::TokenTree;
 use rustc_hir::{AttrArgs, Attribute};
 use rustc_middle::ty::TyCtxt;
 
+/// Accepted portable bus taxonomy values for `#[rseq::driver(bus = "...")]`.
+const ACCEPTED_BUS_VALUES: &[&str] = &["integrated", "amba", "pci"];
+
 /// Extracted driver identity attributes from HIR.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct DriverIdentity {
@@ -12,6 +15,8 @@ pub struct DriverIdentity {
     pub compatible: Vec<String>,
     /// From `#[rseq::device_class(...)]`.
     pub device_class: String,
+    /// From `#[rseq::driver(bus = "...")]`. Optional portable bus/fabric identity.
+    pub bus: Option<String>,
 }
 
 /// Errors during driver identity extraction.
@@ -22,6 +27,7 @@ pub enum DriverIdentityError {
     MissingDeviceClass,
     MalformedAttribute(String),
     DuplicateAttribute(String),
+    UnknownBusValue(String),
 }
 
 /// Extract driver identity information from all `#[rseq::driver(...)]`-annotated
@@ -48,9 +54,11 @@ pub fn extract_driver_identities<'tcx>(
             return Err(DriverIdentityError::DuplicateAttribute("driver".into()));
         }
 
-        let (name, compat) = parse_driver_attr(driver_attrs[0])?;
-        let driver_name = name.ok_or(DriverIdentityError::MissingDriverName)?;
-        let compatible = compat.ok_or(DriverIdentityError::MissingCompatible)?;
+        let parsed = parse_driver_attr(driver_attrs[0])?;
+        let driver_name = parsed.name.ok_or(DriverIdentityError::MissingDriverName)?;
+        let compatible = parsed
+            .compatible
+            .ok_or(DriverIdentityError::MissingCompatible)?;
 
         let class_attrs: Vec<_> = attrs
             .iter()
@@ -72,6 +80,7 @@ pub fn extract_driver_identities<'tcx>(
             driver_name,
             compatible,
             device_class,
+            bus: parsed.bus,
         });
     }
 
@@ -91,10 +100,15 @@ fn rseq_attr_name(attr: &Attribute) -> Option<&str> {
     }
 }
 
-/// Parse `#[rseq::driver(name = "...", compatible = [...])]`.
-fn parse_driver_attr(
-    attr: &Attribute,
-) -> Result<(Option<String>, Option<Vec<String>>), DriverIdentityError> {
+/// Intermediate result from parsing `#[rseq::driver(...)]` key-value pairs.
+struct ParsedDriverAttr {
+    name: Option<String>,
+    compatible: Option<Vec<String>>,
+    bus: Option<String>,
+}
+
+/// Parse `#[rseq::driver(name = "...", compatible = [...], bus = "...")]`.
+fn parse_driver_attr(attr: &Attribute) -> Result<ParsedDriverAttr, DriverIdentityError> {
     let Attribute::Unparsed(item) = attr else {
         return Err(malformed("expected tool attribute"));
     };
@@ -110,6 +124,7 @@ fn parse_driver_attr(
     let trees: Vec<&TokenTree> = tokens.iter().collect();
     let mut driver_name = None;
     let mut compatible = None;
+    let mut bus = None;
     let mut i = 0;
 
     while i < trees.len() {
@@ -147,6 +162,17 @@ fn parse_driver_attr(
                 let list = extract_string_list(trees[i])?;
                 compatible = Some(list);
             }
+            "bus" => {
+                if bus.is_some() {
+                    return Err(DriverIdentityError::DuplicateAttribute("bus".into()));
+                }
+                let val = extract_string_literal(trees[i])
+                    .ok_or_else(|| malformed("bus must be a string literal"))?;
+                if !ACCEPTED_BUS_VALUES.contains(&val.as_str()) {
+                    return Err(DriverIdentityError::UnknownBusValue(val));
+                }
+                bus = Some(val);
+            }
             other => {
                 return Err(malformed(&format!(
                     "unknown driver attribute key: '{other}'"
@@ -156,7 +182,11 @@ fn parse_driver_attr(
         i += 1;
     }
 
-    Ok((driver_name, compatible))
+    Ok(ParsedDriverAttr {
+        name: driver_name,
+        compatible,
+        bus,
+    })
 }
 
 /// Parse `#[rseq::device_class(serial)]`.

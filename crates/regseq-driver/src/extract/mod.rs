@@ -7,6 +7,7 @@ pub(crate) mod driver_identity;
 pub(crate) mod interrupts;
 #[allow(dead_code)]
 pub(crate) mod logging;
+pub(crate) mod mir_extract;
 #[allow(dead_code)]
 pub(crate) mod ordering;
 #[allow(dead_code)]

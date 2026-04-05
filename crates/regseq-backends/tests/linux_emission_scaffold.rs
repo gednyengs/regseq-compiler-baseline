@@ -18,6 +18,7 @@ use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
 use regseq_model::declaration::driver::BusType as ModelBusType;
+use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
 use regseq_model::declaration::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LoggingDeclSet,
     PmGateDeclSet, TimedDelayCallSiteDecl, TimedDelayDeclSet,
@@ -216,10 +217,31 @@ fn pl011_decl() -> DeclarationModel {
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
         bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies: load_real_mir_bodies(),
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },
     }
+}
+
+/// Load real captured MIR bodies from the pl011-full-spec raw artifact.
+fn load_real_mir_bodies() -> MirBodyDeclSet {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/pl011-full-spec/expected/raw-frontend.json");
+    let json = std::fs::read_to_string(&fixture_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read raw-frontend.json at {}: {e}",
+            fixture_path.display()
+        )
+    });
+    let model = regseq_model::declaration::normalize::normalize_from_json(&json)
+        .expect("Failed to normalize raw artifact");
+    model.mir_bodies
 }
 
 fn pl011_binding() -> BindingModel {

@@ -194,7 +194,7 @@ struct ExtractionResults<'a> {
     logging:
         &'a Result<crate::extract::logging::LoggingSurface, crate::extract::logging::LoggingError>,
     pm: &'a Result<crate::extract::pm::PmGateSurface, crate::extract::pm::PmError>,
-    body: &'a Result<crate::extract::body::BodySurface, crate::extract::body::BodyError>,
+    body: &'a Result<crate::mir_repr::MirBodySurface, crate::extract::body::BodyError>,
 }
 
 fn build_raw_artifact(
@@ -223,7 +223,7 @@ fn build_raw_artifact(
         timed_delay: ex.timed_delay.as_ref().ok().map(RawTimedDelaySurface::from),
         logging: ex.logging.as_ref().ok().map(RawLoggingSurface::from),
         pm_gate: ex.pm.as_ref().ok().map(RawPmGateSurface::from),
-        bodies: ex.body.as_ref().ok().map(RawBodySurface::from),
+        bodies: ex.body.as_ref().ok().cloned(),
     }
 }
 

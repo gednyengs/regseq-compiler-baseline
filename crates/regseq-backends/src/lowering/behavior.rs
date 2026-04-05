@@ -219,13 +219,17 @@ pub enum BehaviorNode {
         class_name: String,
     },
 
-    /// Check an error flag from a register field and accumulate errors.
-    RxErrorCheck {
-        /// Error kind name (e.g. "overrun", "break", "parity", "framing").
-        error_kind: String,
-        /// Register containing the error bit.
+    /// Check a register bitfield flag and accumulate into a result.
+    ///
+    /// Generic computation node for flag-checking patterns: read a
+    /// bitfield from a register value and, if nonzero, accumulate a
+    /// named flag into a result variable.
+    RegisterFlagCheck {
+        /// Flag name (e.g. "overrun", "parity", "timeout").
+        flag_name: String,
+        /// Register containing the flag bit.
         register: String,
-        /// Bitfield name for the error flag.
+        /// Bitfield name for the flag.
         field: String,
     },
 
@@ -470,14 +474,14 @@ pub enum ReturnSemantic {
     Ok,
     /// Return None (no data available).
     None,
-    /// Return Some(RxChar) with accumulated data/errors.
-    SomeRxChar,
+    /// Return Some(value) with accumulated data.
+    SomeValue,
     /// Return IRQ handled.
     IrqHandled,
     /// Return IRQ not handled.
     IrqNotHandled,
-    /// Return a conditional IRQ result based on service outcome.
-    ConditionalIrqResult,
+    /// Return a conditional result based on runtime outcome.
+    ConditionalResult,
     /// Return a boolean value.
     Bool(bool),
     /// Void return (implicit).

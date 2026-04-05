@@ -12,6 +12,7 @@
 pub mod bodies;
 pub mod build_context;
 pub mod callbacks;
+pub mod mir_body;
 pub mod normalize;
 pub mod operations;
 pub mod properties;
@@ -84,8 +85,10 @@ pub struct DeclarationModel {
     pub logging: LoggingDeclSet,
     /// PM gate declaration-side evidence.
     pub pm_gate: PmGateDeclSet,
-    /// Authored function body declarations (callbacks, helpers, ISR).
+    /// Authored function body declarations (transitional HIR-style, use `mir_bodies` instead).
     pub bodies: BodyDeclSet,
+    /// MIR-derived function body declarations (canonical executable-body path).
+    pub mir_bodies: mir_body::MirBodyDeclSet,
     /// Build-context metadata (target_os etc.), separate from declaration identity.
     pub build_context: DeclarationBuildContext,
 }

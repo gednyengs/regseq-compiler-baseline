@@ -5,12 +5,11 @@
 //! Normalization is deterministic, local, and does not introduce join logic
 //! or hidden raw-artifact prerequisites.
 
-use super::bodies::{
-    BodyDeclSet, BodyExpr, BodyStmt, FnBodyDecl, FnKind, FnParamDecl, MatchArm, StructFieldExpr,
-};
+use super::bodies::{BodyDeclSet, BodyExpr, FnBodyDecl, FnKind, FnParamDecl};
 use super::build_context::DeclarationBuildContext;
 use super::callbacks::{CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl};
 use super::driver::{BusType, DeviceClass, DriverDecl};
+use super::mir_body::{MirBodyDeclSet, MirFnBodyDecl, MirQueryFlavor};
 use super::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LogArgKind, LogCallSiteDecl,
     LogLevel, LoggingDeclSet, PmGateDecl, PmGateDeclSet, PmGateProperties, TimedDelayCallSiteDecl,
@@ -108,6 +107,7 @@ pub fn normalize(input: &RawArtifactInput) -> Result<DeclarationModel, Normalize
     let logging = normalize_logging(input)?;
     let pm_gate = normalize_pm_gate(input);
     let bodies = normalize_bodies(input);
+    let mir_bodies = normalize_mir_bodies(input);
 
     Ok(DeclarationModel {
         driver,
@@ -120,6 +120,7 @@ pub fn normalize(input: &RawArtifactInput) -> Result<DeclarationModel, Normalize
         logging,
         pm_gate,
         bodies,
+        mir_bodies,
         build_context,
     })
 }
@@ -781,6 +782,69 @@ fn normalize_pm_gate(input: &RawArtifactInput) -> PmGateDeclSet {
 // Body normalization
 // ---------------------------------------------------------------------------
 
+/// Normalize MIR-derived bodies into the canonical `MirBodyDeclSet`.
+///
+/// The raw artifact carries typed MIR bodies from `mir_drops_elaborated_and_const_checked`.
+/// This function converts each raw function entry into a `MirFnBodyDecl` with
+/// the MIR body, helper-call graph edges, and provenance.
+fn normalize_mir_bodies(input: &RawArtifactInput) -> MirBodyDeclSet {
+    let Some(raw_bodies) = &input.bodies else {
+        return MirBodyDeclSet {
+            functions: vec![],
+            query_flavor: MirQueryFlavor::DropsElaborated,
+        };
+    };
+
+    let functions = raw_bodies
+        .functions
+        .iter()
+        .map(|f| MirFnBodyDecl {
+            name: f.name.clone(),
+            def_path: f.def_path.clone(),
+            kind: normalize_mir_fn_kind(&f.kind),
+            receiver: f.receiver.clone(),
+            params: f
+                .params
+                .iter()
+                .map(|p| super::mir_body::FnParamDecl {
+                    name: p.name.clone(),
+                    ty: p.ty.clone(),
+                })
+                .collect(),
+            return_type: f.return_type.clone(),
+            body: f.body.clone(),
+            helper_calls: f.helper_calls.clone(),
+            provenance: Provenance::new("bodies").with_containing_item(f.name.clone()),
+        })
+        .collect();
+
+    MirBodyDeclSet {
+        functions,
+        query_flavor: MirQueryFlavor::DropsElaborated,
+    }
+}
+
+fn normalize_mir_fn_kind(raw: &super::raw_input::RawFnKindInput) -> super::mir_body::FnKind {
+    use super::raw_input::RawFnKindInput;
+    match raw {
+        RawFnKindInput::Callback {
+            trait_name,
+            method_name,
+        } => super::mir_body::FnKind::Callback {
+            trait_name: trait_name.clone(),
+            method_name: method_name.clone(),
+        },
+        RawFnKindInput::Isr => super::mir_body::FnKind::Isr,
+        RawFnKindInput::Helper => super::mir_body::FnKind::Helper,
+        RawFnKindInput::FreeFunction => super::mir_body::FnKind::FreeFunction,
+    }
+}
+
+/// Transitional: populate the legacy `BodyDeclSet` with stub entries.
+///
+/// This fills the `bodies` field of `DeclarationModel` with per-function
+/// metadata but `Unsupported` body markers. Downstream consumers should
+/// migrate to `mir_bodies` for real executable-body data.
 fn normalize_bodies(input: &RawArtifactInput) -> BodyDeclSet {
     let Some(raw_bodies) = &input.bodies else {
         return BodyDeclSet { functions: vec![] };
@@ -802,7 +866,10 @@ fn normalize_bodies(input: &RawArtifactInput) -> BodyDeclSet {
                 })
                 .collect(),
             return_type: f.return_type.clone(),
-            body: normalize_body_expr(&f.body),
+            body: BodyExpr::Unsupported {
+                hir_kind: "MirBody".to_string(),
+                span_text: Some("mir_body_pending_normalization".to_string()),
+            },
             provenance: Provenance::new("bodies").with_containing_item(f.name.clone()),
         })
         .collect();
@@ -822,164 +889,5 @@ fn normalize_fn_kind(raw: &super::raw_input::RawFnKindInput) -> FnKind {
         super::raw_input::RawFnKindInput::Isr => FnKind::Isr,
         super::raw_input::RawFnKindInput::Helper => FnKind::Helper,
         super::raw_input::RawFnKindInput::FreeFunction => FnKind::FreeFunction,
-    }
-}
-
-fn normalize_body_expr(raw: &super::raw_input::RawBodyExprInput) -> BodyExpr {
-    use super::raw_input::RawBodyExprInput as R;
-    match raw {
-        R::Block { stmts, expr } => BodyExpr::Block {
-            stmts: stmts.iter().map(normalize_body_stmt).collect(),
-            expr: expr.as_ref().map(|e| Box::new(normalize_body_expr(e))),
-        },
-        R::MethodCall {
-            receiver,
-            method,
-            type_args,
-            args,
-        } => BodyExpr::MethodCall {
-            receiver: Box::new(normalize_body_expr(receiver)),
-            method: method.clone(),
-            type_args: type_args.clone(),
-            args: args.iter().map(normalize_body_expr).collect(),
-        },
-        R::Call {
-            path,
-            type_args,
-            args,
-        } => BodyExpr::Call {
-            path: path.clone(),
-            type_args: type_args.clone(),
-            args: args.iter().map(normalize_body_expr).collect(),
-        },
-        R::Field { base, name } => BodyExpr::Field {
-            base: Box::new(normalize_body_expr(base)),
-            name: name.clone(),
-        },
-        R::Path { path } => BodyExpr::Path { path: path.clone() },
-        R::LitInt { value, suffix } => BodyExpr::LitInt {
-            value: value.clone(),
-            suffix: suffix.clone(),
-        },
-        R::LitBool { value } => BodyExpr::LitBool { value: *value },
-        R::LitStr { value } => BodyExpr::LitStr {
-            value: value.clone(),
-        },
-        R::Binary { op, lhs, rhs } => BodyExpr::Binary {
-            op: op.clone(),
-            lhs: Box::new(normalize_body_expr(lhs)),
-            rhs: Box::new(normalize_body_expr(rhs)),
-        },
-        R::Unary { op, operand } => BodyExpr::Unary {
-            op: op.clone(),
-            operand: Box::new(normalize_body_expr(operand)),
-        },
-        R::Cast { expr, ty } => BodyExpr::Cast {
-            expr: Box::new(normalize_body_expr(expr)),
-            ty: ty.clone(),
-        },
-        R::If {
-            cond,
-            then_branch,
-            else_branch,
-        } => BodyExpr::If {
-            cond: Box::new(normalize_body_expr(cond)),
-            then_branch: Box::new(normalize_body_expr(then_branch)),
-            else_branch: else_branch
-                .as_ref()
-                .map(|e| Box::new(normalize_body_expr(e))),
-        },
-        R::Loop { body } => BodyExpr::Loop {
-            body: Box::new(normalize_body_expr(body)),
-        },
-        R::Return { expr } => BodyExpr::Return {
-            expr: expr.as_ref().map(|e| Box::new(normalize_body_expr(e))),
-        },
-        R::Try { expr } => BodyExpr::Try {
-            expr: Box::new(normalize_body_expr(expr)),
-        },
-        R::Ref { mutable, expr } => BodyExpr::Ref {
-            mutable: *mutable,
-            expr: Box::new(normalize_body_expr(expr)),
-        },
-        R::Assign { target, value } => BodyExpr::Assign {
-            target: Box::new(normalize_body_expr(target)),
-            value: Box::new(normalize_body_expr(value)),
-        },
-        R::AssignOp { op, target, value } => BodyExpr::AssignOp {
-            op: op.clone(),
-            target: Box::new(normalize_body_expr(target)),
-            value: Box::new(normalize_body_expr(value)),
-        },
-        R::Tuple { elements } => BodyExpr::Tuple {
-            elements: elements.iter().map(normalize_body_expr).collect(),
-        },
-        R::Array { elements } => BodyExpr::Array {
-            elements: elements.iter().map(normalize_body_expr).collect(),
-        },
-        R::Index { base, index } => BodyExpr::Index {
-            base: Box::new(normalize_body_expr(base)),
-            index: Box::new(normalize_body_expr(index)),
-        },
-        R::Struct { path, fields, base } => BodyExpr::Struct {
-            path: path.clone(),
-            fields: fields
-                .iter()
-                .map(|f| StructFieldExpr {
-                    name: f.name.clone(),
-                    value: normalize_body_expr(&f.value),
-                })
-                .collect(),
-            base: base.as_ref().map(|b| Box::new(normalize_body_expr(b))),
-        },
-        R::Closure { params, body } => BodyExpr::Closure {
-            params: params.clone(),
-            body: Box::new(normalize_body_expr(body)),
-        },
-        R::Match { scrutinee, arms } => BodyExpr::Match {
-            scrutinee: Box::new(normalize_body_expr(scrutinee)),
-            arms: arms
-                .iter()
-                .map(|a| MatchArm {
-                    pattern: a.pattern.clone(),
-                    guard: a.guard.as_ref().map(normalize_body_expr),
-                    body: normalize_body_expr(&a.body),
-                })
-                .collect(),
-        },
-        R::Break { expr } => BodyExpr::Break {
-            expr: expr.as_ref().map(|e| Box::new(normalize_body_expr(e))),
-        },
-        R::Continue => BodyExpr::Continue,
-        R::Unsupported {
-            hir_kind,
-            span_text,
-        } => BodyExpr::Unsupported {
-            hir_kind: hir_kind.clone(),
-            span_text: span_text.clone(),
-        },
-    }
-}
-
-fn normalize_body_stmt(raw: &super::raw_input::RawBodyStmtInput) -> BodyStmt {
-    use super::raw_input::RawBodyStmtInput as S;
-    match raw {
-        S::Expr { expr } => BodyStmt::Expr {
-            expr: normalize_body_expr(expr),
-        },
-        S::Semi { expr } => BodyStmt::Semi {
-            expr: normalize_body_expr(expr),
-        },
-        S::Let {
-            name,
-            mutable,
-            ty,
-            init,
-        } => BodyStmt::Let {
-            name: name.clone(),
-            mutable: *mutable,
-            ty: ty.clone(),
-            init: init.as_ref().map(normalize_body_expr),
-        },
     }
 }

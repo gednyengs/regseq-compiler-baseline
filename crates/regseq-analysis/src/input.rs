@@ -17,6 +17,7 @@ use regseq_model::binding::BusBinding;
 use regseq_model::declaration::bodies::{collect_call_targets, BodyDeclSet, FnBodyDecl};
 use regseq_model::declaration::callbacks::{CallbackDeclSet, CallbackFamily, CallbackImplDecl};
 use regseq_model::declaration::driver::BusType;
+use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirFnBodyDecl, MirQueryFlavor};
 use regseq_model::declaration::operations::{
     DurationCtorSiteDecl, LogCallSiteDecl, LoggingDeclSet, PmGateDecl, PmGateDeclSet,
     TimedDelayCallSiteDecl, TimedDelayDeclSet,
@@ -439,8 +440,90 @@ impl AnalysisInput {
         self.decl.bodies.by_name(name)
     }
 
+    // ----------------------------------------------------------------
+    // MIR-derived body capture (canonical executable-body path)
+    // ----------------------------------------------------------------
+
+    /// Borrow the MIR-derived body declaration set (canonical path).
+    pub fn mir_bodies(&self) -> &MirBodyDeclSet {
+        &self.decl.mir_bodies
+    }
+
+    /// Return the MIR query flavor used to produce the bodies.
+    pub fn mir_query_flavor(&self) -> &MirQueryFlavor {
+        &self.decl.mir_bodies.query_flavor
+    }
+
+    /// Return all MIR callback function bodies.
+    pub fn mir_callback_bodies(&self) -> Vec<&MirFnBodyDecl> {
+        self.decl.mir_bodies.callbacks()
+    }
+
+    /// Return all MIR helper function bodies.
+    pub fn mir_helper_bodies(&self) -> Vec<&MirFnBodyDecl> {
+        self.decl.mir_bodies.helpers()
+    }
+
+    /// Return all MIR ISR function bodies.
+    pub fn mir_isr_bodies(&self) -> Vec<&MirFnBodyDecl> {
+        self.decl.mir_bodies.isrs()
+    }
+
+    /// Return all MIR free function bodies.
+    pub fn mir_free_function_bodies(&self) -> Vec<&MirFnBodyDecl> {
+        self.decl.mir_bodies.free_functions()
+    }
+
+    /// Look up a MIR function body by name.
+    pub fn mir_body_by_name(&self, name: &str) -> Option<&MirFnBodyDecl> {
+        self.decl.mir_bodies.by_name(name)
+    }
+
     /// Compute the set of helper and free-function names transitively
-    /// reachable from callbacks and ISRs through call edges.
+    /// reachable from callbacks and ISRs through MIR call edges.
+    ///
+    /// Uses the `helper_calls` field on each `MirFnBodyDecl`, which was
+    /// extracted from MIR `Call` terminators by the frontend.
+    pub fn mir_reachable_helper_names(&self) -> BTreeSet<String> {
+        let non_callback_names: BTreeSet<String> = self
+            .decl
+            .mir_bodies
+            .functions
+            .iter()
+            .filter(|f| f.is_helper() || f.is_free_function())
+            .map(|f| f.name.clone())
+            .collect();
+
+        let mut reachable = BTreeSet::new();
+        let mut worklist: Vec<String> = Vec::new();
+
+        // Seed from callbacks and ISRs.
+        for f in &self.decl.mir_bodies.functions {
+            if f.is_callback() || f.is_isr() {
+                for t in &f.helper_calls {
+                    if non_callback_names.contains(t) && reachable.insert(t.clone()) {
+                        worklist.push(t.clone());
+                    }
+                }
+            }
+        }
+
+        // Transitive closure through helpers and free functions.
+        while let Some(name) = worklist.pop() {
+            if let Some(func) = self.decl.mir_bodies.by_name(&name) {
+                for t in &func.helper_calls {
+                    if non_callback_names.contains(t) && reachable.insert(t.clone()) {
+                        worklist.push(t.clone());
+                    }
+                }
+            }
+        }
+
+        reachable
+    }
+
+    /// Compute the set of helper and free-function names transitively
+    /// reachable from callbacks and ISRs through call edges (legacy HIR path).
     pub fn reachable_helper_names(&self) -> BTreeSet<String> {
         let non_callback_names: BTreeSet<String> = self
             .decl

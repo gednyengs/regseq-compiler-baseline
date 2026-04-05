@@ -5,6 +5,7 @@
 //! provenance fields are present, build-context is separate from identity,
 //! and interrupt binding hints are distinct from declaration facts.
 
+use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
 use regseq_model::declaration::*;
 
 // ---- 1. Types construct and import cleanly ----
@@ -506,6 +507,10 @@ fn make_minimal_model() -> DeclarationModel {
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
         bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies: MirBodyDeclSet {
+            functions: vec![],
+            query_flavor: MirQueryFlavor::DropsElaborated,
+        },
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },

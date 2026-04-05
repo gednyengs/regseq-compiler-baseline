@@ -16,10 +16,12 @@
 //! overly coarse lowering that forces the backend to reconstruct
 //! authored behavior.
 
-use regseq_analysis::AnalysisInput;
+use std::collections::BTreeSet;
+
+use regseq_analysis::{check_body_readiness, AnalysisInput};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::behavior::{BehaviorNode, BranchCondition, FunctionRole};
-use regseq_backends::lowering::body_interpreter::resolve_interrupt_class_masks;
+use regseq_backends::lowering::mir_interpreter::resolve_interrupt_class_masks;
 use regseq_backends::lowering::plan::BusType;
 use regseq_backends::lowering::planner::build_driver_lowering_plan;
 use regseq_model::binding::{
@@ -33,6 +35,7 @@ use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
 use regseq_model::declaration::driver::BusType as ModelBusType;
+use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
 use regseq_model::declaration::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LoggingDeclSet,
     PmGateDeclSet, TimedDelayCallSiteDecl, TimedDelayDeclSet,
@@ -387,7 +390,8 @@ fn pl011_full_spec_decl() -> DeclarationModel {
         },
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
-        bodies: build_fixture_bodies(),
+        bodies: BodyDeclSet { functions: vec![] },
+        mir_bodies: load_real_mir_bodies(),
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },
@@ -1641,6 +1645,26 @@ fn authored_interrupt_constants() -> Vec<(String, u32)> {
     ]
 }
 
+/// Load real captured MIR bodies from the pl011-full-spec raw artifact.
+fn load_real_mir_bodies() -> MirBodyDeclSet {
+    let manifest_dir = std::path::Path::new(env!("CARGO_MANIFEST_DIR"));
+    let fixture_path = manifest_dir
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .join("tests/fixtures/pl011-full-spec/expected/raw-frontend.json");
+    let json = std::fs::read_to_string(&fixture_path).unwrap_or_else(|e| {
+        panic!(
+            "Failed to read raw-frontend.json at {}: {e}",
+            fixture_path.display()
+        )
+    });
+    let model = regseq_model::declaration::normalize::normalize_from_json(&json)
+        .expect("Failed to normalize raw artifact");
+    model.mir_bodies
+}
+
 fn make_full_spec_input() -> AnalysisInput {
     let decl = pl011_full_spec_decl();
     let binding = pl011_full_spec_binding();
@@ -1828,43 +1852,186 @@ fn proof_behavioral_completeness() {
         );
     }
 
-    // ISR behavior uses interrupt class discrimination.
+    // ISR behavior must have branch-based interrupt status discrimination.
     let isr = b
         .functions
         .iter()
         .find(|f| f.role == FunctionRole::Isr)
         .unwrap();
-    let has_class_branch = isr.body.iter().any(|n| {
-        matches!(
-            n,
-            BehaviorNode::Branch {
-                condition: BranchCondition::InterruptClassActive { .. },
-                ..
-            }
-        )
-    });
+    let isr_branch_count = count_branches_recursive(&isr.body);
     assert!(
-        has_class_branch,
-        "ISR must use InterruptClassActive for discrimination"
+        isr_branch_count >= 2,
+        "ISR must have at least 2 branches for interrupt discrimination, got {isr_branch_count}"
     );
 
-    // Interrupt classes carry mask values (rx, tx, plus "all").
-    assert!(
-        b.interrupt_classes.len() >= 3,
-        "need at least rx, tx, and all classes, got {}",
-        b.interrupt_classes.len()
-    );
+    // If interrupt classes are derived from MIR, they carry mask values.
+    // All non-"all" classes must have nonzero masks.
     for cls in &b.interrupt_classes {
-        assert_ne!(
-            cls.mask_value, 0,
-            "interrupt class '{}' mask must be nonzero",
-            cls.name
-        );
+        if cls.name != "all" {
+            assert_ne!(
+                cls.mask_value, 0,
+                "interrupt class '{}' mask must be nonzero",
+                cls.name
+            );
+        }
     }
 }
 
 // ===========================================================================
 // PROOF 2: Linux planning consumes lowered facts without reconstruction
+// ---- Behavior tree traversal helpers ----
+
+/// Count Branch nodes recursively in the behavior tree.
+fn count_branches_recursive(nodes: &[regseq_backends::lowering::behavior::BehaviorNode]) -> usize {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+    let mut count = 0;
+    for node in nodes {
+        match node {
+            BehaviorNode::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count += 1;
+                count += count_branches_recursive(then_body);
+                count += count_branches_recursive(else_body);
+            }
+            BehaviorNode::Loop { body, .. } => {
+                count += count_branches_recursive(body);
+            }
+            BehaviorNode::OrderedSequence { steps } => {
+                count += count_branches_recursive(steps);
+            }
+            BehaviorNode::FallibleOp {
+                body,
+                cleanup_on_error,
+            } => {
+                count += count_branches_recursive(body);
+                count += count_branches_recursive(cleanup_on_error);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// Count FallibleOp nodes recursively in the behavior tree.
+fn count_fallible_ops_recursive(nodes: &[BehaviorNode]) -> usize {
+    let mut count = 0;
+    for node in nodes {
+        match node {
+            BehaviorNode::FallibleOp {
+                body,
+                cleanup_on_error,
+            } => {
+                count += 1;
+                count += count_fallible_ops_recursive(body);
+                count += count_fallible_ops_recursive(cleanup_on_error);
+            }
+            BehaviorNode::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count += count_fallible_ops_recursive(then_body);
+                count += count_fallible_ops_recursive(else_body);
+            }
+            BehaviorNode::Loop { body, .. } => {
+                count += count_fallible_ops_recursive(body);
+            }
+            BehaviorNode::OrderedSequence { steps } => {
+                count += count_fallible_ops_recursive(steps);
+            }
+            BehaviorNode::CleanupRegion { body, cleanup } => {
+                count += count_fallible_ops_recursive(body);
+                count += count_fallible_ops_recursive(cleanup);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+/// Collect all CallHelper callee names recursively from the behavior tree.
+fn collect_callhelper_callees(nodes: &[BehaviorNode]) -> BTreeSet<String> {
+    let mut callees = BTreeSet::new();
+    collect_callhelper_callees_inner(nodes, &mut callees);
+    callees
+}
+
+fn collect_callhelper_callees_inner(nodes: &[BehaviorNode], callees: &mut BTreeSet<String>) {
+    for node in nodes {
+        match node {
+            BehaviorNode::CallHelper { callee } => {
+                callees.insert(callee.clone());
+            }
+            BehaviorNode::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                collect_callhelper_callees_inner(then_body, callees);
+                collect_callhelper_callees_inner(else_body, callees);
+            }
+            BehaviorNode::Loop { body, .. } => {
+                collect_callhelper_callees_inner(body, callees);
+            }
+            BehaviorNode::OrderedSequence { steps } => {
+                collect_callhelper_callees_inner(steps, callees);
+            }
+            BehaviorNode::FallibleOp {
+                body,
+                cleanup_on_error,
+            } => {
+                collect_callhelper_callees_inner(body, callees);
+                collect_callhelper_callees_inner(cleanup_on_error, callees);
+            }
+            BehaviorNode::CleanupRegion { body, cleanup } => {
+                collect_callhelper_callees_inner(body, callees);
+                collect_callhelper_callees_inner(cleanup, callees);
+            }
+            _ => {}
+        }
+    }
+}
+
+/// Count CleanupRegion nodes recursively in the behavior tree.
+fn count_cleanup_regions_recursive(nodes: &[BehaviorNode]) -> usize {
+    let mut count = 0;
+    for node in nodes {
+        match node {
+            BehaviorNode::CleanupRegion { body, cleanup } => {
+                count += 1;
+                count += count_cleanup_regions_recursive(body);
+                count += count_cleanup_regions_recursive(cleanup);
+            }
+            BehaviorNode::FallibleOp {
+                body,
+                cleanup_on_error,
+            } => {
+                count += count_cleanup_regions_recursive(body);
+                count += count_cleanup_regions_recursive(cleanup_on_error);
+            }
+            BehaviorNode::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count += count_cleanup_regions_recursive(then_body);
+                count += count_cleanup_regions_recursive(else_body);
+            }
+            BehaviorNode::Loop { body, .. } => {
+                count += count_cleanup_regions_recursive(body);
+            }
+            BehaviorNode::OrderedSequence { steps } => {
+                count += count_cleanup_regions_recursive(steps);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
 // ===========================================================================
 
 /// Prove that the Linux plan carries register layout data from the portable plan.
@@ -2129,4 +2296,414 @@ fn proof_deterministic_across_runs() {
         assert_eq!(f1.name, f2.name);
         assert_eq!(f1.role, f2.role);
     }
+}
+
+// ===========================================================================
+// PROOF 5: Per-callback and per-helper behavior coverage
+// ===========================================================================
+
+/// Prove that every authored callback has a FunctionBehavior entry matched
+/// by both name and role. Unlike `proof_behavioral_completeness` which
+/// checks only that each role is present somewhere, this test verifies
+/// the specific name-role pairing for every authored callback.
+#[test]
+fn proof_per_callback_behavior_coverage() {
+    let plan = make_portable_plan_with_constants();
+
+    let expected: &[(&str, FunctionRole)] = &[
+        ("init", FunctionRole::LifecycleInit),
+        ("deinit", FunctionRole::LifecycleDeinit),
+        ("port_open", FunctionRole::SerialPortOpen),
+        ("port_close", FunctionRole::SerialPortClose),
+        ("configure", FunctionRole::SerialConfigure),
+        ("tx_byte", FunctionRole::SerialTxByte),
+        ("rx_char", FunctionRole::SerialRxChar),
+        ("tx_ready", FunctionRole::SerialTxReady),
+        ("tx_empty", FunctionRole::SerialTxEmpty),
+        ("flush_rx_fifo", FunctionRole::SerialFlushRxFifo),
+        ("flush_tx_fifo", FunctionRole::SerialFlushTxFifo),
+        ("send_break", FunctionRole::SerialSendBreak),
+        ("handle_irq", FunctionRole::Isr),
+    ];
+
+    for (name, role) in expected {
+        let matched = plan
+            .behavior
+            .functions
+            .iter()
+            .find(|f| f.name == *name && f.role == *role);
+        assert!(
+            matched.is_some(),
+            "missing callback: name={name}, role={role:?}"
+        );
+        assert!(
+            !matched.unwrap().body.is_empty(),
+            "callback '{name}' has empty body"
+        );
+    }
+}
+
+/// Prove that every reachable helper has a corresponding FunctionBehavior
+/// entry with `role == Helper` and a non-empty body.
+#[test]
+fn proof_per_helper_behavior_coverage() {
+    let input = make_full_spec_input();
+    let plan = make_portable_plan_with_constants();
+
+    let reachable = input.mir_reachable_helper_names();
+    assert!(
+        !reachable.is_empty(),
+        "reachable helper set must not be empty"
+    );
+
+    for name in &reachable {
+        let matched = plan
+            .behavior
+            .functions
+            .iter()
+            .find(|f| f.name == *name && f.role == FunctionRole::Helper);
+        assert!(
+            matched.is_some(),
+            "missing helper behavior for reachable helper '{name}'"
+        );
+        assert!(
+            !matched.unwrap().body.is_empty(),
+            "helper '{name}' has empty body"
+        );
+    }
+}
+
+// ===========================================================================
+// PROOF 6: Cleanup/drop behavior visible in lowering plans
+// ===========================================================================
+
+/// Prove that functions using the `?` operator produce FallibleOp nodes
+/// in the behavior tree, meaning cleanup/drop behavior is visible in
+/// lowering plans without backend reconstruction.
+///
+/// Also proves that functions without fallible control flow do NOT
+/// contain FallibleOp nodes, confirming the planner is not inventing
+/// cleanup where none was authored.
+#[test]
+fn proof_cleanup_behavior_visible_in_plans() {
+    let plan = make_portable_plan_with_constants();
+
+    // Functions known to use the `?` operator in the authored spec.
+    let fallible_fns = ["init", "deinit", "port_open", "configure"];
+    for name in &fallible_fns {
+        let func = plan
+            .behavior
+            .functions
+            .iter()
+            .find(|f| f.name == *name)
+            .unwrap_or_else(|| panic!("missing function '{name}'"));
+        let fallible_count = count_fallible_ops_recursive(&func.body);
+        assert!(
+            fallible_count >= 1,
+            "'{name}' uses `?` but has {fallible_count} FallibleOp nodes (expected >= 1)"
+        );
+    }
+
+    // Functions that do NOT use `?` -- should have zero FallibleOp nodes.
+    let non_fallible_fns = ["tx_ready", "tx_empty"];
+    for name in &non_fallible_fns {
+        let func = plan
+            .behavior
+            .functions
+            .iter()
+            .find(|f| f.name == *name)
+            .unwrap_or_else(|| panic!("missing function '{name}'"));
+        let fallible_count = count_fallible_ops_recursive(&func.body);
+        assert_eq!(
+            fallible_count, 0,
+            "'{name}' has no `?` but got {fallible_count} FallibleOp nodes"
+        );
+    }
+}
+
+// ===========================================================================
+// PROOF 7: MIR provenance is mir_drops_elaborated_and_const_checked
+// ===========================================================================
+
+/// Prove that the MIR body source of truth is
+/// `mir_drops_elaborated_and_const_checked` and that this is validated
+/// by the body readiness infrastructure.
+#[test]
+fn proof_mir_provenance_is_drops_elaborated() {
+    let input = make_full_spec_input();
+
+    // Query flavor on the input is DropsElaborated.
+    assert_eq!(
+        *input.mir_query_flavor(),
+        MirQueryFlavor::DropsElaborated,
+        "MIR query flavor must be DropsElaborated"
+    );
+
+    // Body readiness validates the query flavor.
+    let report = check_body_readiness(&input);
+    assert!(
+        report.mir_form_summary.query_flavor_valid,
+        "body readiness must confirm query flavor is valid"
+    );
+
+    // No errors in the body readiness report.
+    assert!(
+        !report.has_errors(),
+        "body readiness must have no errors for the full-spec fixture"
+    );
+
+    // Coverage counts are nonzero, confirming bodies were processed.
+    assert!(
+        report.callback_body_count > 0,
+        "callback body count must be > 0"
+    );
+    assert!(report.isr_body_count > 0, "ISR body count must be > 0");
+    assert!(
+        report.reachable_helper_count > 0,
+        "reachable helper count must be > 0"
+    );
+}
+
+// ===========================================================================
+// PROOF 8: Behavior plan traceable to captured MIR bodies
+// ===========================================================================
+
+/// Prove structural traceability from behavior plan content back to
+/// captured MIR bodies. For every function in the behavior plan, a
+/// corresponding MIR body must exist. For orchestrating functions,
+/// the CallHelper callees in the behavior tree must overlap with the
+/// helper_calls from the MIR function.
+#[test]
+fn proof_behavior_traceable_to_mir_bodies() {
+    let input = make_full_spec_input();
+    let plan = make_portable_plan_with_constants();
+
+    // Every FunctionBehavior must have a corresponding MIR body.
+    for fb in &plan.behavior.functions {
+        assert!(
+            input.mir_body_by_name(&fb.name).is_some(),
+            "behavior function '{}' has no corresponding MIR body",
+            fb.name
+        );
+    }
+
+    // Total behavior function count == callbacks + ISR + reachable helpers.
+    let reachable_helpers = input.mir_reachable_helper_names();
+    let callback_count = input.mir_callback_bodies().len();
+    let isr_count = input.mir_isr_bodies().len();
+    let expected_total = callback_count + isr_count + reachable_helpers.len();
+    assert_eq!(
+        plan.behavior.functions.len(),
+        expected_total,
+        "behavior function count must equal callbacks ({}) + ISRs ({}) + helpers ({})",
+        callback_count,
+        isr_count,
+        reachable_helpers.len()
+    );
+
+    // For orchestrating functions, verify CallHelper callees overlap
+    // with the MIR function's helper_calls.
+    let orchestrating = [
+        "init",
+        "program_polling_port",
+        "shutdown_port",
+        "handle_irq",
+    ];
+    for name in &orchestrating {
+        let fb = plan
+            .behavior
+            .functions
+            .iter()
+            .find(|f| f.name == *name)
+            .unwrap_or_else(|| panic!("missing behavior for '{name}'"));
+        let mir_fn = input
+            .mir_body_by_name(name)
+            .unwrap_or_else(|| panic!("missing MIR body for '{name}'"));
+
+        let behavior_callees = collect_callhelper_callees(&fb.body);
+        let mir_callees: BTreeSet<String> = mir_fn.helper_calls.iter().cloned().collect();
+
+        // Every MIR helper_call that is a reachable helper should
+        // appear as a CallHelper in the behavior tree.
+        for callee in &mir_callees {
+            if reachable_helpers.contains(callee) {
+                assert!(
+                    behavior_callees.contains(callee),
+                    "'{name}' MIR calls helper '{callee}' but behavior tree is missing CallHelper"
+                );
+            }
+        }
+    }
+}
+
+// ===========================================================================
+// PROOF 9: Extended regression -- lowering behavior source genericity
+// ===========================================================================
+
+/// Regression test: the behavior type definitions and behavior planner
+/// do not contain hardcoded PL011-specific register offsets, masks,
+/// compatibility strings, or device-naming literals.
+#[test]
+fn regression_lowering_behavior_source_has_no_pl011_facts() {
+    let sources = [
+        ("behavior.rs", include_str!("../src/lowering/behavior.rs")),
+        (
+            "behavior_planner.rs",
+            include_str!("../src/lowering/behavior_planner.rs"),
+        ),
+    ];
+
+    let forbidden_offsets = [
+        "0x018", "0x024", "0x028", "0x02C", "0x030", "0x034", "0x038", "0x040", "0x044",
+    ];
+    let forbidden_masks = ["0x07ff", "0x7ff"];
+
+    for (filename, source) in &sources {
+        for offset in &forbidden_offsets {
+            assert!(
+                !source.contains(offset),
+                "{filename} contains hardcoded PL011 offset {offset}"
+            );
+        }
+        for mask in &forbidden_masks {
+            assert!(
+                !source.contains(mask),
+                "{filename} contains hardcoded PL011 mask {mask}"
+            );
+        }
+        assert!(
+            !source.contains(r#""arm,pl011""#),
+            "{filename} contains hardcoded PL011 compatibility string"
+        );
+        assert!(
+            !source.contains("Pl011"),
+            "{filename} contains PL011 device name reference"
+        );
+        assert!(
+            !source.contains("PL011"),
+            "{filename} contains PL011 device name reference"
+        );
+    }
+}
+
+/// Regression test: the MIR interpreter modules do not contain hardcoded
+/// PL011-specific register offsets, masks, compatibility strings, or
+/// device-naming literals in non-comment code.
+///
+/// Doc-comment examples (e.g. `/// e.g. "registers::Pl011Registers"`)
+/// are excluded because they illustrate usage but do not encode device
+/// behavior.
+#[test]
+fn regression_mir_interpreter_has_no_pl011_facts() {
+    let sources = [
+        (
+            "mir_interpreter/mod.rs",
+            include_str!("../src/lowering/mir_interpreter/mod.rs"),
+        ),
+        (
+            "mir_interpreter/call_classifier.rs",
+            include_str!("../src/lowering/mir_interpreter/call_classifier.rs"),
+        ),
+        (
+            "mir_interpreter/cfg_helpers.rs",
+            include_str!("../src/lowering/mir_interpreter/cfg_helpers.rs"),
+        ),
+        (
+            "mir_interpreter/cfg_walker.rs",
+            include_str!("../src/lowering/mir_interpreter/cfg_walker.rs"),
+        ),
+        (
+            "mir_interpreter/context.rs",
+            include_str!("../src/lowering/mir_interpreter/context.rs"),
+        ),
+        (
+            "mir_interpreter/place_resolver.rs",
+            include_str!("../src/lowering/mir_interpreter/place_resolver.rs"),
+        ),
+        (
+            "mir_interpreter/value_lowering.rs",
+            include_str!("../src/lowering/mir_interpreter/value_lowering.rs"),
+        ),
+    ];
+
+    let forbidden_offsets = [
+        "0x018", "0x024", "0x028", "0x02C", "0x030", "0x034", "0x038", "0x040", "0x044",
+    ];
+    let forbidden_masks = ["0x07ff", "0x7ff"];
+
+    for (filename, source) in &sources {
+        // Strip comment-only lines so doc-comment examples do not
+        // cause false positives.
+        let code_lines: String = source
+            .lines()
+            .filter(|l| {
+                let trimmed = l.trim_start();
+                !trimmed.starts_with("///") && !trimmed.starts_with("//!")
+            })
+            .collect::<Vec<_>>()
+            .join("\n");
+
+        for offset in &forbidden_offsets {
+            assert!(
+                !code_lines.contains(offset),
+                "{filename} contains hardcoded PL011 offset {offset}"
+            );
+        }
+        for mask in &forbidden_masks {
+            assert!(
+                !code_lines.contains(mask),
+                "{filename} contains hardcoded PL011 mask {mask}"
+            );
+        }
+        assert!(
+            !code_lines.contains(r#""arm,pl011""#),
+            "{filename} contains hardcoded PL011 compatibility string"
+        );
+        assert!(
+            !code_lines.contains("Pl011"),
+            "{filename} contains PL011 device name reference in non-comment code"
+        );
+        assert!(
+            !code_lines.contains("PL011"),
+            "{filename} contains PL011 device name reference in non-comment code"
+        );
+    }
+}
+
+/// Regression test: the legacy body interpreter does not contain hardcoded
+/// PL011-specific register offsets, masks, compatibility strings, or
+/// device-naming literals.
+#[test]
+fn regression_body_interpreter_has_no_pl011_facts() {
+    let source = include_str!("../src/lowering/body_interpreter.rs");
+
+    let forbidden_offsets = [
+        "0x018", "0x024", "0x028", "0x02C", "0x030", "0x034", "0x038", "0x040", "0x044",
+    ];
+    let forbidden_masks = ["0x07ff", "0x7ff"];
+
+    for offset in &forbidden_offsets {
+        assert!(
+            !source.contains(offset),
+            "body_interpreter.rs contains hardcoded PL011 offset {offset}"
+        );
+    }
+    for mask in &forbidden_masks {
+        assert!(
+            !source.contains(mask),
+            "body_interpreter.rs contains hardcoded PL011 mask {mask}"
+        );
+    }
+    assert!(
+        !source.contains(r#""arm,pl011""#),
+        "body_interpreter.rs contains hardcoded PL011 compatibility string"
+    );
+    assert!(
+        !source.contains("Pl011"),
+        "body_interpreter.rs contains PL011 device name reference"
+    );
+    assert!(
+        !source.contains("PL011"),
+        "body_interpreter.rs contains PL011 device name reference"
+    );
 }

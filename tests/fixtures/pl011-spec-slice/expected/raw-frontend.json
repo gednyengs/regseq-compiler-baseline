@@ -6,7 +6,8 @@
     "compatible": [
       "arm,pl011"
     ],
-    "device_class": "serial"
+    "device_class": "serial",
+    "bus": "amba"
   },
   "register_access": {
     "register_blocks": [

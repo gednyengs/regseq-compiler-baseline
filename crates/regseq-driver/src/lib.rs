@@ -1,4 +1,5 @@
 #![feature(rustc_private)]
+#![feature(box_patterns)]
 
 extern crate rustc_ast;
 extern crate rustc_driver;
@@ -10,6 +11,7 @@ extern crate rustc_session;
 pub mod args;
 mod callbacks;
 pub(crate) mod extract;
+pub mod mir_repr;
 pub mod raw_artifact;
 pub use callbacks::RegseqCallbacks;
 

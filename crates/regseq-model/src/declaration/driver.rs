@@ -17,6 +17,8 @@ pub struct DriverDecl {
     pub compatible: Vec<String>,
     /// Device class identity.
     pub device_class: DeviceClass,
+    /// Portable bus/fabric identity from `#[rseq::driver(bus = "...")]`.
+    pub bus: Option<BusType>,
     /// Provenance back to the raw artifact.
     pub provenance: Provenance,
 }
@@ -33,6 +35,42 @@ pub enum DeviceClass {
     Network,
     /// An unrecognized device class, preserved as-is.
     Other(String),
+}
+
+/// Typed portable bus/fabric identity.
+///
+/// Represents the accepted portable bus taxonomy from Layer 1.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BusType {
+    /// Firmware-described integrated/on-chip device with no stronger bus identity.
+    Integrated,
+    /// ARM AMBA / PrimeCell-family device.
+    Amba,
+    /// PCI / PCIe enumerated device.
+    Pci,
+}
+
+impl BusType {
+    /// Parse a bus type from the raw string representation.
+    ///
+    /// Returns `None` for unrecognized values.
+    pub fn from_raw(s: &str) -> Option<Self> {
+        match s {
+            "integrated" => Some(Self::Integrated),
+            "amba" => Some(Self::Amba),
+            "pci" => Some(Self::Pci),
+            _ => None,
+        }
+    }
+
+    /// Return the canonical string label for this bus type.
+    pub fn as_str(&self) -> &str {
+        match self {
+            Self::Integrated => "integrated",
+            Self::Amba => "amba",
+            Self::Pci => "pci",
+        }
+    }
 }
 
 impl DeviceClass {
