@@ -147,6 +147,8 @@ fn interpret_mir_function(
         &func.body.local_decls,
         func.body.arg_count,
         &func.receiver,
+        &func.params,
+        &func.body,
     );
 
     let role = determine_role(func);

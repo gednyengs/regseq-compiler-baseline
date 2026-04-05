@@ -10,6 +10,7 @@ use crate::lowering::behavior::{
 };
 use crate::lowering::plan::ResourceKind;
 
+#[allow(unused_imports)]
 use super::plan::LinuxRegisterLayout;
 
 // ---------------------------------------------------------------------------
@@ -178,8 +179,16 @@ fn emit_behavior_node(node: &BehaviorNode, ctx: &EmitContext<'_>, indent: usize)
         }
 
         BehaviorNode::FieldAssign { field, value } => {
+            // Guard: if the field name contains "::", it's a Rust type path
+            // that leaked through place resolution. Use the last path segment
+            // as a best-effort field name.
+            let c_field = if field.contains("::") {
+                field.rsplit("::").next().unwrap_or(field).to_lowercase()
+            } else {
+                field.clone()
+            };
             let val = emit_assign_value(value);
-            vec![format!("{ind}d->{field} = {val};")]
+            vec![format!("{ind}d->{c_field} = {val};")]
         }
 
         BehaviorNode::ResourceOp {
@@ -203,11 +212,10 @@ fn emit_behavior_node(node: &BehaviorNode, ctx: &EmitContext<'_>, indent: usize)
         BehaviorNode::InterruptClassClear {
             status_source,
             class_name,
+            clear_register,
         } => {
             let mask = interrupt_class_define(&ctx.upper, class_name);
-            // Write to the ICR register to clear the matched interrupt sources.
-            // The ICR register is identified by convention from the register layout.
-            let icr_define = find_icr_register_define(ctx);
+            let icr_define = register_offset_define(ctx.reg_prefix, clear_register);
             vec![format!(
                 "{ind}{}_reg_write(d, {icr_define}, {status_source} & {mask});",
                 ctx.snake
@@ -355,7 +363,14 @@ pub(super) fn emit_value_expr(expr: &ValueExpr, ctx: &EmitContext<'_>) -> String
                 "0".into()
             }
         }
-        ValueExpr::Param(name) => name.clone(),
+        ValueExpr::Param(name) => {
+            // Resolve unevaluated constant references to C define names.
+            if let Some(path) = name.strip_prefix("unsupported_unevaluated:") {
+                resolve_unevaluated_constant(path, ctx)
+            } else {
+                name.clone()
+            }
+        }
         ValueExpr::Local(name) => name.clone(),
         ValueExpr::FieldRef(name) => format!("d->{name}"),
         ValueExpr::BinOp { op, lhs, rhs } => {
@@ -383,6 +398,13 @@ pub(super) fn emit_value_expr(expr: &ValueExpr, ctx: &EmitContext<'_>) -> String
             format!("({c_type})({inner})")
         }
         ValueExpr::MethodResult { callee, args } => {
+            // Safety net: any callee containing "::" that reaches emission
+            // is a lowering regression — the MIR interpreter should have
+            // classified it before it got here.
+            debug_assert!(
+                !callee.contains("::"),
+                "unresolved Rust path in emission: {callee}"
+            );
             let arg_strs: Vec<String> = args.iter().map(|a| emit_value_expr(a, ctx)).collect();
             format!("{}({})", callee, arg_strs.join(", "))
         }
@@ -397,6 +419,14 @@ pub(super) fn emit_value_expr(expr: &ValueExpr, ctx: &EmitContext<'_>) -> String
         }
         ValueExpr::None => "0".into(),
         ValueExpr::Some(inner) => emit_value_expr(inner, ctx),
+        ValueExpr::ResourceRead {
+            resource_kind,
+            field_name,
+            property,
+        } => match (resource_kind, property.as_str()) {
+            (ResourceKind::Clock, "rate") => format!("clk_get_rate(d->{field_name})"),
+            _ => format!("/* TODO: resource read {property} on {field_name} */"),
+        },
     }
 }
 
@@ -507,6 +537,10 @@ fn emit_return(semantic: &ReturnSemantic, ctx: &EmitContext<'_>) -> String {
         }
         ReturnSemantic::Bool(false) => "return 0;".into(),
         ReturnSemantic::Void => "return;".into(),
+        ReturnSemantic::WithValue(expr) => {
+            let val = emit_value_expr(expr, ctx);
+            format!("return {val};")
+        }
     }
 }
 
@@ -637,20 +671,6 @@ fn find_bitfield_mask_define(ctx: &EmitContext<'_>, register: &str, field: &str)
     )
 }
 
-/// Find the ICR (interrupt clear) register define from the layout.
-fn find_icr_register_define(ctx: &EmitContext<'_>) -> String {
-    // Look for a register field named "icr" in the layout.
-    for block in &ctx.register_layout.blocks {
-        for field in &block.fields {
-            if field.name.eq_ignore_ascii_case("icr") {
-                return register_offset_define(ctx.reg_prefix, &field.name);
-            }
-        }
-    }
-    // Fallback: conventional name.
-    format!("{}_ICR", ctx.reg_prefix)
-}
-
 /// Resolve a named value define from the register layout.
 fn resolve_named_value_define(
     ctx: &EmitContext<'_>,
@@ -718,6 +738,38 @@ fn infer_c_type(value: &ValueExpr) -> &'static str {
         }
         _ => "u32",
     }
+}
+
+/// Resolve an unevaluated constant path to a C define or expression.
+///
+/// Handles paths like:
+/// - `"driver::Pl011FullSpec::EXPLICIT_ISR_CLEAR_MASK"` → register-layout-derived define
+/// - `"driver::Pl011FullSpec::DEFAULT_UART_CLOCK_HZ"` → property default define
+/// - `"registers::LCRH_REG::FEN::DISABLED"` → named value define
+fn resolve_unevaluated_constant(path: &str, ctx: &EmitContext<'_>) -> String {
+    let parts: Vec<&str> = path.split("::").collect();
+    let const_name = parts.last().copied().unwrap_or(path);
+
+    // Try to resolve as a register named value (e.g., registers::LCRH_REG::FEN::DISABLED).
+    if parts.len() >= 4 && parts[0] == "registers" {
+        let field = parts[parts.len() - 2];
+        let value = parts[parts.len() - 1];
+        let reg_module = parts[1];
+        let desc_prefix = reg_module.strip_suffix("_REG").unwrap_or(reg_module);
+        return named_value_define(ctx.reg_prefix, desc_prefix, field, value);
+    }
+
+    // Try to resolve as a driver constant (e.g., EXPLICIT_ISR_CLEAR_MASK).
+    // Emit as UPPER_SNAKE_CASE prefixed with the driver upper name.
+    if const_name
+        .chars()
+        .all(|c| c.is_ascii_uppercase() || c == '_')
+    {
+        return format!("{}_{}", ctx.upper, const_name);
+    }
+
+    // Fallback: use the constant name as-is.
+    const_name.to_string()
 }
 
 /// Convert a Rust type name to a C type name.

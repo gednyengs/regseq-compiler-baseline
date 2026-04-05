@@ -248,6 +248,12 @@ pub enum BehaviorNode {
         status_source: String,
         /// Named interrupt class whose bits to clear.
         class_name: String,
+        /// Register name for the write-to-clear operation.
+        ///
+        /// Derived from the MIR body's register write in the clear path.
+        /// The backend uses this to emit the correct register define
+        /// instead of hardcoding a device-specific register name.
+        clear_register: String,
     },
 
     /// Check a register bitfield flag and accumulate into a result.
@@ -372,6 +378,18 @@ pub enum ValueExpr {
         callee: String,
         /// Arguments.
         args: Vec<ValueExpr>,
+    },
+    /// Read a scalar value from a resource.
+    ///
+    /// Represents reading a property of a resource (e.g., clock frequency)
+    /// that the backend maps to the appropriate OS-specific API call.
+    ResourceRead {
+        /// Resource family (Clock, Reset, etc.).
+        resource_kind: ResourceKind,
+        /// Driver field holding the resource.
+        field_name: String,
+        /// Property to read (e.g., "rate").
+        property: String,
     },
     /// Extract a field from a raw register value.
     FieldExtract {
@@ -499,7 +517,7 @@ pub enum BranchCondition {
 }
 
 /// Semantic meaning of a return statement.
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone)]
 pub enum ReturnSemantic {
     /// Return Ok(()) for a Result-returning function.
     Ok,
@@ -517,6 +535,8 @@ pub enum ReturnSemantic {
     Bool(bool),
     /// Void return (implicit).
     Void,
+    /// Return a concrete value expression.
+    WithValue(Box<ValueExpr>),
 }
 
 /// Value for a field assignment.

@@ -355,6 +355,19 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-23",
+          "name": "Backend emission integration for driver output",
+          "spec": ".harness/tasks/regseq-driver/23-backend-emission-integration-for-driver-output.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-19",
+            "regseq-analysis-05",
+            "regseq-linux-backend-02"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1156,9 +1169,10 @@
           "id": "track-a-validation-11",
           "name": "Generated PL011 Linux module host-build proof",
           "spec": ".harness/tasks/track-a-validation/11-generated-pl011-linux-module-host-build-proof.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
-            "regseq-linux-backend-02"
+            "regseq-linux-backend-02",
+            "regseq-driver-23"
           ],
           "artifacts": [],
           "fail_reason": null

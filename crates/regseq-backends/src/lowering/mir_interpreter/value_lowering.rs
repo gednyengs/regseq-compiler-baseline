@@ -45,12 +45,45 @@ fn lower_place_to_value(ctx: &FnContext<'_>, place: &MirPlace) -> ValueExpr {
         ResolvedPlace::RegisterAccess { register, .. } => ValueExpr::FieldRef(register),
         ResolvedPlace::ResourceField { name, .. } => ValueExpr::FieldRef(name),
         ResolvedPlace::Local { index, name } => {
-            ValueExpr::Local(name.unwrap_or_else(|| format!("_{index}")))
+            // Follow copy chain to find the ultimate source.
+            let source = ctx.resolve_copy_chain(index);
+            // Check if the source is an authored parameter.
+            if let Some(authored) = ctx.authored_param_name(source) {
+                return ValueExpr::Param(authored.to_string());
+            }
+            // Check if the source has a user-provided non-_N name.
+            if let Some(src_name) = ctx.local_name(source) {
+                if !is_mir_generated_name(src_name) {
+                    return ValueExpr::Local(src_name.to_string());
+                }
+            }
+            // Use the original local's name if it has a user-provided non-_N name.
+            if let Some(ref n) = name {
+                if !is_mir_generated_name(n) {
+                    return ValueExpr::Local(n.clone());
+                }
+            }
+            // Stable generated name for compiler temporaries.
+            ValueExpr::Local(format!("tmp{index}"))
         }
-        ResolvedPlace::Param { name, index } => {
-            ValueExpr::Param(name.unwrap_or_else(|| format!("_arg{index}")))
+        ResolvedPlace::Param { index, name } => {
+            // Check for authored parameter name first.
+            if let Some(authored) = ctx.authored_param_name(index) {
+                ValueExpr::Param(authored.to_string())
+            } else {
+                ValueExpr::Param(name.unwrap_or_else(|| format!("arg{index}")))
+            }
         }
         ResolvedPlace::Unknown => ValueExpr::IntLit(0),
+    }
+}
+
+/// Check if a local name is a MIR-generated name (pattern: `_` followed by digits).
+fn is_mir_generated_name(name: &str) -> bool {
+    if let Some(rest) = name.strip_prefix('_') {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    } else {
+        false
     }
 }
 
@@ -212,9 +245,14 @@ fn lower_rvalue_to_condition(
         MirRvalue::Discriminant { place } => {
             let resolved = resolve_place(ctx, place);
             if let ResolvedPlace::DriverField { ref name } = resolved {
-                return BranchCondition::FieldIsNone {
-                    field: name.clone(),
+                // Guard: if the name contains "::", it's a type path that
+                // leaked through place resolution. Use the last segment.
+                let c_name = if name.contains("::") {
+                    name.rsplit("::").next().unwrap_or(name).to_lowercase()
+                } else {
+                    name.clone()
                 };
+                return BranchCondition::FieldIsNone { field: c_name };
             }
             BranchCondition::ValueTest {
                 expr: lower_place_to_value(ctx, place),

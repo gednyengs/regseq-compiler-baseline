@@ -11,7 +11,9 @@ use crate::lowering::behavior::ResourceOperation;
 use crate::lowering::plan::ResourceKind;
 
 use super::context::FnContext;
-use super::place_resolver::{resolve_place, ResolvedPlace};
+use super::place_resolver::{
+    resolve_local_type_as_register, resolve_local_type_as_resource, resolve_place, ResolvedPlace,
+};
 
 /// Classification of a MIR Call terminator.
 #[derive(Debug, Clone)]
@@ -42,6 +44,17 @@ pub enum CallClassification {
     TryBranch,
     /// Try trait from_residual (error propagation).
     TryFromResidual,
+    /// core::option::Option method (transparent control flow).
+    OptionMethod { method: String },
+    /// regseq::Serial trait method (lowered to SubsystemAction).
+    SerialTraitMethod { method: String },
+    /// regseq::Duration constructor (argument setup for delay/toggle).
+    DurationConstructor,
+    /// regseq framework value constructor (e.g., SerialErrors::empty).
+    ///
+    /// Transparent structural call that creates a framework-type value.
+    /// Does not produce standalone C behavior.
+    FrameworkValueConstructor { path: String },
     /// Call not classified into a known category.
     Unknown { path: String },
 }
@@ -89,23 +102,43 @@ pub fn classify_call(
         return resource_op;
     }
 
-    // 6. Helper calls — grounded in helper name set + self receiver.
+    // 6. Option methods — transparent control flow.
+    if let Some(opt) = try_classify_option_method(&path) {
+        return opt;
+    }
+
+    // 7. Serial trait methods — lowered to SubsystemAction.
+    if let Some(serial) = try_classify_serial_trait_method(&path) {
+        return serial;
+    }
+
+    // 8. Duration constructors — argument setup for delay/toggle.
+    if try_classify_duration_constructor(&path) {
+        return CallClassification::DurationConstructor;
+    }
+
+    // 9. Framework value constructors (e.g., SerialErrors::empty, IrqResult::*).
+    if is_framework_value_constructor(&path) {
+        return CallClassification::FrameworkValueConstructor { path };
+    }
+
+    // 10. Helper calls — grounded in helper name set + self receiver.
     if let Some(helper) = try_classify_helper_call(ctx, &path, args) {
         return helper;
     }
 
-    // 7. Field value constructors.
+    // 11. Field value constructors.
     if path.contains("field_val") || path.contains("raw_reg_val") || path.contains("field_from_raw")
     {
         return CallClassification::FieldValueConstructor { path };
     }
 
-    // 8. Operator trait implementations (Add, BitOr, etc.)
+    // 12. Operator trait implementations (Add, BitOr, etc.)
     if path.contains("core::ops::") {
         return CallClassification::FieldValueConstructor { path };
     }
 
-    // 9. Unknown — surfaced explicitly.
+    // 13. Unknown — surfaced explicitly.
     CallClassification::Unknown { path }
 }
 
@@ -239,17 +272,27 @@ fn try_classify_helper_call(
 }
 
 /// Resolve the receiver argument to a register name.
+///
+/// First tries place-based resolution (self.regs.cr projection chains).
+/// Falls back to type-based resolution for intermediate MIR locals.
 fn resolve_receiver_register(ctx: &FnContext<'_>, args: &[MirOperand]) -> Option<String> {
     let first_arg = args.first()?;
     let place = operand_place(first_arg)?;
     let resolved = resolve_place(ctx, &place);
     match resolved {
         ResolvedPlace::RegisterAccess { register, .. } => Some(register),
+        ResolvedPlace::Local { index, .. } => {
+            // Fallback: check the local's declared type for register wrapper.
+            resolve_local_type_as_register(ctx, index)
+        }
         _ => None,
     }
 }
 
 /// Resolve the receiver argument to a resource field and kind.
+///
+/// First tries place-based resolution (self.clock projection chains).
+/// Falls back to type-based resolution for intermediate MIR locals.
 fn resolve_receiver_resource(
     ctx: &FnContext<'_>,
     args: &[MirOperand],
@@ -259,6 +302,10 @@ fn resolve_receiver_resource(
     let resolved = resolve_place(ctx, &place);
     match resolved {
         ResolvedPlace::ResourceField { name, kind } => Some((name, kind)),
+        ResolvedPlace::Local { index, .. } => {
+            // Fallback: check the local's declared type for resource type.
+            resolve_local_type_as_resource(ctx, index)
+        }
         _ => None,
     }
 }
@@ -269,4 +316,74 @@ fn operand_place(operand: &MirOperand) -> Option<MirPlace> {
         MirOperand::Copy { place } | MirOperand::Move { place } => Some(place.clone()),
         MirOperand::Constant { .. } => None,
     }
+}
+
+// ---------------------------------------------------------------------------
+// New call classification helpers
+// ---------------------------------------------------------------------------
+
+/// Try to classify a `core::option::Option` method call.
+fn try_classify_option_method(path: &str) -> Option<CallClassification> {
+    if !path.contains("core::option::Option") {
+        return None;
+    }
+    let method = path.rsplit("::").next()?;
+    match method {
+        "as_ref" | "map" | "unwrap_or" | "is_some" | "is_none" | "unwrap" | "expect" => {
+            Some(CallClassification::OptionMethod {
+                method: method.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Try to classify a `regseq::Serial` trait method call.
+fn try_classify_serial_trait_method(path: &str) -> Option<CallClassification> {
+    if !path.contains("Serial::") {
+        return None;
+    }
+    let method = path.rsplit("::").next()?;
+    match method {
+        "rx_char" | "tx_ready" | "tx_empty" | "tx_byte" | "push_rx_char" | "signal_tx_ready" => {
+            Some(CallClassification::SerialTraitMethod {
+                method: method.to_string(),
+            })
+        }
+        _ => None,
+    }
+}
+
+/// Try to classify a `regseq::Duration` constructor call.
+fn try_classify_duration_constructor(path: &str) -> bool {
+    path.contains("Duration::") && {
+        let method = path.rsplit("::").next().unwrap_or("");
+        matches!(method, "from_us" | "from_ms" | "from_ns")
+    }
+}
+
+/// Check if a call is a framework value constructor.
+///
+/// These are `regseq::*` constructors and associated functions that create
+/// framework type values but have no standalone C behavior.
+fn is_framework_value_constructor(path: &str) -> bool {
+    // SerialErrors::empty, SerialErrors::from_bits, etc.
+    if path.contains("SerialErrors::") {
+        return true;
+    }
+    // RxChar::new, RxChar::from_byte, etc.
+    if path.contains("RxChar::") {
+        return true;
+    }
+    // IrqResult variants.
+    if path.contains("IrqResult::") {
+        return true;
+    }
+    // Clock::get_rate is a value-producing call, not an operation.
+    // It is handled as a framework constructor because the value
+    // flows through the Option chain, not as a standalone C call.
+    if path.contains("Clock::get_rate") {
+        return true;
+    }
+    false
 }

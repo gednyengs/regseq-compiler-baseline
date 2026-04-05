@@ -7,7 +7,7 @@
 use std::collections::BTreeSet;
 
 use regseq_model::declaration::mir_body::{
-    MirBody, MirPlace, MirRvalue, MirStatementKind, MirTerminatorKind, MirUnwindAction,
+    MirBody, MirPlace, MirRvalue, MirStatementKind, MirTerminatorKind, MirTy, MirUnwindAction,
 };
 
 use crate::lowering::behavior::{AssignValue, BehaviorNode, ValueExpr};
@@ -125,7 +125,10 @@ pub fn walk_region(
                         current = next.unwrap_or(usize::MAX);
                     }
                     CallClassification::Deref
-                    | CallClassification::FieldValueConstructor { .. } => {
+                    | CallClassification::FieldValueConstructor { .. }
+                    | CallClassification::OptionMethod { .. }
+                    | CallClassification::DurationConstructor
+                    | CallClassification::FrameworkValueConstructor { .. } => {
                         current = next.unwrap_or(usize::MAX);
                     }
                     CallClassification::TryBranch => {
@@ -296,7 +299,14 @@ fn lower_assign(ctx: &FnContext<'_>, place: &MirPlace, rvalue: &MirRvalue) -> Op
                     match val {
                         ValueExpr::None => AssignValue::None,
                         ValueExpr::IntLit(v) => AssignValue::Literal(v.to_string()),
-                        _ => AssignValue::Literal(format!("{val:?}")),
+                        ValueExpr::BoolLit(b) => {
+                            AssignValue::Literal(if b { "1" } else { "0" }.to_string())
+                        }
+                        ValueExpr::Param(ref s) | ValueExpr::Local(ref s) => {
+                            AssignValue::Literal(s.clone())
+                        }
+                        ValueExpr::FieldRef(ref s) => AssignValue::Literal(s.clone()),
+                        _ => AssignValue::None,
                     }
                 }
                 MirRvalue::Aggregate { agg_kind, operands } => {
@@ -312,17 +322,23 @@ fn lower_assign(ctx: &FnContext<'_>, place: &MirPlace, rvalue: &MirRvalue) -> Op
                             } else if path.contains("Option") && *variant_index == 1 {
                                 if let Some(first) = operands.first() {
                                     let val = lower_operand(ctx, first);
-                                    AssignValue::SomeByte {
-                                        source: format!("{val:?}"),
+                                    match val {
+                                        ValueExpr::Param(ref s) | ValueExpr::Local(ref s) => {
+                                            AssignValue::SomeByte { source: s.clone() }
+                                        }
+                                        ValueExpr::IntLit(v) => AssignValue::SomeByte {
+                                            source: v.to_string(),
+                                        },
+                                        _ => AssignValue::None,
                                     }
                                 } else {
                                     AssignValue::None
                                 }
                             } else {
-                                AssignValue::Literal(format!("{rvalue:?}"))
+                                AssignValue::None
                             }
                         }
-                        _ => AssignValue::Literal(format!("{rvalue:?}")),
+                        _ => AssignValue::None,
                     }
                 }
                 _ => return None,
@@ -335,8 +351,20 @@ fn lower_assign(ctx: &FnContext<'_>, place: &MirPlace, rvalue: &MirRvalue) -> Op
         ResolvedPlace::Local { index, name } => {
             if is_semantic_local(ctx, *index, rvalue) {
                 let value = lower_rvalue(ctx, rvalue);
+                // Use authored param name, user-provided name, or stable tmp name.
+                let binding_name = if let Some(authored) = ctx.authored_param_name(*index) {
+                    authored.to_string()
+                } else if let Some(ref n) = name {
+                    if is_mir_generated_local_name(n) {
+                        format!("tmp{index}")
+                    } else {
+                        n.clone()
+                    }
+                } else {
+                    format!("tmp{index}")
+                };
                 Some(BehaviorNode::LocalBinding {
-                    name: name.clone().unwrap_or_else(|| format!("_{index}")),
+                    name: binding_name,
                     mutable: true,
                     value,
                 })
@@ -348,23 +376,94 @@ fn lower_assign(ctx: &FnContext<'_>, place: &MirPlace, rvalue: &MirRvalue) -> Op
     }
 }
 
+/// Check if a local name is a MIR-generated name (pattern: `_` followed by digits).
+fn is_mir_generated_local_name(name: &str) -> bool {
+    if let Some(rest) = name.strip_prefix('_') {
+        !rest.is_empty() && rest.chars().all(|c| c.is_ascii_digit())
+    } else {
+        false
+    }
+}
+
 /// Check if a local variable assignment is semantically meaningful.
+///
+/// For locals with user-provided names (not `_N` pattern), all
+/// non-discriminant, non-reference assignments are semantic.
+///
+/// For `_N`-named locals (compiler temporaries), only value-producing
+/// computations on simple scalar types are promoted to semantic locals.
+/// Register/resource wrapper chain temporaries, discriminants, and
+/// references remain structural (dropped).
 fn is_semantic_local(ctx: &FnContext<'_>, index: u32, rvalue: &MirRvalue) -> bool {
-    if ctx.local_name(index).is_none() {
-        return false;
-    }
-    if let Some(name) = ctx.local_name(index) {
-        if name.starts_with('_') && name.chars().skip(1).all(|c| c.is_ascii_digit()) {
-            return false;
-        }
-    }
+    // Always reject discriminant and reference assignments.
     if matches!(rvalue, MirRvalue::Discriminant { .. }) {
         return false;
     }
-    if matches!(rvalue, MirRvalue::Ref { .. }) {
+    if matches!(
+        rvalue,
+        MirRvalue::Ref { .. } | MirRvalue::CopyForDeref { .. }
+    ) {
         return false;
     }
-    true
+
+    // Locals with no debug name at all are not semantic.
+    let name = match ctx.local_name(index) {
+        Some(n) => n,
+        None => return false,
+    };
+
+    // If the local has a non-_N user-provided name, it is always semantic.
+    if !is_mir_generated_local_name(name) {
+        return true;
+    }
+
+    // For _N-named locals: only promote if value-producing AND simple scalar type.
+    let is_value_producing = matches!(
+        rvalue,
+        MirRvalue::BinaryOp { .. } | MirRvalue::Cast { .. } | MirRvalue::UnaryOp { .. }
+    );
+    if !is_value_producing {
+        return false;
+    }
+
+    // Check if the local's type is a simple scalar.
+    if let Some(decl) = ctx.local_decls.get(index as usize) {
+        is_simple_scalar_type(&decl.ty, ctx)
+    } else {
+        false
+    }
+}
+
+/// Check if a MIR type is a simple scalar suitable for C local declaration.
+fn is_simple_scalar_type(ty: &MirTy, ctx: &FnContext<'_>) -> bool {
+    match ty {
+        MirTy::Uint { .. } | MirTy::Int { .. } | MirTy::Bool => true,
+        MirTy::Adt { path, .. } => {
+            // Reject register wrappers, resource types, Option, Result, etc.
+            if ctx.shared.is_register_wrapper_type(path) {
+                return false;
+            }
+            if ctx
+                .shared
+                .resource_type_paths
+                .iter()
+                .any(|p| path.contains(p))
+            {
+                return false;
+            }
+            if path.contains("Option")
+                || path.contains("Result")
+                || path.contains("ControlFlow")
+                || path.contains("FieldValue")
+                || path.contains("Mmio")
+            {
+                return false;
+            }
+            false // Conservative: unknown ADTs are not simple scalars
+        }
+        MirTy::Ref { .. } | MirTy::Tuple { .. } => false,
+        _ => false,
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -8,7 +8,9 @@
 //! plan. No device-specific register offsets, interrupt masks, callback
 //! templates, or naming policy appears in this module.
 
-use crate::lowering::behavior::{BehaviorPlan, FunctionBehavior, FunctionRole, PortableType};
+use crate::lowering::behavior::{
+    BehaviorNode, BehaviorPlan, FunctionBehavior, FunctionRole, PortableType,
+};
 use crate::lowering::plan::DriverLoweringPlan;
 
 use super::c_ast::{generated_file_banner, CTopLevelItem, CTranslationUnit};
@@ -293,33 +295,58 @@ fn find_behavior_by_role(behavior: &BehaviorPlan, role: FunctionRole) -> Option<
 }
 
 /// Emit helper functions from the behavior plan.
+///
+/// Emits forward declarations first (from the same source as definitions)
+/// to ensure helpers can be called before their definition.
 fn emit_helper_functions(
     tu: &mut CTranslationUnit,
     plan: &LinuxBackendPlan,
     portable: &DriverLoweringPlan,
     snake: &str,
 ) {
-    for mapping in &plan.behavior_mapping.callback_mappings {
-        if mapping.group != LinuxCallbackGroup::Helper {
-            continue;
-        }
-        let func = portable
-            .behavior
-            .functions
-            .iter()
-            .find(|f| f.name == mapping.portable_function);
-        if let Some(func) = func {
-            let ctx = make_emit_context(plan, portable, snake, Some(func.role.clone()));
-            let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
+    // Collect all helper functions from the behavior mapping.
+    let helpers: Vec<&FunctionBehavior> = plan
+        .behavior_mapping
+        .callback_mappings
+        .iter()
+        .filter(|m| m.group == LinuxCallbackGroup::Helper)
+        .filter_map(|m| {
+            portable
+                .behavior
+                .functions
+                .iter()
+                .find(|f| f.name == m.portable_function)
+        })
+        .collect();
+
+    // Emit forward declarations (same source as definitions).
+    if !helpers.is_empty() {
+        tu.push(CTopLevelItem::LineComment(
+            "Helper forward declarations".into(),
+        ));
+        for func in &helpers {
             let ret_ty = helper_return_type(func);
             let param_str = build_c_param_list(snake, func);
-            tu.push(CTopLevelItem::FuncDef {
-                signature: format!("static {ret_ty} {snake}_{}({param_str})", func.name),
-                body: body_lines,
-                comment: Some(format!("Helper: {}", func.name)),
-            });
-            tu.push(CTopLevelItem::BlankLine);
+            tu.push(CTopLevelItem::Raw(format!(
+                "static {ret_ty} {snake}_{}({param_str});",
+                func.name
+            )));
         }
+        tu.push(CTopLevelItem::BlankLine);
+    }
+
+    // Emit function bodies.
+    for func in &helpers {
+        let ctx = make_emit_context(plan, portable, snake, Some(func.role.clone()));
+        let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
+        let ret_ty = helper_return_type(func);
+        let param_str = build_c_param_list(snake, func);
+        tu.push(CTopLevelItem::FuncDef {
+            signature: format!("static {ret_ty} {snake}_{}({param_str})", func.name),
+            body: body_lines,
+            comment: Some(format!("Helper: {}", func.name)),
+        });
+        tu.push(CTopLevelItem::BlankLine);
     }
 }
 
@@ -386,9 +413,9 @@ fn emit_isr_handler(
             String::new(),
         ];
 
-        // Read the interrupt status register.
-        let mis_define = find_register_define_by_suffix(plan, "mis");
-        lines.push(format!("status = {snake}_reg_read(d, {mis_define});"));
+        // Read the interrupt status register — derived from behavior plan.
+        let status_define = find_isr_status_register_define(plan, func, &ctx);
+        lines.push(format!("status = {snake}_reg_read(d, {status_define});"));
         lines.push("if (status == 0)".into());
         lines.push("\treturn IRQ_NONE;".into());
         lines.push(String::new());
@@ -897,21 +924,69 @@ fn emit_module_init_exit(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, sna
 // Register layout helpers
 // ---------------------------------------------------------------------------
 
-/// Find a register define by field name suffix (case-insensitive).
-fn find_register_define_by_suffix(plan: &LinuxBackendPlan, suffix: &str) -> String {
+/// Find the ISR status register define from the behavior plan.
+///
+/// Walks the ISR body for the first `RegReadRaw` node to identify the
+/// status register. Falls back to searching the register layout for
+/// common interrupt-status naming patterns.
+fn find_isr_status_register_define(
+    plan: &LinuxBackendPlan,
+    isr_func: &FunctionBehavior,
+    ctx: &EmitContext<'_>,
+) -> String {
+    // Primary: find the first RegReadRaw in the ISR behavior body.
+    if let Some(reg) = find_first_reg_read_raw(&isr_func.body) {
+        return register_offset_define(ctx.reg_prefix, &reg);
+    }
+
+    // Fallback: search register layout for fields with interrupt-status patterns.
     for block in &plan.register_layout.blocks {
         for field in &block.fields {
-            if field.name.eq_ignore_ascii_case(suffix) {
+            let upper = field.name.to_uppercase();
+            if upper.contains("MIS")
+                || upper.contains("ISR")
+                || upper.contains("INT_STATUS")
+                || upper.contains("INTSTS")
+            {
                 return register_offset_define(&block.reg_prefix, &field.name);
             }
         }
     }
-    // Fallback: construct from first block prefix.
+
+    // Ultimate fallback: construct from first block prefix.
     let prefix = plan
         .register_layout
         .blocks
         .first()
         .map(|b| b.reg_prefix.as_str())
         .unwrap_or("REG");
-    format!("{}_{}", prefix, suffix.to_uppercase())
+    format!("{prefix}_INT_STATUS")
+}
+
+/// Walk behavior nodes to find the first `RegReadRaw` node.
+fn find_first_reg_read_raw(nodes: &[BehaviorNode]) -> Option<String> {
+    for node in nodes {
+        match node {
+            BehaviorNode::RegReadRaw { register } => return Some(register.clone()),
+            BehaviorNode::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                if let Some(r) = find_first_reg_read_raw(then_body) {
+                    return Some(r);
+                }
+                if let Some(r) = find_first_reg_read_raw(else_body) {
+                    return Some(r);
+                }
+            }
+            BehaviorNode::OrderedSequence { steps } => {
+                if let Some(r) = find_first_reg_read_raw(steps) {
+                    return Some(r);
+                }
+            }
+            _ => {}
+        }
+    }
+    None
 }

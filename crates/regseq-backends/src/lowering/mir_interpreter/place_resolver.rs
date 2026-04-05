@@ -86,8 +86,8 @@ fn resolve_self_projection(ctx: &FnContext<'_>, projection: &[MirProjectionElem]
                 // Dereferencing &mut self gives us the driver struct.
                 // Stay at current level.
             }
-            MirProjectionElem::Field { ty, .. } => {
-                current = advance_field(ctx, &current, ty);
+            MirProjectionElem::Field { index, ty } => {
+                current = advance_field(ctx, &current, ty, *index);
             }
             _ => {
                 // Other projections (Index, Downcast, etc.) don't change
@@ -136,14 +136,28 @@ enum SelfWalkState {
 }
 
 /// Advance the walk state through a Field projection.
-fn advance_field(ctx: &FnContext<'_>, state: &SelfWalkState, ty: &MirTy) -> SelfWalkState {
+fn advance_field(
+    ctx: &FnContext<'_>,
+    state: &SelfWalkState,
+    ty: &MirTy,
+    field_index: u32,
+) -> SelfWalkState {
     match state {
         SelfWalkState::SelfRef => {
             // Field on self → driver struct field.
-            let name = identify_field_from_type(ctx, ty);
-            if ctx.shared.is_mmio_type(&name) {
-                // This is an MMIO wrapper field.
-                let mmio_field = find_mmio_field_name(ctx, ty);
+            // First try to resolve by field index from the driver field list.
+            let name =
+                if let Some(field_name) = ctx.shared.driver_field_names.get(field_index as usize) {
+                    field_name.clone()
+                } else {
+                    identify_field_from_type(ctx, ty)
+                };
+            if ctx.shared.is_mmio_type(&name) || ctx.shared.mmio_fields.contains(&name) {
+                let mmio_field = if ctx.shared.mmio_fields.contains(&name) {
+                    name
+                } else {
+                    find_mmio_field_name(ctx, ty)
+                };
                 SelfWalkState::MmioBlock { mmio_field }
             } else {
                 SelfWalkState::DriverField { name }
@@ -246,6 +260,100 @@ fn find_mmio_field_name(ctx: &FnContext<'_>, _ty: &MirTy) -> String {
         .next()
         .cloned()
         .unwrap_or_else(|| "regs".into())
+}
+
+// ---------------------------------------------------------------------------
+// Type-based fallback resolution for intermediate MIR locals
+// ---------------------------------------------------------------------------
+
+/// Resolve a local's declared type to a register name, if it is a register wrapper.
+///
+/// Used as a fallback when place-based resolution fails because the receiver
+/// is an intermediate MIR local rather than a direct self.field projection.
+pub fn resolve_local_type_as_register(ctx: &FnContext<'_>, local_index: u32) -> Option<String> {
+    let decl = ctx.local_decls.get(local_index as usize)?;
+    let ty = unwrap_ref_ty(&decl.ty);
+    let path = type_path(ty);
+    if ctx.shared.is_register_wrapper_type(&path) {
+        // First try the strict path (name must be in register_field_names).
+        let name = identify_register_from_type(ctx, ty);
+        if name != "unknown" {
+            return Some(name);
+        }
+        // Fallback: extract the register name directly from the type
+        // parameter without requiring it to be in the declaration metadata.
+        // This handles cases where the test fixture has real MIR bodies but
+        // a minimal register block declaration.
+        if let Some(name) = extract_register_name_from_type_arg(ty) {
+            return Some(name);
+        }
+    }
+    None
+}
+
+/// Resolve a local's declared type to a resource field and kind.
+///
+/// Used as a fallback when place-based resolution fails for resource operations.
+pub fn resolve_local_type_as_resource(
+    ctx: &FnContext<'_>,
+    local_index: u32,
+) -> Option<(String, ResourceKind)> {
+    let decl = ctx.local_decls.get(local_index as usize)?;
+    let ty = unwrap_ref_ty(&decl.ty);
+    let path = type_path(ty);
+    for prefix in &ctx.shared.resource_type_paths {
+        if path.starts_with(prefix) {
+            let kind = if path.contains("Clock") {
+                ResourceKind::Clock
+            } else if path.contains("ResetLine") || path.contains("Reset") {
+                ResourceKind::Reset
+            } else if path.contains("PinCtrl") {
+                ResourceKind::PinCtrl
+            } else {
+                continue;
+            };
+            // Find the matching field name from declaration metadata.
+            for (name, k) in &ctx.shared.resource_fields {
+                if *k == kind {
+                    return Some((name.clone(), kind));
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Unwrap reference types to get the inner type.
+fn unwrap_ref_ty(ty: &MirTy) -> &MirTy {
+    match ty {
+        MirTy::Ref { ty: inner, .. } => unwrap_ref_ty(inner),
+        _ => ty,
+    }
+}
+
+/// Extract register name directly from a register wrapper type's generic args.
+///
+/// Does not require the name to be in `register_field_names`. Used as a
+/// fallback when the declaration model has fewer register fields than
+/// the captured MIR references.
+fn extract_register_name_from_type_arg(ty: &MirTy) -> Option<String> {
+    let ty = unwrap_ref_ty(ty);
+    if let MirTy::Adt { args, .. } = ty {
+        if args.len() >= 2 {
+            let reg_type_path = type_path(&args[1]);
+            let parts: Vec<&str> = reg_type_path.split("::").collect();
+            if let Some(reg_module) = parts.iter().rev().nth(1) {
+                let name = reg_module
+                    .strip_suffix("_REG")
+                    .unwrap_or(reg_module)
+                    .to_lowercase();
+                if !name.is_empty() && name != "register" {
+                    return Some(name);
+                }
+            }
+        }
+    }
+    None
 }
 
 /// Identify a register name from a register wrapper type.

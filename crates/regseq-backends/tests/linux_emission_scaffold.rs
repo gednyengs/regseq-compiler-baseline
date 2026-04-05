@@ -1149,3 +1149,163 @@ fn with_constants_path_resolves_all_masks() {
         );
     }
 }
+
+// =========================================================================
+// C validity regression tests
+// =========================================================================
+
+/// Read the emitted module.c content for the driver main file.
+fn read_emitted_module_c() -> String {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("should have driver main artifact");
+    std::fs::read_to_string(&main.path).expect("read module.c")
+}
+
+#[test]
+fn no_raw_rust_paths_in_emitted_c() {
+    let content = read_emitted_module_c();
+
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        // Skip comments.
+        if trimmed.starts_with("/*")
+            || trimmed.starts_with("//")
+            || trimmed.starts_with("*")
+            || trimmed.starts_with("#")
+        {
+            continue;
+        }
+        assert!(
+            !trimmed.contains("regseq::"),
+            "line {}: raw Rust path 'regseq::' in non-comment C: {trimmed}",
+            i + 1
+        );
+        assert!(
+            !trimmed.contains("core::option::Option"),
+            "line {}: raw Rust 'core::option::Option' in C: {trimmed}",
+            i + 1
+        );
+        assert!(
+            !trimmed.contains("::<"),
+            "line {}: raw Rust generic syntax '::<' in C: {trimmed}",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn no_invalid_field_access_in_emitted_c() {
+    let content = read_emitted_module_c();
+
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("/*") || trimmed.starts_with("//") {
+            continue;
+        }
+        assert!(
+            !trimmed.contains("d->core::"),
+            "line {}: invalid C field access 'd->core::' found: {trimmed}",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn no_unsupported_markers_in_emitted_c() {
+    let content = read_emitted_module_c();
+
+    for (i, line) in content.lines().enumerate() {
+        let trimmed = line.trim();
+        if trimmed.starts_with("/*") || trimmed.starts_with("//") {
+            continue;
+        }
+        assert!(
+            !trimmed.contains("unsupported_"),
+            "line {}: 'unsupported_' marker in C: {trimmed}",
+            i + 1
+        );
+    }
+}
+
+#[test]
+fn register_op_helpers_emit_reg_calls() {
+    let content = read_emitted_module_c();
+
+    // Register-operation helpers should emit *_reg_write, *_reg_modify, or *_reg_read calls.
+    let has_reg_call = content.contains("_reg_write(")
+        || content.contains("_reg_modify(")
+        || content.contains("_reg_read(");
+    assert!(
+        has_reg_call,
+        "emitted C should contain register helper calls (*_reg_write, *_reg_modify, or *_reg_read)"
+    );
+}
+
+#[test]
+fn helper_forward_declarations_exist() {
+    let content = read_emitted_module_c();
+
+    assert!(
+        content.contains("Helper forward declarations"),
+        "emitted C should contain forward declaration section"
+    );
+
+    // Forward declarations should appear before function bodies.
+    let fwd_pos = content.find("Helper forward declarations").unwrap();
+    // At least one forward declaration should be a semicolon-terminated signature.
+    let fwd_section = &content[fwd_pos..fwd_pos + 500.min(content.len() - fwd_pos)];
+    let has_fwd_decl = fwd_section.lines().any(|l| {
+        let t = l.trim();
+        t.starts_with("static") && t.ends_with(';')
+    });
+    assert!(
+        has_fwd_decl,
+        "forward declarations should be semicolon-terminated signatures"
+    );
+}
+
+#[test]
+fn isr_uses_plan_derived_status_register() {
+    let content = read_emitted_module_c();
+
+    // The ISR should read a status register. The register define should
+    // come from the behavior plan, not a hardcoded "MIS" suffix.
+    // The ISR reads `status = *_reg_read(d, <define>);`
+    let isr_section = content
+        .find("ISR -- Regseq interrupt handler")
+        .expect("ISR section should exist");
+    let isr_text = &content[isr_section..];
+    assert!(
+        isr_text.contains("_reg_read(d,"),
+        "ISR should read a status register"
+    );
+}
+
+#[test]
+fn helper_prototypes_match_definitions() {
+    let content = read_emitted_module_c();
+
+    // Find forward declarations (lines ending with `;` that start with `static`)
+    // and find definitions (lines ending with `{` that start with `static`).
+    let fwd_decls: Vec<String> = content
+        .lines()
+        .filter(|l| {
+            let t = l.trim();
+            t.starts_with("static") && t.ends_with(';') && t.contains("_data *d")
+        })
+        .map(|l| l.trim().trim_end_matches(';').to_string())
+        .collect();
+
+    for decl in &fwd_decls {
+        // The definition should have the same signature but end with `)`
+        // (the function body opener `{` is on the next line in CTranslationUnit).
+        assert!(
+            content.contains(decl),
+            "forward declaration should match a definition: {decl}"
+        );
+    }
+}

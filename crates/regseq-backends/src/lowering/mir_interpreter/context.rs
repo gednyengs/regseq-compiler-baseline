@@ -7,7 +7,9 @@
 use std::collections::{BTreeMap, BTreeSet};
 
 use regseq_analysis::AnalysisInput;
-use regseq_model::declaration::mir_body::MirLocalDecl;
+use regseq_model::declaration::mir_body::{
+    FnParamDecl, MirBody, MirLocalDecl, MirOperand, MirRvalue, MirStatementKind,
+};
 
 use crate::lowering::plan::ResourceKind;
 
@@ -165,8 +167,19 @@ pub struct FnContext<'a> {
     pub arg_count: usize,
     /// Whether this function has a `&mut self` receiver (local 1).
     pub has_self_receiver: bool,
-    /// Local name lookup cache.
+    /// Local name lookup cache (MIR debug names).
     pub local_names: BTreeMap<u32, String>,
+    /// Authored parameter names (local index → authored name).
+    ///
+    /// Maps parameter locals to their authored names from the function
+    /// declaration (e.g., local 2 → "uart_clk_hz").
+    pub param_authored_names: BTreeMap<u32, String>,
+    /// Copy-chain resolution map (local → source local).
+    ///
+    /// For trivial `_N = Copy(_M)` assignments, maps the destination
+    /// local to its ultimate source so that value lowering can resolve
+    /// through chains of copies.
+    pub copy_sources: BTreeMap<u32, u32>,
 }
 
 impl<'a> FnContext<'a> {
@@ -176,6 +189,8 @@ impl<'a> FnContext<'a> {
         local_decls: &'a [MirLocalDecl],
         arg_count: usize,
         receiver: &str,
+        params: &[FnParamDecl],
+        body: &MirBody,
     ) -> Self {
         let has_self_receiver = receiver == "ref_mut" || receiver == "ref";
 
@@ -186,12 +201,26 @@ impl<'a> FnContext<'a> {
             }
         }
 
+        // Map parameter locals to authored names.
+        // Local 0 = return place, local 1 = self (if receiver), then params.
+        let param_start = if has_self_receiver { 2u32 } else { 1u32 };
+        let mut param_authored_names = BTreeMap::new();
+        for (i, param) in params.iter().enumerate() {
+            let local_idx = param_start + i as u32;
+            param_authored_names.insert(local_idx, param.name.clone());
+        }
+
+        // Build copy-chain resolution by scanning for trivial copy assignments.
+        let copy_sources = build_copy_chain(body);
+
         FnContext {
             shared,
             local_decls,
             arg_count,
             has_self_receiver,
             local_names,
+            param_authored_names,
+            copy_sources,
         }
     }
 
@@ -199,4 +228,51 @@ impl<'a> FnContext<'a> {
     pub fn local_name(&self, index: u32) -> Option<&str> {
         self.local_names.get(&index).map(|s| s.as_str())
     }
+
+    /// Get the authored parameter name for a local index, if it is a parameter.
+    pub fn authored_param_name(&self, index: u32) -> Option<&str> {
+        self.param_authored_names.get(&index).map(|s| s.as_str())
+    }
+
+    /// Follow the copy chain to find the ultimate source local.
+    ///
+    /// If local `index` was assigned as `_N = Copy(_M)` and `_M = Copy(_K)`,
+    /// returns `_K`. Returns `index` itself if no copies are recorded.
+    pub fn resolve_copy_chain(&self, index: u32) -> u32 {
+        let mut current = index;
+        let mut visited = BTreeSet::new();
+        while let Some(&source) = self.copy_sources.get(&current) {
+            if !visited.insert(current) {
+                break; // cycle guard
+            }
+            current = source;
+        }
+        current
+    }
+}
+
+/// Scan all basic blocks for trivial copy assignments and build the copy chain.
+///
+/// A trivial copy is: `Assign { place: _N (bare local), rvalue: Use { operand: Copy/Move { place: _M (bare local) } } }`
+fn build_copy_chain(body: &MirBody) -> BTreeMap<u32, u32> {
+    let mut copies = BTreeMap::new();
+    for bb in &body.basic_blocks {
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if !place.projection.is_empty() {
+                    continue;
+                }
+                if let MirRvalue::Use { operand } = rvalue.as_ref() {
+                    let source_place = match operand {
+                        MirOperand::Copy { place: src } | MirOperand::Move { place: src } => src,
+                        _ => continue,
+                    };
+                    if source_place.projection.is_empty() {
+                        copies.insert(place.local, source_place.local);
+                    }
+                }
+            }
+        }
+    }
+    copies
 }
