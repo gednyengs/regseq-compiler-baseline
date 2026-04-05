@@ -6,6 +6,11 @@
 //!
 //! All types use OS-neutral semantic vocabulary. Each OS backend maps
 //! the portable behavior nodes to its own subsystem APIs.
+//!
+//! This is the **canonical** portable behavior representation consumed
+//! by backend planners. The coarser `CallbackBodyPlan` in `plan.rs`
+//! carries supplementary evidence but is not the backend-consumed
+//! source of truth for behavior emission.
 
 use regseq_model::declaration::operations::{DelayIntrinsic, DelayPathKind};
 
@@ -18,7 +23,9 @@ use super::plan::ResourceKind;
 /// Structured behavioral plan for all authored driver functions.
 ///
 /// Each function's behavior is scoped to an individual authored callback
-/// or helper, not aggregated by callback family.
+/// or helper, not aggregated by callback family. This is the canonical
+/// portable behavior representation that later backend work consumes for
+/// code emission.
 #[derive(Debug, Clone)]
 pub struct BehaviorPlan {
     /// Per-function behavior entries.
@@ -32,8 +39,8 @@ pub struct BehaviorPlan {
 
 /// An authored interrupt class with its mask value.
 ///
-/// For PL011: `rx` = `(1 << 4) | (1 << 6)`, `tx` = `1 << 5`,
-/// `error` = `(1 << 7) | (1 << 8) | (1 << 9) | (1 << 10)`.
+/// Interrupt classes are derived from the authored ISR body's branch
+/// conditions, not from backend-hardcoded mask literals.
 #[derive(Debug, Clone)]
 pub struct InterruptClassDef {
     /// Symbolic class name (e.g. "rx", "tx", "error").
@@ -154,10 +161,11 @@ pub enum BehaviorNode {
         body: Vec<BehaviorNode>,
     },
 
-    /// Explicit ordered sequence from `ordered!` blocks.
+    /// Explicit ordered sequence derived from barrier-bracketed regions.
     ///
-    /// Steps must be emitted in declaration order. This is a stronger
-    /// constraint than incidental action order.
+    /// Steps must be emitted in declaration order. Recognized from the
+    /// expanded `ordered!` macro pattern (paired barrier intrinsic calls),
+    /// not from a preserved source-macro marker.
     OrderedSequence {
         /// Ordered steps.
         steps: Vec<BehaviorNode>,
@@ -211,7 +219,7 @@ pub enum BehaviorNode {
         class_name: String,
     },
 
-    /// Check an RX error flag from a register field.
+    /// Check an error flag from a register field and accumulate errors.
     RxErrorCheck {
         /// Error kind name (e.g. "overrun", "break", "parity", "framing").
         error_kind: String,
@@ -221,11 +229,157 @@ pub enum BehaviorNode {
         field: String,
     },
 
-    /// Push a received character with error flags to the serial core.
-    SerialPushRxChar,
+    /// Local variable binding with a computed value.
+    ///
+    /// Represents `let name = value;` in the authored body. Captures
+    /// intermediate computations and expressions.
+    LocalBinding {
+        /// Variable name.
+        name: String,
+        /// Whether the binding is mutable.
+        mutable: bool,
+        /// Computed value expression.
+        value: ValueExpr,
+    },
 
-    /// Compute baud divisor from clock and speed parameters.
-    ComputeBaudDivisor,
+    /// Fallible operation with early-return on error.
+    ///
+    /// Represents the desugared `?` operator: execute the callee, and if
+    /// the result is an error, execute cleanup actions and return early.
+    /// Derived from `SwitchInt`-based result discrimination in captured MIR.
+    FallibleOp {
+        /// The inner action nodes to execute.
+        body: Vec<BehaviorNode>,
+        /// Cleanup actions on the error path (may be empty).
+        cleanup_on_error: Vec<BehaviorNode>,
+    },
+
+    /// Cleanup region with a guaranteed cleanup path on scope exit.
+    ///
+    /// Represents cleanup-bearing MIR regions where the cleanup path
+    /// executes regardless of whether the body succeeds or fails.
+    CleanupRegion {
+        /// The normal body actions.
+        body: Vec<BehaviorNode>,
+        /// Cleanup actions on scope exit.
+        cleanup: Vec<BehaviorNode>,
+    },
+
+    /// OS-neutral subsystem-semantic action.
+    ///
+    /// Represents an interaction with a device-class subsystem that the
+    /// backend maps to its own OS-specific API. Used instead of
+    /// device-specific portable nodes.
+    SubsystemAction {
+        /// Subsystem name (e.g. "serial").
+        subsystem: String,
+        /// Action name (e.g. "push_rx_char", "signal_tx_ready").
+        action: String,
+    },
+
+    /// Compound assignment operation (e.g. `|=`, `&=`).
+    CompoundAssign {
+        /// Target variable or field.
+        target: String,
+        /// Operator (e.g. "|", "&").
+        op: String,
+        /// Right-hand side value.
+        value: ValueExpr,
+    },
+
+    /// Statement-level expression evaluation (side-effect only).
+    Eval {
+        /// Expression to evaluate.
+        expr: ValueExpr,
+    },
+}
+
+// ---------------------------------------------------------------------------
+// Value expressions (for computations and bindings)
+// ---------------------------------------------------------------------------
+
+/// A value expression for use in local bindings and computed arguments.
+///
+/// Represents intermediate computations, casts, field reads, and
+/// arithmetic that appear in authored function bodies. Backend emission
+/// maps these to target-language expressions.
+#[derive(Debug, Clone)]
+pub enum ValueExpr {
+    /// Integer literal.
+    IntLit(u64),
+    /// Boolean literal.
+    BoolLit(bool),
+    /// Reference to a function parameter.
+    Param(String),
+    /// Reference to a local variable.
+    Local(String),
+    /// Reference to a driver struct field.
+    FieldRef(String),
+    /// Binary operation.
+    BinOp {
+        /// Operator.
+        op: BinOp,
+        /// Left-hand side.
+        lhs: Box<ValueExpr>,
+        /// Right-hand side.
+        rhs: Box<ValueExpr>,
+    },
+    /// Type cast.
+    Cast {
+        /// Expression to cast.
+        expr: Box<ValueExpr>,
+        /// Target type name.
+        ty: String,
+    },
+    /// Method call that produces a value.
+    MethodResult {
+        /// Method / helper name.
+        callee: String,
+        /// Arguments.
+        args: Vec<ValueExpr>,
+    },
+    /// Extract a field from a raw register value.
+    FieldExtract {
+        /// Register name.
+        register: String,
+        /// Bitfield name.
+        field: String,
+        /// The raw value expression to extract from.
+        raw_value: Box<ValueExpr>,
+    },
+    /// None literal.
+    None,
+    /// Some(inner) wrapper.
+    Some(Box<ValueExpr>),
+}
+
+/// Binary operator for value expressions.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BinOp {
+    /// Addition.
+    Add,
+    /// Subtraction.
+    Sub,
+    /// Multiplication.
+    Mul,
+    /// Division.
+    Div,
+    /// Left shift.
+    Shl,
+    /// Right shift.
+    Shr,
+    /// Bitwise AND.
+    BitAnd,
+    /// Bitwise OR.
+    BitOr,
+    /// Equality comparison.
+    Eq,
+    /// Inequality comparison.
+    Ne,
+    /// Logical AND.
+    And,
+    /// Logical OR.
+    Or,
 }
 
 // ---------------------------------------------------------------------------
@@ -301,6 +455,11 @@ pub enum BranchCondition {
         status_source: String,
         /// Interrupt class name.
         class_name: String,
+    },
+    /// Value expression used as a boolean condition.
+    ValueTest {
+        /// The expression to test.
+        expr: ValueExpr,
     },
 }
 

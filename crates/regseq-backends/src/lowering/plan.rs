@@ -44,13 +44,21 @@ pub struct DriverLoweringPlan {
     pub register_obligations: RegisterObligations,
     /// Synchronization obligations.
     pub synchronization: SynchronizationObligations,
-    /// Callback-body lowering actions in a backend-usable structured form.
-    pub callback_actions: Vec<CallbackBodyPlan>,
-    /// Structured per-function behavioral plan for emission.
+    /// Supplementary callback-body evidence scoped by callback family.
     ///
-    /// Captures the authored body-level behavior scoped to individual
-    /// functions so that backend emission does not invent device-specific
-    /// callback logic.
+    /// These coarser action summaries carry resource-acquisition and
+    /// operation-level evidence grouped by callback family. They are
+    /// **not** the backend-consumed source of truth for behavior emission.
+    /// Backend planners should consume `behavior` instead.
+    pub callback_actions: Vec<CallbackBodyPlan>,
+    /// Canonical structured per-function behavioral plan for emission.
+    ///
+    /// This is the **canonical** portable behavior representation that
+    /// later backend work consumes for code emission. It captures the
+    /// authored body-level behavior scoped to individual functions,
+    /// derived from captured MIR bodies rather than compiler-owned
+    /// templates. Backend planners must consume this field, not
+    /// `callback_actions`, for behavioral emission decisions.
     pub behavior: BehaviorPlan,
 }
 

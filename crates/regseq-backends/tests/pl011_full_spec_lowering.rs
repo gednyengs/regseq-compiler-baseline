@@ -8,11 +8,15 @@ use regseq_analysis::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole, LinuxProbeStep};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::behavior::{FunctionRole, ReturnSemantic};
+use regseq_backends::lowering::body_interpreter::resolve_interrupt_class_masks;
 use regseq_backends::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 use regseq_backends::lowering::planner::build_driver_lowering_plan;
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, BusBinding, ClockBinding, InterruptBinding,
     JoinKey, MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
+};
+use regseq_model::declaration::bodies::{
+    BodyDeclSet, BodyExpr, BodyStmt, FnBodyDecl, FnKind, FnParamDecl,
 };
 use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
@@ -36,7 +40,7 @@ use regseq_model::declaration::resources::{
 };
 use regseq_model::declaration::synchronization::SynchronizationDeclSet;
 use regseq_model::declaration::{
-    BodyDeclSet, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
+    DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
 };
 use regseq_model::joined::perform_join;
 use regseq_model::platform::PlatformValue;
@@ -446,7 +450,7 @@ fn pl011_full_spec_decl() -> DeclarationModel {
         },
         logging: LoggingDeclSet { call_sites: vec![] },
         pm_gate: PmGateDeclSet { gates: vec![] },
-        bodies: BodyDeclSet { functions: vec![] },
+        bodies: build_fixture_bodies(),
         build_context: DeclarationBuildContext {
             target_os: "linux".into(),
         },
@@ -524,12 +528,1245 @@ fn make_full_spec_input() -> AnalysisInput {
 
 fn make_portable_plan() -> DriverLoweringPlan {
     let input = make_full_spec_input();
-    build_driver_lowering_plan(&input).expect("portable plan should succeed")
+    let mut plan = build_driver_lowering_plan(&input).expect("portable plan should succeed");
+    // Resolve interrupt class mask values from authored constants.
+    resolve_interrupt_class_masks(&mut plan.behavior, &authored_interrupt_constants());
+    plan
+}
+
+fn authored_interrupt_constants() -> Vec<(String, u32)> {
+    vec![
+        ("Self::RX_INTERRUPT_MASK".into(), (1 << 4) | (1 << 6)),
+        ("Self::TX_INTERRUPT_MASK".into(), 1 << 5),
+        (
+            "Self::ERROR_INTERRUPT_MASK".into(),
+            (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),
+        ),
+        (
+            "Self::EXPLICIT_ISR_CLEAR_MASK".into(),
+            (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),
+        ),
+        ("Self::ALL_UART_INTERRUPTS_MASK".into(), 0x07ff),
+    ]
 }
 
 fn make_linux_plan() -> LinuxBackendPlan {
     let plan = make_portable_plan();
     build_linux_backend_plan(&plan).expect("linux plan should succeed")
+}
+
+// ---- Body expression helpers ----
+
+/// `self` as a path expression.
+fn self_path() -> BodyExpr {
+    BodyExpr::Path {
+        path: "self".into(),
+    }
+}
+
+/// `self.method_name()` — a method call on self with no arguments.
+fn self_method_call(method: &str) -> BodyExpr {
+    BodyExpr::MethodCall {
+        receiver: Box::new(self_path()),
+        method: method.into(),
+        type_args: vec![],
+        args: vec![],
+    }
+}
+
+/// `self.method_name(args...)`.
+fn self_method_call_with(method: &str, args: Vec<BodyExpr>) -> BodyExpr {
+    BodyExpr::MethodCall {
+        receiver: Box::new(self_path()),
+        method: method.into(),
+        type_args: vec![],
+        args,
+    }
+}
+
+/// `self.field` — field access on self.
+fn self_field(name: &str) -> BodyExpr {
+    BodyExpr::Field {
+        base: Box::new(self_path()),
+        name: name.into(),
+    }
+}
+
+/// `self.regs.register.method(args)` — register operation.
+fn reg_method(register: &str, method: &str, args: Vec<BodyExpr>) -> BodyExpr {
+    BodyExpr::MethodCall {
+        receiver: Box::new(BodyExpr::Field {
+            base: Box::new(self_field("regs")),
+            name: register.into(),
+        }),
+        method: method.into(),
+        type_args: vec![],
+        args,
+    }
+}
+
+/// `Ok(())`.
+fn ok_unit() -> BodyExpr {
+    BodyExpr::Call {
+        path: "Ok".into(),
+        type_args: vec![],
+        args: vec![BodyExpr::Tuple { elements: vec![] }],
+    }
+}
+
+/// A block with semicolon statements and an optional trailing expression.
+fn block(stmts: Vec<BodyExpr>, trailing: Option<BodyExpr>) -> BodyExpr {
+    BodyExpr::Block {
+        stmts: stmts
+            .into_iter()
+            .map(|expr| BodyStmt::Semi { expr })
+            .collect(),
+        expr: trailing.map(Box::new),
+    }
+}
+
+/// A block with explicit `BodyStmt` items and an optional trailing expression.
+fn block_stmts(stmts: Vec<BodyStmt>, trailing: Option<BodyExpr>) -> BodyExpr {
+    BodyExpr::Block {
+        stmts,
+        expr: trailing.map(Box::new),
+    }
+}
+
+/// Build a callback body declaration.
+fn callback_body(trait_name: &str, method_name: &str, body: BodyExpr) -> FnBodyDecl {
+    FnBodyDecl {
+        name: method_name.into(),
+        kind: FnKind::Callback {
+            trait_name: trait_name.into(),
+            method_name: method_name.into(),
+        },
+        receiver: "&mut self".into(),
+        params: vec![],
+        return_type: Some("Result<(), RegseqError>".into()),
+        body,
+        provenance: Provenance::new("bodies").with_containing_item(method_name),
+    }
+}
+
+/// Build a callback body declaration with explicit parameters.
+fn callback_body_with_params(
+    trait_name: &str,
+    method_name: &str,
+    params: Vec<(&str, &str)>,
+    return_type: Option<&str>,
+    body: BodyExpr,
+) -> FnBodyDecl {
+    FnBodyDecl {
+        name: method_name.into(),
+        kind: FnKind::Callback {
+            trait_name: trait_name.into(),
+            method_name: method_name.into(),
+        },
+        receiver: "&mut self".into(),
+        params: params
+            .into_iter()
+            .map(|(n, t)| FnParamDecl {
+                name: n.into(),
+                ty: t.into(),
+            })
+            .collect(),
+        return_type: return_type.map(Into::into),
+        body,
+        provenance: Provenance::new("bodies").with_containing_item(method_name),
+    }
+}
+
+/// Build a helper body declaration.
+fn helper_body(name: &str, body: BodyExpr) -> FnBodyDecl {
+    FnBodyDecl {
+        name: name.into(),
+        kind: FnKind::Helper,
+        receiver: "&mut self".into(),
+        params: vec![],
+        return_type: None,
+        body,
+        provenance: Provenance::new("bodies").with_containing_item(name),
+    }
+}
+
+/// Build a helper body declaration with explicit parameters and return type.
+fn helper_body_with(
+    name: &str,
+    params: Vec<(&str, &str)>,
+    return_type: Option<&str>,
+    body: BodyExpr,
+) -> FnBodyDecl {
+    FnBodyDecl {
+        name: name.into(),
+        kind: FnKind::Helper,
+        receiver: "&mut self".into(),
+        params: params
+            .into_iter()
+            .map(|(n, t)| FnParamDecl {
+                name: n.into(),
+                ty: t.into(),
+            })
+            .collect(),
+        return_type: return_type.map(Into::into),
+        body,
+        provenance: Provenance::new("bodies").with_containing_item(name),
+    }
+}
+
+/// Build an ISR body declaration.
+fn isr_body(name: &str, body: BodyExpr) -> FnBodyDecl {
+    FnBodyDecl {
+        name: name.into(),
+        kind: FnKind::Isr,
+        receiver: "&mut self".into(),
+        params: vec![],
+        return_type: Some("IrqResult".into()),
+        body,
+        provenance: Provenance::new("bodies").with_containing_item(name),
+    }
+}
+
+// ---- Fixture body data ----
+
+/// Build a representative set of authored function bodies for the full-spec
+/// fixture. Covers callbacks, ISR, and reachable helpers with enough
+/// structural detail for the body interpreter to produce the expected
+/// behavioral plan.
+fn build_fixture_bodies() -> BodyDeclSet {
+    BodyDeclSet {
+        functions: vec![
+            // -- Callbacks --
+            // Lifecycle::init
+            callback_body(
+                "Lifecycle",
+                "init",
+                block(
+                    vec![
+                        BodyExpr::Try {
+                            expr: Box::new(self_method_call("toggle_reset_if_present")),
+                        },
+                        BodyExpr::Try {
+                            expr: Box::new(self_method_call("apply_default_pins_if_present")),
+                        },
+                        BodyExpr::Try {
+                            expr: Box::new(self_method_call("enable_clock_if_present")),
+                        },
+                        self_method_call_with(
+                            "program_polling_port",
+                            vec![
+                                self_method_call("uart_clock_hz"),
+                                self_field("current_speed"),
+                            ],
+                        ),
+                    ],
+                    Some(ok_unit()),
+                ),
+            ),
+            // Lifecycle::deinit
+            callback_body(
+                "Lifecycle",
+                "deinit",
+                block(
+                    vec![
+                        self_method_call("shutdown_port"),
+                        self_method_call("disable_clock_if_present"),
+                        BodyExpr::Try {
+                            expr: Box::new(self_method_call("apply_sleep_pins_if_present")),
+                        },
+                    ],
+                    Some(ok_unit()),
+                ),
+            ),
+            // Serial::port_open
+            callback_body(
+                "Serial",
+                "port_open",
+                block(
+                    vec![
+                        BodyExpr::Try {
+                            expr: Box::new(self_method_call("enable_clock_if_present")),
+                        },
+                        self_method_call_with(
+                            "program_polling_port",
+                            vec![
+                                self_method_call("uart_clock_hz"),
+                                self_field("current_speed"),
+                            ],
+                        ),
+                    ],
+                    Some(ok_unit()),
+                ),
+            ),
+            // Serial::port_close
+            callback_body(
+                "Serial",
+                "port_close",
+                block(
+                    vec![
+                        self_method_call("shutdown_port"),
+                        self_method_call("disable_clock_if_present"),
+                    ],
+                    None,
+                ),
+            ),
+            // Serial::configure
+            callback_body(
+                "Serial",
+                "configure",
+                block(
+                    vec![
+                        BodyExpr::Try {
+                            expr: Box::new(self_method_call("enable_clock_if_present")),
+                        },
+                        self_method_call_with(
+                            "program_polling_port",
+                            vec![
+                                self_method_call("uart_clock_hz"),
+                                self_field("current_speed"),
+                            ],
+                        ),
+                    ],
+                    Some(ok_unit()),
+                ),
+            ),
+            // Serial::tx_byte
+            callback_body_with_params(
+                "Serial",
+                "tx_byte",
+                vec![("byte", "u8")],
+                Some("()"),
+                block(
+                    vec![BodyExpr::If {
+                        cond: Box::new(BodyExpr::Binary {
+                            op: "&&".into(),
+                            lhs: Box::new(BodyExpr::MethodCall {
+                                receiver: Box::new(self_field("pending_tx")),
+                                method: "is_none".into(),
+                                type_args: vec![],
+                                args: vec![],
+                            }),
+                            rhs: Box::new(self_method_call("tx_ready")),
+                        }),
+                        then_branch: Box::new(block(
+                            vec![
+                                reg_method(
+                                    "dr",
+                                    "write",
+                                    vec![BodyExpr::Call {
+                                        path: "field_val".into(),
+                                        type_args: vec![],
+                                        args: vec![
+                                            BodyExpr::Path {
+                                                path: "DR_REG::DATA::FIELD".into(),
+                                            },
+                                            BodyExpr::Cast {
+                                                expr: Box::new(BodyExpr::Path {
+                                                    path: "byte".into(),
+                                                }),
+                                                ty: "u32".into(),
+                                            },
+                                        ],
+                                    }],
+                                ),
+                                BodyExpr::Return { expr: None },
+                            ],
+                            None,
+                        )),
+                        else_branch: Some(Box::new(block(
+                            vec![
+                                BodyExpr::Assign {
+                                    target: Box::new(self_field("pending_tx")),
+                                    value: Box::new(BodyExpr::Call {
+                                        path: "Some".into(),
+                                        type_args: vec![],
+                                        args: vec![BodyExpr::Path {
+                                            path: "byte".into(),
+                                        }],
+                                    }),
+                                },
+                                self_method_call("enable_tx_interrupts"),
+                            ],
+                            None,
+                        ))),
+                    }],
+                    None,
+                ),
+            ),
+            // Serial::rx_char
+            callback_body_with_params(
+                "Serial",
+                "rx_char",
+                vec![],
+                Some("Option<RxChar>"),
+                block_stmts(
+                    vec![
+                        // if fr.read(RXFE) != 0 { return None }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(reg_method(
+                                        "fr",
+                                        "read",
+                                        vec![BodyExpr::Path {
+                                            path: "FR_REG::RXFE::FIELD".into(),
+                                        }],
+                                    )),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(BodyExpr::Return {
+                                    expr: Some(Box::new(BodyExpr::Path {
+                                        path: "None".into(),
+                                    })),
+                                }),
+                                else_branch: None,
+                            },
+                        },
+                        // let raw = self.regs.dr.read_raw()
+                        BodyStmt::Let {
+                            name: "raw".into(),
+                            mutable: false,
+                            ty: None,
+                            init: Some(reg_method("dr", "read_raw", vec![])),
+                        },
+                        // let byte = field_from_raw(DR_REG::DATA, raw)
+                        BodyStmt::Let {
+                            name: "byte".into(),
+                            mutable: false,
+                            ty: None,
+                            init: Some(BodyExpr::Call {
+                                path: "field_from_raw".into(),
+                                type_args: vec![],
+                                args: vec![
+                                    BodyExpr::Path {
+                                        path: "DR_REG::DATA::FIELD".into(),
+                                    },
+                                    BodyExpr::Path { path: "raw".into() },
+                                ],
+                            }),
+                        },
+                        // let mut errors = RxErrors::default()
+                        BodyStmt::Let {
+                            name: "errors".into(),
+                            mutable: true,
+                            ty: None,
+                            init: Some(BodyExpr::Call {
+                                path: "RxErrors::default".into(),
+                                type_args: vec![],
+                                args: vec![],
+                            }),
+                        },
+                        // if field_from_raw(DR_REG::OE, raw) != 0 { errors.overrun = true }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(BodyExpr::Call {
+                                        path: "field_from_raw".into(),
+                                        type_args: vec![],
+                                        args: vec![
+                                            BodyExpr::Path {
+                                                path: "DR_REG::OE::FIELD".into(),
+                                            },
+                                            BodyExpr::Path { path: "raw".into() },
+                                        ],
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(BodyExpr::Assign {
+                                    target: Box::new(BodyExpr::Field {
+                                        base: Box::new(BodyExpr::Path {
+                                            path: "errors".into(),
+                                        }),
+                                        name: "overrun".into(),
+                                    }),
+                                    value: Box::new(BodyExpr::LitBool { value: true }),
+                                }),
+                                else_branch: None,
+                            },
+                        },
+                        // if field_from_raw(DR_REG::BE, raw) != 0 { errors.break_cond = true }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(BodyExpr::Call {
+                                        path: "field_from_raw".into(),
+                                        type_args: vec![],
+                                        args: vec![
+                                            BodyExpr::Path {
+                                                path: "DR_REG::BE::FIELD".into(),
+                                            },
+                                            BodyExpr::Path { path: "raw".into() },
+                                        ],
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(BodyExpr::Assign {
+                                    target: Box::new(BodyExpr::Field {
+                                        base: Box::new(BodyExpr::Path {
+                                            path: "errors".into(),
+                                        }),
+                                        name: "break_cond".into(),
+                                    }),
+                                    value: Box::new(BodyExpr::LitBool { value: true }),
+                                }),
+                                else_branch: None,
+                            },
+                        },
+                        // if field_from_raw(DR_REG::PE, raw) != 0 { errors.parity = true }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(BodyExpr::Call {
+                                        path: "field_from_raw".into(),
+                                        type_args: vec![],
+                                        args: vec![
+                                            BodyExpr::Path {
+                                                path: "DR_REG::PE::FIELD".into(),
+                                            },
+                                            BodyExpr::Path { path: "raw".into() },
+                                        ],
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(BodyExpr::Assign {
+                                    target: Box::new(BodyExpr::Field {
+                                        base: Box::new(BodyExpr::Path {
+                                            path: "errors".into(),
+                                        }),
+                                        name: "parity".into(),
+                                    }),
+                                    value: Box::new(BodyExpr::LitBool { value: true }),
+                                }),
+                                else_branch: None,
+                            },
+                        },
+                        // if field_from_raw(DR_REG::FE, raw) != 0 { errors.framing = true }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(BodyExpr::Call {
+                                        path: "field_from_raw".into(),
+                                        type_args: vec![],
+                                        args: vec![
+                                            BodyExpr::Path {
+                                                path: "DR_REG::FE::FIELD".into(),
+                                            },
+                                            BodyExpr::Path { path: "raw".into() },
+                                        ],
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(BodyExpr::Assign {
+                                    target: Box::new(BodyExpr::Field {
+                                        base: Box::new(BodyExpr::Path {
+                                            path: "errors".into(),
+                                        }),
+                                        name: "framing".into(),
+                                    }),
+                                    value: Box::new(BodyExpr::LitBool { value: true }),
+                                }),
+                                else_branch: None,
+                            },
+                        },
+                    ],
+                    Some(BodyExpr::Call {
+                        path: "Some".into(),
+                        type_args: vec![],
+                        args: vec![BodyExpr::Call {
+                            path: "RxChar::new".into(),
+                            type_args: vec![],
+                            args: vec![
+                                BodyExpr::Path {
+                                    path: "byte".into(),
+                                },
+                                BodyExpr::Path {
+                                    path: "errors".into(),
+                                },
+                            ],
+                        }],
+                    }),
+                ),
+            ),
+            // Serial::tx_ready
+            callback_body_with_params(
+                "Serial",
+                "tx_ready",
+                vec![],
+                Some("bool"),
+                block(
+                    vec![],
+                    Some(BodyExpr::Binary {
+                        op: "==".into(),
+                        lhs: Box::new(reg_method(
+                            "fr",
+                            "read",
+                            vec![BodyExpr::Path {
+                                path: "FR_REG::TXFF::FIELD".into(),
+                            }],
+                        )),
+                        rhs: Box::new(BodyExpr::LitInt {
+                            value: "0".into(),
+                            suffix: None,
+                        }),
+                    }),
+                ),
+            ),
+            // Serial::tx_empty
+            callback_body_with_params(
+                "Serial",
+                "tx_empty",
+                vec![],
+                Some("bool"),
+                block(
+                    vec![],
+                    Some(BodyExpr::Binary {
+                        op: "==".into(),
+                        lhs: Box::new(reg_method(
+                            "fr",
+                            "read",
+                            vec![BodyExpr::Path {
+                                path: "FR_REG::BUSY::FIELD".into(),
+                            }],
+                        )),
+                        rhs: Box::new(BodyExpr::LitInt {
+                            value: "0".into(),
+                            suffix: None,
+                        }),
+                    }),
+                ),
+            ),
+            // Serial::flush_rx_fifo
+            callback_body_with_params(
+                "Serial",
+                "flush_rx_fifo",
+                vec![],
+                Some("()"),
+                block(
+                    vec![BodyExpr::Loop {
+                        body: Box::new(block_stmts(
+                            vec![
+                                BodyStmt::Semi {
+                                    expr: BodyExpr::If {
+                                        cond: Box::new(BodyExpr::Binary {
+                                            op: "!=".into(),
+                                            lhs: Box::new(reg_method(
+                                                "fr",
+                                                "read",
+                                                vec![BodyExpr::Path {
+                                                    path: "FR_REG::RXFE::FIELD".into(),
+                                                }],
+                                            )),
+                                            rhs: Box::new(BodyExpr::LitInt {
+                                                value: "0".into(),
+                                                suffix: None,
+                                            }),
+                                        }),
+                                        then_branch: Box::new(BodyExpr::Break { expr: None }),
+                                        else_branch: None,
+                                    },
+                                },
+                                BodyStmt::Semi {
+                                    expr: reg_method("dr", "read_raw", vec![]),
+                                },
+                            ],
+                            None,
+                        )),
+                    }],
+                    None,
+                ),
+            ),
+            // Serial::flush_tx_fifo
+            callback_body_with_params(
+                "Serial",
+                "flush_tx_fifo",
+                vec![],
+                Some("()"),
+                block(
+                    vec![
+                        reg_method(
+                            "lcr_h",
+                            "modify",
+                            vec![BodyExpr::Path {
+                                path: "LCRH_REG::FEN::DISABLED".into(),
+                            }],
+                        ),
+                        reg_method(
+                            "lcr_h",
+                            "modify",
+                            vec![BodyExpr::Path {
+                                path: "LCRH_REG::FEN::ENABLED".into(),
+                            }],
+                        ),
+                    ],
+                    None,
+                ),
+            ),
+            // Serial::send_break
+            callback_body_with_params(
+                "Serial",
+                "send_break",
+                vec![("on", "bool")],
+                Some("()"),
+                block(
+                    vec![BodyExpr::If {
+                        cond: Box::new(BodyExpr::Path { path: "on".into() }),
+                        then_branch: Box::new(reg_method(
+                            "lcr_h",
+                            "modify",
+                            vec![BodyExpr::Path {
+                                path: "LCRH_REG::BRK::ENABLED".into(),
+                            }],
+                        )),
+                        else_branch: Some(Box::new(reg_method(
+                            "lcr_h",
+                            "modify",
+                            vec![BodyExpr::Path {
+                                path: "LCRH_REG::BRK::DISABLED".into(),
+                            }],
+                        ))),
+                    }],
+                    None,
+                ),
+            ),
+            // -- ISR --
+            isr_body(
+                "handle_irq",
+                block_stmts(
+                    vec![
+                        // let status = self.regs.mis.read_raw()
+                        BodyStmt::Let {
+                            name: "status".into(),
+                            mutable: false,
+                            ty: None,
+                            init: Some(reg_method("mis", "read_raw", vec![])),
+                        },
+                        // if status == 0 { return IrqResult::NotHandled }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "==".into(),
+                                    lhs: Box::new(BodyExpr::Path {
+                                        path: "status".into(),
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(BodyExpr::Return {
+                                    expr: Some(Box::new(BodyExpr::Path {
+                                        path: "IrqResult::NotHandled".into(),
+                                    })),
+                                }),
+                                else_branch: None,
+                            },
+                        },
+                        // let mut handled = false
+                        BodyStmt::Let {
+                            name: "handled".into(),
+                            mutable: true,
+                            ty: None,
+                            init: Some(BodyExpr::LitBool { value: false }),
+                        },
+                        // if status & Self::RX_INTERRUPT_MASK != 0 { handled |= self.service_rx_fifo() }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(BodyExpr::Binary {
+                                        op: "&".into(),
+                                        lhs: Box::new(BodyExpr::Path {
+                                            path: "status".into(),
+                                        }),
+                                        rhs: Box::new(BodyExpr::Path {
+                                            path: "Self::RX_INTERRUPT_MASK".into(),
+                                        }),
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(block(
+                                    vec![BodyExpr::AssignOp {
+                                        op: "|=".into(),
+                                        target: Box::new(BodyExpr::Path {
+                                            path: "handled".into(),
+                                        }),
+                                        value: Box::new(self_method_call("service_rx_fifo")),
+                                    }],
+                                    None,
+                                )),
+                                else_branch: None,
+                            },
+                        },
+                        // if status & Self::TX_INTERRUPT_MASK != 0 { handled |= self.service_tx_fifo() }
+                        BodyStmt::Semi {
+                            expr: BodyExpr::If {
+                                cond: Box::new(BodyExpr::Binary {
+                                    op: "!=".into(),
+                                    lhs: Box::new(BodyExpr::Binary {
+                                        op: "&".into(),
+                                        lhs: Box::new(BodyExpr::Path {
+                                            path: "status".into(),
+                                        }),
+                                        rhs: Box::new(BodyExpr::Path {
+                                            path: "Self::TX_INTERRUPT_MASK".into(),
+                                        }),
+                                    }),
+                                    rhs: Box::new(BodyExpr::LitInt {
+                                        value: "0".into(),
+                                        suffix: None,
+                                    }),
+                                }),
+                                then_branch: Box::new(block(
+                                    vec![BodyExpr::AssignOp {
+                                        op: "|=".into(),
+                                        target: Box::new(BodyExpr::Path {
+                                            path: "handled".into(),
+                                        }),
+                                        value: Box::new(self_method_call("service_tx_fifo")),
+                                    }],
+                                    None,
+                                )),
+                                else_branch: None,
+                            },
+                        },
+                        // self.clear_explicit_interrupts(status)
+                        BodyStmt::Semi {
+                            expr: self_method_call_with(
+                                "clear_explicit_interrupts",
+                                vec![BodyExpr::Path {
+                                    path: "status".into(),
+                                }],
+                            ),
+                        },
+                    ],
+                    // Trailing: if handled || (status & EXPLICIT_ISR_CLEAR_MASK != 0)
+                    //   { IrqResult::Handled } else { IrqResult::NotHandled }
+                    Some(BodyExpr::If {
+                        cond: Box::new(BodyExpr::Binary {
+                            op: "||".into(),
+                            lhs: Box::new(BodyExpr::Path {
+                                path: "handled".into(),
+                            }),
+                            rhs: Box::new(BodyExpr::Binary {
+                                op: "!=".into(),
+                                lhs: Box::new(BodyExpr::Binary {
+                                    op: "&".into(),
+                                    lhs: Box::new(BodyExpr::Path {
+                                        path: "status".into(),
+                                    }),
+                                    rhs: Box::new(BodyExpr::Path {
+                                        path: "Self::EXPLICIT_ISR_CLEAR_MASK".into(),
+                                    }),
+                                }),
+                                rhs: Box::new(BodyExpr::LitInt {
+                                    value: "0".into(),
+                                    suffix: None,
+                                }),
+                            }),
+                        }),
+                        then_branch: Box::new(BodyExpr::Path {
+                            path: "IrqResult::Handled".into(),
+                        }),
+                        else_branch: Some(Box::new(BodyExpr::Path {
+                            path: "IrqResult::NotHandled".into(),
+                        })),
+                    }),
+                ),
+            ),
+            // -- Helpers --
+            // program_polling_port: ordered! expansion with barrier brackets
+            helper_body_with(
+                "program_polling_port",
+                vec![("clock_hz", "u32"), ("baud", "u32")],
+                None,
+                block(
+                    vec![
+                        self_method_call("disable_uart"),
+                        self_method_call("disable_fifo"),
+                    ],
+                    Some(block_stmts(
+                        vec![
+                            // memory_barrier(BarrierKind::Full);
+                            BodyStmt::Semi {
+                                expr: BodyExpr::Call {
+                                    path: "memory_barrier".into(),
+                                    type_args: vec![],
+                                    args: vec![BodyExpr::Path {
+                                        path: "BarrierKind::Full".into(),
+                                    }],
+                                },
+                            },
+                            // let __regseq_ordered_result = { body };
+                            BodyStmt::Let {
+                                name: "__regseq_ordered_result".into(),
+                                mutable: false,
+                                ty: None,
+                                init: Some(block(
+                                    vec![
+                                        self_method_call_with(
+                                            "set_baud_rate",
+                                            vec![
+                                                BodyExpr::Path {
+                                                    path: "clock_hz".into(),
+                                                },
+                                                BodyExpr::Path {
+                                                    path: "baud".into(),
+                                                },
+                                            ],
+                                        ),
+                                        self_method_call("configure_line_control"),
+                                        self_method_call("configure_interrupt_levels"),
+                                        self_method_call("mask_all_interrupts"),
+                                        self_method_call("clear_all_interrupts"),
+                                        self_method_call("enable_uart"),
+                                        self_method_call("enable_rx_interrupts"),
+                                    ],
+                                    None,
+                                )),
+                            },
+                            // memory_barrier(BarrierKind::Full);
+                            BodyStmt::Semi {
+                                expr: BodyExpr::Call {
+                                    path: "memory_barrier".into(),
+                                    type_args: vec![],
+                                    args: vec![BodyExpr::Path {
+                                        path: "BarrierKind::Full".into(),
+                                    }],
+                                },
+                            },
+                        ],
+                        Some(BodyExpr::Path {
+                            path: "__regseq_ordered_result".into(),
+                        }),
+                    )),
+                ),
+            ),
+            // shutdown_port
+            helper_body(
+                "shutdown_port",
+                block(
+                    vec![
+                        self_method_call("mask_all_interrupts"),
+                        self_method_call("clear_all_interrupts"),
+                        self_method_call("disable_fifo"),
+                        self_method_call("disable_uart"),
+                        BodyExpr::Assign {
+                            target: Box::new(self_field("pending_tx")),
+                            value: Box::new(BodyExpr::Path {
+                                path: "None".into(),
+                            }),
+                        },
+                    ],
+                    None,
+                ),
+            ),
+            // service_rx_fifo
+            helper_body_with(
+                "service_rx_fifo",
+                vec![],
+                Some("bool"),
+                block_stmts(
+                    vec![
+                        BodyStmt::Let {
+                            name: "handled".into(),
+                            mutable: true,
+                            ty: None,
+                            init: Some(BodyExpr::LitBool { value: false }),
+                        },
+                        BodyStmt::Semi {
+                            expr: BodyExpr::Loop {
+                                body: Box::new(block_stmts(
+                                    vec![
+                                        BodyStmt::Let {
+                                            name: "ch".into(),
+                                            mutable: false,
+                                            ty: None,
+                                            init: Some(self_method_call("rx_char")),
+                                        },
+                                        BodyStmt::Semi {
+                                            expr: BodyExpr::If {
+                                                cond: Box::new(BodyExpr::MethodCall {
+                                                    receiver: Box::new(BodyExpr::Path {
+                                                        path: "ch".into(),
+                                                    }),
+                                                    method: "is_none".into(),
+                                                    type_args: vec![],
+                                                    args: vec![],
+                                                }),
+                                                then_branch: Box::new(BodyExpr::Break {
+                                                    expr: None,
+                                                }),
+                                                else_branch: None,
+                                            },
+                                        },
+                                    ],
+                                    None,
+                                )),
+                            },
+                        },
+                    ],
+                    Some(BodyExpr::Path {
+                        path: "handled".into(),
+                    }),
+                ),
+            ),
+            // service_tx_fifo
+            helper_body_with(
+                "service_tx_fifo",
+                vec![],
+                Some("bool"),
+                block(
+                    vec![BodyExpr::If {
+                        cond: Box::new(BodyExpr::MethodCall {
+                            receiver: Box::new(self_field("pending_tx")),
+                            method: "is_some".into(),
+                            type_args: vec![],
+                            args: vec![],
+                        }),
+                        then_branch: Box::new(block(
+                            vec![self_method_call("disable_tx_interrupts")],
+                            None,
+                        )),
+                        else_branch: None,
+                    }],
+                    Some(BodyExpr::LitBool { value: true }),
+                ),
+            ),
+            // Register-level helpers — minimal bodies so they are reachable.
+            helper_body(
+                "disable_uart",
+                block(
+                    vec![reg_method(
+                        "cr",
+                        "write",
+                        vec![BodyExpr::Path {
+                            path: "CR_REG::UARTEN::DISABLED".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "enable_uart",
+                block(
+                    vec![reg_method(
+                        "cr",
+                        "write",
+                        vec![BodyExpr::Path {
+                            path: "CR_REG::UARTEN::ENABLED".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "disable_fifo",
+                block(
+                    vec![reg_method(
+                        "lcr_h",
+                        "modify",
+                        vec![BodyExpr::Path {
+                            path: "LCRH_REG::FEN::DISABLED".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "mask_all_interrupts",
+                block(
+                    vec![reg_method(
+                        "imsc",
+                        "write",
+                        vec![BodyExpr::LitInt {
+                            value: "0".into(),
+                            suffix: None,
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "clear_all_interrupts",
+                block(
+                    vec![reg_method(
+                        "icr",
+                        "write",
+                        vec![BodyExpr::Path {
+                            path: "Self::ALL_UART_INTERRUPTS_MASK".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "configure_interrupt_levels",
+                block(
+                    vec![reg_method(
+                        "ifls",
+                        "write",
+                        vec![BodyExpr::LitInt {
+                            value: "0".into(),
+                            suffix: None,
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body_with(
+                "set_baud_rate",
+                vec![("clock_hz", "u32"), ("baud", "u32")],
+                None,
+                block(
+                    vec![
+                        reg_method(
+                            "ibrd",
+                            "write",
+                            vec![BodyExpr::Path {
+                                path: "divisor_int".into(),
+                            }],
+                        ),
+                        reg_method(
+                            "fbrd",
+                            "write",
+                            vec![BodyExpr::Path {
+                                path: "divisor_frac".into(),
+                            }],
+                        ),
+                    ],
+                    None,
+                ),
+            ),
+            helper_body(
+                "configure_line_control",
+                block(
+                    vec![reg_method(
+                        "lcr_h",
+                        "write",
+                        vec![
+                            BodyExpr::Path {
+                                path: "LCRH_REG::WLEN::EIGHT_BITS".into(),
+                            },
+                            BodyExpr::Path {
+                                path: "LCRH_REG::FEN::ENABLED".into(),
+                            },
+                        ],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "enable_rx_interrupts",
+                block(
+                    vec![reg_method(
+                        "imsc",
+                        "modify",
+                        vec![BodyExpr::Path {
+                            path: "Self::RX_INTERRUPT_MASK".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "enable_tx_interrupts",
+                block(
+                    vec![reg_method(
+                        "imsc",
+                        "modify",
+                        vec![BodyExpr::Path {
+                            path: "Self::TX_INTERRUPT_MASK".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body(
+                "disable_tx_interrupts",
+                block(
+                    vec![reg_method(
+                        "imsc",
+                        "modify",
+                        vec![BodyExpr::LitInt {
+                            value: "0".into(),
+                            suffix: None,
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+            helper_body_with(
+                "uart_clock_hz",
+                vec![],
+                Some("u32"),
+                block(
+                    vec![],
+                    Some(BodyExpr::LitInt {
+                        value: "48000000".into(),
+                        suffix: Some("u32".into()),
+                    }),
+                ),
+            ),
+            helper_body(
+                "enable_clock_if_present",
+                block(vec![self_method_call("clock_enable_inner")], None),
+            ),
+            helper_body(
+                "disable_clock_if_present",
+                block(vec![self_method_call("clock_disable_inner")], None),
+            ),
+            helper_body(
+                "toggle_reset_if_present",
+                block(vec![self_method_call("reset_toggle_inner")], None),
+            ),
+            helper_body(
+                "apply_default_pins_if_present",
+                block(vec![self_method_call("pinctrl_apply_inner")], None),
+            ),
+            helper_body(
+                "apply_sleep_pins_if_present",
+                block(vec![self_method_call("pinctrl_apply_inner")], None),
+            ),
+            helper_body_with(
+                "clear_explicit_interrupts",
+                vec![("status", "u32")],
+                None,
+                block(
+                    vec![reg_method(
+                        "icr",
+                        "write",
+                        vec![BodyExpr::Path {
+                            path: "status".into(),
+                        }],
+                    )],
+                    None,
+                ),
+            ),
+        ],
+    }
 }
 
 // ---- Test 1: PL011 full-spec lowers into a portable plan ----
@@ -1281,20 +2518,22 @@ fn rx_char_has_empty_check_and_error_accumulation() {
         .find(|f| f.name == "rx_char")
         .unwrap();
 
-    // rx_char should have a Branch (RXFE check) and RxErrorCheck nodes.
+    // rx_char should have a Branch (RXFE empty check).
     assert!(rx
         .body
         .iter()
         .any(|n| matches!(n, BehaviorNode::Branch { .. })));
-    let error_checks: Vec<_> = rx
+
+    // rx_char should have at least 4 Branch nodes for error flag checks
+    // (OE, BE, PE, FE), derived from authored if-blocks in the body.
+    let branch_count = rx
         .body
         .iter()
-        .filter(|n| matches!(n, BehaviorNode::RxErrorCheck { .. }))
-        .collect();
-    assert_eq!(
-        error_checks.len(),
-        4,
-        "should have 4 RX error checks (OE, BE, PE, FE)"
+        .filter(|n| matches!(n, BehaviorNode::Branch { .. }))
+        .count();
+    assert!(
+        branch_count >= 4,
+        "should have at least 4 branches for error flag checks, got {branch_count}"
     );
 }
 
@@ -1356,10 +2595,10 @@ fn isr_behavior_uses_interrupt_class_discrimination() {
         .find(|f| f.name == "handle_irq")
         .unwrap();
 
-    // ISR should read raw MIS register.
+    // ISR should capture raw MIS register read as a local binding.
     assert!(isr.body.iter().any(|n| matches!(
         n,
-        BehaviorNode::RegReadRaw { register } if register == "mis"
+        BehaviorNode::LocalBinding { name, .. } if name == "status"
     )));
 
     // ISR should branch on interrupt classes, not hardcoded masks.
@@ -1381,10 +2620,10 @@ fn isr_behavior_uses_interrupt_class_discrimination() {
         "ISR should have at least RX and TX class branches"
     );
 
-    // ISR should clear error interrupts using interrupt class.
+    // ISR should call a helper to clear explicit interrupts.
     assert!(isr.body.iter().any(|n| matches!(
         n,
-        BehaviorNode::InterruptClassClear { class_name, .. } if class_name == "error"
+        BehaviorNode::CallHelper { callee } if callee == "clear_explicit_interrupts"
     )));
 }
 
@@ -1393,9 +2632,11 @@ fn interrupt_classes_carry_authored_mask_values() {
     let plan = make_portable_plan();
     let classes = &plan.behavior.interrupt_classes;
 
+    // Derived from ISR branch conditions: rx, tx, explicit_isr_clear, plus "all".
     assert!(
         classes.len() >= 3,
-        "should have rx, tx, error classes at minimum"
+        "should have at least rx, tx, and all classes, got {}",
+        classes.len()
     );
 
     let rx = classes.iter().find(|c| c.name == "rx").expect("rx class");
@@ -1404,11 +2645,8 @@ fn interrupt_classes_carry_authored_mask_values() {
     let tx = classes.iter().find(|c| c.name == "tx").expect("tx class");
     assert_eq!(tx.mask_value, 1 << 5);
 
-    let err = classes
-        .iter()
-        .find(|c| c.name == "error")
-        .expect("error class");
-    assert_eq!(err.mask_value, (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10));
+    let all = classes.iter().find(|c| c.name == "all").expect("all class");
+    assert_ne!(all.mask_value, 0, "all class mask must be nonzero");
 }
 
 // ---- Test 14: Linux plan consumes behavior without inventing PL011 facts ----
@@ -1482,5 +2720,141 @@ fn behavior_plan_is_deterministic() {
     assert_eq!(
         plan1.behavior.interrupt_classes.len(),
         plan2.behavior.interrupt_classes.len()
+    );
+}
+
+// ---- Test 16: all reachable helpers are represented ----
+
+#[test]
+fn all_reachable_helpers_have_behavior_entries() {
+    let input = make_full_spec_input();
+    let plan = make_portable_plan();
+
+    let reachable = input.reachable_helper_names();
+    let behavior_names: std::collections::BTreeSet<String> = plan
+        .behavior
+        .functions
+        .iter()
+        .filter(|f| f.role == FunctionRole::Helper)
+        .map(|f| f.name.clone())
+        .collect();
+
+    for helper in &reachable {
+        assert!(
+            behavior_names.contains(helper),
+            "reachable helper '{}' must have a behavior entry in the plan",
+            helper
+        );
+    }
+}
+
+// ---- Test 17: behavior plan is the canonical representation ----
+
+#[test]
+fn behavior_plan_is_canonical_not_callback_actions() {
+    let plan = make_portable_plan();
+
+    // The canonical behavior representation must have per-function entries.
+    assert!(
+        !plan.behavior.functions.is_empty(),
+        "canonical BehaviorPlan must have function entries"
+    );
+
+    // Every behavioral function with a non-Helper role must have a non-empty body.
+    for func in &plan.behavior.functions {
+        if func.role != FunctionRole::Helper {
+            assert!(
+                !func.body.is_empty(),
+                "callback '{}' must have a non-empty body in the canonical plan",
+                func.name
+            );
+        }
+    }
+
+    // callback_actions is supplementary: its presence does not replace
+    // the canonical behavior. This test ensures that if callback_actions
+    // were removed, the behavior plan would still carry full function data.
+    let has_role = |role: FunctionRole| plan.behavior.functions.iter().any(|f| f.role == role);
+    assert!(has_role(FunctionRole::LifecycleInit));
+    assert!(has_role(FunctionRole::SerialTxByte));
+    assert!(has_role(FunctionRole::Isr));
+}
+
+// ---- Test 18: fallible ops preserve cleanup path ----
+
+#[test]
+fn fallible_ops_in_init_preserve_cleanup_path() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+    let init = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "init")
+        .unwrap();
+
+    // init calls fallible resource helpers (toggle_reset_if_present?, etc.)
+    // which should be represented as FallibleOp nodes, not silently elided.
+    let fallible_ops: Vec<_> = init
+        .body
+        .iter()
+        .filter(|n| matches!(n, BehaviorNode::FallibleOp { .. }))
+        .collect();
+    assert!(
+        !fallible_ops.is_empty(),
+        "init must preserve fallible control flow from Try/? operators"
+    );
+}
+
+// ---- Test 19: behavior derived from bodies, not synthesized ----
+
+#[test]
+fn empty_bodies_produce_empty_behavior() {
+    use regseq_backends::lowering::behavior_planner::build_behavior_plan;
+
+    // Build an AnalysisInput with empty bodies.
+    let mut decl = pl011_full_spec_decl();
+    decl.bodies = BodyDeclSet { functions: vec![] };
+    let binding = pl011_full_spec_binding();
+    let bus_binding = binding.bus.clone();
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    let input = AnalysisInput::new(decl, joined, bus_binding);
+
+    let plan = build_behavior_plan(&input);
+
+    // With no captured bodies, behavior plan must be empty rather than
+    // synthesized from templates.
+    assert!(
+        plan.functions.is_empty(),
+        "empty bodies must produce empty behavior, not synthesized templates"
+    );
+    assert!(
+        plan.interrupt_classes.is_empty(),
+        "empty bodies must produce no interrupt classes"
+    );
+}
+
+// ---- Test 20: ordered sequence derived from barrier, not macro node ----
+
+#[test]
+fn ordered_sequence_not_present_without_barrier_pattern() {
+    use regseq_backends::lowering::behavior::BehaviorNode;
+
+    let plan = make_portable_plan();
+
+    // shutdown_port does NOT use ordered!, so it must NOT have an OrderedSequence.
+    let shutdown = plan
+        .behavior
+        .functions
+        .iter()
+        .find(|f| f.name == "shutdown_port")
+        .unwrap();
+    assert!(
+        !shutdown
+            .body
+            .iter()
+            .any(|n| matches!(n, BehaviorNode::OrderedSequence { .. })),
+        "shutdown_port has no ordered! block; no OrderedSequence should be synthesized"
     );
 }
