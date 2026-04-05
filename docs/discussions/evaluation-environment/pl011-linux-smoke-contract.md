@@ -103,10 +103,20 @@ For the PL011 fixture, that means:
 - `output/linux/pl011-full-spec/`
 
 If evaluation scripts or runbooks need a copy in a separate Ubuntu workspace
-such as `~/regseq-eval/generated/`, that location should be treated as a
+such as `~/regseq-eval/pl011/generated/`, that location should be treated as a
 consumer/archive location rather than the compiler's primary output root.
 
 ## First Smoke Goals
+
+The first smoke gate is intentionally a non-console second-UART gate.
+
+It should use:
+
+- the reserved second PL011 test UART
+- an out-of-tree generated or stand-in module
+- the owned-QEMU PL011 environment
+
+It should not require the generated driver to take over the console UART.
 
 The first PL011 smoke path must prove:
 
@@ -117,7 +127,7 @@ The first PL011 smoke path must prove:
 5. module load succeeds
 6. driver registration succeeds
 7. probe runs once the environment intentionally allows the generated driver to
-   claim the target PL011-compatible device
+   claim the reserved second PL011-compatible device
 8. logs can be captured deterministically
 
 This is enough for the first smoke proof.
@@ -134,10 +144,14 @@ following signals are available:
 - successful module insertion
 - expected registration log messages
 - probe log messages once the environment is configured so the generated driver
-  can own the target device
+  can own the reserved second PL011 device
 - deterministic artifact/log capture locations
 
-The first smoke proof does not require full UART I/O benchmarking.
+The first smoke proof does not require:
+
+- console takeover
+- full UART I/O benchmarking
+- hot-path performance measurement on the console UART
 
 ## What This Contract Does Not Require Yet
 
@@ -149,8 +163,23 @@ The first PL011 smoke contract does not require:
 - PM validation
 - DMA validation
 - in-tree kernel replacement
+- console ownership by the generated driver
 
-Those belong to later validation or evaluation work.
+## Follow-On Evaluation Modes
+
+After the first smoke gate, the next PL011 evaluation mode should be a
+second-UART hot-path functional loop.
+
+That mode is expected to supply most of the PL011 evaluation evidence for the
+paper by exercising:
+
+- real TX/RX paths
+- interrupt-driven behavior
+- FIFO-related hot paths
+- baseline-versus-generated comparison on the reserved second UART
+
+Console-driver evaluation should be treated as a later stricter integration
+mode, not as a prerequisite for the main PL011 smoke loop.
 
 ## Recommended Artifact Retention
 
@@ -178,7 +207,8 @@ When authoring `phase-d-01` validation tasks:
 - allow TCG when the host/guest architecture combination makes KVM unsuitable
 - treat the project-controlled `arm64` kernel tree as the canonical guest
   kernel and module-build target
-- treat compile/build/module-load/registration/probe-if-available as the first
-  smoke gate
+- treat compile/build/module-load/registration/probe on the reserved second
+  PL011 device as the first smoke gate
+- do not block first-smoke validation on console takeover
 
 That is the intended first PL011 Linux validation contract.

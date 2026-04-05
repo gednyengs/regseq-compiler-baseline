@@ -28,6 +28,35 @@ In shorthand:
 2. boot the QEMU `aarch64` `virt` guest with that kernel
 3. build the generated PL011 module against that same kernel tree
 
+## Exact Workflow Contract
+
+The current project-controlled kernel workflow for PL011 is:
+
+1. maintain one pinned kernel tree at:
+   - `~/regseq-eval/pl011/kernel-src/pl011-arm64-linux`
+2. pin one exact upstream kernel revision:
+   - `v6.18.21`
+   - commit `44c944a679974c2d18ee9b87070456d34193f3d4`
+3. use one baseline kernel configuration:
+   - `arm64 defconfig`
+4. record any future kernel-config changes as a small explicit fragment rather
+   than letting ad hoc edits accumulate in `.config`
+5. build all required kernel artifacts from that same tree:
+   - `Image`
+   - modules
+   - `dtbs`
+6. build all generated or stand-in out-of-tree PL011 modules against that same
+   tree via `KDIR`
+7. boot QEMU only with the `Image` produced by that same pinned tree
+
+The invariant is:
+
+- host kernel build tree
+- guest boot kernel
+- out-of-tree module build target
+
+must all come from the same pinned kernel provenance.
+
 ## Why This Is The Right Default
 
 This avoids several recurring problems:
@@ -76,20 +105,42 @@ Within `~/regseq-eval/`, reserve a location such as:
 
 ```text
 ~/regseq-eval/
-  images/
-  kernel-src/
-    pl011-arm64/
-  generated/
-  results/
-  scripts/
+  pl011/
+    images/
+    kernel-src/
+      pl011-arm64-linux/
+    qemu-src/
+    rootfs-src/
+    generated/
+    results/
+    scripts/
 ```
 
 Where:
 
-- `kernel-src/pl011-arm64/` is the pinned kernel tree used for the PL011 smoke
-  path
+- `kernel-src/pl011-arm64-linux/` is the pinned kernel tree used for the PL011
+  smoke path
 - its build output or configured build directory is the canonical `KDIR`
   target for PL011 module builds
+
+This device-scoped layout is preferred because PL011 and E1000 are expected to
+use different kernels, QEMU setups, rootfs policies, and benchmark workflows.
+
+## Canonical Commands
+
+Kernel configure:
+
+```bash
+cd ~/regseq-eval/pl011/kernel-src/pl011-arm64-linux
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- defconfig
+```
+
+Kernel build:
+
+```bash
+cd ~/regseq-eval/pl011/kernel-src/pl011-arm64-linux
+make ARCH=arm64 CROSS_COMPILE=aarch64-linux-gnu- -j$(nproc) Image modules dtbs
+```
 
 ## Module Build Contract
 
@@ -103,7 +154,7 @@ The canonical shape is:
 make \
   ARCH=arm64 \
   CROSS_COMPILE=aarch64-linux-gnu- \
-  KDIR=$HOME/regseq-eval/kernel-src/pl011-arm64
+  KDIR=$HOME/regseq-eval/pl011/kernel-src/pl011-arm64-linux
 ```
 
 If the kernel uses a separate out-of-tree build directory, `KDIR` should point
@@ -114,16 +165,15 @@ to that prepared build directory instead.
 The environment should ensure that the generated PL011 driver has a realistic
 chance to bind to the emulated device during smoke validation.
 
-That means the project-controlled kernel must make an explicit choice about the
-competing in-kernel PL011 path. Acceptable strategies include:
+For the current PL011 environment, that control is achieved by environment
+topology rather than by disabling the stock console driver:
 
-- disabling the competing in-kernel PL011 driver
-- building it as a module and not loading it
-- otherwise ensuring it does not claim the target device before the generated
-  module is tested
+- keep stock built-in PL011 available for the console UART on `ttyAMA0`
+- reserve the second PL011 test UART for the generated or stand-in driver
+  through the patched-QEMU plus DT `arm,primecell-periphid` strategy
 
-The exact kernel-config choice belongs to environment setup, not backend
-lowering.
+So the kernel workflow does not currently require a special PL011-disabling
+config fragment just to make smoke validation possible.
 
 ## What This Solves
 
@@ -142,7 +192,6 @@ This note does not decide:
 - the final Linux codegen layout
 - the final PL011 callback lowering strategy
 - the final benchmark methodology
-- the exact kernel configuration fragment yet
 - the exact rootfs image yet
 
 It only fixes the environment-side kernel control strategy.
@@ -155,6 +204,8 @@ Until a stronger reason appears, evaluation-environment planning should assume:
 - QEMU boots that kernel directly
 - generated PL011 modules are built against that same tree
 - rootfs choice is secondary to kernel control
+- `arm64 defconfig` is the baseline unless a recorded fragment becomes
+  necessary
 
 That is the cleanest way to keep PL011 smoke validation deterministic and
 separate from backend debugging noise.

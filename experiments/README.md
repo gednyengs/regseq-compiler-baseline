@@ -5,6 +5,7 @@ This directory is the repo-wide home for design and compiler experiments.
 Current experiment areas:
 
 - `mir-structured-codegen/`
+- `pl011-eval-env/`
 - `register-access/`
 - `regseq-error/`
 

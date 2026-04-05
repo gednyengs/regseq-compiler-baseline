@@ -17,66 +17,50 @@ The following environment decisions are already considered settled:
 - TCG is acceptable for the first PL011 smoke path on an `x86_64` host
 - the simple-driver smoke baseline is a prerequisite before PL011 smoke
 - the compiler output root is repo-relative `output/linux/<driver-id>/`
-- `~/regseq-eval/generated/` is a consumer/archive location, not the canonical
-  compiler output root
+- `~/regseq-eval/<device>/generated/` is a consumer/archive location, not the
+  canonical compiler output root
 - PL011 smoke should prefer a project-controlled host-side `arm64` kernel tree
 - generated PL011 modules should build against that same kernel tree
+- the PL011 topology question inside QEMU `virt` is resolved by the owned-QEMU
+  experiment path:
+  - patched QEMU `v8.2.2`
+  - two guest-visible PL011s
+  - deterministic aliasing so console stays on `ttyAMA0` and the second UART
+    appears as `ttyAMA1`
+  - the second UART can remain on the AMBA bus and still be reserved for a
+    custom driver by overriding `arm,primecell-periphid` in DT and matching it
+    from a custom out-of-tree `amba_driver`
+- the PL011 guest-workflow issue is resolved at the policy and rootfs-config
+  level:
+  - PL011 uses a no-guest-NIC default profile
+  - 9p is the default artifact-transfer path
+  - Buildroot was updated with `BR2_SYSTEM_DHCP=""` so `-nic none` no longer
+    blocks guest startup waiting for `eth0`
+- the first concrete PL011 guest rootfs/image baseline is resolved:
+  - Buildroot `2026.02`
+  - `qemu_aarch64_virt_defconfig` plus the PL011 fragment recorded in
+    [buildroot-pl011-rootfs.fragment](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/experiments/pl011-eval-env/artifacts/buildroot-pl011-rootfs.fragment)
+- the first PL011 smoke success bar is resolved:
+  - it is a non-console second-UART smoke gate
+  - it requires build, module load, registration, and probe on the reserved
+    second PL011 device
+  - it does not require console takeover
+  - hot-path second-UART evaluation is the next mode after smoke
+  - console integration is deferred to a later stricter phase
+- the exact project-controlled kernel workflow is resolved:
+  - pinned kernel tree at `~/regseq-eval/pl011/kernel-src/pl011-arm64-linux`
+  - pinned revision `v6.18.21`
+  - baseline config `arm64 defconfig`
+  - build `Image`, modules, and `dtbs` from that same tree
+  - boot QEMU with that same tree's `Image`
+  - build all generated PL011 modules against that same `KDIR`
+  - only introduce future config changes through a recorded fragment if needed
 
 Those decisions are captured in the existing notes in this directory.
 
 ## Remaining Open Items
 
-### 1. Exact PL011 binding strategy inside QEMU
-
-This is the most important remaining environment question.
-
-We need to decide how the generated PL011 driver will claim the intended test
-device inside the QEMU environment without destabilizing the console path or
-fighting a competing in-kernel driver.
-
-Examples of candidate strategies include:
-
-- DTB partitioning / dedicated test UART identity
-- stock driver on console UART, generated driver on a separate test UART
-- runtime unbind/rebind or driver override
-
-This item should be resolved before finalizing the first PL011 smoke gate.
-
-### 2. Exact project-controlled kernel workflow
-
-We have decided to own the `arm64` kernel for the PL011 smoke path, but the
-workflow is not yet fully fixed.
-
-Still to decide:
-
-- exact kernel source provenance strategy
-- exact config strategy (`defconfig` plus fragment, or equivalent)
-- exact options required for the first PL011 smoke path
-- any explicit kernel-side choice needed for the competing stock PL011 path
-
-### 3. Exact guest rootfs/image strategy
-
-We still need to choose the first concrete guest image approach.
-
-Still to decide:
-
-- Buildroot versus a minimal distro image
-- which tools/packages are required for first smoke
-- which tools are deferred until later benchmarking
-
-### 4. Exact first PL011 smoke success bar
-
-We are close, but not final.
-
-Still to decide:
-
-- whether the first smoke proof requires only build + module load +
-  registration
-- or whether it requires a real probe on the intended test UART
-
-This depends on Item 1.
-
-### 5. Exact runbook-level loop
+### 1. Exact runbook-level loop
 
 The strategy notes are in place, but we do not yet have one final concrete
 workflow that ties together:
@@ -87,17 +71,13 @@ workflow that ties together:
 4. module transfer/load path
 5. log/artifact capture path
 
-This should be written after Items 1 through 4 are resolved.
+This is now the last remaining environment item.
 
 ## Closure Order
 
 The recommended closure order is:
 
-1. exact PL011 binding strategy inside QEMU
-2. exact project-controlled kernel workflow
-3. exact guest rootfs/image strategy
-4. exact first PL011 smoke success bar
-5. exact runbook-level loop
+1. exact runbook-level loop
 
 ## Practical Rule
 

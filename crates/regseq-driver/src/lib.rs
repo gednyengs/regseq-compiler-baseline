@@ -10,6 +10,7 @@ extern crate rustc_session;
 
 pub mod args;
 mod callbacks;
+pub(crate) mod emit_driver;
 pub(crate) mod extract;
 pub mod mir_repr;
 pub mod raw_artifact;

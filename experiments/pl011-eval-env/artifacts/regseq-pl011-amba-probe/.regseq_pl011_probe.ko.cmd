@@ -1,0 +1,1 @@
+savedcmd_regseq_pl011_probe.ko := aarch64-linux-gnu-ld -r -EL  -maarch64elf -z noexecstack --no-warn-rwx-segments --build-id=sha1  -T /home/nyengele/regseq-eval/kernel-src/pl011-arm64-linux/scripts/module.lds -o regseq_pl011_probe.ko regseq_pl011_probe.o regseq_pl011_probe.mod.o .module-common.o

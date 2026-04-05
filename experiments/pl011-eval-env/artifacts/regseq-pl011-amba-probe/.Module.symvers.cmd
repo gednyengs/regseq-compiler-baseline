@@ -1,0 +1,1 @@
+savedcmd_Module.symvers :=  /home/nyengele/regseq-eval/kernel-src/pl011-arm64-linux/scripts/mod/modpost -M          -o Module.symvers -T modules.order -i /home/nyengele/regseq-eval/kernel-src/pl011-arm64-linux/Module.symvers -e 

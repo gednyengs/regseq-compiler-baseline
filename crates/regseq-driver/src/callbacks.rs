@@ -25,6 +25,13 @@ impl RegseqCallbacks {
             .iter()
             .any(|e| matches!(e, regseq_config::EmitSpec::RawArtifact))
     }
+
+    fn wants_driver(&self) -> bool {
+        self.options
+            .emit
+            .iter()
+            .any(|e| matches!(e, regseq_config::EmitSpec::Driver { .. }))
+    }
 }
 
 impl rustc_driver::Callbacks for RegseqCallbacks {
@@ -128,8 +135,9 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let pm_surface = crate::extract::pm::extract_pm_surface(tcx, &pm_impl_types);
         eprintln!("regseq-driver: pm extraction: {pm_surface:?}");
 
-        // --- raw artifact emission ---
-        if self.wants_raw_artifact() {
+        // --- build raw artifact (shared by raw-artifact and driver emission) ---
+        let needs_artifact = self.wants_raw_artifact() || self.wants_driver();
+        if needs_artifact {
             if let Ok(ref ids) = identities {
                 if let Some(primary) = ids.first() {
                     let ex = ExtractionResults {
@@ -147,14 +155,42 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
                         body: &body_surface,
                     };
                     let artifact = build_raw_artifact(primary, &self.options, &ex);
-                    if let Err(e) = emit_raw_artifact(&artifact, &self.options.output_dir) {
-                        eprintln!("regseq-driver: raw artifact emission failed: {e}");
-                    } else {
-                        eprintln!(
-                            "regseq-driver: raw artifact emitted to {}/drivers/{}.raw.json",
-                            self.options.output_dir.display(),
-                            primary.driver_name,
-                        );
+
+                    // --- raw artifact emission ---
+                    if self.wants_raw_artifact() {
+                        if let Err(e) = emit_raw_artifact(&artifact, &self.options.output_dir) {
+                            eprintln!("regseq-driver: raw artifact emission failed: {e}");
+                        } else {
+                            eprintln!(
+                                "regseq-driver: raw artifact emitted to {}/drivers/{}.raw.json",
+                                self.options.output_dir.display(),
+                                primary.driver_name,
+                            );
+                        }
+                    }
+
+                    // --- driver emission ---
+                    if self.wants_driver() {
+                        match crate::emit_driver::emit_driver(&artifact, &self.options) {
+                            Ok(result) => {
+                                eprintln!(
+                                    "regseq-driver: driver emission complete: {} artifacts under {}",
+                                    result.artifact_set.artifacts.len(),
+                                    result.artifact_set.output_root.display(),
+                                );
+                                for a in &result.artifact_set.artifacts {
+                                    eprintln!(
+                                        "regseq-driver:   {} ({:?}, {} bytes)",
+                                        a.path.display(),
+                                        a.role,
+                                        a.size_bytes,
+                                    );
+                                }
+                            }
+                            Err(e) => {
+                                eprintln!("regseq-driver: driver emission failed: {e}");
+                            }
+                        }
                     }
                 }
             }
