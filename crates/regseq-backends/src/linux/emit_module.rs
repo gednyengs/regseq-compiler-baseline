@@ -8,7 +8,7 @@
 //! plan. No device-specific register offsets, interrupt masks, callback
 //! templates, or naming policy appears in this module.
 
-use crate::lowering::behavior::{BehaviorPlan, FunctionBehavior, FunctionRole};
+use crate::lowering::behavior::{BehaviorPlan, FunctionBehavior, FunctionRole, PortableType};
 use crate::lowering::plan::DriverLoweringPlan;
 
 use super::c_ast::{generated_file_banner, CTopLevelItem, CTranslationUnit};
@@ -17,6 +17,7 @@ use super::emit_behavior::{
 };
 use super::plan::{
     LinuxBackendPlan, LinuxCallbackGroup, LinuxFileRole, LinuxProbeStep, LinuxRemoveStep,
+    LinuxUartOpsBody,
 };
 
 /// Emit the module integration file with real C code.
@@ -310,13 +311,61 @@ fn emit_helper_functions(
         if let Some(func) = func {
             let ctx = make_emit_context(plan, portable, snake, Some(func.role.clone()));
             let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
+            let ret_ty = helper_return_type(func);
+            let param_str = build_c_param_list(snake, func);
             tu.push(CTopLevelItem::FuncDef {
-                signature: format!("static void {snake}_{}(struct {snake}_data *d)", func.name),
+                signature: format!("static {ret_ty} {snake}_{}({param_str})", func.name),
                 body: body_lines,
                 comment: Some(format!("Helper: {}", func.name)),
             });
             tu.push(CTopLevelItem::BlankLine);
         }
+    }
+}
+
+/// Map a portable return type to its C representation for helpers.
+fn helper_return_type(func: &FunctionBehavior) -> &'static str {
+    match &func.return_type {
+        None => "void",
+        Some(PortableType::Bool) => "bool",
+        Some(PortableType::U8) => "u8",
+        Some(PortableType::U16) => "u16",
+        Some(PortableType::U32) => "u32",
+        Some(PortableType::U64) => "u64",
+        Some(PortableType::I8) => "s8",
+        Some(PortableType::I16) => "s16",
+        Some(PortableType::I32) => "s32",
+        Some(PortableType::I64) => "s64",
+        Some(PortableType::Opaque(_)) => "int",
+    }
+}
+
+/// Build the C parameter list for a helper function.
+///
+/// Always starts with `struct {snake}_data *d` (the driver state),
+/// then appends any additional authored parameters.
+fn build_c_param_list(snake: &str, func: &FunctionBehavior) -> String {
+    let mut parts = vec![format!("struct {snake}_data *d")];
+    for p in &func.params {
+        let c_ty = portable_type_to_c(&p.ty);
+        parts.push(format!("{c_ty} {}", p.name));
+    }
+    parts.join(", ")
+}
+
+/// Map a `PortableType` to a C type string.
+fn portable_type_to_c(ty: &PortableType) -> &'static str {
+    match ty {
+        PortableType::U8 => "u8",
+        PortableType::U16 => "u16",
+        PortableType::U32 => "u32",
+        PortableType::U64 => "u64",
+        PortableType::I8 => "s8",
+        PortableType::I16 => "s16",
+        PortableType::I32 => "s32",
+        PortableType::I64 => "s64",
+        PortableType::Bool => "bool",
+        PortableType::Opaque(_) => "u32",
     }
 }
 
@@ -369,227 +418,106 @@ fn emit_isr_handler(
     });
 }
 
-/// Emit uart_ops callback functions from behavior plan.
+/// Emit uart_ops callback functions from realization plan data.
 fn emit_uart_ops(
     tu: &mut CTranslationUnit,
     plan: &LinuxBackendPlan,
     portable: &DriverLoweringPlan,
     snake: &str,
 ) {
-    // tx_empty — from behavior plan or minimal stub.
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialTxEmpty,
-        &format!("static unsigned int {snake}_tx_empty(struct uart_port *port)"),
-        true,
-        &["return 0;".into()],
-    );
+    for entry in &plan.uart_ops_realization {
+        let body = match &entry.body_source {
+            LinuxUartOpsBody::FromPortableRole(role) => {
+                let func = find_behavior_by_role(&portable.behavior, role.clone());
+                if let Some(func) = func {
+                    let ctx = make_emit_context(plan, portable, snake, Some(role.clone()));
+                    let mut lines = Vec::new();
+                    if entry.needs_container_of {
+                        lines.push(format!(
+                            "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+                        ));
+                        lines.push(String::new());
+                    }
+                    lines.extend(emit_behavior_nodes(&func.body, &ctx, 0));
+                    if !entry.trailing.is_empty()
+                        && !lines.iter().any(|l| l.trim_start().starts_with("return"))
+                    {
+                        lines.push(String::new());
+                        lines.extend(entry.trailing.iter().cloned());
+                    }
+                    lines
+                } else {
+                    // No authored behavior for this role — use trailing as default.
+                    let mut lines = Vec::new();
+                    if entry.needs_container_of {
+                        lines.push(format!(
+                            "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+                        ));
+                        lines.push("(void)d;".into());
+                    }
+                    lines.extend(entry.trailing.iter().cloned());
+                    lines
+                }
+            }
+            LinuxUartOpsBody::Stub { lines } => {
+                let mut body = Vec::new();
+                if entry.needs_container_of {
+                    body.push(format!(
+                        "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+                    ));
+                    // Suppress unused-variable warning for stubs.
+                    if lines
+                        .iter()
+                        .all(|l| l.starts_with("/*") || l.starts_with("//"))
+                    {
+                        body.push("(void)d;".into());
+                    }
+                    body.push(String::new());
+                }
+                body.extend(lines.iter().cloned());
+                body
+            }
+        };
 
-    // set_mctrl / get_mctrl — no authored behavior, minimal stubs.
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!(
-            "static void {snake}_set_mctrl(struct uart_port *port, unsigned int mctrl)"
-        ),
-        body: vec!["/* Modem control not realized in first slice */".into()],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static unsigned int {snake}_get_mctrl(struct uart_port *port)"),
-        body: vec!["return TIOCM_CAR | TIOCM_CTS | TIOCM_DSR;".into()],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-
-    // stop_tx — from SerialTxByte behavior (disable TX interrupt).
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialTxByte,
-        &format!("static void {snake}_stop_tx(struct uart_port *port)"),
-        true,
-        &[],
-    );
-
-    // start_tx — enable TX interrupt.
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialTxByte,
-        &format!("static void {snake}_start_tx(struct uart_port *port)"),
-        true,
-        &[],
-    );
-
-    // stop_rx — disable RX interrupt.
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialFlushRxFifo,
-        &format!("static void {snake}_stop_rx(struct uart_port *port)"),
-        true,
-        &[],
-    );
-
-    // break_ctl — from behavior plan.
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialSendBreak,
-        &format!("static void {snake}_break_ctl(struct uart_port *port, int break_state)"),
-        true,
-        &[],
-    );
-
-    // startup — from SerialPortOpen behavior.
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialPortOpen,
-        &format!("static int {snake}_startup(struct uart_port *port)"),
-        true,
-        &["return 0;".into()],
-    );
-
-    // shutdown — from SerialPortClose behavior.
-    emit_behavior_callback(
-        tu,
-        plan,
-        portable,
-        snake,
-        FunctionRole::SerialPortClose,
-        &format!("static void {snake}_shutdown(struct uart_port *port)"),
-        true,
-        &[],
-    );
-
-    // set_termios — from SerialConfigure behavior.
-    emit_behavior_callback(
-        tu, plan, portable, snake,
-        FunctionRole::SerialConfigure,
-        &format!("static void {snake}_set_termios(struct uart_port *port, struct ktermios *termios, const struct ktermios *old)"),
-        true,
-        &[],
-    );
-
-    // type / config_port / request_port / release_port — plan-driven stubs.
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static const char *{snake}_type(struct uart_port *port)"),
-        body: vec![format!("return \"{}\";", plan.registration.module_name)],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-
-    let port_type_name = plan
-        .serial_core
-        .as_ref()
-        .map(|s| s.port_type.define_name.as_str())
-        .unwrap_or("PORT_UNKNOWN");
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_config_port(struct uart_port *port, int flags)"),
-        body: vec![
-            "if (flags & UART_CONFIG_TYPE)".into(),
-            format!("\tport->type = {port_type_name};"),
-        ],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static int {snake}_request_port(struct uart_port *port)"),
-        body: vec!["return 0;".into()],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_release_port(struct uart_port *port)"),
-        body: vec![],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
+        tu.push(CTopLevelItem::FuncDef {
+            signature: entry.signature.clone(),
+            body,
+            comment: None,
+        });
+        tu.push(CTopLevelItem::BlankLine);
+    }
 
     // uart_ops struct.
     tu.push(CTopLevelItem::LineComment("uart_ops definition".into()));
     let serial = plan.serial_core.as_ref().unwrap();
+    let initializer: Vec<String> = plan
+        .uart_ops_realization
+        .iter()
+        .map(|entry| {
+            let field = &entry.op_name;
+            // Extract the function name from the signature.
+            let func_name = entry
+                .signature
+                .split('(')
+                .next()
+                .and_then(|s| s.split_whitespace().last())
+                .unwrap_or(field);
+            if field == "type" {
+                format!(".type\t\t= {func_name},")
+            } else if field.len() < 8 {
+                format!(".{field}\t\t= {func_name},")
+            } else {
+                format!(".{field}\t= {func_name},")
+            }
+        })
+        .collect();
+
     tu.push(CTopLevelItem::StaticDef {
         qualifiers: "static const".into(),
         type_name: "struct uart_ops".into(),
         name: serial.uart_ops_name.clone(),
-        initializer: vec![
-            format!(".tx_empty\t= {snake}_tx_empty,"),
-            format!(".set_mctrl\t= {snake}_set_mctrl,"),
-            format!(".get_mctrl\t= {snake}_get_mctrl,"),
-            format!(".stop_tx\t= {snake}_stop_tx,"),
-            format!(".start_tx\t= {snake}_start_tx,"),
-            format!(".stop_rx\t= {snake}_stop_rx,"),
-            format!(".break_ctl\t= {snake}_break_ctl,"),
-            format!(".startup\t= {snake}_startup,"),
-            format!(".shutdown\t= {snake}_shutdown,"),
-            format!(".set_termios\t= {snake}_set_termios,"),
-            format!(".type\t\t= {snake}_type,"),
-            format!(".config_port\t= {snake}_config_port,"),
-            format!(".request_port\t= {snake}_request_port,"),
-            format!(".release_port\t= {snake}_release_port,"),
-        ],
+        initializer,
     });
-}
-
-/// Emit a uart_ops callback from behavior plan data.
-#[allow(clippy::too_many_arguments)]
-fn emit_behavior_callback(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-    role: FunctionRole,
-    signature: &str,
-    with_container_of: bool,
-    default_body: &[String],
-) {
-    let func = find_behavior_by_role(&portable.behavior, role.clone());
-
-    let body = if let Some(func) = func {
-        let ctx = make_emit_context(plan, portable, snake, Some(role));
-        let mut lines = Vec::new();
-        if with_container_of {
-            lines.push(format!(
-                "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
-            ));
-            lines.push(String::new());
-        }
-        lines.extend(emit_behavior_nodes(&func.body, &ctx, 0));
-        lines
-    } else if !default_body.is_empty() {
-        let mut lines = Vec::new();
-        if with_container_of {
-            lines.push(format!(
-                "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
-            ));
-        }
-        lines.extend(default_body.iter().cloned());
-        lines
-    } else {
-        vec![]
-    };
-
-    tu.push(CTopLevelItem::FuncDef {
-        signature: signature.into(),
-        body,
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
 }
 
 fn emit_uart_driver_def(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {

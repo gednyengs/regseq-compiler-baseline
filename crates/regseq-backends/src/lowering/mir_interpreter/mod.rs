@@ -24,11 +24,14 @@ use regseq_analysis::AnalysisInput;
 use regseq_model::declaration::mir_body::{FnKind, MirFnBodyDecl};
 
 use super::behavior::{
-    BehaviorNode, BehaviorPlan, BranchCondition, FunctionBehavior, FunctionRole, InterruptClassDef,
+    BehaviorNode, BehaviorPlan, BranchCondition, FunctionBehavior, FunctionParam, FunctionRole,
+    InterruptClassDef, PortableType,
 };
 
 use context::{FnContext, MirInterpreterContext};
-use value_lowering::extract_constant_value;
+use value_lowering::{
+    derive_class_name_from_constant_path, extract_constant_path, extract_constant_value,
+};
 
 // ---------------------------------------------------------------------------
 // Public entry point
@@ -149,10 +152,38 @@ fn interpret_mir_function(
     let role = determine_role(func);
     let body = cfg_walker::walk_region(&fn_ctx, &func.body, 0, &BTreeSet::new());
 
+    let params = func
+        .params
+        .iter()
+        .map(|p| FunctionParam {
+            name: p.name.clone(),
+            ty: parse_portable_type(&p.ty),
+        })
+        .collect();
+    let return_type = func.return_type.as_ref().map(|t| parse_portable_type(t));
+
     FunctionBehavior {
         name: func.name.clone(),
         role,
+        params,
+        return_type,
         body,
+    }
+}
+
+/// Parse a Rust type string into a `PortableType`.
+fn parse_portable_type(ty: &str) -> PortableType {
+    match ty {
+        "u8" => PortableType::U8,
+        "u16" => PortableType::U16,
+        "u32" => PortableType::U32,
+        "u64" => PortableType::U64,
+        "i8" => PortableType::I8,
+        "i16" => PortableType::I16,
+        "i32" => PortableType::I32,
+        "i64" => PortableType::I64,
+        "bool" => PortableType::Bool,
+        other => PortableType::Opaque(other.to_string()),
     }
 }
 
@@ -277,34 +308,60 @@ fn extract_mask_from_class_name(name: &str) -> u32 {
 }
 
 /// Try to resolve class mask values from MIR constant operands.
+///
+/// Uses symbolic-name-based matching: extracts constant paths from
+/// MIR BitAnd operands, derives class names, and matches them against
+/// unresolved class definitions. Scalar constants are already handled
+/// by the class-name encoding (e.g., "class_0x0050"). This function
+/// handles the symbolic/unevaluated case.
 fn resolve_classes_from_mir_constants(
-    _classes: &mut [InterruptClassDef],
+    classes: &mut [InterruptClassDef],
     mir_body: &regseq_model::declaration::mir_body::MirBody,
 ) {
-    // Collect all unique constant mask values used in SwitchInt-preceding
-    // BitAnd operations across the MIR body.
-    let mut constant_masks = Vec::new();
+    use regseq_model::declaration::mir_body::{MirBinOp, MirRvalue, MirStatementKind};
+
+    // Collect (class_name, mask_value) pairs from MIR BitAnd operations.
+    // For scalar constants, class names already encode the value and
+    // extract_mask_from_class_name handles them. For symbolic paths,
+    // we try to find a companion scalar value in the same basic block.
+    let mut name_to_mask: Vec<(String, Option<u32>)> = Vec::new();
+
     for bb in &mir_body.basic_blocks {
         for stmt in &bb.statements {
-            if let regseq_model::declaration::mir_body::MirStatementKind::Assign {
-                rvalue, ..
-            } = &stmt.kind
-            {
-                if let regseq_model::declaration::mir_body::MirRvalue::BinaryOp {
-                    op: regseq_model::declaration::mir_body::MirBinOp::BitAnd,
+            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
+                if let MirRvalue::BinaryOp {
+                    op: MirBinOp::BitAnd,
                     rhs,
                     ..
                 } = rvalue.as_ref()
                 {
-                    if let Some(mask) = extract_constant_value(rhs) {
-                        constant_masks.push(mask);
+                    // Skip scalar constants — already resolved via class name encoding.
+                    if extract_constant_value(rhs).is_some() {
+                        continue;
+                    }
+                    // Symbolic/unevaluated constant: extract path and derive class name.
+                    if let Some(path) = extract_constant_path(rhs) {
+                        let class_name = derive_class_name_from_constant_path(&path);
+                        // The scalar value is not available in the current MIR surface
+                        // for unevaluated constants.
+                        name_to_mask.push((class_name, None));
                     }
                 }
             }
         }
     }
 
-    // Classes already have mask values from the class name encoding
-    // (derived during value lowering from MIR scalar constants).
-    // No additional resolution needed in the typical case.
+    // For unresolved classes, check if we found a name match with a value.
+    for class in classes.iter_mut() {
+        if class.mask_value == 0 && class.name != "all" {
+            for (name, value) in &name_to_mask {
+                if class.name == *name {
+                    if let Some(v) = value {
+                        class.mask_value = *v;
+                    }
+                    break;
+                }
+            }
+        }
+    }
 }

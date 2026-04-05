@@ -1962,7 +1962,7 @@ fn collect_callhelper_callees(nodes: &[BehaviorNode]) -> BTreeSet<String> {
 fn collect_callhelper_callees_inner(nodes: &[BehaviorNode], callees: &mut BTreeSet<String>) {
     for node in nodes {
         match node {
-            BehaviorNode::CallHelper { callee } => {
+            BehaviorNode::CallHelper { callee, .. } => {
                 callees.insert(callee.clone());
             }
             BehaviorNode::Branch {
@@ -2030,6 +2030,78 @@ fn count_cleanup_regions_recursive(nodes: &[BehaviorNode]) -> usize {
         }
     }
     count
+}
+
+/// Count cleanup-bearing nodes whose cleanup body is non-empty.
+fn count_non_empty_cleanup_paths_recursive(nodes: &[BehaviorNode]) -> usize {
+    let mut count = 0;
+    for node in nodes {
+        match node {
+            BehaviorNode::CleanupRegion { body, cleanup } => {
+                if !cleanup.is_empty() {
+                    count += 1;
+                }
+                count += count_non_empty_cleanup_paths_recursive(body);
+                count += count_non_empty_cleanup_paths_recursive(cleanup);
+            }
+            BehaviorNode::FallibleOp {
+                body,
+                cleanup_on_error,
+            } => {
+                if !cleanup_on_error.is_empty() {
+                    count += 1;
+                }
+                count += count_non_empty_cleanup_paths_recursive(body);
+                count += count_non_empty_cleanup_paths_recursive(cleanup_on_error);
+            }
+            BehaviorNode::Branch {
+                then_body,
+                else_body,
+                ..
+            } => {
+                count += count_non_empty_cleanup_paths_recursive(then_body);
+                count += count_non_empty_cleanup_paths_recursive(else_body);
+            }
+            BehaviorNode::Loop { body, .. } => {
+                count += count_non_empty_cleanup_paths_recursive(body);
+            }
+            BehaviorNode::OrderedSequence { steps } => {
+                count += count_non_empty_cleanup_paths_recursive(steps);
+            }
+            _ => {}
+        }
+    }
+    count
+}
+
+fn expected_full_spec_reachable_helpers() -> BTreeSet<String> {
+    [
+        "apply_default_pins_if_present",
+        "apply_sleep_pins_if_present",
+        "clear_all_interrupts",
+        "clear_explicit_interrupts",
+        "configure_interrupt_levels",
+        "configure_line_control",
+        "disable_clock_if_present",
+        "disable_fifo",
+        "disable_tx_interrupts",
+        "disable_uart",
+        "enable_clock_if_present",
+        "enable_rx_interrupts",
+        "enable_tx_interrupts",
+        "enable_uart",
+        "mask_all_interrupts",
+        "program_polling_port",
+        "service_rx_fifo",
+        "service_tx_fifo",
+        "set_baud_rate",
+        "shutdown_port",
+        "toggle_reset_if_present",
+        "uart_clock_hz",
+    ]
+    .into_iter()
+    .map(str::to_string)
+    .collect()
 }
 
 // ===========================================================================
@@ -2351,9 +2423,14 @@ fn proof_per_helper_behavior_coverage() {
     let plan = make_portable_plan_with_constants();
 
     let reachable = input.mir_reachable_helper_names();
+    let expected = expected_full_spec_reachable_helpers();
     assert!(
         !reachable.is_empty(),
         "reachable helper set must not be empty"
+    );
+    assert_eq!(
+        reachable, expected,
+        "reachable helper set must match the explicit pl011-full-spec helper closure"
     );
 
     for name in &reachable {
@@ -2398,9 +2475,19 @@ fn proof_cleanup_behavior_visible_in_plans() {
             .find(|f| f.name == *name)
             .unwrap_or_else(|| panic!("missing function '{name}'"));
         let fallible_count = count_fallible_ops_recursive(&func.body);
+        let cleanup_region_count = count_cleanup_regions_recursive(&func.body);
+        let non_empty_cleanup_count = count_non_empty_cleanup_paths_recursive(&func.body);
         assert!(
             fallible_count >= 1,
             "'{name}' uses `?` but has {fallible_count} FallibleOp nodes (expected >= 1)"
+        );
+        assert!(
+            cleanup_region_count + non_empty_cleanup_count >= 1,
+            "'{name}' uses `?` but lowering exposed no cleanup-bearing structure"
+        );
+        assert!(
+            non_empty_cleanup_count >= 1,
+            "'{name}' uses `?` but all cleanup-bearing nodes have empty cleanup bodies"
         );
     }
 

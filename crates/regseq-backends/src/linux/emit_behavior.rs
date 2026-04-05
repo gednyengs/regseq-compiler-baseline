@@ -18,11 +18,11 @@ use super::plan::LinuxRegisterLayout;
 
 /// Context for translating BehaviorNode trees to C code.
 pub(super) struct EmitContext<'a> {
-    /// Snake_case driver name (e.g., `"pl011_full_spec"`).
+    /// Snake_case driver name (e.g., `"my_device"`).
     pub snake: &'a str,
-    /// SCREAMING_SNAKE driver name (e.g., `"PL011_FULL_SPEC"`).
+    /// SCREAMING_SNAKE driver name (e.g., `"MY_DEVICE"`).
     pub upper: String,
-    /// Register define prefix (e.g., `"PL011"`).
+    /// Register define prefix (e.g., `"DEV"`).
     pub reg_prefix: &'a str,
     /// Portable behavior plan (for interrupt class lookup).
     #[allow(dead_code)]
@@ -39,14 +39,14 @@ pub(super) struct EmitContext<'a> {
 
 /// Generate the C define name for a register offset.
 ///
-/// e.g., field `"dr"` with prefix `"PL011"` → `"PL011_DR"`.
+/// e.g., field `"dr"` with prefix `"DEV"` → `"DEV_DR"`.
 pub(super) fn register_offset_define(reg_prefix: &str, field_name: &str) -> String {
     format!("{}_{}", reg_prefix, field_name.to_uppercase())
 }
 
 /// Generate the C define name for a bitfield mask.
 ///
-/// e.g., descriptor `"DR_REG"`, field `"OE"`, prefix `"PL011"` → `"PL011_DR_OE"`.
+/// e.g., descriptor `"DR_REG"`, field `"OE"`, prefix `"DEV"` → `"DEV_DR_OE"`.
 pub(super) fn bitfield_mask_define(reg_prefix: &str, desc_name: &str, bf_name: &str) -> String {
     let desc_prefix = normalize_desc_prefix(desc_name);
     format!("{}_{}_{}", reg_prefix, desc_prefix, bf_name)
@@ -54,8 +54,8 @@ pub(super) fn bitfield_mask_define(reg_prefix: &str, desc_name: &str, bf_name: &
 
 /// Generate the C define name for a named value.
 ///
-/// e.g., descriptor `"LCRH_REG"`, field `"WLEN"`, value `"EIGHT_BITS"`,
-/// prefix `"PL011"` → `"PL011_LCRH_WLEN_EIGHT_BITS"`.
+/// e.g., descriptor `"CTRL_REG"`, field `"MODE"`, value `"EIGHT_BITS"`,
+/// prefix `"DEV"` → `"DEV_CTRL_MODE_EIGHT_BITS"`.
 pub(super) fn named_value_define(
     reg_prefix: &str,
     desc_name: &str,
@@ -68,8 +68,8 @@ pub(super) fn named_value_define(
 
 /// Generate the C define name for an interrupt class mask.
 ///
-/// e.g., class `"rx"`, upper `"PL011_FULL_SPEC"` →
-/// `"PL011_FULL_SPEC_RX_IRQ_MASK"`.
+/// e.g., class `"rx"`, upper `"MY_DEVICE"` →
+/// `"MY_DEVICE_RX_IRQ_MASK"`.
 pub(super) fn interrupt_class_define(upper: &str, class_name: &str) -> String {
     format!("{}_{}_IRQ_MASK", upper, class_name.to_uppercase())
 }
@@ -167,8 +167,14 @@ fn emit_behavior_node(node: &BehaviorNode, ctx: &EmitContext<'_>, indent: usize)
             vec![format!("{ind}{}", emit_return(semantic, ctx))]
         }
 
-        BehaviorNode::CallHelper { callee } => {
-            vec![format!("{ind}{}_{callee}(d);", ctx.snake)]
+        BehaviorNode::CallHelper { callee, args } => {
+            let arg_strs: Vec<String> = args.iter().map(|a| emit_value_expr(a, ctx)).collect();
+            let all_args = if arg_strs.is_empty() {
+                "d".to_string()
+            } else {
+                format!("d, {}", arg_strs.join(", "))
+            };
+            vec![format!("{ind}{}_{callee}({all_args});", ctx.snake)]
         }
 
         BehaviorNode::FieldAssign { field, value } => {

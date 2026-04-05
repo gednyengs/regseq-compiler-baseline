@@ -16,7 +16,8 @@ use super::plan::{
     LinuxPortType, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
     LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
     LinuxRegistrationShape, LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep,
-    LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization,
+    LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization, LinuxUartOpsBody,
+    LinuxUartOpsEntry,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -47,6 +48,7 @@ pub fn build_linux_backend_plan(
     let property_realization = build_property_realization(plan);
     let deployment_metadata = build_deployment_metadata(plan);
     let behavior_mapping = build_behavior_mapping(plan);
+    let uart_ops_realization = build_uart_ops_realization(plan);
 
     Ok(LinuxBackendPlan {
         registration,
@@ -59,6 +61,7 @@ pub fn build_linux_backend_plan(
         property_realization,
         deployment_metadata,
         behavior_mapping,
+        uart_ops_realization,
     })
 }
 
@@ -505,6 +508,171 @@ fn build_deployment_metadata(plan: &DriverLoweringPlan) -> LinuxDeploymentMetada
     }
 }
 
+fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntry> {
+    if plan.identity.device_class != DeviceClass::SerialUart {
+        return vec![];
+    }
+
+    let snake = to_snake_case(&plan.identity.driver_name);
+
+    vec![
+        LinuxUartOpsEntry {
+            op_name: "tx_empty".into(),
+            signature: format!(
+                "static unsigned int {snake}_tx_empty(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialTxEmpty),
+            needs_container_of: true,
+            trailing: vec!["return 0;".into()],
+        },
+        LinuxUartOpsEntry {
+            op_name: "set_mctrl".into(),
+            signature: format!(
+                "static void {snake}_set_mctrl(struct uart_port *port, unsigned int mctrl)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec!["/* Modem control not realized in first slice */".into()],
+            },
+            needs_container_of: false,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "get_mctrl".into(),
+            signature: format!(
+                "static unsigned int {snake}_get_mctrl(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec!["return TIOCM_CAR | TIOCM_CTS | TIOCM_DSR;".into()],
+            },
+            needs_container_of: false,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "stop_tx".into(),
+            signature: format!(
+                "static void {snake}_stop_tx(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec![
+                    "/* TODO: TX disable not yet realized from lowered plan */".into(),
+                ],
+            },
+            needs_container_of: true,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "start_tx".into(),
+            signature: format!(
+                "static void {snake}_start_tx(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec![
+                    "/* TODO: TX enable not yet realized from lowered plan */".into(),
+                ],
+            },
+            needs_container_of: true,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "stop_rx".into(),
+            signature: format!(
+                "static void {snake}_stop_rx(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec![
+                    "/* TODO: RX disable not yet realized from lowered plan */".into(),
+                ],
+            },
+            needs_container_of: true,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "break_ctl".into(),
+            signature: format!(
+                "static void {snake}_break_ctl(struct uart_port *port, int break_state)"
+            ),
+            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialSendBreak),
+            needs_container_of: true,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "startup".into(),
+            signature: format!(
+                "static int {snake}_startup(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialPortOpen),
+            needs_container_of: true,
+            trailing: vec!["return 0;".into()],
+        },
+        LinuxUartOpsEntry {
+            op_name: "shutdown".into(),
+            signature: format!(
+                "static void {snake}_shutdown(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialPortClose),
+            needs_container_of: true,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "set_termios".into(),
+            signature: format!(
+                "static void {snake}_set_termios(struct uart_port *port, struct ktermios *termios, const struct ktermios *old)"
+            ),
+            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialConfigure),
+            needs_container_of: true,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "type".into(),
+            signature: format!(
+                "static const char *{snake}_type(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec![format!("return \"{snake}\";")],
+            },
+            needs_container_of: false,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "config_port".into(),
+            signature: format!(
+                "static void {snake}_config_port(struct uart_port *port, int flags)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec![
+                    "if (flags & UART_CONFIG_TYPE)".into(),
+                    format!(
+                        "\tport->type = PORT_{};",
+                        to_snake_case(&plan.identity.driver_name).to_uppercase()
+                    ),
+                ],
+            },
+            needs_container_of: false,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "request_port".into(),
+            signature: format!(
+                "static int {snake}_request_port(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub {
+                lines: vec!["return 0;".into()],
+            },
+            needs_container_of: false,
+            trailing: vec![],
+        },
+        LinuxUartOpsEntry {
+            op_name: "release_port".into(),
+            signature: format!(
+                "static void {snake}_release_port(struct uart_port *port)"
+            ),
+            body_source: LinuxUartOpsBody::Stub { lines: vec![] },
+            needs_container_of: false,
+            trailing: vec![],
+        },
+    ]
+}
+
 fn to_snake_case(name: &str) -> String {
     let mut result = String::new();
     for (i, ch) in name.chars().enumerate() {
@@ -526,7 +694,7 @@ fn to_snake_case(name: &str) -> String {
 /// fact. Strips the `"Registers"` suffix and converts to SCREAMING_SNAKE.
 ///
 /// Examples:
-/// - `"Pl011Registers"` → `"PL011"`
+/// - `"FooRegisters"` → `"FOO"`
 /// - `"E1000Registers"` → `"E1000"`
 /// - `"FooBarRegs"` → `"FOO_BAR_REGS"`
 fn derive_reg_prefix(block_name: &str) -> String {
@@ -537,7 +705,7 @@ fn derive_reg_prefix(block_name: &str) -> String {
 /// Convert a CamelCase identifier to SCREAMING_SNAKE_CASE.
 ///
 /// Runs of uppercase characters followed by a lowercase character are
-/// treated as acronyms (e.g., "Pl011" → "PL011", not "PL_011").
+/// treated as acronyms (e.g., "FooBar" → "FOO_BAR").
 fn to_screaming_snake(name: &str) -> String {
     let mut result = String::new();
     let chars: Vec<char> = name.chars().collect();

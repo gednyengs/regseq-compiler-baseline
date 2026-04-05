@@ -945,3 +945,207 @@ fn emitted_output_is_plan_driven_not_hardcoded() {
         "must not contain hardcoded port type 113"
     );
 }
+
+// ---- Rejection reason 1: helper signature correctness ----
+
+#[test]
+fn helper_functions_have_authored_signatures() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // Helpers with parameters must NOT be emitted as just
+    // `static void <snake>_<name>(struct <snake>_data *d)`.
+    // They must include their authored parameters.
+    //
+    // The full-spec has helpers like set_baud_rate(uart_clk_hz, baud_rate)
+    // and clear_explicit_interrupts(status). If the MIR carries these
+    // parameters, the emitted C must include them.
+    let (portable, _linux) = make_plans();
+    for func in &portable.behavior.functions {
+        if func.role != regseq_backends::lowering::behavior::FunctionRole::Helper {
+            continue;
+        }
+        if func.params.is_empty() {
+            continue;
+        }
+        // For each param, the emitted helper should contain the param name.
+        for p in &func.params {
+            assert!(
+                content.contains(&p.name),
+                "helper '{}' must emit authored parameter '{}' in its signature",
+                func.name,
+                p.name
+            );
+        }
+    }
+}
+
+#[test]
+fn helper_calls_pass_arguments() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // Helpers with parameters should be called with arguments, not just (d).
+    // Specifically, if a helper has N params, its call sites should contain
+    // at least N+1 comma-separated arguments (d + authored params).
+    let (portable, _linux) = make_plans();
+    let helpers_with_params: Vec<&str> = portable
+        .behavior
+        .functions
+        .iter()
+        .filter(|f| {
+            f.role == regseq_backends::lowering::behavior::FunctionRole::Helper
+                && !f.params.is_empty()
+        })
+        .map(|f| f.name.as_str())
+        .collect();
+
+    // For each parameterized helper, check that at least one call site
+    // passes more than just (d).
+    for helper_name in &helpers_with_params {
+        let call_pattern = format!("pl011_full_spec_{helper_name}(");
+        if let Some(pos) = content.find(&call_pattern) {
+            let rest = &content[pos + call_pattern.len()..];
+            if let Some(end) = rest.find(')') {
+                let args_str = &rest[..end];
+                // Should have at least one comma (d, ...).
+                assert!(
+                    args_str.contains(','),
+                    "call to helper '{helper_name}' should pass arguments, not just (d); got: ({args_str})"
+                );
+            }
+        }
+    }
+}
+
+// ---- Rejection reason 2: Linux callback mapping correctness ----
+
+#[test]
+fn start_tx_stop_tx_stop_rx_are_not_identical() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // start_tx and stop_tx must NOT have identical bodies.
+    // Under the old broken mapping, both used SerialTxByte behavior.
+    // Under the corrected mapping, both are honest stubs with TODO
+    // comments but they must not reuse a portable role body.
+    assert!(
+        !content.contains("pl011_full_spec_tx_byte"),
+        "start_tx/stop_tx must not reuse tx_byte behavior body"
+    );
+}
+
+#[test]
+fn stop_rx_does_not_use_flush_rx_fifo() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // Extract the stop_rx function body.
+    let stop_rx_sig = "pl011_full_spec_stop_rx";
+    assert!(content.contains(stop_rx_sig), "stop_rx must exist");
+
+    // The stop_rx body must NOT contain flush_rx_fifo behavior.
+    // Find the stop_rx function and check its body.
+    if let Some(pos) = content.find(stop_rx_sig) {
+        // Extract a reasonable window after the signature.
+        let window = &content[pos..std::cmp::min(pos + 500, content.len())];
+        assert!(
+            !window.contains("flush"),
+            "stop_rx must not contain flush_rx_fifo behavior"
+        );
+    }
+}
+
+#[test]
+fn start_tx_stop_tx_stop_rx_are_honest_stubs() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // These callbacks should contain TODO comments indicating they are
+    // not yet realized from lowered plan data.
+    for callback in &["start_tx", "stop_tx", "stop_rx"] {
+        let sig = format!("pl011_full_spec_{callback}");
+        assert!(content.contains(&sig), "{callback} must exist");
+        if let Some(pos) = content.find(&sig) {
+            let window = &content[pos..std::cmp::min(pos + 500, content.len())];
+            assert!(
+                window.contains("TODO"),
+                "{callback} should be an honest stub with TODO comment"
+            );
+        }
+    }
+}
+
+// ---- Rejection reason 3: interrupt mask resolution ----
+
+#[test]
+fn default_path_rejects_unresolved_interrupt_masks() {
+    use regseq_backends::lowering::planner::build_driver_lowering_plan;
+
+    let input = make_input();
+    let result = build_driver_lowering_plan(&input);
+
+    // The default path (no explicit constants) should either:
+    // (a) succeed with all masks nonzero if MIR carries resolved values, or
+    // (b) fail with UnresolvedInterruptMasks if MIR has symbolic references.
+    match result {
+        Ok(plan) => {
+            // If it succeeded, all non-"all" classes must have nonzero masks.
+            for class in &plan.behavior.interrupt_classes {
+                if class.name != "all" {
+                    assert!(
+                        class.mask_value != 0,
+                        "default path succeeded but class '{}' has mask_value 0",
+                        class.name
+                    );
+                }
+            }
+        }
+        Err(e) => {
+            let err_str = e.to_string();
+            assert!(
+                err_str.contains("unresolved interrupt class masks"),
+                "error should be UnresolvedInterruptMasks, got: {err_str}"
+            );
+        }
+    }
+}
+
+#[test]
+fn with_constants_path_resolves_all_masks() {
+    let (portable, _linux) = make_plans();
+
+    // The _with_constants path must resolve all interrupt classes.
+    for class in &portable.behavior.interrupt_classes {
+        assert!(
+            class.mask_value != 0,
+            "class '{}' should have nonzero mask with explicit constants",
+            class.name
+        );
+    }
+}

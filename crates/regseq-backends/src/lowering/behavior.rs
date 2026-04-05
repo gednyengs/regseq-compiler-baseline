@@ -60,8 +60,37 @@ pub struct FunctionBehavior {
     pub name: String,
     /// Behavioral role of this function.
     pub role: FunctionRole,
+    /// Authored parameters (excluding `self` receiver).
+    pub params: Vec<FunctionParam>,
+    /// Authored return type, if non-unit.
+    pub return_type: Option<PortableType>,
     /// Ordered body actions.
     pub body: Vec<BehaviorNode>,
+}
+
+/// An authored function parameter.
+#[derive(Debug, Clone)]
+pub struct FunctionParam {
+    /// Parameter name as authored.
+    pub name: String,
+    /// Portable type.
+    pub ty: PortableType,
+}
+
+/// Portable type representation for function signatures.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum PortableType {
+    U8,
+    U16,
+    U32,
+    U64,
+    I8,
+    I16,
+    I32,
+    I64,
+    Bool,
+    /// Fallback for unrecognized or complex types.
+    Opaque(String),
 }
 
 /// Behavioral role of an authored function.
@@ -111,6 +140,8 @@ pub enum BehaviorNode {
     CallHelper {
         /// Helper function name.
         callee: String,
+        /// Arguments (excluding receiver).
+        args: Vec<ValueExpr>,
     },
 
     /// Write a register with field values.

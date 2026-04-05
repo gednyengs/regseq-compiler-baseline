@@ -352,7 +352,7 @@ pub fn extract_constant_path(operand: &MirOperand) -> Option<String> {
 /// Converts paths like `"driver::Foo::RX_INTERRUPT_MASK"` to class
 /// names like `"rx"` by stripping the type prefix and `_INTERRUPT_MASK`
 /// or `_MASK` suffix.
-fn derive_class_name_from_constant_path(path: &str) -> String {
+pub fn derive_class_name_from_constant_path(path: &str) -> String {
     // Take the last segment of the path (the const item name).
     let const_name = path.rsplit("::").next().unwrap_or(path);
 

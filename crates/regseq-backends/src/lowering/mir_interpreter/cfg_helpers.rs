@@ -12,9 +12,9 @@ use regseq_model::declaration::mir_body::{
 
 use crate::lowering::behavior::{BehaviorNode, FieldWrite, FieldWriteValue, ValueExpr};
 
-use super::call_classifier::CallClassification;
+use super::call_classifier::{classify_call, CallClassification};
 use super::context::FnContext;
-use super::value_lowering::lower_operand;
+use super::value_lowering::{determine_return_semantic, lower_operand};
 
 // ---------------------------------------------------------------------------
 // Call node emission
@@ -65,8 +65,11 @@ pub fn emit_call_node(
             }]
         }
         CallClassification::HelperCall { name } => {
+            // Skip the receiver (args[0]) — lower remaining arguments.
+            let lowered_args = args.iter().skip(1).map(|a| lower_operand(ctx, a)).collect();
             vec![BehaviorNode::CallHelper {
                 callee: name.clone(),
+                args: lowered_args,
             }]
         }
         CallClassification::Unknown { path } => {
@@ -156,13 +159,105 @@ pub fn detect_fallible_pattern(
 
 /// Walk the error path of a fallible ? to collect cleanup actions.
 pub fn walk_error_path(
-    _ctx: &FnContext<'_>,
-    _body: &MirBody,
-    _err_bb: usize,
-    _visited: &BTreeSet<usize>,
-    _stop_set: &BTreeSet<usize>,
+    ctx: &FnContext<'_>,
+    body: &MirBody,
+    err_bb: usize,
+    visited: &BTreeSet<usize>,
+    stop_set: &BTreeSet<usize>,
 ) -> Vec<BehaviorNode> {
-    vec![]
+    let mut nodes = Vec::new();
+    let mut current = err_bb;
+    let mut seen = visited.clone();
+
+    while current < body.basic_blocks.len() && !stop_set.contains(&current) && seen.insert(current)
+    {
+        let bb = &body.basic_blocks[current];
+        let Some(term) = &bb.terminator else {
+            break;
+        };
+
+        match &term.kind {
+            MirTerminatorKind::Goto { target } => {
+                current = *target as usize;
+            }
+            MirTerminatorKind::Drop { target, unwind, .. } => {
+                if let MirUnwindAction::Cleanup { target: cleanup_bb } = unwind {
+                    let cleanup = walk_error_path(ctx, body, *cleanup_bb as usize, &seen, stop_set);
+                    if !cleanup.is_empty() {
+                        nodes.push(BehaviorNode::CleanupRegion {
+                            body: vec![],
+                            cleanup,
+                        });
+                    }
+                }
+                current = *target as usize;
+            }
+            MirTerminatorKind::Call {
+                func,
+                args,
+                destination,
+                target,
+                unwind,
+            } => {
+                let classification = classify_call(ctx, func, args);
+                nodes.extend(emit_call_node(ctx, &classification, args, destination));
+
+                if let MirUnwindAction::Cleanup { target: cleanup_bb } = unwind {
+                    let cleanup = walk_error_path(ctx, body, *cleanup_bb as usize, &seen, stop_set);
+                    if !cleanup.is_empty() {
+                        nodes.push(BehaviorNode::CleanupRegion {
+                            body: vec![],
+                            cleanup,
+                        });
+                    }
+                }
+
+                if let Some(next) = target {
+                    current = *next as usize;
+                } else {
+                    break;
+                }
+            }
+            MirTerminatorKind::Assert { target, unwind, .. } => {
+                if let MirUnwindAction::Cleanup { target: cleanup_bb } = unwind {
+                    let cleanup = walk_error_path(ctx, body, *cleanup_bb as usize, &seen, stop_set);
+                    if !cleanup.is_empty() {
+                        nodes.push(BehaviorNode::CleanupRegion {
+                            body: vec![],
+                            cleanup,
+                        });
+                    }
+                }
+                current = *target as usize;
+            }
+            MirTerminatorKind::Return => {
+                nodes.push(BehaviorNode::Return {
+                    semantic: determine_return_semantic(ctx, body),
+                });
+                break;
+            }
+            MirTerminatorKind::SwitchInt { targets, .. } => {
+                for target in &targets.targets {
+                    nodes.extend(walk_error_path(
+                        ctx,
+                        body,
+                        *target as usize,
+                        &seen,
+                        stop_set,
+                    ));
+                }
+                break;
+            }
+            MirTerminatorKind::Unreachable
+            | MirTerminatorKind::UnwindResume
+            | MirTerminatorKind::UnwindTerminate { .. }
+            | MirTerminatorKind::Unsupported { .. } => {
+                break;
+            }
+        }
+    }
+
+    nodes
 }
 
 // ---------------------------------------------------------------------------

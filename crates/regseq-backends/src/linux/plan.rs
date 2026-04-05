@@ -39,6 +39,8 @@ pub struct LinuxBackendPlan {
     pub deployment_metadata: LinuxDeploymentMetadata,
     /// Mapping from portable function behaviors to Linux callbacks.
     pub behavior_mapping: LinuxBehaviorMapping,
+    /// uart_ops realization entries for each Linux callback.
+    pub uart_ops_realization: Vec<LinuxUartOpsEntry>,
 }
 
 // ---------------------------------------------------------------------------
@@ -96,7 +98,7 @@ pub struct LinuxSerialCoreRealization {
 /// device-specific hardware fact.
 #[derive(Debug, Clone)]
 pub struct LinuxPortType {
-    /// Symbolic define name (e.g., `"PORT_PL011_FULL_SPEC"`).
+    /// Symbolic define name (e.g., `"PORT_MY_DEVICE"`).
     pub define_name: String,
     /// Numeric value for the define.
     pub value: u32,
@@ -272,7 +274,7 @@ pub enum LinuxFileRole {
 ///
 /// Carries enough structural metadata that the emitter can produce
 /// per-register byte-offset defines and per-bitfield mask/shift macros
-/// without a hardcoded PL011 offset table.
+/// without a hardcoded device-specific offset table.
 #[derive(Debug, Clone)]
 pub struct LinuxRegisterLayout {
     /// Register blocks with per-field byte offsets.
@@ -284,13 +286,13 @@ pub struct LinuxRegisterLayout {
 /// A register block with per-field structural metadata.
 #[derive(Debug, Clone)]
 pub struct LinuxRegisterBlock {
-    /// Block type name (e.g. "Pl011Registers").
+    /// Block type name (e.g. "FooRegisters").
     pub block_name: String,
     /// C identifier prefix for generated register defines.
     ///
     /// This is a formatting policy for generated C identifiers, not a
     /// semantic fact. Derived from the authored block name by the planner
-    /// (e.g., `"Pl011Registers"` → `"PL011"`).
+    /// (e.g., `"FooRegisters"` → `"FOO"`).
     pub reg_prefix: String,
     /// Register fields with computed byte offsets.
     pub fields: Vec<LinuxRegisterFieldEntry>,
@@ -413,6 +415,38 @@ pub struct LinuxPinCtrlEntry {
     pub required: bool,
     /// Available pin states from the deployment binding.
     pub states: Option<Vec<String>>,
+}
+
+// ---------------------------------------------------------------------------
+// uart_ops realization
+// ---------------------------------------------------------------------------
+
+/// How a Linux uart_ops callback body should be realized.
+#[derive(Debug, Clone)]
+pub enum LinuxUartOpsBody {
+    /// Emit the body of a portable function looked up by role.
+    FromPortableRole(crate::lowering::behavior::FunctionRole),
+    /// Minimal stub body (e.g., modem control, or callbacks not yet
+    /// realized from lowered plan data).
+    Stub {
+        /// C code lines for the stub body.
+        lines: Vec<String>,
+    },
+}
+
+/// Realization entry for a single Linux uart_ops callback.
+#[derive(Debug, Clone)]
+pub struct LinuxUartOpsEntry {
+    /// Linux callback field name (e.g., "start_tx").
+    pub op_name: String,
+    /// Full C function signature.
+    pub signature: String,
+    /// How to realize the body.
+    pub body_source: LinuxUartOpsBody,
+    /// Whether to emit `container_of` preamble.
+    pub needs_container_of: bool,
+    /// Default trailing lines (e.g., "return 0;").
+    pub trailing: Vec<String>,
 }
 
 // ---------------------------------------------------------------------------

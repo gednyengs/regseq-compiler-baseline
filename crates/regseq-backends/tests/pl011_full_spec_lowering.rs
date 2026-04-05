@@ -2474,7 +2474,7 @@ fn init_behavior_has_ordered_resource_then_programming() {
     // Should call program_polling_port helper.
     assert!(init.body.iter().any(|n| matches!(
         n,
-        BehaviorNode::CallHelper { callee } if callee == "program_polling_port"
+        BehaviorNode::CallHelper { callee, .. } if callee == "program_polling_port"
     )));
 }
 
@@ -2634,7 +2634,7 @@ fn isr_behavior_uses_interrupt_class_discrimination() {
     assert!(
         has_node_recursive(&isr.body, &|n| matches!(
             n,
-            BehaviorNode::CallHelper { callee } if callee == "clear_explicit_interrupts"
+            BehaviorNode::CallHelper { callee, .. } if callee == "clear_explicit_interrupts"
         )),
         "ISR should call clear_explicit_interrupts"
     );

@@ -42,6 +42,17 @@ pub enum LoweringPlanError {
         /// Description of the failure.
         reason: String,
     },
+    /// Interrupt class mask values could not be resolved from the MIR body.
+    ///
+    /// The default lowering path requires that interrupt mask constants are
+    /// either embedded as scalar values in MIR or resolvable from the
+    /// available MIR body surface. When they remain as unevaluated symbolic
+    /// references, use `build_driver_lowering_plan_with_constants` instead.
+    #[error("unresolved interrupt class masks: {}", class_names.join(", "))]
+    UnresolvedInterruptMasks {
+        /// Class names whose mask values are still zero.
+        class_names: Vec<String>,
+    },
 }
 
 /// Build a portable `DriverLoweringPlan` from an `AnalysisInput`.
@@ -59,7 +70,25 @@ pub enum LoweringPlanError {
 pub fn build_driver_lowering_plan(
     input: &AnalysisInput,
 ) -> Result<DriverLoweringPlan, LoweringPlanError> {
-    build_driver_lowering_plan_with_constants(input, &[])
+    let plan = build_driver_lowering_plan_with_constants(input, &[])?;
+
+    // Verify all interrupt classes have resolved mask values.
+    // If any remain at zero (excluding the synthetic "all" class),
+    // the MIR body does not carry enough data for the default path.
+    let unresolved: Vec<String> = plan
+        .behavior
+        .interrupt_classes
+        .iter()
+        .filter(|c| c.mask_value == 0 && c.name != "all")
+        .map(|c| c.name.clone())
+        .collect();
+    if !unresolved.is_empty() {
+        return Err(LoweringPlanError::UnresolvedInterruptMasks {
+            class_names: unresolved,
+        });
+    }
+
+    Ok(plan)
 }
 
 /// Build a portable `DriverLoweringPlan` with explicit authored constant values.

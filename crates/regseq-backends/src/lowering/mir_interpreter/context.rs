@@ -23,7 +23,7 @@ pub struct MirInterpreterContext {
     pub register_field_names: BTreeSet<String>,
     /// Per-register-block ordered field name list (index → name).
     pub register_block_fields: Vec<Vec<String>>,
-    /// Register block type paths (e.g. "registers::Pl011Registers").
+    /// Register block type paths (e.g. "registers::FooRegisters").
     pub register_block_types: BTreeSet<String>,
     /// Optional resource fields with their resource kind.
     pub resource_fields: Vec<(String, ResourceKind)>,

@@ -188,6 +188,8 @@ fn interpret_function(ctx: &InterpreterContext, func: &FnBodyDecl) -> FunctionBe
     FunctionBehavior {
         name: func.name.clone(),
         role,
+        params: vec![],
+        return_type: None,
         body,
     }
 }
@@ -436,7 +438,10 @@ fn interpret_single_expr(ctx: &InterpreterContext, expr: &BodyExpr) -> Vec<Behav
             // Generic method call that didn't match specific patterns.
             let callee = method.clone();
             if is_self_receiver(receiver) && ctx.is_helper(&callee) {
-                vec![BehaviorNode::CallHelper { callee }]
+                vec![BehaviorNode::CallHelper {
+                    callee,
+                    args: vec![],
+                }]
             } else {
                 vec![BehaviorNode::Eval {
                     expr: interpret_value_expr(ctx, expr),
@@ -590,6 +595,7 @@ fn try_match_helper_call(ctx: &InterpreterContext, expr: &BodyExpr) -> Option<Be
         if is_self_receiver(receiver) && ctx.is_helper(method) {
             return Some(BehaviorNode::CallHelper {
                 callee: method.clone(),
+                args: vec![],
             });
         }
     }
