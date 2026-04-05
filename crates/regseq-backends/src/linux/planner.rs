@@ -676,7 +676,9 @@ fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntr
 fn to_snake_case(name: &str) -> String {
     let mut result = String::new();
     for (i, ch) in name.chars().enumerate() {
-        if ch.is_uppercase() {
+        if ch == '-' {
+            result.push('_');
+        } else if ch.is_uppercase() {
             if i > 0 {
                 result.push('_');
             }

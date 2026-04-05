@@ -248,7 +248,9 @@ fn emit_kbuild(plan: &LinuxBackendPlan) -> String {
 pub(super) fn to_snake_case(name: &str) -> String {
     let mut result = String::new();
     for (i, ch) in name.chars().enumerate() {
-        if ch.is_uppercase() {
+        if ch == '-' {
+            result.push('_');
+        } else if ch.is_uppercase() {
             if i > 0 {
                 result.push('_');
             }
