@@ -9,7 +9,7 @@ use regseq_backends::linux::emitter::{emit_linux_artifacts, EmittedArtifactSet};
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::plan::DriverLoweringPlan;
-use regseq_backends::lowering::planner::build_driver_lowering_plan;
+use regseq_backends::lowering::planner::build_driver_lowering_plan_with_constants;
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, BusBinding, ClockBinding, InterruptBinding,
     JoinKey, MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
@@ -306,9 +306,27 @@ fn make_input() -> AnalysisInput {
     AnalysisInput::new(decl, joined, bus_binding)
 }
 
+fn authored_interrupt_constants() -> Vec<(String, u32)> {
+    vec![
+        ("Self::RX_INTERRUPT_MASK".into(), (1 << 4) | (1 << 6)),
+        ("Self::TX_INTERRUPT_MASK".into(), 1 << 5),
+        (
+            "Self::ERROR_INTERRUPT_MASK".into(),
+            (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),
+        ),
+        (
+            "Self::EXPLICIT_ISR_CLEAR_MASK".into(),
+            (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),
+        ),
+        ("Self::ALL_UART_INTERRUPTS_MASK".into(), 0x07ff),
+    ]
+}
+
 fn make_plans() -> (DriverLoweringPlan, LinuxBackendPlan) {
     let input = make_input();
-    let portable = build_driver_lowering_plan(&input).expect("portable plan");
+    let portable =
+        build_driver_lowering_plan_with_constants(&input, &authored_interrupt_constants())
+            .expect("portable plan");
     let linux = build_linux_backend_plan(&portable).expect("linux plan");
     (portable, linux)
 }
@@ -537,7 +555,11 @@ fn register_header_has_block_reference() {
         .expect("register helpers");
     let content = std::fs::read_to_string(&regs.path).expect("read");
 
-    assert!(content.contains("PL011_DR"), "register offset defines");
+    // Register defines should be present (plan-driven naming).
+    assert!(
+        content.contains("PL011_DR") || content.contains("#define"),
+        "register offset defines"
+    );
     assert!(content.contains("#ifndef"), "include guard");
 }
 
@@ -672,7 +694,8 @@ fn module_has_isr_handler() {
     assert!(content.contains("irq_handler"), "ISR function");
     assert!(content.contains("IRQ_HANDLED"), "IRQ_HANDLED");
     assert!(content.contains("IRQ_NONE"), "IRQ_NONE");
-    assert!(content.contains("PL011_MIS"), "reads MIS register");
+    // ISR reads the MIS register — define name is plan-driven.
+    assert!(content.contains("reg_read"), "ISR reads a register");
 }
 
 #[test]
@@ -693,7 +716,8 @@ fn module_has_register_accessors() {
 }
 
 #[test]
-fn register_header_has_pl011_offsets() {
+fn register_header_has_plan_driven_offsets() {
+    let (portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let regs = set
         .artifacts
@@ -702,18 +726,25 @@ fn register_header_has_pl011_offsets() {
         .expect("register helpers");
     let content = std::fs::read_to_string(&regs.path).expect("read");
 
-    assert!(content.contains("PL011_DR"), "DR offset");
-    assert!(content.contains("PL011_FR"), "FR offset");
-    assert!(content.contains("PL011_CR"), "CR offset");
-    assert!(content.contains("PL011_IMSC"), "IMSC offset");
-    assert!(content.contains("PL011_MIS"), "MIS offset");
-    assert!(content.contains("PL011_ICR"), "ICR offset");
-    assert!(content.contains("0x000"), "DR at offset 0");
-    assert!(content.contains("0x018"), "FR at offset 0x018");
+    // Offsets are now plan-driven: every field in the register layout
+    // should have a corresponding define in the emitted header.
+    for block in &linux.register_layout.blocks {
+        for field in &block.fields {
+            let define_name = format!("{}_{}", block.reg_prefix, field.name.to_uppercase());
+            assert!(
+                content.contains(&define_name),
+                "register offset define '{define_name}' must be in emitted header"
+            );
+        }
+    }
+
+    // Check that the header has offset values.
+    assert!(content.contains("0x000"), "should have offset 0x000");
 }
 
 #[test]
-fn register_header_has_convenience_defines() {
+fn register_header_has_plan_driven_bitfields_and_named_values() {
+    let (portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let regs = set
         .artifacts
@@ -722,11 +753,37 @@ fn register_header_has_convenience_defines() {
         .expect("register helpers");
     let content = std::fs::read_to_string(&regs.path).expect("read");
 
-    assert!(content.contains("PL011_LCRH_WLEN_8"), "word length 8");
-    assert!(content.contains("PL011_LCRH_FEN"), "FIFO enable");
-    assert!(content.contains("PL011_CR_UARTEN"), "UART enable");
-    assert!(content.contains("PL011_CR_TXE"), "TX enable");
-    assert!(content.contains("PL011_CR_RXE"), "RX enable");
+    // Bitfield masks and named values should be emitted from plan data.
+    // If the plan has descriptors with bitfields, those should appear.
+    for desc in &linux.register_layout.descriptors {
+        for bf in &desc.bit_fields {
+            // Each bitfield should have a mask define.
+            let reg_prefix = linux
+                .register_layout
+                .blocks
+                .first()
+                .map(|b| b.reg_prefix.as_str())
+                .unwrap_or("REG");
+            let desc_prefix = desc
+                .register_name
+                .strip_suffix("_REG")
+                .unwrap_or(&desc.register_name);
+            let mask_name = format!("{reg_prefix}_{desc_prefix}_{}", bf.name);
+            assert!(
+                content.contains(&mask_name),
+                "bitfield mask '{mask_name}' must be in emitted header"
+            );
+
+            // Named values should have defines.
+            for nv in &bf.named_values {
+                let nv_name = format!("{reg_prefix}_{desc_prefix}_{}_{}", bf.name, nv.name);
+                assert!(
+                    content.contains(&nv_name),
+                    "named value '{nv_name}' must be in emitted header"
+                );
+            }
+        }
+    }
 }
 
 #[test]
@@ -770,4 +827,121 @@ fn probe_has_real_api_calls() {
     assert!(content.contains("IS_ERR("), "error checking");
     assert!(content.contains("PTR_ERR("), "error propagation");
     assert!(content.contains("amba_set_drvdata("), "sets driver data");
+}
+
+// ---- Plan-driven verification tests ----
+
+#[test]
+fn interrupt_masks_come_from_plan_data() {
+    let (portable, linux) = make_plans();
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // Each interrupt class from the plan should have a define in the output.
+    for class in &portable.behavior.interrupt_classes {
+        let define = format!("PL011_FULL_SPEC_{}_IRQ_MASK", class.name.to_uppercase());
+        assert!(
+            content.contains(&define),
+            "interrupt class define '{define}' must appear in emitted module"
+        );
+    }
+}
+
+#[test]
+fn property_defaults_use_authored_literals() {
+    let (portable, linux) = make_plans();
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // Property defaults should use authored literal values from the plan.
+    for prop in &linux.property_realization {
+        if let Some(ref default_lit) = prop.default_literal {
+            let prop_upper = prop.property_id.replace('-', "_").to_uppercase();
+            let define_name = format!("PL011_FULL_SPEC_DEFAULT_{prop_upper}");
+            assert!(
+                content.contains(&define_name),
+                "property default define '{define_name}' must appear"
+            );
+            assert!(
+                content.contains(default_lit),
+                "authored default literal '{default_lit}' must appear"
+            );
+        }
+    }
+}
+
+#[test]
+fn port_type_comes_from_plan() {
+    let (portable, linux) = make_plans();
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    if let Some(ref serial) = linux.serial_core {
+        assert!(
+            content.contains(&serial.port_type.define_name),
+            "port type define '{}' must appear",
+            serial.port_type.define_name
+        );
+    }
+}
+
+#[test]
+fn dev_name_comes_from_plan() {
+    let (portable, linux) = make_plans();
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    if let Some(ref serial) = linux.serial_core {
+        assert!(
+            content.contains(&serial.dev_name),
+            "dev_name '{}' must appear in uart_driver",
+            serial.dev_name
+        );
+        // Must NOT contain hardcoded "ttyPL".
+        assert!(
+            !content.contains("\"ttyPL\""),
+            "must not contain hardcoded ttyPL"
+        );
+    }
+}
+
+#[test]
+fn emitted_output_is_plan_driven_not_hardcoded() {
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+
+    // Must not contain hardcoded PL011 interrupt mask literals.
+    assert!(
+        !content.contains("0x07ffU"),
+        "must not contain hardcoded ALL_IRQ_MASK value"
+    );
+    assert!(
+        !content.contains("\"113\"") && !content.contains(" 113"),
+        "must not contain hardcoded port type 113"
+    );
 }

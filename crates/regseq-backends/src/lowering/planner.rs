@@ -8,7 +8,7 @@
 use regseq_analysis::AnalysisInput;
 use regseq_model::declaration::callbacks::CallbackFamily;
 
-use super::behavior_planner::build_behavior_plan;
+use super::behavior_planner::build_behavior_plan_with_constants;
 use super::plan::{
     AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry,
     CallbackInventory, ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity,
@@ -50,8 +50,28 @@ pub enum LoweringPlanError {
 /// The resulting plan captures all driver obligations in a backend-neutral
 /// form so that OS-specific backend planners do not need to re-derive
 /// semantics from the raw declaration/joined models.
+///
+/// When the MIR body data carries resolved scalar constants (the normal
+/// pipeline path), interrupt class masks are extracted directly and no
+/// external constant values are needed. When MIR bodies have unevaluated
+/// symbolic references, use `build_driver_lowering_plan_with_constants`
+/// instead to provide the authored constant values.
 pub fn build_driver_lowering_plan(
     input: &AnalysisInput,
+) -> Result<DriverLoweringPlan, LoweringPlanError> {
+    build_driver_lowering_plan_with_constants(input, &[])
+}
+
+/// Build a portable `DriverLoweringPlan` with explicit authored constant values.
+///
+/// The `constant_values` map provides `(constant_path, value)` pairs for
+/// resolving interrupt class mask values when MIR bodies use symbolic
+/// constant names (e.g., `"Self::RX_INTERRUPT_MASK"`) rather than resolved
+/// scalar values. When MIR bodies carry literal scalar values, this map
+/// may be empty and the resolution is a no-op.
+pub fn build_driver_lowering_plan_with_constants(
+    input: &AnalysisInput,
+    constant_values: &[(String, u32)],
 ) -> Result<DriverLoweringPlan, LoweringPlanError> {
     let identity = build_identity(input);
     let callbacks = build_callback_inventory(input);
@@ -62,7 +82,7 @@ pub fn build_driver_lowering_plan(
     let register_obligations = build_register_obligations(input);
     let synchronization = build_sync_obligations(input);
     let callback_actions = build_callback_actions(input);
-    let behavior = build_behavior_plan(input);
+    let behavior = build_behavior_plan_with_constants(input, constant_values);
 
     Ok(DriverLoweringPlan {
         identity,

@@ -13,10 +13,10 @@ use super::plan::{
     LinuxAcquisitionEntry, LinuxArtifactLayout, LinuxBackendPlan, LinuxBehaviorMapping,
     LinuxBitFieldEntry, LinuxCallbackGroup, LinuxCallbackMapping, LinuxClockEntry,
     LinuxDeploymentMetadata, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue, LinuxPinCtrlEntry,
-    LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization, LinuxRegisterBlock,
-    LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout, LinuxRegistrationShape,
-    LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep, LinuxResetEntry,
-    LinuxResourceSequencing, LinuxSerialCoreRealization,
+    LinuxPortType, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
+    LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
+    LinuxRegistrationShape, LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep,
+    LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -87,13 +87,52 @@ fn build_serial_core(plan: &DriverLoweringPlan) -> Option<LinuxSerialCoreRealiza
     }
 
     let snake_name = to_snake_case(&plan.identity.driver_name);
+    let upper_name = snake_name.to_uppercase();
+
+    // Port type: symbolic name from driver identity, deterministic numeric
+    // value from a stable hash of the driver name in the out-of-tree range.
+    let port_type = LinuxPortType {
+        define_name: format!("PORT_{upper_name}"),
+        value: compute_port_type_value(&plan.identity.driver_name),
+    };
+
+    // Device name: explicit backend naming policy for serial UART devices.
+    // Uses "tty" + abbreviated module name — this is a backend policy
+    // decision, not derived from device-specific identifiers.
+    let dev_name = serial_dev_name_policy(&snake_name);
 
     Some(LinuxSerialCoreRealization {
         uart_driver_name: format!("{snake_name}_uart_driver"),
         uart_ops_name: format!("{snake_name}_uart_ops"),
         realized_ops: plan.device_class_roles.serial_ops_realized.clone(),
-        port_type: format!("PORT_{}", plan.identity.driver_name.to_uppercase()),
+        port_type,
+        dev_name,
     })
+}
+
+/// Compute a deterministic port-type numeric value for out-of-tree modules.
+///
+/// Uses a simple stable hash of the driver name, mapped into the
+/// 100..199 range reserved for out-of-tree serial port types.
+fn compute_port_type_value(driver_name: &str) -> u32 {
+    let hash = driver_name
+        .bytes()
+        .fold(0u32, |acc, b| acc.wrapping_mul(31).wrapping_add(b as u32));
+    100 + (hash % 100)
+}
+
+/// Backend naming policy for serial TTY device names.
+///
+/// Produces the `dev_name` for `uart_driver` based on the module name.
+/// This is a backend-level policy, not a device-specific derivation.
+fn serial_dev_name_policy(module_name: &str) -> String {
+    // Abbreviate by taking the first character of each underscore-separated
+    // segment, prefixed with "tty".
+    let abbrev: String = module_name
+        .split('_')
+        .filter_map(|seg| seg.chars().next())
+        .collect();
+    format!("tty{abbrev}")
 }
 
 fn build_probe(plan: &DriverLoweringPlan) -> LinuxProbeOrchestration {
@@ -354,6 +393,7 @@ fn build_register_layout(plan: &DriverLoweringPlan) -> LinuxRegisterLayout {
         .iter()
         .map(|b| LinuxRegisterBlock {
             block_name: b.name.clone(),
+            reg_prefix: derive_reg_prefix(&b.name),
             fields: b
                 .register_fields
                 .iter()
@@ -476,6 +516,45 @@ fn to_snake_case(name: &str) -> String {
         } else {
             result.push(ch);
         }
+    }
+    result
+}
+
+/// Derive a C identifier prefix from a register block name.
+///
+/// This is a formatting policy for generated C defines, not a semantic
+/// fact. Strips the `"Registers"` suffix and converts to SCREAMING_SNAKE.
+///
+/// Examples:
+/// - `"Pl011Registers"` → `"PL011"`
+/// - `"E1000Registers"` → `"E1000"`
+/// - `"FooBarRegs"` → `"FOO_BAR_REGS"`
+fn derive_reg_prefix(block_name: &str) -> String {
+    let base = block_name.strip_suffix("Registers").unwrap_or(block_name);
+    to_screaming_snake(base)
+}
+
+/// Convert a CamelCase identifier to SCREAMING_SNAKE_CASE.
+///
+/// Runs of uppercase characters followed by a lowercase character are
+/// treated as acronyms (e.g., "Pl011" → "PL011", not "PL_011").
+fn to_screaming_snake(name: &str) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = name.chars().collect();
+
+    for (i, &ch) in chars.iter().enumerate() {
+        if ch.is_uppercase() && i > 0 {
+            let prev = chars[i - 1];
+            // Insert underscore before:
+            // - uppercase after lowercase: "fooB" → "FOO_B"
+            // - uppercase before lowercase when preceded by uppercase: "FOOBar" → "FOO_BAR"
+            if prev.is_lowercase()
+                || (prev.is_uppercase() && i + 1 < chars.len() && chars[i + 1].is_lowercase())
+            {
+                result.push('_');
+            }
+        }
+        result.push(ch.to_uppercase().next().unwrap());
     }
     result
 }

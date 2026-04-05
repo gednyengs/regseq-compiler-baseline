@@ -3,11 +3,21 @@
 //! Generates the backend-owned Linux module integration source file
 //! containing AMBA/platform registration, probe/remove, uart_ops,
 //! uart_driver, and ISR handler.
+//!
+//! All callback bodies are emitted by walking the portable behavior
+//! plan. No device-specific register offsets, interrupt masks, callback
+//! templates, or naming policy appears in this module.
 
+use crate::lowering::behavior::{BehaviorPlan, FunctionBehavior, FunctionRole};
 use crate::lowering::plan::DriverLoweringPlan;
 
 use super::c_ast::{generated_file_banner, CTopLevelItem, CTranslationUnit};
-use super::plan::{LinuxBackendPlan, LinuxFileRole, LinuxProbeStep, LinuxRemoveStep};
+use super::emit_behavior::{
+    emit_behavior_nodes, interrupt_class_define, register_offset_define, EmitContext,
+};
+use super::plan::{
+    LinuxBackendPlan, LinuxCallbackGroup, LinuxFileRole, LinuxProbeStep, LinuxRemoveStep,
+};
 
 /// Emit the module integration file with real C code.
 pub(super) fn emit_module_integration(
@@ -33,17 +43,21 @@ pub(super) fn emit_module_integration(
     emit_includes(&mut tu, plan);
     tu.push(CTopLevelItem::BlankLine);
 
-    emit_constants(&mut tu, plan, snake);
+    emit_constants(&mut tu, plan, portable, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     emit_register_accessors(&mut tu, snake);
     tu.push(CTopLevelItem::BlankLine);
 
-    emit_isr_handler(&mut tu, plan, snake);
+    // Emit helper functions from behavior plan.
+    emit_helper_functions(&mut tu, plan, portable, snake);
+
+    // Emit ISR handler from behavior plan.
+    emit_isr_handler(&mut tu, plan, portable, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     if plan.serial_core.is_some() {
-        emit_uart_ops(&mut tu, plan, snake);
+        emit_uart_ops(&mut tu, plan, portable, snake);
         tu.push(CTopLevelItem::BlankLine);
         emit_uart_driver_def(&mut tu, plan, snake);
         tu.push(CTopLevelItem::BlankLine);
@@ -172,50 +186,47 @@ fn emit_includes(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan) {
     }
 }
 
-fn emit_constants(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
+/// Emit constants derived from plan data.
+///
+/// Interrupt class masks come from `portable.behavior.interrupt_classes`.
+/// Property defaults come from `plan.property_realization[].default_literal`.
+/// Port type comes from `plan.serial_core.port_type`.
+fn emit_constants(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+) {
     let upper = snake.to_uppercase();
 
     tu.push(CTopLevelItem::LineComment(
         "Constants -- Regseq lowered".into(),
     ));
-    tu.push(CTopLevelItem::Define {
-        name: format!("{upper}_ALL_IRQ_MASK"),
-        value: Some("0x07ffU".into()),
-    });
-    tu.push(CTopLevelItem::Define {
-        name: format!("{upper}_RX_IRQ_MASK"),
-        value: Some("((1U << 4) | (1U << 6))".into()),
-    });
-    tu.push(CTopLevelItem::Define {
-        name: format!("{upper}_TX_IRQ_MASK"),
-        value: Some("(1U << 5)".into()),
-    });
-    tu.push(CTopLevelItem::Define {
-        name: format!("{upper}_ERR_IRQ_MASK"),
-        value: Some("((1U << 7) | (1U << 8) | (1U << 9) | (1U << 10))".into()),
-    });
 
-    // Default values from properties
-    for prop in &plan.probe.steps {
-        if let LinuxProbeStep::ReadProperty {
-            property_id,
-            has_default,
-        } = prop
-        {
-            if *has_default {
-                let prop_upper = property_id.replace('-', "_").to_uppercase();
-                tu.push(CTopLevelItem::Define {
-                    name: format!("{upper}_DEFAULT_{prop_upper}"),
-                    value: None,
-                });
-            }
+    // Interrupt class masks from plan data.
+    for class in &portable.behavior.interrupt_classes {
+        tu.push(CTopLevelItem::Define {
+            name: interrupt_class_define(&upper, &class.name),
+            value: Some(format!("{:#06x}U", class.mask_value)),
+        });
+    }
+
+    // Property default values from authored default literals.
+    for prop in &plan.property_realization {
+        if let Some(ref default_lit) = prop.default_literal {
+            let prop_upper = prop.property_id.replace('-', "_").to_uppercase();
+            tu.push(CTopLevelItem::Define {
+                name: format!("{upper}_DEFAULT_{prop_upper}"),
+                value: Some(default_lit.clone()),
+            });
         }
     }
 
-    if plan.serial_core.is_some() {
+    // Port type from plan.
+    if let Some(ref serial) = plan.serial_core {
         tu.push(CTopLevelItem::Define {
-            name: format!("PORT_{upper}"),
-            value: Some("113".into()),
+            name: serial.port_type.define_name.clone(),
+            value: Some(format!("{}", serial.port_type.value)),
         });
     }
 }
@@ -251,93 +262,133 @@ fn emit_register_accessors(tu: &mut CTranslationUnit, snake: &str) {
     });
 }
 
-fn emit_isr_handler(tu: &mut CTranslationUnit, _plan: &LinuxBackendPlan, snake: &str) {
-    let upper = snake.to_uppercase();
+/// Build an EmitContext from plans.
+fn make_emit_context<'a>(
+    plan: &'a LinuxBackendPlan,
+    portable: &'a DriverLoweringPlan,
+    snake: &'a str,
+    role: Option<FunctionRole>,
+) -> EmitContext<'a> {
+    let reg_prefix = plan
+        .register_layout
+        .blocks
+        .first()
+        .map(|b| b.reg_prefix.as_str())
+        .unwrap_or("REG");
 
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!(
-            "static irqreturn_t {snake}_irq_handler(int irq, void *dev_id)"
-        ),
-        body: vec![
+    EmitContext {
+        snake,
+        upper: snake.to_uppercase(),
+        reg_prefix,
+        behavior: &portable.behavior,
+        register_layout: &plan.register_layout,
+        current_role: role,
+    }
+}
+
+/// Find a FunctionBehavior by role.
+fn find_behavior_by_role(behavior: &BehaviorPlan, role: FunctionRole) -> Option<&FunctionBehavior> {
+    behavior.functions.iter().find(|f| f.role == role)
+}
+
+/// Emit helper functions from the behavior plan.
+fn emit_helper_functions(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+) {
+    for mapping in &plan.behavior_mapping.callback_mappings {
+        if mapping.group != LinuxCallbackGroup::Helper {
+            continue;
+        }
+        let func = portable
+            .behavior
+            .functions
+            .iter()
+            .find(|f| f.name == mapping.portable_function);
+        if let Some(func) = func {
+            let ctx = make_emit_context(plan, portable, snake, Some(func.role.clone()));
+            let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
+            tu.push(CTopLevelItem::FuncDef {
+                signature: format!("static void {snake}_{}(struct {snake}_data *d)", func.name),
+                body: body_lines,
+                comment: Some(format!("Helper: {}", func.name)),
+            });
+            tu.push(CTopLevelItem::BlankLine);
+        }
+    }
+}
+
+/// Emit ISR handler from behavior plan.
+fn emit_isr_handler(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+) {
+    let isr_func = find_behavior_by_role(&portable.behavior, FunctionRole::Isr);
+
+    let body = if let Some(func) = isr_func {
+        let ctx = make_emit_context(plan, portable, snake, Some(FunctionRole::Isr));
+        let mut lines = vec![
             format!("struct {snake}_data *d = dev_id;"),
             "u32 status;".into(),
             String::new(),
-            format!("status = {snake}_reg_read(d, PL011_MIS);"),
-            "if (status == 0)".into(),
-            "\treturn IRQ_NONE;".into(),
-            String::new(),
-            format!("if (status & {upper}_RX_IRQ_MASK) {{"),
-            format!("\tstruct uart_port *port = &d->port;"),
-            format!(
-                "\twhile (!({snake}_reg_read(d, PL011_FR) & PL011_FR_RXFE)) {{"
-            ),
-            format!("\t\tu32 dr = {snake}_reg_read(d, PL011_DR);"),
-            "\t\tu8 ch = dr & 0xff;".into(),
-            "\t\tunsigned int flag = TTY_NORMAL;".into(),
-            String::new(),
-            "\t\tport->icount.rx++;".into(),
-            "\t\tif (dr & PL011_DR_OE)".into(),
-            "\t\t\tport->icount.overrun++;".into(),
-            "\t\tif (dr & PL011_DR_BE)".into(),
-            "\t\t\tflag = TTY_BREAK;".into(),
-            "\t\tif (dr & PL011_DR_PE)".into(),
-            "\t\t\tflag = TTY_PARITY;".into(),
-            "\t\tif (dr & PL011_DR_FE)".into(),
-            "\t\t\tflag = TTY_FRAME;".into(),
-            String::new(),
-            "\t\tuart_insert_char(port, dr, PL011_DR_OE, ch, flag);".into(),
-            "\t}".into(),
-            "\ttty_flip_buffer_push(&port->state->port);".into(),
-            "}".into(),
-            String::new(),
-            format!("if (status & {upper}_TX_IRQ_MASK) {{"),
-            format!("\tstruct circ_buf *xmit = &d->port.state->xmit;"),
-            String::new(),
-            "\tif (uart_circ_empty(xmit) || uart_tx_stopped(&d->port)) {".into(),
-            format!(
-                "\t\t{snake}_reg_modify(d, PL011_IMSC, {upper}_TX_IRQ_MASK, 0);"
-            ),
-            "\t} else {".into(),
-            format!(
-                "\t\twhile (!uart_circ_empty(xmit) && !({snake}_reg_read(d, PL011_FR) & PL011_FR_TXFF)) {{"
-            ),
-            format!(
-                "\t\t\t{snake}_reg_write(d, PL011_DR, xmit->buf[xmit->tail]);"
-            ),
-            "\t\t\txmit->tail = (xmit->tail + 1) & (UART_XMIT_SIZE - 1);".into(),
-            "\t\t\td->port.icount.tx++;".into(),
-            "\t\t}".into(),
-            "\t\tif (uart_circ_chars_pending(xmit) < WAKEUP_CHARS)".into(),
-            "\t\t\tuart_write_wakeup(&d->port);".into(),
-            "\t}".into(),
-            "}".into(),
-            String::new(),
-            format!("if (status & {upper}_ERR_IRQ_MASK)"),
-            format!(
-                "\t{snake}_reg_write(d, PL011_ICR, status & {upper}_ERR_IRQ_MASK);"
-            ),
-            String::new(),
-            "return IRQ_HANDLED;".into(),
-        ],
+        ];
+
+        // Read the interrupt status register.
+        let mis_define = find_register_define_by_suffix(plan, "mis");
+        lines.push(format!("status = {snake}_reg_read(d, {mis_define});"));
+        lines.push("if (status == 0)".into());
+        lines.push("\treturn IRQ_NONE;".into());
+        lines.push(String::new());
+
+        // Walk the behavior tree for the ISR body.
+        let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
+        lines.extend(body_lines);
+
+        // If the behavior tree didn't emit a return, add one.
+        if !lines.iter().any(|l| l.contains("return IRQ_HANDLED")) {
+            lines.push(String::new());
+            lines.push("return IRQ_HANDLED;".into());
+        }
+        lines
+    } else {
+        vec![
+            format!("struct {snake}_data *d = dev_id;"),
+            "(void)d;".into(),
+            "return IRQ_NONE;".into(),
+        ]
+    };
+
+    tu.push(CTopLevelItem::FuncDef {
+        signature: format!("static irqreturn_t {snake}_irq_handler(int irq, void *dev_id)"),
+        body,
         comment: Some("ISR -- Regseq interrupt handler".into()),
     });
 }
 
-fn emit_uart_ops(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
-    let upper = snake.to_uppercase();
+/// Emit uart_ops callback functions from behavior plan.
+fn emit_uart_ops(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+) {
+    // tx_empty — from behavior plan or minimal stub.
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialTxEmpty,
+        &format!("static unsigned int {snake}_tx_empty(struct uart_port *port)"),
+        true,
+        &["return 0;".into()],
+    );
 
-    // tx_empty
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static unsigned int {snake}_tx_empty(struct uart_port *port)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            format!("return ({snake}_reg_read(d, PL011_FR) & PL011_FR_BUSY) ? 0 : TIOCSER_TEMT;"),
-        ],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-
-    // set_mctrl / get_mctrl (minimal)
+    // set_mctrl / get_mctrl — no authored behavior, minimal stubs.
     tu.push(CTopLevelItem::FuncDef {
         signature: format!(
             "static void {snake}_set_mctrl(struct uart_port *port, unsigned int mctrl)"
@@ -353,167 +404,105 @@ fn emit_uart_ops(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str
     });
     tu.push(CTopLevelItem::BlankLine);
 
-    // stop_tx / start_tx / stop_rx
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_stop_tx(struct uart_port *port)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            format!("{snake}_reg_modify(d, PL011_IMSC, {upper}_TX_IRQ_MASK, 0);"),
-        ],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_start_tx(struct uart_port *port)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            format!("{snake}_reg_modify(d, PL011_IMSC, {upper}_TX_IRQ_MASK, {upper}_TX_IRQ_MASK);"),
-        ],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_stop_rx(struct uart_port *port)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            format!("{snake}_reg_modify(d, PL011_IMSC, {upper}_RX_IRQ_MASK, 0);"),
-        ],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
+    // stop_tx — from SerialTxByte behavior (disable TX interrupt).
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialTxByte,
+        &format!("static void {snake}_stop_tx(struct uart_port *port)"),
+        true,
+        &[],
+    );
 
-    // break_ctl
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!(
-            "static void {snake}_break_ctl(struct uart_port *port, int break_state)"
-        ),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            "if (break_state == -1)".into(),
-            format!("\t{snake}_reg_modify(d, PL011_LCRH, PL011_LCRH_BRK, PL011_LCRH_BRK);"),
-            "else".into(),
-            format!("\t{snake}_reg_modify(d, PL011_LCRH, PL011_LCRH_BRK, 0);"),
-        ],
-        comment: None,
-    });
-    tu.push(CTopLevelItem::BlankLine);
+    // start_tx — enable TX interrupt.
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialTxByte,
+        &format!("static void {snake}_start_tx(struct uart_port *port)"),
+        true,
+        &[],
+    );
 
-    // startup
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static int {snake}_startup(struct uart_port *port)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            "u32 uart_clk_hz;".into(),
-            String::new(),
-            "if (d->clock) {".into(),
-            "\tint ret = clk_prepare_enable(d->clock);".into(),
-            "\tif (ret)".into(),
-            "\t\treturn ret;".into(),
-            "}".into(),
-            "uart_clk_hz = d->clock ? clk_get_rate(d->clock) : port->uartclk;".into(),
-            String::new(),
-            format!("/* Regseq lifecycle::init -- disable, configure, enable */"),
-            format!("{snake}_reg_write(d, PL011_CR, 0);"),
-            format!("{snake}_reg_modify(d, PL011_LCRH, PL011_LCRH_FEN, 0);"),
-            String::new(),
-            "/* Baud-rate programming */".into(),
-            "{".into(),
-            "\tu64 div64 = (u64)uart_clk_hz * 4;".into(),
-            "\tdo_div(div64, d->current_speed);".into(),
-            format!("\t{snake}_reg_write(d, PL011_IBRD, (u32)(div64 >> 6));"),
-            format!("\t{snake}_reg_write(d, PL011_FBRD, (u32)(div64 & 0x3f));"),
-            "}".into(),
-            String::new(),
-            format!("{snake}_reg_write(d, PL011_LCRH, PL011_LCRH_WLEN_8 | PL011_LCRH_FEN);"),
-            format!("{snake}_reg_write(d, PL011_IFLS, PL011_IFLS_RX_HALF | PL011_IFLS_TX_EIGHTH);"),
-            format!("{snake}_reg_write(d, PL011_IMSC, 0);"),
-            format!("{snake}_reg_write(d, PL011_ICR, {upper}_ALL_IRQ_MASK);"),
-            format!(
-                "{snake}_reg_write(d, PL011_CR, PL011_CR_UARTEN | PL011_CR_TXE | PL011_CR_RXE);"
-            ),
-            format!("{snake}_reg_modify(d, PL011_IMSC, {upper}_RX_IRQ_MASK, {upper}_RX_IRQ_MASK);"),
-            String::new(),
-            "return 0;".into(),
-        ],
-        comment: Some("startup -- Regseq lifecycle::init".into()),
-    });
-    tu.push(CTopLevelItem::BlankLine);
+    // stop_rx — disable RX interrupt.
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialFlushRxFifo,
+        &format!("static void {snake}_stop_rx(struct uart_port *port)"),
+        true,
+        &[],
+    );
 
-    // shutdown
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_shutdown(struct uart_port *port)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            String::new(),
-            format!("/* Regseq lifecycle::deinit -- mask, clear, disable */"),
-            format!("{snake}_reg_write(d, PL011_IMSC, 0);"),
-            format!("{snake}_reg_write(d, PL011_ICR, {upper}_ALL_IRQ_MASK);"),
-            format!("{snake}_reg_modify(d, PL011_LCRH, PL011_LCRH_FEN, 0);"),
-            format!("{snake}_reg_write(d, PL011_CR, 0);"),
-            String::new(),
-            "if (d->clock)".into(),
-            "\tclk_disable_unprepare(d->clock);".into(),
-        ],
-        comment: Some("shutdown -- Regseq lifecycle::deinit".into()),
-    });
-    tu.push(CTopLevelItem::BlankLine);
+    // break_ctl — from behavior plan.
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialSendBreak,
+        &format!("static void {snake}_break_ctl(struct uart_port *port, int break_state)"),
+        true,
+        &[],
+    );
 
-    // set_termios
-    tu.push(CTopLevelItem::FuncDef {
-        signature: format!("static void {snake}_set_termios(struct uart_port *port, struct ktermios *termios, const struct ktermios *old)"),
-        body: vec![
-            format!("struct {snake}_data *d = container_of(port, struct {snake}_data, port);"),
-            "unsigned int baud;".into(),
-            "u32 uart_clk_hz, lcr_h;".into(),
-            String::new(),
-            "baud = uart_get_baud_rate(port, termios, old, 0, port->uartclk / 16);".into(),
-            "uart_clk_hz = d->clock ? clk_get_rate(d->clock) : port->uartclk;".into(),
-            String::new(),
-            format!("{snake}_reg_write(d, PL011_CR, 0);"),
-            String::new(),
-            "/* Baud-rate programming */".into(),
-            "{".into(),
-            "\tu64 div64 = (u64)uart_clk_hz * 4;".into(),
-            "\tdo_div(div64, baud);".into(),
-            format!("\t{snake}_reg_write(d, PL011_IBRD, (u32)(div64 >> 6));"),
-            format!("\t{snake}_reg_write(d, PL011_FBRD, (u32)(div64 & 0x3f));"),
-            "}".into(),
-            String::new(),
-            "lcr_h = PL011_LCRH_FEN;".into(),
-            "switch (termios->c_cflag & CSIZE) {".into(),
-            "case CS5: break;".into(),
-            "case CS6: lcr_h |= PL011_LCRH_WLEN_6; break;".into(),
-            "case CS7: lcr_h |= PL011_LCRH_WLEN_7; break;".into(),
-            "case CS8: default: lcr_h |= PL011_LCRH_WLEN_8; break;".into(),
-            "}".into(),
-            "if (termios->c_cflag & CSTOPB)".into(),
-            "\tlcr_h |= PL011_LCRH_STP2;".into(),
-            "if (termios->c_cflag & PARENB) {".into(),
-            "\tlcr_h |= PL011_LCRH_PEN;".into(),
-            "\tif (!(termios->c_cflag & PARODD))".into(),
-            "\t\tlcr_h |= PL011_LCRH_EPS;".into(),
-            "}".into(),
-            format!("{snake}_reg_write(d, PL011_LCRH, lcr_h);"),
-            format!("{snake}_reg_write(d, PL011_CR, PL011_CR_UARTEN | PL011_CR_TXE | PL011_CR_RXE);"),
-            String::new(),
-            "uart_update_timeout(port, termios->c_cflag, baud);".into(),
-        ],
-        comment: Some("set_termios -- Regseq Serial::configure".into()),
-    });
-    tu.push(CTopLevelItem::BlankLine);
+    // startup — from SerialPortOpen behavior.
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialPortOpen,
+        &format!("static int {snake}_startup(struct uart_port *port)"),
+        true,
+        &["return 0;".into()],
+    );
 
-    // type / config_port / request_port / release_port
+    // shutdown — from SerialPortClose behavior.
+    emit_behavior_callback(
+        tu,
+        plan,
+        portable,
+        snake,
+        FunctionRole::SerialPortClose,
+        &format!("static void {snake}_shutdown(struct uart_port *port)"),
+        true,
+        &[],
+    );
+
+    // set_termios — from SerialConfigure behavior.
+    emit_behavior_callback(
+        tu, plan, portable, snake,
+        FunctionRole::SerialConfigure,
+        &format!("static void {snake}_set_termios(struct uart_port *port, struct ktermios *termios, const struct ktermios *old)"),
+        true,
+        &[],
+    );
+
+    // type / config_port / request_port / release_port — plan-driven stubs.
     tu.push(CTopLevelItem::FuncDef {
         signature: format!("static const char *{snake}_type(struct uart_port *port)"),
         body: vec![format!("return \"{}\";", plan.registration.module_name)],
         comment: None,
     });
     tu.push(CTopLevelItem::BlankLine);
+
+    let port_type_name = plan
+        .serial_core
+        .as_ref()
+        .map(|s| s.port_type.define_name.as_str())
+        .unwrap_or("PORT_UNKNOWN");
     tu.push(CTopLevelItem::FuncDef {
         signature: format!("static void {snake}_config_port(struct uart_port *port, int flags)"),
         body: vec![
             "if (flags & UART_CONFIG_TYPE)".into(),
-            format!("\tport->type = PORT_{upper};"),
+            format!("\tport->type = {port_type_name};"),
         ],
         comment: None,
     });
@@ -531,7 +520,7 @@ fn emit_uart_ops(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str
     });
     tu.push(CTopLevelItem::BlankLine);
 
-    // uart_ops struct
+    // uart_ops struct.
     tu.push(CTopLevelItem::LineComment("uart_ops definition".into()));
     let serial = plan.serial_core.as_ref().unwrap();
     tu.push(CTopLevelItem::StaticDef {
@@ -557,6 +546,52 @@ fn emit_uart_ops(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str
     });
 }
 
+/// Emit a uart_ops callback from behavior plan data.
+#[allow(clippy::too_many_arguments)]
+fn emit_behavior_callback(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+    role: FunctionRole,
+    signature: &str,
+    with_container_of: bool,
+    default_body: &[String],
+) {
+    let func = find_behavior_by_role(&portable.behavior, role.clone());
+
+    let body = if let Some(func) = func {
+        let ctx = make_emit_context(plan, portable, snake, Some(role));
+        let mut lines = Vec::new();
+        if with_container_of {
+            lines.push(format!(
+                "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+            ));
+            lines.push(String::new());
+        }
+        lines.extend(emit_behavior_nodes(&func.body, &ctx, 0));
+        lines
+    } else if !default_body.is_empty() {
+        let mut lines = Vec::new();
+        if with_container_of {
+            lines.push(format!(
+                "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+            ));
+        }
+        lines.extend(default_body.iter().cloned());
+        lines
+    } else {
+        vec![]
+    };
+
+    tu.push(CTopLevelItem::FuncDef {
+        signature: signature.into(),
+        body,
+        comment: None,
+    });
+    tu.push(CTopLevelItem::BlankLine);
+}
+
 fn emit_uart_driver_def(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     let serial = plan.serial_core.as_ref().unwrap();
 
@@ -568,7 +603,7 @@ fn emit_uart_driver_def(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snak
         initializer: vec![
             ".owner\t\t= THIS_MODULE,".into(),
             format!(".driver_name\t= \"{snake}\","),
-            ".dev_name\t= \"ttyPL\",".into(),
+            format!(".dev_name\t= \"{}\",", serial.dev_name),
             ".nr\t\t= 1,".into(),
         ],
     });
@@ -602,7 +637,7 @@ fn emit_probe(
         "&pdev->dev"
     };
 
-    // Resource acquisition in plan order
+    // Resource acquisition in plan order.
     for step in &plan.probe.steps {
         match step {
             LinuxProbeStep::GetClock {
@@ -692,20 +727,36 @@ fn emit_probe(
                 body.push("d->port.membase = d->regs;".into());
                 body.push("d->port.irq = d->irq;".into());
 
-                // Find clock rate default
+                // Clock rate: use plan deployment metadata.
                 let has_opt_clock = portable.resources.clocks.iter().any(|c| !c.required);
                 if has_opt_clock {
+                    // Find the property default for current-speed.
+                    let default_speed_define = plan
+                        .property_realization
+                        .iter()
+                        .find(|p| p.property_id == "current-speed")
+                        .and_then(|p| p.default_literal.as_ref())
+                        .map(|_| format!("{upper}_DEFAULT_CURRENT_SPEED"))
+                        .unwrap_or_else(|| "115200".into());
                     body.push(format!(
-                        "d->port.uartclk = d->clock ? clk_get_rate(d->clock) : {upper}_DEFAULT_CURRENT_SPEED;"
+                        "d->port.uartclk = d->clock ? clk_get_rate(d->clock) : {default_speed_define};"
                     ));
                 } else {
                     body.push("d->port.uartclk = clk_get_rate(d->clock);".into());
                 }
 
-                body.push("d->port.fifosize = d->fifo_size;".into());
+                // FIFO size from property field if available.
+                if portable
+                    .resources
+                    .properties
+                    .iter()
+                    .any(|p| p.field_name == "fifo_size")
+                {
+                    body.push("d->port.fifosize = d->fifo_size;".into());
+                }
                 body.push(format!("d->port.ops = &{};", serial.uart_ops_name));
                 body.push("d->port.flags = UPF_BOOT_AUTOCONF;".into());
-                body.push(format!("d->port.type = PORT_{upper};"));
+                body.push(format!("d->port.type = {};", serial.port_type.define_name));
                 body.push(String::new());
                 if plan.registration.is_amba {
                     body.push("amba_set_drvdata(adev, d);".into());
@@ -912,4 +963,27 @@ fn emit_module_init_exit(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, sna
     tu.push(CTopLevelItem::BlankLine);
     tu.push(CTopLevelItem::Raw(format!("module_init({snake}_init);")));
     tu.push(CTopLevelItem::Raw(format!("module_exit({snake}_exit);")));
+}
+
+// ---------------------------------------------------------------------------
+// Register layout helpers
+// ---------------------------------------------------------------------------
+
+/// Find a register define by field name suffix (case-insensitive).
+fn find_register_define_by_suffix(plan: &LinuxBackendPlan, suffix: &str) -> String {
+    for block in &plan.register_layout.blocks {
+        for field in &block.fields {
+            if field.name.eq_ignore_ascii_case(suffix) {
+                return register_offset_define(&block.reg_prefix, &field.name);
+            }
+        }
+    }
+    // Fallback: construct from first block prefix.
+    let prefix = plan
+        .register_layout
+        .blocks
+        .first()
+        .map(|b| b.reg_prefix.as_str())
+        .unwrap_or("REG");
+    format!("{}_{}", prefix, suffix.to_uppercase())
 }

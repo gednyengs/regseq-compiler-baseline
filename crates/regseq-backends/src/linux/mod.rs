@@ -5,6 +5,7 @@
 //! the emitter that produces the generated artifact set.
 
 pub mod c_ast;
+pub(crate) mod emit_behavior;
 mod emit_module;
 mod emit_regs;
 pub mod emitter;

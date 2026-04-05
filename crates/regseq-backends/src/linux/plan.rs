@@ -79,8 +79,27 @@ pub struct LinuxSerialCoreRealization {
     pub uart_ops_name: String,
     /// Which uart_ops callbacks are realized.
     pub realized_ops: Vec<String>,
-    /// Port type constant name.
-    pub port_type: String,
+    /// Port type constant for Linux serial-core registration.
+    pub port_type: LinuxPortType,
+    /// TTY device name prefix for `uart_driver.dev_name`.
+    ///
+    /// This is an explicit Linux backend naming policy decision,
+    /// not derived from device-specific identifiers.
+    pub dev_name: String,
+}
+
+/// Typed Linux port-type representation.
+///
+/// Carries both the symbolic define name and the numeric value for
+/// the `PORT_*` constant used in serial-core registration. The
+/// numeric value is a deterministic backend allocation, not a
+/// device-specific hardware fact.
+#[derive(Debug, Clone)]
+pub struct LinuxPortType {
+    /// Symbolic define name (e.g., `"PORT_PL011_FULL_SPEC"`).
+    pub define_name: String,
+    /// Numeric value for the define.
+    pub value: u32,
 }
 
 // ---------------------------------------------------------------------------
@@ -267,6 +286,12 @@ pub struct LinuxRegisterLayout {
 pub struct LinuxRegisterBlock {
     /// Block type name (e.g. "Pl011Registers").
     pub block_name: String,
+    /// C identifier prefix for generated register defines.
+    ///
+    /// This is a formatting policy for generated C identifiers, not a
+    /// semantic fact. Derived from the authored block name by the planner
+    /// (e.g., `"Pl011Registers"` → `"PL011"`).
+    pub reg_prefix: String,
     /// Register fields with computed byte offsets.
     pub fields: Vec<LinuxRegisterFieldEntry>,
 }

@@ -269,15 +269,32 @@ fn lower_binop_to_condition(
         }
         MirBinOp::BitAnd => {
             // status & MASK pattern — check if this is interrupt class testing.
+            //
+            // Two cases:
+            // 1. Scalar constant: MIR has resolved the const value, so
+            //    extract_constant_value returns Some(mask). Class name
+            //    encodes the hex value (e.g., "class_0x0050").
+            // 2. Unsupported/unevaluated constant: MIR has a symbolic
+            //    reference. Extract the path and derive a class name
+            //    from the constant name (e.g., "rx" from "RX_INTERRUPT_MASK").
+            //    Mask value starts at 0 and is resolved by the post-pass.
             let mask_value = extract_constant_value(rhs);
             if let Some(mask) = mask_value {
                 let source = lower_operand(ctx, lhs);
                 if let ValueExpr::Local(ref name) | ValueExpr::Param(ref name) = source {
-                    // Look for preceding BitAnd in the block statements to
-                    // identify this as interrupt class discrimination.
                     return BranchCondition::InterruptClassActive {
                         status_source: name.clone(),
                         class_name: derive_interrupt_class_name(mask, bb),
+                    };
+                }
+            }
+            // Try symbolic path from unevaluated constant.
+            if let Some(path) = extract_constant_path(rhs) {
+                let source = lower_operand(ctx, lhs);
+                if let ValueExpr::Local(ref name) | ValueExpr::Param(ref name) = source {
+                    return BranchCondition::InterruptClassActive {
+                        status_source: name.clone(),
+                        class_name: derive_class_name_from_constant_path(&path),
                     };
                 }
             }
@@ -312,6 +329,40 @@ pub fn extract_constant_value(operand: &MirOperand) -> Option<u32> {
         }
     }
     None
+}
+
+/// Extract a symbolic constant path from an `Unsupported` operand.
+///
+/// When the MIR has unevaluated constant references (e.g.,
+/// `"unevaluated:driver::Foo::SOME_MASK"`), this extracts the path
+/// so the interpreter can still recognize interrupt class patterns.
+pub fn extract_constant_path(operand: &MirOperand) -> Option<String> {
+    if let MirOperand::Constant { constant } = operand {
+        if let MirConstValue::Unsupported { description } = &constant.value {
+            if let Some(path) = description.strip_prefix("unevaluated:") {
+                return Some(path.to_string());
+            }
+        }
+    }
+    None
+}
+
+/// Derive an interrupt class name from a symbolic constant path.
+///
+/// Converts paths like `"driver::Foo::RX_INTERRUPT_MASK"` to class
+/// names like `"rx"` by stripping the type prefix and `_INTERRUPT_MASK`
+/// or `_MASK` suffix.
+fn derive_class_name_from_constant_path(path: &str) -> String {
+    // Take the last segment of the path (the const item name).
+    let const_name = path.rsplit("::").next().unwrap_or(path);
+
+    // Strip _INTERRUPT_MASK or _MASK suffix, then lowercase.
+    let stripped = const_name
+        .strip_suffix("_INTERRUPT_MASK")
+        .or_else(|| const_name.strip_suffix("_MASK"))
+        .unwrap_or(const_name);
+
+    stripped.to_lowercase()
 }
 
 /// Derive an interrupt class name from a mask value and block context.
