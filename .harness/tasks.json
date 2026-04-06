@@ -555,7 +555,7 @@
           "id": "regseq-model-14",
           "name": "Item hierarchy schema and canonical cross-link model",
           "spec": ".harness/tasks/regseq-model/14-item-hierarchy-schema-and-canonical-cross-link-model.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-24",
             "regseq-model-13"

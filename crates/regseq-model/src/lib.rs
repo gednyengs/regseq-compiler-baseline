@@ -10,6 +10,7 @@
 
 pub mod binding;
 pub mod declaration;
+pub mod item;
 pub mod joined;
 pub mod platform;
 pub mod platform_parser;
