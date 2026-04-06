@@ -22,6 +22,7 @@ use regseq_model::item::identity::{CanonicalPath, ItemId};
 use regseq_model::item::interrupt::InterruptClassDef;
 use regseq_model::item::type_ref::{PrimitiveType, TypeRef};
 use regseq_model::item::types::Item;
+use regseq_model::semantic::SemanticType;
 
 // ---------------------------------------------------------------------------
 // Shared fixture builders
@@ -1220,6 +1221,123 @@ fn test_duplicate_canonical_path_is_error() {
             assert_eq!(path, "pkg::Dup");
         }
         other => panic!("expected DuplicateCanonicalPath, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_duplicate_field_canonical_path_is_error() {
+    let mut enrichment = empty_enrichment();
+    enrichment.structs.push(RawStructFactInput {
+        canonical_path: "pkg::One".into(),
+        name: "One".into(),
+        module_path: "pkg".into(),
+        is_driver: false,
+        is_register_block: false,
+        fields: vec![RawFieldFactInput {
+            name: "shared".into(),
+            canonical_path: "pkg::Shared::field".into(),
+            rseq_kind: None,
+        }],
+    });
+    enrichment.structs.push(RawStructFactInput {
+        canonical_path: "pkg::Two".into(),
+        name: "Two".into(),
+        module_path: "pkg".into(),
+        is_driver: false,
+        is_register_block: false,
+        fields: vec![RawFieldFactInput {
+            name: "shared".into(),
+            canonical_path: "pkg::Shared::field".into(),
+            rseq_kind: None,
+        }],
+    });
+
+    let result = build_item_hierarchy(
+        &enrichment,
+        &[],
+        &[],
+        &BTreeMap::new(),
+        &empty_trait_paths(),
+    );
+
+    assert!(result.is_err());
+    match result.unwrap_err() {
+        HierarchyBuildError::DuplicateCanonicalPath { path } => {
+            assert_eq!(path, "pkg::Shared::field");
+        }
+        other => panic!("expected DuplicateCanonicalPath, got {other:?}"),
+    }
+}
+
+#[test]
+fn test_constructed_functions_have_empty_semantic_bodies() {
+    let mut enrichment = empty_enrichment();
+    enrichment.structs.push(RawStructFactInput {
+        canonical_path: "pkg::Device".into(),
+        name: "Device".into(),
+        module_path: "pkg".into(),
+        is_driver: false,
+        is_register_block: false,
+        fields: vec![],
+    });
+    enrichment.impl_blocks.push(RawImplBlockFactInput {
+        canonical_path: "pkg::<impl Device>".into(),
+        self_type_path: "pkg::Device".into(),
+        self_type_name: "Device".into(),
+        trait_path: None,
+        trait_name: None,
+        is_inherent: true,
+        methods: vec![RawImplMethodFactInput {
+            name: "helper".into(),
+            canonical_path: "pkg::Device::helper".into(),
+            is_isr: false,
+        }],
+        constants: vec![],
+    });
+    enrichment
+        .free_functions
+        .push(regseq_model::declaration::raw_input::RawFunctionFactInput {
+            canonical_path: "pkg::top_level_helper".into(),
+            name: "top_level_helper".into(),
+            module_path: "pkg".into(),
+        });
+
+    let h = build_item_hierarchy(
+        &enrichment,
+        &[],
+        &[],
+        &BTreeMap::new(),
+        &empty_trait_paths(),
+    )
+    .unwrap();
+
+    for path in ["pkg::Device::helper", "pkg::top_level_helper"] {
+        let id = h
+            .cross_link
+            .resolve_item(&CanonicalPath::new(path))
+            .unwrap();
+        match h.store.get(id).unwrap() {
+            Item::Function(f) => {
+                assert!(
+                    f.body.locals.is_empty(),
+                    "{path} should not have locals yet"
+                );
+                assert!(
+                    f.body.params.is_empty(),
+                    "{path} should not have params yet"
+                );
+                assert_eq!(
+                    f.body.return_type,
+                    SemanticType::Void,
+                    "{path} should use the empty-body void return type"
+                );
+                assert!(
+                    f.body.body.stmts.is_empty(),
+                    "{path} should not have MIR-derived statements yet"
+                );
+            }
+            other => panic!("expected Function for {path}, got {other:?}"),
+        }
     }
 }
 

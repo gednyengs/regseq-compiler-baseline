@@ -210,6 +210,7 @@ fn build_structs(
 
         // Insert field-level cross-links.
         for (idx, field) in fields.iter().enumerate() {
+            check_duplicate(cross_link, &field.canonical_path)?;
             cross_link.insert_field(field.canonical_path.clone(), struct_id, idx);
         }
     }
@@ -594,7 +595,7 @@ fn check_duplicate(
     cross_link: &CrossLinkTable,
     path: &CanonicalPath,
 ) -> Result<(), HierarchyBuildError> {
-    if cross_link.resolve_item(path).is_some() {
+    if cross_link.resolve_item(path).is_some() || cross_link.resolve_field(path).is_some() {
         return Err(HierarchyBuildError::DuplicateCanonicalPath {
             path: path.as_str().to_string(),
         });
