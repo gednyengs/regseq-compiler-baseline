@@ -14,8 +14,10 @@ generated module still failed against the pinned kernel build.
 Read before starting:
 
 - `.harness/tasks/regseq-driver/23-backend-emission-integration-for-driver-output.md`
+- `.harness/tasks/regseq-lowering/08-semanticmodel-projection-and-driverloweringplan-behavior-migration.md`
 - `.harness/tasks/regseq-linux-backend/02-pl011-linux-driver-emission-for-supported-slice.md`
 - `.harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md`
+- `docs/discussions/semantic-procedural-ir/plan.md`
 - `docs/discussions/evaluation-environment/pl011-project-controlled-kernel-strategy.md`
 - `docs/discussions/evaluation-environment/current-resolutions-and-strategy.md`
 - `docs/discussions/evaluation-environment/qemu-relative-evaluation-runbook.md`
@@ -74,6 +76,14 @@ authored constant provisioning or another non-default-but-supported compiler
 input step, that step must be shown explicitly in the proof instead of being
 hidden behind an implication that the default lowering path resolved
 everything automatically.
+
+Semantic-IR continuity note:
+
+- this proof is downstream of the new semantic-IR chain and must validate the
+  canonical emission path after `DriverLoweringPlan.behavior` has migrated to
+  `SemanticModel`
+- the validation harness must not bypass that path or revive older
+  `BehaviorPlan`-centric code paths as a convenience
 
 This task must consume the production compiler-path emission implemented for
 `EmitSpec::Driver`. It must not reconstruct backend plans directly inside the

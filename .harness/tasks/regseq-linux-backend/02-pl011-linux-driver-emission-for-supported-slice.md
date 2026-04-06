@@ -15,9 +15,15 @@ generated build collateral needed for host-side compilation.
 Read before starting:
 
 - `.harness/tasks/regseq-linux-backend/01-linux-artifact-layout-and-backend-emission-scaffold.md`
-- `.harness/tasks/regseq-lowering/03-pl011-register-resource-and-property-realization-lowering.md`
-- `.harness/tasks/regseq-lowering/04-pl011-serial-lifecycle-and-isr-behavior-lowering.md`
+- `.harness/tasks/regseq-driver/24-semantic-ir-phase0-extraction-enrichment.md`
+- `.harness/tasks/regseq-model/14-item-hierarchy-schema-and-canonical-cross-link-model.md`
+- `.harness/tasks/regseq-lowering/05-semantic-procedural-ir-types-and-boundary.md`
+- `.harness/tasks/regseq-lowering/06-item-hierarchy-construction-from-enriched-extraction.md`
+- `.harness/tasks/regseq-lowering/07-supported-regseq-semantic-body-lowering-validated-on-pl011-representative-set.md`
+- `.harness/tasks/regseq-lowering/08-semanticmodel-projection-and-driverloweringplan-behavior-migration.md`
 - `.harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md`
+- `docs/discussions/semantic-procedural-ir/plan.md`
+- `docs/discussions/semantic-procedural-ir/semantic-procedural-ir-implementation-tracker.md`
 - `docs/discussions/linux-codegen/pl011-linux-first-slice.md`
 - `docs/compiler-collateral/constructs/bus-resource-management.md`
 - `docs/discussions/pl011-full-spec/pl011-unified-spec-boundary.md`
@@ -40,6 +46,17 @@ should live under the repo-local generated output root.
 
 This task should emit the first Linux generated-driver slice for PL011,
 including enough code and build collateral to support the first real build loop.
+
+Semantic-IR continuity note:
+
+- this task is now explicitly downstream of the semantic-IR prerequisite chain
+  (`regseq-driver-24`, `regseq-model-14`, `regseq-lowering-05`,
+  `regseq-lowering-06`, `regseq-lowering-07`, `regseq-lowering-08`)
+- the required backend input boundary is now `DriverLoweringPlan.behavior:
+  SemanticModel`
+- do not route around that chain by reviving `BehaviorPlan`-centric emitter
+  logic or re-deriving semantics from raw MIR/HIR-shaped data inside Linux
+  emission
 
 The emitted Linux path should explicitly cover:
 
