@@ -332,6 +332,7 @@ fn make_minimal_input(bodies: Option<RawBodySurfaceInput>) -> RawArtifactInput {
         logging: None,
         pm_gate: None,
         bodies,
+        identity_enrichment: None,
     }
 }
 

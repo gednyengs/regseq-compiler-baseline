@@ -234,6 +234,7 @@ fn absent_bus_normalizes_to_none() {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     };
     let model = normalize(&input).unwrap();
     assert_eq!(model.driver.bus, None);
@@ -262,6 +263,7 @@ fn unrecognized_bus_value_returns_error() {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     };
     let err = normalize(&input).unwrap_err();
     assert_eq!(
@@ -371,6 +373,7 @@ fn absent_families_normalize_to_empty() {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     };
     let model = normalize(&input).unwrap();
     assert!(model.registers.blocks.is_empty());
@@ -406,6 +409,7 @@ fn missing_identity_returns_error() {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     };
     let err = normalize(&input).unwrap_err();
     assert_eq!(err, NormalizeError::MissingIdentity);
@@ -695,5 +699,6 @@ fn make_rich_input() -> RawArtifactInput {
             }],
         }),
         bodies: None,
+        identity_enrichment: None,
     }
 }

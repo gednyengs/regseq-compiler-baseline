@@ -368,6 +368,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-24",
+          "name": "Semantic IR Phase 0 extraction enrichment",
+          "spec": ".harness/tasks/regseq-driver/24-semantic-ir-phase0-extraction-enrichment.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-21",
+            "regseq-driver-22"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -535,6 +547,18 @@
           "depends_on": [
             "regseq-driver-22",
             "regseq-model-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-14",
+          "name": "Item hierarchy schema and canonical cross-link model",
+          "spec": ".harness/tasks/regseq-model/14-item-hierarchy-schema-and-canonical-cross-link-model.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-24",
+            "regseq-model-13"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -934,6 +958,53 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-05",
+          "name": "Semantic procedural IR types and boundary",
+          "spec": ".harness/tasks/regseq-lowering/05-semantic-procedural-ir-types-and-boundary.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-01",
+            "regseq-model-14"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-06",
+          "name": "Item hierarchy construction from enriched extraction",
+          "spec": ".harness/tasks/regseq-lowering/06-item-hierarchy-construction-from-enriched-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-05",
+            "regseq-driver-24"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-07",
+          "name": "Supported Regseq semantic-body lowering validated on the PL011 representative set",
+          "spec": ".harness/tasks/regseq-lowering/07-supported-regseq-semantic-body-lowering-validated-on-pl011-representative-set.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-06",
+            "track-a-validation-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-08",
+          "name": "SemanticModel projection and DriverLoweringPlan behavior migration",
+          "spec": ".harness/tasks/regseq-lowering/08-semanticmodel-projection-and-driverloweringplan-behavior-migration.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -959,7 +1030,7 @@
           "status": "pending",
           "depends_on": [
             "regseq-linux-backend-01",
-            "regseq-lowering-04",
+            "regseq-lowering-08",
             "track-a-validation-10"
           ],
           "artifacts": [],
@@ -1169,7 +1240,7 @@
           "id": "track-a-validation-11",
           "name": "Generated PL011 Linux module host-build proof",
           "spec": ".harness/tasks/track-a-validation/11-generated-pl011-linux-module-host-build-proof.md",
-          "status": "in_progress",
+          "status": "pending",
           "depends_on": [
             "regseq-linux-backend-02",
             "regseq-driver-23"

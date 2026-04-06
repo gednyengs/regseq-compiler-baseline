@@ -4,6 +4,7 @@ extern crate rustc_driver;
 
 use regseq_driver::mir_repr::*;
 use regseq_driver::raw_artifact::*;
+use regseq_model::declaration::raw_input::RawArtifactInput;
 
 fn sample_artifact() -> RawFrontendArtifact {
     RawFrontendArtifact {
@@ -120,6 +121,7 @@ fn sample_artifact() -> RawFrontendArtifact {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     }
 }
 
@@ -249,6 +251,7 @@ fn raw_artifact_identity_without_bus_omits_field() {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     };
 
     let json = serde_json::to_string_pretty(&artifact).expect("serialize");
@@ -354,6 +357,7 @@ fn raw_artifact_empty_family_serializes_cleanly() {
         logging: None,
         pm_gate: None,
         bodies: None,
+        identity_enrichment: None,
     };
 
     let json = serde_json::to_string(&artifact).expect("serialize");
@@ -513,4 +517,325 @@ fn raw_artifact_mir_unsupported_statement_preserved() {
     let decoded: MirStatement = serde_json::from_str(&json).expect("deserialize");
     assert_eq!(wrapped, decoded);
     assert!(json.contains("\"description\": \"FakeIntrinsic\""));
+}
+
+// ---------------------------------------------------------------------------
+// Identity enrichment integration tests
+// ---------------------------------------------------------------------------
+
+fn sample_enrichment_surface() -> RawIdentityEnrichmentSurface {
+    RawIdentityEnrichmentSurface {
+        modules: vec![
+            ModuleFact {
+                canonical_path: CanonicalPath("pl011_spec".to_string()),
+                name: "pl011_spec".to_string(),
+                child_items: vec![
+                    CanonicalPath("pl011_spec::driver".to_string()),
+                    CanonicalPath("pl011_spec::Pl011Spec".to_string()),
+                    CanonicalPath("pl011_spec::Pl011Registers".to_string()),
+                    CanonicalPath("pl011_spec::InterruptClass".to_string()),
+                ],
+            },
+            ModuleFact {
+                canonical_path: CanonicalPath("pl011_spec::driver".to_string()),
+                name: "driver".to_string(),
+                child_items: vec![CanonicalPath("pl011_spec::driver::helper_fn".to_string())],
+            },
+        ],
+        structs: vec![
+            StructFact {
+                canonical_path: CanonicalPath("pl011_spec::Pl011Spec".to_string()),
+                name: "Pl011Spec".to_string(),
+                module_path: CanonicalPath("pl011_spec".to_string()),
+                is_driver: true,
+                is_register_block: false,
+                fields: vec![
+                    FieldFact {
+                        name: "regs".to_string(),
+                        canonical_path: CanonicalPath("pl011_spec::Pl011Spec::regs".to_string()),
+                        rseq_kind: Some(RseqFieldKind::Mmio {
+                            id: "uart_regs".to_string(),
+                        }),
+                    },
+                    FieldFact {
+                        name: "irq".to_string(),
+                        canonical_path: CanonicalPath("pl011_spec::Pl011Spec::irq".to_string()),
+                        rseq_kind: Some(RseqFieldKind::Interrupt {
+                            id: "uart_irq".to_string(),
+                        }),
+                    },
+                    FieldFact {
+                        name: "clock".to_string(),
+                        canonical_path: CanonicalPath("pl011_spec::Pl011Spec::clock".to_string()),
+                        rseq_kind: Some(RseqFieldKind::Clock {
+                            id: "uart_clk".to_string(),
+                        }),
+                    },
+                    FieldFact {
+                        name: "internal_state".to_string(),
+                        canonical_path: CanonicalPath(
+                            "pl011_spec::Pl011Spec::internal_state".to_string(),
+                        ),
+                        rseq_kind: None,
+                    },
+                ],
+            },
+            StructFact {
+                canonical_path: CanonicalPath("pl011_spec::Pl011Registers".to_string()),
+                name: "Pl011Registers".to_string(),
+                module_path: CanonicalPath("pl011_spec".to_string()),
+                is_driver: false,
+                is_register_block: true,
+                fields: vec![FieldFact {
+                    name: "dr".to_string(),
+                    canonical_path: CanonicalPath("pl011_spec::Pl011Registers::dr".to_string()),
+                    rseq_kind: None,
+                }],
+            },
+        ],
+        enums: vec![EnumFact {
+            canonical_path: CanonicalPath("pl011_spec::InterruptClass".to_string()),
+            name: "InterruptClass".to_string(),
+            module_path: CanonicalPath("pl011_spec".to_string()),
+            variants: vec!["Rx".to_string(), "Tx".to_string(), "Error".to_string()],
+        }],
+        impl_blocks: vec![
+            ImplBlockFact {
+                canonical_path: CanonicalPath("pl011_spec::<impl Pl011Spec>".to_string()),
+                self_type_path: CanonicalPath("pl011_spec::Pl011Spec".to_string()),
+                self_type_name: "Pl011Spec".to_string(),
+                trait_path: None,
+                trait_name: None,
+                is_inherent: true,
+                methods: vec![
+                    ImplMethodFact {
+                        name: "disable_uart".to_string(),
+                        canonical_path: CanonicalPath(
+                            "pl011_spec::Pl011Spec::disable_uart".to_string(),
+                        ),
+                        is_isr: false,
+                    },
+                    ImplMethodFact {
+                        name: "handle_irq".to_string(),
+                        canonical_path: CanonicalPath(
+                            "pl011_spec::Pl011Spec::handle_irq".to_string(),
+                        ),
+                        is_isr: true,
+                    },
+                ],
+                constants: vec![AssociatedConstantFact {
+                    name: "ALL_INTERRUPTS_MASK".to_string(),
+                    canonical_path: CanonicalPath(
+                        "pl011_spec::Pl011Spec::ALL_INTERRUPTS_MASK".to_string(),
+                    ),
+                    ty: "u32".to_string(),
+                    owner_impl_path: CanonicalPath("pl011_spec::<impl Pl011Spec>".to_string()),
+                }],
+            },
+            ImplBlockFact {
+                canonical_path: CanonicalPath(
+                    "pl011_spec::<impl Lifecycle for Pl011Spec>".to_string(),
+                ),
+                self_type_path: CanonicalPath("pl011_spec::Pl011Spec".to_string()),
+                self_type_name: "Pl011Spec".to_string(),
+                trait_path: Some(CanonicalPath("rseq::Lifecycle".to_string())),
+                trait_name: Some("Lifecycle".to_string()),
+                is_inherent: false,
+                methods: vec![ImplMethodFact {
+                    name: "init".to_string(),
+                    canonical_path: CanonicalPath("pl011_spec::Pl011Spec::init".to_string()),
+                    is_isr: false,
+                }],
+                constants: vec![],
+            },
+        ],
+        free_functions: vec![FunctionFact {
+            name: "helper_fn".to_string(),
+            canonical_path: CanonicalPath("pl011_spec::driver::helper_fn".to_string()),
+            module_path: CanonicalPath("pl011_spec::driver".to_string()),
+        }],
+    }
+}
+
+fn artifact_with_enrichment() -> RawFrontendArtifact {
+    let mut artifact = sample_artifact();
+    artifact.identity_enrichment = Some(sample_enrichment_surface());
+    artifact
+}
+
+#[test]
+fn enrichment_round_trips_through_raw_artifact_json() {
+    let artifact = artifact_with_enrichment();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let decoded: RawFrontendArtifact = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(artifact, decoded);
+    assert!(decoded.identity_enrichment.is_some());
+}
+
+#[test]
+fn enrichment_survives_cross_boundary_handoff_to_raw_input() {
+    let artifact = artifact_with_enrichment();
+    let json = serde_json::to_string_pretty(&artifact).expect("serialize");
+    let input: RawArtifactInput =
+        serde_json::from_str(&json).expect("deserialize as RawArtifactInput");
+
+    let enrichment = input
+        .identity_enrichment
+        .as_ref()
+        .expect("identity_enrichment must survive handoff");
+
+    // Module facts
+    assert_eq!(enrichment.modules.len(), 2);
+    assert_eq!(enrichment.modules[0].canonical_path, "pl011_spec");
+    assert_eq!(enrichment.modules[0].name, "pl011_spec");
+    assert_eq!(enrichment.modules[1].canonical_path, "pl011_spec::driver");
+
+    // Struct facts: driver and register block
+    assert_eq!(enrichment.structs.len(), 2);
+    let driver_struct = enrichment
+        .structs
+        .iter()
+        .find(|s| s.is_driver)
+        .expect("driver struct must be present");
+    assert_eq!(driver_struct.canonical_path, "pl011_spec::Pl011Spec");
+    assert_eq!(driver_struct.fields.len(), 4);
+
+    let reg_block = enrichment
+        .structs
+        .iter()
+        .find(|s| s.is_register_block)
+        .expect("register block struct must be present");
+    assert_eq!(reg_block.canonical_path, "pl011_spec::Pl011Registers");
+
+    // Enum facts
+    assert_eq!(enrichment.enums.len(), 1);
+    assert_eq!(enrichment.enums[0].name, "InterruptClass");
+    assert_eq!(enrichment.enums[0].variants, vec!["Rx", "Tx", "Error"]);
+
+    // Impl block facts
+    assert_eq!(enrichment.impl_blocks.len(), 2);
+    let inherent_impl = enrichment
+        .impl_blocks
+        .iter()
+        .find(|i| i.is_inherent)
+        .expect("inherent impl must be present");
+    assert_eq!(inherent_impl.self_type_path, "pl011_spec::Pl011Spec");
+    assert!(inherent_impl.trait_path.is_none());
+
+    let trait_impl = enrichment
+        .impl_blocks
+        .iter()
+        .find(|i| !i.is_inherent)
+        .expect("trait impl must be present");
+    assert_eq!(trait_impl.trait_path.as_deref(), Some("rseq::Lifecycle"));
+
+    // Free functions
+    assert_eq!(enrichment.free_functions.len(), 1);
+    assert_eq!(enrichment.free_functions[0].name, "helper_fn");
+    assert_eq!(
+        enrichment.free_functions[0].canonical_path,
+        "pl011_spec::driver::helper_fn"
+    );
+}
+
+#[test]
+fn enrichment_field_identity_survives_handoff() {
+    let artifact = artifact_with_enrichment();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let input: RawArtifactInput = serde_json::from_str(&json).expect("deserialize");
+
+    let enrichment = input.identity_enrichment.as_ref().unwrap();
+    let driver_struct = enrichment.structs.iter().find(|s| s.is_driver).unwrap();
+
+    // Field canonical paths survive
+    let regs_field = driver_struct
+        .fields
+        .iter()
+        .find(|f| f.name == "regs")
+        .expect("regs field must be present");
+    assert_eq!(regs_field.canonical_path, "pl011_spec::Pl011Spec::regs");
+
+    // RseqFieldKind tagged enum survives JSON boundary
+    let kind = regs_field
+        .rseq_kind
+        .as_ref()
+        .expect("regs must carry rseq_kind");
+    let kind_json = serde_json::to_value(kind).unwrap();
+    assert_eq!(kind_json["kind"], "Mmio");
+    assert_eq!(kind_json["id"], "uart_regs");
+
+    // Plain fields have no rseq_kind
+    let plain_field = driver_struct
+        .fields
+        .iter()
+        .find(|f| f.name == "internal_state")
+        .unwrap();
+    assert!(plain_field.rseq_kind.is_none());
+
+    // Same short field name on different structs are disambiguated
+    let reg_block = enrichment
+        .structs
+        .iter()
+        .find(|s| s.is_register_block)
+        .unwrap();
+    let reg_dr = reg_block.fields.iter().find(|f| f.name == "dr").unwrap();
+    assert_eq!(reg_dr.canonical_path, "pl011_spec::Pl011Registers::dr");
+    // Different from any driver field path
+    assert!(driver_struct
+        .fields
+        .iter()
+        .all(|f| f.canonical_path != reg_dr.canonical_path));
+}
+
+#[test]
+fn enrichment_isr_marker_survives_handoff() {
+    let artifact = artifact_with_enrichment();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let input: RawArtifactInput = serde_json::from_str(&json).expect("deserialize");
+
+    let enrichment = input.identity_enrichment.as_ref().unwrap();
+    let inherent_impl = enrichment
+        .impl_blocks
+        .iter()
+        .find(|i| i.is_inherent)
+        .unwrap();
+
+    let isr_method = inherent_impl
+        .methods
+        .iter()
+        .find(|m| m.name == "handle_irq")
+        .expect("handle_irq must be present");
+    assert!(isr_method.is_isr, "ISR marker must survive handoff");
+
+    let non_isr = inherent_impl
+        .methods
+        .iter()
+        .find(|m| m.name == "disable_uart")
+        .unwrap();
+    assert!(!non_isr.is_isr);
+}
+
+#[test]
+fn enrichment_associated_constant_ownership_survives_handoff() {
+    let artifact = artifact_with_enrichment();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let input: RawArtifactInput = serde_json::from_str(&json).expect("deserialize");
+
+    let enrichment = input.identity_enrichment.as_ref().unwrap();
+    let inherent_impl = enrichment
+        .impl_blocks
+        .iter()
+        .find(|i| i.is_inherent)
+        .unwrap();
+
+    assert_eq!(inherent_impl.constants.len(), 1);
+    let constant = &inherent_impl.constants[0];
+    assert_eq!(constant.name, "ALL_INTERRUPTS_MASK");
+    assert_eq!(
+        constant.canonical_path,
+        "pl011_spec::Pl011Spec::ALL_INTERRUPTS_MASK"
+    );
+    assert_eq!(constant.ty, "u32");
+    // Ownership points back to the owning impl
+    assert_eq!(constant.owner_impl_path, inherent_impl.canonical_path);
 }

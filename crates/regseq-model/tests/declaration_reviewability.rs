@@ -452,5 +452,6 @@ fn make_rich_input() -> RawArtifactInput {
             }],
         }),
         bodies: None,
+        identity_enrichment: None,
     }
 }

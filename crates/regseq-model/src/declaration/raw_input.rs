@@ -26,6 +26,9 @@ pub struct RawArtifactInput {
     pub pm_gate: Option<RawPmGateSurfaceInput>,
     #[serde(default)]
     pub bodies: Option<RawBodySurfaceInput>,
+    /// Identity enrichment surface: canonical paths, ownership, field identity.
+    #[serde(default)]
+    pub identity_enrichment: Option<RawIdentityEnrichmentInput>,
 }
 
 // ---- Identity ----
@@ -391,4 +394,152 @@ pub struct RawFnParamInput {
     pub name: String,
     /// Parameter type.
     pub ty: String,
+}
+
+// ---- Identity enrichment ----
+
+/// Identity and ownership facts from the Phase 0 extraction enrichment.
+///
+/// This is the canonical Phase 0 handoff consumed by later phases to build
+/// `Module`, `ItemStore`, and `CrossLinkTable`.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawIdentityEnrichmentInput {
+    /// Module containment facts.
+    pub modules: Vec<RawModuleFactInput>,
+    /// All structs with identity and field-level facts.
+    pub structs: Vec<RawStructFactInput>,
+    /// All enums with identity.
+    pub enums: Vec<RawEnumFactInput>,
+    /// All impl blocks with method/constant membership.
+    pub impl_blocks: Vec<RawImplBlockFactInput>,
+    /// All free (non-method) functions.
+    pub free_functions: Vec<RawFunctionFactInput>,
+}
+
+/// A module with its direct children.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawModuleFactInput {
+    /// Canonical path of the module.
+    pub canonical_path: String,
+    /// Short module name.
+    pub name: String,
+    /// Canonical paths of items directly contained in this module.
+    pub child_items: Vec<String>,
+}
+
+/// A struct with field-level identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawStructFactInput {
+    /// Canonical path of the struct.
+    pub canonical_path: String,
+    /// Short struct name.
+    pub name: String,
+    /// Canonical path of the containing module.
+    pub module_path: String,
+    /// Whether this struct carries `#[rseq::driver]`.
+    pub is_driver: bool,
+    /// Whether this struct carries `#[rseq::register_block]`.
+    pub is_register_block: bool,
+    /// Field-level identity facts.
+    pub fields: Vec<RawFieldFactInput>,
+}
+
+/// Field-level identity for cross-link resolution.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawFieldFactInput {
+    /// Short field name.
+    pub name: String,
+    /// Canonical path: parent struct path + `::` + field name.
+    pub canonical_path: String,
+    /// Resource classification from `#[rseq::*]` attributes on this field.
+    #[serde(default)]
+    pub rseq_kind: Option<RawRseqFieldKindInput>,
+}
+
+/// Resource classification derived from `#[rseq::*]` attributes on struct fields.
+///
+/// Typed mirror of the driver-side `RseqFieldKind`. Tagged enum, not stringly
+/// typed.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(tag = "kind")]
+pub enum RawRseqFieldKindInput {
+    /// Field carries `#[rseq::mmio(...)]`.
+    Mmio { id: String },
+    /// Field carries `#[rseq::clock(...)]`.
+    Clock { id: String },
+    /// Field carries `#[rseq::pinctrl(...)]`.
+    PinCtrl { id: String },
+    /// Field carries `#[rseq::interrupt(...)]`.
+    Interrupt { id: String },
+    /// Field carries `#[rseq::property(...)]`.
+    Property { id: String },
+}
+
+/// An enum with canonical identity.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawEnumFactInput {
+    /// Canonical path of the enum.
+    pub canonical_path: String,
+    /// Short enum name.
+    pub name: String,
+    /// Canonical path of the containing module.
+    pub module_path: String,
+    /// Variant names.
+    pub variants: Vec<String>,
+}
+
+/// An impl block with structural membership facts.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawImplBlockFactInput {
+    /// Canonical path of the impl block.
+    pub canonical_path: String,
+    /// Canonical path of the self type.
+    pub self_type_path: String,
+    /// Short self type name.
+    pub self_type_name: String,
+    /// If trait impl: the trait's canonical path.
+    pub trait_path: Option<String>,
+    /// If trait impl: short trait name.
+    pub trait_name: Option<String>,
+    /// Whether this is an inherent impl (no trait).
+    pub is_inherent: bool,
+    /// Methods in this impl block.
+    pub methods: Vec<RawImplMethodFactInput>,
+    /// Associated constants in this impl block.
+    pub constants: Vec<RawAssociatedConstantFactInput>,
+}
+
+/// A method within an impl block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawImplMethodFactInput {
+    /// Short method name.
+    pub name: String,
+    /// Canonical path of the method.
+    pub canonical_path: String,
+    /// Whether this method carries `#[rseq::isr]`.
+    pub is_isr: bool,
+}
+
+/// An associated constant within an impl block.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawAssociatedConstantFactInput {
+    /// Short constant name.
+    pub name: String,
+    /// Canonical path of the constant.
+    pub canonical_path: String,
+    /// Type as rendered from HIR.
+    pub ty: String,
+    /// Canonical path of the owning impl block.
+    pub owner_impl_path: String,
+}
+
+/// A free (non-method) function.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct RawFunctionFactInput {
+    /// Short function name.
+    pub name: String,
+    /// Canonical path of the function.
+    pub canonical_path: String,
+    /// Canonical path of the containing module.
+    pub module_path: String,
 }

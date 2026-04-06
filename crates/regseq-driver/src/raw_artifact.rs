@@ -71,6 +71,9 @@ pub struct RawFrontendArtifact {
     /// Extracted function body surface.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub bodies: Option<RawBodySurface>,
+    /// Identity enrichment surface: canonical paths, ownership, field identity.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub identity_enrichment: Option<RawIdentityEnrichmentSurface>,
 }
 
 // ---------------------------------------------------------------------------
@@ -905,6 +908,17 @@ impl From<&PmGateProperties> for RawPmGateProperties {
 /// The raw body surface now directly uses the owned MIR representation.
 /// The `MirBodySurface` type carries all extracted MIR function bodies.
 pub type RawBodySurface = MirBodySurface;
+
+/// The raw identity enrichment surface directly uses the extraction types.
+pub type RawIdentityEnrichmentSurface =
+    crate::extract::identity_enrichment::IdentityEnrichmentSurface;
+
+// Re-export enrichment constituent types so integration tests and downstream
+// consumers can construct `RawIdentityEnrichmentSurface` values.
+pub use crate::extract::identity_enrichment::{
+    AssociatedConstantFact, CanonicalPath, EnumFact, FieldFact, FunctionFact, ImplBlockFact,
+    ImplMethodFact, ModuleFact, RseqFieldKind, StructFact,
+};
 
 // ---------------------------------------------------------------------------
 // Shared label helpers
