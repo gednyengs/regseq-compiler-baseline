@@ -34,6 +34,33 @@ pub enum Item {
     Constant(ConstantDef),
 }
 
+impl Item {
+    /// Return the embedded `ItemId` from whichever variant this item is.
+    pub fn id(&self) -> ItemId {
+        match self {
+            Item::Struct(s) => s.id,
+            Item::Enum(e) => e.id,
+            Item::Function(f) => f.id,
+            Item::Impl(i) => i.id,
+            Item::Constant(c) => c.id,
+        }
+    }
+
+    /// Set the embedded `ItemId` on whichever variant this item is.
+    ///
+    /// Called by `ItemStore::push()` to synchronize the item's internal id
+    /// with its store-assigned position.
+    pub fn set_id(&mut self, id: ItemId) {
+        match self {
+            Item::Struct(s) => s.id = id,
+            Item::Enum(e) => e.id = id,
+            Item::Function(f) => f.id = id,
+            Item::Impl(i) => i.id = id,
+            Item::Constant(c) => c.id = id,
+        }
+    }
+}
+
 /// A struct definition in the Regseq model.
 ///
 /// Covers: driver structs, register block structs, configuration types.

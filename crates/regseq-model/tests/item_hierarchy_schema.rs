@@ -46,6 +46,7 @@ fn item_store_is_canonical_owner() {
     let retrieved = store.get(id).expect("item should exist");
     match retrieved {
         Item::Struct(s) => {
+            assert_eq!(s.id, id, "embedded id must match store-assigned id");
             assert_eq!(s.name, "MyDriver");
             assert_eq!(s.canonical_path.as_str(), "pkg::driver::MyDriver");
         }
@@ -54,6 +55,77 @@ fn item_store_is_canonical_owner() {
 
     // Out-of-bounds returns None.
     assert!(store.get(ItemId(999)).is_none());
+}
+
+// ---------------------------------------------------------------------------
+// Test 1b: ItemStore synchronizes embedded id on push
+// ---------------------------------------------------------------------------
+
+#[test]
+fn item_store_synchronizes_embedded_id() {
+    let mut store = ItemStore::new();
+
+    // Push items with deliberately wrong initial ids.
+    let id0 = store.push(Item::Struct(StructDef {
+        id: ItemId(999), // wrong -- store must overwrite to 0
+        canonical_path: CanonicalPath::new("pkg::A"),
+        name: "A".into(),
+        fields: vec![],
+        attributes: vec![],
+        provenance: test_provenance("identity"),
+    }));
+    assert_eq!(id0, ItemId(0));
+
+    let id1 = store.push(Item::Function(FunctionDef {
+        id: ItemId(42), // wrong -- store must overwrite to 1
+        canonical_path: CanonicalPath::new("pkg::A::run"),
+        name: "run".into(),
+        kind: FunctionKind::InherentMethod { owner: id0 },
+        role: FunctionRole::Helper,
+        provenance: test_provenance("identity"),
+    }));
+    assert_eq!(id1, ItemId(1));
+
+    let id2 = store.push(Item::Enum(EnumDef {
+        id: ItemId(7), // wrong -- store must overwrite to 2
+        canonical_path: CanonicalPath::new("pkg::Status"),
+        name: "Status".into(),
+        variants: vec![],
+        provenance: test_provenance("identity"),
+    }));
+    assert_eq!(id2, ItemId(2));
+
+    let id3 = store.push(Item::Impl(ImplDef {
+        id: ItemId(100), // wrong -- store must overwrite to 3
+        canonical_path: CanonicalPath::new("pkg::<impl A>"),
+        self_type: TypeRef::Item { id: id0 },
+        trait_ref: None,
+        methods: vec![id1],
+        constants: vec![],
+        provenance: test_provenance("identity"),
+    }));
+    assert_eq!(id3, ItemId(3));
+
+    let id4 = store.push(Item::Constant(ConstantDef {
+        id: ItemId(55), // wrong -- store must overwrite to 4
+        canonical_path: CanonicalPath::new("pkg::A::MAX"),
+        name: "MAX".into(),
+        owner: Some(id0),
+        ty: TypeRef::Primitive {
+            ty: PrimitiveType::U32,
+        },
+        value: Some(ConstValue::Integer(256)),
+        stable_name: "A_MAX".into(),
+        provenance: test_provenance("identity"),
+    }));
+    assert_eq!(id4, ItemId(4));
+
+    // Every retrieved item's embedded id must match its store-assigned id.
+    assert_eq!(store.get(id0).unwrap().id(), id0);
+    assert_eq!(store.get(id1).unwrap().id(), id1);
+    assert_eq!(store.get(id2).unwrap().id(), id2);
+    assert_eq!(store.get(id3).unwrap().id(), id3);
+    assert_eq!(store.get(id4).unwrap().id(), id4);
 }
 
 // ---------------------------------------------------------------------------
@@ -91,12 +163,22 @@ fn module_items_reference_through_item_id() {
 
     assert_eq!(module.items.len(), 2);
 
-    // Resolve each item through the store.
+    // Resolve each item through the store and verify embedded id coherence.
     let first = store.get(module.items[0]).unwrap();
     assert!(matches!(first, Item::Struct(_)));
+    assert_eq!(
+        first.id(),
+        struct_id,
+        "embedded id must match store-assigned id"
+    );
 
     let second = store.get(module.items[1]).unwrap();
     assert!(matches!(second, Item::Function(_)));
+    assert_eq!(
+        second.id(),
+        fn_id,
+        "embedded id must match store-assigned id"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -159,15 +241,25 @@ fn impl_methods_and_constants_resolve() {
         provenance: test_provenance("identity"),
     };
 
-    // Methods resolve to FunctionDef.
+    // Methods resolve to FunctionDef with coherent id.
     let method = store.get(impl_def.methods[0]).unwrap();
+    assert_eq!(
+        method.id(),
+        init_id,
+        "embedded id must match store-assigned id"
+    );
     match method {
         Item::Function(f) => assert_eq!(f.name, "init"),
         _ => panic!("expected Function item"),
     }
 
-    // Constants resolve to ConstantDef.
+    // Constants resolve to ConstantDef with coherent id.
     let constant = store.get(impl_def.constants[0]).unwrap();
+    assert_eq!(
+        constant.id(),
+        const_id,
+        "embedded id must match store-assigned id"
+    );
     match constant {
         Item::Constant(c) => {
             assert_eq!(c.name, "DEFAULT_SPEED");

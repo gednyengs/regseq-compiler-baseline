@@ -169,3 +169,33 @@ Test commands:
 - tests pass
 - `cargo test --workspace` passes
 - `cargo clippy --workspace -- -D warnings` passes
+
+## Reopen Note
+
+This task was reopened after review of the first implementation.
+
+The overall schema direction is correct, but the implementation does not yet
+satisfy the required ownership/coherence boundary:
+
+- `ItemStore` is documented as the canonical owner of item payloads and
+  `ItemStore::push()` assigns a fresh `ItemId`, but the stored payload is
+  inserted unchanged even though the payload types still carry their own `id`
+  field
+- as implemented, later code can retrieve an item through one `ItemId` while
+  observing a different embedded `id` inside the payload, which violates the
+  task's required "`ItemStore` / `ItemId` ownership is explicit and coherent"
+  contract
+- the current test suite does not assert this invariant; it constructs payloads
+  with placeholder ids and assumes the store overwrites them, but it never
+  proves that a retrieved payload's internal `id` matches the store-assigned
+  `ItemId`
+
+The revised implementation must:
+
+- make `ItemStore` ownership coherent by ensuring stored item payload identity
+  cannot diverge from the `ItemId` used to retrieve it
+- add reviewer-facing tests that explicitly prove the retrieved payload id
+  matches the store-assigned id for all relevant item families
+
+Do not address this by weakening the ownership claim in the schema docs. Fix
+the model so the ownership invariant is actually true.

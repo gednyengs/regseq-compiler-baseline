@@ -81,8 +81,12 @@ impl ItemStore {
     }
 
     /// Insert an item and return its assigned identifier.
-    pub fn push(&mut self, item: Item) -> ItemId {
+    ///
+    /// The item's embedded `id` field is overwritten with the store-assigned
+    /// `ItemId` so that `item.id()` always matches the store position.
+    pub fn push(&mut self, mut item: Item) -> ItemId {
         let id = ItemId(self.items.len() as u32);
+        item.set_id(id);
         self.items.push(item);
         id
     }
