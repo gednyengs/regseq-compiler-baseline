@@ -439,7 +439,7 @@ fn build_teardown_order(acquisition: &[AcquisitionStep]) -> Vec<TeardownStep> {
         .enumerate()
         .map(|(i, acq)| TeardownStep {
             order: i,
-            resource_kind: acq.resource_kind.clone(),
+            resource_kind: acq.resource_kind,
             resource_id: acq.resource_id.clone(),
         })
         .collect()

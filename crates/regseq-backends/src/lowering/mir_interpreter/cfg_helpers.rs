@@ -59,7 +59,7 @@ pub fn emit_call_node(
             operation,
         } => {
             vec![BehaviorNode::ResourceOp {
-                resource_kind: kind.clone(),
+                resource_kind: *kind,
                 field_name: field.clone(),
                 operation: operation.clone(),
             }]

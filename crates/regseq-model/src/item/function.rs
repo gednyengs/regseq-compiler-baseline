@@ -5,26 +5,26 @@
 //! function does for the backend). These are orthogonal concerns and both
 //! coexist on `FunctionDef`.
 //!
-//! `FunctionDef` is header-only at this task boundary. The executable body
-//! (`SemanticBody`) will be added as a field in the semantic body lowering
-//! task. See the doc comment on `FunctionDef` for the migration path.
+//! `FunctionDef` carries a `SemanticBody` for the executable body. Before
+//! semantic lowering populates bodies from MIR (Phase 2B), functions carry
+//! an empty body via `SemanticBody::empty()`.
 
 use serde::{Deserialize, Serialize};
 
 use crate::declaration::Provenance;
+use crate::semantic::SemanticBody;
 
 use super::identity::{CanonicalPath, ItemId};
 use super::impl_def::TraitRef;
 
-/// A function definition in the Regseq item hierarchy (header-only).
+/// A function definition with an executable body.
 ///
-/// Carries identity, structural origin, and semantic role. The executable
-/// body (`SemanticBody`) is deliberately absent at this task boundary.
+/// This is the item-level wrapper. The body is a `SemanticBody`, which is
+/// the procedural IR for executable function bodies (statement/expression-based,
+/// with explicit locals and a principled type universe).
 ///
-/// Migration path: when `SemanticBody` is introduced in the semantic body
-/// lowering task, add `pub body: SemanticBody` here. All `FunctionDef`
-/// construction sites update to supply the body. This is an additive,
-/// non-breaking change within the crate.
+/// Before semantic lowering populates bodies from MIR (Phase 2B), functions
+/// carry an empty body via `SemanticBody::empty()`.
 ///
 /// Distinct from `declaration::bodies::FnKind` / `declaration::mir_body::FnKind`,
 /// which are declaration-layer classifications (Callback, Isr, Helper,
@@ -39,6 +39,8 @@ pub struct FunctionDef {
     pub kind: FunctionKind,
     /// Semantic role for backend dispatch.
     pub role: FunctionRole,
+    /// Executable body in the semantic procedural IR.
+    pub body: SemanticBody,
     pub provenance: Provenance,
 }
 

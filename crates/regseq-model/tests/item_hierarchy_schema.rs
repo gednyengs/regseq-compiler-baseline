@@ -11,6 +11,7 @@ use regseq_model::item::{
     InterruptClassDef, Item, ItemAttribute, ItemId, ItemStore, LifecycleRole, Module,
     PrimitiveType, StructDef, StructFieldDef, TraitRef, TypeRef,
 };
+use regseq_model::semantic::SemanticBody;
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -82,6 +83,7 @@ fn item_store_synchronizes_embedded_id() {
         name: "run".into(),
         kind: FunctionKind::InherentMethod { owner: id0 },
         role: FunctionRole::Helper,
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
     assert_eq!(id1, ItemId(1));
@@ -151,6 +153,7 @@ fn module_items_reference_through_item_id() {
         name: "init".into(),
         kind: FunctionKind::InherentMethod { owner: struct_id },
         role: FunctionRole::Helper,
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -212,6 +215,7 @@ fn impl_methods_and_constants_resolve() {
         role: FunctionRole::Lifecycle {
             role: LifecycleRole::Init,
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -574,6 +578,7 @@ fn schema_is_device_neutral() {
         role: FunctionRole::Lifecycle {
             role: LifecycleRole::Init,
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -583,6 +588,7 @@ fn schema_is_device_neutral() {
         name: "do_reset".into(),
         kind: FunctionKind::InherentMethod { owner: driver_id },
         role: FunctionRole::Helper,
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -637,6 +643,7 @@ fn no_device_specific_type_names() {
             class: DeviceClassKind::Network,
             callback: DeviceCallbackRole::Named("tx_packet".into()),
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -648,6 +655,7 @@ fn no_device_specific_type_names() {
         role: FunctionRole::Isr {
             binding: "irq".into(),
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -685,6 +693,7 @@ fn serde_json_round_trip() {
         name: "run".into(),
         kind: FunctionKind::InherentMethod { owner: struct_id },
         role: FunctionRole::Helper,
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     }));
 
@@ -782,6 +791,7 @@ fn function_kind_and_role_are_independent() {
         name: "set_baud_rate".into(),
         kind: FunctionKind::InherentMethod { owner: driver_id },
         role: FunctionRole::Helper,
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     };
     assert!(matches!(helper.kind, FunctionKind::InherentMethod { .. }));
@@ -802,6 +812,7 @@ fn function_kind_and_role_are_independent() {
         role: FunctionRole::Lifecycle {
             role: LifecycleRole::Init,
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     };
     assert!(matches!(init.kind, FunctionKind::TraitMethod { .. }));
@@ -821,6 +832,7 @@ fn function_kind_and_role_are_independent() {
         role: FunctionRole::Isr {
             binding: "irq".into(),
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     };
     assert!(matches!(isr.kind, FunctionKind::InherentMethod { .. }));
@@ -842,6 +854,7 @@ fn function_kind_and_role_are_independent() {
             class: DeviceClassKind::Serial,
             callback: DeviceCallbackRole::TxByte,
         },
+        body: SemanticBody::empty(),
         provenance: test_provenance("identity"),
     };
     assert!(matches!(callback.kind, FunctionKind::TraitMethod { .. }));

@@ -167,7 +167,7 @@ impl InterpreterContext {
         self.resource_fields
             .iter()
             .find(|(name, _)| name == field_name)
-            .map(|(_, kind)| kind.clone())
+            .map(|(_, kind)| *kind)
     }
 
     /// Check if a name is a known helper function.

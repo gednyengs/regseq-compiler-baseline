@@ -406,34 +406,9 @@ pub enum ValueExpr {
     Some(Box<ValueExpr>),
 }
 
-/// Binary operator for value expressions.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum BinOp {
-    /// Addition.
-    Add,
-    /// Subtraction.
-    Sub,
-    /// Multiplication.
-    Mul,
-    /// Division.
-    Div,
-    /// Left shift.
-    Shl,
-    /// Right shift.
-    Shr,
-    /// Bitwise AND.
-    BitAnd,
-    /// Bitwise OR.
-    BitOr,
-    /// Equality comparison.
-    Eq,
-    /// Inequality comparison.
-    Ne,
-    /// Logical AND.
-    And,
-    /// Logical OR.
-    Or,
-}
+// BinOp is now defined in regseq-model::semantic::ops and re-exported here
+// for backward compatibility with existing import sites.
+pub use regseq_model::semantic::BinOp;
 
 // ---------------------------------------------------------------------------
 // Supporting types

@@ -963,7 +963,7 @@
           "id": "regseq-lowering-05",
           "name": "Semantic procedural IR types and boundary",
           "spec": ".harness/tasks/regseq-lowering/05-semantic-procedural-ir-types-and-boundary.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-01",
             "regseq-model-14"

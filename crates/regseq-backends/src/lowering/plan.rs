@@ -301,22 +301,9 @@ pub struct TeardownStep {
     pub resource_id: String,
 }
 
-/// Resource family discriminant for ordering steps.
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub enum ResourceKind {
-    /// MMIO mapping.
-    Mmio,
-    /// Interrupt line.
-    Interrupt,
-    /// Clock.
-    Clock,
-    /// Reset line.
-    Reset,
-    /// Pin controller state.
-    PinCtrl,
-    /// Firmware property read.
-    Property,
-}
+// ResourceKind is now defined in regseq-model::semantic::types and re-exported
+// here for backward compatibility with existing import sites.
+pub use regseq_model::semantic::ResourceKind;
 
 // ---------------------------------------------------------------------------
 // Device-class roles

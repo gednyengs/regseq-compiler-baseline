@@ -8,8 +8,9 @@
 //! complementary view: construct-family-indexed (obligations) vs
 //! item-indexed (structure/semantics). Both are bridged by `CanonicalPath`.
 //!
-//! Semantic bodies (`SemanticBody`, `Stmt`, `Expr`) are NOT defined here.
-//! `FunctionDef` is header-only until the semantic body lowering task.
+//! Semantic body types (`SemanticBody`, `Stmt`, `Expr`) are defined in the
+//! [`crate::semantic`] module. `FunctionDef` carries a `SemanticBody` for
+//! its executable body.
 
 pub mod attributes;
 pub mod constant;
