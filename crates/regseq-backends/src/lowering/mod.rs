@@ -12,3 +12,4 @@ pub mod hierarchy;
 pub mod mir_interpreter;
 pub mod plan;
 pub mod planner;
+pub mod semantic_lowering;
