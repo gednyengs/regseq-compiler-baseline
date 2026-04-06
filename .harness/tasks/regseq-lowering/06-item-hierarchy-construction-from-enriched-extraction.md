@@ -62,7 +62,10 @@ by that slice.
 
 This task owns hierarchy construction only. It must not:
 
-- attach `SemanticBody` payloads yet
+- populate `SemanticBody` with MIR-derived content (`Stmt` / `Expr` trees,
+  locals, or return types beyond `Void`). `FunctionDef.body` uses
+  `SemanticBody::empty()` per the accepted regseq-lowering-05 type boundary
+  as the canonical "no body content yet" representation.
 - walk MIR into `Stmt` / `Expr`
 - migrate `DriverLoweringPlan.behavior`
 - rewrite Linux emission
@@ -110,14 +113,16 @@ This task must leave behind deterministic hierarchy evidence, such as:
 - ownership snapshots
 - cross-link resolution snapshots
 
-The result must be inspectable before any semantic bodies are attached.
+The result must be inspectable before any MIR-derived semantic body content is
+populated (Phase 2B). Functions carry `SemanticBody::empty()` at this boundary.
 
 ### Non-Goals / Negative Constraints
 
 Do not in this task:
 
 - build `Stmt` / `Expr` trees
-- attach placeholder bodies
+- populate `SemanticBody` with MIR-derived content (use `SemanticBody::empty()`
+  per the accepted lowering-05 boundary)
 - infer semantics from Linux-facing needs
 - collapse the hierarchy into backend-only planning structures
 

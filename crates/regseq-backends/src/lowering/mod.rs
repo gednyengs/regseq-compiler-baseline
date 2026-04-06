@@ -8,6 +8,7 @@
 pub mod behavior;
 pub mod behavior_planner;
 pub mod body_interpreter;
+pub mod hierarchy;
 pub mod mir_interpreter;
 pub mod plan;
 pub mod planner;
