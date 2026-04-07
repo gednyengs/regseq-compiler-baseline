@@ -118,6 +118,15 @@ pub fn emit_call_node(
                 return vec![];
             }
 
+            // Supported external callables are now modeled items handled
+            // by the semantic walker. The old behavior path treats them
+            // as transparent (no standalone C behavior in this path).
+            if crate::lowering::semantic_lowering::external_items::is_supported_external_callable(
+                path,
+            ) {
+                return vec![];
+            }
+
             // Hard failure for unresolved calls — this is a producer-side
             // classification gap that must be fixed in call_classifier.rs.
             panic!(

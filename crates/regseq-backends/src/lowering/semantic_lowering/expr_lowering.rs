@@ -311,6 +311,31 @@ fn lower_aggregate(
             if path.contains("Result") && *variant_index == 1 && !operands.is_empty() {
                 return lower_operand(fn_ctx, local_env, resolver, &operands[0], tc);
             }
+            // External enum variant construction.
+            //
+            // Current-slice encoding tactic for unit enum variants: encode
+            // variant_index in IntLit.value with SemanticType::Enum as the type.
+            // Variant identity is recoverable: enum_def.variants[value as usize].name.
+            // This works for unit variants (no payload fields); variants with
+            // fields would require a richer representation in a future task.
+            {
+                let normalized = super::external_items::normalize_external_alias(path);
+                let canonical = regseq_model::item::identity::CanonicalPath::new(normalized);
+                if let Some(item_id) = tc.0.resolve_item(&canonical) {
+                    if let Some(regseq_model::item::types::Item::Enum(enum_def)) = tc.1.get(item_id)
+                    {
+                        if !enum_def.variants.is_empty() {
+                            return Ok(Expr::IntLit {
+                                value: *variant_index as i128,
+                                ty: SemanticType::Enum {
+                                    id: item_id,
+                                    name: enum_def.name.clone(),
+                                },
+                            });
+                        }
+                    }
+                }
+            }
             // Tuple or other aggregate — take first operand if available.
             if !operands.is_empty() {
                 return lower_operand(fn_ctx, local_env, resolver, &operands[0], tc);

@@ -364,24 +364,16 @@ fn try_classify_duration_constructor(path: &str) -> bool {
 
 /// Check if a call is a framework value constructor.
 ///
-/// These are `regseq::*` constructors and associated functions that create
-/// framework type values but have no standalone C behavior.
+/// These are `regseq::*` infrastructure calls that are structurally
+/// transparent — they exist only for type-level or control-flow purposes
+/// and have no standalone C semantic.
+///
+/// Referenced supported external callables (RxChar::new, SerialErrors::empty,
+/// etc.) are NOT included here. They are materialized as first-class modeled
+/// items and flow through ordinary modeled identity.
 fn is_framework_value_constructor(path: &str) -> bool {
-    // SerialErrors::empty, SerialErrors::from_bits, etc.
-    if path.contains("SerialErrors::") {
-        return true;
-    }
-    // RxChar::new, RxChar::from_byte, etc.
-    if path.contains("RxChar::") {
-        return true;
-    }
-    // IrqResult variants.
-    if path.contains("IrqResult::") {
-        return true;
-    }
-    // Clock::get_rate is a value-producing call, not an operation.
-    // It is handled as a framework constructor because the value
-    // flows through the Option chain, not as a standalone C call.
+    // Clock::get_rate is a value-producing call handled by the
+    // resource-property-read chain (option_lowering bridge).
     if path.contains("Clock::get_rate") {
         return true;
     }

@@ -987,7 +987,7 @@
           "id": "regseq-lowering-07",
           "name": "Supported Regseq semantic-body lowering validated on the PL011 representative set",
           "spec": ".harness/tasks/regseq-lowering/07-supported-regseq-semantic-body-lowering-validated-on-pl011-representative-set.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-06",
             "track-a-validation-10"
@@ -999,9 +999,20 @@
           "id": "regseq-lowering-08",
           "name": "SemanticModel projection and DriverLoweringPlan behavior migration",
           "spec": ".harness/tasks/regseq-lowering/08-semanticmodel-projection-and-driverloweringplan-behavior-migration.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-09",
+          "name": "External referenced item materialization and enum-variant preservation",
+          "spec": ".harness/tasks/regseq-lowering/09-external-referenced-item-materialization-and-enum-variant-preservation.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-lowering-08"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -1030,11 +1041,11 @@
           "status": "pending",
           "depends_on": [
             "regseq-linux-backend-01",
-            "regseq-lowering-08",
+            "regseq-lowering-09",
             "track-a-validation-10"
           ],
           "artifacts": [],
-          "fail_reason": "Rejected by fresh canonical compiler-driven emission. The wrapper-driven EmitSpec::Driver path now emits underscore-safe filenames and no longer leaks raw Rust path spellings such as regseq::... or core::..., but the generated helper/ISR bodies are still not valid C and still do not preserve the required lowered semantics. Concrete defects observed in tests/fixtures/pl011-full-spec/regseq-out/regseq_pl011_full_spec_module.c include: (1) undeclared temporaries and control variables such as tmp3, tmp6, tmp11, tmp14, tmp24, tmp30 used in conditions, register writes, and helper bodies without matching declarations or dominating assignments; (2) undeclared ret flow and impossible duplicated return blocks such as if (ret) { return 0; return ret; }, proving the current error-path lowering is still malformed; (3) helper signatures whose bodies are still semantically incomplete, including uart_clock_hz emitted as static u32 ... { return; }, which is invalid C and shows the Option/resource-read value chain is not actually lowered; (4) register/value emission that still threads unresolved MIR-derived temporaries into final C, e.g. clear_explicit_interrupts, enable_tx_interrupts, set_baud_rate, and multiple other helpers; (5) malformed ISR emission, including a bare pl011_full_spec_reg_read(d, PL011_MIS) statement without a semicolon, undefined temporaries throughout the ISR decision tree, and return 0; in an irqreturn_t function instead of a valid IRQ_* result; (6) backend-local tests currently pass even though the fresh wrapper-driven artifact is still invalid, which means the current test strategy is insufficiently strong and is not exercising real emitted helper/ISR body validity; (7) the wrapper-driven e2e test itself still contains stale hyphenated filename expectations and must be updated to the underscore-safe producer naming policy so it can serve as a trustworthy regression gate; (8) cargo clippy -p regseq-backends --all-targets -- -D warnings still fails because backend test code contains unused imports/variables and dead helper scaffolding. Required corrective direction: the backend must lower helper and ISR bodies to compile-valid C from the canonical wrapper-driven emission path, not merely remove raw Rust spellings. MIR/local lowering must produce declared, well-scoped C locals or correctly inline expressions while preserving evaluation order and data dependencies. Value-returning helpers must emit real return expressions of the correct type. Register/resource/value lowering must not reference nonexistent temps. ISR emission must produce syntactically complete C statements and valid irqreturn_t results. Backend-local tests must add positive assertions over fresh emitted helper/ISR bodies, not just negative substring bans, and the wrapper-driven e2e test must be updated to the current filename policy and treated as part of the acceptance boundary."
+          "fail_reason": "Reopened. Historical rejection notes predating the accepted SemanticModel migration have been intentionally cleared from this active harness entry so the next plan is based on the current task spec and codebase, not stale mixed-era guidance. The still-relevant boundary is: canonical Linux emission must consume DriverLoweringPlan.behavior as SemanticModel, emitted helper/ISR bodies must be compile-valid C that preserves lowered semantics, and backend-local tests must prove canonical emitted-body validity rather than only string-shape properties."
         }
       ]
     },

@@ -449,6 +449,73 @@ pub fn walk_semantic_region(
                         }
                     }
 
+                    // Unknown calls: gated recovery for supported external callables.
+                    //
+                    // Semantic contract: referenced supported external callables
+                    // lower through ordinary modeled identity. Using Unknown as
+                    // the arrival classification is a current implementation tactic
+                    // after removing these paths from FrameworkValueConstructor.
+                    CallClassification::Unknown { ref path } => {
+                        if crate::lowering::semantic_lowering::external_items::is_supported_external_callable(path) {
+                            // Supported external callable — must resolve to a
+                            // materialized function.
+                            if let Ok(func_ref) = resolver.resolve_call(&mir_fn_path) {
+                                let lowered_args = lower_external_call_args(
+                                    &ctx.fn_ctx,
+                                    &mut ctx.local_env,
+                                    resolver,
+                                    args,
+                                    tc,
+                                )?;
+                                let call_expr = Expr::HelperCall {
+                                    callee: func_ref,
+                                    args: lowered_args,
+                                };
+                                if let Some(stmt) = assign_to_destination(
+                                    ctx,
+                                    resolver,
+                                    destination,
+                                    call_expr,
+                                    tc,
+                                )? {
+                                    let target = if barrier_active {
+                                        &mut ordered_stmts
+                                    } else {
+                                        &mut stmts
+                                    };
+                                    target.push(stmt);
+                                }
+                                current = next.unwrap_or(usize::MAX);
+                            } else {
+                                // Supported external callable not materialized — hard error.
+                                return Err(super::SemanticLoweringError::UnresolvedFunction {
+                                    path: mir_fn_path.clone(),
+                                    hint: "supported external callable not materialized".into(),
+                                });
+                            }
+                        } else {
+                            // Not a supported external callable — delegate to
+                            // call_lowering for structural-core checks or hard error.
+                            let call_stmts = lower_call(
+                                &ctx.fn_ctx,
+                                &mut ctx.local_env,
+                                resolver,
+                                &classification,
+                                &mir_fn_path,
+                                args,
+                                destination,
+                                tc,
+                            )?;
+                            let target = if barrier_active {
+                                &mut ordered_stmts
+                            } else {
+                                &mut stmts
+                            };
+                            target.extend(call_stmts);
+                            current = next.unwrap_or(usize::MAX);
+                        }
+                    }
+
                     // All other classified calls.
                     _ => {
                         let call_stmts = lower_call(
@@ -755,6 +822,33 @@ fn lower_assign(
 
         _ => Ok(None),
     }
+}
+
+/// Lower MIR call arguments for an external function call.
+///
+/// Detects whether the first MIR arg is a self receiver by inspecting
+/// the resolved place. Associated functions like `RxChar::new` have no
+/// self receiver; their MIR args start with the first real parameter.
+fn lower_external_call_args(
+    fn_ctx: &crate::lowering::mir_interpreter::context::FnContext<'_>,
+    local_env: &mut super::local_env::LocalEnvironment,
+    resolver: &ReferenceResolver,
+    args: &[regseq_model::declaration::mir_body::MirOperand],
+    tc: super::expr_lowering::TypeCtx<'_>,
+) -> Result<Vec<Expr>, super::SemanticLoweringError> {
+    use regseq_model::declaration::mir_body::MirOperand;
+
+    let first_is_self = match args.first() {
+        Some(MirOperand::Copy { place } | MirOperand::Move { place }) => {
+            matches!(resolve_place(fn_ctx, place), ResolvedPlace::SelfRef)
+        }
+        _ => false,
+    };
+    let skip = if first_is_self { 1 } else { 0 };
+    args.iter()
+        .skip(skip)
+        .map(|a| super::expr_lowering::lower_operand(fn_ctx, local_env, resolver, a, tc))
+        .collect()
 }
 
 /// Assign a value-producing expression to a destination local.
