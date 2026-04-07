@@ -1275,7 +1275,7 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": "5 of 8 checks fail: canonical path lacks crate prefix (check 2), block-level endian/access_width not extracted (checks 3,8), reserved-region byte offsets not preserved (check 4), per-register type name/byte offset/access kind not extracted (check 6). Report: docs/validation/01-pl011/checks/results/01-register-block-extraction.md"
+          "fail_reason": "4 of 8 checks fail: block-level endian/access_width dropped (check 3,8), reserved region offsets not reconstructable (check 4), per-register facts incomplete -- only field name preserved, no register name/offset/access kind (check 6). See docs/validation/01-pl011/checks/results/01-register-block-extraction.md"
         }
       ]
     },

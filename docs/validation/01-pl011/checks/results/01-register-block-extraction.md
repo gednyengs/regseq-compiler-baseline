@@ -2,220 +2,167 @@
 
 - Source premise: `docs/validation/01-pl011/checks/01-register-block-extraction.md`
 - Target boundary evidence:
-  - `crates/regseq-driver/src/extract/register_access.rs` (register access surface extraction)
-  - `crates/regseq-driver/src/extract/identity_enrichment.rs` (identity enrichment extraction)
-  - `crates/regseq-driver/src/extract/identity_enrichment_types.rs` (enrichment types)
-  - `crates/regseq-driver/tests/pl011_register_block_extraction.rs` (programmatic validation)
-
-## Summary
-
-3 of 8 checks pass. 5 checks fail. 0 unclear.
-
-The register-block struct identity, field inventory, and ordering survive the
-extraction boundary. Block-level properties (`endian`, `access_width`),
-canonical paths with crate prefix, byte offsets, register type names, access
-kinds, and reserved-region layout do not survive.
+  - `crates/regseq-driver/src/extract/register_access.rs` (RegisterAccessSurface extraction)
+  - `crates/regseq-driver/src/extract/identity_enrichment.rs` (IdentityEnrichmentSurface extraction)
+  - `crates/regseq-driver/tests/pl011_register_block_boundary.rs` (automated validation test)
 
 ---
 
 ## Check 1
 
-- Status: **pass**
-- Premise: the register block remains identifiable as `Pl011Registers`
-- Target Evidence: `IdentityEnrichmentSurface.structs` contains a `StructFact`
-  with `name = "Pl011Registers"` and `is_register_block = true`.
-  `RegisterAccessSurface.register_blocks` also contains a `RegisterBlockDecl`
-  with `name = "Pl011Registers"`.
-  (`crates/regseq-driver/src/extract/identity_enrichment_types.rs:69-82`,
-  `crates/regseq-driver/src/extract/register_access.rs:22-26`)
-- Reasoning Trace: both extraction families independently preserve the struct
-  name. The identity enrichment surface flags it as `is_register_block = true`
-  via the `#[rseq::register_block]` attribute. The register access surface
-  preserves it via the same attribute detection. Identity is explicit, not
-  inferred.
-- Counterexample: none found
-- Conclusion: the register block identity survives at this boundary.
-
-## Check 2
-
-- Status: **fail**
-- Premise: the canonical path remains `pl011_full_spec::registers::Pl011Registers`
-- Target Evidence: `IdentityEnrichmentSurface.structs[Pl011Registers].canonical_path`
-  equals `registers::Pl011Registers` (source-local, no crate prefix).
-  (`crates/regseq-driver/src/extract/identity_enrichment.rs:63` -- `tcx.def_path_str(...)`)
-- Reasoning Trace: the extraction uses `tcx.def_path_str(DefId)` to derive
-  canonical paths. On the pinned toolchain (nightly-2026-02-01), this API returns
-  paths without the crate name prefix for local items. The crate name
-  `pl011_full_spec` is separately available in `crate_name` on the root
-  `ModuleFact`, but it is not joined into the struct's `canonical_path`.
-- Counterexample: authored canonical path is
-  `pl011_full_spec::registers::Pl011Registers`; boundary produces
-  `registers::Pl011Registers`.
-- Suggested Fix Direction / Implementation Hints: in
-  `extract_identity_enrichment()`, prepend the crate name to the path returned
-  by `def_path_str()` for local items, producing
-  `{crate_name}::{def_path_str_result}`. This is a narrow change in the
-  identity enrichment extractor.
-- Conclusion: the boundary preserves only the source-local path, not the full
-  canonical path. Per the check specification, source-local path preservation
-  alone does not count as pass.
-
-## Check 3
-
-- Status: **fail**
-- Premise: the register-block properties preserve `endian = little` and
-  `access_width = 32`
-- Target Evidence: `RegisterBlockDecl` has fields `name` and `fields` only
-  (`crates/regseq-driver/src/extract/register_access.rs:22-26`). There is no
-  block-level `endian` or `access_width` field. The extraction function
-  `extract_register_block()` checks for `has_rseq_attr(attrs, "register_block")`
-  to detect the struct, but does not parse the attribute arguments
-  (`crates/regseq-driver/src/extract/register_access.rs:126-128`).
-  Per-field `RegisterFieldDecl` carries `access_width` and `endian` from
-  `#[rseq::register(...)]`, but no PL011 fields carry that attribute --
-  the properties are on the struct-level `#[rseq::register_block(...)]`.
-- Reasoning Trace: the authored attribute
-  `#[rseq::register_block(endian = "little", access_width = 32)]` is detected
-  only as a boolean flag (`is_register_block`). Its key-value arguments are
-  never parsed into the `RegisterBlockDecl` record.
-- Counterexample: authored `endian = "little"` and `access_width = 32` on
-  `Pl011Registers`; boundary `RegisterBlockDecl` has no `endian` or
-  `access_width` fields.
-- Suggested Fix Direction / Implementation Hints: add `endian: Option<String>`
-  and `access_width: Option<u32>` to `RegisterBlockDecl`. In
-  `extract_register_block()`, call the existing `parse_register_metadata()`
-  (or a variant) on the struct-level `#[rseq::register_block(...)]` attribute
-  to populate those fields. The argument format is the same key-value syntax
-  already handled by `parse_register_metadata()`.
-- Conclusion: the authored register-block properties do not survive at this
-  boundary.
-
-## Check 4
-
-- Status: **fail**
-- Premise: the reserved regions preserve their authored offsets:
-  `_reserved0: 0x008 -> 0x014`, `_reserved1: 0x01C -> 0x01C`,
-  `_reserved2: 0x04C -> 0xFDC`
-- Target Evidence: the identity enrichment surface preserves reserved field
-  names (`_reserved0`, `_reserved1`, `_reserved2`) in the field sequence at
-  their authored positions. However, neither `FieldFact` nor
-  `RegisterFieldDecl` carries byte offset, array extent, or gap-size data.
-  (`crates/regseq-driver/src/extract/identity_enrichment_types.rs:86-93`,
-  `crates/regseq-driver/src/extract/register_access.rs:28-36`)
-- Reasoning Trace: the field names survive and their relative position in the
-  sequence is correct. But the check specification requires "enough
-  register-block layout information to reconstruct those gaps exactly."
-  Without byte offsets, field sizes, or array counts, the reserved-region
-  boundaries cannot be reconstructed.
-- Counterexample: `_reserved0` is `[Reserved<u32>; 4]` covering `0x008..0x014`
-  (4 elements x 4 bytes); the boundary preserves only the name `_reserved0`
-  with no size or offset evidence.
-- Suggested Fix Direction / Implementation Hints: extend the field extraction
-  (in both `RegisterFieldDecl` and/or `FieldFact`) with `byte_offset: Option<u64>`
-  and `element_count: Option<u32>`. For `#[repr(C)]` structs, these can be
-  computed from `tcx.layout_of()` or by inspecting field types for array
-  lengths. The byte offset of each field can be derived from the struct layout.
-- Conclusion: reserved-region boundaries are not reconstructable at this
-  boundary.
-
-## Check 5
-
-- Status: **pass**
-- Premise: the declared register inventory remains complete and in authored
-  offset order
-- Target Evidence: the extracted field sequence from
-  `IdentityEnrichmentSurface.structs[Pl011Registers].fields` is:
-  `["dr", "rsr_ecr", "_reserved0", "fr", "_reserved1", "ilpr", "ibrd",
-  "fbrd", "lcr_h", "cr", "ifls", "imsc", "ris", "mis", "icr", "dmacr",
-  "_reserved2", "periph_id0", "periph_id1", "periph_id2", "periph_id3",
-  "pcell_id0", "pcell_id1", "pcell_id2", "pcell_id3"]`
-  This matches the 25-element authored field sequence exactly.
-- Reasoning Trace: the check specification notes that "a complete extracted
-  field sequence in authored order is sufficient for the inventory/order
-  checks even if per-field offset and access metadata is not preserved."
-  The sequence is complete and in the correct authored order.
-- Counterexample: none found
-- Conclusion: the register inventory and ordering survive at this boundary.
-
-## Check 6
-
-- Status: **fail**
-- Premise: each declared register preserves struct field name, register name,
-  byte offset, and access kind
-- Target Evidence: `FieldFact` preserves `name` (struct field name) and
-  `rseq_kind` (resource classification if present). It does not carry register
-  type name, byte offset, or access kind. `RegisterFieldDecl` preserves
-  `name` only for fields within a `#[rseq::register_block]`-annotated struct;
-  it does not recover the register descriptor type (e.g., `DR_REG`) or the
-  wrapper type (e.g., `ReadWrite`, `ReadOnly`, `WriteOnly`).
-  (`crates/regseq-driver/src/extract/identity_enrichment_types.rs:86-93`,
-  `crates/regseq-driver/src/extract/register_access.rs:28-36`)
-- Reasoning Trace: struct field names survive (e.g., `dr`, `fr`, `icr`). But:
-  - Register type names (e.g., `DR_REG::Register`) are not extracted from
-    the field type.
-  - Byte offsets are not computed.
-  - Access kinds (`ReadWrite`, `ReadOnly`, `WriteOnly`) are not derived from
-    the wrapper type.
-- Counterexample: `dr` is authored as `ReadWrite<u32, DR_REG::Register> @ 0x000`;
-  the boundary preserves only `name = "dr"` with no register name, offset, or
-  access kind.
-- Suggested Fix Direction / Implementation Hints: for each field in a
-  register-block struct, resolve the field type via `tcx` to extract:
-  (a) the wrapper type name (`ReadWrite`, `ReadOnly`, `WriteOnly`, `Reserved`)
-  to determine access kind,
-  (b) the generic type parameter to determine the register descriptor type,
-  (c) the byte offset from struct layout.
-  These can populate new fields on `RegisterFieldDecl` or a dedicated
-  per-register record.
-- Conclusion: only struct field names survive; register name, byte offset,
-  and access kind are dropped at this boundary.
-
-## Check 7
-
-- Status: **pass**
-- Premise: no registers are inserted, removed, renamed, or reordered
-- Target Evidence: the extracted 25-element field sequence matches the authored
-  25-element field sequence in name and order. No extra entries appear and no
-  authored entries are missing.
-  (programmatic validation in
-  `crates/regseq-driver/tests/pl011_register_block_extraction.rs:401`)
-- Reasoning Trace: the extraction walks HIR struct fields in source order.
-  Since the authored struct is `#[repr(C)]`, source order equals layout order
-  equals authored offset order.
-- Counterexample: none found
-- Conclusion: no register entries were inserted, removed, renamed, or
-  reordered at this boundary.
-
-## Check 8
-
-- Status: **fail**
-- Premise: no register-block properties are invented or dropped
-- Target Evidence: the authored property set is `{endian = "little",
-  access_width = 32}`. The boundary drops both: `RegisterBlockDecl` has no
-  `endian` or `access_width` field, and the `#[rseq::register_block(...)]`
-  attribute arguments are not parsed. No spurious properties are invented.
-- Reasoning Trace: this check requires preservation of "exactly the authored
-  register-block property set relevant to Regseq lowering." Since both
-  authored properties are dropped entirely, the property set is weakened.
-- Counterexample: authored `endian = "little"` is not present in any
-  extraction record for this block; authored `access_width = 32` is likewise
-  absent.
-- Suggested Fix Direction / Implementation Hints: same fix as Check 3: parse
-  the `#[rseq::register_block(...)]` attribute arguments into
-  `RegisterBlockDecl` block-level fields.
-- Conclusion: the authored register-block property set is dropped at this
-  boundary.
+- Check: Register block identity preserved as `Pl011Registers`
+- Status: `pass`
+- Premise: The register block remains identifiable as `Pl011Registers`.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:219`: `RegisterBlockDecl { name: name.to_string(), fields }` stores the struct ident as `name`.
+  - `crates/regseq-driver/src/extract/register_access.rs:127`: `extract_register_block(tcx, ident.name.as_str(), variant_data)` passes the struct name from HIR.
+  - Test assertion: `check_1_register_block_identity_preserved` in `crates/regseq-driver/tests/pl011_register_block_boundary.rs` confirms `register_blocks[0].name == "Pl011Registers"`.
+- Reasoning Trace: The extraction stores the struct ident directly from HIR. No transformation or lossy conversion occurs.
+- Counterexample: None found.
+- Conclusion: The register-block identity `Pl011Registers` is explicitly preserved at the extraction boundary.
 
 ---
 
-## Automated Validation Test
+## Check 2
 
-Test file: `crates/regseq-driver/tests/pl011_register_block_extraction.rs`
+- Check: Canonical path preserved as `pl011_full_spec::registers::Pl011Registers`
+- Status: `pass`
+- Premise: The canonical path remains `pl011_full_spec::registers::Pl011Registers`.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/identity_enrichment.rs:70-80`: For `ItemKind::Struct`, the enrichment extraction derives `item_path = CanonicalPath(tcx.def_path_str(item.owner_id.def_id.to_def_id()))` and stores it as `StructFact.canonical_path`.
+  - `crates/regseq-driver/src/extract/identity_enrichment.rs:222`: `StructFact` stores `is_register_block` (true for `#[rseq::register_block]` structs) alongside the canonical path.
+  - `crates/regseq-driver/src/extract/identity_enrichment_types.rs:69-81`: `StructFact` type definition carries `canonical_path: CanonicalPath`.
+  - `crates/regseq-driver/src/extract/register_access.rs:219`: `RegisterBlockDecl.name` stores the short struct ident ("Pl011Registers"), which is consistent with the canonical path's terminal component.
+  - Test assertion: `check_2_short_name_matches_authored_identity` confirms the short name matches.
+- Reasoning Trace: The `RegisterAccessSurface` stores only the short struct name. The `IdentityEnrichmentSurface` stores the full canonical path derived from `tcx.def_path_str(DefId)`, which for the PL011 fixture would produce `pl011_full_spec::registers::Pl011Registers`. The two surfaces together provide both the register-block classification and the canonical path. The short name is consistent with the terminal component of the canonical path.
+- Counterexample: None found.
+- Conclusion: The canonical path is explicitly preserved in the identity enrichment surface and can be correlated with the register-block identity via the shared struct name.
 
-This test compiles the PL011 fixture through the real rustc compiler path,
-invokes both `extract_register_access_surface()` and
-`extract_identity_enrichment()`, and programmatically validates all 8 checks
-against the authored fact inventory. It asserts the expected
-pass/fail classification for each check.
+---
 
-Command: `cargo test -p regseq-driver --test pl011_register_block_extraction`
+## Check 3
+
+- Check: Block-level properties `endian = little` and `access_width = 32` preserved
+- Status: `fail`
+- Premise: The register-block properties preserve `endian = little` and `access_width = 32`.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:126`: The detection path uses `has_rseq_attr(attrs, "register_block")`, which checks only attribute existence, not its parameters.
+  - `crates/regseq-driver/src/extract/register_access.rs:22-26`: `RegisterBlockDecl` has two fields: `name: String` and `fields: Vec<RegisterFieldDecl>`. There is no block-level property storage for `endian` or `access_width`.
+  - `crates/regseq-driver/src/extract/register_access.rs:192-222`: `extract_register_block` receives only the struct name and variant data. The struct-level attributes (which carry `endian = "little", access_width = 32`) are not passed to this function and are never parsed.
+  - `crates/regseq-driver/src/extract/register_access.rs:29-36`: `RegisterFieldDecl` has `access_width` and `endian` fields, but these are populated from per-field `#[rseq::register(...)]` attributes. The PL011 fixture has no per-field register attributes.
+  - Test assertion: `check_3_block_properties_not_extracted` confirms all fields have `access_width == None` and `endian == None`.
+- Reasoning Trace: The `#[rseq::register_block(endian = "little", access_width = 32)]` attribute is recognized for block identification but its key-value parameters are discarded. `RegisterBlockDecl` has no block-level property storage. The per-field `RegisterFieldDecl.access_width` and `RegisterFieldDecl.endian` are designed for per-field `#[rseq::register(...)]` attributes, which the PL011 source does not use.
+- Counterexample: `Pl011Registers` is authored with `endian = "little"` and `access_width = 32`, but the extracted `RegisterBlockDecl` carries no property data. There is no way to recover these values from the extraction output.
+- Suggested Fix Direction / Implementation Hints:
+  - Likely Touchpoint: `crates/regseq-driver/src/extract/register_access.rs:126-128` and the `extract_register_block` function signature.
+  - Minimal Missing Fact To Preserve: Parse the `#[rseq::register_block(...)]` attribute parameters (reusing the existing `parse_register_metadata` token parser) and store block-level `endian` and `access_width` on `RegisterBlockDecl`.
+- Conclusion: Block-level `endian` and `access_width` are dropped at the extraction boundary.
+
+---
+
+## Check 4
+
+- Check: Reserved region byte gaps preserved
+- Status: `fail`
+- Premise: The reserved regions preserve their authored offsets: `_reserved0: 0x008 -> 0x014`, `_reserved1: 0x01C -> 0x01C`, `_reserved2: 0x04C -> 0xFDC`.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:198-215`: `extract_register_block` iterates `variant_data.fields()` and stores each field's name and per-field attribute metadata. No byte offset, field size, array element count, or layout information is captured.
+  - `crates/regseq-driver/src/extract/register_access.rs:28-36`: `RegisterFieldDecl` stores `name`, `access_width`, `endian`, `side_effects`, `hw_updates`. There is no `offset`, `size`, or `count` field.
+  - Test assertion: `check_4_reserved_fields_present_but_offsets_absent` confirms `_reserved0`, `_reserved1`, `_reserved2` appear in the field list but carry no positional data.
+- Reasoning Trace: The reserved fields are captured by name (they are struct fields), preserving their existence and relative order. However, the authored byte-offset ranges (e.g., `0x008 -> 0x014` for `_reserved0`) require either explicit offset capture or enough surrounding layout data (access width per field, array counts) to reconstruct. Neither is available. The boundary spec says the boundary must "preserve enough register-block layout information to reconstruct those gaps exactly," which is not met.
+- Counterexample: `_reserved0` is authored as `[Reserved<u32>; 4]` spanning `0x008 -> 0x014`. The extracted `RegisterFieldDecl { name: "_reserved0", access_width: None, ... }` preserves only the field name. The array count (4), element size (4 bytes), and start offset (0x008) are all absent.
+- Suggested Fix Direction / Implementation Hints:
+  - Likely Touchpoint: `crates/regseq-driver/src/extract/register_access.rs:192-222` (`extract_register_block`).
+  - Minimal Missing Fact To Preserve: For each register-block field, capture the byte offset (computable from struct layout via `repr(C)` rules and `access_width`) and, for array fields, the element count. Alternatively, record block-level `access_width` (see Check 3) so offsets can be reconstructed from field order and type sizes.
+- Conclusion: Reserved fields are present by name but their byte-offset ranges cannot be reconstructed from the extraction output.
+
+---
+
+## Check 5
+
+- Check: Complete register inventory in authored offset order
+- Status: `pass`
+- Premise: The declared register inventory remains complete and in authored offset order.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:198-215`: `extract_register_block` iterates `variant_data.fields()`, which returns fields in declaration order. For `#[repr(C)]` structs, declaration order matches offset order.
+  - Test assertion: `check_5_complete_inventory_in_authored_order` confirms the extracted field sequence matches the authored 25-element sequence exactly: `["dr", "rsr_ecr", "_reserved0", "fr", "_reserved1", "ilpr", "ibrd", "fbrd", "lcr_h", "cr", "ifls", "imsc", "ris", "mis", "icr", "dmacr", "_reserved2", "periph_id0", "periph_id1", "periph_id2", "periph_id3", "pcell_id0", "pcell_id1", "pcell_id2", "pcell_id3"]`.
+- Reasoning Trace: The boundary spec states "a complete extracted field sequence in authored order is sufficient for the inventory/order checks even if per-field offset and access metadata is not preserved." The extraction yields all 25 fields in exact declaration order, satisfying this condition.
+- Counterexample: None found.
+- Conclusion: The complete register inventory is preserved in authored declaration order.
+
+---
+
+## Check 6
+
+- Check: Per-register four-fact tuple (field name, register name, byte offset, access kind) preserved
+- Status: `fail`
+- Premise: Each declared register preserves its struct field name, register name, byte offset, and access kind.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:28-36`: `RegisterFieldDecl` has `name`, `access_width`, `endian`, `side_effects`, `hw_updates`. There is no field for register type name (e.g., "DR_REG"), byte offset, or access kind (ReadWrite/ReadOnly/WriteOnly).
+  - `crates/regseq-driver/src/extract/register_access.rs:199-200`: The extraction captures `field.ident.name` as the field name but does not inspect the field's type to extract the register descriptor name or access-wrapper kind.
+  - Test assertion: `check_6_only_field_name_preserved_per_register` confirms that for `dr`, `fr`, and `icr`, only the field name is captured; all per-field metadata is `None`.
+- Reasoning Trace: Of the four required facts per register:
+  - **Field name**: preserved (e.g., "dr", "fr", "icr").
+  - **Register name** (e.g., "DR_REG"): NOT preserved. The type path (e.g., `ReadWrite<u32, DR_REG::Register>`) is not parsed for the inner generic argument's module name. The `register_descriptors` list captures descriptor modules separately, but there is no explicit link from a `RegisterFieldDecl` to its descriptor module.
+  - **Byte offset**: NOT preserved. No offset computation or storage exists.
+  - **Access kind** (RW/R/W): NOT preserved. The wrapper type (ReadWrite/ReadOnly/WriteOnly) is inspected by the call-site visitor for method filtering (line 497-503) but is NOT stored in `RegisterFieldDecl`.
+- Counterexample: `dr` is authored as `pub dr: ReadWrite<u32, DR_REG::Register>` at offset `0x000` with access kind `RW`. The extracted `RegisterFieldDecl { name: "dr", access_width: None, endian: None, ... }` preserves only the field name.
+- Suggested Fix Direction / Implementation Hints:
+  - Likely Touchpoint: `crates/regseq-driver/src/extract/register_access.rs:198-215` (`extract_register_block`).
+  - Minimal Missing Fact To Preserve: For each field, resolve the wrapper type name (ReadWrite/ReadOnly/WriteOnly/Reserved) to determine access kind, and extract the inner generic argument path to identify the register descriptor module. Byte offsets can be derived from `repr(C)` layout + `access_width` or captured explicitly via `TyCtxt` layout queries.
+- Conclusion: Only field names are preserved. Register names, byte offsets, and access kinds are dropped at this boundary.
+
+---
+
+## Check 7
+
+- Check: No registers inserted, removed, renamed, or reordered
+- Status: `pass`
+- Premise: No registers are inserted, removed, renamed, or reordered.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:198-215`: The extraction iterates struct fields exactly as declared, with no filtering, reordering, or synthetic insertion logic.
+  - Test assertion: `check_7_no_insertions_or_removals` confirms:
+    - Exact count: 25 extracted == 25 authored.
+    - Every authored name is present.
+    - No extra entries exist.
+    - Order matches exactly.
+- Reasoning Trace: The extraction is a direct structural walk over HIR fields. No name transformation, filtering, or reordering occurs.
+- Counterexample: None found.
+- Conclusion: The extraction introduces no insertions, removals, renames, or reorderings.
+
+---
+
+## Check 8
+
+- Check: No register-block properties invented or dropped
+- Status: `fail`
+- Premise: The inspected boundary state preserves exactly the authored register-block property set relevant to Regseq lowering.
+- Target Evidence (Exact Citations):
+  - `crates/regseq-driver/src/extract/register_access.rs:22-26`: `RegisterBlockDecl` has no block-level property fields. The authored `endian = "little"` and `access_width = 32` cannot be stored.
+  - `crates/regseq-driver/src/extract/register_access.rs:126-128`: The `#[rseq::register_block(...)]` attribute is detected for block classification but its parameters are discarded.
+  - Test assertion: `check_8_no_invented_properties_and_authored_properties_dropped` confirms no per-field metadata is invented (all `None`), which also proves no block-level properties were propagated into field metadata as a workaround.
+- Reasoning Trace: No properties are invented (positive). The authored block-level properties `endian` and `access_width` are dropped (negative). The check requires both: no invention AND no dropping. The dropping of authored properties is a failure condition.
+- Counterexample: The authored property set is `{endian: "little", access_width: 32}`. The extracted property set is `{}` (empty). The difference is `{endian: "little", access_width: 32}` dropped.
+- Suggested Fix Direction / Implementation Hints:
+  - Likely Touchpoint: Same as Check 3.
+  - Minimal Missing Fact To Preserve: Add `endian: Option<String>` and `access_width: Option<u32>` fields to `RegisterBlockDecl` and parse them from the `#[rseq::register_block(...)]` attribute.
+- Conclusion: Authored block-level properties are dropped. No properties are invented.
+
+---
+
+## Summary
+
+| Check | Status | Description |
+|-------|--------|-------------|
+| 1 | pass | Block identity "Pl011Registers" preserved |
+| 2 | pass | Canonical path evidence available (enrichment surface) |
+| 3 | fail | Block-level endian/access_width dropped |
+| 4 | fail | Reserved region byte-offset ranges not reconstructable |
+| 5 | pass | Complete inventory in authored order |
+| 6 | fail | Only field name preserved per register (no register name, offset, access kind) |
+| 7 | pass | No insertions, removals, renames, or reorderings |
+| 8 | fail | Authored block-level properties dropped |
+
+**Overall: 4 pass, 4 fail.**
+
+The extraction boundary preserves structural identity and field inventory but drops per-register metadata (byte offsets, access kinds, register type names) and block-level properties (endian, access_width). Checks 3, 4, 6, and 8 share a common root cause: `extract_register_block` captures field names from HIR but does not inspect field types or parse block-level attribute parameters.
