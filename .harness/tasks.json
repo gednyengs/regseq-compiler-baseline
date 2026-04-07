@@ -1038,14 +1038,14 @@
           "id": "regseq-linux-backend-02",
           "name": "PL011 Linux driver emission for supported slice",
           "spec": ".harness/tasks/regseq-linux-backend/02-pl011-linux-driver-emission-for-supported-slice.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-linux-backend-01",
             "regseq-lowering-09",
             "track-a-validation-10"
           ],
           "artifacts": [],
-          "fail_reason": "Reopened. Historical rejection notes predating the accepted SemanticModel migration have been intentionally cleared from this active harness entry so the next plan is based on the current task spec and codebase, not stale mixed-era guidance. The still-relevant boundary is: canonical Linux emission must consume DriverLoweringPlan.behavior as SemanticModel, emitted helper/ISR bodies must be compile-valid C that preserves lowered semantics, and backend-local tests must prove canonical emitted-body validity rather than only string-shape properties."
+          "fail_reason": null
         }
       ]
     },
@@ -1251,13 +1251,31 @@
           "id": "pl011-linux-validation-11",
           "name": "Generated PL011 Linux module host-build proof",
           "spec": ".harness/tasks/track-a-validation/11-pl011-linux-module-host-build-proof.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-linux-backend-02",
             "regseq-driver-23"
           ],
           "artifacts": [],
           "fail_reason": null
+        }
+      ]
+    },
+    {
+      "id": "source-to-extraction",
+      "name": "source to extraction boundary validation",
+      "tasks": [
+        {
+          "id": "source-to-extraction-01",
+          "name": "PL011 register-block authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/01-pl011-register-block-authored-to-extraction.md",
+          "status": "failed",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": "5 of 8 checks fail: canonical path lacks crate prefix (check 2), block-level endian/access_width not extracted (checks 3,8), reserved-region byte offsets not preserved (check 4), per-register type name/byte offset/access kind not extracted (check 6). Report: docs/validation/01-pl011/checks/results/01-register-block-extraction.md"
         }
       ]
     },
