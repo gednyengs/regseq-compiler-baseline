@@ -1275,7 +1275,7 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": "4 of 8 checks fail: block-level endian/access_width dropped (Check 3), reserved byte offsets not reconstructible (Check 4), per-register register-name/offset/access-kind not captured (Check 6), block properties dropped (Check 8). See docs/validation/01-pl011/checks/results/01-register-block-extraction.md for details and fix hints."
+          "fail_reason": "4 of 8 checks fail: block-level properties (endian, access_width) dropped (checks 3, 8); reserved region byte offsets not extracted (check 4); per-register type info (register name, byte offset, access kind) not extracted (check 6). Root cause: extract_register_block() does not parse #[rseq::register_block] attribute args and does not capture per-field type information. See docs/validation/01-pl011/checks/results/01-register-block-extraction.md for detailed report."
         }
       ]
     },

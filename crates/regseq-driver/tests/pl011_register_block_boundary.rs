@@ -1,3 +1,13 @@
+//! Boundary validation: PL011 register-block authored -> extraction.
+//!
+//! Validates checks 1-8 from
+//! `docs/validation/01-pl011/checks/01-register-block-extraction.md`
+//! against the compiler-side extraction surfaces (`RegisterAccessSurface`
+//! and `IdentityEnrichmentSurface`).
+//!
+//! Specimen: inline mirror of `tests/fixtures/pl011-full-spec/src/registers.rs`
+//! preserving every structural fact required by the checks.
+
 #![feature(rustc_private)]
 
 extern crate rustc_ast;
@@ -18,11 +28,13 @@ mod identity_enrichment_types;
 #[path = "../src/extract/identity_enrichment.rs"]
 mod identity_enrichment;
 
-use identity_enrichment::*;
-use register_access::*;
+use identity_enrichment::{IdentityEnrichmentError, IdentityEnrichmentSurface};
+use register_access::{RegisterAccessError, RegisterAccessSurface};
 
-type RaResult = Result<RegisterAccessSurface, RegisterAccessError>;
-type IeResult = Result<IdentityEnrichmentSurface, IdentityEnrichmentError>;
+type BothSurfaces = (
+    Result<RegisterAccessSurface, RegisterAccessError>,
+    Result<IdentityEnrichmentSurface, IdentityEnrichmentError>,
+);
 
 static INIT: Once = Once::new();
 static COMPILER_LOCK: Mutex<()> = Mutex::new(());
@@ -44,12 +56,9 @@ fn get_sysroot() -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
-struct BoundaryResult {
-    register_access: RegisterAccessSurface,
-    identity_enrichment: IdentityEnrichmentSurface,
-}
-
-fn compile_and_extract(source: &str, test_name: &str) -> BoundaryResult {
+/// Compile the inline specimen and extract both the register-access and
+/// identity-enrichment surfaces in a single compiler invocation.
+fn compile_and_extract_both(source: &str, test_name: &str, crate_name: &str) -> BothSurfaces {
     let _lock = COMPILER_LOCK.lock().unwrap();
     init_rustc();
 
@@ -66,12 +75,10 @@ fn compile_and_extract(source: &str, test_name: &str) -> BoundaryResult {
 
     let sysroot = get_sysroot();
 
-    let ra_result: Arc<Mutex<Option<RaResult>>> = Arc::new(Mutex::new(None));
-    let ie_result: Arc<Mutex<Option<IeResult>>> = Arc::new(Mutex::new(None));
+    let result: Arc<Mutex<Option<BothSurfaces>>> = Arc::new(Mutex::new(None));
 
     struct ExtractCallbacks {
-        ra: Arc<Mutex<Option<RaResult>>>,
-        ie: Arc<Mutex<Option<IeResult>>>,
+        result: Arc<Mutex<Option<BothSurfaces>>>,
     }
 
     impl rustc_driver::Callbacks for ExtractCallbacks {
@@ -94,15 +101,15 @@ fn compile_and_extract(source: &str, test_name: &str) -> BoundaryResult {
             _compiler: &rustc_interface::interface::Compiler,
             tcx: rustc_middle::ty::TyCtxt<'tcx>,
         ) -> rustc_driver::Compilation {
-            *self.ra.lock().unwrap() = Some(extract_register_access_surface(tcx));
-            *self.ie.lock().unwrap() = Some(extract_identity_enrichment(tcx));
+            let ra = register_access::extract_register_access_surface(tcx);
+            let ie = identity_enrichment::extract_identity_enrichment(tcx);
+            *self.result.lock().unwrap() = Some((ra, ie));
             rustc_driver::Compilation::Stop
         }
     }
 
     let mut callbacks = ExtractCallbacks {
-        ra: ra_result.clone(),
-        ie: ie_result.clone(),
+        result: result.clone(),
     };
 
     let args = vec![
@@ -114,117 +121,146 @@ fn compile_and_extract(source: &str, test_name: &str) -> BoundaryResult {
         "2021".to_string(),
         "--crate-type".to_string(),
         "lib".to_string(),
+        "--crate-name".to_string(),
+        crate_name.to_string(),
         "--out-dir".to_string(),
         test_dir.to_str().unwrap().to_string(),
     ];
 
     rustc_driver::run_compiler(&args, &mut callbacks);
 
-    let ra = ra_result
+    let extracted = result
         .lock()
         .unwrap()
         .take()
-        .expect("after_analysis should have run (register access)")
-        .expect("register access extraction failed");
-    let ie = ie_result
-        .lock()
-        .unwrap()
-        .take()
-        .expect("after_analysis should have run (identity enrichment)")
-        .expect("identity enrichment extraction failed");
+        .expect("after_analysis should have been called");
 
     std::fs::remove_dir_all(&test_dir).ok();
 
-    BoundaryResult {
-        register_access: ra,
-        identity_enrichment: ie,
-    }
+    extracted
 }
 
 // ---------------------------------------------------------------------------
-// Inline fixture mirroring PL011 Pl011Registers authored layout.
-//
-// Preserves: struct name, field names, field order, field count, reserved
-// regions, block-level #[rseq::register_block(endian, access_width)] attribute,
-// wrapper-type structure (ReadWrite/ReadOnly/WriteOnly/Reserved), register
-// descriptor module names, and a driver struct for identity enrichment.
-//
-// Omits: register_bitfields! macro expansion internals (field/named-value
-// constants) because those are a separate extraction family not in scope for
-// the register-block boundary check.
+// Inline specimen: faithful mirror of the authored PL011 register block
 // ---------------------------------------------------------------------------
 
-const PL011_FIXTURE: &str = r#"
+const PL011_SPECIMEN: &str = r#"
     use core::marker::PhantomData;
 
+    pub struct Mmio<T> { _t: PhantomData<T> }
     pub struct ReadWrite<T, R> { _v: T, _r: PhantomData<R> }
     pub struct ReadOnly<T, R> { _v: T, _r: PhantomData<R> }
     pub struct WriteOnly<T, R> { _v: T, _r: PhantomData<R> }
     pub struct Reserved<T> { _v: T }
-    pub struct Mmio<T> { _t: PhantomData<T> }
 
-    #[allow(non_snake_case)] pub mod DR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod RSR_ECR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod FR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod ILPR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod IBRD_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod FBRD_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod LCRH_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod CR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod IFLS_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod IMSC_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod RIS_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod MIS_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod ICR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod DMACR_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PERIPHID0_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PERIPHID1_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PERIPHID2_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PERIPHID3_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PCELLID0_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PCELLID1_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PCELLID2_REG { pub struct Register; }
-    #[allow(non_snake_case)] pub mod PCELLID3_REG { pub struct Register; }
-
-    #[repr(C)]
-    #[rseq::register_block(endian = "little", access_width = 32)]
-    pub struct Pl011Registers {
-        pub dr: ReadWrite<u32, DR_REG::Register>,
-        pub rsr_ecr: ReadWrite<u32, RSR_ECR_REG::Register>,
-        _reserved0: [Reserved<u32>; 4],
-        pub fr: ReadOnly<u32, FR_REG::Register>,
-        _reserved1: Reserved<u32>,
-        pub ilpr: ReadWrite<u32, ILPR_REG::Register>,
-        pub ibrd: ReadWrite<u32, IBRD_REG::Register>,
-        pub fbrd: ReadWrite<u32, FBRD_REG::Register>,
-        pub lcr_h: ReadWrite<u32, LCRH_REG::Register>,
-        pub cr: ReadWrite<u32, CR_REG::Register>,
-        pub ifls: ReadWrite<u32, IFLS_REG::Register>,
-        pub imsc: ReadWrite<u32, IMSC_REG::Register>,
-        pub ris: ReadOnly<u32, RIS_REG::Register>,
-        pub mis: ReadOnly<u32, MIS_REG::Register>,
-        pub icr: WriteOnly<u32, ICR_REG::Register>,
-        pub dmacr: ReadWrite<u32, DMACR_REG::Register>,
-        _reserved2: [Reserved<u32>; 997],
-        pub periph_id0: ReadOnly<u32, PERIPHID0_REG::Register>,
-        pub periph_id1: ReadOnly<u32, PERIPHID1_REG::Register>,
-        pub periph_id2: ReadOnly<u32, PERIPHID2_REG::Register>,
-        pub periph_id3: ReadOnly<u32, PERIPHID3_REG::Register>,
-        pub pcell_id0: ReadOnly<u32, PCELLID0_REG::Register>,
-        pub pcell_id1: ReadOnly<u32, PCELLID1_REG::Register>,
-        pub pcell_id2: ReadOnly<u32, PCELLID2_REG::Register>,
-        pub pcell_id3: ReadOnly<u32, PCELLID3_REG::Register>,
+    macro_rules! reg_mod {
+        ($($name:ident),* $(,)?) => {
+            $(
+                #[allow(non_snake_case)]
+                pub mod $name { pub struct Register; }
+            )*
+        }
     }
 
-    #[rseq::driver(name = "pl011-boundary-test")]
-    pub struct BoundaryTestDriver {
-        #[rseq::mmio(id = "uart_regs")]
-        pub regs: Mmio<Pl011Registers>,
+    reg_mod!(
+        DR_REG, RSR_ECR_REG, FR_REG, ILPR_REG, IBRD_REG, FBRD_REG,
+        LCRH_REG, CR_REG, IFLS_REG, IMSC_REG, RIS_REG, MIS_REG,
+        ICR_REG, DMACR_REG,
+        PERIPHID0_REG, PERIPHID1_REG, PERIPHID2_REG, PERIPHID3_REG,
+        PCELLID0_REG, PCELLID1_REG, PCELLID2_REG, PCELLID3_REG,
+    );
+
+    pub mod registers {
+        use super::*;
+
+        #[repr(C)]
+        #[rseq::register_block(endian = "little", access_width = 32)]
+        pub struct Pl011Registers {
+            /// 0x000 - Data Register.
+            pub dr: ReadWrite<u32, DR_REG::Register>,
+
+            /// 0x004 - Receive Status / Error Clear Register.
+            pub rsr_ecr: ReadWrite<u32, RSR_ECR_REG::Register>,
+
+            /// 0x008..0x014 - Reserved.
+            _reserved0: [Reserved<u32>; 4],
+
+            /// 0x018 - Flag Register.
+            pub fr: ReadOnly<u32, FR_REG::Register>,
+
+            /// 0x01C - Reserved.
+            _reserved1: Reserved<u32>,
+
+            /// 0x020 - IrDA Low-Power Counter Register.
+            pub ilpr: ReadWrite<u32, ILPR_REG::Register>,
+
+            /// 0x024 - Integer Baud Rate Register.
+            pub ibrd: ReadWrite<u32, IBRD_REG::Register>,
+
+            /// 0x028 - Fractional Baud Rate Register.
+            pub fbrd: ReadWrite<u32, FBRD_REG::Register>,
+
+            /// 0x02C - Line Control Register.
+            pub lcr_h: ReadWrite<u32, LCRH_REG::Register>,
+
+            /// 0x030 - Control Register.
+            pub cr: ReadWrite<u32, CR_REG::Register>,
+
+            /// 0x034 - Interrupt FIFO Level Select Register.
+            pub ifls: ReadWrite<u32, IFLS_REG::Register>,
+
+            /// 0x038 - Interrupt Mask Set/Clear Register.
+            pub imsc: ReadWrite<u32, IMSC_REG::Register>,
+
+            /// 0x03C - Raw Interrupt Status Register.
+            pub ris: ReadOnly<u32, RIS_REG::Register>,
+
+            /// 0x040 - Masked Interrupt Status Register.
+            pub mis: ReadOnly<u32, MIS_REG::Register>,
+
+            /// 0x044 - Interrupt Clear Register.
+            pub icr: WriteOnly<u32, ICR_REG::Register>,
+
+            /// 0x048 - DMA Control Register.
+            pub dmacr: ReadWrite<u32, DMACR_REG::Register>,
+
+            /// 0x04C..0xFDC - Reserved and test-only regions.
+            _reserved2: [Reserved<u32>; 997],
+
+            /// 0xFE0 - Peripheral Identification Register 0.
+            pub periph_id0: ReadOnly<u32, PERIPHID0_REG::Register>,
+
+            /// 0xFE4 - Peripheral Identification Register 1.
+            pub periph_id1: ReadOnly<u32, PERIPHID1_REG::Register>,
+
+            /// 0xFE8 - Peripheral Identification Register 2.
+            pub periph_id2: ReadOnly<u32, PERIPHID2_REG::Register>,
+
+            /// 0xFEC - Peripheral Identification Register 3.
+            pub periph_id3: ReadOnly<u32, PERIPHID3_REG::Register>,
+
+            /// 0xFF0 - PrimeCell Identification Register 0.
+            pub pcell_id0: ReadOnly<u32, PCELLID0_REG::Register>,
+
+            /// 0xFF4 - PrimeCell Identification Register 1.
+            pub pcell_id1: ReadOnly<u32, PCELLID1_REG::Register>,
+
+            /// 0xFF8 - PrimeCell Identification Register 2.
+            pub pcell_id2: ReadOnly<u32, PCELLID2_REG::Register>,
+
+            /// 0xFFC - PrimeCell Identification Register 3.
+            pub pcell_id3: ReadOnly<u32, PCELLID3_REG::Register>,
+        }
+    }
+
+    #[rseq::driver(name = "pl011")]
+    pub struct Pl011Driver {
+        pub dummy: u32,
     }
 "#;
 
-/// Authored field names in exact declared order (22 registers + 3 reserved).
-const EXPECTED_FIELDS: &[&str] = &[
+/// Authored field names in exact authored order (all fields including reserved).
+const AUTHORED_ALL_FIELDS: &[&str] = &[
     "dr",
     "rsr_ecr",
     "_reserved0",
@@ -252,148 +288,271 @@ const EXPECTED_FIELDS: &[&str] = &[
     "pcell_id3",
 ];
 
+/// Authored declared (non-reserved) registers in offset order.
+const AUTHORED_DECLARED_REGISTERS: &[&str] = &[
+    "dr",
+    "rsr_ecr",
+    "fr",
+    "ilpr",
+    "ibrd",
+    "fbrd",
+    "lcr_h",
+    "cr",
+    "ifls",
+    "imsc",
+    "ris",
+    "mis",
+    "icr",
+    "dmacr",
+    "periph_id0",
+    "periph_id1",
+    "periph_id2",
+    "periph_id3",
+    "pcell_id0",
+    "pcell_id1",
+    "pcell_id2",
+    "pcell_id3",
+];
+
 // ---------------------------------------------------------------------------
-// Boundary validation test
+// Check 1: register block identity preserved
 // ---------------------------------------------------------------------------
 
 #[test]
-fn pl011_register_block_extraction_boundary() {
-    let result = compile_and_extract(PL011_FIXTURE, "pl011_register_block_boundary");
+fn check1_register_block_identity() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check1", "pl011_full_spec");
+    let surface = ra.unwrap();
 
-    let ra = &result.register_access;
-    let ie = &result.identity_enrichment;
-
-    // -------------------------------------------------------------------
-    // Check 1: Register block identity
-    // -------------------------------------------------------------------
     assert_eq!(
-        ra.register_blocks.len(),
+        surface.register_blocks.len(),
         1,
-        "Check 1: exactly one register block extracted"
+        "exactly one register block expected"
     );
-    let block = &ra.register_blocks[0];
-    assert_eq!(
-        block.name, "Pl011Registers",
-        "Check 1: register block name matches authored identity"
-    );
+    assert_eq!(surface.register_blocks[0].name, "Pl011Registers");
+}
 
-    let rb_struct = ie
+// ---------------------------------------------------------------------------
+// Check 2: canonical path preserved
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check2_canonical_path() {
+    let (_ra, ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check2", "pl011_full_spec");
+    let surface = ie.unwrap();
+
+    let reg_block_struct = surface
         .structs
         .iter()
         .find(|s| s.name == "Pl011Registers")
-        .expect("Check 1: Pl011Registers found in identity enrichment");
+        .expect("Pl011Registers struct must appear in identity enrichment");
+
     assert!(
-        rb_struct.is_register_block,
-        "Check 1: identity enrichment marks struct as register_block"
+        reg_block_struct.is_register_block,
+        "struct must be marked as register_block"
     );
 
-    // -------------------------------------------------------------------
-    // Check 2: Canonical path preservation
-    // -------------------------------------------------------------------
-    assert!(
-        rb_struct.canonical_path.0 == "Pl011Registers"
-            || rb_struct.canonical_path.0.ends_with("::Pl011Registers"),
-        "Check 2: canonical path preserves Pl011Registers identity, got: {}",
-        rb_struct.canonical_path.0
+    // def_path_str() returns crate-relative paths for local items.
+    // The struct canonical path preserves the module-qualified path.
+    assert_eq!(
+        reg_block_struct.canonical_path.0, "registers::Pl011Registers",
+        "struct canonical path must preserve module-qualified identity"
     );
 
-    // -------------------------------------------------------------------
-    // Check 3: Block-level properties (endian, access_width) -- FAIL
-    //
+    // The containing module path is also preserved.
+    assert_eq!(
+        reg_block_struct.module_path.0, "registers",
+        "containing module path must be preserved"
+    );
+
+    // The crate root module preserves the crate name, enabling exact
+    // reconstruction: crate_name + "::" + canonical_path =
+    // "pl011_full_spec::registers::Pl011Registers"
+    let crate_root = surface
+        .modules
+        .iter()
+        .find(|m| m.child_items.iter().any(|c| c.0 == "registers"))
+        .expect("crate root module must contain the registers module");
+    assert_eq!(
+        crate_root.canonical_path.0, "pl011_full_spec",
+        "crate root must carry the crate name"
+    );
+
+    // Verify full canonical path is reconstructable.
+    let reconstructed = format!(
+        "{}::{}",
+        crate_root.canonical_path.0, reg_block_struct.canonical_path.0
+    );
+    assert_eq!(
+        reconstructed, "pl011_full_spec::registers::Pl011Registers",
+        "full canonical path must be exactly reconstructable from extraction evidence"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Check 3: block-level properties (endian, access_width) preservation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check3_block_properties_not_extracted() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check3", "pl011_full_spec");
+    let surface = ra.unwrap();
+    let block = &surface.register_blocks[0];
+
     // RegisterBlockDecl has no block-level endian or access_width fields.
-    // The authored #[rseq::register_block(endian = "little", access_width = 32)]
-    // is used only as a marker to detect the struct. The attribute arguments
-    // are not parsed into the extraction record.
-    //
-    // Per-field #[rseq::register] attrs do not exist on the authored source,
-    // so all per-field metadata is None.
-    // -------------------------------------------------------------------
+    // The only property metadata lives on individual RegisterFieldDecl entries
+    // via #[rseq::register(...)], which the authored source does not use.
+    // Verify that no per-field metadata carries block-level properties either.
     for field in &block.fields {
-        assert!(
-            field.access_width.is_none(),
-            "Check 3: field '{}' has no access_width (block-level attr not parsed)",
-            field.name,
+        assert_eq!(
+            field.endian, None,
+            "field '{}' should have no endian metadata (no per-field #[rseq::register])",
+            field.name
         );
-        assert!(
-            field.endian.is_none(),
-            "Check 3: field '{}' has no endian (block-level attr not parsed)",
-            field.name,
+        assert_eq!(
+            field.access_width, None,
+            "field '{}' should have no access_width metadata (no per-field #[rseq::register])",
+            field.name
         );
     }
 
-    // -------------------------------------------------------------------
-    // Check 4: Reserved region names survive
-    //
-    // Reserved field names are present. Byte offsets and array element
-    // counts are NOT preserved in RegisterFieldDecl (no offset or type
-    // fields). Without block-level access_width (Check 3 gap), exact byte
-    // ranges cannot be reconstructed from the extraction record alone.
-    // -------------------------------------------------------------------
-    let field_names: Vec<&str> = block.fields.iter().map(|f| f.name.as_str()).collect();
-    assert!(
-        field_names.contains(&"_reserved0"),
-        "Check 4: _reserved0 present"
-    );
-    assert!(
-        field_names.contains(&"_reserved1"),
-        "Check 4: _reserved1 present"
-    );
-    assert!(
-        field_names.contains(&"_reserved2"),
-        "Check 4: _reserved2 present"
-    );
+    // This proves the extraction boundary drops block-level endian=little and
+    // access_width=32. RegisterBlockDecl has no fields to carry them.
+}
 
-    // -------------------------------------------------------------------
-    // Check 5: Complete inventory in authored order
-    // -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Check 4: reserved region offset preservation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check4_reserved_regions_names_present_offsets_absent() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check4", "pl011_full_spec");
+    let surface = ra.unwrap();
+    let block = &surface.register_blocks[0];
+
+    // Reserved field names are captured.
+    let reserved_names: Vec<&str> = block
+        .fields
+        .iter()
+        .filter(|f| f.name.starts_with("_reserved"))
+        .map(|f| f.name.as_str())
+        .collect();
     assert_eq!(
-        field_names.as_slice(),
-        EXPECTED_FIELDS,
-        "Check 5: field inventory matches authored order exactly"
+        reserved_names,
+        vec!["_reserved0", "_reserved1", "_reserved2"],
+        "all three reserved field names must be present in order"
     );
 
-    // -------------------------------------------------------------------
-    // Check 6: Per-register four facts
+    // RegisterFieldDecl carries no byte-offset, type, or array-length data.
+    // Therefore the authored reserved-region ranges cannot be reconstructed:
+    //   _reserved0: 0x008 -> 0x014  (array of 4)
+    //   _reserved1: 0x01C -> 0x01C  (single)
+    //   _reserved2: 0x04C -> 0xFDC  (array of 997)
     //
-    // Struct field name: preserved (Check 5).
-    // Register name (e.g., DR_REG): NOT in RegisterFieldDecl.
-    // Byte offset: NOT in RegisterFieldDecl.
-    // Access kind (RW/R/W): NOT in RegisterFieldDecl.
-    //
-    // All metadata fields are None for every field, confirming no
-    // per-register metadata beyond the name survives.
-    // -------------------------------------------------------------------
-    for field in &block.fields {
-        assert!(
-            field.access_width.is_none()
-                && field.endian.is_none()
-                && field.side_effects.is_none()
-                && field.hw_updates.is_none(),
-            "Check 6: field '{}' carries no register metadata",
-            field.name,
-        );
-    }
+    // The field names alone survive; the byte ranges do not.
+}
 
-    // -------------------------------------------------------------------
-    // Check 7: No insertions, removals, renames, or reordering
-    // -------------------------------------------------------------------
+// ---------------------------------------------------------------------------
+// Check 5: complete register inventory in authored order
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check5_inventory_complete_and_ordered() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check5", "pl011_full_spec");
+    let surface = ra.unwrap();
+    let block = &surface.register_blocks[0];
+
+    let extracted_names: Vec<&str> = block.fields.iter().map(|f| f.name.as_str()).collect();
     assert_eq!(
-        block.fields.len(),
-        EXPECTED_FIELDS.len(),
-        "Check 7: no registers inserted or removed"
+        extracted_names, AUTHORED_ALL_FIELDS,
+        "complete field inventory must match authored order exactly"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Check 6: per-register four-fact preservation
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check6_per_register_facts() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check6", "pl011_full_spec");
+    let surface = ra.unwrap();
+    let block = &surface.register_blocks[0];
+
+    // Fact 1: struct field name -- preserved.
+    let declared: Vec<&str> = block
+        .fields
+        .iter()
+        .filter(|f| !f.name.starts_with("_reserved"))
+        .map(|f| f.name.as_str())
+        .collect();
+    assert_eq!(
+        declared, AUTHORED_DECLARED_REGISTERS,
+        "declared register field names must match"
     );
 
-    // -------------------------------------------------------------------
-    // Check 8: No invented properties
-    //
-    // Block-level endian and access_width are dropped (Check 3).
-    // No per-field properties are invented -- all metadata is None.
-    // -------------------------------------------------------------------
+    // Facts 2-4: register name, byte offset, access kind -- NOT preserved.
+    // RegisterFieldDecl has no register_name, offset, or access_kind fields.
+    // These facts are dropped at this extraction boundary.
     for field in &block.fields {
-        assert!(
-            field.side_effects.is_none() && field.hw_updates.is_none(),
-            "Check 8: field '{}' has no invented properties",
-            field.name,
-        );
+        if field.name.starts_with("_reserved") {
+            continue;
+        }
+        // The only metadata available is from #[rseq::register(...)], which
+        // the authored source does not use. All per-field metadata is None.
+        assert_eq!(field.endian, None);
+        assert_eq!(field.access_width, None);
+        assert_eq!(field.side_effects, None);
+        assert_eq!(field.hw_updates, None);
     }
+}
+
+// ---------------------------------------------------------------------------
+// Check 7: no insertions, removals, renames, or reordering
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check7_no_spurious_changes() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check7", "pl011_full_spec");
+    let surface = ra.unwrap();
+    let block = &surface.register_blocks[0];
+
+    let extracted_names: Vec<&str> = block.fields.iter().map(|f| f.name.as_str()).collect();
+
+    // Exact match proves no insertion, removal, rename, or reorder.
+    assert_eq!(
+        extracted_names, AUTHORED_ALL_FIELDS,
+        "extraction must match authored field list exactly"
+    );
+
+    // Only one register block exists -- no extra blocks invented.
+    assert_eq!(surface.register_blocks.len(), 1);
+}
+
+// ---------------------------------------------------------------------------
+// Check 8: no properties invented or dropped
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check8_block_properties_dropped() {
+    let (ra, _ie) = compile_and_extract_both(PL011_SPECIMEN, "pl011_rb_check8", "pl011_full_spec");
+    let surface = ra.unwrap();
+    let block = &surface.register_blocks[0];
+
+    // RegisterBlockDecl carries only `name` and `fields`.
+    // The authored block-level properties (endian=little, access_width=32) are
+    // derived from #[rseq::register_block(endian = "little", access_width = 32)]
+    // but the extraction only checks attribute existence via has_rseq_attr()
+    // and never parses the attribute arguments at the block level.
+    //
+    // Verify no per-field metadata carries these either:
+    let any_endian = block.fields.iter().any(|f| f.endian.is_some());
+    let any_access_width = block.fields.iter().any(|f| f.access_width.is_some());
+    assert!(!any_endian, "no field should carry endian metadata");
+    assert!(
+        !any_access_width,
+        "no field should carry access_width metadata"
+    );
+
+    // This proves the authored register-block properties are dropped at the
+    // extraction boundary.
 }
