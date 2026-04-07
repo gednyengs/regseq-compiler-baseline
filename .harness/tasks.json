@@ -1275,7 +1275,7 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": "4 of 8 checks fail: block-level endian/access_width dropped (check 3,8), reserved region offsets not reconstructable (check 4), per-register facts incomplete -- only field name preserved, no register name/offset/access kind (check 6). See docs/validation/01-pl011/checks/results/01-register-block-extraction.md"
+          "fail_reason": "4 of 8 checks fail: block-level endian/access_width dropped (Check 3), reserved byte offsets not reconstructible (Check 4), per-register register-name/offset/access-kind not captured (Check 6), block properties dropped (Check 8). See docs/validation/01-pl011/checks/results/01-register-block-extraction.md for details and fix hints."
         }
       ]
     },

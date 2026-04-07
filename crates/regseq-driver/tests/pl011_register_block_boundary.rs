@@ -1,12 +1,3 @@
-//! Compiler-side boundary validation test for PL011 register-block extraction.
-//!
-//! Validates the 8 checks defined in:
-//!   docs/validation/01-pl011/checks/01-register-block-extraction.md
-//!
-//! This test compiles an inline source that structurally mirrors the PL011
-//! `Pl011Registers` register block and inspects what the register-access
-//! extractor actually captures at the compiler-side boundary.
-
 #![feature(rustc_private)]
 
 extern crate rustc_ast;
@@ -21,9 +12,17 @@ use std::sync::{Arc, Mutex, Once};
 #[path = "../src/extract/register_access.rs"]
 mod register_access;
 
+#[path = "../src/extract/identity_enrichment_types.rs"]
+mod identity_enrichment_types;
+
+#[path = "../src/extract/identity_enrichment.rs"]
+mod identity_enrichment;
+
+use identity_enrichment::*;
 use register_access::*;
 
-type ExtractionResult = Result<RegisterAccessSurface, RegisterAccessError>;
+type RaResult = Result<RegisterAccessSurface, RegisterAccessError>;
+type IeResult = Result<IdentityEnrichmentSurface, IdentityEnrichmentError>;
 
 static INIT: Once = Once::new();
 static COMPILER_LOCK: Mutex<()> = Mutex::new(());
@@ -45,7 +44,12 @@ fn get_sysroot() -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
-fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
+struct BoundaryResult {
+    register_access: RegisterAccessSurface,
+    identity_enrichment: IdentityEnrichmentSurface,
+}
+
+fn compile_and_extract(source: &str, test_name: &str) -> BoundaryResult {
     let _lock = COMPILER_LOCK.lock().unwrap();
     init_rustc();
 
@@ -62,10 +66,12 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
 
     let sysroot = get_sysroot();
 
-    let result: Arc<Mutex<Option<ExtractionResult>>> = Arc::new(Mutex::new(None));
+    let ra_result: Arc<Mutex<Option<RaResult>>> = Arc::new(Mutex::new(None));
+    let ie_result: Arc<Mutex<Option<IeResult>>> = Arc::new(Mutex::new(None));
 
     struct ExtractCallbacks {
-        result: Arc<Mutex<Option<ExtractionResult>>>,
+        ra: Arc<Mutex<Option<RaResult>>>,
+        ie: Arc<Mutex<Option<IeResult>>>,
     }
 
     impl rustc_driver::Callbacks for ExtractCallbacks {
@@ -88,13 +94,15 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
             _compiler: &rustc_interface::interface::Compiler,
             tcx: rustc_middle::ty::TyCtxt<'tcx>,
         ) -> rustc_driver::Compilation {
-            *self.result.lock().unwrap() = Some(extract_register_access_surface(tcx));
+            *self.ra.lock().unwrap() = Some(extract_register_access_surface(tcx));
+            *self.ie.lock().unwrap() = Some(extract_identity_enrichment(tcx));
             rustc_driver::Compilation::Stop
         }
     }
 
     let mut callbacks = ExtractCallbacks {
-        result: result.clone(),
+        ra: ra_result.clone(),
+        ie: ie_result.clone(),
     };
 
     let args = vec![
@@ -112,38 +120,48 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
 
     rustc_driver::run_compiler(&args, &mut callbacks);
 
-    let extracted = result
+    let ra = ra_result
         .lock()
         .unwrap()
         .take()
-        .expect("after_analysis should have been called");
+        .expect("after_analysis should have run (register access)")
+        .expect("register access extraction failed");
+    let ie = ie_result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("after_analysis should have run (identity enrichment)")
+        .expect("identity enrichment extraction failed");
 
     std::fs::remove_dir_all(&test_dir).ok();
 
-    extracted
+    BoundaryResult {
+        register_access: ra,
+        identity_enrichment: ie,
+    }
 }
 
 // ---------------------------------------------------------------------------
-// Inline source that mirrors the PL011 register block authored structure
+// Inline fixture mirroring PL011 Pl011Registers authored layout.
+//
+// Preserves: struct name, field names, field order, field count, reserved
+// regions, block-level #[rseq::register_block(endian, access_width)] attribute,
+// wrapper-type structure (ReadWrite/ReadOnly/WriteOnly/Reserved), register
+// descriptor module names, and a driver struct for identity enrichment.
+//
+// Omits: register_bitfields! macro expansion internals (field/named-value
+// constants) because those are a separate extraction family not in scope for
+// the register-block boundary check.
 // ---------------------------------------------------------------------------
 
-/// Type stubs and complete register block matching the authored PL011 fixture.
-///
-/// This source mirrors `tests/fixtures/pl011-full-spec/src/registers.rs`:
-/// - Same field names and ordering
-/// - Same struct-level `#[rseq::register_block(endian = "little", access_width = 32)]`
-/// - Same wrapper types (ReadWrite, ReadOnly, WriteOnly, Reserved)
-/// - Same reserved-region structure
-///
-/// No per-field `#[rseq::register(...)]` attributes are present, matching the
-/// authored source exactly.
-const PL011_REGISTER_BLOCK_SOURCE: &str = r#"
+const PL011_FIXTURE: &str = r#"
     use core::marker::PhantomData;
 
     pub struct ReadWrite<T, R> { _v: T, _r: PhantomData<R> }
     pub struct ReadOnly<T, R> { _v: T, _r: PhantomData<R> }
     pub struct WriteOnly<T, R> { _v: T, _r: PhantomData<R> }
     pub struct Reserved<T> { _v: T }
+    pub struct Mmio<T> { _t: PhantomData<T> }
 
     #[allow(non_snake_case)] pub mod DR_REG { pub struct Register; }
     #[allow(non_snake_case)] pub mod RSR_ECR_REG { pub struct Register; }
@@ -197,10 +215,16 @@ const PL011_REGISTER_BLOCK_SOURCE: &str = r#"
         pub pcell_id2: ReadOnly<u32, PCELLID2_REG::Register>,
         pub pcell_id3: ReadOnly<u32, PCELLID3_REG::Register>,
     }
+
+    #[rseq::driver(name = "pl011-boundary-test")]
+    pub struct BoundaryTestDriver {
+        #[rseq::mmio(id = "uart_regs")]
+        pub regs: Mmio<Pl011Registers>,
+    }
 "#;
 
 /// Authored field names in exact declared order (22 registers + 3 reserved).
-const AUTHORED_FIELD_NAMES: &[&str] = &[
+const EXPECTED_FIELDS: &[&str] = &[
     "dr",
     "rsr_ecr",
     "_reserved0",
@@ -228,275 +252,148 @@ const AUTHORED_FIELD_NAMES: &[&str] = &[
     "pcell_id3",
 ];
 
-fn extract_pl011_block() -> RegisterAccessSurface {
-    compile_and_extract(PL011_REGISTER_BLOCK_SOURCE, "pl011_register_block_boundary")
-        .expect("extraction must succeed for structurally valid register block")
-}
-
 // ---------------------------------------------------------------------------
-// Check 1: Register block identity preserved as "Pl011Registers"
+// Boundary validation test
 // ---------------------------------------------------------------------------
 
 #[test]
-fn check_1_register_block_identity_preserved() {
-    let surface = extract_pl011_block();
+fn pl011_register_block_extraction_boundary() {
+    let result = compile_and_extract(PL011_FIXTURE, "pl011_register_block_boundary");
 
+    let ra = &result.register_access;
+    let ie = &result.identity_enrichment;
+
+    // -------------------------------------------------------------------
+    // Check 1: Register block identity
+    // -------------------------------------------------------------------
     assert_eq!(
-        surface.register_blocks.len(),
+        ra.register_blocks.len(),
         1,
-        "exactly one register block must be extracted"
+        "Check 1: exactly one register block extracted"
     );
-    assert_eq!(
-        surface.register_blocks[0].name, "Pl011Registers",
-        "register block must retain authored identity"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Check 2: Canonical path evidence
-//
-// The RegisterAccessSurface stores only the short struct name. Canonical path
-// preservation is provided by the IdentityEnrichmentSurface (see
-// crates/regseq-driver/src/extract/identity_enrichment.rs:70-80 where
-// StructFact.canonical_path is derived from tcx.def_path_str(DefId) for
-// structs marked is_register_block). This test verifies the register-access
-// surface contribution: the short name matches the authored identity.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn check_2_short_name_matches_authored_identity() {
-    let surface = extract_pl011_block();
-
-    let block = &surface.register_blocks[0];
+    let block = &ra.register_blocks[0];
     assert_eq!(
         block.name, "Pl011Registers",
-        "short name must match authored struct ident for canonical path reconstruction"
+        "Check 1: register block name matches authored identity"
     );
-}
 
-// ---------------------------------------------------------------------------
-// Check 3: Block-level properties (endian, access_width) NOT captured
-//
-// The authored source has:
-//   #[rseq::register_block(endian = "little", access_width = 32)]
-// But extract_register_block only checks attribute existence via
-// has_rseq_attr, not its parameters. RegisterBlockDecl has no block-level
-// property fields. This test proves the gap.
-// ---------------------------------------------------------------------------
+    let rb_struct = ie
+        .structs
+        .iter()
+        .find(|s| s.name == "Pl011Registers")
+        .expect("Check 1: Pl011Registers found in identity enrichment");
+    assert!(
+        rb_struct.is_register_block,
+        "Check 1: identity enrichment marks struct as register_block"
+    );
 
-#[test]
-fn check_3_block_properties_not_extracted() {
-    let surface = extract_pl011_block();
+    // -------------------------------------------------------------------
+    // Check 2: Canonical path preservation
+    // -------------------------------------------------------------------
+    assert!(
+        rb_struct.canonical_path.0 == "Pl011Registers"
+            || rb_struct.canonical_path.0.ends_with("::Pl011Registers"),
+        "Check 2: canonical path preserves Pl011Registers identity, got: {}",
+        rb_struct.canonical_path.0
+    );
 
-    let block = &surface.register_blocks[0];
-
-    // The authored register block has no per-field #[rseq::register(...)]
-    // attributes, so all per-field metadata is None.
+    // -------------------------------------------------------------------
+    // Check 3: Block-level properties (endian, access_width) -- FAIL
+    //
+    // RegisterBlockDecl has no block-level endian or access_width fields.
+    // The authored #[rseq::register_block(endian = "little", access_width = 32)]
+    // is used only as a marker to detect the struct. The attribute arguments
+    // are not parsed into the extraction record.
+    //
+    // Per-field #[rseq::register] attrs do not exist on the authored source,
+    // so all per-field metadata is None.
+    // -------------------------------------------------------------------
     for field in &block.fields {
-        assert_eq!(
-            field.access_width, None,
-            "field '{}': access_width must be None (block-level attribute not parsed into fields)",
-            field.name
+        assert!(
+            field.access_width.is_none(),
+            "Check 3: field '{}' has no access_width (block-level attr not parsed)",
+            field.name,
         );
-        assert_eq!(
-            field.endian, None,
-            "field '{}': endian must be None (block-level attribute not parsed into fields)",
-            field.name
+        assert!(
+            field.endian.is_none(),
+            "Check 3: field '{}' has no endian (block-level attr not parsed)",
+            field.name,
         );
     }
-}
 
-// ---------------------------------------------------------------------------
-// Check 4: Reserved regions present but offsets not captured
-//
-// Reserved fields appear in the field list but without byte offset or
-// array-count data. The extraction boundary does not preserve enough
-// information to reconstruct the authored gap ranges:
-//   _reserved0: 0x008 -> 0x014
-//   _reserved1: 0x01C -> 0x01C
-//   _reserved2: 0x04C -> 0xFDC
-// ---------------------------------------------------------------------------
-
-#[test]
-fn check_4_reserved_fields_present_but_offsets_absent() {
-    let surface = extract_pl011_block();
-
-    let block = &surface.register_blocks[0];
+    // -------------------------------------------------------------------
+    // Check 4: Reserved region names survive
+    //
+    // Reserved field names are present. Byte offsets and array element
+    // counts are NOT preserved in RegisterFieldDecl (no offset or type
+    // fields). Without block-level access_width (Check 3 gap), exact byte
+    // ranges cannot be reconstructed from the extraction record alone.
+    // -------------------------------------------------------------------
     let field_names: Vec<&str> = block.fields.iter().map(|f| f.name.as_str()).collect();
-
-    // Reserved fields are present in the extracted field list.
     assert!(
         field_names.contains(&"_reserved0"),
-        "_reserved0 must be present in extracted fields"
+        "Check 4: _reserved0 present"
     );
     assert!(
         field_names.contains(&"_reserved1"),
-        "_reserved1 must be present in extracted fields"
+        "Check 4: _reserved1 present"
     );
     assert!(
         field_names.contains(&"_reserved2"),
-        "_reserved2 must be present in extracted fields"
+        "Check 4: _reserved2 present"
     );
 
-    // RegisterFieldDecl carries no byte-offset or array-size fields.
-    // Confirm that the only per-field metadata available (access_width,
-    // endian, side_effects, hw_updates) is all None for reserved fields.
-    let reserved_fields: Vec<&RegisterFieldDecl> = block
-        .fields
-        .iter()
-        .filter(|f| f.name.starts_with("_reserved"))
-        .collect();
-
-    for rf in &reserved_fields {
-        assert_eq!(rf.access_width, None);
-        assert_eq!(rf.endian, None);
-        assert_eq!(rf.side_effects, None);
-        assert_eq!(rf.hw_updates, None);
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Check 5: Complete register inventory in authored order
-//
-// The check spec says: "a complete extracted field sequence in authored order
-// is sufficient for the inventory/order checks even if per-field offset and
-// access metadata is not preserved."
-// ---------------------------------------------------------------------------
-
-#[test]
-fn check_5_complete_inventory_in_authored_order() {
-    let surface = extract_pl011_block();
-
-    let block = &surface.register_blocks[0];
-    let extracted_names: Vec<&str> = block.fields.iter().map(|f| f.name.as_str()).collect();
-
+    // -------------------------------------------------------------------
+    // Check 5: Complete inventory in authored order
+    // -------------------------------------------------------------------
     assert_eq!(
-        extracted_names.len(),
-        AUTHORED_FIELD_NAMES.len(),
-        "extracted field count must match authored count ({})",
-        AUTHORED_FIELD_NAMES.len()
+        field_names.as_slice(),
+        EXPECTED_FIELDS,
+        "Check 5: field inventory matches authored order exactly"
     );
 
-    assert_eq!(
-        extracted_names, AUTHORED_FIELD_NAMES,
-        "extracted field sequence must match authored declaration order exactly"
-    );
-}
-
-// ---------------------------------------------------------------------------
-// Check 6: Per-register four-fact tuple incomplete
-//
-// The check requires: field name, register name, byte offset, access kind.
-// Only field name is captured. Register name (e.g. "DR_REG"), byte offset,
-// and access kind (RW/R/W) are not present in RegisterFieldDecl.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn check_6_only_field_name_preserved_per_register() {
-    let surface = extract_pl011_block();
-
-    let block = &surface.register_blocks[0];
-
-    // Field name is captured for every field.
-    let dr = block.fields.iter().find(|f| f.name == "dr").unwrap();
-    assert_eq!(dr.name, "dr");
-
-    // RegisterFieldDecl has no register-type-name field.
-    // RegisterFieldDecl has no byte-offset field.
-    // RegisterFieldDecl has no access-kind field.
-    // The only per-field metadata fields are: access_width, endian,
-    // side_effects, hw_updates -- all None for PL011 fields.
-    assert_eq!(dr.access_width, None, "no per-field access_width");
-    assert_eq!(dr.endian, None, "no per-field endian");
-    assert_eq!(dr.side_effects, None, "no per-field side_effects");
-    assert_eq!(dr.hw_updates, None, "no per-field hw_updates");
-
-    // Same absence pattern for a read-only register.
-    let fr = block.fields.iter().find(|f| f.name == "fr").unwrap();
-    assert_eq!(fr.access_width, None);
-
-    // Same absence pattern for a write-only register.
-    let icr = block.fields.iter().find(|f| f.name == "icr").unwrap();
-    assert_eq!(icr.access_width, None);
-}
-
-// ---------------------------------------------------------------------------
-// Check 7: No registers inserted, removed, renamed, or reordered
-// ---------------------------------------------------------------------------
-
-#[test]
-fn check_7_no_insertions_or_removals() {
-    let surface = extract_pl011_block();
-
-    let block = &surface.register_blocks[0];
-    let extracted_names: Vec<&str> = block.fields.iter().map(|f| f.name.as_str()).collect();
-
-    // Exact count match: no insertions.
-    assert_eq!(extracted_names.len(), 25);
-
-    // Every authored name is present.
-    for &name in AUTHORED_FIELD_NAMES {
-        assert!(
-            extracted_names.contains(&name),
-            "authored field '{}' must be present in extraction",
-            name
-        );
-    }
-
-    // No extra entries.
-    for &name in &extracted_names {
-        assert!(
-            AUTHORED_FIELD_NAMES.contains(&name),
-            "extracted field '{}' must not be an invented insertion",
-            name
-        );
-    }
-
-    // Order preserved.
-    assert_eq!(extracted_names, AUTHORED_FIELD_NAMES);
-}
-
-// ---------------------------------------------------------------------------
-// Check 8: No block-level properties invented or dropped
-//
-// The authored register-block properties are endian and access_width.
-// RegisterBlockDecl has no fields to carry them. This test proves that no
-// properties are invented AND that the authored properties are not available.
-// ---------------------------------------------------------------------------
-
-#[test]
-fn check_8_no_invented_properties_and_authored_properties_dropped() {
-    let surface = extract_pl011_block();
-
-    let block = &surface.register_blocks[0];
-
-    // RegisterBlockDecl has exactly two fields: name and fields.
-    // No block-level property fields exist in the struct definition
-    // (see crates/regseq-driver/src/extract/register_access.rs:22-26).
-    // This means no properties are invented.
-    // But it also means the authored endian and access_width are dropped.
-
-    // Confirm no per-field metadata was invented for any field.
+    // -------------------------------------------------------------------
+    // Check 6: Per-register four facts
+    //
+    // Struct field name: preserved (Check 5).
+    // Register name (e.g., DR_REG): NOT in RegisterFieldDecl.
+    // Byte offset: NOT in RegisterFieldDecl.
+    // Access kind (RW/R/W): NOT in RegisterFieldDecl.
+    //
+    // All metadata fields are None for every field, confirming no
+    // per-register metadata beyond the name survives.
+    // -------------------------------------------------------------------
     for field in &block.fields {
-        assert_eq!(
-            field.access_width, None,
-            "field '{}': no access_width invented",
-            field.name
+        assert!(
+            field.access_width.is_none()
+                && field.endian.is_none()
+                && field.side_effects.is_none()
+                && field.hw_updates.is_none(),
+            "Check 6: field '{}' carries no register metadata",
+            field.name,
         );
-        assert_eq!(
-            field.endian, None,
-            "field '{}': no endian invented",
-            field.name
-        );
-        assert_eq!(
-            field.side_effects, None,
-            "field '{}': no side_effects invented",
-            field.name
-        );
-        assert_eq!(
-            field.hw_updates, None,
-            "field '{}': no hw_updates invented",
-            field.name
+    }
+
+    // -------------------------------------------------------------------
+    // Check 7: No insertions, removals, renames, or reordering
+    // -------------------------------------------------------------------
+    assert_eq!(
+        block.fields.len(),
+        EXPECTED_FIELDS.len(),
+        "Check 7: no registers inserted or removed"
+    );
+
+    // -------------------------------------------------------------------
+    // Check 8: No invented properties
+    //
+    // Block-level endian and access_width are dropped (Check 3).
+    // No per-field properties are invented -- all metadata is None.
+    // -------------------------------------------------------------------
+    for field in &block.fields {
+        assert!(
+            field.side_effects.is_none() && field.hw_updates.is_none(),
+            "Check 8: field '{}' has no invented properties",
+            field.name,
         );
     }
 }
