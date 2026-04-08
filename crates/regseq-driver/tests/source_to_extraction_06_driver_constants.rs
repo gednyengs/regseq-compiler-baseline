@@ -226,6 +226,8 @@ struct AuthoredConstant {
     name: &'static str,
     ty: &'static str,
     canonical_path: &'static str,
+    /// Authored evaluated value.
+    evaluated_value: u128,
 }
 
 const AUTHORED_CONSTANTS: &[AuthoredConstant] = &[
@@ -233,31 +235,38 @@ const AUTHORED_CONSTANTS: &[AuthoredConstant] = &[
         name: "ALL_UART_INTERRUPTS_MASK",
         ty: "u32",
         canonical_path: "pl011_full_spec::driver::Pl011FullSpec::ALL_UART_INTERRUPTS_MASK",
+        evaluated_value: 0x07ff,
     },
     AuthoredConstant {
         name: "RX_INTERRUPT_MASK",
         ty: "u32",
         canonical_path: "pl011_full_spec::driver::Pl011FullSpec::RX_INTERRUPT_MASK",
+        evaluated_value: (1 << 4) | (1 << 6),
     },
     AuthoredConstant {
         name: "TX_INTERRUPT_MASK",
         ty: "u32",
         canonical_path: "pl011_full_spec::driver::Pl011FullSpec::TX_INTERRUPT_MASK",
+        evaluated_value: 1 << 5,
     },
     AuthoredConstant {
         name: "ERROR_INTERRUPT_MASK",
         ty: "u32",
         canonical_path: "pl011_full_spec::driver::Pl011FullSpec::ERROR_INTERRUPT_MASK",
+        evaluated_value: (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),
     },
     AuthoredConstant {
         name: "EXPLICIT_ISR_CLEAR_MASK",
         ty: "u32",
         canonical_path: "pl011_full_spec::driver::Pl011FullSpec::EXPLICIT_ISR_CLEAR_MASK",
+        // Self::ERROR_INTERRUPT_MASK == (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10)
+        evaluated_value: (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10),
     },
     AuthoredConstant {
         name: "DEFAULT_UART_CLOCK_HZ",
         ty: "u32",
         canonical_path: "pl011_full_spec::driver::Pl011FullSpec::DEFAULT_UART_CLOCK_HZ",
+        evaluated_value: 48_000_000,
     },
 ];
 
@@ -597,19 +606,15 @@ fn check1f_constant_references_in_mir_body() {
     }
 }
 
-/// Check 1g: Constant literal values are NOT preserved as evaluated scalars
-/// at the extraction boundary. This documents an extraction gap.
+/// Check 1g: Constant literal values are preserved as evaluated scalars on
+/// the identity enrichment surface via `AssociatedConstantFact.evaluated_value`.
 ///
-/// The MIR body extractor classifies associated constants as
-/// `MirConstValue::Unsupported` (unevaluated) rather than evaluating them to
-/// `MirConstValue::Scalar`. The identity enrichment surface has no `value`
-/// field. Therefore, the authored literal values (e.g., `0x07ff`, `48_000_000`)
-/// are not directly available at the extraction boundary.
+/// The extraction evaluates each associated constant via `tcx.const_eval_poly`
+/// and records the resulting scalar in the `evaluated_value` field.
 #[test]
-fn check1g_constant_values_not_evaluated() {
+fn check1g_constant_values_evaluated() {
     let result = compile_and_extract(SPECIMEN, "s2e06_check1g");
 
-    // The identity enrichment surface has no value field on AssociatedConstantFact
     let inherent = result
         .identity
         .impl_blocks
@@ -617,55 +622,22 @@ fn check1g_constant_values_not_evaluated() {
         .find(|ib| ib.is_inherent && ib.self_type_name == "Pl011FullSpec")
         .expect("inherent impl block must exist");
 
-    // Verify AssociatedConstantFact only has name, canonical_path, ty, owner_impl_path
-    // (no value field exists -- this is a compile-time structural fact)
-    for c in &inherent.constants {
-        assert!(!c.name.is_empty(), "constant name must be non-empty");
-        assert!(!c.ty.is_empty(), "constant type must be non-empty");
-        assert!(
-            !c.canonical_path.0.is_empty(),
-            "constant canonical path must be non-empty"
-        );
-        assert!(
-            !c.owner_impl_path.0.is_empty(),
-            "constant owner path must be non-empty"
-        );
-    }
+    for authored in AUTHORED_CONSTANTS {
+        let extracted = inherent
+            .constants
+            .iter()
+            .find(|c| c.name == authored.name)
+            .unwrap_or_else(|| panic!("constant '{}' must exist", authored.name));
 
-    // In MIR, constants appear as Unsupported/unevaluated (not Scalar)
-    let use_constants_fn = result
-        .body
-        .functions
-        .iter()
-        .find(|f| f.name == "use_constants")
-        .expect("use_constants must be extracted");
-
-    let scalars = collect_scalar_constants(&use_constants_fn.body);
-    let unevaluated = collect_unevaluated_constant_refs(&use_constants_fn.body);
-
-    // No scalar values for the authored constants
-    // (scalars may exist for array length, etc., but authored constant values
-    // should appear as unevaluated, not as scalar literals)
-    let authored_values: Vec<u128> = vec![0x07ff, 0x50, 0x20, 0x0780, 0x0780, 48_000_000];
-    for val in &authored_values {
-        assert!(
-            !scalars.contains(val),
-            "authored constant value {} (0x{:x}) should NOT appear as a scalar in MIR; \
-             it should be unevaluated; scalars found: {:?}",
-            val,
-            val,
-            scalars
+        assert_eq!(
+            extracted.evaluated_value,
+            Some(authored.evaluated_value),
+            "constant '{}' evaluated_value must be Some({}), got {:?}",
+            authored.name,
+            authored.evaluated_value,
+            extracted.evaluated_value
         );
     }
-
-    // But unevaluated references exist for all 6 constants
-    assert!(
-        unevaluated.len() >= AUTHORED_CONSTANTS.len(),
-        "at least {} unevaluated constant refs expected; got {}: {:?}",
-        AUTHORED_CONSTANTS.len(),
-        unevaluated.len(),
-        unevaluated
-    );
 }
 
 // ---------------------------------------------------------------------------
@@ -739,16 +711,11 @@ fn check2a_both_constants_survive_as_distinct_entries() {
 /// Check 2b: Inspect the constant-definition surface directly for the
 /// `EXPLICIT_ISR_CLEAR_MASK = Self::ERROR_INTERRUPT_MASK` relationship.
 ///
-/// The identity enrichment surface does NOT preserve the syntactic definitional
-/// relationship. `AssociatedConstantFact` has no `value_expr` or `definition_ref`
-/// field. The relationship is discoverable only through MIR unevaluated reference
-/// descriptions: `EXPLICIT_ISR_CLEAR_MASK`'s MIR representation references
-/// `ERROR_INTERRUPT_MASK` via the unevaluated form.
-///
-/// This test inspects the constant-definition surface directly by examining
-/// whether the MIR body of a function that uses `EXPLICIT_ISR_CLEAR_MASK`
-/// contains a reference to `ERROR_INTERRUPT_MASK` at the same use site
-/// or definition point.
+/// The identity enrichment surface preserves the syntactic definitional
+/// relationship via `AssociatedConstantFact.initializer_expr`. For
+/// `EXPLICIT_ISR_CLEAR_MASK`, the initializer expression is rendered from
+/// HIR and contains a reference to `ERROR_INTERRUPT_MASK`, proving the
+/// authored dependency.
 #[test]
 fn check2b_definitional_relationship_on_definition_surface() {
     let result = compile_and_extract(SPECIMEN, "s2e06_check2b");
@@ -772,8 +739,7 @@ fn check2b_definitional_relationship_on_definition_surface() {
         .find(|c| c.name == "ERROR_INTERRUPT_MASK")
         .expect("ERROR_INTERRUPT_MASK must exist");
 
-    // On the identity surface: both exist but no cross-reference field.
-    // The identity surface only records name, ty, canonical_path, owner_impl_path.
+    // Both exist with correct types and same owner
     assert_eq!(explicit_isr.ty, "u32");
     assert_eq!(error_mask.ty, "u32");
     assert_ne!(
@@ -785,133 +751,38 @@ fn check2b_definitional_relationship_on_definition_surface() {
         "both constants must share the same owner impl path"
     );
 
-    // On the MIR definition surface: the unevaluated description for
-    // EXPLICIT_ISR_CLEAR_MASK uses the same constant mechanism as
-    // ERROR_INTERRUPT_MASK, but the syntactic `Self::ERROR_INTERRUPT_MASK`
-    // definitional link is NOT preserved. The compiler evaluates
-    // `Self::ERROR_INTERRUPT_MASK` to produce the value for
-    // EXPLICIT_ISR_CLEAR_MASK at const-eval time, so in MIR both appear
-    // as independent unevaluated references to their own DefId.
-    //
-    // This is a documented extraction gap: the identity surface has no
-    // `value_expr` field, and the MIR surface does not preserve the
-    // syntactic `Self::ERROR_INTERRUPT_MASK` reference from the definition.
-    let use_constants_fn = result
-        .body
-        .functions
-        .iter()
-        .find(|f| f.name == "use_constants")
-        .expect("use_constants must be extracted");
-
-    let unevaluated = collect_unevaluated_constant_refs(&use_constants_fn.body);
-
-    // Both constants appear as independent unevaluated references
-    let explicit_refs: Vec<&String> = unevaluated
-        .iter()
-        .filter(|d| d.contains("EXPLICIT_ISR_CLEAR_MASK"))
-        .collect();
-    let error_refs: Vec<&String> = unevaluated
-        .iter()
-        .filter(|d| d.contains("ERROR_INTERRUPT_MASK") && !d.contains("EXPLICIT_ISR_CLEAR_MASK"))
-        .collect();
+    // The initializer_expr for EXPLICIT_ISR_CLEAR_MASK must reference
+    // ERROR_INTERRUPT_MASK, proving the authored definitional relationship.
+    let init_expr = explicit_isr
+        .initializer_expr
+        .as_ref()
+        .expect("EXPLICIT_ISR_CLEAR_MASK must have an initializer_expr");
 
     assert!(
-        !explicit_refs.is_empty(),
-        "EXPLICIT_ISR_CLEAR_MASK must have an unevaluated reference"
-    );
-    assert!(
-        !error_refs.is_empty(),
-        "ERROR_INTERRUPT_MASK must have an unevaluated reference"
+        init_expr.contains("ERROR_INTERRUPT_MASK"),
+        "EXPLICIT_ISR_CLEAR_MASK initializer_expr must reference ERROR_INTERRUPT_MASK; \
+         got: '{}'",
+        init_expr
     );
 
-    // The definitional link is NOT present: the unevaluated description for
-    // EXPLICIT_ISR_CLEAR_MASK does NOT contain "ERROR_INTERRUPT_MASK".
-    // Each constant resolves to its own DefId in the unevaluated form.
-    for r in &explicit_refs {
-        assert!(
-            !r.contains("ERROR_INTERRUPT_MASK"),
-            "EXPLICIT_ISR_CLEAR_MASK unevaluated ref should NOT contain \
-             ERROR_INTERRUPT_MASK (syntactic relationship is not preserved); got: {}",
-            r
-        );
-    }
+    // The initializer for ERROR_INTERRUPT_MASK itself should NOT reference
+    // EXPLICIT_ISR_CLEAR_MASK (it is the independent definition).
+    let error_init = error_mask
+        .initializer_expr
+        .as_ref()
+        .expect("ERROR_INTERRUPT_MASK must have an initializer_expr");
+
+    assert!(
+        !error_init.contains("EXPLICIT_ISR_CLEAR_MASK"),
+        "ERROR_INTERRUPT_MASK initializer should not reference EXPLICIT_ISR_CLEAR_MASK; \
+         got: '{}'",
+        error_init
+    );
 }
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
-
-/// Collect all scalar constant values from a MIR body by walking basic blocks.
-fn collect_scalar_constants(body: &MirBody) -> Vec<u128> {
-    let mut scalars = Vec::new();
-
-    for bb in &body.basic_blocks {
-        for stmt in &bb.statements {
-            collect_scalars_from_statement(stmt, &mut scalars);
-        }
-        if let Some(term) = &bb.terminator {
-            collect_scalars_from_terminator(&term.kind, &mut scalars);
-        }
-    }
-
-    scalars
-}
-
-fn collect_scalars_from_statement(stmt: &MirStatement, out: &mut Vec<u128>) {
-    if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
-        collect_scalars_from_rvalue(rvalue, out);
-    }
-}
-
-fn collect_scalars_from_rvalue(rvalue: &MirRvalue, out: &mut Vec<u128>) {
-    match rvalue {
-        MirRvalue::Use { operand } => {
-            collect_scalars_from_operand(operand, out);
-        }
-        MirRvalue::BinaryOp { lhs, rhs, .. } => {
-            collect_scalars_from_operand(lhs, out);
-            collect_scalars_from_operand(rhs, out);
-        }
-        MirRvalue::UnaryOp { operand, .. } => {
-            collect_scalars_from_operand(operand, out);
-        }
-        MirRvalue::Aggregate { operands, .. } => {
-            for op in operands {
-                collect_scalars_from_operand(op, out);
-            }
-        }
-        MirRvalue::Cast { operand, .. } => {
-            collect_scalars_from_operand(operand, out);
-        }
-        _ => {}
-    }
-}
-
-fn collect_scalars_from_operand(operand: &MirOperand, out: &mut Vec<u128>) {
-    if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Scalar { bits, .. } = &constant.value {
-            out.push(*bits);
-        }
-    }
-}
-
-fn collect_scalars_from_terminator(term: &MirTerminatorKind, out: &mut Vec<u128>) {
-    match term {
-        MirTerminatorKind::Call { func, args, .. } => {
-            collect_scalars_from_operand(func, out);
-            for arg in args {
-                collect_scalars_from_operand(arg, out);
-            }
-        }
-        MirTerminatorKind::SwitchInt { discr, .. } => {
-            collect_scalars_from_operand(discr, out);
-        }
-        MirTerminatorKind::Assert { cond, .. } => {
-            collect_scalars_from_operand(cond, out);
-        }
-        _ => {}
-    }
-}
 
 /// Collect all unevaluated constant reference descriptions from a MIR body.
 fn collect_unevaluated_constant_refs(body: &MirBody) -> Vec<String> {

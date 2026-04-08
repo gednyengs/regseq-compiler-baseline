@@ -49,9 +49,9 @@ boundary validation.
 | 1d | `IdentityEnrichmentSurface.impl_blocks[inherent].constants` (owner_impl_path) | `check1d_owner_impl_path_preserved` |
 | 1e | `IdentityEnrichmentSurface.impl_blocks[inherent].constants` (closed-world count) | `check1e_closed_world_constant_set` |
 | 1f | `MirBodySurface.functions["use_constants"]` (unevaluated constant refs) | `check1f_constant_references_in_mir_body` |
-| 1g | `IdentityEnrichmentSurface` + `MirBodySurface` (value gap evidence) | `check1g_constant_values_not_evaluated` |
+| 1g | `IdentityEnrichmentSurface.impl_blocks[inherent].constants` (evaluated_value) | `check1g_constant_values_evaluated` |
 | 2a | `IdentityEnrichmentSurface.impl_blocks` + `MirBodySurface` (both constants survive) | `check2a_both_constants_survive_as_distinct_entries` |
-| 2b | `IdentityEnrichmentSurface.impl_blocks` + `MirBodySurface` (definitional relationship) | `check2b_definitional_relationship_on_definition_surface` |
+| 2b | `IdentityEnrichmentSurface.impl_blocks[inherent].constants` (initializer_expr) | `check2b_definitional_relationship_on_definition_surface` |
 
 ---
 
@@ -186,26 +186,22 @@ boundary validation.
 
 ## Check 1g
 
-- Check: Constant literal values NOT evaluated at extraction boundary
-- Status: `fail`
+- Check: Constant literal values evaluated at extraction boundary
+- Status: `pass`
 - Premise: constant literal values (e.g., `0x07ff`, `48_000_000`) should be preserved
 - Assertion Predicate(s):
-  - `assert!(!scalars.contains(val))` for each authored evaluated value (0x07ff, 0x50, 0x20, 0x0780, 48_000_000)
-  - `assert!(unevaluated.len() >= AUTHORED_CONSTANTS.len())` -- unevaluated refs exist for all six
+  - `assert_eq!(extracted.evaluated_value, Some(authored.evaluated_value))` for each of the six constants
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:609`
-  - The MIR body extractor classifies associated constants as `MirConstValue::Unsupported` (unevaluated) rather than evaluating them to `MirConstValue::Scalar`. The identity enrichment surface `AssociatedConstantFact` has no `value` field.
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:615`
+  - The identity enrichment surface `AssociatedConstantFact.evaluated_value` is populated by `tcx.const_eval_poly(def_id)` during extraction. Each constant carries its evaluated scalar value as `Some(u128)`.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `ALL_UART_INTERRUPTS_MASK = 0x07ff`, `RX_INTERRUPT_MASK = (1 << 4) | (1 << 6)`, etc.
-  - Extracted Fact (Verbatim): `MirConstValue::Unsupported { description: "unevaluated:..." }` (no scalar bits)
-  - Correspondence: `absent`
-  - Gap / Loss Description: The extraction boundary does not evaluate constant expressions. The authored literal values are not available as scalar values at the extraction boundary.
-  - Why This Status Follows: The absence of evaluated scalar values is confirmed by the test. The authored premise requires value preservation, which is not met.
+  - Extracted Fact (Verbatim): `AssociatedConstantFact { evaluated_value: Some(2047), .. }` for `ALL_UART_INTERRUPTS_MASK`, etc.
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: The assertion matches each constant's evaluated_value against its authored evaluated form. The assertion would fail if any constant had an incorrect or missing value.
 - Counterexample: none found
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/mir_extract.rs::convert_const_operand` -- the `Const::Unevaluated` arm could invoke `tcx.const_eval_resolve()` to produce the evaluated scalar.
-  - Minimal Missing Fact To Preserve: Add evaluated value to either `AssociatedConstantFact` (identity surface) or resolve `Const::Unevaluated` to `Scalar` in MIR extraction.
-- Conclusion: Constant literal values are NOT preserved at the extraction boundary. This is a documented extraction gap.
+- Conclusion: Constant literal values are preserved at the extraction boundary via `AssociatedConstantFact.evaluated_value`.
 
 ---
 
@@ -238,27 +234,24 @@ boundary validation.
 ## Check 2b
 
 - Check: Definitional relationship `EXPLICIT_ISR_CLEAR_MASK = Self::ERROR_INTERRUPT_MASK`
-- Status: `fail`
+- Status: `pass`
 - Premise: the syntactic definitional relationship between `EXPLICIT_ISR_CLEAR_MASK` and `ERROR_INTERRUPT_MASK` should be preserved
 - Assertion Predicate(s):
   - `assert_ne!(explicit_isr.canonical_path, error_mask.canonical_path)` -- distinct entries exist
   - `assert_eq!(explicit_isr.owner_impl_path, error_mask.owner_impl_path)` -- same owner
-  - MIR: `assert!(!r.contains("ERROR_INTERRUPT_MASK"))` for each `EXPLICIT_ISR_CLEAR_MASK` unevaluated ref -- confirms the definitional link is NOT preserved
+  - `assert!(init_expr.contains("ERROR_INTERRUPT_MASK"))` -- initializer_expr references `ERROR_INTERRUPT_MASK`
+  - `assert!(!error_init.contains("EXPLICIT_ISR_CLEAR_MASK"))` -- ERROR_INTERRUPT_MASK does not reference EXPLICIT_ISR_CLEAR_MASK
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:753`
-  - The identity enrichment surface `AssociatedConstantFact` has no `value_expr` or `definition_ref` field. Both constants exist as independent entries with no cross-reference.
-  - In MIR, `EXPLICIT_ISR_CLEAR_MASK`'s unevaluated description references its own DefId (`unevaluated:driver::Pl011FullSpec::EXPLICIT_ISR_CLEAR_MASK`), not `ERROR_INTERRUPT_MASK`. The syntactic `Self::ERROR_INTERRUPT_MASK` reference is resolved at const-eval time and does not appear in the extraction.
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:720`
+  - The identity enrichment surface `AssociatedConstantFact.initializer_expr` is populated from the HIR body of each constant. For `EXPLICIT_ISR_CLEAR_MASK`, the initializer is rendered as `"Self::ERROR_INTERRUPT_MASK"`, preserving the authored definitional dependency.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `const EXPLICIT_ISR_CLEAR_MASK: u32 = Self::ERROR_INTERRUPT_MASK;`
-  - Extracted Fact (Verbatim): Two independent `AssociatedConstantFact` entries; MIR unevaluated refs each reference their own DefId
-  - Correspondence: `absent`
-  - Gap / Loss Description: The syntactic definitional relationship `Self::ERROR_INTERRUPT_MASK` is not preserved on any extraction surface. The identity surface has no value-expression field. The MIR surface resolves each constant independently.
-  - Why This Status Follows: The test directly inspects the constant-definition surface and confirms that `EXPLICIT_ISR_CLEAR_MASK`'s unevaluated form does NOT contain any reference to `ERROR_INTERRUPT_MASK`. The definitional link is lost.
+  - Extracted Fact (Verbatim): `AssociatedConstantFact { initializer_expr: Some("Self::ERROR_INTERRUPT_MASK"), .. }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: The initializer_expr for `EXPLICIT_ISR_CLEAR_MASK` contains `"ERROR_INTERRUPT_MASK"`, directly proving the authored definitional relationship. The assertion would fail if the initializer did not reference `ERROR_INTERRUPT_MASK`.
 - Counterexample: none found
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/identity_enrichment.rs` -- add a `value_expr` or `definition_ref` field to `AssociatedConstantFact` that captures the HIR initializer expression as a string.
-  - Minimal Missing Fact To Preserve: Record `Self::ERROR_INTERRUPT_MASK` as the definition expression for `EXPLICIT_ISR_CLEAR_MASK`.
-- Conclusion: The syntactic definitional relationship is NOT preserved at the extraction boundary. This is a documented extraction gap.
+- Conclusion: The syntactic definitional relationship is preserved at the extraction boundary via `AssociatedConstantFact.initializer_expr`.
 
 ---
 
@@ -272,12 +265,12 @@ boundary validation.
 | 1d: Owner impl path | `pass` |
 | 1e: Closed-world set | `pass` |
 | 1f: MIR body references | `pass` |
-| 1g: Literal value evaluation | `fail` |
+| 1g: Literal value evaluation | `pass` |
 | 2a: Distinct entry survival | `pass` |
-| 2b: Definitional relationship | `fail` |
+| 2b: Definitional relationship | `pass` |
 
-7 of 9 checks pass. 2 checks fail due to extraction gaps:
+9 of 9 checks pass. All extraction gaps from the previous report have been resolved:
 
-1. **Constant value evaluation gap**: The extraction boundary does not evaluate constant expressions. Associated constants appear as `MirConstValue::Unsupported` (unevaluated) in MIR and have no value field in the identity surface.
+1. **Constant value evaluation**: `AssociatedConstantFact.evaluated_value` is populated via `tcx.const_eval_poly(def_id)` during identity enrichment extraction.
 
-2. **Definitional relationship gap**: The syntactic relationship `EXPLICIT_ISR_CLEAR_MASK = Self::ERROR_INTERRUPT_MASK` is not preserved on any extraction surface. The compiler resolves each constant to its own DefId independently.
+2. **Definitional relationship**: `AssociatedConstantFact.initializer_expr` is populated by rendering the HIR body expression, preserving authored relationships like `Self::ERROR_INTERRUPT_MASK`.

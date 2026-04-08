@@ -17,7 +17,7 @@ pub use super::identity_enrichment_types::*;
 
 use rustc_ast::token::{LitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
-use rustc_hir::{AttrArgs, Attribute, GenericParamKind, ImplItemKind, ItemKind, QPath};
+use rustc_hir::{AttrArgs, Attribute, ExprKind, GenericParamKind, ImplItemKind, ItemKind, QPath};
 use rustc_middle::ty::TyCtxt;
 
 // ---------------------------------------------------------------------------
@@ -366,12 +366,32 @@ fn extract_impl_block<'tcx>(
                     is_isr,
                 });
             }
-            ImplItemKind::Const(ty, _) => {
+            ImplItemKind::Const(ty, rhs) => {
+                let def_id = impl_item.owner_id.def_id.to_def_id();
+
+                // Evaluate the constant to get its scalar value.
+                let evaluated_value = tcx.const_eval_poly(def_id).ok().and_then(|val| match val {
+                    rustc_middle::mir::ConstValue::Scalar(
+                        rustc_middle::mir::interpret::Scalar::Int(int),
+                    ) => Some(int.to_bits(int.size())),
+                    _ => None,
+                });
+
+                // Render the HIR initializer expression.
+                let initializer_expr = if let rustc_hir::ConstItemRhs::Body(body_id) = rhs {
+                    let body = tcx.hir_body(*body_id);
+                    Some(render_const_initializer(body.value))
+                } else {
+                    None
+                };
+
                 constants.push(AssociatedConstantFact {
                     name: item_name,
                     canonical_path: item_canonical,
                     ty: render_hir_ty(ty),
                     owner_impl_path: impl_path.clone(),
+                    evaluated_value,
+                    initializer_expr,
                 });
             }
             ImplItemKind::Type(_) => {
@@ -551,6 +571,51 @@ fn parse_id_arg(
         attr_name: attr_name.to_string(),
         reason: "missing required id = \"...\" argument".to_string(),
     })
+}
+
+// ---------------------------------------------------------------------------
+// Constant initializer rendering
+// ---------------------------------------------------------------------------
+
+/// Render a constant's HIR initializer expression, preserving authored
+/// definitional relationships such as `Self::ERROR_INTERRUPT_MASK`.
+fn render_const_initializer(expr: &rustc_hir::Expr<'_>) -> String {
+    match &expr.kind {
+        ExprKind::Path(qpath) => render_qpath(qpath),
+        ExprKind::Lit(lit) => match lit.node {
+            rustc_ast::LitKind::Int(val, _) => format!("{}", val.get()),
+            _ => format!("{:?}", lit.node),
+        },
+        ExprKind::Binary(op, lhs, rhs) => {
+            let op_str = match op.node {
+                rustc_hir::BinOpKind::BitOr => "|",
+                rustc_hir::BinOpKind::BitAnd => "&",
+                rustc_hir::BinOpKind::Shl => "<<",
+                rustc_hir::BinOpKind::Shr => ">>",
+                rustc_hir::BinOpKind::Add => "+",
+                rustc_hir::BinOpKind::Sub => "-",
+                rustc_hir::BinOpKind::Mul => "*",
+                rustc_hir::BinOpKind::Div => "/",
+                rustc_hir::BinOpKind::Rem => "%",
+                _ => "?",
+            };
+            format!(
+                "({} {} {})",
+                render_const_initializer(lhs),
+                op_str,
+                render_const_initializer(rhs),
+            )
+        }
+        ExprKind::Unary(op, inner) => {
+            let op_str = match op {
+                rustc_hir::UnOp::Not => "!",
+                rustc_hir::UnOp::Neg => "-",
+                rustc_hir::UnOp::Deref => "*",
+            };
+            format!("{}{}", op_str, render_const_initializer(inner))
+        }
+        _ => "<expr>".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------

@@ -632,6 +632,8 @@ fn sample_enrichment_surface() -> RawIdentityEnrichmentSurface {
                     ),
                     ty: "u32".to_string(),
                     owner_impl_path: CanonicalPath("pl011_spec::<impl Pl011Spec>".to_string()),
+                    evaluated_value: None,
+                    initializer_expr: None,
                 }],
             },
             ImplBlockFact {

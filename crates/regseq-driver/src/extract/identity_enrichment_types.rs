@@ -177,6 +177,13 @@ pub struct AssociatedConstantFact {
     pub ty: String,
     /// Canonical path of the owning impl block.
     pub owner_impl_path: CanonicalPath,
+    /// Evaluated scalar value of the constant, if it evaluates to a scalar.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub evaluated_value: Option<u128>,
+    /// HIR initializer expression rendered as a string, preserving authored
+    /// definitional relationships (e.g., `Self::ERROR_INTERRUPT_MASK`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub initializer_expr: Option<String>,
 }
 
 // ---------------------------------------------------------------------------
