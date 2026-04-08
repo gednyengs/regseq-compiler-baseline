@@ -8,40 +8,34 @@ Reviewed certificate:
 
 ## Current Status
 
-- Passing:
-  - identity / trait role / signature / return-type group
-- Failing:
-  - body group
+- Implemented via `extraction-remediation-11`
+- The corresponding validation task `source-to-extraction-11` is complete
 
-## Extraction Gaps To Fix
+## Resolution Summary
 
-- `tx_ready` does not preserve field-level identity strongly enough to prove
-  `FR_REG::TXFF::FIELD`.
-- `tx_empty` does not preserve field-level identity strongly enough to prove
-  `FR_REG::BUSY::FIELD`.
-- `flush_tx_fifo` does not preserve symbolic value ordering strongly enough to
-  prove `FEN::DISABLED` then `FEN::ENABLED`.
-- `send_break` does not preserve branch-to-value mapping strongly enough to
-  prove `on == true -> BRK::ENABLED` and `on == false -> BRK::DISABLED`.
+- The prior remediation hypothesis was too pessimistic. The current MIR/body
+  extraction already preserves symbolic constant identity strongly enough to
+  prove:
+  - `tx_ready` uses `FR_REG::TXFF::FIELD`
+  - `tx_empty` uses `FR_REG::BUSY::FIELD`
+  - `flush_tx_fifo` applies `FEN::DISABLED` then `FEN::ENABLED` in order
+  - `send_break` maps `on == true -> BRK::ENABLED` and
+    `on == false -> BRK::DISABLED`
+- The missing work was in the validation proof and certificate, not in the
+  compiler boundary itself.
+- The previously passing `flush_rx_fifo` and callback identity/signature facts
+  remain preserved.
 
-## Likely Touchpoints
+## Evidence Notes
 
-- MIR/body extraction for call-argument symbolic identity
-- Any intermediate representation that can preserve field and `FieldValue`
-  constant paths before lowering to scalars
+- `MirConstValue::Unevaluated` already carries constant def-path identity for
+  call arguments at the current extraction boundary.
+- `source-to-extraction-11` now proves those authored facts directly against
+  the existing extraction surface.
 
-## Minimal Facts To Preserve
+## Current Backlog State
 
-- Symbolic path of `Field` constants passed to `read`
-- Symbolic path of `FieldValue` constants passed to `modify`
-- Branch-local association between `send_break` control-flow arms and the
-  authored `BRK` values
-
-## Acceptance Checklist
-
-- [ ] `tx_ready` proves exact `FR_REG::TXFF::FIELD`
-- [ ] `tx_empty` proves exact `FR_REG::BUSY::FIELD`
-- [ ] `flush_tx_fifo` proves exact ordered `FEN::DISABLED` then
-      `FEN::ENABLED`
-- [ ] `send_break` proves exact branch-to-`BRK` mapping
-- [ ] `source-to-extraction-11` body group upgrades from `fail` to `pass`
+- No current compiler remediation work is required for this check.
+- If this boundary regresses, first confirm whether the regression is in the
+  extraction surface or only in the task-owned proof before opening a new
+  remediation task.

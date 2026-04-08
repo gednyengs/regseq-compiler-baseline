@@ -13,6 +13,13 @@ branch-local value mapping rather than only structural register/call shape.
 
 This is an implementation task, not a proof-only task.
 
+Historical completion note:
+
+- Verification showed the current extraction boundary already preserved the
+  required symbolic constant identity in MIR call arguments.
+- The task closed by strengthening the task-owned validation proof and
+  updating the certificate, not by changing production extraction code.
+
 ## Input Context
 
 Read before starting:
