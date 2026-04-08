@@ -716,8 +716,9 @@ fn check_group_2_field_val_body_proves_authored_facts() {
     );
 
     // Param locals are 1 and 2: `field`, `raw`.
-    let mask_local = find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 0))
-        .expect("field_val must copy `field.mask` into a temp local");
+    let mask_local =
+        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 0))
+            .expect("field_val must copy `field.mask` into a temp local");
     let raw_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 2))
         .expect("field_val must copy `raw` into a temp local");
     let shift_local =

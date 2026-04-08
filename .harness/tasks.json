@@ -1452,7 +1452,7 @@
           "id": "extraction-remediation-06",
           "name": "PL011 driver-constants extraction remediation",
           "spec": ".harness/tasks/extraction-remediation/06-pl011-driver-constants-extraction-remediation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "source-to-extraction-06"
           ],
