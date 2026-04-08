@@ -1269,13 +1269,13 @@
           "id": "source-to-extraction-01",
           "name": "PL011 register-block authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/01-pl011-register-block-authored-to-extraction.md",
-          "status": "in_progress",
+          "status": "failed",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": "Validation complete: 4/8 checks pass, 4/8 fail. Checks 3,4,6,8 fail because RegisterBlockDecl drops block-level properties (endian, access_width) and does not capture byte offsets, register descriptor type names, or access kinds. Additionally, cargo test --workspace blocked by pre-existing broken test files from other concurrent agents (helper_methods_b_extraction.rs, isr_extraction.rs, serial_callbacks_b_extraction.rs, serial_callbacks_extraction_a.rs). See docs/validation/01-pl011/checks/results/01-register-block-extraction.md for full report."
         },
         {
           "id": "source-to-extraction-02",
@@ -1293,7 +1293,7 @@
           "id": "source-to-extraction-03",
           "name": "PL011 driver-struct authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/03-pl011-driver-struct-authored-to-extraction.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
