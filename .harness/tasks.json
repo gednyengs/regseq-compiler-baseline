@@ -1447,6 +1447,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "extraction-remediation-06",
+          "name": "PL011 driver-constants extraction remediation",
+          "spec": ".harness/tasks/extraction-remediation/06-pl011-driver-constants-extraction-remediation.md",
+          "status": "pending",
+          "depends_on": [
+            "source-to-extraction-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
