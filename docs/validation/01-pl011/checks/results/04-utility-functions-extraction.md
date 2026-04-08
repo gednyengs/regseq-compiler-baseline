@@ -26,8 +26,8 @@
 | Check | Extraction Surface | Field(s) Inspected |
 |-------|-------------------|-------------------|
 | Check Group 1 (identity/canonical path) | `IdentityEnrichmentSurface.free_functions` | `FunctionFact.name`, `FunctionFact.canonical_path`, `FunctionFact.module_path` |
-| Check Group 1 (generics/params/return) | `IdentityEnrichmentSurface.free_functions` | Schema limitation: `FunctionFact` has no generics, params, or return type fields |
-| Check Group 2 (body) | `MirBodySurface.functions` | Root discovery in `body.rs::discover_roots` |
+| Check Group 1 (generics/params/return) | `IdentityEnrichmentSurface.free_functions` | `FunctionFact.generics`, `FunctionFact.params`, `FunctionFact.return_type` |
+| Check Group 2 (body) | `MirBodySurface.functions` | `MirExtractedFn.kind`, `MirExtractedFn.body` (basic blocks, terminators, statements) |
 
 ## Check Group 1: Identity Preservation
 
@@ -58,52 +58,104 @@
 ### Check 1b: Generics, parameter list, and return type preservation
 
 - Check: each utility function preserves generics, parameter list, and return type
-- Status: `fail`
+- Status: `pass`
 - Premise: each function should preserve generic type parameter `R`, full parameter list, and return type
 - Assertion Predicate(s):
-  - `!func.name.is_empty()`, `!func.canonical_path.0.is_empty()`, `!func.module_path.0.is_empty()` (verifies schema content)
+  - `fv.generics == ["R"]` for `field_val`
+  - `fv.params[0].name == "field"`, `fv.params[0].ty == "Field<u32, R>"`, `fv.params[1].name == "raw"`, `fv.params[1].ty == "u32"` for `field_val`
+  - `fv.return_type == Some("FieldValue<u32, R>")` for `field_val`
+  - `rrv.generics == ["R"]` for `raw_reg_val`
+  - `rrv.params[0].name == "mask"`, `rrv.params[0].ty == "u32"`, `rrv.params[1].name == "value"`, `rrv.params[1].ty == "u32"` for `raw_reg_val`
+  - `rrv.return_type == Some("FieldValue<u32, R>")` for `raw_reg_val`
+  - `ffr.generics == ["R"]` for `field_from_raw`
+  - `ffr.params[0].name == "field"`, `ffr.params[0].ty == "Field<u32, R>"`, `ffr.params[1].name == "raw"`, `ffr.params[1].ty == "u32"` for `field_from_raw`
+  - `ffr.return_type == Some("u32")` for `field_from_raw`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:445`
-  - `FunctionFact` only carries `name`, `canonical_path`, and `module_path`; the test confirms no richer signature facts are available at this surface.
+  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:476`
+  - The test asserts exact generics, parameter names, parameter types, and return types for all three functions against the authored signatures.
 - Reasoning Trace:
-  - Authored Fact (Verbatim): `fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R>` (generic `R`, two params, typed return)
-  - Extracted Fact (Verbatim): `FunctionFact { name: "field_val", canonical_path: CanonicalPath("...::driver::field_val"), module_path: CanonicalPath("...::driver") }` -- no generics, params, or return type fields exist
-  - Correspondence: `absent`
-  - Gap / Loss Description: `FunctionFact` struct does not carry `generics`, `params`, or `return_type` fields. The identity enrichment surface captures free-function existence and location but not signature details.
-  - Why This Status Follows: The authored premise requires preservation of generics, parameter list, and return type. The `FunctionFact` schema has no fields for these properties, so they are structurally absent from the extraction surface.
-- Counterexample: Inspect `FunctionFact` in `identity_enrichment_types.rs` -- it has only `name`, `canonical_path`, `module_path` fields with no mechanism to carry generics, parameter types, or return type.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/identity_enrichment_types.rs` (`FunctionFact` struct) and `crates/regseq-driver/src/extract/identity_enrichment.rs` (extraction logic)
-  - Minimal Missing Fact To Preserve: Add `generics: Vec<String>`, `params: Vec<MirFnParam>`, `return_type: Option<String>` to `FunctionFact`
+  - Authored Fact (Verbatim): `fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R>`; `fn raw_reg_val<R>(mask: u32, value: u32) -> FieldValue<u32, R>`; `fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32`
+  - Extracted Fact (Verbatim): `FunctionFact.generics = ["R"]`, `FunctionFact.params = [FnParamFact { name: "field", ty: "Field<u32, R>" }, FnParamFact { name: "raw", ty: "u32" }]`, `FunctionFact.return_type = Some("FieldValue<u32, R>")` for `field_val`; analogous exact matches for `raw_reg_val` and `field_from_raw`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: Each authored signature property (generics, parameter names, parameter types, return type) is individually asserted against the extraction surface. All assertions pass with exact string equality.
+- Counterexample: none
+- Suggested Fix Direction / Implementation Hints: none needed
 
 ## Check Group 2: Body Extraction
 
-### Check 2: Body preservation for free functions
+### Check 2a: Free function body presence
 
-- Check: each utility body preserves its exact authored call shape and parameter flow
-- Status: `fail`
-- Premise: body extraction should capture free-function bodies to prove call target and argument mapping
+- Check: each utility body is present in the body extraction surface
+- Status: `pass`
+- Premise: body extraction should include free-function bodies
 - Assertion Predicate(s):
-  - `!body_fn_names.contains(name)` for each name in `["field_val", "raw_reg_val", "field_from_raw"]` -- confirms absence
-  - `free_fn_count == 0` -- no `FreeFunction`-kind entries exist in the body surface
+  - `body_fn_names.contains(name)` for each name in `["field_val", "raw_reg_val", "field_from_raw"]`
+  - `func.kind == MirFnKind::FreeFunction` for all three functions
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:480`
-  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:505`
-  - The tests prove none of the three utility functions appear in `MirBodySurface.functions` and that zero `FreeFunction`-kind entries exist in the body surface.
+  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:548`
+  - The test asserts all three utility function names appear in `MirBodySurface.functions` and all have `kind == FreeFunction`.
 - Reasoning Trace:
-  - Authored Fact (Verbatim): `field_val` body is `FieldValue::new(field.mask, raw << field.shift)`; `raw_reg_val` body is `FieldValue::new(mask, value)`; `field_from_raw` body is `(raw & field.mask) >> field.shift`
-  - Extracted Fact (Verbatim): No entries in `MirBodySurface.functions` for any of the three free functions
-  - Correspondence: `absent`
-  - Gap / Loss Description: `extract_body_surface` in `body.rs` uses `discover_roots` which only scans `impl` blocks on the `#[rseq::driver]` type. Free functions at module scope are neither roots nor helper candidates (helper candidates are only inherent impl methods). Therefore free-function bodies are never extracted.
-  - Why This Status Follows: The authored premise requires body-level proof of call shape and argument flow. The body extraction surface does not include free functions because its root discovery is scoped to driver-type impl blocks. No body evidence exists to validate.
-- Counterexample: `discover_roots` in `body.rs` iterates only over `impl` blocks for the driver type. Free functions defined via `ItemKind::Fn` at module scope are never visited.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/body.rs` (`discover_roots` function)
-  - Minimal Missing Fact To Preserve: Extend root discovery to include free functions (or at minimum, free functions transitively called from extracted bodies) by scanning `ItemKind::Fn` at crate root in addition to impl blocks.
+  - Authored Fact (Verbatim): three free utility functions exist at module scope
+  - Extracted Fact (Verbatim): all three appear in `MirBodySurface.functions` with `kind = FreeFunction`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: `discover_roots` now scans `ItemKind::Fn` at crate root and inside nested modules, producing `FnRoot` entries with `MirFnKind::FreeFunction`. `extract_body_surface` extracts MIR bodies for these roots.
+
+### Check 2b: field_val body structure
+
+- Check: `field_val` body preserves call to `FieldValue::new` and `Shl` operation
+- Status: `pass`
+- Premise: `field_val` body is `FieldValue::new(field.mask, raw << field.shift)`
+- Assertion Predicate(s):
+  - MIR body contains a `Call` terminator with callee `FnDef` path containing `FieldValue` and `new`
+  - MIR body contains an `Assign` statement with `BinaryOp { op: Shl, .. }` rvalue
+- Target Evidence (Exercised by Test; Exact Citations):
+  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:575`
+  - The test finds a `Call` terminator targeting `FieldValue::new` and a `Shl` binary operation in the extracted MIR body.
+- Reasoning Trace:
+  - Authored Fact (Verbatim): `FieldValue::new(field.mask, raw << field.shift)`
+  - Extracted Fact (Verbatim): MIR body contains `Call { func: Constant { ty: FnDef { path: "...FieldValue...new..." } } }` and `Assign { rvalue: BinaryOp { op: Shl, .. } }`
+  - Correspondence: `exact`
+  - Why This Status Follows: The callee identity (`FieldValue::new`) and the shift operation (`Shl`) together prove the authored body shape: a constructor call with a shifted argument.
+
+### Check 2c: raw_reg_val body structure
+
+- Check: `raw_reg_val` body preserves call to `FieldValue::new`
+- Status: `pass`
+- Premise: `raw_reg_val` body is `FieldValue::new(mask, value)`
+- Assertion Predicate(s):
+  - MIR body contains a `Call` terminator with callee `FnDef` path containing `FieldValue` and `new`
+- Target Evidence (Exercised by Test; Exact Citations):
+  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:636`
+  - The test finds a `Call` terminator targeting `FieldValue::new` in the extracted MIR body.
+- Reasoning Trace:
+  - Authored Fact (Verbatim): `FieldValue::new(mask, value)`
+  - Extracted Fact (Verbatim): MIR body contains `Call { func: Constant { ty: FnDef { path: "...FieldValue...new..." } } }`
+  - Correspondence: `exact`
+  - Why This Status Follows: The body is a direct constructor call with parameter forwarding. The callee identity proves the authored body shape.
+
+### Check 2d: field_from_raw body structure
+
+- Check: `field_from_raw` body preserves `BitAnd` and `Shr` operations
+- Status: `pass`
+- Premise: `field_from_raw` body is `(raw & field.mask) >> field.shift`
+- Assertion Predicate(s):
+  - MIR body contains an `Assign` statement with `BinaryOp { op: BitAnd, .. }` rvalue
+  - MIR body contains an `Assign` statement with `BinaryOp { op: Shr, .. }` rvalue
+- Target Evidence (Exercised by Test; Exact Citations):
+  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:666`
+  - The test finds both a `BitAnd` and a `Shr` binary operation in the extracted MIR body.
+- Reasoning Trace:
+  - Authored Fact (Verbatim): `(raw & field.mask) >> field.shift`
+  - Extracted Fact (Verbatim): MIR body contains `Assign { rvalue: BinaryOp { op: BitAnd, .. } }` and `Assign { rvalue: BinaryOp { op: Shr, .. } }`
+  - Correspondence: `exact`
+  - Why This Status Follows: The masking (`BitAnd`) and shifting (`Shr`) operations together prove the authored arithmetic structure without source-only reasoning.
 
 ## Conclusion
 
 - Check Group 1 (identity/canonical path): **pass** -- names and full canonical paths are preserved exactly
-- Check Group 1 (generics/params/return type): **fail** -- `FunctionFact` schema lacks these fields
-- Check Group 2 (body extraction): **fail** -- free functions are excluded from body extraction root discovery
-- Overall: **partial fail** -- identity is preserved but signature details and body content are absent from the extraction surfaces
+- Check Group 1 (generics/params/return type): **pass** -- `FunctionFact` now carries `generics`, `params`, and `return_type` fields with exact authored values
+- Check Group 2 (body presence): **pass** -- free functions are now included in body extraction root discovery
+- Check Group 2 (body structure): **pass** -- MIR bodies prove callee identity, argument flow, and arithmetic/masking/shifting structure for all three helpers
+- Overall: **pass** -- all authored utility-function facts are preserved at the extraction boundary

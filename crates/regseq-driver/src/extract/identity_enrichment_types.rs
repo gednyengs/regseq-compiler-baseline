@@ -183,7 +183,7 @@ pub struct AssociatedConstantFact {
 // Free function identity
 // ---------------------------------------------------------------------------
 
-/// A free (non-method) function.
+/// A free (non-method) function with signature-level facts.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct FunctionFact {
     /// Short function name.
@@ -192,6 +192,24 @@ pub struct FunctionFact {
     pub canonical_path: CanonicalPath,
     /// Canonical path of the containing module.
     pub module_path: CanonicalPath,
+    /// Type parameter names (e.g., `["R"]` for `fn foo<R>(...)`).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub generics: Vec<String>,
+    /// Parameters (name and HIR-rendered type).
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub params: Vec<FnParamFact>,
+    /// Return type as rendered from HIR. `None` for unit return.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub return_type: Option<String>,
+}
+
+/// A parameter of a free function.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FnParamFact {
+    /// Parameter name from the HIR pattern.
+    pub name: String,
+    /// Parameter type as rendered from HIR.
+    pub ty: String,
 }
 
 // ---------------------------------------------------------------------------

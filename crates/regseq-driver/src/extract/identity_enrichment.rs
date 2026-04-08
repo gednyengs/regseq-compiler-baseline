@@ -17,7 +17,7 @@ pub use super::identity_enrichment_types::*;
 
 use rustc_ast::token::{LitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
-use rustc_hir::{AttrArgs, Attribute, ImplItemKind, ItemKind, QPath};
+use rustc_hir::{AttrArgs, Attribute, GenericParamKind, ImplItemKind, ItemKind, QPath};
 use rustc_middle::ty::TyCtxt;
 
 // ---------------------------------------------------------------------------
@@ -96,12 +96,22 @@ pub fn extract_identity_enrichment<'tcx>(
                 crate_root_children.push(item_path.clone());
                 extract_impl_block(tcx, &item_path, item, impl_block, &mut acc.impl_blocks)?;
             }
-            ItemKind::Fn { ident, .. } => {
+            ItemKind::Fn {
+                ident,
+                sig,
+                generics,
+                ..
+            } => {
                 crate_root_children.push(item_path.clone());
+                let (gen, params, ret) =
+                    extract_free_fn_signature(tcx, item.owner_id, sig, generics);
                 acc.free_functions.push(FunctionFact {
                     name: ident.name.as_str().to_string(),
                     canonical_path: item_path,
                     module_path: crate_root_path.clone(),
+                    generics: gen,
+                    params,
+                    return_type: ret,
                 });
             }
             _ => {}
@@ -183,12 +193,22 @@ fn extract_module<'tcx>(
                 child_items.push(item_path.clone());
                 extract_impl_block(tcx, &item_path, item, impl_block, &mut acc.impl_blocks)?;
             }
-            ItemKind::Fn { ident, .. } => {
+            ItemKind::Fn {
+                ident,
+                sig,
+                generics,
+                ..
+            } => {
                 child_items.push(item_path.clone());
+                let (gen, params, ret) =
+                    extract_free_fn_signature(tcx, item.owner_id, sig, generics);
                 acc.free_functions.push(FunctionFact {
                     name: ident.name.as_str().to_string(),
                     canonical_path: item_path,
                     module_path: module_path.clone(),
+                    generics: gen,
+                    params,
+                    return_type: ret,
                 });
             }
             _ => {}
@@ -202,6 +222,60 @@ fn extract_module<'tcx>(
     });
 
     Ok(())
+}
+
+// ---------------------------------------------------------------------------
+// Free function signature extraction
+// ---------------------------------------------------------------------------
+
+/// Extract generics, parameters, and return type from a free function's HIR.
+fn extract_free_fn_signature<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    owner_id: rustc_hir::OwnerId,
+    sig: &rustc_hir::FnSig<'tcx>,
+    generics: &rustc_hir::Generics<'tcx>,
+) -> (Vec<String>, Vec<FnParamFact>, Option<String>) {
+    let gen_names: Vec<String> = generics
+        .params
+        .iter()
+        .filter_map(|p| match p.kind {
+            GenericParamKind::Type { .. } => Some(p.name.ident().name.as_str().to_string()),
+            _ => None,
+        })
+        .collect();
+
+    let body = tcx.hir_body_owned_by(owner_id.def_id);
+    let params: Vec<FnParamFact> = body
+        .params
+        .iter()
+        .zip(sig.decl.inputs.iter())
+        .map(|(param, ty)| FnParamFact {
+            name: render_pat(param.pat),
+            ty: render_hir_ty(ty),
+        })
+        .collect();
+
+    let return_type = match &sig.decl.output {
+        rustc_hir::FnRetTy::DefaultReturn(_) => None,
+        rustc_hir::FnRetTy::Return(ty) => {
+            let r = render_hir_ty(ty);
+            if r == "()" {
+                None
+            } else {
+                Some(r)
+            }
+        }
+    };
+
+    (gen_names, params, return_type)
+}
+
+fn render_pat(pat: &rustc_hir::Pat<'_>) -> String {
+    match &pat.kind {
+        rustc_hir::PatKind::Binding(_, _, ident, _) => ident.name.as_str().to_string(),
+        rustc_hir::PatKind::Wild => "_".to_string(),
+        _ => "<pattern>".to_string(),
+    }
 }
 
 // ---------------------------------------------------------------------------
@@ -560,11 +634,34 @@ fn render_qpath(qpath: &QPath<'_>) -> String {
         QPath::Resolved(_, path) => path
             .segments
             .iter()
-            .map(|s| s.ident.name.as_str())
+            .map(|s| render_path_segment(s))
             .collect::<Vec<_>>()
             .join("::"),
         QPath::TypeRelative(ty, segment) => {
-            format!("{}::{}", render_hir_ty(ty), segment.ident.name.as_str())
+            format!("{}::{}", render_hir_ty(ty), render_path_segment(segment))
         }
+    }
+}
+
+/// Render a single path segment including any generic type arguments.
+fn render_path_segment(seg: &rustc_hir::PathSegment<'_>) -> String {
+    let name = seg.ident.name.as_str().to_string();
+    match seg.args {
+        Some(args) if !args.args.is_empty() => {
+            let type_args: Vec<String> = args
+                .args
+                .iter()
+                .filter_map(|arg| match arg {
+                    rustc_hir::GenericArg::Type(ty) => Some(render_hir_ty(ty.as_unambig_ty())),
+                    _ => None,
+                })
+                .collect();
+            if type_args.is_empty() {
+                name
+            } else {
+                format!("{}<{}>", name, type_args.join(", "))
+            }
+        }
+        _ => name,
     }
 }

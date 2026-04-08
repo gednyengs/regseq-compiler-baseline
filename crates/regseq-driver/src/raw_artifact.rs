@@ -924,8 +924,8 @@ pub type RawIdentityEnrichmentSurface =
 // Re-export enrichment constituent types so integration tests and downstream
 // consumers can construct `RawIdentityEnrichmentSurface` values.
 pub use crate::extract::identity_enrichment::{
-    AssociatedConstantFact, CanonicalPath, EnumFact, FieldFact, FunctionFact, ImplBlockFact,
-    ImplMethodFact, ModuleFact, RseqFieldKind, StructFact,
+    AssociatedConstantFact, CanonicalPath, EnumFact, FieldFact, FnParamFact, FunctionFact,
+    ImplBlockFact, ImplMethodFact, ModuleFact, RseqFieldKind, StructFact,
 };
 
 // ---------------------------------------------------------------------------

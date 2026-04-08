@@ -93,6 +93,35 @@ pub fn extract_body_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<MirBodySurface, B
         });
     }
 
+    // Extract free function bodies.
+    for root in &roots.free_functions {
+        let name = root.name.clone();
+        if visited.contains(&name) {
+            continue;
+        }
+        visited.insert(name.clone());
+
+        let local_def_id = root.owner_id.def_id;
+        let def_path = tcx.def_path_str(local_def_id.to_def_id());
+        let stolen = tcx.mir_drops_elaborated_and_const_checked(local_def_id);
+        let body_ref = stolen.borrow();
+
+        let mir_body = super::mir_extract::convert_body(tcx, &body_ref);
+        let helper_calls = Vec::new();
+        let (params, return_type) = extract_free_fn_signature(tcx, root.owner_id);
+
+        functions.push(MirExtractedFn {
+            name,
+            def_path,
+            kind: MirFnKind::FreeFunction,
+            receiver: "none".to_string(),
+            params,
+            return_type,
+            body: mir_body,
+            helper_calls,
+        });
+    }
+
     Ok(MirBodySurface { functions })
 }
 
@@ -104,6 +133,7 @@ struct DiscoveredRoots {
     callbacks: Vec<FnRoot>,
     isrs: Vec<FnRoot>,
     helper_candidates: Vec<(String, rustc_hir::OwnerId)>,
+    free_functions: Vec<FnRoot>,
 }
 
 struct FnRoot {
@@ -116,57 +146,70 @@ fn discover_roots(tcx: TyCtxt<'_>, driver_type: &str) -> DiscoveredRoots {
     let mut callbacks = Vec::new();
     let mut isrs = Vec::new();
     let mut helper_candidates = Vec::new();
+    let mut free_functions = Vec::new();
 
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
-        let ItemKind::Impl(impl_block) = &item.kind else {
-            continue;
-        };
-        let Some(self_name) = self_type_name(impl_block.self_ty) else {
-            continue;
-        };
-        if self_name != driver_type {
-            continue;
-        }
+        match &item.kind {
+            ItemKind::Impl(impl_block) => {
+                let Some(self_name) = self_type_name(impl_block.self_ty) else {
+                    continue;
+                };
+                if self_name != driver_type {
+                    continue;
+                }
 
-        if let Some(trait_ref) = &impl_block.of_trait {
-            let trait_name = resolve_trait_name(tcx, trait_ref.trait_ref.path);
-            for item_ref in impl_block.items {
-                let impl_item = tcx.hir_impl_item(rustc_hir::ImplItemId {
-                    owner_id: item_ref.owner_id,
-                });
-                if let ImplItemKind::Fn(..) = &impl_item.kind {
-                    let method_name = impl_item.ident.name.as_str().to_string();
-                    callbacks.push(FnRoot {
-                        name: method_name.clone(),
-                        owner_id: item_ref.owner_id,
-                        kind: MirFnKind::Callback {
-                            trait_name: trait_name.clone(),
-                            method_name,
-                        },
-                    });
-                }
-            }
-        } else {
-            for item_ref in impl_block.items {
-                let impl_item = tcx.hir_impl_item(rustc_hir::ImplItemId {
-                    owner_id: item_ref.owner_id,
-                });
-                if let ImplItemKind::Fn(..) = &impl_item.kind {
-                    let name = impl_item.ident.name.as_str().to_string();
-                    let attrs = tcx.hir_attrs(impl_item.hir_id());
-                    let is_isr = attrs.iter().any(|a| rseq_attr_name(a) == Some("isr"));
-                    if is_isr {
-                        isrs.push(FnRoot {
-                            name: name.clone(),
+                if let Some(trait_ref) = &impl_block.of_trait {
+                    let trait_name = resolve_trait_name(tcx, trait_ref.trait_ref.path);
+                    for item_ref in impl_block.items {
+                        let impl_item = tcx.hir_impl_item(rustc_hir::ImplItemId {
                             owner_id: item_ref.owner_id,
-                            kind: MirFnKind::Isr,
                         });
+                        if let ImplItemKind::Fn(..) = &impl_item.kind {
+                            let method_name = impl_item.ident.name.as_str().to_string();
+                            callbacks.push(FnRoot {
+                                name: method_name.clone(),
+                                owner_id: item_ref.owner_id,
+                                kind: MirFnKind::Callback {
+                                    trait_name: trait_name.clone(),
+                                    method_name,
+                                },
+                            });
+                        }
                     }
-                    // All inherent methods are helper candidates.
-                    helper_candidates.push((name, item_ref.owner_id));
+                } else {
+                    for item_ref in impl_block.items {
+                        let impl_item = tcx.hir_impl_item(rustc_hir::ImplItemId {
+                            owner_id: item_ref.owner_id,
+                        });
+                        if let ImplItemKind::Fn(..) = &impl_item.kind {
+                            let name = impl_item.ident.name.as_str().to_string();
+                            let attrs = tcx.hir_attrs(impl_item.hir_id());
+                            let is_isr = attrs.iter().any(|a| rseq_attr_name(a) == Some("isr"));
+                            if is_isr {
+                                isrs.push(FnRoot {
+                                    name: name.clone(),
+                                    owner_id: item_ref.owner_id,
+                                    kind: MirFnKind::Isr,
+                                });
+                            }
+                            // All inherent methods are helper candidates.
+                            helper_candidates.push((name, item_ref.owner_id));
+                        }
+                    }
                 }
             }
+            ItemKind::Fn { ident, .. } => {
+                free_functions.push(FnRoot {
+                    name: ident.name.as_str().to_string(),
+                    owner_id: item.owner_id,
+                    kind: MirFnKind::FreeFunction,
+                });
+            }
+            ItemKind::Mod(_, mod_ref) => {
+                discover_free_fns_in_module(tcx, mod_ref, &mut free_functions);
+            }
+            _ => {}
         }
     }
 
@@ -174,6 +217,31 @@ fn discover_roots(tcx: TyCtxt<'_>, driver_type: &str) -> DiscoveredRoots {
         callbacks,
         isrs,
         helper_candidates,
+        free_functions,
+    }
+}
+
+/// Recursively discover free functions inside a module.
+fn discover_free_fns_in_module(
+    tcx: TyCtxt<'_>,
+    mod_ref: &rustc_hir::Mod<'_>,
+    free_functions: &mut Vec<FnRoot>,
+) {
+    for &child_id in mod_ref.item_ids {
+        let item = tcx.hir_item(child_id);
+        match &item.kind {
+            ItemKind::Fn { ident, .. } => {
+                free_functions.push(FnRoot {
+                    name: ident.name.as_str().to_string(),
+                    owner_id: item.owner_id,
+                    kind: MirFnKind::FreeFunction,
+                });
+            }
+            ItemKind::Mod(_, nested_mod) => {
+                discover_free_fns_in_module(tcx, nested_mod, free_functions);
+            }
+            _ => {}
+        }
     }
 }
 
@@ -255,6 +323,42 @@ fn extract_fn_signature(
         }
     };
     (receiver, params, return_type)
+}
+
+/// Extract signature facts for a free function (an `Item`, not `ImplItem`).
+fn extract_free_fn_signature(
+    tcx: TyCtxt<'_>,
+    owner_id: rustc_hir::OwnerId,
+) -> (Vec<MirFnParam>, Option<String>) {
+    let node = tcx.hir_owner_node(owner_id);
+    let rustc_hir::OwnerNode::Item(item) = node else {
+        return (vec![], None);
+    };
+    let ItemKind::Fn { sig, .. } = &item.kind else {
+        return (vec![], None);
+    };
+    let body = tcx.hir_body_owned_by(owner_id.def_id);
+    let params: Vec<MirFnParam> = body
+        .params
+        .iter()
+        .zip(sig.decl.inputs.iter())
+        .map(|(param, ty)| MirFnParam {
+            name: render_pat(param.pat),
+            ty: render_hir_ty(ty),
+        })
+        .collect();
+    let return_type = match &sig.decl.output {
+        rustc_hir::FnRetTy::DefaultReturn(_) => None,
+        rustc_hir::FnRetTy::Return(ty) => {
+            let r = render_hir_ty(ty);
+            if r == "()" {
+                None
+            } else {
+                Some(r)
+            }
+        }
+    };
+    (params, return_type)
 }
 
 fn receiver_label(decl: &rustc_hir::FnDecl<'_>) -> String {

@@ -406,16 +406,6 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
 
     // Canonical paths must preserve enough information to reconstruct the full
     // authored path `pl011_full_spec::driver::<fn_name>` exactly.
-    //
-    // The identity surface stores source-local paths for nested items, so the
-    // proof here mirrors task 01: we require
-    //   1. crate root module `pl011_full_spec`
-    //   2. `driver` module as a child of crate root
-    //   3. function canonical_path `driver::<fn_name>`
-    //   4. function module_path `driver`
-    //
-    // These four exercised facts are enough to reconstruct the full authored
-    // canonical path without heuristics.
     let crate_root = surface
         .modules
         .iter()
@@ -476,35 +466,71 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// Check Group 1b: generics, parameter list, and return type preservation
+// ---------------------------------------------------------------------------
+
 #[test]
-fn check_group_1_identity_surface_lacks_generics_params_return_type() {
-    // FunctionFact only contains name, canonical_path, module_path.
-    // It does NOT carry generics, parameter list, or return type.
-    // This test documents that the identity enrichment surface does not
-    // preserve those declaration facts.
-    let result = compile_and_extract_dual(SPECIMEN, "s2e04_identity_schema");
+fn check_group_1b_identity_surface_preserves_generics_params_return_type() {
+    let result = compile_and_extract_dual(SPECIMEN, "s2e04_identity_sig");
     let surface = result.identity.expect("identity extraction should succeed");
 
-    for name in AUTHORED_UTILITY_FN_NAMES {
-        let func = surface
-            .free_functions
-            .iter()
-            .find(|f| f.name == *name)
-            .unwrap_or_else(|| panic!("function '{name}' not found"));
+    // field_val: fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R>
+    let fv = surface
+        .free_functions
+        .iter()
+        .find(|f| f.name == "field_val")
+        .expect("field_val must exist in free_functions");
+    assert_eq!(fv.generics, vec!["R"], "field_val generics");
+    assert_eq!(fv.params.len(), 2, "field_val param count");
+    assert_eq!(fv.params[0].name, "field", "field_val param[0] name");
+    assert_eq!(fv.params[0].ty, "Field<u32, R>", "field_val param[0] type");
+    assert_eq!(fv.params[1].name, "raw", "field_val param[1] name");
+    assert_eq!(fv.params[1].ty, "u32", "field_val param[1] type");
+    assert_eq!(
+        fv.return_type.as_deref(),
+        Some("FieldValue<u32, R>"),
+        "field_val return type"
+    );
 
-        // FunctionFact has exactly three fields: name, canonical_path,
-        // module_path. There are no fields for generics, parameters, or
-        // return type. We verify the fields that ARE present:
-        assert!(!func.name.is_empty(), "name must be non-empty for '{name}'");
-        assert!(
-            !func.canonical_path.0.is_empty(),
-            "canonical_path must be non-empty for '{name}'"
-        );
-        assert!(
-            !func.module_path.0.is_empty(),
-            "module_path must be non-empty for '{name}'"
-        );
-    }
+    // raw_reg_val: fn raw_reg_val<R>(mask: u32, value: u32) -> FieldValue<u32, R>
+    let rrv = surface
+        .free_functions
+        .iter()
+        .find(|f| f.name == "raw_reg_val")
+        .expect("raw_reg_val must exist in free_functions");
+    assert_eq!(rrv.generics, vec!["R"], "raw_reg_val generics");
+    assert_eq!(rrv.params.len(), 2, "raw_reg_val param count");
+    assert_eq!(rrv.params[0].name, "mask", "raw_reg_val param[0] name");
+    assert_eq!(rrv.params[0].ty, "u32", "raw_reg_val param[0] type");
+    assert_eq!(rrv.params[1].name, "value", "raw_reg_val param[1] name");
+    assert_eq!(rrv.params[1].ty, "u32", "raw_reg_val param[1] type");
+    assert_eq!(
+        rrv.return_type.as_deref(),
+        Some("FieldValue<u32, R>"),
+        "raw_reg_val return type"
+    );
+
+    // field_from_raw: fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32
+    let ffr = surface
+        .free_functions
+        .iter()
+        .find(|f| f.name == "field_from_raw")
+        .expect("field_from_raw must exist in free_functions");
+    assert_eq!(ffr.generics, vec!["R"], "field_from_raw generics");
+    assert_eq!(ffr.params.len(), 2, "field_from_raw param count");
+    assert_eq!(ffr.params[0].name, "field", "field_from_raw param[0] name");
+    assert_eq!(
+        ffr.params[0].ty, "Field<u32, R>",
+        "field_from_raw param[0] type"
+    );
+    assert_eq!(ffr.params[1].name, "raw", "field_from_raw param[1] name");
+    assert_eq!(ffr.params[1].ty, "u32", "field_from_raw param[1] type");
+    assert_eq!(
+        ffr.return_type.as_deref(),
+        Some("u32"),
+        "field_from_raw return type"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -512,48 +538,193 @@ fn check_group_1_identity_surface_lacks_generics_params_return_type() {
 // ---------------------------------------------------------------------------
 
 #[test]
-fn check_group_2_body_surface_does_not_contain_free_functions() {
-    // The body extraction surface (MirBodySurface) only extracts bodies for
-    // roots discovered via impl blocks on the driver type: callbacks, ISRs,
-    // and transitively-reachable helper methods. Free functions at module
-    // scope are NOT roots and NOT helper candidates (helper candidates are
-    // only inherent impl methods on the driver type).
-    //
-    // Therefore, the three utility free functions should NOT appear in
-    // MirBodySurface.functions.
+fn check_group_2_body_surface_contains_free_functions() {
     let result = compile_and_extract_dual(SPECIMEN, "s2e04_body");
     let body = result.body.expect("body extraction should succeed");
 
     let body_fn_names: Vec<&str> = body.functions.iter().map(|f| f.name.as_str()).collect();
 
+    // All three utility free functions must appear in MirBodySurface.functions.
     for name in AUTHORED_UTILITY_FN_NAMES {
         assert!(
-            !body_fn_names.contains(name),
-            "free function '{name}' should NOT appear in \
-             MirBodySurface.functions because free functions are not \
-             body-extraction roots; found functions: {body_fn_names:?}"
+            body_fn_names.contains(name),
+            "free function '{name}' must appear in \
+             MirBodySurface.functions; found: {body_fn_names:?}"
+        );
+    }
+
+    // All three must have kind == FreeFunction.
+    for name in AUTHORED_UTILITY_FN_NAMES {
+        let func = body
+            .functions
+            .iter()
+            .find(|f| f.name == *name)
+            .unwrap_or_else(|| panic!("function '{name}' must be in body surface"));
+        assert_eq!(
+            func.kind,
+            MirFnKind::FreeFunction,
+            "{name} must have kind FreeFunction"
         );
     }
 }
 
 #[test]
-fn check_group_2_free_function_body_extraction_root_absence() {
-    // This test specifically documents that free functions are absent from
-    // body extraction because `discover_roots` in body.rs only scans impl
-    // blocks on the `#[rseq::driver]` type. Free functions are outside that
-    // scope. This is the root-cause explanation for the body-extraction gap.
-    let result = compile_and_extract_dual(SPECIMEN, "s2e04_root_absence");
-    let body = result.body.expect("body extraction should succeed");
+fn check_group_2_field_val_body_proves_authored_facts() {
+    // field_val body: FieldValue::new(field.mask, raw << field.shift)
+    //   - callee: FieldValue::new
+    //   - arg0: field.mask (field access on param 0)
+    //   - arg1: raw << field.shift (Shl of param 1 and field.shift)
+    let result = compile_and_extract_dual(SPECIMEN, "s2e04_body_fv");
+    let body_surface = result.body.expect("body extraction should succeed");
 
-    // No function in the body surface has kind == FreeFunction.
-    let free_fn_count = body
+    let func = body_surface
         .functions
         .iter()
-        .filter(|f| matches!(f.kind, MirFnKind::FreeFunction))
-        .count();
-    assert_eq!(
-        free_fn_count, 0,
-        "body surface should contain zero FreeFunction-kind entries; \
-         root discovery only considers impl blocks on the driver type"
+        .find(|f| f.name == "field_val")
+        .expect("field_val must be in body surface");
+
+    // Verify function has a body with basic blocks.
+    assert!(
+        !func.body.basic_blocks.is_empty(),
+        "field_val body must have basic blocks"
+    );
+
+    // Find a Call terminator whose callee is FieldValue::new.
+    let has_field_value_new_call = func.body.basic_blocks.iter().any(|bb| {
+        if let Some(term) = &bb.terminator {
+            if let MirTerminatorKind::Call { func: callee, .. } = &term.kind {
+                if let MirOperand::Constant { constant } = callee {
+                    if let MirTy::FnDef { path, .. } = &constant.ty {
+                        return path.contains("FieldValue") && path.contains("new");
+                    }
+                }
+            }
+        }
+        false
+    });
+    assert!(
+        has_field_value_new_call,
+        "field_val body must contain a call to FieldValue::new"
+    );
+
+    // Find a Shl operation (raw << field.shift).
+    let has_shl = func.body.basic_blocks.iter().any(|bb| {
+        bb.statements.iter().any(|stmt| {
+            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
+                matches!(
+                    rvalue.as_ref(),
+                    MirRvalue::BinaryOp {
+                        op: MirBinOp::Shl,
+                        ..
+                    }
+                )
+            } else {
+                false
+            }
+        })
+    });
+    assert!(
+        has_shl,
+        "field_val body must contain a Shl operation (raw << field.shift)"
+    );
+}
+
+#[test]
+fn check_group_2_raw_reg_val_body_proves_authored_facts() {
+    // raw_reg_val body: FieldValue::new(mask, value)
+    //   - callee: FieldValue::new
+    //   - args: direct parameter forwarding (mask, value)
+    let result = compile_and_extract_dual(SPECIMEN, "s2e04_body_rrv");
+    let body_surface = result.body.expect("body extraction should succeed");
+
+    let func = body_surface
+        .functions
+        .iter()
+        .find(|f| f.name == "raw_reg_val")
+        .expect("raw_reg_val must be in body surface");
+
+    assert!(
+        !func.body.basic_blocks.is_empty(),
+        "raw_reg_val body must have basic blocks"
+    );
+
+    // Find a Call terminator whose callee is FieldValue::new.
+    let has_field_value_new_call = func.body.basic_blocks.iter().any(|bb| {
+        if let Some(term) = &bb.terminator {
+            if let MirTerminatorKind::Call { func: callee, .. } = &term.kind {
+                if let MirOperand::Constant { constant } = callee {
+                    if let MirTy::FnDef { path, .. } = &constant.ty {
+                        return path.contains("FieldValue") && path.contains("new");
+                    }
+                }
+            }
+        }
+        false
+    });
+    assert!(
+        has_field_value_new_call,
+        "raw_reg_val body must contain a call to FieldValue::new"
+    );
+}
+
+#[test]
+fn check_group_2_field_from_raw_body_proves_authored_facts() {
+    // field_from_raw body: (raw & field.mask) >> field.shift
+    //   - BitAnd (raw & field.mask)
+    //   - Shr (result >> field.shift)
+    let result = compile_and_extract_dual(SPECIMEN, "s2e04_body_ffr");
+    let body_surface = result.body.expect("body extraction should succeed");
+
+    let func = body_surface
+        .functions
+        .iter()
+        .find(|f| f.name == "field_from_raw")
+        .expect("field_from_raw must be in body surface");
+
+    assert!(
+        !func.body.basic_blocks.is_empty(),
+        "field_from_raw body must have basic blocks"
+    );
+
+    // Find a BitAnd operation (raw & field.mask).
+    let has_bitand = func.body.basic_blocks.iter().any(|bb| {
+        bb.statements.iter().any(|stmt| {
+            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
+                matches!(
+                    rvalue.as_ref(),
+                    MirRvalue::BinaryOp {
+                        op: MirBinOp::BitAnd,
+                        ..
+                    }
+                )
+            } else {
+                false
+            }
+        })
+    });
+    assert!(
+        has_bitand,
+        "field_from_raw body must contain a BitAnd operation (raw & field.mask)"
+    );
+
+    // Find a Shr operation (result >> field.shift).
+    let has_shr = func.body.basic_blocks.iter().any(|bb| {
+        bb.statements.iter().any(|stmt| {
+            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
+                matches!(
+                    rvalue.as_ref(),
+                    MirRvalue::BinaryOp {
+                        op: MirBinOp::Shr,
+                        ..
+                    }
+                )
+            } else {
+                false
+            }
+        })
+    });
+    assert!(
+        has_shr,
+        "field_from_raw body must contain a Shr operation (result >> field.shift)"
     );
 }

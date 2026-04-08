@@ -655,6 +655,9 @@ fn sample_enrichment_surface() -> RawIdentityEnrichmentSurface {
             name: "helper_fn".to_string(),
             canonical_path: CanonicalPath("pl011_spec::driver::helper_fn".to_string()),
             module_path: CanonicalPath("pl011_spec::driver".to_string()),
+            generics: vec![],
+            params: vec![],
+            return_type: None,
         }],
     }
 }
