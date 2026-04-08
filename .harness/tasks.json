@@ -1469,6 +1469,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "extraction-remediation-08",
+          "name": "PL011 helper-methods B extraction remediation",
+          "spec": ".harness/tasks/extraction-remediation/08-pl011-helper-methods-b-extraction-remediation.md",
+          "status": "pending",
+          "depends_on": [
+            "source-to-extraction-08"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
