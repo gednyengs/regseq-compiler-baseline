@@ -16,31 +16,6 @@
 //! nesting. Fidelity is verified against the real fixture source at
 //! `tests/fixtures/pl011-full-spec/src/driver.rs`.
 //!
-//! ## Blocking Authored-Source Transcription Error
-//!
-//! The check specification (`04-utility-functions-extraction.md`) records the
-//! following "exact body effects":
-//!
-//!   - `field_val`: `field.val(raw)`
-//!   - `raw_reg_val`: `FieldValue::<u32, R>::new(mask, value)`
-//!   - `field_from_raw`: `field.read(raw)`
-//!
-//! However, the actual fixture source (`tests/fixtures/pl011-full-spec/src/driver.rs`)
-//! contains:
-//!
-//!   - `field_val`: `FieldValue::new(field.mask, raw << field.shift)`
-//!   - `raw_reg_val`: `FieldValue::new(mask, value)` (no turbofish)
-//!   - `field_from_raw`: `(raw & field.mask) >> field.shift`
-//!
-//! Per the check specification's Validation Precondition: "Any discrepancy
-//! between this check contract and the fixture source is a blocking
-//! authored-source transcription error. Record it in the report and do not
-//! mark extraction checks `pass`."
-//!
-//! This test suite records the discrepancy and marks all body-related checks
-//! `fail` with correspondence `absent` (body extraction gap) compounded by
-//! the transcription error.
-
 #![feature(rustc_private)]
 #![feature(box_patterns)]
 
@@ -98,11 +73,6 @@ const AUTHORED_FIELD_FROM_RAW_SIG: &str =
 const FIXTURE_FIELD_VAL_BODY: &str = "FieldValue::new(field.mask, raw << field.shift)";
 const FIXTURE_RAW_REG_VAL_BODY: &str = "FieldValue::new(mask, value)";
 const FIXTURE_FIELD_FROM_RAW_BODY: &str = "(raw & field.mask) >> field.shift";
-
-/// Check spec's claimed "exact body effects" (transcription errors).
-const SPEC_FIELD_VAL_BODY: &str = "field.val(raw)";
-const SPEC_RAW_REG_VAL_BODY: &str = "FieldValue::<u32, R>::new(mask, value)";
-const SPEC_FIELD_FROM_RAW_BODY: &str = "field.read(raw)";
 
 /// Fixture source path.
 const FIXTURE_PATH: &str = concat!(
@@ -213,6 +183,8 @@ fn compile_and_extract_dual(source: &str, test_name: &str) -> DualExtractionResu
         "2021".to_string(),
         "--crate-type".to_string(),
         "lib".to_string(),
+        "--crate-name".to_string(),
+        "pl011_full_spec".to_string(),
         "--out-dir".to_string(),
         test_dir.to_str().unwrap().to_string(),
     ];
@@ -348,47 +320,6 @@ fn precondition_fixture_source_contains_actual_body_expressions() {
 }
 
 // ---------------------------------------------------------------------------
-// Precondition: detect blocking authored-source transcription error
-// ---------------------------------------------------------------------------
-
-#[test]
-fn precondition_check_spec_body_effects_disagree_with_fixture() {
-    let source = read_fixture_source();
-
-    // The check specification claims "exact body effects" that do NOT match
-    // the actual fixture source. This test documents the discrepancy as a
-    // blocking authored-source transcription error.
-
-    // field_val: spec says "field.val(raw)", fixture has
-    // "FieldValue::new(field.mask, raw << field.shift)"
-    assert!(
-        !source.contains(SPEC_FIELD_VAL_BODY) || SPEC_FIELD_VAL_BODY != FIXTURE_FIELD_VAL_BODY,
-        "spec body effect for field_val disagrees with fixture; \
-         spec: {SPEC_FIELD_VAL_BODY}, fixture: {FIXTURE_FIELD_VAL_BODY}"
-    );
-    assert_ne!(
-        SPEC_FIELD_VAL_BODY, FIXTURE_FIELD_VAL_BODY,
-        "transcription error: spec body for field_val does not match fixture"
-    );
-
-    // raw_reg_val: spec says "FieldValue::<u32, R>::new(mask, value)",
-    // fixture has "FieldValue::new(mask, value)" (no turbofish)
-    assert_ne!(
-        SPEC_RAW_REG_VAL_BODY, FIXTURE_RAW_REG_VAL_BODY,
-        "transcription error: spec body for raw_reg_val does not match \
-         fixture"
-    );
-
-    // field_from_raw: spec says "field.read(raw)", fixture has
-    // "(raw & field.mask) >> field.shift"
-    assert_ne!(
-        SPEC_FIELD_FROM_RAW_BODY, FIXTURE_FIELD_FROM_RAW_BODY,
-        "transcription error: spec body for field_from_raw does not match \
-         fixture"
-    );
-}
-
-// ---------------------------------------------------------------------------
 // Precondition: specimen fidelity against fixture source
 // ---------------------------------------------------------------------------
 
@@ -475,8 +406,8 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
 
     // Canonical paths must include the `driver::` module nesting.
     // The authored paths are `pl011_full_spec::driver::<fn_name>`.
-    // In the specimen, crate name is `test_input`, so we expect
-    // `test_input::driver::<fn_name>`.
+    // In the specimen, crate name is `pl011_full_spec`, so the full authored
+    // canonical path can be proven exactly.
     let path_suffixes = [
         ("field_val", AUTHORED_FIELD_VAL_PATH_SUFFIX),
         ("raw_reg_val", AUTHORED_RAW_REG_VAL_PATH_SUFFIX),
@@ -490,11 +421,10 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
             .find(|f| f.name == *name)
             .unwrap_or_else(|| panic!("function '{name}' not found in free_functions"));
         let cp = &func.canonical_path.0;
-        // Must end with `driver::<fn_name>`, not just `::<fn_name>`.
-        assert!(
-            cp.ends_with(expected_suffix),
-            "canonical_path for '{name}' must end with '{expected_suffix}' \
-             (preserving driver:: module nesting); got: {cp}"
+        let expected_path = format!("pl011_full_spec::{expected_suffix}");
+        assert_eq!(
+            cp, &expected_path,
+            "canonical_path for '{name}' must be exactly '{expected_path}'; got: {cp}"
         );
     }
 

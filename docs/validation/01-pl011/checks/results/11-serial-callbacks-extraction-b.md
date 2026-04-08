@@ -1,6 +1,6 @@
 # Validation Certificate: PL011 Serial Callbacks Extraction Check B
 
-Source premise: `docs/validation/01-pl011/01-authored-source.md` (Serial Callbacks: tx_ready, tx_empty, flush_rx_fifo, flush_tx_fifo, send_break)
+Source premise: `docs/validation/01-pl011/checks/11-serial-callbacks-extraction-b.md`
 Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs`
 
 ## Specimen Fidelity
@@ -23,8 +23,8 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_11_se
   - `fixture.contains("impl Serial for Pl011FullSpec")` -- fixture has Serial impl
   - Corresponding SPECIMEN.contains assertions verify specimen reproduces each fact
 - Fidelity Evidence (Exact Citations):
-  - Test `precondition_specimen_fidelity` in `source_to_extraction_11_serial_callbacks_b.rs` exercises all above predicates
-  - Fixture source: `tests/fixtures/pl011-full-spec/src/driver.rs` lines 345-370
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L525)
+  - [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs#L345)
 
 ## Check-to-Surface Mapping
 
@@ -60,10 +60,9 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_11_se
   - `send_break.receiver == "ref_mut"`, `.params.len() == 1`, `.params[0].name == "on"`, `.params[0].ty contains "bool"`, `.return_type == None`
   - `send_break.kind == Callback { Serial, send_break }`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_group_1_serial_trait_role_recognized` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Test `check_group_1_serial_impl_in_identity_enrichment` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Test `check_group_1_callback_signatures_and_return_types` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Exercises TraitSurface.serial_impls, IdentityEnrichmentSurface.impl_blocks, and MirBodySurface.functions
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L660)
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L676)
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L714)
 - Supporting Evidence (Optional; Exact Citations): N/A
 - Reasoning Trace:
   - Authored Fact (Verbatim): tx_ready: `fn tx_ready(&mut self) -> bool`, tx_empty: `fn tx_empty(&mut self) -> bool`, flush_rx_fifo: `fn flush_rx_fifo(&mut self)`, flush_tx_fifo: `fn flush_tx_fifo(&mut self)`, send_break: `fn send_break(&mut self, on: bool)`
@@ -80,7 +79,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_11_se
 ## Check Group 2
 
 - Check: Serial callback bodies preserve the downstream checks captured in the authored-source entries
-- Status: `pass`
+- Status: `fail`
 - Premise: serial callback bodies preserve the downstream checks captured in the authored-source entries
 - Assertion Predicate(s):
   - **tx_ready**: `has_call_to(&f.body, "read")` -- calls register read; `call_has_type_arg(&f.body, "read", "FR_REG")` -- read targets FR register module; `has_return(&f.body)` -- has Return; `f.return_type contains "bool"` -- returns bool
@@ -89,12 +88,11 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_11_se
   - **flush_tx_fifo**: `count_calls_to(&f.body, "modify") == 2` -- exactly two modify calls; `collect_calls_with_type_args` verifies both modify calls instantiated with `LCRH_REG::Register`; `modify_indices[0] < modify_indices[1]` -- first modify before second; `has_return(&f.body)` -- has Return; `f.return_type.is_none()` -- returns unit
   - **send_break**: `has_switch_int(&f.body)` -- has SwitchInt for `if on` branch; `has_call_to(&f.body, "modify")` -- calls modify for LCR_H; `count_calls_to(&f.body, "modify") == 2` -- exactly two modify calls (one per branch); `collect_calls_with_type_args` verifies both modify calls instantiated with `LCRH_REG::Register`; `has_return(&f.body)` -- has Return; `f.return_type.is_none()` -- returns unit; `f.params[0].name == "on"` -- param named on; `f.params[0].ty contains "bool"` -- param type bool
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_group_2_tx_ready_body` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Test `check_group_2_tx_empty_body` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Test `check_group_2_flush_rx_fifo_body` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Test `check_group_2_flush_tx_fifo_body` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - Test `check_group_2_send_break_body` in `source_to_extraction_11_serial_callbacks_b.rs`
-  - All tests exercise MirBodySurface.functions for the respective callback
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L859)
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L896)
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L932)
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L979)
+  - [source_to_extraction_11_serial_callbacks_b.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs#L1046)
 - Supporting Evidence (Optional; Exact Citations): N/A
 - Reasoning Trace:
   - Authored Fact (Verbatim):
@@ -110,8 +108,9 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_11_se
     - **flush_tx_fifo value ordering**: MIR proves two ordered modify calls both targeting `LCRH_REG::Register`. However, the specific FieldValue constants (`FEN::DISABLED` and `FEN::ENABLED`) are inlined as scalar values in MIR and their symbolic names are lost. The authored fact that the first call applies `FEN::DISABLED` and the second `FEN::ENABLED` cannot be proven.
     - **send_break branch-to-value mapping**: MIR proves SwitchInt branching on the `on: bool` parameter and two modify calls both targeting `LCRH_REG::Register`. However, which branch maps to which FieldValue constant (`BRK::ENABLED` vs `BRK::DISABLED`) cannot be proven because the symbolic constant names are inlined in MIR.
   - Why This Status Follows: Each callback's structural body semantics (register module identity, call patterns, control flow shape) are proven by non-tautological MIR assertions. However, three specific authored facts (field-level identity within a register module, constant value ordering, and branch-to-constant mapping) are not provable from the current MIR representation because Field/FieldValue constants are inlined and lose their symbolic names. The correspondence is `weakened` rather than `exact` because these gaps exist.
-- Counterexample: N/A
+- Counterexample:
+  - No exercised MIR evidence distinguishes `FR_REG::TXFF::FIELD` from `FR_REG::BUSY::FIELD`, distinguishes `LCRH_REG::FEN::DISABLED` from `LCRH_REG::FEN::ENABLED` by symbolic identity, or maps the `send_break(on)` branches to `BRK::ENABLED` versus `BRK::DISABLED`.
 - Suggested Fix Direction / Implementation Hints:
   - Likely Touchpoint: `crates/regseq-driver/src/extract/mir_extract.rs` -- MIR extraction could be extended to preserve symbolic constant paths in Call arguments, enabling field-level and value-level identity proofs.
   - Minimal Missing Fact To Preserve: Symbolic path of FieldValue/Field constants passed as call arguments (e.g., `FR_REG::TXFF::FIELD`, `LCRH_REG::FEN::DISABLED`).
-- Conclusion: All five serial callbacks in group B have their body structure preserved through extraction, including register module identity (FR_REG, LCRH_REG), call patterns (read, read_raw, modify), and control flow (loops, branches). However, field-level identity within register modules, constant value ordering, and branch-to-value mappings are weakened because the MIR representation inlines Field/FieldValue constants as scalars, losing their symbolic names.
+- Conclusion: fail -- serial callback body structure is strongly preserved, but exact field-level identity, constant value ordering, and branch-to-value mappings required by the authored predicates are not directly provable at the current extraction boundary.

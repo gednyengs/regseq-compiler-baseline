@@ -1,16 +1,16 @@
 # Validation Certificate: PL011 Pin-State Markers Extraction Check
 
-Source premise: `docs/validation/01-pl011/01-authored-source.md`
+Source premise: `docs/validation/01-pl011/checks/05-pin-state-markers-extraction.md`
 Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`
 
 ## Specimen Fidelity
 
 A reduced inline specimen is used. The specimen nests all authored facts inside
 a `pub mod driver { ... }` block to reproduce the authored module structure
-(`pl011_full_spec::driver::*`). With the crate name `test_input`, canonical
-paths become `test_input::driver::DefaultState` and
-`test_input::driver::SleepState`, matching the authored
-`<crate>::driver::<Type>` structure exactly.
+(`pl011_full_spec::driver::*`). The specimen is compiled with crate name
+`pl011_full_spec`, so the reconstructed full paths are exactly
+`pl011_full_spec::driver::DefaultState` and
+`pl011_full_spec::driver::SleepState`.
 
 Specimen fidelity is established by the `precondition_specimen_fidelity` test,
 which reads the real fixture source at
@@ -34,7 +34,7 @@ Fidelity Assertion Predicate(s):
 Fidelity Evidence (Exact Citations):
 
 - Test `precondition_specimen_fidelity` in
-  `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+  `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:227`.
 - All 17 assertions pass (8 for fixture, 8 for specimen, 1 for module nesting).
 
 ## Check-to-Surface Mapping
@@ -65,17 +65,17 @@ Fidelity Evidence (Exact Citations):
   - `ss.canonical_path.0 == "driver::SleepState"` (exact full canonical path)
   - `ds.name == "DefaultState"` (exact struct name)
   - `ss.name == "SleepState"` (exact struct name)
-  - `crate_root.name == "test_input"` (crate root existence)
-  - `format!("{}::{}", crate_root.name, ds.canonical_path.0) == "test_input::driver::DefaultState"` (full path reconstruction)
-  - `format!("{}::{}", crate_root.name, ss.canonical_path.0) == "test_input::driver::SleepState"` (full path reconstruction)
+  - `crate_root.name == "pl011_full_spec"` (crate root existence)
+  - `format!("{}::{}", crate_root.name, ds.canonical_path.0) == "pl011_full_spec::driver::DefaultState"` (full path reconstruction)
+  - `format!("{}::{}", crate_root.name, ss.canonical_path.0) == "pl011_full_spec::driver::SleepState"` (full path reconstruction)
   - `ds.fields.is_empty()` (DefaultState is zero-sized)
   - `ss.fields.is_empty()` (SleepState is zero-sized)
 - Target Evidence (Exercised by Test; Exact Citations):
   - Test `check1a_marker_types_have_distinct_canonical_paths` in
-    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:354`.
   - Both structs found in `IdentityEnrichmentSurface.structs` with:
     - Exact canonical path equality (`driver::DefaultState`, `driver::SleepState`)
-    - Full path reconstructability via crate root module (`test_input::driver::DefaultState`, `test_input::driver::SleepState`)
+    - Full path reconstructability via crate root module (`pl011_full_spec::driver::DefaultState`, `pl011_full_spec::driver::SleepState`)
     - Zero field count proving zero-sized marker type property
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pub struct DefaultState;` and `pub struct SleepState;`
@@ -85,17 +85,16 @@ Fidelity Evidence (Exact Citations):
     and `StructFact { name: "SleepState", canonical_path: CanonicalPath("driver::SleepState"), module_path: CanonicalPath("driver"), fields: [] }`.
   - Correspondence: `exact` -- the `<crate>::driver::<Type>` path structure is
     fully proven via exact canonical path equality plus crate root reconstruction.
-    The only difference is the crate name (`test_input` vs `pl011_full_spec`),
-    which is expected since we use a reduced specimen. The zero-sized property is
-    proven by asserting empty field sets.
+    The zero-sized property is proven by asserting empty field sets.
   - Gap / Loss Description: None. The canonical path omits the local crate
     prefix (a rustc `def_path_str` convention), but the crate root module
     provides the prefix for exact reconstruction.
   - Why This Status Follows: The assertions directly inspect the extraction
     surface with exact equality (not suffix-only). The full path is
-    reconstructed and proven equal to the expected `test_input::driver::DefaultState`
-    structure. The zero-sized property is verified by asserting empty fields.
-    All assertions would fail if the authored facts were not preserved.
+    reconstructed and proven equal to the expected
+    `pl011_full_spec::driver::DefaultState` structure. The zero-sized property
+    is verified by asserting empty fields. All assertions would fail if the
+    authored facts were not preserved.
 - Counterexample: N/A
 - Conclusion: Pass. Marker-type identity, full canonical paths, and zero-sized
   property are all preserved.
@@ -115,7 +114,7 @@ Fidelity Evidence (Exact Citations):
   - `ds_reconstructed != ss_reconstructed` (distinct)
 - Target Evidence (Exercised by Test; Exact Citations):
   - Test `check1a_canonical_path_reconstructable_via_module` in
-    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:453`.
   - Reconstructed path `driver::DefaultState` equals `canonical_path.0` exactly.
   - Reconstructed path `driver::SleepState` equals `canonical_path.0` exactly.
 - Reasoning Trace:
@@ -145,7 +144,7 @@ Fidelity Evidence (Exact Citations):
   - where `driver_structs` is filtered by `module_path.0 == "driver"`
 - Target Evidence (Exercised by Test; Exact Citations):
   - Test `check1b_no_marker_collapse_closed_world` in
-    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:505`.
   - Closed-world enumeration within the `driver` module confirms exactly one
     DefaultState and exactly one SleepState. Neither is duplicated, dropped,
     or merged within the module scope.
@@ -179,7 +178,7 @@ Fidelity Evidence (Exact Citations):
     by `(self_type_name, canonical_path)` to select module-scoped facts.
 - Target Evidence (Exercised by Test; Exact Citations):
   - Test `check2a_pinstate_trait_impl_evidence` in
-    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:560`.
   - Two distinct `ImplBlockFact` entries with `trait_name == Some("PinState")`
     found, one for each marker type in the `driver` module.
 - Reasoning Trace:
@@ -211,7 +210,7 @@ Fidelity Evidence (Exact Citations):
   - `result.pinctrl.call_sites.len() == 2` (closed-world, no duplication/loss)
 - Target Evidence (Exercised by Test; Exact Citations):
   - Test `check2b_usage_site_distinction` in
-    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:633`.
   - Two `PinCtrlCallSite` entries found with the exact authored state_type and
     containing_fn pairs.
 - Reasoning Trace:
@@ -240,7 +239,7 @@ Fidelity Evidence (Exact Citations):
   - `sorted.len() == state_types.len()` (all distinct after dedup)
 - Target Evidence (Exercised by Test; Exact Citations):
   - Test `check2c_call_site_state_types_are_distinct` in
-    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs`.
+    `crates/regseq-driver/tests/source_to_extraction_05_pin_state_markers.rs:670`.
   - After dedup, the state_type set retains the same cardinality, proving
     no two call sites share a state_type.
 - Reasoning Trace:
@@ -260,7 +259,7 @@ Fidelity Evidence (Exact Citations):
 All checks pass. The extraction boundary preserves:
 - Distinct type identity for both `DefaultState` and `SleepState` with exact
   full canonical paths (`driver::DefaultState`, `driver::SleepState`) and
-  full reconstructability (`test_input::driver::DefaultState`, etc.) (Check 1a)
+  full reconstructability (`pl011_full_spec::driver::DefaultState`, etc.) (Check 1a)
 - Full canonical path reconstruction consistency (Check 1a-supp)
 - Zero-sized marker type property (empty field sets) (Check 1a)
 - No marker collapse under closed-world enumeration (Check 1b)

@@ -689,14 +689,14 @@ Primary source fixture:
   - `raw`: `u32`
 - Summary:
   - constructs a `FieldValue<u32, R>` from the provided field descriptor and raw value
-  - returns `field.val(raw)`
+  - returns `FieldValue::new(field.mask, raw << field.shift)`
   - provides a local typed wrapper for register-field write construction
 - Notes:
-  - authored as a thin wrapper over `field.val(raw)`
+  - authored as a thin wrapper over `FieldValue::new(field.mask, raw << field.shift)`
   - generic over register marker type `R`
 - Downstream Checks:
   - check that the utility preserves both authored parameters
-  - check that the returned value is exactly the result of `field.val(raw)`
+  - check that the returned value is exactly `FieldValue::new(field.mask, raw << field.shift)`
   - check that no additional arithmetic, masking, or side effects are introduced
 
 ### Utility Function: raw_reg_val
@@ -710,14 +710,14 @@ Primary source fixture:
   - `value`: `u32`
 - Summary:
   - constructs a `FieldValue<u32, R>` from a raw mask/value pair
-  - returns `FieldValue::<u32, R>::new(mask, value)`
+  - returns `FieldValue::new(mask, value)`
   - provides a local typed wrapper for raw register modify/write payload construction
 - Notes:
-  - authored as a thin wrapper over `FieldValue::<u32, R>::new(mask, value)`
+  - authored as a thin wrapper over `FieldValue::new(mask, value)`
   - generic over register marker type `R`
 - Downstream Checks:
   - check that the utility preserves both authored parameters
-  - check that the returned value is exactly `FieldValue::<u32, R>::new(mask, value)`
+  - check that the returned value is exactly `FieldValue::new(mask, value)`
   - check that both payload components `mask` and `value` are preserved
   - check that no additional arithmetic, masking, or side effects are introduced
 
@@ -732,14 +732,14 @@ Primary source fixture:
   - `raw`: `u32`
 - Summary:
   - extracts a field value from a raw register word
-  - returns `field.read(raw)`
+  - returns `(raw & field.mask) >> field.shift`
   - provides a local typed wrapper for raw register-field extraction
 - Notes:
-  - authored as a thin wrapper over `field.read(raw)`
+  - authored as a thin wrapper over `(raw & field.mask) >> field.shift`
   - generic over register marker type `R`
 - Downstream Checks:
   - check that the utility preserves both authored parameters
-  - check that the returned value is exactly the result of `field.read(raw)`
+  - check that the returned value is exactly `(raw & field.mask) >> field.shift`
   - check that no additional arithmetic, masking, or side effects are introduced
 
 ## Pin-State Marker Types

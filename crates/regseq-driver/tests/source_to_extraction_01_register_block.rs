@@ -94,6 +94,37 @@ const AUTHORED_REGISTER_NAMES: &[&str] = &[
     "pcell_id3",
 ];
 
+/// Exact authored field declarations from the PL011 fixture register block.
+/// These are used to prove reduced-specimen fidelity exhaustively rather than
+/// by representative wrapper-type samples.
+const AUTHORED_FIELD_DECLS: &[(&str, &str)] = &[
+    ("dr", "pub dr: ReadWrite<u32, DR_REG::Register>,"),
+    ("rsr_ecr", "pub rsr_ecr: ReadWrite<u32, RSR_ECR_REG::Register>,"),
+    ("_reserved0", "_reserved0: [Reserved<u32>; 4],"),
+    ("fr", "pub fr: ReadOnly<u32, FR_REG::Register>,"),
+    ("_reserved1", "_reserved1: Reserved<u32>,"),
+    ("ilpr", "pub ilpr: ReadWrite<u32, ILPR_REG::Register>,"),
+    ("ibrd", "pub ibrd: ReadWrite<u32, IBRD_REG::Register>,"),
+    ("fbrd", "pub fbrd: ReadWrite<u32, FBRD_REG::Register>,"),
+    ("lcr_h", "pub lcr_h: ReadWrite<u32, LCRH_REG::Register>,"),
+    ("cr", "pub cr: ReadWrite<u32, CR_REG::Register>,"),
+    ("ifls", "pub ifls: ReadWrite<u32, IFLS_REG::Register>,"),
+    ("imsc", "pub imsc: ReadWrite<u32, IMSC_REG::Register>,"),
+    ("ris", "pub ris: ReadOnly<u32, RIS_REG::Register>,"),
+    ("mis", "pub mis: ReadOnly<u32, MIS_REG::Register>,"),
+    ("icr", "pub icr: WriteOnly<u32, ICR_REG::Register>,"),
+    ("dmacr", "pub dmacr: ReadWrite<u32, DMACR_REG::Register>,"),
+    ("_reserved2", "_reserved2: [Reserved<u32>; 997],"),
+    ("periph_id0", "pub periph_id0: ReadOnly<u32, PERIPHID0_REG::Register>,"),
+    ("periph_id1", "pub periph_id1: ReadOnly<u32, PERIPHID1_REG::Register>,"),
+    ("periph_id2", "pub periph_id2: ReadOnly<u32, PERIPHID2_REG::Register>,"),
+    ("periph_id3", "pub periph_id3: ReadOnly<u32, PERIPHID3_REG::Register>,"),
+    ("pcell_id0", "pub pcell_id0: ReadOnly<u32, PCELLID0_REG::Register>,"),
+    ("pcell_id1", "pub pcell_id1: ReadOnly<u32, PCELLID1_REG::Register>,"),
+    ("pcell_id2", "pub pcell_id2: ReadOnly<u32, PCELLID2_REG::Register>,"),
+    ("pcell_id3", "pub pcell_id3: ReadOnly<u32, PCELLID3_REG::Register>,"),
+];
+
 // ---------------------------------------------------------------------------
 // Extraction result types
 // ---------------------------------------------------------------------------
@@ -337,53 +368,50 @@ fn specimen_fidelity_against_real_fixture() {
         "fixture must have register_block attribute with endian=little, access_width=32"
     );
 
-    // Fidelity assertion 3: all authored field names present in source order
-    for field_name in AUTHORED_FIELD_NAMES {
-        let pattern = if field_name.starts_with('_') {
-            format!("{field_name}:")
-        } else {
-            format!("pub {field_name}:")
-        };
+    // Fidelity assertion 3: every exact authored field declaration appears in
+    // both the real fixture and the reduced specimen.
+    for (field_name, field_decl) in AUTHORED_FIELD_DECLS {
         assert!(
-            fixture_src.contains(&pattern),
-            "fixture must contain field `{field_name}`"
+            fixture_src.contains(field_decl),
+            "fixture must contain exact field declaration for `{field_name}`: {field_decl}"
+        );
+        assert!(
+            SPECIMEN_SOURCE.contains(field_decl),
+            "specimen must contain exact field declaration for `{field_name}`: {field_decl}"
         );
     }
 
-    // Fidelity assertion 4: field ordering matches authored order
-    let mut last_pos = 0usize;
-    for field_name in AUTHORED_FIELD_NAMES {
-        let pattern = if field_name.starts_with('_') {
-            format!("{field_name}:")
-        } else {
-            format!("pub {field_name}:")
-        };
-        let pos = fixture_src[last_pos..]
-            .find(&pattern)
-            .unwrap_or_else(|| panic!("field `{field_name}` not found after position {last_pos}"));
-        last_pos += pos + pattern.len();
+    // Fidelity assertion 4: fixture field ordering matches authored order.
+    let mut last_fixture_pos = 0usize;
+    for (field_name, field_decl) in AUTHORED_FIELD_DECLS {
+        let pos = fixture_src[last_fixture_pos..].find(field_decl).unwrap_or_else(|| {
+            panic!("fixture declaration `{field_name}` not found after position {last_fixture_pos}")
+        });
+        last_fixture_pos += pos + field_decl.len();
     }
 
-    // Fidelity assertion 5: reserved region array sizes
-    assert!(
-        fixture_src.contains("_reserved0: [Reserved<u32>; 4]"),
-        "fixture must have _reserved0 as [Reserved<u32>; 4]"
-    );
-    assert!(
-        fixture_src.contains("_reserved1: Reserved<u32>"),
-        "fixture must have _reserved1 as Reserved<u32>"
-    );
-    assert!(
-        fixture_src.contains("_reserved2: [Reserved<u32>; 997]"),
-        "fixture must have _reserved2 as [Reserved<u32>; 997]"
-    );
+    // Fidelity assertion 5: specimen field ordering matches authored order.
+    let mut last_specimen_pos = 0usize;
+    for (field_name, field_decl) in AUTHORED_FIELD_DECLS {
+        let pos = SPECIMEN_SOURCE[last_specimen_pos..]
+            .find(field_decl)
+            .unwrap_or_else(|| {
+                panic!(
+                    "specimen declaration `{field_name}` not found after position {last_specimen_pos}"
+                )
+            });
+        last_specimen_pos += pos + field_decl.len();
+    }
 
-    // Fidelity assertion 6: wrapper types match authored access kinds
-    assert!(fixture_src.contains("pub dr: ReadWrite<u32, DR_REG::Register>"));
-    assert!(fixture_src.contains("pub fr: ReadOnly<u32, FR_REG::Register>"));
-    assert!(fixture_src.contains("pub icr: WriteOnly<u32, ICR_REG::Register>"));
-    assert!(fixture_src.contains("pub ris: ReadOnly<u32, RIS_REG::Register>"));
-    assert!(fixture_src.contains("pub cr: ReadWrite<u32, CR_REG::Register>"));
+    // Fidelity assertion 6: reserved region declarations and wrapper/access
+    // kinds are covered exhaustively by the exact field-declaration checks
+    // above. Keep a small sanity check on declaration cardinality so the
+    // fidelity proof fails if the authored field table drifts.
+    assert_eq!(
+        AUTHORED_FIELD_DECLS.len(),
+        AUTHORED_FIELD_NAMES.len(),
+        "every authored field must have an exact declaration entry"
+    );
 }
 
 // ---------------------------------------------------------------------------

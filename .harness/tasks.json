@@ -1269,7 +1269,7 @@
           "id": "source-to-extraction-01",
           "name": "PL011 register-block authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/01-pl011-register-block-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1281,7 +1281,7 @@
           "id": "source-to-extraction-02",
           "name": "PL011 register definitions authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/02-pl011-register-definitions-authored-to-extraction.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1293,7 +1293,7 @@
           "id": "source-to-extraction-03",
           "name": "PL011 driver-struct authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/03-pl011-driver-struct-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1317,7 +1317,7 @@
           "id": "source-to-extraction-05",
           "name": "PL011 pin-state markers authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/05-pl011-pin-state-markers-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1341,7 +1341,7 @@
           "id": "source-to-extraction-07",
           "name": "PL011 helper methods A authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/07-pl011-helper-methods-a-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1353,7 +1353,7 @@
           "id": "source-to-extraction-08",
           "name": "PL011 helper methods B authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/08-pl011-helper-methods-b-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1389,7 +1389,7 @@
           "id": "source-to-extraction-11",
           "name": "PL011 serial callbacks B authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/11-pl011-serial-callbacks-b-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1401,10 +1401,27 @@
           "id": "source-to-extraction-12",
           "name": "PL011 ISR authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/12-pl011-isr-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
+    },
+    {
+      "id": "extraction-remediation",
+      "name": "extraction remediation",
+      "tasks": [
+        {
+          "id": "extraction-remediation-01",
+          "name": "PL011 register-block extraction remediation",
+          "spec": ".harness/tasks/extraction-remediation/01-pl011-register-block-extraction-remediation.md",
+          "status": "pending",
+          "depends_on": [
+            "source-to-extraction-01"
           ],
           "artifacts": [],
           "fail_reason": null

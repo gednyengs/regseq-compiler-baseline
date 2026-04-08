@@ -1,6 +1,6 @@
 # Validation Certificate: PL011 ISR Extraction Check
 
-Source premise: `docs/validation/01-pl011/01-authored-source.md` (ISR: handle_irq section)
+Source premise: `docs/validation/01-pl011/checks/12-isr-extraction.md`
 Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_isr.rs`
 
 ## Specimen Fidelity
@@ -10,23 +10,8 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
     real fixture source (`tests/fixtures/pl011-full-spec/src/driver.rs`) and
     then verifies that the inline SPECIMEN reproduces each fact verbatim.
 - Fidelity Evidence (Exact Citations):
-  - Fixture contains `#[rseq::isr]` -- asserted via `fixture.contains("#[rseq::isr]")`
-  - Fixture contains `pub fn handle_irq(&mut self) -> IrqResult` -- asserted via `fixture.contains(...)`
-  - Fixture contains `let status = self.regs.mis.read_raw();` -- asserted via `fixture.contains(...)`
-  - Fixture contains `if status == 0 {` -- asserted via `fixture.contains(...)`
-  - Fixture contains `return IrqResult::NotHandled;` -- asserted via `fixture.contains(...)`
-  - Fixture contains `let mut handled = false;` -- asserted via `fixture.contains(...)`
-  - Fixture contains `if status & Self::RX_INTERRUPT_MASK != 0 {` -- asserted via `fixture.contains(...)`
-  - Fixture contains `if status & Self::TX_INTERRUPT_MASK != 0 {` -- asserted via `fixture.contains(...)`
-  - Fixture contains `handled |= self.service_rx_fifo();` -- asserted via `fixture.contains(...)`
-  - Fixture contains `handled |= self.service_tx_fifo();` -- asserted via `fixture.contains(...)`
-  - Fixture contains `self.clear_explicit_interrupts(status);` -- asserted via `fixture.contains(...)`
-  - Fixture contains `if handled || (status & Self::EXPLICIT_ISR_CLEAR_MASK != 0) {` -- asserted via `fixture.contains(...)`
-  - Fixture contains `const RX_INTERRUPT_MASK: u32 = (1 << 4) | (1 << 6);` -- asserted
-  - Fixture contains `const TX_INTERRUPT_MASK: u32 = 1 << 5;` -- asserted
-  - Fixture contains `const EXPLICIT_ISR_CLEAR_MASK: u32 = Self::ERROR_INTERRUPT_MASK;` -- asserted
-  - Fixture contains `const ERROR_INTERRUPT_MASK: u32 = (1 << 7) | (1 << 8) | (1 << 9) | (1 << 10);` -- asserted
-  - All 16 facts also verified present in inline SPECIMEN via matching `SPECIMEN.contains(...)` assertions
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L474)
+  - [driver.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs#L372)
 
 ## Check-to-Surface Mapping
 
@@ -58,7 +43,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - `binding.bind_target == IsrBindTarget::Auto`
   - `!binding.has_index_param`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check1a_isr_binding_identity` passes: exactly one ISR binding named `handle_irq` with `Auto` target and no index param
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L654)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `ISR Annotation: #[rseq::isr]`, `Source Local Path: driver::Pl011FullSpec::handle_irq`
   - Extracted Fact (Verbatim): `handler_name = "handle_irq"`, `bind_target = Auto`
@@ -77,7 +62,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - `method.is_isr == true`
   - `method.canonical_path.0.contains("handle_irq")`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check1b_identity_enrichment_isr_marker` passes: handle_irq exists as a method in Pl011FullSpec inherent impl with `is_isr = true`
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L688)
 - Reasoning Trace:
   - Authored Fact (Verbatim): ISR method `handle_irq` in inherent impl with `#[rseq::isr]`
   - Extracted Fact (Verbatim): `ImplMethodFact { name: "handle_irq", is_isr: true, ... }`
@@ -97,7 +82,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - `handle_irq.return_type == Some("IrqResult")`
   - `handle_irq.params.is_empty()`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check1c_mir_isr_identity_and_signature` passes: handle_irq classified as Isr, receiver is ref_mut, return type is IrqResult, no extra params
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L738)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pub fn handle_irq(&mut self) -> IrqResult`
   - Extracted Fact (Verbatim): kind=Isr, receiver="ref_mut", return_type=Some("IrqResult"), params=[]
@@ -118,7 +103,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - `handle_irq.helper_calls.contains("service_tx_fifo")`
   - `handle_irq.helper_calls.contains("clear_explicit_interrupts")`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2a_helper_dispatch` passes: all three helper names present in helper_calls
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L788)
 - Reasoning Trace:
   - Authored Fact (Verbatim): calls `self.service_rx_fifo()`, `self.service_tx_fifo()`, `self.clear_explicit_interrupts(status)`
   - Extracted Fact (Verbatim): helper_calls contains all three names
@@ -137,7 +122,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - BitAnd rvalue exists with operand scalar 0x50 (or unevaluated RX_INTERRUPT_MASK)
   - BitAnd rvalue exists with operand scalar 0x20 (or unevaluated TX_INTERRUPT_MASK)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2b_status_read_and_branch_conditions` passes: found SwitchInt with 0, BitAnd with 0x50, BitAnd with 0x20
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L825)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `if status == 0`, `status & Self::RX_INTERRUPT_MASK != 0`, `status & Self::TX_INTERRUPT_MASK != 0`
   - Extracted Fact (Verbatim): SwitchInt(0), BitAnd(0x50), BitAnd(0x20) present in MIR
@@ -154,7 +139,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
 - Assertion Predicate(s):
   - BitAnd rvalue exists with scalar 0x0780 on lhs or rhs, or unevaluated const named EXPLICIT_ISR_CLEAR_MASK
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2c_explicit_clear_mask_in_final_condition` passes
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L963)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `status & Self::EXPLICIT_ISR_CLEAR_MASK != 0` where EXPLICIT_ISR_CLEAR_MASK = 0x0780
   - Extracted Fact (Verbatim): BitAnd with 0x0780 or named ref found in MIR
@@ -174,7 +159,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - The other variant index is 0 (Handled)
   - `handled_variant == 0` and `not_handled_variant == 1`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2d_irq_result_variants_distinguishable` passes: found exactly 2 variant indices, early return block constructs variant 1 (NotHandled), variant 0 is Handled
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1044)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `IrqResult::Handled` and `IrqResult::NotHandled` are distinct enum variants; early return produces NotHandled
   - Extracted Fact (Verbatim): variant_index 0 = Handled, variant_index 1 = NotHandled, early branch constructs variant 1
@@ -194,7 +179,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - All BitOr accumulations target the same local (consistent accumulator)
   - At least 2 BitOr accumulations exist (one for RX, one for TX)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2e_handled_accumulation_via_bitor` passes: found >= 2 BitOr ops targeting the same bool local
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1206)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `handled |= self.service_rx_fifo()` and `handled |= self.service_tx_fifo()`
   - Extracted Fact (Verbatim): 2+ BitOr(local_N, local_N, rhs) where local_N is a Bool local
@@ -213,7 +198,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - At least 3 IrqResult aggregate construction sites exist (early NotHandled, final Handled, final NotHandled)
   - Each IrqResult aggregate site reaches a Return terminator via CFG walk
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2f_return_terminators_present` passes: found >= 3 IrqResult aggregate bbs, each reaching Return
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1291)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `return IrqResult::NotHandled;` (early), `IrqResult::Handled` (final true), `IrqResult::NotHandled` (final false)
   - Extracted Fact (Verbatim): 3 IrqResult aggregate sites, all with paths to Return terminator
@@ -233,7 +218,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - Its mutability is `MirMutability::Mut`
   - It is assigned `Scalar { bits: 0, size: 1 }` (false) via a `Use` rvalue
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2g_handled_local_is_bool` passes: BitOr target local is Bool, Mut, initialized to false
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1374)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `let mut handled = false;`
   - Extracted Fact (Verbatim): local_N: ty=Bool, mutability=Mut, assigned Scalar{bits:0,size:1}
@@ -250,7 +235,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
 - Assertion Predicate(s):
   - Call terminator with func FnDef path containing "read_raw" exists
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2h_status_read_call_present` passes
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1473)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `let status = self.regs.mis.read_raw();`
   - Extracted Fact (Verbatim): Call terminator referencing `read_raw` present
@@ -267,7 +252,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
 - Assertion Predicate(s):
   - Each helper name found in `body.functions` with `kind == MirFnKind::Helper`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2i_helpers_extracted_as_functions` passes for all three helpers
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1830)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `fn service_rx_fifo`, `fn service_tx_fifo`, `fn clear_explicit_interrupts`
   - Extracted Fact (Verbatim): all three present with kind=Helper
@@ -294,7 +279,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_12_is
   - IrqResult variant 1 (NotHandled) aggregate is reachable from clear continuation and reaches Return
   - Final Handled and NotHandled are in distinct basic blocks
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check2j_control_flow_ordering` passes: all 11 CFG ordering assertions hold
+  - [source_to_extraction_12_isr.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_12_isr.rs#L1518)
 - Reasoning Trace:
   - Authored Fact (Verbatim): early `status == 0` returns NotHandled first; RX/TX dispatch before `clear_explicit_interrupts(status)`; clear before final handled condition; true -> Handled, false -> NotHandled
   - Extracted Fact (Verbatim): CFG walk confirms: early SwitchInt true-arm -> variant 1 -> Return (no helper calls reachable); RX/TX call bbs reachable from status!=0; clear reachable from RX/TX continuations; mask check reachable from clear continuation; variant 0 (Handled) and variant 1 (NotHandled) both reachable from clear continuation and both reach Return

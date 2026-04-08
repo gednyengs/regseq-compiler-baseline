@@ -37,7 +37,7 @@ boundary validation.
   - `assert!(fixture.contains("const DEFAULT_UART_CLOCK_HZ: u32 = 48_000_000;"))`
   - Matching assertions on `SPECIMEN` confirm the inline specimen reproduces each declaration.
 - Fidelity Evidence (Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::precondition_specimen_fidelity`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:271`
 
 ## Check-to-Surface Mapping
 
@@ -63,7 +63,7 @@ boundary validation.
 - Assertion Predicate(s):
   - `assert!(extracted_names.contains(&authored.name))` for each of the six constants
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1a_all_constants_present_by_name`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:375`
   - The inherent impl block for `Pl011FullSpec` contains `AssociatedConstantFact` entries with names matching all six authored constants.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `ALL_UART_INTERRUPTS_MASK`, `RX_INTERRUPT_MASK`, `TX_INTERRUPT_MASK`, `ERROR_INTERRUPT_MASK`, `EXPLICIT_ISR_CLEAR_MASK`, `DEFAULT_UART_CLOCK_HZ`
@@ -84,7 +84,7 @@ boundary validation.
 - Assertion Predicate(s):
   - `assert_eq!(extracted.ty, authored.ty)` for each constant, where `authored.ty = "u32"`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1b_constant_types_preserved`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:400`
   - Each `AssociatedConstantFact.ty` equals `"u32"`.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `u32` for all six constants
@@ -106,7 +106,7 @@ boundary validation.
   - `assert_eq!(crate_root.canonical_path.0, "pl011_full_spec")` -- crate root is correct
   - `assert_eq!(reconstructed, authored.canonical_path)` for each constant, where `reconstructed = crate_root_path + "::" + extracted.canonical_path.0`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1c_canonical_paths_preserved`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:434`
   - `tcx.def_path_str()` produces paths without the crate-name prefix (e.g., `driver::Pl011FullSpec::ALL_UART_INTERRUPTS_MASK`). The crate root module path `pl011_full_spec` is stored separately in `IdentityEnrichmentSurface.modules`. The full authored canonical path is exactly reconstructable by prepending `pl011_full_spec::`.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pl011_full_spec::driver::Pl011FullSpec::ALL_UART_INTERRUPTS_MASK` etc.
@@ -127,7 +127,7 @@ boundary validation.
 - Assertion Predicate(s):
   - `assert_eq!(extracted.owner_impl_path, inherent.canonical_path)` for each constant
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1d_owner_impl_path_preserved`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:482`
   - Each `AssociatedConstantFact.owner_impl_path` matches the canonical path of the inherent impl block for `Pl011FullSpec`.
 - Reasoning Trace:
   - Authored Fact (Verbatim): constants are declared inside `impl Pl011FullSpec { ... }`
@@ -150,7 +150,7 @@ boundary validation.
   - `assert!(extracted_names.contains(name))` for each authored name
   - `assert!(authored_names.contains(name))` for each extracted name
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1e_closed_world_constant_set`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:511`
   - The extraction contains exactly six constants with no extras and no losses.
 - Reasoning Trace:
   - Authored Fact (Verbatim): six named constants
@@ -171,7 +171,7 @@ boundary validation.
 - Assertion Predicate(s):
   - `assert!(unevaluated_refs.iter().any(|desc| desc == &expected))` for each constant, where `expected = "unevaluated:" + def_path_str`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1f_constant_references_in_mir_body`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:563`
   - Each constant appears as a `MirConstValue::Unsupported { description: "unevaluated:driver::Pl011FullSpec::<NAME>" }` in the MIR body. The unevaluated form preserves the constant identity at use sites.
 - Reasoning Trace:
   - Authored Fact (Verbatim): six constant references in `use_constants`
@@ -193,7 +193,7 @@ boundary validation.
   - `assert!(!scalars.contains(val))` for each authored evaluated value (0x07ff, 0x50, 0x20, 0x0780, 48_000_000)
   - `assert!(unevaluated.len() >= AUTHORED_CONSTANTS.len())` -- unevaluated refs exist for all six
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check1g_constant_values_not_evaluated`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:609`
   - The MIR body extractor classifies associated constants as `MirConstValue::Unsupported` (unevaluated) rather than evaluating them to `MirConstValue::Scalar`. The identity enrichment surface `AssociatedConstantFact` has no `value` field.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `ALL_UART_INTERRUPTS_MASK = 0x07ff`, `RX_INTERRUPT_MASK = (1 << 4) | (1 << 6)`, etc.
@@ -222,7 +222,7 @@ boundary validation.
   - `assert_ne!(explicit_isr.canonical_path, error_mask.canonical_path)` -- distinct paths
   - MIR: `assert!(unevaluated.iter().any(|d| d.contains("EXPLICIT_ISR_CLEAR_MASK")))` and `assert!(unevaluated.iter().any(|d| d.contains("ERROR_INTERRUPT_MASK") && !d.contains("EXPLICIT_ISR_CLEAR_MASK")))`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check2a_both_constants_survive_as_distinct_entries`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:679`
   - Both constants are present as distinct `AssociatedConstantFact` entries with the same type and owner but different canonical paths. Both appear as distinct unevaluated references in MIR.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `EXPLICIT_ISR_CLEAR_MASK` and `ERROR_INTERRUPT_MASK` as separate constants
@@ -245,7 +245,7 @@ boundary validation.
   - `assert_eq!(explicit_isr.owner_impl_path, error_mask.owner_impl_path)` -- same owner
   - MIR: `assert!(!r.contains("ERROR_INTERRUPT_MASK"))` for each `EXPLICIT_ISR_CLEAR_MASK` unevaluated ref -- confirms the definitional link is NOT preserved
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs::check2b_definitional_relationship_on_definition_surface`
+  - `crates/regseq-driver/tests/source_to_extraction_06_driver_constants.rs:753`
   - The identity enrichment surface `AssociatedConstantFact` has no `value_expr` or `definition_ref` field. Both constants exist as independent entries with no cross-reference.
   - In MIR, `EXPLICIT_ISR_CLEAR_MASK`'s unevaluated description references its own DefId (`unevaluated:driver::Pl011FullSpec::EXPLICIT_ISR_CLEAR_MASK`), not `ERROR_INTERRUPT_MASK`. The syntactic `Self::ERROR_INTERRUPT_MASK` reference is resolved at const-eval time and does not appear in the extraction.
 - Reasoning Trace:

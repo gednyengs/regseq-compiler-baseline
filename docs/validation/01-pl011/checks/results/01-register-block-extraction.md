@@ -12,16 +12,17 @@
 - Fidelity Assertion Predicate(s):
   - `fixture_src.contains("pub struct Pl011Registers")` -- struct name matches
   - `fixture_src.contains(r#"#[rseq::register_block(endian = "little", access_width = 32)]"#)` -- attribute matches
-  - All 25 authored field names present in fixture source in authored order (positional scan)
-  - `fixture_src.contains("_reserved0: [Reserved<u32>; 4]")` -- reserved0 array size
-  - `fixture_src.contains("_reserved1: Reserved<u32>")` -- reserved1 scalar
-  - `fixture_src.contains("_reserved2: [Reserved<u32>; 997]")` -- reserved2 array size
-  - Wrapper type checks: `ReadWrite<u32, DR_REG::Register>`, `ReadOnly<u32, FR_REG::Register>`, `WriteOnly<u32, ICR_REG::Register>`, etc.
+  - For every authored field declaration in `AUTHORED_FIELD_DECLS`, `fixture_src.contains(field_decl)` and `SPECIMEN_SOURCE.contains(field_decl)` -- exact declaration equality across all 25 fields
+  - Positional scan over `AUTHORED_FIELD_DECLS` succeeds in `fixture_src` -- fixture field ordering matches authored order
+  - Positional scan over `AUTHORED_FIELD_DECLS` succeeds in `SPECIMEN_SOURCE` -- specimen field ordering matches authored order
+  - `AUTHORED_FIELD_DECLS.len() == AUTHORED_FIELD_NAMES.len()` -- every authored field has an exact declaration entry
 - Fidelity Evidence (Exact Citations):
-  - Test `specimen_fidelity_against_real_fixture` in `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs`
-  - Reads `tests/fixtures/pl011-full-spec/src/registers.rs` at runtime
-  - All 6 fidelity assertion groups pass
-- Justification: The inline specimen preserves: struct name, register_block attribute with properties, all 25 field names in authored order, wrapper types (ReadWrite/ReadOnly/WriteOnly), reserved region array sizes. Facts not modeled (register_bitfields! expansion, driver struct, trait impls) are not needed for the register-block extraction checks.
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:349`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:371`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:384`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:393`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:410`
+- Justification: The inline specimen now proves fidelity exhaustively for every in-scope register-block field declaration, not by representative wrapper/access samples. Facts not modeled (register_bitfields! expansion, driver struct methods, trait impls) are not needed for the register-block extraction checks.
 
 ## Check-to-Surface Mapping
 
@@ -46,7 +47,7 @@
 - Assertion Predicate(s):
   - `surface.register_blocks.iter().filter(|b| b.name == "Pl011Registers").count() == 1`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_1_register_block_identity` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:422`
   - `RegisterAccessSurface.register_blocks` contains exactly one entry with `name == "Pl011Registers"`
 - Reasoning Trace:
   - Authored Fact (Verbatim): `Pl011Registers`
@@ -68,7 +69,7 @@
   - crate root module has `registers` module as child
   - struct's `module_path.0 == "registers"`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_2_canonical_path` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:445`
   - `IdentityEnrichmentSurface.structs` contains struct with `canonical_path.0 == "registers::Pl011Registers"`, `is_register_block == true`, `module_path.0 == "registers"`
   - `IdentityEnrichmentSurface.modules` contains crate root `pl011_full_spec` with `registers` as child
 - Reasoning Trace:
@@ -88,7 +89,7 @@
 - Assertion Predicate(s):
   - For every field in block: `field.endian == None` and `field.access_width == None`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_3_register_block_properties` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:507`
   - All 25 fields have `endian == None` and `access_width == None`
   - `RegisterBlockDecl` struct definition (`crates/regseq-driver/src/extract/register_access.rs`, lines 22-26) has only `name: String` and `fields: Vec<RegisterFieldDecl>` -- no block-level property fields
 - Reasoning Trace:
@@ -111,7 +112,7 @@
 - Assertion Predicate(s):
   - `reserved_names == vec!["_reserved0", "_reserved1", "_reserved2"]` (names present)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_4_reserved_regions` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:547`
   - Reserved field names are extracted correctly
   - `RegisterFieldDecl` struct definition (`crates/regseq-driver/src/extract/register_access.rs`, lines 29-36) has no `byte_offset`, `array_size`, or layout fields
 - Reasoning Trace:
@@ -134,7 +135,7 @@
 - Assertion Predicate(s):
   - `extracted_names == AUTHORED_FIELD_NAMES` (exact 25-element sequence equality)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_5_register_inventory_and_order` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:581`
   - All 25 fields extracted in authored order from `RegisterAccessSurface.register_blocks[0].fields`
 - Supporting Evidence: The check spec states "a complete extracted field sequence in authored order is sufficient for the inventory/order checks even if per-field offset and access metadata is not preserved."
 - Reasoning Trace:
@@ -155,7 +156,7 @@
   - `non_reserved == AUTHORED_REGISTER_NAMES` (field names preserved)
   - For all non-reserved fields: `field.access_width == None && field.endian == None` (confirming absence of other facts)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_6_per_register_facts` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:607`
   - Field names match authored exactly (22 non-reserved registers)
   - `RegisterFieldDecl` has no `register_type_name`, `byte_offset`, or `access_kind` fields (structural absence in type definition at lines 29-36 of `register_access.rs`)
 - Reasoning Trace:
@@ -180,7 +181,7 @@
   - `extracted == AUTHORED_FIELD_NAMES` (exact sequence equality)
   - `surface.register_blocks.len() == 1` (no spurious blocks)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_7_closed_world_inventory` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:657`
   - Field count is exactly 25, sequence is identical to authored, only 1 register block exists
 - Reasoning Trace:
   - Authored Fact (Verbatim): 22 registers + 3 reserved = 25 fields, no extras, no missing
@@ -199,7 +200,7 @@
 - Assertion Predicate(s):
   - For all fields: `field.access_width == None`, `field.endian == None`, `field.side_effects == None`, `field.hw_updates == None`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - Test `check_8_property_set_integrity` in `source_to_extraction_01_register_block.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:694`
   - All 25 fields have all property fields as `None` -- no properties invented
   - `RegisterBlockDecl` struct has no block-level property fields (lines 22-26 of `register_access.rs`)
 - Reasoning Trace:

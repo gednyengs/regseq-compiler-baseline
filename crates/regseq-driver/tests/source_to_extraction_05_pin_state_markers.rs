@@ -129,6 +129,8 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
         sysroot,
         "--edition".to_string(),
         "2021".to_string(),
+        "--crate-name".to_string(),
+        "pl011_full_spec".to_string(),
         "--crate-type".to_string(),
         "lib".to_string(),
         "--out-dir".to_string(),
@@ -167,10 +169,11 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
 /// - `pinctrl.apply::<SleepState>()` in `apply_sleep_pins_if_present`
 ///
 /// Types are nested inside a `driver` module to reproduce the authored module
-/// structure (`pl011_full_spec::driver::*`). With the crate name `test_input`,
-/// the canonical paths become `test_input::driver::DefaultState` and
-/// `test_input::driver::SleepState`, allowing full-path equality assertions
-/// rather than suffix-only checks.
+/// structure (`pl011_full_spec::driver::*`). With the crate name
+/// `pl011_full_spec`, the full paths become
+/// `pl011_full_spec::driver::DefaultState` and
+/// `pl011_full_spec::driver::SleepState`, allowing exact authored-path
+/// assertions rather than suffix-only checks.
 const SPECIMEN: &str = r#"
     #![allow(dead_code)]
 
@@ -336,12 +339,12 @@ fn precondition_specimen_fidelity() {
 ///
 /// The authored canonical paths are `pl011_full_spec::driver::DefaultState` and
 /// `pl011_full_spec::driver::SleepState`. The specimen nests markers inside a
-/// `driver` module and is compiled as crate `test_input`, so the extraction
+/// `driver` module and is compiled as crate `pl011_full_spec`, so the extraction
 /// produces `canonical_path = "driver::DefaultState"` and
 /// `module_path = "driver"` (rustc's `def_path_str` omits the local crate
 /// prefix). The full path is reconstructed using the crate root module
-/// (`test_input`) to yield `test_input::driver::DefaultState`, proving the
-/// exact `<crate>::driver::<Type>` structure matches the authored layout.
+/// (`pl011_full_spec`) to yield `pl011_full_spec::driver::DefaultState`,
+/// proving the exact authored `<crate>::driver::<Type>` structure.
 ///
 /// We filter for markers whose `module_path` is `"driver"` to select the
 /// module-scoped extraction facts (the identity enrichment extractor may
@@ -412,16 +415,16 @@ fn check1a_marker_types_have_distinct_canonical_paths() {
         .identity
         .modules
         .iter()
-        .find(|m| m.name == "test_input")
-        .expect("crate root module 'test_input' must exist");
+        .find(|m| m.name == "pl011_full_spec")
+        .expect("crate root module 'pl011_full_spec' must exist");
     let ds_full = format!("{}::{}", crate_root.name, ds.canonical_path.0);
     let ss_full = format!("{}::{}", crate_root.name, ss.canonical_path.0);
     assert_eq!(
-        ds_full, "test_input::driver::DefaultState",
+        ds_full, "pl011_full_spec::driver::DefaultState",
         "full reconstructed DefaultState path must match authored structure"
     );
     assert_eq!(
-        ss_full, "test_input::driver::SleepState",
+        ss_full, "pl011_full_spec::driver::SleepState",
         "full reconstructed SleepState path must match authored structure"
     );
 

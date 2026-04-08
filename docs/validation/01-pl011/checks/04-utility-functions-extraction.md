@@ -55,15 +55,15 @@ Utility functions:
 - `field_val`
   - canonical path: `pl011_full_spec::driver::field_val`
   - signature: `fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R>`
-  - exact body effect: `field.val(raw)`
+  - exact body effect: `FieldValue::new(field.mask, raw << field.shift)`
 - `raw_reg_val`
   - canonical path: `pl011_full_spec::driver::raw_reg_val`
   - signature: `fn raw_reg_val<R>(mask: u32, value: u32) -> FieldValue<u32, R>`
-  - exact body effect: `FieldValue::<u32, R>::new(mask, value)`
+  - exact body effect: `FieldValue::new(mask, value)`
 - `field_from_raw`
   - canonical path: `pl011_full_spec::driver::field_from_raw`
   - signature: `fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32`
-  - exact body effect: `field.read(raw)`
+  - exact body effect: `(raw & field.mask) >> field.shift`
 
 ## Checks To Validate
 

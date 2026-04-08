@@ -17,7 +17,8 @@ Fidelity Assertion Predicate(s):
 - Every authored named value appears in its register's section with the exact numeric value (parsed from decimal, binary, or hex literal).
 
 Fidelity Evidence (Exact Citations):
-- Test `precondition_specimen_fidelity_against_fixture_source` in `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs` exercises all four predicates. The test reads the real fixture file at runtime via `CARGO_MANIFEST_DIR` and asserts every register, field, offset, width, and named value.
+- `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs:941`
+- The test reads the real fixture file at runtime via `CARGO_MANIFEST_DIR` and asserts every register, field, offset, width, and named value.
 
 ## Check-to-Surface Mapping
 
@@ -38,7 +39,7 @@ Fidelity Evidence (Exact Citations):
   - `surface.register_descriptors.iter().find(|d| d.register_module == reg.name).is_some()` for each of the 22 registers
   - `surface.register_descriptors.len() == AUTHORED_REGISTERS.len()` (exact total count = 22, no filtering)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_register_identity_preserved` in `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs:1054`
   - Asserts presence of all 22 register modules by name and exact count
 - Reasoning Trace:
   - Authored Fact (Verbatim): 22 register names (DR_REG through PCELLID3_REG)
@@ -58,7 +59,7 @@ Fidelity Evidence (Exact Citations):
   - `descriptor.fields.len() == reg.fields.len()` for each register
   - `extracted_names == authored_names` (Vec<&str> equality preserving order) for each register
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_field_inventory_complete_and_ordered` in `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs:1087`
   - Asserts exact field count and ordered name list for all 22 registers
 - Reasoning Trace:
   - Authored Fact (Verbatim): Per-register field lists (e.g., DR_REG: OE, BE, PE, FE, DATA)
@@ -79,7 +80,7 @@ Fidelity Evidence (Exact Citations):
   - `extracted_field.width == authored_field.width` for each field
   - Field found by `descriptor.fields.iter().find(|f| f.field_name == authored_field.name)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_3_field_name_offset_width_preserved` in `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs:1129`
   - Asserts all three properties for every field across all 22 registers
 - Reasoning Trace:
   - Authored Fact (Verbatim): e.g., CR_REG.CTSEN OFFSET(15) NUMBITS(1)
@@ -100,7 +101,7 @@ Fidelity Evidence (Exact Citations):
   - `extracted_nv.name == nv_name && extracted_nv.value == nv_value` for each named value
   - `extracted_nv_names == authored_nv_names` (order preservation)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_4_named_values_preserved` in `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs:1172`
   - Asserts name, value, count, and order for all named values across all registers with named values (LCRH_REG, CR_REG, IFLS_REG, DMACR_REG, PERIPHID0-3_REG, PCELLID0-3_REG)
 - Reasoning Trace:
   - Authored Fact (Verbatim): e.g., LCRH_REG.WLEN: FIVE_BITS=0b00, SIX_BITS=0b01, SEVEN_BITS=0b10, EIGHT_BITS=0b11
@@ -122,7 +123,7 @@ Fidelity Evidence (Exact Citations):
   - `extracted_field_names == authored_field_names` (exact field membership and order)
   - `extracted_pairs == authored_pairs` where pairs are `(name, value)` tuples (exact named-value membership, values, and order)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_5_exact_membership_and_ordering` in `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs`
+  - `crates/regseq-driver/tests/source_to_extraction_02_register_definitions.rs:1262`
   - Asserts closed-world evidence: exact counts, exact ordered lists, exact name-value pairs for all 22 registers
 - Reasoning Trace:
   - Authored Fact (Verbatim): 22 registers with exact field and named-value inventories

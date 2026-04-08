@@ -1,6 +1,6 @@
 # Validation Certificate: PL011 Lifecycle Callbacks Extraction Check
 
-- Source premise: `docs/validation/01-pl011/01-authored-source.md` (Lifecycle Callbacks section)
+- Source premise: `docs/validation/01-pl011/checks/09-lifecycle-callbacks-extraction.md`
 - Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
 
 ## Specimen Fidelity
@@ -25,7 +25,7 @@
     fixture and the specimen.
 - Fidelity Evidence (Exact Citations):
   - Test `specimen_fidelity_against_fixture` in
-    `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
+    `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:275`
     (32 assertion predicates covering init body lines, deinit body lines,
     callback signatures, trait impl presence, helper fallibility, and
     specimen-to-fixture cross-checks).
@@ -56,10 +56,10 @@
   - `init_fn.params.is_empty()` -- no extra parameters
   - (same four predicates for `deinit`)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_trait_surface_lifecycle_identity`: asserts exactly one Lifecycle impl for Pl011FullSpec on `TraitSurface`
-  - `check_group_1_identity_enrichment_lifecycle_impl_block`: asserts Lifecycle impl block with init and deinit methods on `IdentityEnrichmentSurface`
-  - `check_group_1_body_surface_init_signature`: asserts init is a Lifecycle Callback with ref_mut receiver, `Result<(), RegseqError>` return, no extra params on `MirBodySurface`
-  - `check_group_1_body_surface_deinit_signature`: asserts deinit is a Lifecycle Callback with ref_mut receiver, `Result<(), RegseqError>` return, no extra params on `MirBodySurface`
+  - `check_group_1_trait_surface_lifecycle_identity` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:405`: asserts exactly one Lifecycle impl for Pl011FullSpec on `TraitSurface`
+  - `check_group_1_identity_enrichment_lifecycle_impl_block` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:421`: asserts Lifecycle impl block with init and deinit methods on `IdentityEnrichmentSurface`
+  - `check_group_1_body_surface_init_signature` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:454`: asserts init is a Lifecycle Callback with ref_mut receiver, `Result<(), RegseqError>` return, no extra params on `MirBodySurface`
+  - `check_group_1_body_surface_deinit_signature` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:501`: asserts deinit is a Lifecycle Callback with ref_mut receiver, `Result<(), RegseqError>` return, no extra params on `MirBodySurface`
 - Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs`
 - Reasoning Trace:
   - Authored Fact (Verbatim): `fn init(&mut self) -> Result<(), RegseqError>` and `fn deinit(&mut self) -> Result<(), RegseqError>` in `impl Lifecycle for Pl011FullSpec`
@@ -93,13 +93,13 @@
   - **deinit error propagation**: `!has_error_propagation_after_call(body, "shutdown_port")` and `!has_error_propagation_after_call(body, "disable_clock_if_present")` -- both infallible; `has_error_propagation_after_call(body, "apply_sleep_pins_if_present")` -- fallible with `?`
   - **deinit success return**: `has_ok_unit_return(body)` -- same Ok(()) return pattern
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_init_helper_call_order`: asserts helper_calls membership and positional ordering for all four init helpers
-  - `check_group_2_init_error_propagation`: asserts `?` propagation present for first three helpers and absent for program_polling_port
-  - `check_group_2_init_success_return`: asserts Ok(()) return path exists
-  - `check_group_2_init_argument_flow`: inspects MIR Call terminator operands -- verifies that program_polling_port's arg 1 references the destination local of the uart_clock_hz() call, and arg 2 references a Field projection on self (local 1), proving actual operand data flow rather than mere call ordering
-  - `check_group_2_deinit_helper_call_order`: asserts helper_calls membership and positional ordering for all three deinit helpers
-  - `check_group_2_deinit_error_propagation`: asserts infallible helpers have no `?` and apply_sleep_pins_if_present has `?`
-  - `check_group_2_deinit_success_return`: asserts Ok(()) return path exists
+  - `check_group_2_init_helper_call_order` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:714`: asserts helper_calls membership and positional ordering for all four init helpers
+  - `check_group_2_init_error_propagation` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:790`: asserts `?` propagation present for first three helpers and absent for program_polling_port
+  - `check_group_2_init_success_return` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:822`: asserts Ok(()) return path exists
+  - `check_group_2_init_argument_flow` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:891`: inspects MIR Call terminator operands -- verifies that program_polling_port's arg 1 references the destination local of the uart_clock_hz() call, and arg 2 references a Field projection on self (local 1), proving actual operand data flow rather than mere call ordering
+  - `check_group_2_deinit_helper_call_order` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:1003`: asserts helper_calls membership and positional ordering for all three deinit helpers
+  - `check_group_2_deinit_error_propagation` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:1060`: asserts infallible helpers have no `?` and apply_sleep_pins_if_present has `?`
+  - `check_group_2_deinit_success_return` in `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs:1090`: asserts Ok(()) return path exists
 - Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs`
 - Reasoning Trace:
   - Authored Fact (Verbatim): init calls `toggle_reset_if_present()?`, `apply_default_pins_if_present()?`, `enable_clock_if_present()?`, `program_polling_port(self.uart_clock_hz(), self.current_speed)`, then `Ok(())`; deinit calls `shutdown_port()`, `disable_clock_if_present()`, `apply_sleep_pins_if_present()?`, then `Ok(())`

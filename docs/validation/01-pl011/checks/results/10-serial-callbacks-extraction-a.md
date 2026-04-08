@@ -1,6 +1,6 @@
 # Validation Certificate: PL011 Serial Callbacks Extraction Check A
 
-- Source premise: `docs/validation/01-pl011/01-authored-source.md` (Serial Callbacks section: port_open, port_close, configure, tx_byte, rx_char)
+- Source premise: `docs/validation/01-pl011/checks/10-serial-callbacks-extraction-a.md`
 - Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs`
 
 ## Specimen Fidelity
@@ -13,7 +13,7 @@
   - The reduced specimen's `rx_char` body preserves `FR.RXFE` read, single raw `DR` read, `field_from_raw` extraction for DATA/OE/BE/PE/FE, `ErrorKind::empty()` initialization, bitwise-or error accumulation, and `Some(RxChar::new(byte, errors))` return -- verified against fixture.
   - Helper signatures in the specimen match the fixture: `enable_clock_if_present` returns `Result<(), RegseqError>`, `program_polling_port` is infallible, `shutdown_port` and `disable_clock_if_present` are infallible, `enable_tx_interrupts` is infallible.
 - Fidelity Evidence (Exact Citations):
-  - Test `precondition_specimen_fidelity` in `crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs` (38+ assertion predicates covering all five callback signatures, body lines, and specimen-to-fixture cross-checks).
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1093)
 
 ## Check-to-Surface Mapping
 
@@ -40,9 +40,9 @@
   - `tx_byte`: kind == Callback(Serial, tx_byte), receiver == "ref_mut", params[0].name == "byte", params[0].ty contains "u8", return_type is None
   - `rx_char`: kind == Callback(Serial, rx_char), receiver == "ref_mut", params empty, return_type contains "Option"
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_serial_trait_role_recognized`: asserts exactly one Serial impl for Pl011FullSpec on TraitSurface
-  - `check_group_1_serial_impl_in_identity_enrichment`: asserts Serial impl block with all five methods on IdentityEnrichmentSurface
-  - `check_group_1_callback_signatures_and_return_types`: asserts kind, receiver, params, and return_type for all five callbacks on MirBodySurface
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1288)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1304)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1336)
 - Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs` lines 288-343
 - Reasoning Trace:
   - Authored Fact (Verbatim): `fn port_open(&mut self) -> Result<(), RegseqError>`, `fn port_close(&mut self)`, `fn configure(&mut self, _config: &SerialConfig) -> Result<(), RegseqError>`, `fn tx_byte(&mut self, byte: u8)`, `fn rx_char(&mut self) -> Option<RxChar>` in `impl Serial for Pl011FullSpec`
@@ -59,7 +59,7 @@
 ## Check Group 2
 
 - Check: serial callback bodies preserve the downstream checks captured in the authored-source entries
-- Status: `pass`
+- Status: `fail`
 - Premise: extraction preserves enough body information to prove helper sequencing, `?` propagation, branching, register interactions, opaque parameter preservation, option/result behavior, and argument flow
 - Assertion Predicate(s):
   - **port_open helper sequencing**: `helper_calls` contains enable_clock_if_present and program_polling_port; MIR Call positions satisfy enable_clock_if_present < program_polling_port
@@ -89,18 +89,20 @@
   - **rx_char Option::None return**: Aggregate(Adt(Option, variant_index: 0)) present for empty-FIFO path
   - **rx_char Return**: Return terminator present
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_port_open_body`: asserts helper call presence, ordering, `?` propagation, argument flow, and Ok(()) return
-  - `check_group_2_port_close_body`: asserts helper call presence, ordering, and unit return
-  - `check_group_2_configure_body`: asserts _config opacity, helper call presence/ordering, `?` propagation, argument flow, and Ok(()) return
-  - `check_group_2_tx_byte_body`: asserts SwitchInt branch, is_none/tx_ready calls, structural path isolation (fast-path reaches field_val/write but not enable_tx_interrupts; staged-path reaches enable_tx_interrupts but not write), byte->field_val argument flow via cast, staged-path Option::Some + enable_tx_interrupts, and unit return
-  - `check_group_2_rx_char_body`: asserts SwitchInt, FR read via exact-suffix `::read` match (avoids read_raw overlap), single read_raw, 5+ field_from_raw calls, empty() init, 4+ bitor calls, 5+ SwitchInt blocks, RxChar::new, Option::Some, Option::None, and Return
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1459)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1532)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1579)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1656)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1800)
 - Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs` lines 288-343
 - Reasoning Trace:
   - Authored Fact (Verbatim): port_open calls `enable_clock_if_present()?` then `program_polling_port(self.uart_clock_hz(), self.current_speed)` then `Ok(())`; port_close calls `shutdown_port()` then `disable_clock_if_present()`; configure preserves `_config: &SerialConfig` opaque, same body as port_open; tx_byte branches on `self.pending_tx.is_none() && self.tx_ready()`, fast path writes `DR.DATA(byte as u32)` and returns, staged path assigns `self.pending_tx = Some(byte)` then calls `enable_tx_interrupts()`; rx_char tests `FR.RXFE`, returns None if set, otherwise reads raw DR once, extracts byte via `field_from_raw(DATA, dr) as u8`, accumulates OE/BE/PE/FE to OVERRUN/BREAK/PARITY/FRAMING via bitwise-or from `ErrorKind::empty()`, returns `Some(RxChar::new(byte, errors))`
   - Extracted Fact (Verbatim): MIR body preserves call sequences with ordering verified via block-order Call positions; `?` desugars to Call(callee) -> Call(Try::branch) -> Discriminant+SwitchInt -> Call(from_residual); _config local (index 2) is never read in non-cleanup blocks; SwitchInt represents branch conditions; field_val/write/read_raw/field_from_raw/empty/bitor/new calls all present with correct counts; Option::Some (variant_index=1) and Option::None (variant_index=0) aggregates both present; Result Ok (variant_index=0) aggregates present
-  - Correspondence: `exact`
-  - Gap / Loss Description: The specific OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING pairing cannot be individually proven from MIR because ErrorKind constants (OVERRUN, BREAK, PARITY, FRAMING) are lowered to integer literals before MIR emission. The test proves: (a) exactly 5 field_from_raw calls (1 DATA + 4 error flags), (b) exactly 4 bitor calls, (c) at least 5 SwitchInt blocks (1 RXFE + 4 error-flag checks), and (d) specimen fidelity establishes the authored OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING mapping. This gives high confidence but not a structural proof of individual error-to-kind pairings at the MIR level.
-  - Why This Status Follows: every callback-specific required predicate from the check specification (helper ordering, `?` propagation, `_config` opacity, branch condition, fast-path/staged-path split with structural path isolation, byte parameter flow into field_val, single DR read reuse, error flag extraction and accumulation counts, option/result construction) is covered by non-tautological assertions that inspect the actual MIR body structure. The rx_char `read` vs `read_raw` substring overlap is resolved via exact suffix matching. The individual OE->OVERRUN mapping is documented as a known limitation where the extraction surface does not expose constant names.
-- Counterexample: n/a
-- Suggested Fix Direction / Implementation Hints: n/a
-- Conclusion: pass -- serial callback bodies preserve helper sequencing, error propagation, opaque parameter preservation, branching behavior, register interactions, error mapping, and return construction through MIR extraction
+  - Correspondence: `weakened`
+  - Gap / Loss Description: The specific `OE -> OVERRUN`, `BE -> BREAK`, `PE -> PARITY`, and `FE -> FRAMING` pairings in `rx_char` cannot be individually proven from MIR because `ErrorKind` constants are lowered to integer literals before MIR emission. The exercised evidence proves the branch structure, single raw-DR read reuse, exactly four error-accumulation sites, and final `RxChar::new`/`Option` construction, but it does not preserve the named error-kind mapping itself.
+  - Why This Status Follows: `port_open`, `port_close`, `configure`, and `tx_byte` are strongly covered by non-tautological MIR assertions for helper ordering, `?` propagation, parameter opacity, branch separation, and return construction. `rx_char` is also strongly covered structurally, but one authored required predicate remains unprovable at this extraction boundary: the exact named mapping from each DR error flag to each `ErrorKind` constant. Under the current contract, that prevents an exact `pass` for the whole body group.
+- Counterexample:
+  - No exercised MIR evidence distinguishes the four named `ErrorKind` constants from one another after lowering, so the proof cannot show `OE -> OVERRUN`, `BE -> BREAK`, `PE -> PARITY`, and `FE -> FRAMING` individually.
+- Suggested Fix Direction / Implementation Hints:
+  - Preserve named error-kind constants on the extraction/body surface, or add a richer HIR-side semantic surface for the `rx_char` error-mapping expression before MIR lowers the constants to integer literals.
+- Conclusion: fail -- most serial callback body predicates are strongly preserved, but exact `rx_char` error-kind mapping is not directly provable at the current extraction boundary

@@ -626,14 +626,10 @@ fn check_group_3_regs_mmio_resource() {
         "authored regs type must match extraction's Mmio<register_block_type>"
     );
 
-    // Requiredness: AUTHORED_REGS_TYPE is "Mmio<Pl011Registers>" (not Option-wrapped),
-    // so the field is required. The MmioFieldDecl surface does not have an explicit
-    // `required` field, but we verify via the authored type that it is not Optional.
-    assert!(
-        !AUTHORED_REGS_TYPE.starts_with("Option<"),
-        "regs field type '{}' must not be Option-wrapped (field is required)",
-        AUTHORED_REGS_TYPE
-    );
+    // Requiredness is exactly reconstructable here: the extractor only records
+    // fields in `mmio_fields` when the HIR field type itself is `Mmio<T>`.
+    // An `Option<Mmio<T>>` field would not reach this surface because
+    // `is_mmio_type()` only matches a top-level `Mmio` path.
 
     // -- Identity enrichment surface: field classification --
     let enrichment = result
@@ -703,19 +699,10 @@ fn check_group_3_irq_interrupt_resource() {
         irq.shape
     );
 
-    // Rust type assertion: AUTHORED_IRQ_TYPE is "Interrupt".
-    // InterruptFieldShape::Single proves the field type is bare `Interrupt`
-    // (not Option<Interrupt> which would be Optional).
-    assert_eq!(
-        AUTHORED_IRQ_TYPE, "Interrupt",
-        "authored irq type must be 'Interrupt'"
-    );
-    assert_eq!(
-        irq.shape,
-        interrupts::InterruptFieldShape::Single,
-        "Single shape proves type is '{}' (not Option-wrapped)",
-        AUTHORED_IRQ_TYPE
-    );
+    // The interrupt surface preserves a weaker structural fact here:
+    // `shape == Single`. It does not expose a rendered Rust type string, so the
+    // exact authored type `Interrupt` is not directly recoverable from this
+    // surface alone.
 
     // Identity enrichment field classification
     let enrichment = result
@@ -780,18 +767,9 @@ fn check_group_3_clock_resource() {
         "clock must be optional (required == false); got required == true"
     );
 
-    // Rust type assertion: AUTHORED_CLOCK_TYPE is "Option<Clock>".
-    // required == false proves the Option wrapper; presence in clock surface
-    // proves the inner type is Clock.
-    assert_eq!(
-        AUTHORED_CLOCK_TYPE, "Option<Clock>",
-        "authored clock type must be 'Option<Clock>'"
-    );
-    assert!(
-        !clk.required,
-        "required == false proves type is '{}' (Option-wrapped)",
-        AUTHORED_CLOCK_TYPE
-    );
+    // The clock surface preserves the weaker structural fact `required == false`.
+    // It does not expose a rendered Rust type string, so the exact authored
+    // type `Option<Clock>` is not directly recoverable from this surface alone.
 
     // Identity enrichment field classification
     let enrichment = result
@@ -849,18 +827,9 @@ fn check_group_3_reset_resource() {
         "reset must be optional (required == false); got required == true"
     );
 
-    // Rust type assertion: AUTHORED_RESET_TYPE is "Option<ResetLine>".
-    // required == false proves the Option wrapper; presence in reset surface
-    // proves the inner type is ResetLine.
-    assert_eq!(
-        AUTHORED_RESET_TYPE, "Option<ResetLine>",
-        "authored reset type must be 'Option<ResetLine>'"
-    );
-    assert!(
-        !rst.required,
-        "required == false proves type is '{}' (Option-wrapped)",
-        AUTHORED_RESET_TYPE
-    );
+    // The reset surface preserves the weaker structural fact `required == false`.
+    // It does not expose a rendered Rust type string, so the exact authored
+    // type `Option<ResetLine>` is not directly recoverable from this surface alone.
 
     // Reset uses field-name join key, no id attribute. Verify there is no
     // rseq classification in enrichment (reset has no #[rseq::*] attr).
@@ -925,18 +894,9 @@ fn check_group_3_pinctrl_resource() {
         "pinctrl must be optional (required == false); got required == true"
     );
 
-    // Rust type assertion: AUTHORED_PINCTRL_TYPE is "Option<PinCtrl>".
-    // required == false proves the Option wrapper; presence in pinctrl surface
-    // proves the inner type is PinCtrl.
-    assert_eq!(
-        AUTHORED_PINCTRL_TYPE, "Option<PinCtrl>",
-        "authored pinctrl type must be 'Option<PinCtrl>'"
-    );
-    assert!(
-        !pin.required,
-        "required == false proves type is '{}' (Option-wrapped)",
-        AUTHORED_PINCTRL_TYPE
-    );
+    // The pinctrl surface preserves the weaker structural fact `required == false`.
+    // It does not expose a rendered Rust type string, so the exact authored
+    // type `Option<PinCtrl>` is not directly recoverable from this surface alone.
 
     // Identity enrichment field classification
     let enrichment = result
