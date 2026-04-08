@@ -10,7 +10,51 @@ Primary source fixture:
 
 ## Status
 
-- `not started`
+- `completed` for authored-source ledgering and source-to-extraction check
+  decomposition
+
+## Current Review State
+
+- This document is the upstream authored-facts ledger for the PL011 fixture.
+- Its facts have been decomposed into the source-to-extraction validation
+  contracts under
+  [checks/](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/checks).
+- The current extraction-boundary check set derived from this ledger is clean:
+  reviewed certificates live under `checks/results/`, and the associated
+  remediation backlog under `checks/remediation/` has no active open items.
+- Later boundary reviews in
+  [02-hir-mir.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/02-hir-mir.md),
+  [03-regseq-model.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/03-regseq-model.md),
+  [04-linux-backend-plan.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/04-linux-backend-plan.md),
+  and [05-generated-c.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/05-generated-c.md)
+  remain separate work.
+
+## Source-To-Extraction Check Crosswalk
+
+- `01-register-block-extraction.md`: register block identity, layout, reserved
+  regions, register inventory, offsets, and access kinds
+- `02-register-definitions-extraction.md`: per-register field inventories,
+  offsets, widths, and named field values
+- `03-driver-struct-extraction.md`: driver identity, device class, resources,
+  properties, and user field shape
+- `04-utility-functions-extraction.md`: local utility function identity,
+  signatures, and executable bodies
+- `05-pin-state-markers-extraction.md`: marker type identity and usage-site
+  distinction
+- `06-driver-constants-extraction.md`: constant identity, values, and defining
+  expression structure
+- `07-helper-methods-extraction-a.md`: helper-method group A identity,
+  signatures, returns, and exact body facts
+- `08-helper-methods-extraction-b.md`: helper-method group B identity,
+  signatures, returns, and exact body facts
+- `09-lifecycle-callbacks-extraction.md`: lifecycle callback identity,
+  signatures, returns, and body semantics
+- `10-serial-callbacks-extraction-a.md`: serial callback group A identity,
+  signatures, returns, and body semantics
+- `11-serial-callbacks-extraction-b.md`: serial callback group B identity,
+  signatures, returns, and body semantics
+- `12-isr-extraction.md`: ISR identity, classification, signature, return, and
+  body semantics
 
 ## Review Template
 
