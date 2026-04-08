@@ -340,7 +340,7 @@ def format_failure(step: dict) -> list[str]:
 
 
 def run_verification(task_id: str) -> tuple[bool, list[str]]:
-    """Run cargo test, fmt check, and clippy. Return (passed, messages)."""
+    """Run cleanup steps, then workspace verification. Return (passed, messages)."""
     messages = []
     passed = True
     log_entries = []
@@ -348,6 +348,52 @@ def run_verification(task_id: str) -> tuple[bool, list[str]]:
     if not workspace_has_members():
         messages.append("VERIFICATION: Workspace has no packages. Skipping cargo checks.")
         return True, messages
+
+    # cleanup: cargo fmt --all
+    step = run_step(["cargo", "fmt", "--all"], "cargo fmt --all")
+    log_entries.append(step)
+    if step["passed"]:
+        messages.append("CLEANUP: cargo fmt --all... PASSED")
+    else:
+        passed = False
+        messages.append("CLEANUP: cargo fmt --all... FAILED")
+        messages.extend(format_failure(step))
+
+    # cleanup: cargo fix
+    step = run_step(
+        ["cargo", "fix", "--workspace", "--allow-dirty", "--allow-staged"],
+        "cargo fix --workspace --allow-dirty --allow-staged"
+    )
+    log_entries.append(step)
+    if step["passed"]:
+        messages.append("CLEANUP: cargo fix --workspace... PASSED")
+    else:
+        passed = False
+        messages.append("CLEANUP: cargo fix --workspace... FAILED")
+        messages.extend(format_failure(step))
+
+    # cleanup: cargo clippy --fix
+    step = run_step(
+        ["cargo", "clippy", "--fix", "--workspace", "--allow-dirty", "--allow-staged"],
+        "cargo clippy --fix --workspace --allow-dirty --allow-staged"
+    )
+    log_entries.append(step)
+    if step["passed"]:
+        messages.append("CLEANUP: cargo clippy --fix --workspace... PASSED")
+    else:
+        passed = False
+        messages.append("CLEANUP: cargo clippy --fix --workspace... FAILED")
+        messages.extend(format_failure(step))
+
+    # cleanup: re-run fmt after automated fixes mutate files
+    step = run_step(["cargo", "fmt", "--all"], "cargo fmt --all")
+    log_entries.append(step)
+    if step["passed"]:
+        messages.append("CLEANUP: final cargo fmt --all... PASSED")
+    else:
+        passed = False
+        messages.append("CLEANUP: final cargo fmt --all... FAILED")
+        messages.extend(format_failure(step))
 
     # cargo test
     step = run_step(["cargo", "test", "--workspace"], "cargo test --workspace")
@@ -379,10 +425,10 @@ def run_verification(task_id: str) -> tuple[bool, list[str]]:
     )
     log_entries.append(step)
     if step["passed"]:
-        messages.append("VERIFICATION: cargo clippy --workspace... PASSED")
+        messages.append("VERIFICATION: cargo clippy --workspace -- -D warnings... PASSED")
     else:
         passed = False
-        messages.append("VERIFICATION: cargo clippy --workspace... FAILED")
+        messages.append("VERIFICATION: cargo clippy --workspace -- -D warnings... FAILED")
         messages.extend(format_failure(step))
 
     # Persist full log

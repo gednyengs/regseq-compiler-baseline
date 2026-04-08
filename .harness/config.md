@@ -39,11 +39,15 @@ Active implementation stream notes:
 - Define public API signatures (with `todo!()` bodies) first, then write tests
   against them, then implement. This ensures tests compile before implementation.
 - Run `cargo test -p <crate>` after changes to verify your work.
-- Verification on `scripts/python/task.py done` runs three checks in order:
+- `scripts/python/task.py done` first runs cleanup steps that may modify files:
+  1. `cargo fmt --all` -- applies formatting in place
+  2. `cargo fix --workspace --allow-dirty --allow-staged` -- applies compiler-suggested fixes
+  3. `cargo clippy --fix --workspace --allow-dirty --allow-staged` -- applies machine-applicable clippy fixes
+  4. `cargo fmt --all` -- re-formats after automated fixes
+- After cleanup, `scripts/python/task.py done` runs three verification checks in order:
   1. `cargo test --workspace` -- all tests must pass
-  2. `cargo fmt --all -- --check` -- code must be formatted
-  3. `cargo clippy --workspace -- -D warnings` -- no clippy warnings
-- Run `cargo fmt` before completing a task to avoid fmt check failures.
+  2. `cargo fmt --all -- --check` -- code must already be formatted
+  3. `cargo clippy --workspace -- -D warnings` -- no clippy warnings remain
 
 ## Workflow
 
