@@ -1281,7 +1281,7 @@
           "id": "source-to-extraction-02",
           "name": "PL011 register definitions authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/02-pl011-register-definitions-authored-to-extraction.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1305,7 +1305,7 @@
           "id": "source-to-extraction-04",
           "name": "PL011 utility functions authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/04-pl011-utility-functions-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1329,7 +1329,7 @@
           "id": "source-to-extraction-06",
           "name": "PL011 driver constants authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/06-pl011-driver-constants-authored-to-extraction.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
