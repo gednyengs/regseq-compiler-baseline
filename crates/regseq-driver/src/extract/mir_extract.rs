@@ -4,7 +4,7 @@
 //! fully-owned representations that can be serialized without any rustc
 //! arena dependency.
 
-use std::collections::{HashMap, HashSet};
+use std::collections::HashSet;
 
 use rustc_middle::mir;
 use rustc_middle::ty::{self, TyCtxt};
@@ -64,14 +64,11 @@ pub(crate) fn convert_body<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> M
         })
         .collect();
 
-    let symbolic_consts = resolve_symbolic_consts(tcx, body);
-
     MirBody {
         local_decls,
         arg_count: body.arg_count,
         basic_blocks,
         source_scopes,
-        symbolic_consts,
     }
 }
 
@@ -650,196 +647,6 @@ fn convert_mutability(m: mir::Mutability) -> MirMutability {
     match m {
         mir::Mutability::Not => MirMutability::Not,
         mir::Mutability::Mut => MirMutability::Mut,
-    }
-}
-
-// ---------------------------------------------------------------------------
-// Symbolic constant resolution
-// ---------------------------------------------------------------------------
-
-/// Scan a MIR body for scalar constant operands whose ADT type has named
-/// associated constants. For each unique (type, scalar) pair that resolves
-/// unambiguously to a single associated constant, emit a mapping.
-fn resolve_symbolic_consts<'tcx>(
-    tcx: TyCtxt<'tcx>,
-    body: &mir::Body<'tcx>,
-) -> Vec<SymbolicConstMapping> {
-    // Collect all (ty, scalar_bits) pairs seen in the body.
-    let mut seen: HashMap<(String, u128), ()> = HashMap::new();
-
-    for bb in body.basic_blocks.iter() {
-        visit_operands_in_block(bb, |operand| {
-            if let mir::Operand::Constant(box const_op) = operand {
-                if let mir::Const::Val(
-                    mir::ConstValue::Scalar(mir::interpret::Scalar::Int(int)),
-                    const_ty,
-                ) = const_op.const_
-                {
-                    if let ty::TyKind::Adt(adt_def, _) = const_ty.kind() {
-                        if adt_def.is_struct() {
-                            let path = tcx.def_path_str(adt_def.did());
-                            let bits = int.to_bits(int.size());
-                            seen.insert((path, bits), ());
-                        }
-                    }
-                }
-            }
-        });
-    }
-
-    if seen.is_empty() {
-        return Vec::new();
-    }
-
-    // Group by type path.
-    let mut by_type: HashMap<String, Vec<u128>> = HashMap::new();
-    for (ty_path, bits) in seen.keys() {
-        by_type.entry(ty_path.clone()).or_default().push(*bits);
-    }
-
-    let mut result = Vec::new();
-    let typing_env = ty::TypingEnv::fully_monomorphized();
-
-    for (ty_path, values) in &by_type {
-        // Find the ADT DefId for this type path. We need to look it up
-        // from one of the constants we already saw.
-        let adt_did = {
-            let mut found = None;
-            'outer: for bb in body.basic_blocks.iter() {
-                visit_operands_in_block(bb, |operand| {
-                    if found.is_some() {
-                        return;
-                    }
-                    if let mir::Operand::Constant(box const_op) = operand {
-                        if let mir::Const::Val(_, const_ty) = const_op.const_ {
-                            if let ty::TyKind::Adt(adt_def, _) = const_ty.kind() {
-                                if tcx.def_path_str(adt_def.did()) == *ty_path {
-                                    found = Some(adt_def.did());
-                                }
-                            }
-                        }
-                    }
-                });
-                if found.is_some() {
-                    break 'outer;
-                }
-            }
-            match found {
-                Some(did) => did,
-                None => continue,
-            }
-        };
-
-        // Collect all associated constants from inherent impls of this type.
-        let inherent_impls = tcx.inherent_impls(adt_did);
-
-        let mut const_map: HashMap<u128, Vec<String>> = HashMap::new();
-        for &impl_did in inherent_impls.iter() {
-            for item in tcx.associated_items(impl_did).in_definition_order() {
-                if !matches!(item.kind, ty::AssocKind::Const { .. }) {
-                    continue;
-                }
-                let uneval = mir::UnevaluatedConst {
-                    def: item.def_id,
-                    args: ty::List::empty(),
-                    promoted: None,
-                };
-                let Ok(const_val) =
-                    tcx.const_eval_resolve(typing_env, uneval, tcx.def_span(item.def_id))
-                else {
-                    continue;
-                };
-                let mir::ConstValue::Scalar(mir::interpret::Scalar::Int(const_int)) = const_val
-                else {
-                    // Also try Indirect for struct-wrapped scalars.
-                    if let mir::ConstValue::Indirect { alloc_id, offset } = const_val {
-                        if let Ok(layout) = tcx.layout_of(
-                            typing_env
-                                .as_query_input(tcx.type_of(item.def_id).instantiate_identity()),
-                        ) {
-                            let rustc_middle::mir::interpret::GlobalAlloc::Memory(alloc) =
-                                tcx.global_alloc(alloc_id)
-                            else {
-                                continue;
-                            };
-                            let size = layout.size;
-                            if size.bytes() > 0 {
-                                let range = rustc_middle::mir::interpret::alloc_range(offset, size);
-                                if let Ok(scalar) = alloc.inner().read_scalar(&tcx, range, false) {
-                                    if let Ok(int) = scalar.try_to_scalar_int() {
-                                        let bits = int.to_bits(int.size());
-                                        let path = tcx.def_path_str(item.def_id);
-                                        const_map.entry(bits).or_default().push(path);
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    continue;
-                };
-                let bits = const_int.to_bits(const_int.size());
-                let path = tcx.def_path_str(item.def_id);
-                const_map.entry(bits).or_default().push(path);
-            }
-        }
-
-        // For each value we saw in the body, find unambiguous matches.
-        for bits in values {
-            if let Some(paths) = const_map.get(bits) {
-                if paths.len() == 1 {
-                    result.push(SymbolicConstMapping {
-                        ty_path: ty_path.clone(),
-                        value: *bits,
-                        path: paths[0].clone(),
-                    });
-                }
-            }
-        }
-    }
-
-    result
-}
-
-/// Visit all operands in a basic block (both statement and terminator operands).
-fn visit_operands_in_block<'tcx, F>(bb: &mir::BasicBlockData<'tcx>, mut visit: F)
-where
-    F: FnMut(&mir::Operand<'tcx>),
-{
-    for stmt in &bb.statements {
-        if let mir::StatementKind::Assign(box (_, ref rvalue)) = stmt.kind {
-            match rvalue {
-                mir::Rvalue::Use(op)
-                | mir::Rvalue::UnaryOp(_, op)
-                | mir::Rvalue::Cast(_, op, _) => visit(op),
-                mir::Rvalue::BinaryOp(_, box (lhs, rhs)) => {
-                    visit(lhs);
-                    visit(rhs);
-                }
-                mir::Rvalue::Aggregate(_, ops) => {
-                    for op in ops.iter() {
-                        visit(op);
-                    }
-                }
-                _ => {}
-            }
-        }
-    }
-    if let Some(ref term) = bb.terminator {
-        match &term.kind {
-            mir::TerminatorKind::Call { func, args, .. } => {
-                visit(func);
-                for arg in args {
-                    visit(&arg.node);
-                }
-            }
-            mir::TerminatorKind::SwitchInt { discr, .. } => {
-                visit(discr);
-            }
-            mir::TerminatorKind::Assert { cond, .. } => {
-                visit(cond);
-            }
-            _ => {}
-        }
     }
 }
 

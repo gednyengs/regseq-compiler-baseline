@@ -152,7 +152,6 @@ fn minimal_mir_body() -> MirBody {
             index: 0,
             name: None,
         }],
-        symbolic_consts: vec![],
     }
 }
 

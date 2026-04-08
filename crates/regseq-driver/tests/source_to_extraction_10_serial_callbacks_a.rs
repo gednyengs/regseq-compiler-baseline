@@ -930,7 +930,7 @@ fn extract_error_flag_mappings(body: &MirBody) -> Vec<(String, String)> {
     let bbs = &body.basic_blocks;
     let mut mappings = Vec::new();
 
-    for (bi, bb) in bbs.iter().enumerate() {
+    for bb in bbs.iter() {
         if bb.is_cleanup {
             continue;
         }
@@ -967,10 +967,9 @@ fn extract_error_flag_mappings(body: &MirBody) -> Vec<(String, String)> {
         let Some(switch_bb_idx) = target else {
             continue;
         };
-        let _switch_bb = match bbs.get(*switch_bb_idx as usize) {
-            Some(bb) => bb,
-            None => continue,
-        };
+        if bbs.get(*switch_bb_idx as usize).is_none() {
+            continue;
+        }
 
         // The SwitchInt might be in the next block or one further (through an
         // intermediate assign + compare block). Find it by following the chain.

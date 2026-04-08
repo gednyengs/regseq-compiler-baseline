@@ -71,7 +71,6 @@ fn trivial_mir_body() -> MirBody {
             index: 0,
             name: None,
         }],
-        symbolic_consts: vec![],
     }
 }
 
@@ -123,7 +122,6 @@ fn calling_mir_body(callee_path: &str) -> MirBody {
             index: 0,
             name: None,
         }],
-        symbolic_consts: vec![],
     }
 }
 
@@ -260,7 +258,6 @@ fn fallible_mir_body() -> MirBody {
             index: 0,
             name: Some("init".into()),
         }],
-        symbolic_consts: vec![],
     }
 }
 
@@ -466,7 +463,6 @@ fn representative_mir_bodies() -> MirBodyDeclSet {
                         index: 0,
                         name: Some("compute_divisor".into()),
                     }],
-                    symbolic_consts: vec![],
                 },
             ),
         ],
@@ -802,7 +798,6 @@ fn unsupported_mir_terminator_surfaced() {
                         index: 0,
                         name: None,
                     }],
-                    symbolic_consts: vec![],
                 },
                 vec![],
             ),
@@ -864,7 +859,6 @@ fn unsupported_rvalue_surfaced() {
                         index: 0,
                         name: None,
                     }],
-                    symbolic_consts: vec![],
                 },
                 vec![],
             ),
@@ -933,7 +927,6 @@ fn unsupported_projection_surfaced() {
                         index: 0,
                         name: None,
                     }],
-                    symbolic_consts: vec![],
                 },
                 vec![],
             ),
