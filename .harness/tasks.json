@@ -1436,6 +1436,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "extraction-remediation-04",
+          "name": "PL011 utility-functions extraction remediation",
+          "spec": ".harness/tasks/extraction-remediation/04-pl011-utility-functions-extraction-remediation.md",
+          "status": "pending",
+          "depends_on": [
+            "source-to-extraction-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
