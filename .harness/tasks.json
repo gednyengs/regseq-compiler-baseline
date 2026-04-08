@@ -1269,13 +1269,145 @@
           "id": "source-to-extraction-01",
           "name": "PL011 register-block authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/01-pl011-register-block-authored-to-extraction.md",
-          "status": "failed",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": "4/8 checks fail: block-level properties (endian, access_width) not parsed from #[rseq::register_block(...)]; per-field byte offset, register descriptor type, and access kind not captured. See docs/validation/01-pl011/checks/results/01-register-block-extraction.md"
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-02",
+          "name": "PL011 register definitions authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/02-pl011-register-definitions-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-03",
+          "name": "PL011 driver-struct authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/03-pl011-driver-struct-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-04",
+          "name": "PL011 utility functions authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/04-pl011-utility-functions-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-05",
+          "name": "PL011 pin-state markers authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/05-pl011-pin-state-markers-authored-to-extraction.md",
+          "status": "in_progress",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-06",
+          "name": "PL011 driver constants authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/06-pl011-driver-constants-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-07",
+          "name": "PL011 helper methods A authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/07-pl011-helper-methods-a-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-08",
+          "name": "PL011 helper methods B authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/08-pl011-helper-methods-b-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-09",
+          "name": "PL011 lifecycle callbacks authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/09-pl011-lifecycle-callbacks-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-10",
+          "name": "PL011 serial callbacks A authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/10-pl011-serial-callbacks-a-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-11",
+          "name": "PL011 serial callbacks B authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/11-pl011-serial-callbacks-b-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "source-to-extraction-12",
+          "name": "PL011 ISR authored->extraction boundary validation",
+          "spec": ".harness/tasks/source-to-extraction/12-pl011-isr-authored-to-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-19",
+            "track-a-pl011-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },

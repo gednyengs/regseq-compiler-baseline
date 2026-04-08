@@ -623,7 +623,7 @@ items:
       - regseq-linux-backend-01
       - regseq-linux-backend-02
       - track-a-validation-10
-      - track-a-validation-11
+      - pl011-linux-validation-11
       - track-a-validation-07
       - track-a-validation-08
 
