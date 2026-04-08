@@ -1365,7 +1365,7 @@
           "id": "source-to-extraction-09",
           "name": "PL011 lifecycle callbacks authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/09-pl011-lifecycle-callbacks-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
