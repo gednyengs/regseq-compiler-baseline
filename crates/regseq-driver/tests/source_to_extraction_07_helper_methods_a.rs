@@ -588,6 +588,34 @@ fn count_calls_containing(body: &MirBody, substring: &str) -> usize {
         .count()
 }
 
+/// Retrieve the resolved scalar field at the given index for an unevaluated
+/// constant matching the given name substring. The extraction encodes resolved
+/// fields in the description string as `unevaluated:path[0=0x...,1=0x...]`.
+/// Returns `None` if the constant is not found or has no resolved field at
+/// that index.
+fn resolved_field_bits(body: &MirBody, name_substring: &str, field_index: u32) -> Option<u128> {
+    collect_all_constants(body).iter().find_map(|c| {
+        if let MirConstValue::Unsupported { description } = &c.value {
+            if description.contains(name_substring) {
+                // Parse "[idx=0xHEX,...]" suffix.
+                let bracket_start = description.find('[')?;
+                let bracket_end = description.find(']')?;
+                let fields_str = &description[bracket_start + 1..bracket_end];
+                for entry in fields_str.split(',') {
+                    let (idx_str, val_str) = entry.split_once('=')?;
+                    let idx: u32 = idx_str.parse().ok()?;
+                    if idx == field_index {
+                        let bits =
+                            u128::from_str_radix(val_str.trim_start_matches("0x"), 16).ok()?;
+                        return Some(bits);
+                    }
+                }
+            }
+        }
+        None
+    })
+}
+
 // ============================================================================
 // Fixture source loading for specimen fidelity
 // ============================================================================
@@ -894,6 +922,21 @@ fn check_group_2_disable_fifo_body() {
         has_register_field_access(&func.body, "LcrhReg"),
         "disable_fifo: must access LcrhReg register"
     );
+
+    // Field-locality proof: FEN::DISABLED resolves to mask=0x10, value=0x00.
+    // This proves only the FEN bit (bit 4) is affected and its value is 0.
+    let fen_mask = resolved_field_bits(&func.body, "FEN::DISABLED", 0)
+        .expect("disable_fifo: FEN::DISABLED must have resolved mask field");
+    assert_eq!(
+        fen_mask, 0x10,
+        "disable_fifo: FEN::DISABLED mask must be 0x10 (only FEN bit affected)"
+    );
+    let fen_value = resolved_field_bits(&func.body, "FEN::DISABLED", 1)
+        .expect("disable_fifo: FEN::DISABLED must have resolved value field");
+    assert_eq!(
+        fen_value, 0x00,
+        "disable_fifo: FEN::DISABLED value must be 0x00 (disabled)"
+    );
 }
 
 #[test]
@@ -1197,17 +1240,28 @@ fn check_group_2_configure_line_control_body() {
         "configure_line_control: must access LcrhReg register"
     );
 
-    // Spec requires "preserves materialized literal 0x70".
-    // WLEN::EIGHT_BITS.value (0x60) + FEN::ENABLED.value (0x10) = 0x70.
-    // At MIR opt level 0 the compiler keeps FieldValue constants unevaluated,
-    // so the combined scalar 0x70 does not appear as a MirConstValue::Scalar.
-    // The constituent constants are individually preserved (asserted above).
-    // Correspondence for materialized literal 0x70: weakened -- constituents
-    // are present as unevaluated constants but the folded scalar is absent.
-    assert!(
-        !has_scalar_const(&func.body, 0x70),
-        "configure_line_control: 0x70 unexpectedly appears as scalar -- \
-         if this fires, upgrade correspondence to exact and add a positive assertion"
+    // Materialized literal 0x70 proof via resolved FieldValue fields.
+    // WLEN::EIGHT_BITS has value = 0x60, FEN::ENABLED has value = 0x10.
+    // The Add::add impl combines with bitwise OR: 0x60 | 0x10 = 0x70.
+    let wlen_value = resolved_field_bits(&func.body, "WLEN::EIGHT_BITS", 1)
+        .expect("configure_line_control: WLEN::EIGHT_BITS must have resolved value field");
+    assert_eq!(
+        wlen_value, 0x60,
+        "configure_line_control: WLEN::EIGHT_BITS value must be 0x60"
+    );
+
+    let fen_value = resolved_field_bits(&func.body, "FEN::ENABLED", 1)
+        .expect("configure_line_control: FEN::ENABLED must have resolved value field");
+    assert_eq!(
+        fen_value, 0x10,
+        "configure_line_control: FEN::ENABLED value must be 0x10"
+    );
+
+    // Combined materialized literal: 0x60 | 0x10 = 0x70.
+    assert_eq!(
+        wlen_value | fen_value,
+        0x70,
+        "configure_line_control: combined value must equal materialized literal 0x70"
     );
 }
 
@@ -1241,18 +1295,36 @@ fn check_group_2_enable_uart_body() {
         "enable_uart: must access CrReg register"
     );
 
-    // Spec requires "preserves materialized literal 0x301".
-    // UARTEN::ENABLED.value (1) + TXE::ENABLED.value (0x100) +
-    // RXE::ENABLED.value (0x200) = 0x301.
-    // At MIR opt level 0 the compiler keeps FieldValue constants unevaluated,
-    // so the combined scalar 0x301 does not appear as a MirConstValue::Scalar.
-    // The constituent constants are individually preserved (asserted above).
-    // Correspondence for materialized literal 0x301: weakened -- constituents
-    // are present as unevaluated constants but the folded scalar is absent.
-    assert!(
-        !has_scalar_const(&func.body, 0x301),
-        "enable_uart: 0x301 unexpectedly appears as scalar -- \
-         if this fires, upgrade correspondence to exact and add a positive assertion"
+    // Materialized literal 0x301 proof via resolved FieldValue fields.
+    // UARTEN::ENABLED has value = 0x01, TXE::ENABLED has value = 0x100,
+    // RXE::ENABLED has value = 0x200.
+    // The Add::add impl combines with bitwise OR: 0x01 | 0x100 | 0x200 = 0x301.
+    let uarten_value = resolved_field_bits(&func.body, "CR_REG::UARTEN::ENABLED", 1)
+        .expect("enable_uart: CR_REG::UARTEN::ENABLED must have resolved value field");
+    assert_eq!(
+        uarten_value, 0x01,
+        "enable_uart: UARTEN::ENABLED value must be 0x01"
+    );
+
+    let txe_value = resolved_field_bits(&func.body, "CR_REG::TXE::ENABLED", 1)
+        .expect("enable_uart: CR_REG::TXE::ENABLED must have resolved value field");
+    assert_eq!(
+        txe_value, 0x100,
+        "enable_uart: TXE::ENABLED value must be 0x100"
+    );
+
+    let rxe_value = resolved_field_bits(&func.body, "CR_REG::RXE::ENABLED", 1)
+        .expect("enable_uart: CR_REG::RXE::ENABLED must have resolved value field");
+    assert_eq!(
+        rxe_value, 0x200,
+        "enable_uart: RXE::ENABLED value must be 0x200"
+    );
+
+    // Combined materialized literal: 0x01 | 0x100 | 0x200 = 0x301.
+    assert_eq!(
+        uarten_value | txe_value | rxe_value,
+        0x301,
+        "enable_uart: combined value must equal materialized literal 0x301"
     );
 }
 

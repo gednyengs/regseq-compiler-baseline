@@ -716,14 +716,16 @@ fn check_group_2_field_val_body_proves_authored_facts() {
     );
 
     // Param locals are 1 and 2: `field`, `raw`.
-    let mask_local =
-        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 0))
-            .expect("field_val must copy `field.mask` into a temp local");
+    let mask_local = find_use_assign_local(&func.body, |operand| {
+        operand_is_field_projection(operand, 1, 0)
+    })
+    .expect("field_val must copy `field.mask` into a temp local");
     let raw_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 2))
         .expect("field_val must copy `raw` into a temp local");
-    let shift_local =
-        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 1))
-            .expect("field_val must copy `field.shift` into a temp local");
+    let shift_local = find_use_assign_local(&func.body, |operand| {
+        operand_is_field_projection(operand, 1, 1)
+    })
+    .expect("field_val must copy `field.shift` into a temp local");
 
     let shl_local = find_binary_op_assign_local(
         &func.body,
@@ -802,9 +804,10 @@ fn check_group_2_field_from_raw_body_proves_authored_facts() {
 
     let raw_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 2))
         .expect("field_from_raw must copy `raw` into a temp local");
-    let mask_local =
-        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 0))
-            .expect("field_from_raw must copy `field.mask` into a temp local");
+    let mask_local = find_use_assign_local(&func.body, |operand| {
+        operand_is_field_projection(operand, 1, 0)
+    })
+    .expect("field_from_raw must copy `field.mask` into a temp local");
     let bitand_local = find_binary_op_assign_local(
         &func.body,
         MirBinOp::BitAnd,
@@ -813,9 +816,10 @@ fn check_group_2_field_from_raw_body_proves_authored_facts() {
     )
     .expect("field_from_raw must compute `raw & field.mask` from copied operand locals");
 
-    let shift_local =
-        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 1))
-            .expect("field_from_raw must copy `field.shift` into a temp local");
+    let shift_local = find_use_assign_local(&func.body, |operand| {
+        operand_is_field_projection(operand, 1, 1)
+    })
+    .expect("field_from_raw must copy `field.shift` into a temp local");
     let shr_local = find_binary_op_assign_local(
         &func.body,
         MirBinOp::Shr,
@@ -829,7 +833,8 @@ fn check_group_2_field_from_raw_body_proves_authored_facts() {
             return false;
         }
         bb.statements.iter().any(|stmt| match &stmt.kind {
-            MirStatementKind::Assign { place, rvalue } if place.local == 0 => match rvalue.as_ref() {
+            MirStatementKind::Assign { place, rvalue } if place.local == 0 => match rvalue.as_ref()
+            {
                 MirRvalue::BinaryOp { op, lhs, rhs } => {
                     *op == MirBinOp::Shr
                         && operand_is_local(lhs, bitand_local)

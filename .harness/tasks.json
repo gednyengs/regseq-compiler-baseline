@@ -1463,7 +1463,7 @@
           "id": "extraction-remediation-07",
           "name": "PL011 helper-methods A extraction remediation",
           "spec": ".harness/tasks/extraction-remediation/07-pl011-helper-methods-a-extraction-remediation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "source-to-extraction-07"
           ],

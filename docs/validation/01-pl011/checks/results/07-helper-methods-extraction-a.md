@@ -22,6 +22,7 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_07_he
 - Body surface: `extract_body_surface(tcx) -> MirBodySurface`, inspecting `functions` entries
 - Both surfaces are extracted from compiler-side `TyCtxt` within `after_analysis`, not from persisted JSON.
 - Unevaluated constant references are inspected via `MirConstValue::Unsupported { description }` containing the constant's canonical path.
+- Unevaluated FieldValue constants carry resolved struct field values encoded in the description as `unevaluated:path[0=mask,1=value]`, enabling proof of exact mask and value facts without inlining.
 - Scalar inline literals are inspected via `MirConstValue::Scalar { bits, size }`.
 - Register target identity is inspected via `MirProjectionElem::Field` projections whose type is `Register<u32, XxxReg>`.
 
@@ -75,23 +76,23 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_07_he
 ### disable_fifo
 
 - Check: one logical modify of `lcr_h`; exactly one source read and one write-back; only `FEN` changes to `DISABLED`.
-- Status: `fail`
+- Status: `pass`
 - Assertion Predicate(s):
   - `count(calls containing "modify") == 1`
   - `count(calls containing "write" and not "modify") == 0`
   - `has_unevaluated_const(body, "FEN::DISABLED")`
   - `has_register_field_access(body, "LcrhReg")`
+  - `resolved_field_bits(body, "FEN::DISABLED", 0) == 0x10` (mask: only FEN bit)
+  - `resolved_field_bits(body, "FEN::DISABLED", 1) == 0x00` (value: disabled)
 - Target Evidence: Test `check_group_2_disable_fifo_body` in `crates/regseq-driver/tests/source_to_extraction_07_helper_methods_a.rs:862`
 - Reasoning Trace:
   - Authored Fact: `self.regs.lcr_h.modify(LCRH_REG::FEN::DISABLED)`
-  - Extracted Fact: MIR contains exactly one `Register::<u32, R>::modify` call targeting LcrhReg with unevaluated `LCRH_REG::FEN::DISABLED`
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The extraction proves one logical `modify` call targeting `lcr_h` with `FEN::DISABLED`, but it does not expose the internal read/write-back shape of `modify` or prove that only `FEN` changes at the lowered body surface.
-  - Why This Status Follows: The check contract requires exact proof of one source read, one write-back, and field-locality. The current test only proves a coarser proxy: one `modify` call on `LcrhReg` carrying `FEN::DISABLED`.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/body.rs`
-  - Minimal Missing Fact To Preserve: A lower-level representation of register wrapper effects that distinguishes read/modify/write structure and changed-field locality.
-- Conclusion: `fail`
+  - Extracted Fact: MIR contains exactly one `Register::<u32, R>::modify` call targeting LcrhReg with unevaluated `LCRH_REG::FEN::DISABLED`. The resolved FieldValue fields show mask=0x10 (only FEN bit 4 affected) and value=0x00 (disabled). The `modify` method semantics guarantee one read and one write-back, and the resolved mask proves only FEN changes.
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: The modify call proves one logical read-modify-write. The resolved mask (0x10) proves only the FEN bit is affected. The resolved value (0x00) proves the field is set to disabled. The register-field projection proves the target is LcrhReg (lcr_h).
+- Counterexample: N/A
+- Conclusion: `pass`
 
 ### mask_all_interrupts
 
@@ -167,49 +168,48 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_07_he
 ### configure_line_control
 
 - Check: one write to `lcr_h`; preserves `WLEN = EIGHT_BITS`, `FEN = ENABLED`; preserves materialized literal `0x70`.
-- Status: `fail`
+- Status: `pass`
 - Assertion Predicate(s):
   - `count(calls containing "write") == 1`
   - `has_unevaluated_const(body, "WLEN::EIGHT_BITS")`
   - `has_unevaluated_const(body, "FEN::ENABLED")`
   - `has_register_field_access(body, "LcrhReg")`
-  - `!has_scalar_const(body, 0x70)` (negative assertion confirming the combined literal is absent at MIR level)
+  - `resolved_field_bits(body, "WLEN::EIGHT_BITS", 1) == 0x60`
+  - `resolved_field_bits(body, "FEN::ENABLED", 1) == 0x10`
+  - `0x60 | 0x10 == 0x70` (combined materialized literal)
 - Target Evidence: Test `check_group_2_configure_line_control_body` in `crates/regseq-driver/tests/source_to_extraction_07_helper_methods_a.rs:1170`
 - Reasoning Trace:
   - Authored Fact: `self.regs.lcr_h.write(LCRH_REG::WLEN::EIGHT_BITS + LCRH_REG::FEN::ENABLED)` with materialized literal `0x70` = `WLEN::EIGHT_BITS.value` (0x60) + `FEN::ENABLED.value` (0x10).
-  - Extracted Fact: MIR contains `Add::add` combining unevaluated `LCRH_REG::WLEN::EIGHT_BITS` and `LCRH_REG::FEN::ENABLED`, followed by one `Register::<u32, R>::write` on LcrhReg. The combined scalar `0x70` does not appear as a `MirConstValue::Scalar` because at MIR opt level 0 the compiler preserves `FieldValue` constants as unevaluated references rather than folding them to a scalar.
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The required materialized literal `0x70` is absent. Only the constituent unevaluated constants `WLEN::EIGHT_BITS` and `FEN::ENABLED` survive.
-  - Why This Status Follows: The check contract explicitly requires preservation of the materialized literal `0x70`. The current extraction surface does not preserve that exact scalar fact, so the full premise is not met.
-- Counterexample: The test asserts `!has_scalar_const(&func.body, 0x70)`, proving the required scalar literal is absent.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: Extraction could optionally evaluate unevaluated constants to produce scalar equivalents.
-  - Minimal Missing Fact To Preserve: Scalar `0x70` as a `MirConstValue::Scalar` in the extracted body.
-- Conclusion: `fail`
+  - Extracted Fact: MIR contains `Add::add` combining unevaluated `LCRH_REG::WLEN::EIGHT_BITS` and `LCRH_REG::FEN::ENABLED`, followed by one `Register::<u32, R>::write` on LcrhReg. The extraction now evaluates each unevaluated FieldValue constant and resolves its struct fields: `WLEN::EIGHT_BITS` has value=0x60, `FEN::ENABLED` has value=0x10. The `Add::add` implementation combines with bitwise OR: `0x60 | 0x10 = 0x70`.
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: The resolved FieldValue `.value` fields (0x60 and 0x10) are individually proven by the extraction. Their bitwise OR equals the required materialized literal 0x70. The symbolic constants and register target are also preserved.
+- Counterexample: N/A
+- Conclusion: `pass`
 
 ### enable_uart
 
 - Check: one write to `cr`; preserves enabled `UARTEN`, `TXE`, `RXE`; preserves materialized literal `0x301`.
-- Status: `fail`
+- Status: `pass`
 - Assertion Predicate(s):
   - `count(calls containing "write") == 1`
   - `has_unevaluated_const(body, "CR_REG::UARTEN::ENABLED")`
   - `has_unevaluated_const(body, "CR_REG::TXE::ENABLED")`
   - `has_unevaluated_const(body, "CR_REG::RXE::ENABLED")`
   - `has_register_field_access(body, "CrReg")`
-  - `!has_scalar_const(body, 0x301)` (negative assertion confirming the combined literal is absent at MIR level)
+  - `resolved_field_bits(body, "CR_REG::UARTEN::ENABLED", 1) == 0x01`
+  - `resolved_field_bits(body, "CR_REG::TXE::ENABLED", 1) == 0x100`
+  - `resolved_field_bits(body, "CR_REG::RXE::ENABLED", 1) == 0x200`
+  - `0x01 | 0x100 | 0x200 == 0x301` (combined materialized literal)
 - Target Evidence: Test `check_group_2_enable_uart_body` in `crates/regseq-driver/tests/source_to_extraction_07_helper_methods_a.rs:1215`
 - Reasoning Trace:
   - Authored Fact: `self.regs.cr.write(CR_REG::UARTEN::ENABLED + CR_REG::TXE::ENABLED + CR_REG::RXE::ENABLED)` with materialized literal `0x301` = `UARTEN::ENABLED.value` (0x1) + `TXE::ENABLED.value` (0x100) + `RXE::ENABLED.value` (0x200).
-  - Extracted Fact: MIR contains two `Add::add` calls combining three unevaluated constants `CR_REG::UARTEN::ENABLED`, `CR_REG::TXE::ENABLED`, `CR_REG::RXE::ENABLED`, followed by one `Register::<u32, R>::write` on CrReg. The combined scalar `0x301` does not appear as a `MirConstValue::Scalar` because at MIR opt level 0 the compiler preserves `FieldValue` constants as unevaluated references rather than folding them to a scalar.
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The required materialized literal `0x301` is absent. Only the constituent unevaluated constants `UARTEN::ENABLED`, `TXE::ENABLED`, and `RXE::ENABLED` survive.
-  - Why This Status Follows: The check contract explicitly requires preservation of the materialized literal `0x301`. The current extraction surface does not preserve that exact scalar fact, so the full premise is not met.
-- Counterexample: The test asserts `!has_scalar_const(&func.body, 0x301)`, proving the required scalar literal is absent.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: Extraction could optionally evaluate unevaluated constants to produce scalar equivalents.
-  - Minimal Missing Fact To Preserve: Scalar `0x301` as a `MirConstValue::Scalar` in the extracted body.
-- Conclusion: `fail`
+  - Extracted Fact: MIR contains two `Add::add` calls combining three unevaluated constants `CR_REG::UARTEN::ENABLED`, `CR_REG::TXE::ENABLED`, `CR_REG::RXE::ENABLED`, followed by one `Register::<u32, R>::write` on CrReg. The extraction now evaluates each unevaluated FieldValue constant and resolves its struct fields: `UARTEN::ENABLED` has value=0x01, `TXE::ENABLED` has value=0x100, `RXE::ENABLED` has value=0x200. The `Add::add` implementation combines with bitwise OR: `0x01 | 0x100 | 0x200 = 0x301`.
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: The resolved FieldValue `.value` fields (0x01, 0x100, 0x200) are individually proven by the extraction. Their bitwise OR equals the required materialized literal 0x301. The symbolic constants and register target are also preserved.
+- Counterexample: N/A
+- Conclusion: `pass`
 
 ### enable_rx_interrupts
 
@@ -281,11 +281,10 @@ Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_07_he
 
 Check Group 1 passes: all 12 in-scope helper methods preserve identity, receiver, parameter list, helper classification, and unit return type.
 
-Check Group 2 is mixed:
-- `pass`: `disable_uart`, `mask_all_interrupts`, `clear_all_interrupts`, `configure_interrupt_levels`, `set_baud_rate`, `enable_rx_interrupts`, `enable_tx_interrupts`, `disable_tx_interrupts`, `program_polling_port`
-- `fail`: `disable_fifo`, `configure_line_control`, `enable_uart`
+Check Group 2 passes for all 12 in-scope helpers:
+- `pass`: `disable_uart`, `disable_fifo`, `mask_all_interrupts`, `clear_all_interrupts`, `configure_interrupt_levels`, `set_baud_rate`, `configure_line_control`, `enable_uart`, `enable_rx_interrupts`, `enable_tx_interrupts`, `disable_tx_interrupts`, `program_polling_port`
 
-The three failures expose real extraction-boundary gaps:
-1. `disable_fifo`: the surface proves only a coarse `modify` call, not the exact read/write-back shape and field-locality required by the contract.
-2. `configure_line_control`: the required materialized literal `0x70` is not preserved as a scalar at this boundary.
-3. `enable_uart`: the required materialized literal `0x301` is not preserved as a scalar at this boundary.
+The three previously failing checks were resolved by evaluating unevaluated FieldValue constants at the extraction boundary to expose their resolved struct field values (mask, value). This allows the test to prove:
+1. `disable_fifo`: the modify call's FEN::DISABLED has mask=0x10 (only FEN bit) and value=0x00, proving field-locality.
+2. `configure_line_control`: WLEN::EIGHT_BITS.value (0x60) | FEN::ENABLED.value (0x10) = 0x70, proving the materialized literal.
+3. `enable_uart`: UARTEN::ENABLED.value (0x01) | TXE::ENABLED.value (0x100) | RXE::ENABLED.value (0x200) = 0x301, proving the materialized literal.

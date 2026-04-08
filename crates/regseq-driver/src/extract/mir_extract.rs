@@ -513,16 +513,35 @@ fn convert_const_operand<'tcx>(
     const_op: &mir::ConstOperand<'tcx>,
 ) -> MirConstant {
     let ty = convert_ty(tcx, const_op.const_.ty());
-    let value = match const_op.const_ {
-        mir::Const::Val(val, _) => convert_const_value(&val),
-        mir::Const::Ty(_, _) => MirConstValue::Unsupported {
-            description: "ty_const".to_string(),
+    match const_op.const_ {
+        mir::Const::Val(val, _) => MirConstant {
+            ty,
+            value: convert_const_value(&val),
         },
-        mir::Const::Unevaluated(uneval, _) => MirConstValue::Unsupported {
-            description: format!("unevaluated:{}", tcx.def_path_str(uneval.def)),
+        mir::Const::Ty(_, _) => MirConstant {
+            ty,
+            value: MirConstValue::Unsupported {
+                description: "ty_const".to_string(),
+            },
         },
-    };
-    MirConstant { ty, value }
+        mir::Const::Unevaluated(uneval, eval_ty) => {
+            let path = tcx.def_path_str(uneval.def);
+            let resolved = try_resolve_const_fields(tcx, const_op, &uneval, eval_ty);
+            let description = if resolved.is_empty() {
+                format!("unevaluated:{path}")
+            } else {
+                let fields: Vec<String> = resolved
+                    .iter()
+                    .map(|(idx, bits)| format!("{idx}={bits:#x}"))
+                    .collect();
+                format!("unevaluated:{path}[{}]", fields.join(","))
+            };
+            MirConstant {
+                ty,
+                value: MirConstValue::Unsupported { description },
+            }
+        }
+    }
 }
 
 fn convert_const_value(val: &mir::ConstValue) -> MirConstValue {
@@ -541,6 +560,82 @@ fn convert_const_value(val: &mir::ConstValue) -> MirConstValue {
             description: format!("{other:?}"),
         },
     }
+}
+
+// ---------------------------------------------------------------------------
+// Unevaluated constant field resolution
+// ---------------------------------------------------------------------------
+
+/// Attempt to evaluate an unevaluated constant and extract its scalar struct
+/// fields. Returns field index/bits pairs for every non-ZST scalar field in
+/// the struct layout. Returns an empty vec if evaluation fails or the constant
+/// is not a struct.
+fn try_resolve_const_fields<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    const_op: &mir::ConstOperand<'tcx>,
+    uneval: &mir::UnevaluatedConst<'tcx>,
+    eval_ty: ty::Ty<'tcx>,
+) -> Vec<(u32, u128)> {
+    // Only attempt resolution for ADT (struct) types.
+    let ty::TyKind::Adt(adt_def, args) = eval_ty.kind() else {
+        return vec![];
+    };
+
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+
+    // Evaluate the constant.
+    let Ok(val) = tcx.const_eval_resolve(typing_env, *uneval, const_op.span) else {
+        return vec![];
+    };
+
+    // We need an indirect (allocation-backed) result for struct types.
+    let mir::ConstValue::Indirect { alloc_id, offset } = val else {
+        return vec![];
+    };
+
+    // Get the struct layout so we can read fields at correct offsets.
+    let Ok(struct_layout) = tcx.layout_of(typing_env.as_query_input(eval_ty)) else {
+        return vec![];
+    };
+
+    // Retrieve the backing allocation.
+    let rustc_middle::mir::interpret::GlobalAlloc::Memory(const_alloc) = tcx.global_alloc(alloc_id)
+    else {
+        return vec![];
+    };
+
+    let mut fields = Vec::new();
+    let variant = adt_def.non_enum_variant();
+
+    for (i, field_def) in variant.fields.iter().enumerate() {
+        let field_ty = field_def.ty(tcx, args);
+        let Ok(field_layout) = tcx.layout_of(typing_env.as_query_input(field_ty)) else {
+            continue;
+        };
+        let field_size = field_layout.size;
+
+        // Skip ZST fields (e.g., PhantomData).
+        if field_size.bytes() == 0 {
+            continue;
+        }
+
+        let field_offset = struct_layout.layout.fields().offset(i);
+        let read_offset = offset + field_offset;
+        let range = rustc_middle::mir::interpret::alloc_range(read_offset, field_size);
+        let Ok(scalar) = const_alloc
+            .inner()
+            .read_scalar(&tcx, range, /* read_provenance */ false)
+        else {
+            continue;
+        };
+        let Ok(int) = scalar.try_to_scalar_int() else {
+            continue;
+        };
+
+        fields.push((i as u32, int.to_bits(field_size)));
+    }
+
+    fields
 }
 
 // ---------------------------------------------------------------------------
