@@ -68,38 +68,15 @@ const AUTHORED_FIELD_NAMES: &[&str] = &[
     "pcell_id3",
 ];
 
-/// Non-reserved register field names only (for register-inventory checks).
-const AUTHORED_REGISTER_NAMES: &[&str] = &[
-    "dr",
-    "rsr_ecr",
-    "fr",
-    "ilpr",
-    "ibrd",
-    "fbrd",
-    "lcr_h",
-    "cr",
-    "ifls",
-    "imsc",
-    "ris",
-    "mis",
-    "icr",
-    "dmacr",
-    "periph_id0",
-    "periph_id1",
-    "periph_id2",
-    "periph_id3",
-    "pcell_id0",
-    "pcell_id1",
-    "pcell_id2",
-    "pcell_id3",
-];
-
 /// Exact authored field declarations from the PL011 fixture register block.
 /// These are used to prove reduced-specimen fidelity exhaustively rather than
 /// by representative wrapper-type samples.
 const AUTHORED_FIELD_DECLS: &[(&str, &str)] = &[
     ("dr", "pub dr: ReadWrite<u32, DR_REG::Register>,"),
-    ("rsr_ecr", "pub rsr_ecr: ReadWrite<u32, RSR_ECR_REG::Register>,"),
+    (
+        "rsr_ecr",
+        "pub rsr_ecr: ReadWrite<u32, RSR_ECR_REG::Register>,",
+    ),
     ("_reserved0", "_reserved0: [Reserved<u32>; 4],"),
     ("fr", "pub fr: ReadOnly<u32, FR_REG::Register>,"),
     ("_reserved1", "_reserved1: Reserved<u32>,"),
@@ -115,14 +92,38 @@ const AUTHORED_FIELD_DECLS: &[(&str, &str)] = &[
     ("icr", "pub icr: WriteOnly<u32, ICR_REG::Register>,"),
     ("dmacr", "pub dmacr: ReadWrite<u32, DMACR_REG::Register>,"),
     ("_reserved2", "_reserved2: [Reserved<u32>; 997],"),
-    ("periph_id0", "pub periph_id0: ReadOnly<u32, PERIPHID0_REG::Register>,"),
-    ("periph_id1", "pub periph_id1: ReadOnly<u32, PERIPHID1_REG::Register>,"),
-    ("periph_id2", "pub periph_id2: ReadOnly<u32, PERIPHID2_REG::Register>,"),
-    ("periph_id3", "pub periph_id3: ReadOnly<u32, PERIPHID3_REG::Register>,"),
-    ("pcell_id0", "pub pcell_id0: ReadOnly<u32, PCELLID0_REG::Register>,"),
-    ("pcell_id1", "pub pcell_id1: ReadOnly<u32, PCELLID1_REG::Register>,"),
-    ("pcell_id2", "pub pcell_id2: ReadOnly<u32, PCELLID2_REG::Register>,"),
-    ("pcell_id3", "pub pcell_id3: ReadOnly<u32, PCELLID3_REG::Register>,"),
+    (
+        "periph_id0",
+        "pub periph_id0: ReadOnly<u32, PERIPHID0_REG::Register>,",
+    ),
+    (
+        "periph_id1",
+        "pub periph_id1: ReadOnly<u32, PERIPHID1_REG::Register>,",
+    ),
+    (
+        "periph_id2",
+        "pub periph_id2: ReadOnly<u32, PERIPHID2_REG::Register>,",
+    ),
+    (
+        "periph_id3",
+        "pub periph_id3: ReadOnly<u32, PERIPHID3_REG::Register>,",
+    ),
+    (
+        "pcell_id0",
+        "pub pcell_id0: ReadOnly<u32, PCELLID0_REG::Register>,",
+    ),
+    (
+        "pcell_id1",
+        "pub pcell_id1: ReadOnly<u32, PCELLID1_REG::Register>,",
+    ),
+    (
+        "pcell_id2",
+        "pub pcell_id2: ReadOnly<u32, PCELLID2_REG::Register>,",
+    ),
+    (
+        "pcell_id3",
+        "pub pcell_id3: ReadOnly<u32, PCELLID3_REG::Register>,",
+    ),
 ];
 
 // ---------------------------------------------------------------------------
@@ -514,29 +515,19 @@ fn check_3_register_block_properties() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    // The RegisterBlockDecl struct has no block-level `endian` or
-    // `access_width` fields. The check specification requires both to survive
-    // at the extraction boundary. We verify that the extraction surface does
-    // NOT carry these properties.
-    //
-    // Per-field RegisterFieldDecl has access_width/endian but those come from
-    // per-field #[rseq::register(...)] attributes, which are NOT present on the
-    // PL011 fixture fields. The block-level attribute values are not propagated.
-    for field in &block.fields {
-        assert_eq!(
-            field.endian, None,
-            "field `{}`: no endian extracted (block-level attr not propagated)",
-            field.name
-        );
-        assert_eq!(
-            field.access_width, None,
-            "field `{}`: no access_width extracted (block-level attr not propagated)",
-            field.name
-        );
-    }
+    // Block-level endian must be preserved as "little".
+    assert_eq!(
+        block.endian.as_deref(),
+        Some("little"),
+        "block-level endian must be preserved as 'little'"
+    );
 
-    // The above proves that endian=little and access_width=32 are NOT
-    // preserved at the RegisterAccessSurface boundary. This check is FAIL.
+    // Block-level access_width must be preserved as 32.
+    assert_eq!(
+        block.access_width,
+        Some(32),
+        "block-level access_width must be preserved as 32"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -554,23 +545,42 @@ fn check_4_reserved_regions() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    // Reserved fields are extracted by name.
-    let reserved_names: Vec<&str> = block
+    let element_size = block.access_width.expect("access_width must be present") / 8;
+
+    // _reserved0: 0x008 -> 0x014 (4 elements)
+    let r0 = block
         .fields
         .iter()
-        .filter(|f| f.name.starts_with("_reserved"))
-        .map(|f| f.name.as_str())
-        .collect();
+        .find(|f| f.name == "_reserved0")
+        .expect("_reserved0 must exist");
+    assert_eq!(r0.byte_offset, Some(0x008), "_reserved0 start offset");
+    let r0_count = r0.array_count.expect("_reserved0 must have array_count");
+    assert_eq!(r0_count, 4, "_reserved0 array count");
+    let r0_end = r0.byte_offset.unwrap() + (r0_count - 1) * element_size;
+    assert_eq!(r0_end, 0x014, "_reserved0 end offset");
 
-    assert_eq!(
-        reserved_names,
-        vec!["_reserved0", "_reserved1", "_reserved2"],
-        "all three reserved regions must be extracted by name"
-    );
+    // _reserved1: 0x01C -> 0x01C (single element)
+    let r1 = block
+        .fields
+        .iter()
+        .find(|f| f.name == "_reserved1")
+        .expect("_reserved1 must exist");
+    assert_eq!(r1.byte_offset, Some(0x01C), "_reserved1 start offset");
+    assert_eq!(r1.array_count, None, "_reserved1 is not an array");
+    let r1_end = r1.byte_offset.unwrap() + (r1.array_count.unwrap_or(1) - 1) * element_size;
+    assert_eq!(r1_end, 0x01C, "_reserved1 end offset");
 
-    // However, RegisterFieldDecl has no offset or size fields. The authored
-    // offsets (0x008->0x014, 0x01C->0x01C, 0x04C->0xFDC) cannot be
-    // reconstructed from the extraction boundary. This check is FAIL.
+    // _reserved2: 0x04C -> 0xFDC (997 elements)
+    let r2 = block
+        .fields
+        .iter()
+        .find(|f| f.name == "_reserved2")
+        .expect("_reserved2 must exist");
+    assert_eq!(r2.byte_offset, Some(0x04C), "_reserved2 start offset");
+    let r2_count = r2.array_count.expect("_reserved2 must have array_count");
+    assert_eq!(r2_count, 997, "_reserved2 array count");
+    let r2_end = r2.byte_offset.unwrap() + (r2_count - 1) * element_size;
+    assert_eq!(r2_end, 0xFDC, "_reserved2 end offset");
 }
 
 // ---------------------------------------------------------------------------
@@ -614,39 +624,55 @@ fn check_6_per_register_facts() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    // (a) Struct field names are preserved.
-    let non_reserved: Vec<&str> = block
-        .fields
-        .iter()
-        .filter(|f| !f.name.starts_with("_reserved"))
-        .map(|f| f.name.as_str())
-        .collect();
-    assert_eq!(
-        non_reserved, AUTHORED_REGISTER_NAMES,
-        "all non-reserved field names must match authored register names"
-    );
+    // Authored facts: (field_name, register_type_name, byte_offset, access_kind)
+    let expected: &[(&str, &str, u32, &str)] = &[
+        ("dr", "DR_REG", 0x000, "RW"),
+        ("rsr_ecr", "RSR_ECR_REG", 0x004, "RW"),
+        ("fr", "FR_REG", 0x018, "R"),
+        ("ilpr", "ILPR_REG", 0x020, "RW"),
+        ("ibrd", "IBRD_REG", 0x024, "RW"),
+        ("fbrd", "FBRD_REG", 0x028, "RW"),
+        ("lcr_h", "LCRH_REG", 0x02C, "RW"),
+        ("cr", "CR_REG", 0x030, "RW"),
+        ("ifls", "IFLS_REG", 0x034, "RW"),
+        ("imsc", "IMSC_REG", 0x038, "RW"),
+        ("ris", "RIS_REG", 0x03C, "R"),
+        ("mis", "MIS_REG", 0x040, "R"),
+        ("icr", "ICR_REG", 0x044, "W"),
+        ("dmacr", "DMACR_REG", 0x048, "RW"),
+        ("periph_id0", "PERIPHID0_REG", 0xFE0, "R"),
+        ("periph_id1", "PERIPHID1_REG", 0xFE4, "R"),
+        ("periph_id2", "PERIPHID2_REG", 0xFE8, "R"),
+        ("periph_id3", "PERIPHID3_REG", 0xFEC, "R"),
+        ("pcell_id0", "PCELLID0_REG", 0xFF0, "R"),
+        ("pcell_id1", "PCELLID1_REG", 0xFF4, "R"),
+        ("pcell_id2", "PCELLID2_REG", 0xFF8, "R"),
+        ("pcell_id3", "PCELLID3_REG", 0xFFC, "R"),
+    ];
 
-    // (b) Register name (type descriptor), byte offset, and access kind are
-    //     NOT preserved in RegisterFieldDecl. The struct only has: name,
-    //     access_width, endian, side_effects, hw_updates. None carry the
-    //     register descriptor type name, byte offset, or access classification.
-    for field in &block.fields {
-        if field.name.starts_with("_reserved") {
-            continue;
-        }
+    for &(field_name, reg_type, offset, access) in expected {
+        let field = block
+            .fields
+            .iter()
+            .find(|f| f.name == field_name)
+            .unwrap_or_else(|| panic!("field `{field_name}` must exist"));
+
         assert_eq!(
-            field.access_width, None,
-            "field `{}`: access_width not preserved (no per-field #[rseq::register])",
-            field.name
+            field.register_type_name.as_deref(),
+            Some(reg_type),
+            "field `{field_name}`: register_type_name must be {reg_type}"
         );
         assert_eq!(
-            field.endian, None,
-            "field `{}`: endian not preserved (no per-field #[rseq::register])",
-            field.name
+            field.byte_offset,
+            Some(offset),
+            "field `{field_name}`: byte_offset must be 0x{offset:03X}"
+        );
+        assert_eq!(
+            field.access_kind.as_deref(),
+            Some(access),
+            "field `{field_name}`: access_kind must be {access}"
         );
     }
-    // This check is FAIL for register name, byte offset, and access kind.
-    // Only struct field name is preserved.
 }
 
 // ---------------------------------------------------------------------------
@@ -701,20 +727,29 @@ fn check_8_property_set_integrity() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    // The authored property set is: endian=little, access_width=32.
-    // RegisterBlockDecl has NO block-level property fields at all -- only
-    // `name` and `fields`.
-    //
-    // Verify no properties are invented at the per-field level either:
+    // Block-level properties must be preserved exactly as authored.
+    assert_eq!(
+        block.endian.as_deref(),
+        Some("little"),
+        "block endian must be preserved"
+    );
+    assert_eq!(
+        block.access_width,
+        Some(32),
+        "block access_width must be preserved"
+    );
+
+    // No properties should be invented at the per-field level
+    // (per-field #[rseq::register(...)] attributes are absent in PL011).
     for field in &block.fields {
         assert_eq!(
             field.access_width, None,
-            "no access_width should be invented for `{}`",
+            "no per-field access_width should be invented for `{}`",
             field.name
         );
         assert_eq!(
             field.endian, None,
-            "no endian should be invented for `{}`",
+            "no per-field endian should be invented for `{}`",
             field.name
         );
         assert_eq!(
@@ -728,8 +763,4 @@ fn check_8_property_set_integrity() {
             field.name
         );
     }
-
-    // No properties are invented (good), but authored endian=little and
-    // access_width=32 are dropped because RegisterBlockDecl does not carry
-    // block-level properties. This check is FAIL.
 }

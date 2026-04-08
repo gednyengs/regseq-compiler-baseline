@@ -1419,12 +1419,12 @@
           "id": "extraction-remediation-01",
           "name": "PL011 register-block extraction remediation",
           "spec": ".harness/tasks/extraction-remediation/01-pl011-register-block-extraction-remediation.md",
-          "status": "pending",
+          "status": "failed",
           "depends_on": [
             "source-to-extraction-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": "All task-owned tests pass (9/9 in source_to_extraction_01_register_block). Workspace verification blocked by pre-existing failure in unrelated test: source_to_extraction_04_utility_functions::check_group_1_free_function_identity_name_and_canonical_path (canonical_path assertion expects crate-prefixed path but extraction returns source-local path). This failure exists on clean main and is outside this task's scope."
         }
       ]
     },

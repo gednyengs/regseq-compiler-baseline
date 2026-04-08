@@ -22,6 +22,8 @@ pub struct RegisterAccessSurface {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterBlockDecl {
     pub name: String,
+    pub endian: Option<String>,
+    pub access_width: Option<u32>,
     pub fields: Vec<RegisterFieldDecl>,
 }
 
@@ -33,6 +35,10 @@ pub struct RegisterFieldDecl {
     pub endian: Option<String>,
     pub side_effects: Option<String>,
     pub hw_updates: Option<String>,
+    pub register_type_name: Option<String>,
+    pub byte_offset: Option<u32>,
+    pub access_kind: Option<String>,
+    pub array_count: Option<u32>,
 }
 
 /// An `Mmio<T>` typed field, with optional `#[rseq::mmio(...)]` metadata.
@@ -124,7 +130,8 @@ pub fn extract_register_access_surface<'tcx>(
         match &item.kind {
             ItemKind::Struct(ident, _generics, variant_data) => {
                 if has_rseq_attr(attrs, "register_block") {
-                    let block = extract_register_block(tcx, ident.name.as_str(), variant_data)?;
+                    let block =
+                        extract_register_block(tcx, ident.name.as_str(), attrs, variant_data)?;
                     register_blocks.push(block);
                 }
 
@@ -192,19 +199,46 @@ fn has_rseq_attr(attrs: &[Attribute], name: &str) -> bool {
 fn extract_register_block<'tcx>(
     tcx: TyCtxt<'tcx>,
     name: &str,
+    block_attrs: &[Attribute],
     variant_data: &rustc_hir::VariantData<'tcx>,
 ) -> Result<RegisterBlockDecl, RegisterAccessError> {
+    // Parse block-level properties from #[rseq::register_block(...)]
+    let block_attr = block_attrs
+        .iter()
+        .find(|a| rseq_attr_name(a) == Some("register_block"));
+    let (block_access_width, block_endian, _, _) = match block_attr {
+        Some(attr) => parse_register_metadata(attr)?,
+        None => (None, None, None, None),
+    };
+
+    let element_size = block_access_width.map(|w| w / 8);
+    let mut current_offset: u32 = 0;
     let mut fields = Vec::new();
 
     for field in variant_data.fields() {
         let field_name = field.ident.name.as_str().to_string();
-        let attrs = tcx.hir_attrs(field.hir_id);
-        let reg_attr = attrs.iter().find(|a| rseq_attr_name(a) == Some("register"));
+        let field_attrs = tcx.hir_attrs(field.hir_id);
+        let reg_attr = field_attrs
+            .iter()
+            .find(|a| rseq_attr_name(a) == Some("register"));
 
         let (access_width, endian, side_effects, hw_updates) = match reg_attr {
             Some(attr) => parse_register_metadata(attr)?,
             None => (None, None, None, None),
         };
+
+        let wrapper_name = extract_field_wrapper_type_name(field.ty);
+        let access_kind = wrapper_name
+            .as_deref()
+            .and_then(wrapper_to_access_kind)
+            .map(|s| s.to_string());
+        let register_type_name = extract_register_type_name(field.ty);
+        let array_count = extract_field_array_count(tcx, field);
+        let byte_offset = element_size.map(|_| current_offset);
+
+        if let Some(es) = element_size {
+            current_offset += array_count.unwrap_or(1) * es;
+        }
 
         fields.push(RegisterFieldDecl {
             name: field_name,
@@ -212,11 +246,17 @@ fn extract_register_block<'tcx>(
             endian,
             side_effects,
             hw_updates,
+            register_type_name,
+            byte_offset,
+            access_kind,
+            array_count,
         });
     }
 
     Ok(RegisterBlockDecl {
         name: name.to_string(),
+        endian: block_endian,
+        access_width: block_access_width,
         fields,
     })
 }
@@ -284,6 +324,94 @@ fn parse_register_metadata(attr: &Attribute) -> Result<RegisterMetadata, Registe
     }
 
     Ok((access_width, endian, side_effects, hw_updates))
+}
+
+// ---------------------------------------------------------------------------
+// Register-block field type helpers
+// ---------------------------------------------------------------------------
+
+/// Extract the wrapper type name from a register-block field type.
+///
+/// For `ReadWrite<u32, DR_REG::Register>` returns `Some("ReadWrite")`.
+/// For `[Reserved<u32>; 4]` returns `Some("Reserved")`.
+fn extract_field_wrapper_type_name(ty: &rustc_hir::Ty<'_>) -> Option<String> {
+    let inner = match &ty.kind {
+        rustc_hir::TyKind::Array(elem, _) => *elem,
+        _ => ty,
+    };
+    let rustc_hir::TyKind::Path(qpath) = &inner.kind else {
+        return None;
+    };
+    let path = match qpath {
+        rustc_hir::QPath::Resolved(_, path) => path,
+        _ => return None,
+    };
+    path.segments
+        .last()
+        .map(|s| s.ident.name.as_str().to_string())
+}
+
+/// Map a wrapper type name to its access kind abbreviation.
+fn wrapper_to_access_kind(wrapper: &str) -> Option<&'static str> {
+    match wrapper {
+        "ReadWrite" => Some("RW"),
+        "ReadOnly" => Some("R"),
+        "WriteOnly" => Some("W"),
+        _ => None,
+    }
+}
+
+/// Extract the register descriptor type name from the second generic argument.
+///
+/// For `ReadWrite<u32, DR_REG::Register>` returns `Some("DR_REG")`.
+/// For `Reserved<u32>` or arrays of reserved types, returns `None`.
+fn extract_register_type_name(ty: &rustc_hir::Ty<'_>) -> Option<String> {
+    let inner = match &ty.kind {
+        rustc_hir::TyKind::Array(elem, _) => *elem,
+        _ => ty,
+    };
+    let rustc_hir::TyKind::Path(qpath) = &inner.kind else {
+        return None;
+    };
+    let path = match qpath {
+        rustc_hir::QPath::Resolved(_, path) => path,
+        _ => return None,
+    };
+    let last_seg = path.segments.last()?;
+    let args = last_seg.args?;
+    let mut type_idx = 0;
+    for arg in args.args.iter() {
+        if let rustc_hir::GenericArg::Type(inner_ty) = arg {
+            if type_idx == 1 {
+                if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, inner_path)) =
+                    &inner_ty.kind
+                {
+                    if !inner_path.segments.is_empty() {
+                        return Some(inner_path.segments[0].ident.name.as_str().to_string());
+                    }
+                }
+                return None;
+            }
+            type_idx += 1;
+        }
+    }
+    None
+}
+
+/// Extract the array element count from a struct field's resolved type.
+///
+/// Returns `Some(n)` for array-typed fields like `[Reserved<u32>; n]`,
+/// `None` for non-array fields.
+fn extract_field_array_count<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    field: &rustc_hir::FieldDef<'tcx>,
+) -> Option<u32> {
+    let field_ty = tcx.type_of(field.def_id).instantiate_identity();
+    if let rustc_middle::ty::TyKind::Array(_, len_const) = field_ty.kind() {
+        len_const.try_to_target_usize(tcx).map(|v| v as u32)
+    } else {
+        None
+    }
 }
 
 // ---------------------------------------------------------------------------

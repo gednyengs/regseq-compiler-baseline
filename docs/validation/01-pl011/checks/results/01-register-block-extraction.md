@@ -22,7 +22,7 @@
   - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:384`
   - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:393`
   - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:410`
-- Justification: The inline specimen now proves fidelity exhaustively for every in-scope register-block field declaration, not by representative wrapper/access samples. Facts not modeled (register_bitfields! expansion, driver struct methods, trait impls) are not needed for the register-block extraction checks.
+- Justification: The inline specimen proves fidelity exhaustively for every in-scope register-block field declaration, not by representative wrapper/access samples. Facts not modeled (register_bitfields! expansion, driver struct methods, trait impls) are not needed for the register-block extraction checks.
 
 ## Check-to-Surface Mapping
 
@@ -30,12 +30,12 @@
 |-------|-----------|---------------|
 | 1 | RegisterAccessSurface.register_blocks | check_1_register_block_identity |
 | 2 | IdentityEnrichmentSurface.structs, .modules | check_2_canonical_path |
-| 3 | RegisterAccessSurface.register_blocks[].fields | check_3_register_block_properties |
-| 4 | RegisterAccessSurface.register_blocks[].fields | check_4_reserved_regions |
+| 3 | RegisterAccessSurface.register_blocks[].endian, .access_width | check_3_register_block_properties |
+| 4 | RegisterAccessSurface.register_blocks[].fields[].byte_offset, .array_count | check_4_reserved_regions |
 | 5 | RegisterAccessSurface.register_blocks[].fields | check_5_register_inventory_and_order |
-| 6 | RegisterAccessSurface.register_blocks[].fields | check_6_per_register_facts |
+| 6 | RegisterAccessSurface.register_blocks[].fields[].register_type_name, .byte_offset, .access_kind | check_6_per_register_facts |
 | 7 | RegisterAccessSurface.register_blocks, .register_blocks[].fields | check_7_closed_world_inventory |
-| 8 | RegisterAccessSurface.register_blocks[].fields | check_8_property_set_integrity |
+| 8 | RegisterAccessSurface.register_blocks[].endian, .access_width; per-field absence checks | check_8_property_set_integrity |
 
 ## Per-Check Results
 
@@ -84,48 +84,52 @@
 ### Check 3
 
 - Check: Register-block properties preserve `endian = little` and `access_width = 32`
-- Status: `fail`
+- Status: `pass`
 - Premise: The register-block properties preserve `endian = little` and `access_width = 32`.
 - Assertion Predicate(s):
-  - For every field in block: `field.endian == None` and `field.access_width == None`
+  - `block.endian.as_deref() == Some("little")`
+  - `block.access_width == Some(32)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:507`
-  - All 25 fields have `endian == None` and `access_width == None`
-  - `RegisterBlockDecl` struct definition (`crates/regseq-driver/src/extract/register_access.rs`, lines 22-26) has only `name: String` and `fields: Vec<RegisterFieldDecl>` -- no block-level property fields
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:519`
+  - `RegisterBlockDecl.endian == Some("little")` for the `Pl011Registers` block
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:526`
+  - `RegisterBlockDecl.access_width == Some(32)` for the `Pl011Registers` block
 - Reasoning Trace:
   - Authored Fact (Verbatim): `#[rseq::register_block(endian = "little", access_width = 32)]`
-  - Extracted Fact (Verbatim): `RegisterBlockDecl { name: "Pl011Registers", fields: [...] }` -- no endian, no access_width at block level
-  - Correspondence: `absent`
-  - Gap / Loss Description: `RegisterBlockDecl` has no fields to carry block-level `endian` or `access_width`. The `extract_register_block` function (`register_access.rs`, line 192) detects the `#[rseq::register_block]` attribute via `has_rseq_attr(attrs, "register_block")` but does not parse its key-value arguments. Per-field `endian`/`access_width` in `RegisterFieldDecl` come from `#[rseq::register(...)]` per-field attributes, which are absent from the PL011 fixture.
-  - Why This Status Follows: Both authored properties are structurally absent from the extraction surface. No block-level property data survives.
-- Counterexample: `RegisterBlockDecl` for `Pl011Registers` has no endian or access_width data at all.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `extract_register_block` in `crates/regseq-driver/src/extract/register_access.rs` (line 192)
-  - Minimal Missing Fact To Preserve: Add `endian: Option<String>` and `access_width: Option<u32>` fields to `RegisterBlockDecl`, and parse the `#[rseq::register_block(...)]` attribute arguments using the same token-parsing logic as `parse_register_metadata`.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `RegisterBlockDecl { name: "Pl011Registers", endian: Some("little"), access_width: Some(32), fields: [...] }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: `extract_register_block` now parses the `#[rseq::register_block(...)]` attribute arguments using the same token-parsing logic as per-field `#[rseq::register(...)]`, storing `endian` and `access_width` as block-level properties on `RegisterBlockDecl`.
+- Counterexample: none found
+- Conclusion: pass
 
 ### Check 4
 
 - Check: Reserved regions preserve authored offsets
-- Status: `fail`
+- Status: `pass`
 - Premise: The reserved regions preserve their authored offsets: `_reserved0: 0x008 -> 0x014`, `_reserved1: 0x01C -> 0x01C`, `_reserved2: 0x04C -> 0xFDC`.
 - Assertion Predicate(s):
-  - `reserved_names == vec!["_reserved0", "_reserved1", "_reserved2"]` (names present)
+  - `_reserved0.byte_offset == Some(0x008)`, `_reserved0.array_count == Some(4)`, computed end `0x008 + (4-1)*4 == 0x014`
+  - `_reserved1.byte_offset == Some(0x01C)`, `_reserved1.array_count == None`, computed end `0x01C + (1-1)*4 == 0x01C`
+  - `_reserved2.byte_offset == Some(0x04C)`, `_reserved2.array_count == Some(997)`, computed end `0x04C + (997-1)*4 == 0xFDC`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:547`
-  - Reserved field names are extracted correctly
-  - `RegisterFieldDecl` struct definition (`crates/regseq-driver/src/extract/register_access.rs`, lines 29-36) has no `byte_offset`, `array_size`, or layout fields
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:556` (_reserved0 start offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:558` (_reserved0 array count)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:560` (_reserved0 end offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:568` (_reserved1 start offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:569` (_reserved1 array count is None)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:571` (_reserved1 end offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:579` (_reserved2 start offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:581` (_reserved2 array count)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:583` (_reserved2 end offset)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `_reserved0: 0x008 -> 0x014`, `_reserved1: 0x01C -> 0x01C`, `_reserved2: 0x04C -> 0xFDC`
-  - Extracted Fact (Verbatim): `RegisterFieldDecl { name: "_reserved0", access_width: None, endian: None, ... }` -- name only, no offset or size
-  - Correspondence: `weakened` (names preserved, offsets/sizes absent)
-  - Gap / Loss Description: `RegisterFieldDecl` does not carry byte offset, array element count, or start/end address. The authored gap offsets cannot be reconstructed from the extraction boundary.
-  - Why This Status Follows: The boundary preserves reserved region names but not the layout information needed to reconstruct exact byte gaps. The check spec requires offset preservation or enough layout data for exact reconstruction.
-- Counterexample: `_reserved0` is known to be at name position 2 in the field list, but its byte offset 0x008 and end 0x014 are nowhere in the extraction output.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `extract_register_block` in `crates/regseq-driver/src/extract/register_access.rs`
-  - Minimal Missing Fact To Preserve: Add byte offset computation from `#[repr(C)]` layout (using `tcx.layout_of` or field order + known access_width), or store array element counts for reserved fields.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `_reserved0: byte_offset=0x008, array_count=4`; `_reserved1: byte_offset=0x01C, array_count=None`; `_reserved2: byte_offset=0x04C, array_count=997`
+  - Correspondence: `exact` (start offsets explicit, end offsets exactly reconstructable from `byte_offset + (array_count.unwrap_or(1) - 1) * element_size` where `element_size = access_width / 8`)
+  - Gap / Loss Description: none
+  - Why This Status Follows: `extract_register_block` now computes byte offsets cumulatively from the block-level `access_width` and field array counts. Array counts are extracted via `tcx.type_of(field.def_id)` for array-typed fields. The test reconstructs the exact authored end offsets from these boundary facts without heuristic guesswork.
+- Counterexample: none found
+- Conclusion: pass
 
 ### Check 5
 
@@ -135,7 +139,7 @@
 - Assertion Predicate(s):
   - `extracted_names == AUTHORED_FIELD_NAMES` (exact 25-element sequence equality)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:581`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:605`
   - All 25 fields extracted in authored order from `RegisterAccessSurface.register_blocks[0].fields`
 - Supporting Evidence: The check spec states "a complete extracted field sequence in authored order is sufficient for the inventory/order checks even if per-field offset and access metadata is not preserved."
 - Reasoning Trace:
@@ -150,26 +154,24 @@
 ### Check 6
 
 - Check: Per-register fact preservation (field name, register name, byte offset, access kind)
-- Status: `fail`
+- Status: `pass`
 - Premise: Each declared register preserves: struct field name, register name, byte offset, access kind.
 - Assertion Predicate(s):
-  - `non_reserved == AUTHORED_REGISTER_NAMES` (field names preserved)
-  - For all non-reserved fields: `field.access_width == None && field.endian == None` (confirming absence of other facts)
+  - For all 22 non-reserved registers: `field.register_type_name == Some(authored_type)`, `field.byte_offset == Some(authored_offset)`, `field.access_kind == Some(authored_access)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:607`
-  - Field names match authored exactly (22 non-reserved registers)
-  - `RegisterFieldDecl` has no `register_type_name`, `byte_offset`, or `access_kind` fields (structural absence in type definition at lines 29-36 of `register_access.rs`)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:628` (authored fact table with all 22 registers)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:660` (register_type_name assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:665` (byte_offset assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:670` (access_kind assertion)
+  - All 22 non-reserved fields verified with exact four-fact match
 - Reasoning Trace:
   - Authored Fact (Verbatim): e.g. `dr: DR_REG @ 0x000 [RW]` -- four facts per register
-  - Extracted Fact (Verbatim): `RegisterFieldDecl { name: "dr", access_width: None, endian: None, side_effects: None, hw_updates: None }` -- only field name
-  - Correspondence: `weakened` (1 of 4 facts preserved)
-  - Gap / Loss Description: Register descriptor type name (e.g. `DR_REG`), byte offset (e.g. `0x000`), and access kind (e.g. `RW`) are not fields in `RegisterFieldDecl` and are not extracted at all.
-  - Why This Status Follows: The premise requires all four facts. Only struct field name survives. Three facts are structurally absent.
-- Counterexample: Register `dr` has authored facts `DR_REG @ 0x000 [RW]` -- none of these three are present in the extracted `RegisterFieldDecl`.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `RegisterFieldDecl` struct and `extract_register_block` in `crates/regseq-driver/src/extract/register_access.rs`
-  - Minimal Missing Fact To Preserve: Add `register_type_name: Option<String>` (from the second generic arg of `ReadWrite<u32, DR_REG::Register>`), `byte_offset: Option<u32>` (from layout computation), `access_kind: Option<String>` (from wrapper type name: ReadWrite->RW, ReadOnly->R, WriteOnly->W).
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `RegisterFieldDecl { name: "dr", register_type_name: Some("DR_REG"), byte_offset: Some(0x000), access_kind: Some("RW"), ... }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: `extract_register_block` now extracts: (1) field name from HIR `field.ident`, (2) register descriptor type name from the second generic argument of the wrapper type path, (3) byte offset computed cumulatively from `access_width` and array counts, (4) access kind mapped from wrapper type name (ReadWrite->RW, ReadOnly->R, WriteOnly->W).
+- Counterexample: none found
+- Conclusion: pass
 
 ### Check 7
 
@@ -181,7 +183,7 @@
   - `extracted == AUTHORED_FIELD_NAMES` (exact sequence equality)
   - `surface.register_blocks.len() == 1` (no spurious blocks)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:657`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:694`
   - Field count is exactly 25, sequence is identical to authored, only 1 register block exists
 - Reasoning Trace:
   - Authored Fact (Verbatim): 22 registers + 3 reserved = 25 fields, no extras, no missing
@@ -195,25 +197,24 @@
 ### Check 8
 
 - Check: No register-block properties invented or dropped
-- Status: `fail`
+- Status: `pass`
 - Premise: No register-block properties are invented or dropped.
 - Assertion Predicate(s):
-  - For all fields: `field.access_width == None`, `field.endian == None`, `field.side_effects == None`, `field.hw_updates == None`
+  - `block.endian == Some("little")` (authored endian preserved)
+  - `block.access_width == Some(32)` (authored access_width preserved)
+  - For all fields: `field.access_width == None`, `field.endian == None`, `field.side_effects == None`, `field.hw_updates == None` (no per-field properties invented)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:694`
-  - All 25 fields have all property fields as `None` -- no properties invented
-  - `RegisterBlockDecl` struct has no block-level property fields (lines 22-26 of `register_access.rs`)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:731` (block endian preserved)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:736` (block access_width preserved)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:744` (per-field property absence loop)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `endian = little`, `access_width = 32` on the register block
-  - Extracted Fact (Verbatim): `RegisterBlockDecl { name: "Pl011Registers", fields: [...] }` -- no property data at any level
-  - Correspondence: `absent` (properties dropped)
-  - Gap / Loss Description: The authored property set `{endian, access_width}` is dropped entirely. No properties are invented (good), but both authored properties are lost because `RegisterBlockDecl` has no block-level property storage and the block-level `#[rseq::register_block(...)]` attribute arguments are not parsed.
-  - Why This Status Follows: The check requires preservation of exactly the authored property set. Both authored properties are absent from the extraction surface. While no spurious properties are invented, the drop of the two authored properties constitutes a failure.
-- Counterexample: `RegisterBlockDecl` for `Pl011Registers` has zero properties; the authored source specifies two.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `RegisterBlockDecl` and `extract_register_block` in `crates/regseq-driver/src/extract/register_access.rs`
-  - Minimal Missing Fact To Preserve: Add `endian: Option<String>` and `access_width: Option<u32>` to `RegisterBlockDecl` and parse the `#[rseq::register_block(...)]` attribute arguments.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `RegisterBlockDecl { endian: Some("little"), access_width: Some(32), ... }` -- both block-level properties preserved; no per-field properties invented
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: The authored property set `{endian, access_width}` is now preserved at the block level via `RegisterBlockDecl.endian` and `RegisterBlockDecl.access_width`. No spurious per-field properties are invented (all per-field property fields remain `None` since the PL011 fixture does not use per-field `#[rseq::register(...)]` attributes).
+- Counterexample: none found
+- Conclusion: pass
 
 ## Summary
 
@@ -221,13 +222,13 @@
 |-------|--------|
 | 1 - Register block identity | pass |
 | 2 - Canonical path | pass |
-| 3 - Block-level properties (endian, access_width) | fail |
-| 4 - Reserved region offsets | fail |
+| 3 - Block-level properties (endian, access_width) | pass |
+| 4 - Reserved region offsets | pass |
 | 5 - Register inventory and order | pass |
-| 6 - Per-register facts (name, type, offset, access) | fail |
+| 6 - Per-register facts (name, type, offset, access) | pass |
 | 7 - Closed-world inventory | pass |
-| 8 - Property set integrity | fail |
+| 8 - Property set integrity | pass |
 
-Result: 4 pass, 4 fail.
+Result: 8 pass, 0 fail.
 
-The four failures share a common root cause: `RegisterBlockDecl` and `RegisterFieldDecl` capture struct field names but not block-level attribute properties (endian, access_width), per-field layout data (byte offset, array size), per-field type information (register descriptor type name), or access kind classification (ReadWrite/ReadOnly/WriteOnly). The `extract_register_block` function recognizes `#[rseq::register_block]` but does not parse its arguments, and does not inspect field types for access classification or register descriptor identity.
+The four previously failing checks (3, 4, 6, 8) now pass after extending `RegisterBlockDecl` with block-level `endian` and `access_width` properties, and `RegisterFieldDecl` with `register_type_name`, `byte_offset`, `access_kind`, and `array_count`. The `extract_register_block` function now parses `#[rseq::register_block(...)]` attribute arguments, extracts wrapper type and register descriptor type names from HIR field types, computes cumulative byte offsets from the block-level access width, and resolves array element counts from the middle type system.
