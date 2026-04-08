@@ -36,7 +36,7 @@ Those concerns are owned by the downstream reopened chain:
 - `regseq-lowering-04`
 - `track-a-validation-10`
 - `regseq-linux-backend-02`
-- `track-a-validation-11`
+- `pl011-linux-validation-11`
 - `track-a-validation-07`
 
 So implementers and reviewers should treat this task as a valid scaffold/layout

@@ -14,6 +14,8 @@ use regseq_model::declaration::provenance::Provenance;
 use regseq_model::declaration::registers::WrapperMethod;
 use regseq_model::declaration::synchronization::SyncFieldKind;
 
+use regseq_model::semantic::SemanticModel;
+
 use super::behavior::BehaviorPlan;
 
 // ---------------------------------------------------------------------------
@@ -51,15 +53,23 @@ pub struct DriverLoweringPlan {
     /// **not** the backend-consumed source of truth for behavior emission.
     /// Backend planners should consume `behavior` instead.
     pub callback_actions: Vec<CallbackBodyPlan>,
-    /// Canonical structured per-function behavioral plan for emission.
+    /// Backend-facing semantic model for behavioral emission.
     ///
-    /// This is the **canonical** portable behavior representation that
-    /// later backend work consumes for code emission. It captures the
-    /// authored body-level behavior scoped to individual functions,
-    /// derived from captured MIR bodies rather than compiler-owned
-    /// templates. Backend planners must consume this field, not
-    /// `callback_actions`, for behavioral emission decisions.
-    pub behavior: BehaviorPlan,
+    /// The **canonical** portable behavioral representation. Carries
+    /// typed `FunctionDef` items with `SemanticBody` IR (`Stmt`/`Expr`
+    /// trees), referenced constants, and interrupt class definitions.
+    /// Projected from the populated item hierarchy via
+    /// `project_semantic_model`.
+    ///
+    /// Backend planners on the canonical path consume this field for
+    /// behavioral emission decisions.
+    pub behavior: SemanticModel,
+    /// **Transitional**: legacy behavior plan for current Linux emitter.
+    ///
+    /// Retained only because the Linux emitter has not yet been rewritten
+    /// to consume `SemanticModel` (Phase 3). Will be removed after that
+    /// migration. **Do not add new consumers.**
+    pub legacy_behavior: BehaviorPlan,
 }
 
 // ---------------------------------------------------------------------------

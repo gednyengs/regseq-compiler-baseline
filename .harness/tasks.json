@@ -1269,19 +1269,19 @@
           "id": "source-to-extraction-01",
           "name": "PL011 register-block authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/01-pl011-register-block-authored-to-extraction.md",
-          "status": "failed",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": "Validation complete: 4/8 checks pass, 4/8 fail. Checks 3,4,6,8 fail because RegisterBlockDecl drops block-level properties (endian, access_width) and does not capture byte offsets, register descriptor type names, or access kinds. Additionally, cargo test --workspace blocked by pre-existing broken test files from other concurrent agents (helper_methods_b_extraction.rs, isr_extraction.rs, serial_callbacks_b_extraction.rs, serial_callbacks_extraction_a.rs). See docs/validation/01-pl011/checks/results/01-register-block-extraction.md for full report."
+          "fail_reason": null
         },
         {
           "id": "source-to-extraction-02",
           "name": "PL011 register definitions authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/02-pl011-register-definitions-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1293,7 +1293,7 @@
           "id": "source-to-extraction-03",
           "name": "PL011 driver-struct authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/03-pl011-driver-struct-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1305,7 +1305,7 @@
           "id": "source-to-extraction-04",
           "name": "PL011 utility functions authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/04-pl011-utility-functions-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1317,7 +1317,7 @@
           "id": "source-to-extraction-05",
           "name": "PL011 pin-state markers authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/05-pl011-pin-state-markers-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1329,7 +1329,7 @@
           "id": "source-to-extraction-06",
           "name": "PL011 driver constants authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/06-pl011-driver-constants-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1341,7 +1341,7 @@
           "id": "source-to-extraction-07",
           "name": "PL011 helper methods A authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/07-pl011-helper-methods-a-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1353,7 +1353,7 @@
           "id": "source-to-extraction-08",
           "name": "PL011 helper methods B authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/08-pl011-helper-methods-b-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1365,7 +1365,7 @@
           "id": "source-to-extraction-09",
           "name": "PL011 lifecycle callbacks authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/09-pl011-lifecycle-callbacks-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1377,7 +1377,7 @@
           "id": "source-to-extraction-10",
           "name": "PL011 serial callbacks A authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/10-pl011-serial-callbacks-a-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
@@ -1389,19 +1389,19 @@
           "id": "source-to-extraction-11",
           "name": "PL011 serial callbacks B authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/11-pl011-serial-callbacks-b-authored-to-extraction.md",
-          "status": "failed",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": "Task-specific tests pass (7/7). Workspace-wide verification blocked by pre-existing compilation errors in pl011_helper_methods_a_boundary.rs, semantic_model_projection.rs, and emit_driver.rs (from uncommitted work in other tasks). See report at docs/validation/01-pl011/checks/results/11-serial-callbacks-extraction-b.md"
+          "fail_reason": null
         },
         {
           "id": "source-to-extraction-12",
           "name": "PL011 ISR authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/12-pl011-isr-authored-to-extraction.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"

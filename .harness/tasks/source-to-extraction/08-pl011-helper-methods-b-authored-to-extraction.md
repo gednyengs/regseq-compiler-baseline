@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/08-helper-methods-extraction-b.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_08_helper_methods_b.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_08_helper_methods_b.rs`
 
 Modify if needed:
 
@@ -62,8 +65,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +78,14 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-08`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- use path-sensitive assertions for the body-heavy helpers:
+  - `uart_clock_hz`: prove higher-order `Clock::get_rate` combinator usage and
+    exact fallback constant flow
+  - `shutdown_port`: prove exact helper order and `pending_tx = None` placement
+  - `service_rx_fifo`: prove exact loop condition, handled flag behavior, and
+    returned-bool correspondence
+  - `service_tx_fifo`: prove exact Some/None and ready/not-ready path behavior
+  - `clear_explicit_interrupts`: prove conditional write only when clear_mask != 0
 
 This task should not:
 
@@ -127,8 +138,11 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- path-sensitive helper checks only pass if each authored branch/path predicate
+  is exercised directly
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the helper-methods-B boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

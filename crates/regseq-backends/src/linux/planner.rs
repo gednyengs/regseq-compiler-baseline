@@ -5,8 +5,8 @@
 //! re-deriving driver semantics from the raw models.
 
 use regseq_model::declaration::driver::DeviceClass;
+use regseq_model::item::function::{DeviceCallbackRole, DeviceClassKind, FunctionRole};
 
-use crate::lowering::behavior::FunctionRole;
 use crate::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 
 use super::plan::{
@@ -17,7 +17,7 @@ use super::plan::{
     LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
     LinuxRegistrationShape, LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep,
     LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization, LinuxUartOpsBody,
-    LinuxUartOpsEntry,
+    LinuxUartOpsEntry, ParamBinding, ReturnAdaptation,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -311,6 +311,16 @@ fn build_artifact_layout(plan: &DriverLoweringPlan) -> LinuxArtifactLayout {
     }
 }
 
+/// Device-class callback roles that have DirectBody/WrappedBody realization
+/// in uart_ops (not emitted as helpers).
+const UART_OPS_REALIZED: &[DeviceCallbackRole] = &[
+    DeviceCallbackRole::PortOpen,
+    DeviceCallbackRole::PortClose,
+    DeviceCallbackRole::Configure,
+    DeviceCallbackRole::TxEmpty,
+    DeviceCallbackRole::SendBreak,
+];
+
 fn build_behavior_mapping(plan: &DriverLoweringPlan) -> LinuxBehaviorMapping {
     let snake_name = to_snake_case(&plan.identity.driver_name);
 
@@ -319,59 +329,18 @@ fn build_behavior_mapping(plan: &DriverLoweringPlan) -> LinuxBehaviorMapping {
         .functions
         .iter()
         .map(|f| {
-            let (linux_callback, group) = match f.role {
-                FunctionRole::LifecycleInit => (
-                    format!("{snake_name}_probe"),
-                    LinuxCallbackGroup::ProbeRemove,
-                ),
-                FunctionRole::LifecycleDeinit => (
-                    format!("{snake_name}_remove"),
-                    LinuxCallbackGroup::ProbeRemove,
-                ),
-                FunctionRole::SerialPortOpen => {
-                    (format!("{snake_name}_startup"), LinuxCallbackGroup::UartOps)
+            let linux_callback = format!("{snake_name}_{}", f.name);
+            let group = match &f.role {
+                FunctionRole::Lifecycle { .. } => LinuxCallbackGroup::ProbeRemove,
+                FunctionRole::DeviceClassCallback { callback, .. } => {
+                    if UART_OPS_REALIZED.contains(callback) {
+                        LinuxCallbackGroup::UartOps
+                    } else {
+                        LinuxCallbackGroup::Helper
+                    }
                 }
-                FunctionRole::SerialPortClose => (
-                    format!("{snake_name}_shutdown"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialConfigure => (
-                    format!("{snake_name}_set_termios"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialTxByte => (
-                    format!("{snake_name}_start_tx"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialRxChar => (
-                    format!("{snake_name}_rx_chars"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialTxReady => (
-                    format!("{snake_name}_tx_ready"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialTxEmpty => (
-                    format!("{snake_name}_tx_empty"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialFlushRxFifo => (
-                    format!("{snake_name}_flush_buffer"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialFlushTxFifo => (
-                    format!("{snake_name}_flush_buffer"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::SerialSendBreak => (
-                    format!("{snake_name}_break_ctl"),
-                    LinuxCallbackGroup::UartOps,
-                ),
-                FunctionRole::Isr => (
-                    format!("{snake_name}_irq_handler"),
-                    LinuxCallbackGroup::IsrHandler,
-                ),
-                FunctionRole::Helper => (f.name.clone(), LinuxCallbackGroup::Helper),
+                FunctionRole::Isr { .. } => LinuxCallbackGroup::IsrHandler,
+                FunctionRole::Helper => LinuxCallbackGroup::Helper,
             };
 
             LinuxCallbackMapping {
@@ -521,9 +490,19 @@ fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntr
             signature: format!(
                 "static unsigned int {snake}_tx_empty(struct uart_port *port)"
             ),
-            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialTxEmpty),
+            body_source: LinuxUartOpsBody::WrappedBody {
+                role: FunctionRole::DeviceClassCallback {
+                    class: DeviceClassKind::Serial,
+                    callback: DeviceCallbackRole::TxEmpty,
+                },
+                param_bindings: vec![],
+                return_adaptation: Some(ReturnAdaptation::BoolToUint {
+                    true_value: "TIOCSER_TEMT".into(),
+                    false_value: "0".into(),
+                }),
+            },
             needs_container_of: true,
-            trailing: vec!["return 0;".into()],
+            trailing: vec![],
         },
         LinuxUartOpsEntry {
             op_name: "set_mctrl".into(),
@@ -591,7 +570,18 @@ fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntr
             signature: format!(
                 "static void {snake}_break_ctl(struct uart_port *port, int break_state)"
             ),
-            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialSendBreak),
+            body_source: LinuxUartOpsBody::WrappedBody {
+                role: FunctionRole::DeviceClassCallback {
+                    class: DeviceClassKind::Serial,
+                    callback: DeviceCallbackRole::SendBreak,
+                },
+                param_bindings: vec![ParamBinding {
+                    semantic_name: "on".into(),
+                    c_type: "bool".into(),
+                    c_expr: "break_state != 0".into(),
+                }],
+                return_adaptation: None,
+            },
             needs_container_of: true,
             trailing: vec![],
         },
@@ -600,7 +590,14 @@ fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntr
             signature: format!(
                 "static int {snake}_startup(struct uart_port *port)"
             ),
-            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialPortOpen),
+            body_source: LinuxUartOpsBody::WrappedBody {
+                role: FunctionRole::DeviceClassCallback {
+                    class: DeviceClassKind::Serial,
+                    callback: DeviceCallbackRole::PortOpen,
+                },
+                param_bindings: vec![],
+                return_adaptation: Some(ReturnAdaptation::ResultToInt),
+            },
             needs_container_of: true,
             trailing: vec!["return 0;".into()],
         },
@@ -609,7 +606,12 @@ fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntr
             signature: format!(
                 "static void {snake}_shutdown(struct uart_port *port)"
             ),
-            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialPortClose),
+            body_source: LinuxUartOpsBody::DirectBody {
+                role: FunctionRole::DeviceClassCallback {
+                    class: DeviceClassKind::Serial,
+                    callback: DeviceCallbackRole::PortClose,
+                },
+            },
             needs_container_of: true,
             trailing: vec![],
         },
@@ -618,7 +620,18 @@ fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntr
             signature: format!(
                 "static void {snake}_set_termios(struct uart_port *port, struct ktermios *termios, const struct ktermios *old)"
             ),
-            body_source: LinuxUartOpsBody::FromPortableRole(FunctionRole::SerialConfigure),
+            body_source: LinuxUartOpsBody::WrappedBody {
+                role: FunctionRole::DeviceClassCallback {
+                    class: DeviceClassKind::Serial,
+                    callback: DeviceCallbackRole::Configure,
+                },
+                param_bindings: vec![ParamBinding {
+                    semantic_name: "_config".into(),
+                    c_type: "const struct ktermios *".into(),
+                    c_expr: "termios".into(),
+                }],
+                return_adaptation: Some(ReturnAdaptation::DropResult),
+            },
             needs_container_of: true,
             trailing: vec![],
         },

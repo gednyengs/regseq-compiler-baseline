@@ -77,7 +77,7 @@ impl DeviceClass {
     /// Parse a device class from the raw string representation.
     pub fn from_raw(s: &str) -> Self {
         match s {
-            "serial_uart" => Self::SerialUart,
+            "serial_uart" | "serial" => Self::SerialUart,
             "network" => Self::Network,
             other => Self::Other(other.to_string()),
         }

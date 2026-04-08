@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/09-lifecycle-callbacks-extraction.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
 
 Modify if needed:
 
@@ -62,8 +65,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +78,9 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-09`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- for `init`, prove actual operand flow into `program_polling_port`: the first
+  argument comes from `self.uart_clock_hz()` and the second from
+  `self.current_speed`; call ordering alone is not enough
 
 This task should not:
 
@@ -127,8 +133,11 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- lifecycle body checks only pass if helper sequencing and argument flow are
+  both proven exactly
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the lifecycle-callback boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

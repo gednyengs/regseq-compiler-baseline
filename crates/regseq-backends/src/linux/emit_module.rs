@@ -4,22 +4,30 @@
 //! containing AMBA/platform registration, probe/remove, uart_ops,
 //! uart_driver, and ISR handler.
 //!
-//! All callback bodies are emitted by walking the portable behavior
-//! plan. No device-specific register offsets, interrupt masks, callback
-//! templates, or naming policy appears in this module.
+//! All callback bodies are emitted by walking the semantic model from
+//! `DriverLoweringPlan.behavior`. No device-specific register offsets,
+//! interrupt masks, callback templates, or naming policy appears in this
+//! module.
 
-use crate::lowering::behavior::{
-    BehaviorNode, BehaviorPlan, FunctionBehavior, FunctionRole, PortableType,
-};
+use std::collections::HashSet;
+
+use regseq_model::item::function::FunctionRole;
+use regseq_model::semantic::body::SemanticBody;
+use regseq_model::semantic::expr::Expr;
+use regseq_model::semantic::local::LocalId;
+use regseq_model::semantic::model::SemanticModel;
+use regseq_model::semantic::stmt::Stmt;
+
 use crate::lowering::plan::DriverLoweringPlan;
 
 use super::c_ast::{generated_file_banner, CTopLevelItem, CTranslationUnit};
-use super::emit_behavior::{
-    emit_behavior_nodes, interrupt_class_define, register_offset_define, EmitContext,
+use super::emit_semantic::{
+    emit_body_stmts, interrupt_class_define, register_offset_define, semantic_type_to_c,
+    ReturnMode, SemanticEmitContext,
 };
 use super::plan::{
     LinuxBackendPlan, LinuxCallbackGroup, LinuxFileRole, LinuxProbeStep, LinuxRemoveStep,
-    LinuxUartOpsBody,
+    LinuxUartOpsBody, ReturnAdaptation,
 };
 
 /// Emit the module integration file with real C code.
@@ -189,9 +197,10 @@ fn emit_includes(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan) {
     }
 }
 
-/// Emit constants derived from plan data.
+/// Emit constants derived from plan data and the semantic model.
 ///
 /// Interrupt class masks come from `portable.behavior.interrupt_classes`.
+/// Authored constants come from `portable.behavior.constants`.
 /// Property defaults come from `plan.property_realization[].default_literal`.
 /// Port type comes from `plan.serial_core.port_type`.
 fn emit_constants(
@@ -206,12 +215,33 @@ fn emit_constants(
         "Constants -- Regseq lowered".into(),
     ));
 
-    // Interrupt class masks from plan data.
+    // Interrupt class masks from semantic model.
     for class in &portable.behavior.interrupt_classes {
         tu.push(CTopLevelItem::Define {
             name: interrupt_class_define(&upper, &class.name),
             value: Some(format!("{:#06x}U", class.mask_value)),
         });
+    }
+
+    // Authored constants from semantic model (only when populated).
+    for cdef in &portable.behavior.constants {
+        if let Some(ref val) = cdef.value {
+            let val_str = match val {
+                regseq_model::item::constant::ConstValue::Integer(i) => format!("{i}"),
+                regseq_model::item::constant::ConstValue::Bool(b) => {
+                    if *b {
+                        "1".into()
+                    } else {
+                        "0".into()
+                    }
+                }
+                regseq_model::item::constant::ConstValue::Str(s) => format!("\"{s}\""),
+            };
+            tu.push(CTopLevelItem::Define {
+                name: cdef.stable_name.clone(),
+                value: Some(val_str),
+            });
+        }
     }
 
     // Property default values from authored default literals.
@@ -265,13 +295,13 @@ fn emit_register_accessors(tu: &mut CTranslationUnit, snake: &str) {
     });
 }
 
-/// Build an EmitContext from plans.
-fn make_emit_context<'a>(
+/// Build a SemanticEmitContext from plans and a function's locals.
+fn make_semantic_context<'a>(
     plan: &'a LinuxBackendPlan,
     portable: &'a DriverLoweringPlan,
     snake: &'a str,
-    role: Option<FunctionRole>,
-) -> EmitContext<'a> {
+    body: &'a SemanticBody,
+) -> SemanticEmitContext<'a> {
     let reg_prefix = plan
         .register_layout
         .blocks
@@ -279,22 +309,25 @@ fn make_emit_context<'a>(
         .map(|b| b.reg_prefix.as_str())
         .unwrap_or("REG");
 
-    EmitContext {
+    SemanticEmitContext {
         snake,
         upper: snake.to_uppercase(),
         reg_prefix,
-        behavior: &portable.behavior,
         register_layout: &plan.register_layout,
-        current_role: role,
+        model: &portable.behavior,
+        locals: &body.locals,
     }
 }
 
-/// Find a FunctionBehavior by role.
-fn find_behavior_by_role(behavior: &BehaviorPlan, role: FunctionRole) -> Option<&FunctionBehavior> {
-    behavior.functions.iter().find(|f| f.role == role)
+/// Find a FunctionDef by role in the semantic model.
+fn find_function_by_role<'a>(
+    model: &'a SemanticModel,
+    role: &FunctionRole,
+) -> Option<&'a regseq_model::item::function::FunctionDef> {
+    model.functions.iter().find(|f| &f.role == role)
 }
 
-/// Emit helper functions from the behavior plan.
+/// Emit helper functions from the semantic model.
 ///
 /// Emits forward declarations first (from the same source as definitions)
 /// to ensure helpers can be called before their definition.
@@ -304,29 +337,40 @@ fn emit_helper_functions(
     portable: &DriverLoweringPlan,
     snake: &str,
 ) {
-    // Collect all helper functions from the behavior mapping.
-    let helpers: Vec<&FunctionBehavior> = plan
+    emit_helper_functions_semantic(tu, plan, portable, snake);
+}
+
+/// Emit helper functions from the semantic model (canonical path).
+fn emit_helper_functions_semantic(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+) {
+    // Collect helper function defs from the semantic model via the behavior mapping.
+    let helper_names: Vec<&str> = plan
         .behavior_mapping
         .callback_mappings
         .iter()
         .filter(|m| m.group == LinuxCallbackGroup::Helper)
-        .filter_map(|m| {
-            portable
-                .behavior
-                .functions
-                .iter()
-                .find(|f| f.name == m.portable_function)
-        })
+        .map(|m| m.portable_function.as_str())
         .collect();
 
-    // Emit forward declarations (same source as definitions).
+    let helpers: Vec<&regseq_model::item::function::FunctionDef> = portable
+        .behavior
+        .functions
+        .iter()
+        .filter(|f| helper_names.contains(&f.name.as_str()))
+        .collect();
+
+    // Emit forward declarations.
     if !helpers.is_empty() {
         tu.push(CTopLevelItem::LineComment(
             "Helper forward declarations".into(),
         ));
         for func in &helpers {
-            let ret_ty = helper_return_type(func);
-            let param_str = build_c_param_list(snake, func);
+            let ret_ty = semantic_type_to_c(&func.body.return_type, snake);
+            let param_str = build_semantic_param_list(snake, &func.body);
             tu.push(CTopLevelItem::Raw(format!(
                 "static {ret_ty} {snake}_{}({param_str});",
                 func.name
@@ -337,10 +381,12 @@ fn emit_helper_functions(
 
     // Emit function bodies.
     for func in &helpers {
-        let ctx = make_emit_context(plan, portable, snake, Some(func.role.clone()));
-        let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
-        let ret_ty = helper_return_type(func);
-        let param_str = build_c_param_list(snake, func);
+        let body = &func.body;
+        let ctx = make_semantic_context(plan, portable, snake, body);
+        let all_param_ids: HashSet<LocalId> = body.params.iter().copied().collect();
+        let body_lines = emit_body_stmts(body, &ctx, &all_param_ids, &ReturnMode::Direct);
+        let ret_ty = semantic_type_to_c(&body.return_type, snake);
+        let param_str = build_semantic_param_list(snake, body);
         tu.push(CTopLevelItem::FuncDef {
             signature: format!("static {ret_ty} {snake}_{}({param_str})", func.name),
             body: body_lines,
@@ -350,81 +396,77 @@ fn emit_helper_functions(
     }
 }
 
-/// Map a portable return type to its C representation for helpers.
-fn helper_return_type(func: &FunctionBehavior) -> &'static str {
-    match &func.return_type {
-        None => "void",
-        Some(PortableType::Bool) => "bool",
-        Some(PortableType::U8) => "u8",
-        Some(PortableType::U16) => "u16",
-        Some(PortableType::U32) => "u32",
-        Some(PortableType::U64) => "u64",
-        Some(PortableType::I8) => "s8",
-        Some(PortableType::I16) => "s16",
-        Some(PortableType::I32) => "s32",
-        Some(PortableType::I64) => "s64",
-        Some(PortableType::Opaque(_)) => "int",
-    }
-}
-
-/// Build the C parameter list for a helper function.
+/// Build the C parameter list for a function from its SemanticBody.
 ///
-/// Always starts with `struct {snake}_data *d` (the driver state),
-/// then appends any additional authored parameters.
-fn build_c_param_list(snake: &str, func: &FunctionBehavior) -> String {
-    let mut parts = vec![format!("struct {snake}_data *d")];
-    for p in &func.params {
-        let c_ty = portable_type_to_c(&p.ty);
-        parts.push(format!("{c_ty} {}", p.name));
-    }
-    parts.join(", ")
-}
+/// The self parameter (DriverData) is always `struct {snake}_data *d`.
+/// Additional authored parameters use their semantic local names and types.
+fn build_semantic_param_list(snake: &str, body: &SemanticBody) -> String {
+    use regseq_model::semantic::types::SemanticType;
 
-/// Map a `PortableType` to a C type string.
-fn portable_type_to_c(ty: &PortableType) -> &'static str {
-    match ty {
-        PortableType::U8 => "u8",
-        PortableType::U16 => "u16",
-        PortableType::U32 => "u32",
-        PortableType::U64 => "u64",
-        PortableType::I8 => "s8",
-        PortableType::I16 => "s16",
-        PortableType::I32 => "s32",
-        PortableType::I64 => "s64",
-        PortableType::Bool => "bool",
-        PortableType::Opaque(_) => "u32",
+    let mut parts = Vec::new();
+    for &param_id in &body.params {
+        let local = &body.locals[param_id.0 as usize];
+        if matches!(local.ty, SemanticType::DriverData) {
+            parts.push(format!("struct {snake}_data *d"));
+        } else {
+            let c_ty = semantic_type_to_c(&local.ty, snake);
+            parts.push(format!("{c_ty} {}", local.name));
+        }
+    }
+    if parts.is_empty() {
+        "void".into()
+    } else {
+        parts.join(", ")
     }
 }
 
-/// Emit ISR handler from behavior plan.
+/// Emit ISR handler from the semantic model.
 fn emit_isr_handler(
     tu: &mut CTranslationUnit,
     plan: &LinuxBackendPlan,
     portable: &DriverLoweringPlan,
     snake: &str,
 ) {
-    let isr_func = find_behavior_by_role(&portable.behavior, FunctionRole::Isr);
+    emit_isr_handler_semantic(tu, plan, portable, snake);
+}
+
+/// Emit ISR handler from the semantic model (canonical path).
+fn emit_isr_handler_semantic(
+    tu: &mut CTranslationUnit,
+    plan: &LinuxBackendPlan,
+    portable: &DriverLoweringPlan,
+    snake: &str,
+) {
+    // Find ISR function via FunctionRole::Isr { .. }.
+    let isr_func = portable
+        .behavior
+        .functions
+        .iter()
+        .find(|f| matches!(&f.role, FunctionRole::Isr { .. }));
 
     let body = if let Some(func) = isr_func {
-        let ctx = make_emit_context(plan, portable, snake, Some(FunctionRole::Isr));
-        let mut lines = vec![
-            format!("struct {snake}_data *d = dev_id;"),
-            "u32 status;".into(),
-            String::new(),
-        ];
+        let semantic_body = &func.body;
+        let ctx = make_semantic_context(plan, portable, snake, semantic_body);
 
-        // Read the interrupt status register — derived from behavior plan.
-        let status_define = find_isr_status_register_define(plan, func, &ctx);
-        lines.push(format!("status = {snake}_reg_read(d, {status_define});"));
-        lines.push("if (status == 0)".into());
-        lines.push("\treturn IRQ_NONE;".into());
-        lines.push(String::new());
+        let mut lines = vec![format!("struct {snake}_data *d = dev_id;")];
 
-        // Walk the behavior tree for the ISR body.
-        let body_lines = emit_behavior_nodes(&func.body, &ctx, 0);
+        // Find the ISR status register by walking Stmt/Expr trees for first RegReadRaw.
+        if let Some(reg_name) = find_first_semantic_reg_read_raw(&semantic_body.body) {
+            let status_define = register_offset_define(ctx.reg_prefix, &reg_name);
+            lines.push("u32 status;".into());
+            lines.push(String::new());
+            lines.push(format!("status = {snake}_reg_read(d, {status_define});"));
+            lines.push("if (status == 0)".into());
+            lines.push("\treturn IRQ_NONE;".into());
+            lines.push(String::new());
+        }
+
+        // Emit the full semantic body with all params excluded (self + dev_id).
+        let all_param_ids: HashSet<LocalId> = semantic_body.params.iter().copied().collect();
+        let body_lines = emit_body_stmts(semantic_body, &ctx, &all_param_ids, &ReturnMode::Direct);
         lines.extend(body_lines);
 
-        // If the behavior tree didn't emit a return, add one.
+        // If the body didn't emit a return, add one.
         if !lines.iter().any(|l| l.contains("return IRQ_HANDLED")) {
             lines.push(String::new());
             lines.push("return IRQ_HANDLED;".into());
@@ -454,10 +496,11 @@ fn emit_uart_ops(
 ) {
     for entry in &plan.uart_ops_realization {
         let body = match &entry.body_source {
-            LinuxUartOpsBody::FromPortableRole(role) => {
-                let func = find_behavior_by_role(&portable.behavior, role.clone());
+            LinuxUartOpsBody::DirectBody { role } => {
+                let func = find_function_by_role(&portable.behavior, role);
                 if let Some(func) = func {
-                    let ctx = make_emit_context(plan, portable, snake, Some(role.clone()));
+                    let semantic_body = &func.body;
+                    let ctx = make_semantic_context(plan, portable, snake, semantic_body);
                     let mut lines = Vec::new();
                     if entry.needs_container_of {
                         lines.push(format!(
@@ -465,8 +508,73 @@ fn emit_uart_ops(
                         ));
                         lines.push(String::new());
                     }
-                    lines.extend(emit_behavior_nodes(&func.body, &ctx, 0));
-                    if !entry.trailing.is_empty()
+                    let all_param_ids: HashSet<LocalId> =
+                        semantic_body.params.iter().copied().collect();
+                    lines.extend(emit_body_stmts(
+                        semantic_body,
+                        &ctx,
+                        &all_param_ids,
+                        &ReturnMode::Direct,
+                    ));
+                    lines
+                } else {
+                    emit_stub_body(entry, snake)
+                }
+            }
+            LinuxUartOpsBody::WrappedBody {
+                role,
+                param_bindings,
+                return_adaptation,
+            } => {
+                let func = find_function_by_role(&portable.behavior, role);
+                if let Some(func) = func {
+                    let semantic_body = &func.body;
+                    let ctx = make_semantic_context(plan, portable, snake, semantic_body);
+                    let mut lines = Vec::new();
+                    if entry.needs_container_of {
+                        lines.push(format!(
+                            "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+                        ));
+                    }
+
+                    // Emit parameter bindings.
+                    for binding in param_bindings {
+                        lines.push(format!(
+                            "{} {} = {};",
+                            binding.c_type, binding.semantic_name, binding.c_expr
+                        ));
+                    }
+                    if entry.needs_container_of || !param_bindings.is_empty() {
+                        lines.push(String::new());
+                    }
+
+                    // Determine return mode from adaptation.
+                    let return_mode = match return_adaptation {
+                        Some(ReturnAdaptation::BoolToUint {
+                            true_value,
+                            false_value,
+                        }) => ReturnMode::BoolToUint {
+                            true_value: true_value.clone(),
+                            false_value: false_value.clone(),
+                        },
+                        Some(ReturnAdaptation::ResultToInt) => ReturnMode::ResultToInt,
+                        Some(ReturnAdaptation::DropResult) => ReturnMode::DropResult,
+                        None => ReturnMode::Direct,
+                    };
+
+                    let all_param_ids: HashSet<LocalId> =
+                        semantic_body.params.iter().copied().collect();
+                    lines.extend(emit_body_stmts(
+                        semantic_body,
+                        &ctx,
+                        &all_param_ids,
+                        &return_mode,
+                    ));
+
+                    // For ResultToInt: append trailing "return 0;" if body didn't
+                    // already emit a return.
+                    if matches!(return_adaptation, Some(ReturnAdaptation::ResultToInt))
+                        && !entry.trailing.is_empty()
                         && !lines.iter().any(|l| l.trim_start().starts_with("return"))
                     {
                         lines.push(String::new());
@@ -474,16 +582,7 @@ fn emit_uart_ops(
                     }
                     lines
                 } else {
-                    // No authored behavior for this role — use trailing as default.
-                    let mut lines = Vec::new();
-                    if entry.needs_container_of {
-                        lines.push(format!(
-                            "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
-                        ));
-                        lines.push("(void)d;".into());
-                    }
-                    lines.extend(entry.trailing.iter().cloned());
-                    lines
+                    emit_stub_body(entry, snake)
                 }
             }
             LinuxUartOpsBody::Stub { lines } => {
@@ -921,72 +1020,97 @@ fn emit_module_init_exit(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, sna
 }
 
 // ---------------------------------------------------------------------------
-// Register layout helpers
+// Semantic model helpers
 // ---------------------------------------------------------------------------
 
-/// Find the ISR status register define from the behavior plan.
-///
-/// Walks the ISR body for the first `RegReadRaw` node to identify the
-/// status register. Falls back to searching the register layout for
-/// common interrupt-status naming patterns.
-fn find_isr_status_register_define(
-    plan: &LinuxBackendPlan,
-    isr_func: &FunctionBehavior,
-    ctx: &EmitContext<'_>,
-) -> String {
-    // Primary: find the first RegReadRaw in the ISR behavior body.
-    if let Some(reg) = find_first_reg_read_raw(&isr_func.body) {
-        return register_offset_define(ctx.reg_prefix, &reg);
+/// Generate a stub body for an unrealized uart_ops entry.
+fn emit_stub_body(entry: &super::plan::LinuxUartOpsEntry, snake: &str) -> Vec<String> {
+    let mut lines = Vec::new();
+    if entry.needs_container_of {
+        lines.push(format!(
+            "struct {snake}_data *d = container_of(port, struct {snake}_data, port);"
+        ));
+        lines.push("(void)d;".into());
     }
-
-    // Fallback: search register layout for fields with interrupt-status patterns.
-    for block in &plan.register_layout.blocks {
-        for field in &block.fields {
-            let upper = field.name.to_uppercase();
-            if upper.contains("MIS")
-                || upper.contains("ISR")
-                || upper.contains("INT_STATUS")
-                || upper.contains("INTSTS")
-            {
-                return register_offset_define(&block.reg_prefix, &field.name);
-            }
-        }
-    }
-
-    // Ultimate fallback: construct from first block prefix.
-    let prefix = plan
-        .register_layout
-        .blocks
-        .first()
-        .map(|b| b.reg_prefix.as_str())
-        .unwrap_or("REG");
-    format!("{prefix}_INT_STATUS")
+    lines.extend(entry.trailing.iter().cloned());
+    lines
 }
 
-/// Walk behavior nodes to find the first `RegReadRaw` node.
-fn find_first_reg_read_raw(nodes: &[BehaviorNode]) -> Option<String> {
-    for node in nodes {
-        match node {
-            BehaviorNode::RegReadRaw { register } => return Some(register.clone()),
-            BehaviorNode::Branch {
-                then_body,
-                else_body,
-                ..
-            } => {
-                if let Some(r) = find_first_reg_read_raw(then_body) {
-                    return Some(r);
-                }
-                if let Some(r) = find_first_reg_read_raw(else_body) {
-                    return Some(r);
-                }
-            }
-            BehaviorNode::OrderedSequence { steps } => {
-                if let Some(r) = find_first_reg_read_raw(steps) {
-                    return Some(r);
-                }
-            }
-            _ => {}
+/// Walk Stmt/Expr trees to find the first `Expr::RegReadRaw` register name.
+fn find_first_semantic_reg_read_raw(block: &regseq_model::semantic::body::Block) -> Option<String> {
+    for stmt in &block.stmts {
+        if let Some(name) = find_reg_read_raw_in_stmt(stmt) {
+            return Some(name);
         }
     }
     None
+}
+
+/// Recursively search a statement for an `Expr::RegReadRaw`.
+fn find_reg_read_raw_in_stmt(stmt: &Stmt) -> Option<String> {
+    match stmt {
+        Stmt::Let { value, .. } => find_reg_read_raw_in_expr(value),
+        Stmt::Assign { value, .. } => find_reg_read_raw_in_expr(value),
+        Stmt::CompoundAssign { value, .. } => find_reg_read_raw_in_expr(value),
+        Stmt::Eval { expr } => find_reg_read_raw_in_expr(expr),
+        Stmt::Branch {
+            condition,
+            then_body,
+            else_body,
+        } => find_reg_read_raw_in_expr(condition)
+            .or_else(|| find_first_semantic_reg_read_raw(then_body))
+            .or_else(|| find_first_semantic_reg_read_raw(else_body)),
+        Stmt::Loop { condition, body } => {
+            find_reg_read_raw_in_expr(condition).or_else(|| find_first_semantic_reg_read_raw(body))
+        }
+        Stmt::OrderedRegion { body } => find_first_semantic_reg_read_raw(body),
+        Stmt::FallibleOp {
+            body,
+            cleanup_on_error,
+            ..
+        } => find_first_semantic_reg_read_raw(body)
+            .or_else(|| find_first_semantic_reg_read_raw(cleanup_on_error)),
+        Stmt::Return { value } => value.as_ref().and_then(find_reg_read_raw_in_expr),
+        Stmt::RegWrite { .. } | Stmt::RegModify { .. } => None,
+        Stmt::ResourceOp { .. } => None,
+        Stmt::FieldAssign { value, .. } => find_reg_read_raw_in_expr(value),
+        Stmt::SubsystemAction { args, .. } => {
+            for arg in args {
+                if let Some(name) = find_reg_read_raw_in_expr(arg) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+    }
+}
+
+/// Recursively search an expression for an `Expr::RegReadRaw`.
+fn find_reg_read_raw_in_expr(expr: &Expr) -> Option<String> {
+    match expr {
+        Expr::RegReadRaw { register } => Some(register.name.clone()),
+        Expr::BinaryOp { lhs, rhs, .. } => {
+            find_reg_read_raw_in_expr(lhs).or_else(|| find_reg_read_raw_in_expr(rhs))
+        }
+        Expr::UnaryOp { operand, .. } => find_reg_read_raw_in_expr(operand),
+        Expr::Cast { expr, .. } => find_reg_read_raw_in_expr(expr),
+        Expr::RegFieldRead { .. } => None,
+        Expr::FieldExtract { raw_value, .. } => find_reg_read_raw_in_expr(raw_value),
+        Expr::HelperCall { args, .. } => {
+            for arg in args {
+                if let Some(name) = find_reg_read_raw_in_expr(arg) {
+                    return Some(name);
+                }
+            }
+            None
+        }
+        Expr::WithDefault { value, default } => {
+            find_reg_read_raw_in_expr(value).or_else(|| find_reg_read_raw_in_expr(default))
+        }
+        Expr::InterruptClassTest { status, .. } => find_reg_read_raw_in_expr(status),
+        Expr::IsSome { inner } | Expr::OptionSome { inner } | Expr::OptionUnwrap { inner } => {
+            find_reg_read_raw_in_expr(inner)
+        }
+        _ => None,
+    }
 }

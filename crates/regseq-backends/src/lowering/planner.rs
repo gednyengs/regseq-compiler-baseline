@@ -1,14 +1,23 @@
 //! Portable lowering planner.
 //!
-//! Converts an `AnalysisInput` into a `DriverLoweringPlan`. This is the
-//! first planner boundary: it extracts and restructures driver semantics
-//! into a form that OS-specific backend planners can consume without
-//! re-walking the raw models.
+//! Converts an `AnalysisInput` into a `DriverLoweringPlan`. The canonical
+//! entry point is `build_driver_lowering_plan_from_hierarchy`, which
+//! projects a real `SemanticModel` from a populated item hierarchy.
+//!
+//! The older `build_driver_lowering_plan` / `build_driver_lowering_plan_with_constants`
+//! signatures are retained for workspace compilation with `regseq-driver`
+//! (out of scope for the Phase 2C migration). They are not part of the
+//! semantic-model migration and should not be used for new work.
+
+use std::collections::BTreeSet;
 
 use regseq_analysis::AnalysisInput;
 use regseq_model::declaration::callbacks::CallbackFamily;
+use regseq_model::item::identity::ItemId;
+use regseq_model::semantic::SemanticModel;
 
 use super::behavior_planner::build_behavior_plan_with_constants;
+use super::hierarchy::ItemHierarchy;
 use super::plan::{
     AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry,
     CallbackInventory, ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity,
@@ -18,6 +27,7 @@ use super::plan::{
     RegisterObligations, ResetObligation, ResourceKind, ResourceObligations, ResourcePolicy,
     SyncFieldObligation, SynchronizationObligations, TeardownStep,
 };
+use super::projection::project_semantic_model;
 
 /// Errors that can occur during portable lowering plan construction.
 #[derive(Debug, thiserror::Error)]
@@ -55,28 +65,72 @@ pub enum LoweringPlanError {
     },
 }
 
-/// Build a portable `DriverLoweringPlan` from an `AnalysisInput`.
+// ---------------------------------------------------------------------------
+// Canonical entry point (Phase 2C semantic-model path)
+// ---------------------------------------------------------------------------
+
+/// Build a `DriverLoweringPlan` from analysis input and a populated item
+/// hierarchy.
 ///
-/// This is the primary entry point for the portable lowering layer.
-/// The resulting plan captures all driver obligations in a backend-neutral
-/// form so that OS-specific backend planners do not need to re-derive
-/// semantics from the raw declaration/joined models.
+/// This is the canonical plan builder. `SemanticModel` is projected from
+/// the hierarchy and becomes `plan.behavior`. The legacy `BehaviorPlan`
+/// is built alongside into `plan.legacy_behavior` for transitional Linux
+/// emitter compatibility.
+pub fn build_driver_lowering_plan_from_hierarchy(
+    input: &AnalysisInput,
+    hierarchy: &ItemHierarchy,
+    lowered_functions: &BTreeSet<ItemId>,
+    constant_values: &[(String, u32)],
+) -> Result<DriverLoweringPlan, LoweringPlanError> {
+    let semantic_model = project_semantic_model(hierarchy, lowered_functions);
+
+    // Verify all interrupt classes have resolved mask values.
+    let unresolved: Vec<String> = semantic_model
+        .interrupt_classes
+        .iter()
+        .filter(|c| c.mask_value == 0 && c.name != "all")
+        .map(|c| c.name.clone())
+        .collect();
+    if !unresolved.is_empty() {
+        return Err(LoweringPlanError::UnresolvedInterruptMasks {
+            class_names: unresolved,
+        });
+    }
+
+    let legacy_behavior = build_behavior_plan_with_constants(input, constant_values);
+    let base = build_plan_base(input)?;
+
+    Ok(DriverLoweringPlan {
+        identity: base.identity,
+        callbacks: base.callbacks,
+        resources: base.resources,
+        acquisition_order: base.acquisition_order,
+        teardown_order: base.teardown_order,
+        device_class_roles: base.device_class_roles,
+        register_obligations: base.register_obligations,
+        synchronization: base.synchronization,
+        callback_actions: base.callback_actions,
+        behavior: semantic_model,
+        legacy_behavior,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Retained compat shims (workspace compilation with regseq-driver)
+// ---------------------------------------------------------------------------
+
+/// Retained for workspace compilation with `regseq-driver`.
 ///
-/// When the MIR body data carries resolved scalar constants (the normal
-/// pipeline path), interrupt class masks are extracted directly and no
-/// external constant values are needed. When MIR bodies have unevaluated
-/// symbolic references, use `build_driver_lowering_plan_with_constants`
-/// instead to provide the authored constant values.
+/// Not part of the semantic-model migration. Use
+/// `build_driver_lowering_plan_from_hierarchy` for the canonical path.
 pub fn build_driver_lowering_plan(
     input: &AnalysisInput,
 ) -> Result<DriverLoweringPlan, LoweringPlanError> {
     let plan = build_driver_lowering_plan_with_constants(input, &[])?;
 
     // Verify all interrupt classes have resolved mask values.
-    // If any remain at zero (excluding the synthetic "all" class),
-    // the MIR body does not carry enough data for the default path.
     let unresolved: Vec<String> = plan
-        .behavior
+        .legacy_behavior
         .interrupt_classes
         .iter()
         .filter(|c| c.mask_value == 0 && c.name != "all")
@@ -91,17 +145,54 @@ pub fn build_driver_lowering_plan(
     Ok(plan)
 }
 
-/// Build a portable `DriverLoweringPlan` with explicit authored constant values.
+/// Retained for workspace compilation with `regseq-driver`.
 ///
-/// The `constant_values` map provides `(constant_path, value)` pairs for
-/// resolving interrupt class mask values when MIR bodies use symbolic
-/// constant names (e.g., `"Self::RX_INTERRUPT_MASK"`) rather than resolved
-/// scalar values. When MIR bodies carry literal scalar values, this map
-/// may be empty and the resolution is a no-op.
+/// Not part of the semantic-model migration. Use
+/// `build_driver_lowering_plan_from_hierarchy` for the canonical path.
 pub fn build_driver_lowering_plan_with_constants(
     input: &AnalysisInput,
     constant_values: &[(String, u32)],
 ) -> Result<DriverLoweringPlan, LoweringPlanError> {
+    let legacy_behavior = build_behavior_plan_with_constants(input, constant_values);
+    let base = build_plan_base(input)?;
+
+    Ok(DriverLoweringPlan {
+        identity: base.identity,
+        callbacks: base.callbacks,
+        resources: base.resources,
+        acquisition_order: base.acquisition_order,
+        teardown_order: base.teardown_order,
+        device_class_roles: base.device_class_roles,
+        register_obligations: base.register_obligations,
+        synchronization: base.synchronization,
+        callback_actions: base.callback_actions,
+        behavior: SemanticModel {
+            functions: Vec::new(),
+            constants: Vec::new(),
+            interrupt_classes: Vec::new(),
+        },
+        legacy_behavior,
+    })
+}
+
+// ---------------------------------------------------------------------------
+// Shared plan-construction helper
+// ---------------------------------------------------------------------------
+
+/// Non-behavior fields of a `DriverLoweringPlan`, built from `AnalysisInput`.
+struct PlanBase {
+    identity: DriverIdentity,
+    callbacks: CallbackInventory,
+    resources: ResourceObligations,
+    acquisition_order: Vec<AcquisitionStep>,
+    teardown_order: Vec<TeardownStep>,
+    device_class_roles: DeviceClassRoles,
+    register_obligations: RegisterObligations,
+    synchronization: SynchronizationObligations,
+    callback_actions: Vec<CallbackBodyPlan>,
+}
+
+fn build_plan_base(input: &AnalysisInput) -> Result<PlanBase, LoweringPlanError> {
     let identity = build_identity(input);
     let callbacks = build_callback_inventory(input);
     let resources = build_resource_obligations(input)?;
@@ -111,9 +202,8 @@ pub fn build_driver_lowering_plan_with_constants(
     let register_obligations = build_register_obligations(input);
     let synchronization = build_sync_obligations(input);
     let callback_actions = build_callback_actions(input);
-    let behavior = build_behavior_plan_with_constants(input, constant_values);
 
-    Ok(DriverLoweringPlan {
+    Ok(PlanBase {
         identity,
         callbacks,
         resources,
@@ -123,7 +213,6 @@ pub fn build_driver_lowering_plan_with_constants(
         register_obligations,
         synchronization,
         callback_actions,
-        behavior,
     })
 }
 

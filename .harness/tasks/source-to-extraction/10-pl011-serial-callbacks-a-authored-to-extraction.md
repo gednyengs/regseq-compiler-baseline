@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/10-serial-callbacks-extraction-a.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs`
 
 Modify if needed:
 
@@ -62,8 +65,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +78,14 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-10`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- for `port_open` and `configure`, prove `?` propagation and exact
+  `program_polling_port` argument flow, not just helper-call presence
+- for `configure`, prove `_config` remains opaque and unused
+- for `tx_byte`, prove the exact fast-path vs staged-path split, including
+  immediate write-and-return versus `pending_tx = Some(byte)` followed by
+  `enable_tx_interrupts()`
+- for `rx_char`, prove single raw `DR` read reuse and exact OE/BE/PE/FE to
+  `ErrorKind::{OVERRUN,BREAK,PARITY,FRAMING}` mapping
 
 This task should not:
 
@@ -127,8 +138,11 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- serial-callback body checks only pass if path splits, propagation behavior,
+  and payload/error mapping are proven directly where in scope
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the serial-callbacks-A boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

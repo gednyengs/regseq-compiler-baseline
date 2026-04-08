@@ -10,7 +10,7 @@ environment-backed guest smoke path:
 
 This task is the first guest/environment-backed validation gate for Phase D.
 The host-side generated-module build gate is handled earlier by
-`track-a-validation-11`.
+`pl011-linux-validation-11`.
 
 ## Input Context
 
@@ -18,7 +18,7 @@ Read before starting:
 
 - `.harness/tasks/regseq-linux-backend/02-pl011-linux-driver-emission-for-supported-slice.md`
 - `.harness/tasks/track-a-validation/10-pl011-full-spec-lowering-completeness-and-backend-independence-proof.md`
-- `.harness/tasks/track-a-validation/11-generated-pl011-linux-module-host-build-proof.md`
+- `.harness/tasks/track-a-validation/11-pl011-linux-module-host-build-proof.md`
 - `docs/discussions/evaluation-environment/pl011-linux-smoke-contract.md`
 - `docs/discussions/evaluation-environment/pl011-project-controlled-kernel-strategy.md`
 - `docs/discussions/evaluation-environment/current-resolutions-and-strategy.md`
@@ -122,7 +122,7 @@ The smoke proof should explicitly cover:
   - capture deterministic guest log evidence
 
 This task may reuse retained build artifacts and logs from
-`track-a-validation-11` instead of repeating the host-side compile proof
+`pl011-linux-validation-11` instead of repeating the host-side compile proof
 inline.
 
 This task should treat the second-UART smoke path as the required gate.
@@ -151,7 +151,7 @@ Add validation to verify:
 
 Test commands should include the relevant guest smoke commands or narrow
 wrappers for them, and may reference retained host-build artifacts from
-`track-a-validation-11`.
+`pl011-linux-validation-11`.
 
 ## Acceptance Criteria
 

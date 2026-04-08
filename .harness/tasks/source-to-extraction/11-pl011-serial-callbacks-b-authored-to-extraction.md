@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/11-serial-callbacks-extraction-b.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_11_serial_callbacks_b.rs`
 
 Modify if needed:
 
@@ -54,6 +57,9 @@ This task should:
 - execute the check specification exactly as written
 - verify that the authored facts copied into the check file still match the
   actual fixture source before judging extraction outcomes
+- if the check contract, authored-source document, and fixture source diverge,
+  fail fast with a blocking authored-source discrepancy instead of silently
+  substituting a different premise
 - if using a reduced or inline specimen, add an explicit precondition test that
   compares it against the real fixture source for every authored fact relevant
   to the checks in scope
@@ -62,8 +68,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +81,12 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-11`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- prove callback-specific predicates exactly:
+  - `tx_ready`: exact `FR.TXFF` predicate logic
+  - `tx_empty`: exact `FR.BUSY` predicate logic
+  - `flush_rx_fifo`: exact loop on `FR.RXFE == 0` and `dr.read_raw()` drain
+  - `flush_tx_fifo`: exactly two ordered `FEN` modifies, DISABLED then ENABLED
+  - `send_break`: exact `on: bool` branch mapping to `BRK::ENABLED` / `BRK::DISABLED`
 
 This task should not:
 
@@ -84,6 +96,8 @@ This task should not:
   the automated test does not actually inspect
 - continue with extraction `pass` claims if the authored facts in the check
   file disagree with the fixture source
+- continue if the check contract diverges from the authored-source document or
+  fixture on callback-specific predicates
 - continue with extraction `pass` claims when reduced-specimen fidelity has not
   been established by exercised evidence against the real fixture source
 - use tautological or non-falsifiable assertions as exercised evidence
@@ -127,8 +141,11 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- callback-specific body checks only pass if the exact field identity, ordered
+  transitions, and branch-to-value mapping are proven directly
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the serial-callbacks-B boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

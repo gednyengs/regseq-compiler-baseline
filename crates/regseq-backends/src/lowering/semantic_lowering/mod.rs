@@ -171,14 +171,18 @@ pub fn populate_hierarchy(
 /// This is the Phase 2B entry point. Takes a Phase 2A hierarchy (with empty
 /// bodies) and the `AnalysisInput` (carrying MIR), and returns a new
 /// `ItemHierarchy` with populated `SemanticBody` on each lowered
-/// `FunctionDef`.
+/// `FunctionDef`, together with the set of `ItemId`s whose bodies were
+/// populated.
 ///
 /// Non-lowered functions (those without MIR bodies in the input) retain
 /// `SemanticBody::empty()`.
+///
+/// The returned `BTreeSet<ItemId>` identifies the lowered function set
+/// for downstream projection into `SemanticModel`.
 pub fn lower_and_populate_hierarchy(
     hierarchy: &ItemHierarchy,
     input: &AnalysisInput,
-) -> Result<ItemHierarchy, SemanticLoweringError> {
+) -> Result<(ItemHierarchy, BTreeSet<ItemId>), SemanticLoweringError> {
     // Step 1: Discover and materialize external items.
     let augmented = external_items::discover_and_materialize(hierarchy, input)?;
 
@@ -234,5 +238,6 @@ pub fn lower_and_populate_hierarchy(
         lowered.insert(func_id, body);
     }
 
-    Ok(populate_hierarchy(&augmented, &lowered))
+    let lowered_ids: BTreeSet<ItemId> = lowered.keys().cloned().collect();
+    Ok((populate_hierarchy(&augmented, &lowered), lowered_ids))
 }

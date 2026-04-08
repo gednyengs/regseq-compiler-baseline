@@ -303,7 +303,7 @@ Add tests to verify:
    the later host-build gate runs
 9. emitted code contains no raw Rust path syntax, generic Rust syntax, or raw
    MIR local names in final C output
-10. canonical compiler-driven host-build evidence from `track-a-validation-11`
+10. canonical compiler-driven host-build evidence from `pl011-linux-validation-11`
     no longer surfaces producer-side behavioral-emission defects attributable
     to this task
 

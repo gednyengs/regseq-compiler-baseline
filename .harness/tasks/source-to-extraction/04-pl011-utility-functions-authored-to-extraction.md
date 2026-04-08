@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/04-utility-functions-extraction.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs`
 
 Modify if needed:
 
@@ -57,13 +60,16 @@ This task should:
 - if using a reduced or inline specimen, add an explicit precondition test that
   compares it against the real fixture source for every authored fact relevant
   to the checks in scope
+- if canonical path is in scope, preserve the authored module nesting in the
+  specimen or explicitly downgrade the result; name-only or suffix-only path
+  evidence is not enough for `pass`
 - validate against the current compiler-side extraction state rather than
   treating `raw-frontend.json` as the primary boundary artifact
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +81,9 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-04`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- if body extraction for free functions is absent, fail with a surface-local
+  explanation tied to root discovery; do not replace that proof with source
+  inspection or narrative reasoning
 
 This task should not:
 
@@ -127,8 +136,13 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- canonical-path checks only pass if the specimen preserves the authored module
+  shape or the full path is otherwise proven exactly
+- free-function body checks must inspect actual body-extraction roots, not a
+  hand-constructed substitute
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the utility-functions boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

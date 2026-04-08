@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/07-helper-methods-extraction-a.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_07_helper_methods_a.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_07_helper_methods_a.rs`
 
 Modify if needed:
 
@@ -62,8 +65,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +78,14 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-07`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- for body-level helper checks, provide at least one exercised assertion for
+  every authored downstream predicate; proxies like "one write exists" or "one
+  modify call exists" are not enough for an `exact` conclusion
+- assert exact register target identity, exact literal or mask values, exact
+  read/modify/write shape, and path-specific call ordering where those are part
+  of the authored predicate
+- for `program_polling_port`, prove the `ordered!` barrier anchors as well as
+  the ordered helper-call sequence inside the region
 
 This task should not:
 
@@ -127,8 +138,11 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- body-level `exact` conclusions only pass if every named downstream predicate
+  is individually exercised
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the helper-methods-A boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

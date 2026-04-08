@@ -987,7 +987,7 @@ fn mir_narrow_subset_lowers_successfully() {
         "lower_and_populate_hierarchy failed: {:?}",
         result.err()
     );
-    let populated = result.unwrap();
+    let (populated, _lowered_ids) = result.unwrap();
 
     // Narrow subset: uart_clock_hz, set_baud_rate, init
     for name in &["uart_clock_hz", "set_baud_rate", "init"] {
@@ -1008,7 +1008,7 @@ fn mir_narrow_subset_lowers_successfully() {
 fn mir_set_baud_rate_has_typed_locals_and_reg_writes() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
     let body = find_function_body(&populated, "set_baud_rate").unwrap();
 
     // Must have self as params[0].
@@ -1031,7 +1031,7 @@ fn mir_set_baud_rate_has_typed_locals_and_reg_writes() {
 fn mir_init_has_fallible_sequencing() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
     let body = find_function_body(&populated, "init").unwrap();
 
     let kinds = collect_stmt_kinds(&body.body.stmts);
@@ -1049,7 +1049,7 @@ fn mir_init_has_fallible_sequencing() {
 fn mir_full_representative_set_lowers_successfully() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
 
     let representative = [
         "uart_clock_hz",
@@ -1077,7 +1077,7 @@ fn mir_full_representative_set_lowers_successfully() {
 fn mir_uart_clock_hz_has_resource_default_semantics() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
     let body = find_function_body(&populated, "uart_clock_hz").unwrap();
 
     // Must contain a WithDefault expression whose value side is
@@ -1096,7 +1096,7 @@ fn mir_uart_clock_hz_has_resource_default_semantics() {
 fn mir_service_tx_fifo_has_option_carrier_semantics() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
     let body = find_function_body(&populated, "service_tx_fifo").unwrap();
 
     // Must contain IsSome (option presence test on pending_tx).
@@ -1118,7 +1118,7 @@ fn mir_service_tx_fifo_has_option_carrier_semantics() {
 fn mir_service_rx_fifo_has_option_carrier_semantics() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
     let body = find_function_body(&populated, "service_rx_fifo").unwrap();
 
     // Must contain a Loop (the while rx_char().is_some() loop).
@@ -1147,7 +1147,7 @@ fn mir_service_rx_fifo_has_option_carrier_semantics() {
 fn mir_handle_irq_has_interrupt_tests_and_accumulated_result() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
     let body = find_function_body(&populated, "handle_irq").unwrap();
 
     // Must have Branch statements (for interrupt class dispatch).
@@ -1191,7 +1191,7 @@ fn mir_handle_irq_has_interrupt_tests_and_accumulated_result() {
 fn mir_validation_passes_on_produced_bodies() {
     let input = make_real_analysis_input();
     let hierarchy = build_pl011_hierarchy();
-    let populated = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
+    let (populated, _lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
 
     let representative = [
         "uart_clock_hz",

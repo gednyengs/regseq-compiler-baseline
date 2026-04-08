@@ -31,10 +31,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/01-register-block-extraction.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs`
 
 Modify if needed:
 
@@ -79,8 +82,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - cite exact code locations in failure notes when a check fails
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
@@ -168,4 +171,5 @@ Suggested commands:
 - the task remains scoped to the register-block boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

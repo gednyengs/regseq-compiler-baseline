@@ -1677,7 +1677,7 @@ fn make_full_spec_input() -> AnalysisInput {
 fn make_portable_plan_with_constants() -> regseq_backends::lowering::plan::DriverLoweringPlan {
     let input = make_full_spec_input();
     let mut plan = build_driver_lowering_plan(&input).expect("lowering should succeed");
-    resolve_interrupt_class_masks(&mut plan.behavior, &authored_interrupt_constants());
+    resolve_interrupt_class_masks(&mut plan.legacy_behavior, &authored_interrupt_constants());
     plan
 }
 
@@ -1817,7 +1817,7 @@ fn proof_optional_resource_metadata_completeness() {
 fn proof_behavioral_completeness() {
     let plan = make_portable_plan_with_constants();
 
-    let b = &plan.behavior;
+    let b = &plan.legacy_behavior;
 
     // Required function roles for the supported slice.
     let required_roles = [
@@ -2193,26 +2193,31 @@ fn proof_linux_plan_behavior_from_plan() {
     let portable = build_driver_lowering_plan(&input).unwrap();
     let linux = build_linux_backend_plan(&portable).unwrap();
 
+    // The behavior mapping now reads from SemanticModel. When built via
+    // the legacy compat path (empty SemanticModel), the mapping is empty.
+    // Full behavior mapping coverage is validated in
+    // linux_emission_scaffold.rs which uses the hierarchy-based builder.
     assert_eq!(
         linux.behavior_mapping.portable_function_count,
-        portable.behavior.functions.len()
+        portable.behavior.functions.len(),
+        "mapping count must match SemanticModel function count"
     );
     assert_eq!(
         linux.behavior_mapping.interrupt_class_count,
-        portable.behavior.interrupt_classes.len()
+        portable.behavior.interrupt_classes.len(),
+        "mapping interrupt count must match SemanticModel"
     );
 
-    // Every portable function has a Linux mapping.
-    for pf in &portable.behavior.functions {
+    for func in &portable.behavior.functions {
         let mapping = linux
             .behavior_mapping
             .callback_mappings
             .iter()
-            .find(|m| m.portable_function == pf.name);
+            .find(|m| m.portable_function == func.name);
         assert!(
             mapping.is_some(),
-            "no Linux mapping for portable function '{}'",
-            pf.name
+            "no Linux mapping for semantic function '{}'",
+            func.name
         );
     }
 }
@@ -2336,12 +2341,12 @@ fn proof_deterministic_across_runs() {
         plan2.resources.properties.len()
     );
     assert_eq!(
-        plan1.behavior.functions.len(),
-        plan2.behavior.functions.len()
+        plan1.legacy_behavior.functions.len(),
+        plan2.legacy_behavior.functions.len()
     );
     assert_eq!(
-        plan1.behavior.interrupt_classes.len(),
-        plan2.behavior.interrupt_classes.len()
+        plan1.legacy_behavior.interrupt_classes.len(),
+        plan2.legacy_behavior.interrupt_classes.len()
     );
 
     // Linux plan determinism.
@@ -2360,10 +2365,10 @@ fn proof_deterministic_across_runs() {
 
     // Function order is deterministic.
     for (f1, f2) in plan1
-        .behavior
+        .legacy_behavior
         .functions
         .iter()
-        .zip(plan2.behavior.functions.iter())
+        .zip(plan2.legacy_behavior.functions.iter())
     {
         assert_eq!(f1.name, f2.name);
         assert_eq!(f1.role, f2.role);
@@ -2400,7 +2405,7 @@ fn proof_per_callback_behavior_coverage() {
 
     for (name, role) in expected {
         let matched = plan
-            .behavior
+            .legacy_behavior
             .functions
             .iter()
             .find(|f| f.name == *name && f.role == *role);
@@ -2435,7 +2440,7 @@ fn proof_per_helper_behavior_coverage() {
 
     for name in &reachable {
         let matched = plan
-            .behavior
+            .legacy_behavior
             .functions
             .iter()
             .find(|f| f.name == *name && f.role == FunctionRole::Helper);
@@ -2469,7 +2474,7 @@ fn proof_cleanup_behavior_visible_in_plans() {
     let fallible_fns = ["init", "deinit", "port_open", "configure"];
     for name in &fallible_fns {
         let func = plan
-            .behavior
+            .legacy_behavior
             .functions
             .iter()
             .find(|f| f.name == *name)
@@ -2495,7 +2500,7 @@ fn proof_cleanup_behavior_visible_in_plans() {
     let non_fallible_fns = ["tx_ready", "tx_empty"];
     for name in &non_fallible_fns {
         let func = plan
-            .behavior
+            .legacy_behavior
             .functions
             .iter()
             .find(|f| f.name == *name)
@@ -2566,7 +2571,7 @@ fn proof_behavior_traceable_to_mir_bodies() {
     let plan = make_portable_plan_with_constants();
 
     // Every FunctionBehavior must have a corresponding MIR body.
-    for fb in &plan.behavior.functions {
+    for fb in &plan.legacy_behavior.functions {
         assert!(
             input.mir_body_by_name(&fb.name).is_some(),
             "behavior function '{}' has no corresponding MIR body",
@@ -2580,7 +2585,7 @@ fn proof_behavior_traceable_to_mir_bodies() {
     let isr_count = input.mir_isr_bodies().len();
     let expected_total = callback_count + isr_count + reachable_helpers.len();
     assert_eq!(
-        plan.behavior.functions.len(),
+        plan.legacy_behavior.functions.len(),
         expected_total,
         "behavior function count must equal callbacks ({}) + ISRs ({}) + helpers ({})",
         callback_count,
@@ -2598,7 +2603,7 @@ fn proof_behavior_traceable_to_mir_bodies() {
     ];
     for name in &orchestrating {
         let fb = plan
-            .behavior
+            .legacy_behavior
             .functions
             .iter()
             .find(|f| f.name == *name)

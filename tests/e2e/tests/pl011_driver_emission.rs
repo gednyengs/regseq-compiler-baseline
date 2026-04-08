@@ -190,11 +190,11 @@ fn pl011_full_spec_emitted_file_inventory() {
     let (_stderr, out) = run_driver_emission();
 
     // Filenames are derived from the driver name "pl011-full-spec" by the
-    // Linux backend planner's snake-case and prefix policies.
+    // Linux backend planner's snake-case policy (hyphens → underscores).
     let expected_files = [
-        "regseq_pl011-full-spec_module.c",
-        "regseq_pl011-full-spec_shared.h",
-        "pl011-full-spec_regs.h",
+        "regseq_pl011_full_spec_module.c",
+        "regseq_pl011_full_spec_shared.h",
+        "pl011_full_spec_regs.h",
         "Makefile",
         "Kbuild",
     ];
@@ -248,7 +248,7 @@ fn pl011_full_spec_output_under_configured_root() {
 fn pl011_full_spec_module_c_contains_expected_structures() {
     let (_stderr, out) = run_driver_emission();
 
-    let module_c = out.join("regseq_pl011-full-spec_module.c");
+    let module_c = out.join("regseq_pl011_full_spec_module.c");
     let content = std::fs::read_to_string(&module_c)
         .unwrap_or_else(|e| panic!("failed to read {}: {e}", module_c.display()));
 
@@ -262,9 +262,47 @@ fn pl011_full_spec_module_c_contains_expected_structures() {
         "module.c should contain MODULE_LICENSE"
     );
     // AMBA driver registration — pl011 is an AMBA device.
+    // When serial core is realized, registration uses amba_driver_register
+    // with module_init/module_exit instead of the module_amba_driver macro.
     assert!(
-        content.contains("module_amba_driver"),
-        "module.c should contain module_amba_driver registration"
+        content.contains("amba_driver"),
+        "module.c should contain amba_driver registration"
+    );
+
+    // Serial core emission proof.
+    assert!(
+        content.contains("struct uart_ops"),
+        "module.c should contain struct uart_ops (serial-core emission)"
+    );
+    assert!(
+        content.contains("struct uart_driver"),
+        "module.c should contain struct uart_driver (uart driver registration)"
+    );
+    assert!(
+        content.contains("linux/serial_core.h"),
+        "module.c should include linux/serial_core.h"
+    );
+
+    // Callback emission proof.
+    assert!(
+        content.contains("startup"),
+        "module.c should contain startup callback"
+    );
+    assert!(
+        content.contains("shutdown"),
+        "module.c should contain shutdown callback"
+    );
+    assert!(
+        content.contains("tx_empty"),
+        "module.c should contain tx_empty callback"
+    );
+    assert!(
+        content.contains("set_termios"),
+        "module.c should contain set_termios callback"
+    );
+    assert!(
+        content.contains("break_ctl"),
+        "module.c should contain break_ctl callback"
     );
 }
 

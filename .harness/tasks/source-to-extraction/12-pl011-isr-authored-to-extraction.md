@@ -29,10 +29,13 @@ Output Path:
 
 - `docs/validation/01-pl011/checks/results/12-isr-extraction.md`
 
+Test Path:
+
+- `crates/regseq-driver/tests/source_to_extraction_12_isr.rs`
+
 Create or modify:
 
-- `crates/regseq-driver/tests/` only as narrowly needed for a dedicated
-  compiler-side boundary validation test
+- `crates/regseq-driver/tests/source_to_extraction_12_isr.rs`
 
 Modify if needed:
 
@@ -62,8 +65,8 @@ This task should:
 - inspect the extraction surfaces named in the check contract rather than a
   hand-constructed substitute or a later lowering artifact
 - create a uniquely named integration test file owned by this task only
-- do not reuse, edit, or delete another `source-to-extraction-*` task's test
-  file
+- create or update exactly the declared `Test Path`
+- do not reuse, edit, or delete another `source-to-extraction-*` task's test file
 - write the detailed validation report to the declared output path
 - keep the harness `fail_reason` short and descriptive
 - ensure every `pass` in the report is backed by an automated assertion that
@@ -75,6 +78,12 @@ This task should:
   `CARGO_TARGET_DIR=target/source-to-extraction-12`
 - ensure multi-property premises are proven by assertions that cover every
   named property, not just a subset
+- prove exact control-flow correspondence for:
+  - early `status == 0` return of `IrqResult::NotHandled`
+  - RX and TX dispatch before `clear_explicit_interrupts(status)`
+  - `clear_explicit_interrupts(status)` before the final handled condition
+  - final true branch returning `IrqResult::Handled` and final false branch
+    returning `IrqResult::NotHandled`
 
 This task should not:
 
@@ -127,8 +136,11 @@ Suggested commands:
 - every reported assertion is non-tautological and included in the report
 - the report explains specimen fidelity and check-to-surface mapping
 - no `pass` relies on a weaker surrogate than the authored premise
+- ISR body checks only pass if branch ordering and final variant mapping are
+  proven exactly, not inferred from helper presence or variant existence alone
 - failures can be recorded precisely in harness notes
 - the task remains scoped to the ISR boundary
 - the task uses a uniquely named test file that does not conflict with sibling
   `source-to-extraction-*` tasks
+- the task creates or updates exactly the declared `Test Path`
 - tests pass

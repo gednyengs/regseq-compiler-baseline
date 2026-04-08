@@ -60,6 +60,8 @@ After PL011 is clean, the next validation series should move to:
   Final artifact and wrapper-driven proof review.
 - [findings.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/findings.md)
   Stable issue ledger for findings that need compiler updates.
+- [todo.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/todo.md)
+  Implementation follow-up ledger for urgent and deferred work surfaced during validation.
 
 ## Status Model
 

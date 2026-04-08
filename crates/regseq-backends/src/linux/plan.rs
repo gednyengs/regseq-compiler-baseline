@@ -424,14 +424,47 @@ pub struct LinuxPinCtrlEntry {
 /// How a Linux uart_ops callback body should be realized.
 #[derive(Debug, Clone)]
 pub enum LinuxUartOpsBody {
-    /// Emit the body of a portable function looked up by role.
-    FromPortableRole(crate::lowering::behavior::FunctionRole),
+    /// Emit the semantic body directly (self-only params, direct return).
+    DirectBody {
+        role: regseq_model::item::function::FunctionRole,
+    },
+    /// Emit the semantic body with parameter bindings and/or return adaptation.
+    WrappedBody {
+        role: regseq_model::item::function::FunctionRole,
+        param_bindings: Vec<ParamBinding>,
+        return_adaptation: Option<ReturnAdaptation>,
+    },
     /// Minimal stub body (e.g., modem control, or callbacks not yet
     /// realized from lowered plan data).
     Stub {
         /// C code lines for the stub body.
         lines: Vec<String>,
     },
+}
+
+/// A parameter binding that maps a Linux callback parameter to a semantic name.
+#[derive(Debug, Clone)]
+pub struct ParamBinding {
+    /// Semantic parameter name expected by the body.
+    pub semantic_name: String,
+    /// C type for the binding declaration.
+    pub c_type: String,
+    /// C expression that computes the semantic value from Linux params.
+    pub c_expr: String,
+}
+
+/// How the return value is adapted between semantic body and Linux callback.
+#[derive(Debug, Clone)]
+pub enum ReturnAdaptation {
+    /// Adapt bool return to unsigned int with symbolic true/false constants.
+    BoolToUint {
+        true_value: String,
+        false_value: String,
+    },
+    /// Adapt Result return to int (error paths pass through, success → 0).
+    ResultToInt,
+    /// Drop Result return (Linux callback returns void).
+    DropResult,
 }
 
 /// Realization entry for a single Linux uart_ops callback.
