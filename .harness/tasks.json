@@ -1377,7 +1377,7 @@
           "id": "source-to-extraction-10",
           "name": "PL011 serial callbacks A authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/10-pl011-serial-callbacks-a-authored-to-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
