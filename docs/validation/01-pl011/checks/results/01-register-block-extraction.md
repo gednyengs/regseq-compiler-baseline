@@ -30,12 +30,12 @@
 |-------|-----------|---------------|
 | 1 | RegisterAccessSurface.register_blocks | check_1_register_block_identity |
 | 2 | IdentityEnrichmentSurface.structs, .modules | check_2_canonical_path |
-| 3 | RegisterAccessSurface.register_blocks[].endian, .access_width | check_3_register_block_properties |
-| 4 | RegisterAccessSurface.register_blocks[].fields[].byte_offset, .array_count | check_4_reserved_regions |
+| 3 | RegisterAccessSurface.register_blocks[].properties | check_3_register_block_properties |
+| 4 | RegisterAccessSurface.register_blocks[].properties, .fields[].byte_offset, .array_count | check_4_reserved_regions |
 | 5 | RegisterAccessSurface.register_blocks[].fields | check_5_register_inventory_and_order |
 | 6 | RegisterAccessSurface.register_blocks[].fields[].register_type_name, .byte_offset, .access_kind | check_6_per_register_facts |
 | 7 | RegisterAccessSurface.register_blocks, .register_blocks[].fields | check_7_closed_world_inventory |
-| 8 | RegisterAccessSurface.register_blocks[].endian, .access_width; per-field absence checks | check_8_property_set_integrity |
+| 8 | RegisterAccessSurface.register_blocks[].properties; per-field absence checks | check_8_property_set_integrity |
 
 ## Per-Check Results
 
@@ -51,7 +51,7 @@
   - `RegisterAccessSurface.register_blocks` contains exactly one entry with `name == "Pl011Registers"`
 - Reasoning Trace:
   - Authored Fact (Verbatim): `Pl011Registers`
-  - Extracted Fact (Verbatim): `RegisterBlockDecl { name: "Pl011Registers", fields: [...] }`
+  - Extracted Fact (Verbatim): `RegisterBlockDecl { name: "Pl011Registers", ... }`
   - Correspondence: `exact`
   - Gap / Loss Description: none
   - Why This Status Follows: The extraction surface explicitly preserves the struct name via HIR `ident.name.as_str()` in `extract_register_block`.
@@ -87,19 +87,17 @@
 - Status: `pass`
 - Premise: The register-block properties preserve `endian = little` and `access_width = 32`.
 - Assertion Predicate(s):
-  - `block.endian.as_deref() == Some("little")`
-  - `block.access_width == Some(32)`
+  - `block.properties.iter().find(|(k, _)| k == "endian").unwrap().1 == BlockPropertyValue::Str("little")`
+  - `block.properties.iter().find(|(k, _)| k == "access_width").unwrap().1 == BlockPropertyValue::Int(32)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:519`
-  - `RegisterBlockDecl.endian == Some("little")` for the `Pl011Registers` block
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:526`
-  - `RegisterBlockDecl.access_width == Some(32)` for the `Pl011Registers` block
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:524` (endian property lookup and assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:536` (access_width property lookup and assertion)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `#[rseq::register_block(endian = "little", access_width = 32)]`
-  - Extracted Fact (Verbatim): `RegisterBlockDecl { name: "Pl011Registers", endian: Some("little"), access_width: Some(32), fields: [...] }`
+  - Extracted Fact (Verbatim): `RegisterBlockDecl { properties: [("endian", Str("little")), ("access_width", Int(32))], ... }`
   - Correspondence: `exact`
   - Gap / Loss Description: none
-  - Why This Status Follows: `extract_register_block` now parses the `#[rseq::register_block(...)]` attribute arguments using the same token-parsing logic as per-field `#[rseq::register(...)]`, storing `endian` and `access_width` as block-level properties on `RegisterBlockDecl`.
+  - Why This Status Follows: `parse_block_properties` parses all key=value pairs from the `#[rseq::register_block(...)]` attribute into a generic property bag (`Vec<(String, BlockPropertyValue)>`), preserving every authored property regardless of whether it is a known key. The typed `BlockPropertyValue` enum distinguishes string and integer literals.
 - Counterexample: none found
 - Conclusion: pass
 
@@ -113,21 +111,21 @@
   - `_reserved1.byte_offset == Some(0x01C)`, `_reserved1.array_count == None`, computed end `0x01C + (1-1)*4 == 0x01C`
   - `_reserved2.byte_offset == Some(0x04C)`, `_reserved2.array_count == Some(997)`, computed end `0x04C + (997-1)*4 == 0xFDC`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:556` (_reserved0 start offset)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:558` (_reserved0 array count)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:560` (_reserved0 end offset)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:568` (_reserved1 start offset)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:569` (_reserved1 array count is None)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:571` (_reserved1 end offset)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:579` (_reserved2 start offset)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:581` (_reserved2 array count)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:583` (_reserved2 end offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:581` (_reserved0 start offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:583` (_reserved0 array count)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:585` (_reserved0 end offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:593` (_reserved1 start offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:594` (_reserved1 array count is None)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:596` (_reserved1 end offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:604` (_reserved2 start offset)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:606` (_reserved2 array count)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:608` (_reserved2 end offset)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `_reserved0: 0x008 -> 0x014`, `_reserved1: 0x01C -> 0x01C`, `_reserved2: 0x04C -> 0xFDC`
   - Extracted Fact (Verbatim): `_reserved0: byte_offset=0x008, array_count=4`; `_reserved1: byte_offset=0x01C, array_count=None`; `_reserved2: byte_offset=0x04C, array_count=997`
   - Correspondence: `exact` (start offsets explicit, end offsets exactly reconstructable from `byte_offset + (array_count.unwrap_or(1) - 1) * element_size` where `element_size = access_width / 8`)
   - Gap / Loss Description: none
-  - Why This Status Follows: `extract_register_block` now computes byte offsets cumulatively from the block-level `access_width` and field array counts. Array counts are extracted via `tcx.type_of(field.def_id)` for array-typed fields. The test reconstructs the exact authored end offsets from these boundary facts without heuristic guesswork.
+  - Why This Status Follows: `extract_register_block` computes byte offsets cumulatively from the block-level `access_width` property (extracted from the generic property bag) and field array counts. Array counts are extracted via `tcx.type_of(field.def_id)` for array-typed fields. The test reconstructs the exact authored end offsets from these boundary facts without heuristic guesswork.
 - Counterexample: none found
 - Conclusion: pass
 
@@ -139,7 +137,7 @@
 - Assertion Predicate(s):
   - `extracted_names == AUTHORED_FIELD_NAMES` (exact 25-element sequence equality)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:605`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:630`
   - All 25 fields extracted in authored order from `RegisterAccessSurface.register_blocks[0].fields`
 - Supporting Evidence: The check spec states "a complete extracted field sequence in authored order is sufficient for the inventory/order checks even if per-field offset and access metadata is not preserved."
 - Reasoning Trace:
@@ -159,17 +157,17 @@
 - Assertion Predicate(s):
   - For all 22 non-reserved registers: `field.register_type_name == Some(authored_type)`, `field.byte_offset == Some(authored_offset)`, `field.access_kind == Some(authored_access)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:628` (authored fact table with all 22 registers)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:660` (register_type_name assertion)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:665` (byte_offset assertion)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:670` (access_kind assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:653` (authored fact table with all 22 registers)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:685` (register_type_name assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:690` (byte_offset assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:695` (access_kind assertion)
   - All 22 non-reserved fields verified with exact four-fact match
 - Reasoning Trace:
   - Authored Fact (Verbatim): e.g. `dr: DR_REG @ 0x000 [RW]` -- four facts per register
   - Extracted Fact (Verbatim): `RegisterFieldDecl { name: "dr", register_type_name: Some("DR_REG"), byte_offset: Some(0x000), access_kind: Some("RW"), ... }`
   - Correspondence: `exact`
   - Gap / Loss Description: none
-  - Why This Status Follows: `extract_register_block` now extracts: (1) field name from HIR `field.ident`, (2) register descriptor type name from the second generic argument of the wrapper type path, (3) byte offset computed cumulatively from `access_width` and array counts, (4) access kind mapped from wrapper type name (ReadWrite->RW, ReadOnly->R, WriteOnly->W).
+  - Why This Status Follows: `extract_register_block` extracts: (1) field name from HIR `field.ident`, (2) register descriptor type name from the second generic argument of the wrapper type path, (3) byte offset computed cumulatively from `access_width` and array counts, (4) access kind mapped from wrapper type name (ReadWrite->RW, ReadOnly->R, WriteOnly->W).
 - Counterexample: none found
 - Conclusion: pass
 
@@ -183,7 +181,7 @@
   - `extracted == AUTHORED_FIELD_NAMES` (exact sequence equality)
   - `surface.register_blocks.len() == 1` (no spurious blocks)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:694`
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:719`
   - Field count is exactly 25, sequence is identical to authored, only 1 register block exists
 - Reasoning Trace:
   - Authored Fact (Verbatim): 22 registers + 3 reserved = 25 fields, no extras, no missing
@@ -200,19 +198,21 @@
 - Status: `pass`
 - Premise: No register-block properties are invented or dropped.
 - Assertion Predicate(s):
-  - `block.endian == Some("little")` (authored endian preserved)
-  - `block.access_width == Some(32)` (authored access_width preserved)
+  - `block.properties.iter().map(|(k, _)| k.as_str()).collect() == ["endian", "access_width"]` (exact authored key set in authored order)
+  - `block.properties[0].1 == BlockPropertyValue::Str("little")` (endian value)
+  - `block.properties[1].1 == BlockPropertyValue::Int(32)` (access_width value)
   - For all fields: `field.access_width == None`, `field.endian == None`, `field.side_effects == None`, `field.hw_updates == None` (no per-field properties invented)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:731` (block endian preserved)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:736` (block access_width preserved)
-  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:744` (per-field property absence loop)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:756` (exact property key set assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:762` (endian value assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:767` (access_width value assertion)
+  - `crates/regseq-driver/tests/source_to_extraction_01_register_block.rs:775` (per-field property absence loop)
 - Reasoning Trace:
   - Authored Fact (Verbatim): `endian = little`, `access_width = 32` on the register block
-  - Extracted Fact (Verbatim): `RegisterBlockDecl { endian: Some("little"), access_width: Some(32), ... }` -- both block-level properties preserved; no per-field properties invented
+  - Extracted Fact (Verbatim): `RegisterBlockDecl { properties: [("endian", Str("little")), ("access_width", Int(32))], ... }` -- generic property bag preserves the exact authored set; no per-field properties invented
   - Correspondence: `exact`
   - Gap / Loss Description: none
-  - Why This Status Follows: The authored property set `{endian, access_width}` is now preserved at the block level via `RegisterBlockDecl.endian` and `RegisterBlockDecl.access_width`. No spurious per-field properties are invented (all per-field property fields remain `None` since the PL011 fixture does not use per-field `#[rseq::register(...)]` attributes).
+  - Why This Status Follows: The `parse_block_properties` function extracts all key=value pairs from the `#[rseq::register_block(...)]` attribute into a generic `Vec<(String, BlockPropertyValue)>` property bag. This preserves the full authored property set without a fixed whitelist, so future block-level properties will also be captured. The exact key sequence match proves no properties are invented or dropped. No spurious per-field properties are invented (all per-field property fields remain `None` since the PL011 fixture does not use per-field `#[rseq::register(...)]` attributes).
 - Counterexample: none found
 - Conclusion: pass
 
@@ -231,4 +231,4 @@
 
 Result: 8 pass, 0 fail.
 
-The four previously failing checks (3, 4, 6, 8) now pass after extending `RegisterBlockDecl` with block-level `endian` and `access_width` properties, and `RegisterFieldDecl` with `register_type_name`, `byte_offset`, `access_kind`, and `array_count`. The `extract_register_block` function now parses `#[rseq::register_block(...)]` attribute arguments, extracts wrapper type and register descriptor type names from HIR field types, computes cumulative byte offsets from the block-level access width, and resolves array element counts from the middle type system.
+The four previously failing checks (3, 4, 6, 8) now pass. Block-level properties are stored in a generic property bag (`Vec<(String, BlockPropertyValue)>`) via `parse_block_properties`, which captures all authored key=value pairs from the `#[rseq::register_block(...)]` attribute without a fixed whitelist. Per-field metadata (`register_type_name`, `byte_offset`, `access_kind`, `array_count`) is extracted from HIR field types and cumulative layout computation.

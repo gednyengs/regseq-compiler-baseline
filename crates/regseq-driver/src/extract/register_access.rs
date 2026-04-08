@@ -18,12 +18,21 @@ pub struct RegisterAccessSurface {
     pub register_descriptors: Vec<RegisterDescriptorFact>,
 }
 
+/// A typed value from a register-block attribute property.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum BlockPropertyValue {
+    /// A string literal value, e.g. `endian = "little"`.
+    Str(String),
+    /// An integer literal value, e.g. `access_width = 32`.
+    Int(u32),
+}
+
 /// A struct annotated with `#[rseq::register_block]`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct RegisterBlockDecl {
     pub name: String,
-    pub endian: Option<String>,
-    pub access_width: Option<u32>,
+    /// All authored key=value properties from `#[rseq::register_block(...)]`.
+    pub properties: Vec<(String, BlockPropertyValue)>,
     pub fields: Vec<RegisterFieldDecl>,
 }
 
@@ -202,14 +211,27 @@ fn extract_register_block<'tcx>(
     block_attrs: &[Attribute],
     variant_data: &rustc_hir::VariantData<'tcx>,
 ) -> Result<RegisterBlockDecl, RegisterAccessError> {
-    // Parse block-level properties from #[rseq::register_block(...)]
+    // Parse all block-level properties from #[rseq::register_block(...)]
     let block_attr = block_attrs
         .iter()
         .find(|a| rseq_attr_name(a) == Some("register_block"));
-    let (block_access_width, block_endian, _, _) = match block_attr {
-        Some(attr) => parse_register_metadata(attr)?,
-        None => (None, None, None, None),
+    let block_properties = match block_attr {
+        Some(attr) => parse_block_properties(attr)?,
+        None => Vec::new(),
     };
+
+    // Extract access_width from the property bag for byte-offset computation.
+    let block_access_width = block_properties.iter().find_map(|(k, v)| {
+        if k == "access_width" {
+            if let BlockPropertyValue::Int(n) = v {
+                Some(*n)
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
 
     let element_size = block_access_width.map(|w| w / 8);
     let mut current_offset: u32 = 0;
@@ -255,8 +277,7 @@ fn extract_register_block<'tcx>(
 
     Ok(RegisterBlockDecl {
         name: name.to_string(),
-        endian: block_endian,
-        access_width: block_access_width,
+        properties: block_properties,
         fields,
     })
 }
@@ -324,6 +345,57 @@ fn parse_register_metadata(attr: &Attribute) -> Result<RegisterMetadata, Registe
     }
 
     Ok((access_width, endian, side_effects, hw_updates))
+}
+
+/// Parse all key=value properties from a `#[rseq::register_block(...)]` attribute
+/// into a generic property bag, preserving every authored property.
+fn parse_block_properties(
+    attr: &Attribute,
+) -> Result<Vec<(String, BlockPropertyValue)>, RegisterAccessError> {
+    let Attribute::Unparsed(item) = attr else {
+        return Err(malformed("expected tool attribute"));
+    };
+    let tokens = match &item.args {
+        AttrArgs::Delimited(d) => &d.tokens,
+        _ => return Ok(Vec::new()),
+    };
+
+    let trees: Vec<&TokenTree> = tokens.iter().collect();
+    let mut properties = Vec::new();
+    let mut i = 0;
+
+    while i < trees.len() {
+        if is_comma(trees[i]) {
+            i += 1;
+            continue;
+        }
+
+        let key = extract_ident(trees[i])
+            .ok_or_else(|| malformed("expected key in register_block attribute"))?;
+        i += 1;
+
+        if i >= trees.len() || !is_eq(trees[i]) {
+            return Err(malformed(&format!("expected '=' after '{key}'")));
+        }
+        i += 1;
+
+        if i >= trees.len() {
+            return Err(malformed(&format!("expected value for '{key}'")));
+        }
+
+        let value = if let Some(int_val) = extract_integer_literal(trees[i]) {
+            BlockPropertyValue::Int(int_val)
+        } else if let Some(str_val) = extract_string_literal(trees[i]) {
+            BlockPropertyValue::Str(str_val)
+        } else {
+            return Err(malformed(&format!("unsupported value type for '{key}'")));
+        };
+
+        properties.push((key, value));
+        i += 1;
+    }
+
+    Ok(properties)
 }
 
 // ---------------------------------------------------------------------------

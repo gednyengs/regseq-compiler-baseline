@@ -515,17 +515,27 @@ fn check_3_register_block_properties() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    // Block-level endian must be preserved as "little".
+    // The property bag must contain the authored endian property.
+    let endian = block
+        .properties
+        .iter()
+        .find(|(k, _)| k == "endian")
+        .expect("block properties must contain 'endian'");
     assert_eq!(
-        block.endian.as_deref(),
-        Some("little"),
+        endian.1,
+        BlockPropertyValue::Str("little".to_string()),
         "block-level endian must be preserved as 'little'"
     );
 
-    // Block-level access_width must be preserved as 32.
+    // The property bag must contain the authored access_width property.
+    let aw = block
+        .properties
+        .iter()
+        .find(|(k, _)| k == "access_width")
+        .expect("block properties must contain 'access_width'");
     assert_eq!(
-        block.access_width,
-        Some(32),
+        aw.1,
+        BlockPropertyValue::Int(32),
         "block-level access_width must be preserved as 32"
     );
 }
@@ -545,7 +555,22 @@ fn check_4_reserved_regions() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    let element_size = block.access_width.expect("access_width must be present") / 8;
+    let block_aw = block
+        .properties
+        .iter()
+        .find_map(|(k, v)| {
+            if k == "access_width" {
+                if let BlockPropertyValue::Int(n) = v {
+                    Some(*n)
+                } else {
+                    None
+                }
+            } else {
+                None
+            }
+        })
+        .expect("access_width must be present in block properties");
+    let element_size = block_aw / 8;
 
     // _reserved0: 0x008 -> 0x014 (4 elements)
     let r0 = block
@@ -727,15 +752,21 @@ fn check_8_property_set_integrity() {
         .find(|b| b.name == "Pl011Registers")
         .expect("Pl011Registers block must exist");
 
-    // Block-level properties must be preserved exactly as authored.
+    // Block-level property bag must contain exactly the authored properties.
+    let prop_keys: Vec<&str> = block.properties.iter().map(|(k, _)| k.as_str()).collect();
     assert_eq!(
-        block.endian.as_deref(),
-        Some("little"),
+        prop_keys,
+        vec!["endian", "access_width"],
+        "property bag must contain exactly the authored property keys in authored order"
+    );
+    assert_eq!(
+        block.properties[0].1,
+        BlockPropertyValue::Str("little".to_string()),
         "block endian must be preserved"
     );
     assert_eq!(
-        block.access_width,
-        Some(32),
+        block.properties[1].1,
+        BlockPropertyValue::Int(32),
         "block access_width must be preserved"
     );
 
