@@ -795,3 +795,42 @@ fn check_8_property_set_integrity() {
         );
     }
 }
+
+// ---------------------------------------------------------------------------
+// Supplemental: generic property bag supports boolean literals
+// ---------------------------------------------------------------------------
+
+#[test]
+fn check_supplemental_block_property_bag_supports_boolean_literals() {
+    const BOOL_SPECIMEN: &str = r#"
+        pub mod registers {
+            pub struct ReadWrite<T, R>(core::marker::PhantomData<(T, R)>);
+            pub struct Reserved<T>(core::marker::PhantomData<T>);
+            pub mod DR_REG { pub struct Register; }
+
+            #[rseq::register_block(endian = "little", access_width = 32, shadow = true)]
+            pub struct BoolPropsRegisters {
+                pub dr: ReadWrite<u32, DR_REG::Register>,
+            }
+        }
+    "#;
+
+    let result = compile_and_extract_dual(BOOL_SPECIMEN, "src_to_ext_01_bool_props");
+    let surface = result.register_access.unwrap();
+    let block = surface
+        .register_blocks
+        .iter()
+        .find(|b| b.name == "BoolPropsRegisters")
+        .expect("BoolPropsRegisters block must exist");
+
+    let shadow = block
+        .properties
+        .iter()
+        .find(|(k, _)| k == "shadow")
+        .expect("block properties must contain 'shadow'");
+    assert_eq!(
+        shadow.1,
+        BlockPropertyValue::Bool(true),
+        "boolean property 'shadow' must be preserved as BlockPropertyValue::Bool(true)"
+    );
+}

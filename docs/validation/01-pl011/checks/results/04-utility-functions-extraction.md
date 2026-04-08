@@ -38,17 +38,20 @@
 - Premise: `field_val`, `raw_reg_val`, `field_from_raw` should be discoverable by name and canonical path in the identity enrichment surface
 - Assertion Predicate(s):
   - `fn_names.contains(name)` for each name in `["field_val", "raw_reg_val", "field_from_raw"]`
-  - `cp == "pl011_full_spec::driver::field_val"`, `cp == "pl011_full_spec::driver::raw_reg_val"`, `cp == "pl011_full_spec::driver::field_from_raw"` -- verifies the full canonical path exactly
+  - crate root module exists with `name == "pl011_full_spec"` and `canonical_path.0 == "pl011_full_spec"`
+  - `driver` module exists as a child of the crate root
+  - `cp == "driver::field_val"`, `cp == "driver::raw_reg_val"`, `cp == "driver::field_from_raw"` -- verifies source-local function canonical paths
+  - `module_path.0 == "driver"` for all three free functions
   - `authored_count == 3` confirming all three functions present
 - Target Evidence (Exercised by Test; Exact Citations):
   - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:389`
-  - The test asserts all three free-function names exist and that each canonical path matches the full authored path exactly.
+  - The test asserts all three free-function names exist, the crate root and `driver` module relationship is preserved, each function has the expected source-local path `driver::<fn_name>`, and each function's `module_path` is `driver`.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `field_val` at `pl011_full_spec::driver::field_val`, `raw_reg_val` at `pl011_full_spec::driver::raw_reg_val`, `field_from_raw` at `pl011_full_spec::driver::field_from_raw`
-  - Extracted Fact (Verbatim): All three names found in `free_functions`; canonical paths are `pl011_full_spec::driver::field_val`, `pl011_full_spec::driver::raw_reg_val`, and `pl011_full_spec::driver::field_from_raw`
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: The specimen now compiles with crate name `pl011_full_spec`, so the identity enrichment surface preserves the full authored canonical paths exactly.
+  - Extracted Fact (Verbatim): All three names found in `free_functions`; canonical paths are `driver::field_val`, `driver::raw_reg_val`, and `driver::field_from_raw`; each has `module_path = "driver"`; crate root module is `pl011_full_spec` and contains `driver`
+  - Correspondence: `exact` (reconstructible from exercised crate/module/function facts)
+  - Gap / Loss Description: The free-function `canonical_path` is source-local rather than crate-prefixed, but the crate root module and containment facts make the full authored path exactly reconstructable.
+  - Why This Status Follows: Combining (1) crate root `pl011_full_spec`, (2) `driver` is a child of crate root, (3) each function canonical_path is `driver::<fn_name>`, and (4) each function module_path is `driver` yields the exact authored canonical path `pl011_full_spec::driver::<fn_name>` without heuristics.
 - Counterexample: none
 - Suggested Fix Direction / Implementation Hints: none needed
 

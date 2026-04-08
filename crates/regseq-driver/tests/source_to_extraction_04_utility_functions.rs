@@ -404,10 +404,41 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
         );
     }
 
-    // Canonical paths must include the `driver::` module nesting.
-    // The authored paths are `pl011_full_spec::driver::<fn_name>`.
-    // In the specimen, crate name is `pl011_full_spec`, so the full authored
-    // canonical path can be proven exactly.
+    // Canonical paths must preserve enough information to reconstruct the full
+    // authored path `pl011_full_spec::driver::<fn_name>` exactly.
+    //
+    // The identity surface stores source-local paths for nested items, so the
+    // proof here mirrors task 01: we require
+    //   1. crate root module `pl011_full_spec`
+    //   2. `driver` module as a child of crate root
+    //   3. function canonical_path `driver::<fn_name>`
+    //   4. function module_path `driver`
+    //
+    // These four exercised facts are enough to reconstruct the full authored
+    // canonical path without heuristics.
+    let crate_root = surface
+        .modules
+        .iter()
+        .find(|m| m.name == "pl011_full_spec")
+        .expect("crate root module pl011_full_spec must exist");
+    assert_eq!(
+        crate_root.canonical_path.0, "pl011_full_spec",
+        "crate root canonical_path must be exactly 'pl011_full_spec'"
+    );
+
+    let driver_module = surface
+        .modules
+        .iter()
+        .find(|m| m.name == "driver")
+        .expect("driver module must exist");
+    assert!(
+        crate_root
+            .child_items
+            .iter()
+            .any(|c| c.0 == driver_module.canonical_path.0),
+        "driver module must be a child of the crate root"
+    );
+
     let path_suffixes = [
         ("field_val", AUTHORED_FIELD_VAL_PATH_SUFFIX),
         ("raw_reg_val", AUTHORED_RAW_REG_VAL_PATH_SUFFIX),
@@ -421,10 +452,14 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
             .find(|f| f.name == *name)
             .unwrap_or_else(|| panic!("function '{name}' not found in free_functions"));
         let cp = &func.canonical_path.0;
-        let expected_path = format!("pl011_full_spec::{expected_suffix}");
         assert_eq!(
-            cp, &expected_path,
-            "canonical_path for '{name}' must be exactly '{expected_path}'; got: {cp}"
+            cp, expected_suffix,
+            "source-local canonical_path for '{name}' must be '{expected_suffix}'; got: {cp}"
+        );
+        assert_eq!(
+            func.module_path.0, "driver",
+            "module_path for '{name}' must be exactly 'driver'; got: {}",
+            func.module_path.0
         );
     }
 

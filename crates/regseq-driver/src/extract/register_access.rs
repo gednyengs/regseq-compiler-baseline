@@ -25,6 +25,8 @@ pub enum BlockPropertyValue {
     Str(String),
     /// An integer literal value, e.g. `access_width = 32`.
     Int(u32),
+    /// A boolean literal value, e.g. `shadow = true`.
+    Bool(bool),
 }
 
 /// A struct annotated with `#[rseq::register_block]`.
@@ -387,6 +389,8 @@ fn parse_block_properties(
             BlockPropertyValue::Int(int_val)
         } else if let Some(str_val) = extract_string_literal(trees[i]) {
             BlockPropertyValue::Str(str_val)
+        } else if let Some(bool_val) = extract_boolean_literal(trees[i]) {
+            BlockPropertyValue::Bool(bool_val)
         } else {
             return Err(malformed(&format!("unsupported value type for '{key}'")));
         };
@@ -898,6 +902,17 @@ fn extract_integer_literal(tree: &TokenTree) -> Option<u32> {
             TokenKind::Literal(lit) if lit.kind == LitKind::Integer => {
                 lit.symbol.as_str().parse::<u32>().ok()
             }
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+fn extract_boolean_literal(tree: &TokenTree) -> Option<bool> {
+    match tree {
+        TokenTree::Token(tok, _) => match tok.kind {
+            TokenKind::Ident(sym, _) if sym.as_str() == "true" => Some(true),
+            TokenKind::Ident(sym, _) if sym.as_str() == "false" => Some(false),
             _ => None,
         },
         _ => None,
