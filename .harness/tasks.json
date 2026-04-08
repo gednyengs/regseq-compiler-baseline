@@ -1480,7 +1480,7 @@
           "id": "mir-schema-refactor-01",
           "name": "MIR type and constant schema refactor",
           "spec": ".harness/tasks/mir-schema-refactor/01-mir-type-and-constant-schema-refactor.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "extraction-remediation-01",
             "extraction-remediation-03",
