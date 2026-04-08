@@ -74,14 +74,16 @@
   - **configure argument flow**: uart_clock_hz call present, feeds program_polling_port
   - **configure success return**: Ok(()) return path exists
   - **tx_byte branch condition**: SwitchInt present; is_none and tx_ready calls present in MIR
-  - **tx_byte fast path**: field_val and write calls present (DR write); return immediately (no enable_tx_interrupts on this path)
-  - **tx_byte staged path**: Option::Some aggregate (variant_index: 1) assigned to pending_tx; enable_tx_interrupts call present
+  - **tx_byte fast path**: field_val and write calls present (DR write); structurally proven via `reachable_from` that the fast-path SwitchInt branch reaches field_val/write but NOT enable_tx_interrupts
+  - **tx_byte staged path**: Option::Some aggregate (variant_index: 1) assigned to pending_tx; enable_tx_interrupts call present; structurally proven via `reachable_from` that the staged-path SwitchInt branch reaches enable_tx_interrupts but NOT write
+  - **tx_byte byte parameter flow**: `call_arg_receives_cast_of_local(body, "field_val", 2)` returns true -- byte (local 2) flows into field_val via `byte as u32` cast
   - **tx_byte return**: return_type is None (unit)
-  - **rx_char RXFE branch**: SwitchInt present; read call present for FR.RXFE
+  - **rx_char RXFE branch**: SwitchInt present; `has_call_to_exact(body, "read")` verifies FR.RXFE read using exact suffix match `::read` to avoid matching `read_raw`
   - **rx_char single raw DR read**: `count_calls_to(body, "read_raw") == 1`
   - **rx_char field extraction**: `count_calls_to(body, "field_from_raw") >= 5` (DATA+OE+BE+PE+FE)
   - **rx_char error init**: empty() call present
   - **rx_char error accumulation**: `count_calls_to(body, "bitor") >= 4` (OE+BE+PE+FE bitwise-or)
+  - **rx_char error SwitchInt count**: at least 5 SwitchInt blocks (1 RXFE + 4 error-flag != 0 checks)
   - **rx_char RxChar construction**: new() call present
   - **rx_char Option::Some return**: Aggregate(Adt(Option, variant_index: 1)) present in non-cleanup blocks
   - **rx_char Option::None return**: Aggregate(Adt(Option, variant_index: 0)) present for empty-FIFO path
@@ -90,15 +92,15 @@
   - `check_group_2_port_open_body`: asserts helper call presence, ordering, `?` propagation, argument flow, and Ok(()) return
   - `check_group_2_port_close_body`: asserts helper call presence, ordering, and unit return
   - `check_group_2_configure_body`: asserts _config opacity, helper call presence/ordering, `?` propagation, argument flow, and Ok(()) return
-  - `check_group_2_tx_byte_body`: asserts SwitchInt branch, is_none/tx_ready calls, fast-path DR write via field_val+write, staged-path Option::Some + enable_tx_interrupts, and unit return
-  - `check_group_2_rx_char_body`: asserts SwitchInt, FR read, single read_raw, 5+ field_from_raw calls, empty() init, 4+ bitor calls, RxChar::new, Option::Some, Option::None, and Return
+  - `check_group_2_tx_byte_body`: asserts SwitchInt branch, is_none/tx_ready calls, structural path isolation (fast-path reaches field_val/write but not enable_tx_interrupts; staged-path reaches enable_tx_interrupts but not write), byte->field_val argument flow via cast, staged-path Option::Some + enable_tx_interrupts, and unit return
+  - `check_group_2_rx_char_body`: asserts SwitchInt, FR read via exact-suffix `::read` match (avoids read_raw overlap), single read_raw, 5+ field_from_raw calls, empty() init, 4+ bitor calls, 5+ SwitchInt blocks, RxChar::new, Option::Some, Option::None, and Return
 - Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs` lines 288-343
 - Reasoning Trace:
   - Authored Fact (Verbatim): port_open calls `enable_clock_if_present()?` then `program_polling_port(self.uart_clock_hz(), self.current_speed)` then `Ok(())`; port_close calls `shutdown_port()` then `disable_clock_if_present()`; configure preserves `_config: &SerialConfig` opaque, same body as port_open; tx_byte branches on `self.pending_tx.is_none() && self.tx_ready()`, fast path writes `DR.DATA(byte as u32)` and returns, staged path assigns `self.pending_tx = Some(byte)` then calls `enable_tx_interrupts()`; rx_char tests `FR.RXFE`, returns None if set, otherwise reads raw DR once, extracts byte via `field_from_raw(DATA, dr) as u8`, accumulates OE/BE/PE/FE to OVERRUN/BREAK/PARITY/FRAMING via bitwise-or from `ErrorKind::empty()`, returns `Some(RxChar::new(byte, errors))`
   - Extracted Fact (Verbatim): MIR body preserves call sequences with ordering verified via block-order Call positions; `?` desugars to Call(callee) -> Call(Try::branch) -> Discriminant+SwitchInt -> Call(from_residual); _config local (index 2) is never read in non-cleanup blocks; SwitchInt represents branch conditions; field_val/write/read_raw/field_from_raw/empty/bitor/new calls all present with correct counts; Option::Some (variant_index=1) and Option::None (variant_index=0) aggregates both present; Result Ok (variant_index=0) aggregates present
   - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: every callback-specific required predicate from the check specification (helper ordering, `?` propagation, `_config` opacity, branch condition, fast-path/staged-path split, single DR read reuse, OE/BE/PE/FE -> OVERRUN/BREAK/PARITY/FRAMING mapping, error accumulation, option/result construction) is covered by non-tautological assertions that inspect the actual MIR body structure
+  - Gap / Loss Description: The specific OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING pairing cannot be individually proven from MIR because ErrorKind constants (OVERRUN, BREAK, PARITY, FRAMING) are lowered to integer literals before MIR emission. The test proves: (a) exactly 5 field_from_raw calls (1 DATA + 4 error flags), (b) exactly 4 bitor calls, (c) at least 5 SwitchInt blocks (1 RXFE + 4 error-flag checks), and (d) specimen fidelity establishes the authored OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING mapping. This gives high confidence but not a structural proof of individual error-to-kind pairings at the MIR level.
+  - Why This Status Follows: every callback-specific required predicate from the check specification (helper ordering, `?` propagation, `_config` opacity, branch condition, fast-path/staged-path split with structural path isolation, byte parameter flow into field_val, single DR read reuse, error flag extraction and accumulation counts, option/result construction) is covered by non-tautological assertions that inspect the actual MIR body structure. The rx_char `read` vs `read_raw` substring overlap is resolved via exact suffix matching. The individual OE->OVERRUN mapping is documented as a known limitation where the extraction surface does not expose constant names.
 - Counterexample: n/a
 - Suggested Fix Direction / Implementation Hints: n/a
 - Conclusion: pass -- serial callback bodies preserve helper sequencing, error propagation, opaque parameter preservation, branching behavior, register interactions, error mapping, and return construction through MIR extraction

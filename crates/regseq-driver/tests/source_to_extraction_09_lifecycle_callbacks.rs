@@ -280,6 +280,7 @@ fn specimen_fidelity_against_fixture() {
     .expect("fixture source must be readable");
 
     // -- init callback body fidelity --
+    // The fixture's init body contains exactly these lines in order:
     assert!(
         fixture.contains("self.toggle_reset_if_present()?;"),
         "fixture must contain toggle_reset_if_present()? call"
@@ -329,7 +330,8 @@ fn specimen_fidelity_against_fixture() {
         "fixture must contain Lifecycle impl for Pl011FullSpec"
     );
 
-    // Verify helper fallibility matches the specimen
+    // Verify helper fallibility matches the specimen:
+    // toggle_reset_if_present returns Result
     assert!(
         fixture.contains("fn toggle_reset_if_present(&self) -> Result<(), RegseqError>"),
         "fixture toggle_reset_if_present must return Result"
@@ -342,24 +344,28 @@ fn specimen_fidelity_against_fixture() {
         fixture.contains("fn enable_clock_if_present(&self) -> Result<(), RegseqError>"),
         "fixture enable_clock_if_present must return Result"
     );
+    // program_polling_port is infallible
     assert!(
         fixture.contains("fn program_polling_port(&mut self, uart_clk_hz: u32, baud_rate: u32)"),
         "fixture program_polling_port must be infallible with exact params"
     );
+    // shutdown_port is infallible
     assert!(
         fixture.contains("fn shutdown_port(&mut self)"),
         "fixture shutdown_port must be infallible"
     );
+    // disable_clock_if_present is infallible
     assert!(
         fixture.contains("fn disable_clock_if_present(&self)"),
         "fixture disable_clock_if_present must be infallible"
     );
+    // apply_sleep_pins_if_present returns Result
     assert!(
         fixture.contains("fn apply_sleep_pins_if_present(&self) -> Result<(), RegseqError>"),
         "fixture apply_sleep_pins_if_present must return Result"
     );
 
-    // Verify the specimen itself contains the same authored facts
+    // Also verify the specimen itself contains the same authored facts
     assert!(
         LIFECYCLE_SPECIMEN.contains("self.toggle_reset_if_present()?;"),
         "specimen must contain toggle_reset_if_present()?"
@@ -397,7 +403,7 @@ fn specimen_fidelity_against_fixture() {
 
 #[test]
 fn check_group_1_trait_surface_lifecycle_identity() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg1_trait");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg1_trait");
 
     // Trait surface: exactly one Lifecycle impl
     assert_eq!(
@@ -413,7 +419,7 @@ fn check_group_1_trait_surface_lifecycle_identity() {
 
 #[test]
 fn check_group_1_identity_enrichment_lifecycle_impl_block() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg1_identity");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg1_identity");
 
     // Identity enrichment: find the Lifecycle trait impl block
     let lifecycle_impl = surface
@@ -446,7 +452,7 @@ fn check_group_1_identity_enrichment_lifecycle_impl_block() {
 
 #[test]
 fn check_group_1_body_surface_init_signature() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg1_init_sig");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg1_init_sig");
 
     let init_fn = surface
         .bodies
@@ -479,8 +485,8 @@ fn check_group_1_body_surface_init_signature() {
         .as_deref()
         .expect("init must have a return type");
     assert!(
-        ret.contains("Result"),
-        "init return type must contain Result, got: {}",
+        ret.contains("Result<(), RegseqError>"),
+        "init return type must contain Result<(), RegseqError>, got: {}",
         ret
     );
 
@@ -493,7 +499,7 @@ fn check_group_1_body_surface_init_signature() {
 
 #[test]
 fn check_group_1_body_surface_deinit_signature() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg1_deinit_sig");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg1_deinit_sig");
 
     let deinit_fn = surface
         .bodies
@@ -529,8 +535,8 @@ fn check_group_1_body_surface_deinit_signature() {
         .as_deref()
         .expect("deinit must have a return type");
     assert!(
-        ret.contains("Result"),
-        "deinit return type must contain Result, got: {}",
+        ret.contains("Result<(), RegseqError>"),
+        "deinit return type must contain Result<(), RegseqError>, got: {}",
         ret
     );
 
@@ -543,7 +549,7 @@ fn check_group_1_body_surface_deinit_signature() {
 
 // ---------------------------------------------------------------------------
 // Check Group 2: Lifecycle callback bodies -- helper sequencing, error
-// propagation, success return, and argument flow
+// propagation, and success return
 // ---------------------------------------------------------------------------
 
 /// Extract ordered call names from MIR basic blocks.
@@ -561,6 +567,7 @@ fn extract_call_sequence(body: &MirBody) -> Vec<String> {
             } = term.kind
             {
                 if let MirTy::FnDef { ref path, .. } = constant.ty {
+                    // Extract the short function name from the path
                     let short_name = path.rsplit("::").next().unwrap_or(path).to_string();
                     calls.push(short_name);
                 }
@@ -639,6 +646,7 @@ fn has_error_propagation_after_call(body: &MirBody, fn_name: &str) -> bool {
                 return true;
             }
 
+            // Follow Goto or Call-to-Try::branch to the next block.
             match block.terminator.as_ref().map(|t| &t.kind) {
                 Some(MirTerminatorKind::Goto { target }) => {
                     cur = *target as usize;
@@ -648,6 +656,10 @@ fn has_error_propagation_after_call(body: &MirBody, fn_name: &str) -> bool {
                     target: Some(next),
                     ..
                 }) => {
+                    // Only follow through Try::branch calls, not
+                    // arbitrary calls (which would cause false
+                    // positives for infallible helpers that happen
+                    // to precede a fallible one).
                     let is_try_branch = match call_func {
                         MirOperand::Constant { constant } => match &constant.ty {
                             MirTy::FnDef { path, .. } => path.contains("Try::branch"),
@@ -687,8 +699,8 @@ fn has_ok_unit_return(body: &MirBody) -> bool {
                 ..
             } = &stmt.kind
             {
-                // variant_index 0 is Ok, and if assigned to _0 (return place),
-                // it is the success path.
+                // variant_index 0 is Ok, and if it's assigned to _0
+                // (the return place), it's the success path
                 if *variant_index == 0 && place.local == 0 {
                     return true;
                 }
@@ -698,195 +710,9 @@ fn has_ok_unit_return(body: &MirBody) -> bool {
     false
 }
 
-/// Find the Call terminator block for a given function name and return
-/// the arguments passed to it (the `args` field of `MirTerminatorKind::Call`).
-fn find_call_args<'a>(body: &'a MirBody, fn_name: &str) -> Option<&'a Vec<MirOperand>> {
-    for bb in &body.basic_blocks {
-        if bb.is_cleanup {
-            continue;
-        }
-        if let Some(ref term) = bb.terminator {
-            if let MirTerminatorKind::Call {
-                ref func, ref args, ..
-            } = term.kind
-            {
-                let is_target = match func {
-                    MirOperand::Constant { ref constant } => match &constant.ty {
-                        MirTy::FnDef { ref path, .. } => {
-                            path.rsplit("::").next().unwrap_or(path) == fn_name
-                        }
-                        _ => false,
-                    },
-                    _ => false,
-                };
-                if is_target {
-                    return Some(args);
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Resolve which local a given MIR operand reads from, if it is a
-/// Copy or Move of a simple local (no projection).
-fn operand_local(op: &MirOperand) -> Option<u32> {
-    match op {
-        MirOperand::Copy { place } | MirOperand::Move { place } => {
-            if place.projection.is_empty() {
-                Some(place.local)
-            } else {
-                None
-            }
-        }
-        _ => None,
-    }
-}
-
-/// Check whether a local is defined as the destination of a call to
-/// `fn_name` anywhere in the body. This proves that the value flowing
-/// into that local came from `fn_name`.
-fn local_defined_by_call(body: &MirBody, local: u32, fn_name: &str) -> bool {
-    for bb in &body.basic_blocks {
-        if bb.is_cleanup {
-            continue;
-        }
-        if let Some(ref term) = bb.terminator {
-            if let MirTerminatorKind::Call {
-                ref func,
-                ref destination,
-                ..
-            } = term.kind
-            {
-                if destination.local == local && destination.projection.is_empty() {
-                    let is_target = match func {
-                        MirOperand::Constant { ref constant } => match &constant.ty {
-                            MirTy::FnDef { ref path, .. } => {
-                                path.rsplit("::").next().unwrap_or(path) == fn_name
-                            }
-                            _ => false,
-                        },
-                        _ => false,
-                    };
-                    if is_target {
-                        return true;
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Check whether a MIR operand references a field projection on local 1
-/// (self). A field access of `self.current_speed` in MIR is a Copy/Move
-/// of `_1.field[N]` (where _1 is `self`).
-fn operand_is_self_field_access(op: &MirOperand) -> bool {
-    match op {
-        MirOperand::Copy { place } | MirOperand::Move { place } => {
-            // Self is local 1 in methods with `&mut self`
-            if place.local == 1 {
-                // Must have at least a Deref and a Field projection
-                let has_deref = place
-                    .projection
-                    .iter()
-                    .any(|p| matches!(p, MirProjectionElem::Deref));
-                let has_field = place
-                    .projection
-                    .iter()
-                    .any(|p| matches!(p, MirProjectionElem::Field { .. }));
-                has_deref && has_field
-            } else {
-                false
-            }
-        }
-        _ => false,
-    }
-}
-
-/// Trace through assignments to find if a local ultimately originates from
-/// a self-field access (possibly through intermediate copies).
-fn local_traces_to_self_field(body: &MirBody, local: u32) -> bool {
-    // Check direct: is the local itself used as a self-field access operand?
-    // First check if any assignment to this local uses a self-field rvalue.
-    for bb in &body.basic_blocks {
-        if bb.is_cleanup {
-            continue;
-        }
-        for stmt in &bb.statements {
-            if let MirStatementKind::Assign { place, rvalue, .. } = &stmt.kind {
-                if place.local == local && place.projection.is_empty() {
-                    match rvalue.as_ref() {
-                        MirRvalue::Use { operand } => {
-                            if operand_is_self_field_access(operand) {
-                                return true;
-                            }
-                            // Follow through copies
-                            if let Some(src) = operand_local(operand) {
-                                if local_traces_to_self_field(body, src) {
-                                    return true;
-                                }
-                            }
-                        }
-                        MirRvalue::CopyForDeref { place: src_place } => {
-                            // Deref of self to get a field
-                            if src_place.local == 1 {
-                                let has_deref = src_place
-                                    .projection
-                                    .iter()
-                                    .any(|p| matches!(p, MirProjectionElem::Deref));
-                                let has_field = src_place
-                                    .projection
-                                    .iter()
-                                    .any(|p| matches!(p, MirProjectionElem::Field { .. }));
-                                if has_deref && has_field {
-                                    return true;
-                                }
-                            }
-                            if src_place.projection.is_empty() {
-                                return local_traces_to_self_field(body, src_place.local);
-                            }
-                        }
-                        _ => {}
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
-/// Trace through assignments to find if a local ultimately originates
-/// from a call to `fn_name` (possibly through intermediate copies).
-fn local_traces_to_call(body: &MirBody, local: u32, fn_name: &str) -> bool {
-    if local_defined_by_call(body, local, fn_name) {
-        return true;
-    }
-    // Check assignments to this local for copy chains
-    for bb in &body.basic_blocks {
-        if bb.is_cleanup {
-            continue;
-        }
-        for stmt in &bb.statements {
-            if let MirStatementKind::Assign { place, rvalue, .. } = &stmt.kind {
-                if place.local == local && place.projection.is_empty() {
-                    if let MirRvalue::Use { operand } = rvalue.as_ref() {
-                        if let Some(src) = operand_local(operand) {
-                            if local_traces_to_call(body, src, fn_name) {
-                                return true;
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
-    false
-}
-
 #[test]
 fn check_group_2_init_helper_call_order() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_init_order");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_init_order");
 
     let init_fn = surface
         .bodies
@@ -928,6 +754,7 @@ fn check_group_2_init_helper_call_order() {
     // Verify call ordering in the MIR body
     let call_seq = extract_call_sequence(&init_fn.body);
 
+    // Find positions of each helper in the sequence
     let pos_toggle = call_seq
         .iter()
         .position(|c| c == "toggle_reset_if_present")
@@ -961,7 +788,7 @@ fn check_group_2_init_helper_call_order() {
 
 #[test]
 fn check_group_2_init_error_propagation() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_init_errprop");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_init_errprop");
 
     let init_fn = surface
         .bodies
@@ -993,7 +820,7 @@ fn check_group_2_init_error_propagation() {
 
 #[test]
 fn check_group_2_init_success_return() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_init_ok");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_init_ok");
 
     let init_fn = surface
         .bodies
@@ -1008,9 +835,61 @@ fn check_group_2_init_success_return() {
     );
 }
 
+/// Find the Call terminator for a given function name in non-cleanup blocks.
+/// Returns (args, destination) for the first matching call.
+fn find_call_terminator(body: &MirBody, fn_name: &str) -> Option<(Vec<MirOperand>, MirPlace)> {
+    for bb in &body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(ref term) = bb.terminator {
+            if let MirTerminatorKind::Call {
+                func: MirOperand::Constant { ref constant },
+                ref args,
+                ref destination,
+                ..
+            } = term.kind
+            {
+                if let MirTy::FnDef { ref path, .. } = constant.ty {
+                    let short_name = path.rsplit("::").next().unwrap_or(path);
+                    if short_name == fn_name {
+                        return Some((args.clone(), destination.clone()));
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check whether an operand references a given local index (directly or
+/// through projections).
+fn operand_references_local(op: &MirOperand, local: u32) -> bool {
+    match op {
+        MirOperand::Copy { place } | MirOperand::Move { place } => place.local == local,
+        MirOperand::Constant { .. } => false,
+    }
+}
+
+/// Check whether an operand is a field access on a given local (e.g.
+/// `self.current_speed` would be local 1 with a Field projection whose
+/// field name contains "current_speed" or whose index matches).
+fn operand_is_field_on_local(op: &MirOperand, local: u32) -> bool {
+    match op {
+        MirOperand::Copy { place } | MirOperand::Move { place } => {
+            place.local == local
+                && place
+                    .projection
+                    .iter()
+                    .any(|p| matches!(p, MirProjectionElem::Field { .. }))
+        }
+        MirOperand::Constant { .. } => false,
+    }
+}
+
 #[test]
-fn check_group_2_init_argument_flow_into_program_polling_port() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_init_argflow");
+fn check_group_2_init_argument_flow() {
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_init_args");
 
     let init_fn = surface
         .bodies
@@ -1019,58 +898,110 @@ fn check_group_2_init_argument_flow_into_program_polling_port() {
         .find(|f| f.name == "init")
         .expect("body surface must contain init function");
 
-    // Verify that uart_clock_hz is called before program_polling_port
-    let call_seq = extract_call_sequence(&init_fn.body);
-    let pos_uart_clk = call_seq
-        .iter()
-        .position(|c| c == "uart_clock_hz")
-        .expect("uart_clock_hz must appear in init call sequence");
-    let pos_program = call_seq
-        .iter()
-        .position(|c| c == "program_polling_port")
-        .expect("program_polling_port must appear in init call sequence");
+    // --- Part A: uart_clock_hz() return value flows into program_polling_port ---
+    //
+    // Find the uart_clock_hz Call terminator to learn which local receives
+    // its return value.
+    let (_, uart_clk_dest) = find_call_terminator(&init_fn.body, "uart_clock_hz")
+        .expect("uart_clock_hz Call terminator must exist in init MIR");
+
+    let uart_clk_local = uart_clk_dest.local;
+
+    // Find the program_polling_port Call terminator and inspect its args.
+    // MIR args for a method call are: [self_ref, arg0, arg1, ...]
+    // In authored source: program_polling_port(self.uart_clock_hz(), self.current_speed)
+    // So MIR args should be: [self_ref, <uart_clk_result>, <current_speed_field>]
+    let (ppp_args, _) = find_call_terminator(&init_fn.body, "program_polling_port")
+        .expect("program_polling_port Call terminator must exist in init MIR");
+
+    // There should be at least 3 args: self, uart_clk, baud_rate
     assert!(
-        pos_uart_clk < pos_program,
-        "uart_clock_hz must be called before program_polling_port (argument flow)"
+        ppp_args.len() >= 3,
+        "program_polling_port must have at least 3 MIR args (self + 2 params), got {}",
+        ppp_args.len()
     );
 
-    // Prove actual operand flow: the first argument to program_polling_port
-    // comes from self.uart_clock_hz() and the second from self.current_speed.
-    let args = find_call_args(&init_fn.body, "program_polling_port")
-        .expect("program_polling_port call must have arguments in MIR");
-
-    // args[0] is &mut self (the receiver), actual params start at index 1
+    // arg[1] (first non-self argument) must reference the local that
+    // holds the return value of uart_clock_hz().
     assert!(
-        args.len() >= 3,
-        "program_polling_port call must have at least 3 operands (self + 2 params), got {}",
-        args.len()
+        operand_references_local(&ppp_args[1], uart_clk_local),
+        "program_polling_port arg 1 must reference the uart_clock_hz() return \
+         local (_{uart_clk_local}), but got: {:?}",
+        ppp_args[1]
     );
 
-    // First param (args[1]): must trace back to uart_clock_hz call result
-    let first_param = &args[1];
-    let first_local = operand_local(first_param)
-        .expect("first param to program_polling_port must be a local (Copy/Move)");
-    assert!(
-        local_traces_to_call(&init_fn.body, first_local, "uart_clock_hz"),
-        "first argument to program_polling_port must originate from uart_clock_hz() call"
-    );
+    // --- Part B: self.current_speed flows as arg 2 ---
+    //
+    // In MIR, `self.current_speed` is local 1 (the self parameter in init,
+    // which takes &mut self) with a Field projection. The self local in a
+    // method body is local 1 (local 0 is the return place).
+    //
+    // We verify that arg[2] is a field access on a local that is either
+    // local 1 directly (the self reference) or a deref of local 1.
+    // After MIR lowering, `self.current_speed` may appear as a Copy/Move
+    // of a temporary that was assigned from a field projection. We check
+    // two strategies:
+    //   (a) arg[2] is directly a field access on self (local 1)
+    //   (b) arg[2] references a local that was assigned from a field on self
 
-    // Second param (args[2]): must trace back to self.current_speed field access
-    let second_param = &args[2];
-    let second_local = operand_local(second_param);
-    let second_is_field = match second_local {
-        Some(local) => local_traces_to_self_field(&init_fn.body, local),
-        None => operand_is_self_field_access(second_param),
+    let arg2 = &ppp_args[2];
+    let arg2_is_field_on_self = operand_is_field_on_local(arg2, 1);
+
+    // Strategy (b): if arg2 references a temporary, check if that
+    // temporary was assigned from a field projection on self.
+    let arg2_is_indirect_field = if !arg2_is_field_on_self {
+        match arg2 {
+            MirOperand::Copy { place } | MirOperand::Move { place } => {
+                let target_local = place.local;
+                // Search statements for an assignment to this local from
+                // a field access on self (local 1 or a deref thereof).
+                init_fn.body.basic_blocks.iter().any(|bb| {
+                    if bb.is_cleanup {
+                        return false;
+                    }
+                    bb.statements.iter().any(|stmt| {
+                        if let MirStatementKind::Assign {
+                            place: assign_place,
+                            rvalue,
+                        } = &stmt.kind
+                        {
+                            if assign_place.local != target_local {
+                                return false;
+                            }
+                            match rvalue.as_ref() {
+                                MirRvalue::Use { operand } => operand_is_field_on_local(operand, 1),
+                                MirRvalue::CopyForDeref { place: src } => {
+                                    src.local == 1
+                                        && src
+                                            .projection
+                                            .iter()
+                                            .any(|p| matches!(p, MirProjectionElem::Field { .. }))
+                                }
+                                _ => false,
+                            }
+                        } else {
+                            false
+                        }
+                    })
+                })
+            }
+            MirOperand::Constant { .. } => false,
+        }
+    } else {
+        false
     };
+
     assert!(
-        second_is_field,
-        "second argument to program_polling_port must originate from self.current_speed field access"
+        arg2_is_field_on_self || arg2_is_indirect_field,
+        "program_polling_port arg 2 must reference self.current_speed \
+         (a field on the self parameter, local 1), but got: {:?}",
+        arg2
     );
 }
 
 #[test]
 fn check_group_2_deinit_helper_call_order() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_deinit_order");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_deinit_order");
 
     let deinit_fn = surface
         .bodies
@@ -1127,7 +1058,7 @@ fn check_group_2_deinit_helper_call_order() {
 
 #[test]
 fn check_group_2_deinit_error_propagation() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_deinit_errprop");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_deinit_errprop");
 
     let deinit_fn = surface
         .bodies
@@ -1157,7 +1088,7 @@ fn check_group_2_deinit_error_propagation() {
 
 #[test]
 fn check_group_2_deinit_success_return() {
-    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "s2e09_cg2_deinit_ok");
+    let surface = compile_and_extract_all(LIFECYCLE_SPECIMEN, "lifecycle_cg2_deinit_ok");
 
     let deinit_fn = surface
         .bodies

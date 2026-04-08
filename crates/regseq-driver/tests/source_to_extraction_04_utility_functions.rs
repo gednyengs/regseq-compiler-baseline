@@ -12,8 +12,34 @@
 //!     -- inspects `MirBodySurface.functions`
 //!
 //! Specimen: inline reduced specimen mirroring the three PL011 utility
-//! functions. Fidelity is verified against the real fixture source at
+//! functions inside a `mod driver` block to preserve the authored module
+//! nesting. Fidelity is verified against the real fixture source at
 //! `tests/fixtures/pl011-full-spec/src/driver.rs`.
+//!
+//! ## Blocking Authored-Source Transcription Error
+//!
+//! The check specification (`04-utility-functions-extraction.md`) records the
+//! following "exact body effects":
+//!
+//!   - `field_val`: `field.val(raw)`
+//!   - `raw_reg_val`: `FieldValue::<u32, R>::new(mask, value)`
+//!   - `field_from_raw`: `field.read(raw)`
+//!
+//! However, the actual fixture source (`tests/fixtures/pl011-full-spec/src/driver.rs`)
+//! contains:
+//!
+//!   - `field_val`: `FieldValue::new(field.mask, raw << field.shift)`
+//!   - `raw_reg_val`: `FieldValue::new(mask, value)` (no turbofish)
+//!   - `field_from_raw`: `(raw & field.mask) >> field.shift`
+//!
+//! Per the check specification's Validation Precondition: "Any discrepancy
+//! between this check contract and the fixture source is a blocking
+//! authored-source transcription error. Record it in the report and do not
+//! mark extraction checks `pass`."
+//!
+//! This test suite records the discrepancy and marks all body-related checks
+//! `fail` with correspondence `absent` (body extraction gap) compounded by
+//! the transcription error.
 
 #![feature(rustc_private)]
 #![feature(box_patterns)]
@@ -53,6 +79,11 @@ use mir_repr::*;
 /// Authored utility function names.
 const AUTHORED_UTILITY_FN_NAMES: &[&str] = &["field_val", "raw_reg_val", "field_from_raw"];
 
+/// Authored canonical path suffixes (module-qualified).
+const AUTHORED_FIELD_VAL_PATH_SUFFIX: &str = "driver::field_val";
+const AUTHORED_RAW_REG_VAL_PATH_SUFFIX: &str = "driver::raw_reg_val";
+const AUTHORED_FIELD_FROM_RAW_PATH_SUFFIX: &str = "driver::field_from_raw";
+
 /// Authored signatures (for fixture-fidelity verification).
 const AUTHORED_FIELD_VAL_SIG: &str =
     "fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R>";
@@ -61,10 +92,17 @@ const AUTHORED_RAW_REG_VAL_SIG: &str =
 const AUTHORED_FIELD_FROM_RAW_SIG: &str =
     "fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32";
 
-/// Authored body effects (for fixture-fidelity verification).
-const AUTHORED_FIELD_VAL_BODY: &str = "FieldValue::new(field.mask, raw << field.shift)";
-const AUTHORED_RAW_REG_VAL_BODY: &str = "FieldValue::new(mask, value)";
-const AUTHORED_FIELD_FROM_RAW_BODY: &str = "(raw & field.mask) >> field.shift";
+/// Actual body expressions from the fixture source (used for fidelity checks).
+/// These are the REAL bodies, NOT the check spec's "exact body effects" which
+/// contain transcription errors.
+const FIXTURE_FIELD_VAL_BODY: &str = "FieldValue::new(field.mask, raw << field.shift)";
+const FIXTURE_RAW_REG_VAL_BODY: &str = "FieldValue::new(mask, value)";
+const FIXTURE_FIELD_FROM_RAW_BODY: &str = "(raw & field.mask) >> field.shift";
+
+/// Check spec's claimed "exact body effects" (transcription errors).
+const SPEC_FIELD_VAL_BODY: &str = "field.val(raw)";
+const SPEC_RAW_REG_VAL_BODY: &str = "FieldValue::<u32, R>::new(mask, value)";
+const SPEC_FIELD_FROM_RAW_BODY: &str = "field.read(raw)";
 
 /// Fixture source path.
 const FIXTURE_PATH: &str = concat!(
@@ -201,17 +239,20 @@ fn compile_and_extract_dual(source: &str, test_name: &str) -> DualExtractionResu
 // Reduced inline specimen
 // ---------------------------------------------------------------------------
 
-/// Reduced inline specimen that mirrors the three PL011 utility functions.
+/// Reduced inline specimen that mirrors the three PL011 utility functions
+/// inside a `mod driver` block to preserve the authored `driver::` module
+/// nesting from the real fixture (`pl011_full_spec::driver::*`).
 ///
 /// The specimen preserves:
+/// - `mod driver` module nesting (authored canonical paths use `driver::`)
 /// - all three function names exactly
 /// - generic parameter `R` on each function
 /// - parameter names and types
 /// - return types
-/// - body expressions
+/// - body expressions matching the fixture source
 ///
-/// A minimal driver struct is included to satisfy body-extraction prerequisites
-/// (body extraction requires finding the `#[rseq::driver]` struct).
+/// The `#[rseq::driver]` struct is placed at crate root (outside the driver
+/// module) because body extraction requires it at root discovery scope.
 const SPECIMEN: &str = r#"
 pub struct Field<T, R> {
     pub mask: T,
@@ -238,16 +279,20 @@ impl<T, R> Field<T, R> {
     }
 }
 
-fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R> {
-    FieldValue::new(field.mask, raw << field.shift)
-}
+mod driver {
+    use super::{Field, FieldValue};
 
-fn raw_reg_val<R>(mask: u32, value: u32) -> FieldValue<u32, R> {
-    FieldValue::new(mask, value)
-}
+    pub fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R> {
+        FieldValue::new(field.mask, raw << field.shift)
+    }
 
-fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32 {
-    (raw & field.mask) >> field.shift
+    pub fn raw_reg_val<R>(mask: u32, value: u32) -> FieldValue<u32, R> {
+        FieldValue::new(mask, value)
+    }
+
+    pub fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32 {
+        (raw & field.mask) >> field.shift
+    }
 }
 
 #[rseq::driver(name = "test-drv", compatible = ["vendor,test"])]
@@ -255,11 +300,11 @@ pub struct TestDriver;
 "#;
 
 // ---------------------------------------------------------------------------
-// Precondition: fixture-source fidelity
+// Precondition: fixture-source fidelity (signatures)
 // ---------------------------------------------------------------------------
 
 #[test]
-fn precondition_fixture_source_contains_authored_utility_functions() {
+fn precondition_fixture_source_contains_authored_signatures() {
     let source = read_fixture_source();
 
     // Verify each authored signature is present in the fixture source.
@@ -273,21 +318,73 @@ fn precondition_fixture_source_contains_authored_utility_functions() {
     );
     assert!(
         source.contains(AUTHORED_FIELD_FROM_RAW_SIG),
-        "fixture must contain field_from_raw signature: {AUTHORED_FIELD_FROM_RAW_SIG}"
+        "fixture must contain field_from_raw signature: \
+         {AUTHORED_FIELD_FROM_RAW_SIG}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Precondition: fixture-source body fidelity (actual bodies)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn precondition_fixture_source_contains_actual_body_expressions() {
+    let source = read_fixture_source();
+
+    // Verify the REAL body expressions from the fixture source.
+    assert!(
+        source.contains(FIXTURE_FIELD_VAL_BODY),
+        "fixture must contain field_val body: {FIXTURE_FIELD_VAL_BODY}"
+    );
+    assert!(
+        source.contains(FIXTURE_RAW_REG_VAL_BODY),
+        "fixture must contain raw_reg_val body: {FIXTURE_RAW_REG_VAL_BODY}"
+    );
+    assert!(
+        source.contains(FIXTURE_FIELD_FROM_RAW_BODY),
+        "fixture must contain field_from_raw body: \
+         {FIXTURE_FIELD_FROM_RAW_BODY}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Precondition: detect blocking authored-source transcription error
+// ---------------------------------------------------------------------------
+
+#[test]
+fn precondition_check_spec_body_effects_disagree_with_fixture() {
+    let source = read_fixture_source();
+
+    // The check specification claims "exact body effects" that do NOT match
+    // the actual fixture source. This test documents the discrepancy as a
+    // blocking authored-source transcription error.
+
+    // field_val: spec says "field.val(raw)", fixture has
+    // "FieldValue::new(field.mask, raw << field.shift)"
+    assert!(
+        !source.contains(SPEC_FIELD_VAL_BODY) || SPEC_FIELD_VAL_BODY != FIXTURE_FIELD_VAL_BODY,
+        "spec body effect for field_val disagrees with fixture; \
+         spec: {SPEC_FIELD_VAL_BODY}, fixture: {FIXTURE_FIELD_VAL_BODY}"
+    );
+    assert_ne!(
+        SPEC_FIELD_VAL_BODY, FIXTURE_FIELD_VAL_BODY,
+        "transcription error: spec body for field_val does not match fixture"
     );
 
-    // Verify each authored body expression is present in the fixture source.
-    assert!(
-        source.contains(AUTHORED_FIELD_VAL_BODY),
-        "fixture must contain field_val body: {AUTHORED_FIELD_VAL_BODY}"
+    // raw_reg_val: spec says "FieldValue::<u32, R>::new(mask, value)",
+    // fixture has "FieldValue::new(mask, value)" (no turbofish)
+    assert_ne!(
+        SPEC_RAW_REG_VAL_BODY, FIXTURE_RAW_REG_VAL_BODY,
+        "transcription error: spec body for raw_reg_val does not match \
+         fixture"
     );
-    assert!(
-        source.contains(AUTHORED_RAW_REG_VAL_BODY),
-        "fixture must contain raw_reg_val body: {AUTHORED_RAW_REG_VAL_BODY}"
-    );
-    assert!(
-        source.contains(AUTHORED_FIELD_FROM_RAW_BODY),
-        "fixture must contain field_from_raw body: {AUTHORED_FIELD_FROM_RAW_BODY}"
+
+    // field_from_raw: spec says "field.read(raw)", fixture has
+    // "(raw & field.mask) >> field.shift"
+    assert_ne!(
+        SPEC_FIELD_FROM_RAW_BODY, FIXTURE_FIELD_FROM_RAW_BODY,
+        "transcription error: spec body for field_from_raw does not match \
+         fixture"
     );
 }
 
@@ -300,8 +397,8 @@ fn precondition_specimen_fidelity_against_fixture() {
     let source = read_fixture_source();
 
     // The specimen contains the exact same three function definitions as the
-    // fixture. Verify each function name, signature, and body expression appear
-    // in both the specimen and the fixture.
+    // fixture. Verify each function name, signature, and body expression
+    // appear in both the specimen and the fixture.
     for name in AUTHORED_UTILITY_FN_NAMES {
         assert!(
             SPECIMEN.contains(name),
@@ -329,11 +426,11 @@ fn precondition_specimen_fidelity_against_fixture() {
         );
     }
 
-    // Verify exact body expressions appear in both.
+    // Verify exact body expressions (from fixture, not spec) appear in both.
     for body_expr in &[
-        AUTHORED_FIELD_VAL_BODY,
-        AUTHORED_RAW_REG_VAL_BODY,
-        AUTHORED_FIELD_FROM_RAW_BODY,
+        FIXTURE_FIELD_VAL_BODY,
+        FIXTURE_RAW_REG_VAL_BODY,
+        FIXTURE_FIELD_FROM_RAW_BODY,
     ] {
         assert!(
             SPECIMEN.contains(body_expr),
@@ -344,6 +441,13 @@ fn precondition_specimen_fidelity_against_fixture() {
             "fixture must contain body: {body_expr}"
         );
     }
+
+    // Verify the specimen preserves `mod driver` nesting.
+    assert!(
+        SPECIMEN.contains("mod driver"),
+        "specimen must contain `mod driver` to preserve authored module \
+         nesting"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -369,26 +473,32 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
         );
     }
 
-    // Canonical paths: in an inline single-file specimen the crate name is
-    // `test_input` (derived from filename). The functions are at crate root,
-    // so canonical paths are `test_input::<fn_name>` or just `<fn_name>`
-    // (rustc may omit crate name for root-level items).
-    for name in AUTHORED_UTILITY_FN_NAMES {
+    // Canonical paths must include the `driver::` module nesting.
+    // The authored paths are `pl011_full_spec::driver::<fn_name>`.
+    // In the specimen, crate name is `test_input`, so we expect
+    // `test_input::driver::<fn_name>`.
+    let path_suffixes = [
+        ("field_val", AUTHORED_FIELD_VAL_PATH_SUFFIX),
+        ("raw_reg_val", AUTHORED_RAW_REG_VAL_PATH_SUFFIX),
+        ("field_from_raw", AUTHORED_FIELD_FROM_RAW_PATH_SUFFIX),
+    ];
+
+    for (name, expected_suffix) in &path_suffixes {
         let func = surface
             .free_functions
             .iter()
             .find(|f| f.name == *name)
             .unwrap_or_else(|| panic!("function '{name}' not found in free_functions"));
         let cp = &func.canonical_path.0;
+        // Must end with `driver::<fn_name>`, not just `::<fn_name>`.
         assert!(
-            cp == *name || cp.ends_with(&format!("::{name}")),
-            "canonical_path for '{name}' should end with the function name; got: {cp}"
+            cp.ends_with(expected_suffix),
+            "canonical_path for '{name}' must end with '{expected_suffix}' \
+             (preserving driver:: module nesting); got: {cp}"
         );
     }
 
-    // Exactly three utility functions expected (plus possibly the
-    // constructor/helper functions from supporting types, but the check is
-    // that all three authored ones are present).
+    // Verify all three authored utility functions are present.
     let authored_count = AUTHORED_UTILITY_FN_NAMES
         .iter()
         .filter(|n| fn_names.contains(*n))
@@ -396,7 +506,8 @@ fn check_group_1_free_function_identity_name_and_canonical_path() {
     assert_eq!(
         authored_count,
         AUTHORED_UTILITY_FN_NAMES.len(),
-        "all three authored utility functions must be present in free_functions"
+        "all three authored utility functions must be present in \
+         free_functions"
     );
 }
 
@@ -416,9 +527,9 @@ fn check_group_1_identity_surface_lacks_generics_params_return_type() {
             .find(|f| f.name == *name)
             .unwrap_or_else(|| panic!("function '{name}' not found"));
 
-        // FunctionFact has exactly three fields: name, canonical_path, module_path.
-        // There are no fields for generics, parameters, or return type.
-        // We verify the fields that ARE present:
+        // FunctionFact has exactly three fields: name, canonical_path,
+        // module_path. There are no fields for generics, parameters, or
+        // return type. We verify the fields that ARE present:
         assert!(!func.name.is_empty(), "name must be non-empty for '{name}'");
         assert!(
             !func.canonical_path.0.is_empty(),
@@ -453,9 +564,9 @@ fn check_group_2_body_surface_does_not_contain_free_functions() {
     for name in AUTHORED_UTILITY_FN_NAMES {
         assert!(
             !body_fn_names.contains(name),
-            "free function '{name}' should NOT appear in MirBodySurface.functions \
-             because free functions are not body-extraction roots; \
-             found functions: {body_fn_names:?}"
+            "free function '{name}' should NOT appear in \
+             MirBodySurface.functions because free functions are not \
+             body-extraction roots; found functions: {body_fn_names:?}"
         );
     }
 }

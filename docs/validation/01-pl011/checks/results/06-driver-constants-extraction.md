@@ -276,7 +276,7 @@ boundary validation.
 | 2a: Distinct entry survival | `pass` |
 | 2b: Definitional relationship | `fail` |
 
-8 of 9 checks pass. 2 checks fail due to extraction gaps:
+7 of 9 checks pass. 2 checks fail due to extraction gaps:
 
 1. **Constant value evaluation gap**: The extraction boundary does not evaluate constant expressions. Associated constants appear as `MirConstValue::Unsupported` (unevaluated) in MIR and have no value field in the identity surface.
 

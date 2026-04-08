@@ -367,11 +367,34 @@ fn render_qpath(qpath: &QPath<'_>) -> String {
         QPath::Resolved(_, path) => path
             .segments
             .iter()
-            .map(|s| s.ident.name.as_str())
+            .map(|s| render_path_segment(s))
             .collect::<Vec<_>>()
             .join("::"),
         QPath::TypeRelative(ty, segment) => {
-            format!("{}::{}", render_hir_ty(ty), segment.ident.name.as_str())
+            format!("{}::{}", render_hir_ty(ty), render_path_segment(segment))
         }
+    }
+}
+
+/// Render a single path segment including any generic type arguments.
+fn render_path_segment(seg: &rustc_hir::PathSegment<'_>) -> String {
+    let name = seg.ident.name.as_str().to_string();
+    match seg.args {
+        Some(args) if !args.args.is_empty() => {
+            let type_args: Vec<String> = args
+                .args
+                .iter()
+                .filter_map(|arg| match arg {
+                    rustc_hir::GenericArg::Type(ty) => Some(render_hir_ty(ty.as_unambig_ty())),
+                    _ => None,
+                })
+                .collect();
+            if type_args.is_empty() {
+                name
+            } else {
+                format!("{}<{}>", name, type_args.join(", "))
+            }
+        }
+        _ => name,
     }
 }

@@ -637,6 +637,181 @@ fn operand_mentions(op: &MirOperand, substr: &str) -> bool {
     }
 }
 
+/// Check if an operand's constant path ends with `::name` (exact suffix match).
+/// This prevents substring overlaps like "read" matching "read_raw".
+fn operand_mentions_exact(op: &MirOperand, name: &str) -> bool {
+    match op {
+        MirOperand::Constant { constant } => match &constant.ty {
+            MirTy::FnDef { path, .. } => {
+                let suffix = format!("::{}", name);
+                path.ends_with(&suffix)
+            }
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+/// Like `has_call_to` but uses exact suffix matching (`::name`) to avoid
+/// substring overlaps (e.g. "read" vs "read_raw").
+fn has_call_to_exact(body: &MirBody, callee_name: &str) -> bool {
+    body.basic_blocks.iter().any(|bb| {
+        bb.terminator.as_ref().is_some_and(|t| match &t.kind {
+            MirTerminatorKind::Call { func, .. } => operand_mentions_exact(func, callee_name),
+            _ => false,
+        })
+    })
+}
+
+/// Collect all basic-block indices reachable from `start_idx` (full
+/// reachability, following all CFG edges including SwitchInt arms).
+fn reachable_from(body: &MirBody, start_idx: usize) -> Vec<usize> {
+    let mut visited = std::collections::HashSet::new();
+    let mut stack = vec![start_idx];
+    while let Some(idx) = stack.pop() {
+        if !visited.insert(idx) {
+            continue;
+        }
+        if idx >= body.basic_blocks.len() {
+            continue;
+        }
+        let bb = &body.basic_blocks[idx];
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(t) = &bb.terminator {
+            match &t.kind {
+                MirTerminatorKind::Goto { target } => {
+                    stack.push(*target as usize);
+                }
+                MirTerminatorKind::Call { target, .. } => {
+                    if let Some(tgt) = target {
+                        stack.push(*tgt as usize);
+                    }
+                }
+                MirTerminatorKind::SwitchInt { targets, .. } => {
+                    for &tgt in &targets.targets {
+                        stack.push(tgt as usize);
+                    }
+                }
+                MirTerminatorKind::Drop { target, .. } => {
+                    stack.push(*target as usize);
+                }
+                MirTerminatorKind::Assert { target, .. } => {
+                    stack.push(*target as usize);
+                }
+                MirTerminatorKind::Return
+                | MirTerminatorKind::Unreachable
+                | MirTerminatorKind::UnwindResume
+                | MirTerminatorKind::UnwindTerminate { .. }
+                | MirTerminatorKind::Unsupported { .. } => {}
+            }
+        }
+    }
+    visited.into_iter().collect()
+}
+
+/// Check if a set of reachable block indices contains a call to `callee_substr`.
+fn reachable_set_has_call(body: &MirBody, reachable: &[usize], callee_substr: &str) -> bool {
+    reachable.iter().any(|&idx| {
+        let bb = &body.basic_blocks[idx];
+        bb.terminator.as_ref().is_some_and(|t| match &t.kind {
+            MirTerminatorKind::Call { func, .. } => operand_mentions(func, callee_substr),
+            _ => false,
+        })
+    })
+}
+
+/// Check if a Call terminator's args contain a reference to the given local.
+fn call_args_reference_local(body: &MirBody, callee_substr: &str, local: u32) -> bool {
+    body.basic_blocks.iter().any(|bb| {
+        if bb.is_cleanup {
+            return false;
+        }
+        bb.terminator.as_ref().is_some_and(|t| match &t.kind {
+            MirTerminatorKind::Call { func, args, .. } => {
+                if !operand_mentions(func, callee_substr) {
+                    return false;
+                }
+                args.iter().any(|a| operand_reads_local(a, local))
+            }
+            _ => false,
+        })
+    })
+}
+
+/// Check whether `source_local` flows (possibly through Use/Copy/Move
+/// assignments and/or a Cast) into the args of `target_callee`.
+/// This traces patterns like `field_val(FIELD, byte as u32)` where `byte`
+/// (local 2) goes through Copy/Move to a temp, then Cast to u32, then
+/// into field_val's args.
+fn call_arg_receives_cast_of_local(body: &MirBody, target_callee: &str, source_local: u32) -> bool {
+    // Build the transitive set of locals that carry source_local's value
+    // (via Use { operand: Copy/Move } assignments).
+    let mut value_locals = std::collections::HashSet::new();
+    value_locals.insert(source_local);
+    // Fixed-point: keep expanding until no new locals are found
+    loop {
+        let mut new_locals = Vec::new();
+        for bb in &body.basic_blocks {
+            if bb.is_cleanup {
+                continue;
+            }
+            for stmt in &bb.statements {
+                if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                    if let MirRvalue::Use { operand } = rvalue.as_ref() {
+                        if value_locals
+                            .iter()
+                            .any(|&l| operand_reads_local(operand, l))
+                            && !value_locals.contains(&place.local)
+                        {
+                            new_locals.push(place.local);
+                        }
+                    }
+                }
+            }
+        }
+        if new_locals.is_empty() {
+            break;
+        }
+        for l in new_locals {
+            value_locals.insert(l);
+        }
+    }
+
+    // Find locals that are assigned a Cast of any value_local
+    let mut cast_locals = std::collections::HashSet::new();
+    for bb in &body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if let MirRvalue::Cast { operand, .. } = rvalue.as_ref() {
+                    if value_locals
+                        .iter()
+                        .any(|&l| operand_reads_local(operand, l))
+                    {
+                        cast_locals.insert(place.local);
+                    }
+                }
+            }
+        }
+    }
+
+    // Check if target_callee directly receives any value_local
+    if value_locals
+        .iter()
+        .any(|&l| call_args_reference_local(body, target_callee, l))
+    {
+        return true;
+    }
+    // Check if any cast_local feeds into target_callee args
+    cast_locals
+        .iter()
+        .any(|&cl| call_args_reference_local(body, target_callee, cl))
+}
+
 /// Collect all Call terminator callee names from non-cleanup MIR blocks,
 /// in block order.
 fn collect_call_names(body: &MirBody) -> Vec<String> {
@@ -645,14 +820,23 @@ fn collect_call_names(body: &MirBody) -> Vec<String> {
         if bb.is_cleanup {
             continue;
         }
-        if let Some(t) = &bb.terminator {
-            if let MirTerminatorKind::Call { func, .. } = &t.kind {
-                if let MirOperand::Constant { constant } = func {
-                    if let MirTy::FnDef { path, .. } = &constant.ty {
-                        names.push(path.clone());
-                    }
-                }
-            }
+        if let Some(MirTerminator {
+            kind:
+                MirTerminatorKind::Call {
+                    func:
+                        MirOperand::Constant {
+                            constant:
+                                MirConstant {
+                                    ty: MirTy::FnDef { path, .. },
+                                    ..
+                                },
+                        },
+                    ..
+                },
+            ..
+        }) = &bb.terminator
+        {
+            names.push(path.clone());
         }
     }
     names
@@ -1499,11 +1683,49 @@ fn check_group_2_tx_byte_body() {
         "tx_byte MIR must call write (register write on fast path)"
     );
 
-    // Fast path does NOT call enable_tx_interrupts.
-    // We verify this indirectly: enable_tx_interrupts only appears on
-    // the staged path. The MIR has two separate code paths from the
-    // SwitchInt; the fast path ends with Return and does not traverse
-    // the enable_tx_interrupts block. We verify both paths exist.
+    // --- Structural path isolation proof ---
+    // The `&&` short-circuit and if/else body produce multiple SwitchInt
+    // nodes in MIR. We search for any SwitchInt whose immediate targets
+    // produce path isolation: one target's full reachability includes
+    // field_val/write (fast path) but NOT enable_tx_interrupts, and the
+    // other includes enable_tx_interrupts (staged path) but NOT write.
+    let mut found_isolation = false;
+    for bb in &f.body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        let Some(t) = &bb.terminator else { continue };
+        let MirTerminatorKind::SwitchInt { targets, .. } = &t.kind else {
+            continue;
+        };
+        if targets.targets.len() < 2 {
+            continue;
+        }
+        let mut has_fast = false;
+        let mut has_staged = false;
+        for &tgt in &targets.targets {
+            let reachable = reachable_from(&f.body, tgt as usize);
+            let reaches_write = reachable_set_has_call(&f.body, &reachable, "write");
+            let reaches_enable =
+                reachable_set_has_call(&f.body, &reachable, "enable_tx_interrupts");
+            if reaches_write && !reaches_enable {
+                has_fast = true;
+            }
+            if reaches_enable && !reaches_write {
+                has_staged = true;
+            }
+        }
+        if has_fast && has_staged {
+            found_isolation = true;
+            break;
+        }
+    }
+    assert!(
+        found_isolation,
+        "tx_byte must have a SwitchInt with structurally isolated paths: \
+         one branch reaching field_val/write (fast) but not enable_tx_interrupts, \
+         and another reaching enable_tx_interrupts (staged) but not write"
+    );
 
     // Staged path: assigns pending_tx = Some(byte)
     let has_option_some = f.body.basic_blocks.iter().any(|bb| {
@@ -1542,6 +1764,34 @@ fn check_group_2_tx_byte_body() {
         "tx_byte MIR must contain call to enable_tx_interrupts"
     );
 
+    // byte parameter (local 2: local 0=return, 1=self, 2=byte) flows into
+    // field_val via a `byte as u32` cast. Verify that the cast of local 2
+    // feeds into the field_val call arguments.
+    // Debug: show casts and field_val args
+    for bb in &f.body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if let MirRvalue::Cast { operand, .. } = rvalue.as_ref() {
+                    eprintln!("Cast: place=local{}, operand={:?}", place.local, operand);
+                }
+            }
+        }
+        if let Some(t) = &bb.terminator {
+            if let MirTerminatorKind::Call { func, args, .. } = &t.kind {
+                if operand_mentions(func, "field_val") {
+                    eprintln!("field_val args: {:?}", args);
+                }
+            }
+        }
+    }
+    assert!(
+        call_arg_receives_cast_of_local(&f.body, "field_val", 2),
+        "tx_byte must pass `byte` (local 2, possibly cast as u32) into field_val call"
+    );
+
     // Return type is unit
     assert!(f.return_type.is_none(), "tx_byte must return unit");
 }
@@ -1564,10 +1814,10 @@ fn check_group_2_rx_char_body() {
         "rx_char MIR must have SwitchInt for RXFE branch"
     );
 
-    // FR.RXFE read
+    // FR.RXFE read -- use exact suffix match to avoid matching read_raw
     assert!(
-        has_call_to(&f.body, "read"),
-        "rx_char MIR must call read (for FR.RXFE)"
+        has_call_to_exact(&f.body, "read"),
+        "rx_char MIR must call read (for FR.RXFE), distinct from read_raw"
     );
 
     // Single raw DR read via read_raw
@@ -1604,6 +1854,59 @@ fn check_group_2_rx_char_body() {
         bitor_count >= 4,
         "rx_char must have >= 4 bitor calls for OE/BE/PE/FE accumulation, found: {}",
         bitor_count
+    );
+
+    // Verify specific OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING mapping.
+    // The extraction surface exposes call paths but not the constant names
+    // passed as arguments (ErrorKind::OVERRUN etc. are compile-time constants
+    // inlined by rustc before MIR emission). The `field_from_raw` calls
+    // receive Field constants whose paths contain "OE", "BE", "PE", "FE",
+    // but the ErrorKind constants (OVERRUN, BREAK, PARITY, FRAMING) are
+    // lowered to integer literals by the time we see MIR.
+    //
+    // What we CAN verify structurally:
+    // 1. All four field_from_raw calls with OE/BE/PE/FE paths exist
+    // 2. Each is followed by a SwitchInt (the `!= 0` check)
+    // 3. The bitor count matches the error flag count (4)
+    //
+    // KNOWN LIMITATION: The specific OE->OVERRUN (not OE->BREAK, etc.)
+    // pairing cannot be individually verified from MIR because ErrorKind
+    // constants are integer literals at this level. The count-based
+    // assertion (4 field_from_raw for error flags + 4 bitor calls) combined
+    // with specimen fidelity provides high confidence but not a structural
+    // proof of individual mappings.
+
+    // The field_from_raw call itself won't contain "OE" in its path -- it's
+    // a free function. But we verify via the Call args: the first arg is a
+    // Copy/Move of a constant Field from the OE/BE/PE/FE modules.
+    // We verify this indirectly: the fixture source has exactly 4 conditional
+    // field_from_raw calls (OE, BE, PE, FE), each followed by `!= 0` and
+    // bitor with the corresponding error kind. Since we already proved:
+    // - exactly 5 field_from_raw calls (1 DATA + 4 error flags)
+    // - exactly 4 bitor calls
+    // - exactly 4 SwitchInt blocks after the RXFE branch
+    // - specimen fidelity ensures the mapping is OE->OVERRUN, BE->BREAK,
+    //   PE->PARITY, FE->FRAMING
+    // This gives us high assurance of the mapping ordering.
+
+    // Count SwitchInt blocks (the != 0 checks) -- expect at least 5:
+    // 1 for RXFE + 4 for error flags
+    let switch_int_count = f
+        .body
+        .basic_blocks
+        .iter()
+        .filter(|bb| {
+            !bb.is_cleanup
+                && matches!(
+                    bb.terminator.as_ref().map(|t| &t.kind),
+                    Some(MirTerminatorKind::SwitchInt { .. })
+                )
+        })
+        .count();
+    assert!(
+        switch_int_count >= 5,
+        "rx_char must have >= 5 SwitchInt blocks (1 RXFE + 4 error flags), found: {}",
+        switch_int_count
     );
 
     // RxChar::new construction

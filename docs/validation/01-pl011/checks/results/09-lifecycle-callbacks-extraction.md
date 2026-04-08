@@ -1,250 +1,112 @@
 # Validation Certificate: PL011 Lifecycle Callbacks Extraction Check
 
-Source premise: `docs/validation/01-pl011/checks/09-lifecycle-callbacks-extraction.md`
-Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
+- Source premise: `docs/validation/01-pl011/01-authored-source.md` (Lifecycle Callbacks section)
+- Target boundary evidence: `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
 
 ## Specimen Fidelity
 
-- Specimen type: reduced inline specimen (`LIFECYCLE_SPECIMEN`)
 - Fidelity Assertion Predicate(s):
-  - `fixture.contains("self.toggle_reset_if_present()?;")` -- init call 1
-  - `fixture.contains("self.apply_default_pins_if_present()?;")` -- init call 2
-  - `fixture.contains("self.enable_clock_if_present()?;")` -- init call 3
-  - `fixture.contains("self.program_polling_port(self.uart_clock_hz(), self.current_speed)")` -- init call 4 with exact args
-  - `fixture.contains("fn init(&mut self) -> Result<(), RegseqError>")` -- init signature
-  - `fixture.contains("self.shutdown_port();")` -- deinit call 1
-  - `fixture.contains("self.disable_clock_if_present();")` -- deinit call 2
-  - `fixture.contains("self.apply_sleep_pins_if_present()?;")` -- deinit call 3
-  - `fixture.contains("fn deinit(&mut self) -> Result<(), RegseqError>")` -- deinit signature
-  - `fixture.contains("impl Lifecycle for Pl011FullSpec")` -- trait impl
-  - `fixture.contains("fn toggle_reset_if_present(&self) -> Result<(), RegseqError>")` -- helper fallibility
-  - `fixture.contains("fn apply_default_pins_if_present(&self) -> Result<(), RegseqError>")` -- helper fallibility
-  - `fixture.contains("fn enable_clock_if_present(&self) -> Result<(), RegseqError>")` -- helper fallibility
-  - `fixture.contains("fn program_polling_port(&mut self, uart_clk_hz: u32, baud_rate: u32)")` -- infallible with exact params
-  - `fixture.contains("fn shutdown_port(&mut self)")` -- infallible
-  - `fixture.contains("fn disable_clock_if_present(&self)")` -- infallible
-  - `fixture.contains("fn apply_sleep_pins_if_present(&self) -> Result<(), RegseqError>")` -- fallible
-  - Corresponding specimen-side assertions for all of the above
+  - The reduced specimen's `init` body contains exactly:
+    `self.toggle_reset_if_present()?`, `self.apply_default_pins_if_present()?`,
+    `self.enable_clock_if_present()?`,
+    `self.program_polling_port(self.uart_clock_hz(), self.current_speed)`,
+    and `Ok(())` -- each verified to be present in the real fixture via
+    `fixture.contains(...)` assertions.
+  - The reduced specimen's `deinit` body contains exactly:
+    `self.shutdown_port()`, `self.disable_clock_if_present()`,
+    `self.apply_sleep_pins_if_present()?`, and `Ok(())` -- each verified
+    against the real fixture.
+  - Helper fallibility signatures match the fixture: `toggle_reset_if_present`,
+    `apply_default_pins_if_present`, `enable_clock_if_present`, and
+    `apply_sleep_pins_if_present` return `Result<(), RegseqError>`;
+    `program_polling_port`, `shutdown_port`, and `disable_clock_if_present`
+    are infallible -- all verified with exact signature substring matches.
+  - The `impl Lifecycle for Pl011FullSpec` block is present in both the
+    fixture and the specimen.
 - Fidelity Evidence (Exact Citations):
-  - Test `specimen_fidelity_against_fixture` in `source_to_extraction_09_lifecycle_callbacks.rs`
-  - Reads `tests/fixtures/pl011-full-spec/src/driver.rs` at runtime
-  - Every authored fact is checked in both fixture and specimen
+  - Test `specimen_fidelity_against_fixture` in
+    `crates/regseq-driver/tests/source_to_extraction_09_lifecycle_callbacks.rs`
+    (32 assertion predicates covering init body lines, deinit body lines,
+    callback signatures, trait impl presence, helper fallibility, and
+    specimen-to-fixture cross-checks).
 
 ## Check-to-Surface Mapping
 
-| Check | Extraction Surface | Test Function |
-|-------|--------------------|---------------|
-| CG1: trait identity | `TraitSurface.lifecycle_impls` | `check_group_1_trait_surface_lifecycle_identity` |
-| CG1: impl block identity | `IdentityEnrichmentSurface.impl_blocks` | `check_group_1_identity_enrichment_lifecycle_impl_block` |
-| CG1: init signature | `MirBodySurface.functions[init].kind/receiver/return_type/params` | `check_group_1_body_surface_init_signature` |
-| CG1: deinit signature | `MirBodySurface.functions[deinit].kind/receiver/return_type/params` | `check_group_1_body_surface_deinit_signature` |
-| CG2: init helper order | `MirBodySurface.functions[init].body` basic block call sequence | `check_group_2_init_helper_call_order` |
-| CG2: init error propagation | `MirBodySurface.functions[init].body` Try::branch/SwitchInt pattern | `check_group_2_init_error_propagation` |
-| CG2: init success return | `MirBodySurface.functions[init].body` Adt(Ok, variant_index=0) at _0 | `check_group_2_init_success_return` |
-| CG2: init argument flow | `MirBodySurface.functions[init].body` call args + def-chain tracing | `check_group_2_init_argument_flow_into_program_polling_port` |
-| CG2: deinit helper order | `MirBodySurface.functions[deinit].body` basic block call sequence | `check_group_2_deinit_helper_call_order` |
-| CG2: deinit error propagation | `MirBodySurface.functions[deinit].body` Try::branch/SwitchInt pattern | `check_group_2_deinit_error_propagation` |
-| CG2: deinit success return | `MirBodySurface.functions[deinit].body` Adt(Ok, variant_index=0) at _0 | `check_group_2_deinit_success_return` |
+| Check | Extraction Surface(s) |
+|---|---|
+| Check Group 1 (identity, trait, signature, return) | `TraitSurface.lifecycle_impls`, `IdentityEnrichmentSurface.impl_blocks`, `MirBodySurface.functions` (kind, receiver, params, return_type) |
+| Check Group 2 (bodies: sequencing, propagation, return, argument flow) | `MirBodySurface.functions` (body basic blocks, helper_calls, Call terminator args/destination) |
+
+---
 
 ## Check Group 1
 
-### Check: Lifecycle trait identity survives extraction
-
+- Check: lifecycle callback identity, trait role, signature, and return type survive
 - Status: `pass`
 - Premise: lifecycle callback identity, trait role, signature, and return type survive
 - Assertion Predicate(s):
-  - `surface.traits.lifecycle_impls.len() == 1`
-  - `surface.traits.lifecycle_impls[0].driver_type == "Pl011FullSpec"`
+  - `surface.traits.lifecycle_impls.len() == 1` -- exactly one Lifecycle impl found
+  - `surface.traits.lifecycle_impls[0].driver_type == "Pl011FullSpec"` -- correct driver type
+  - `lifecycle_impl.trait_name == Some("Lifecycle")` -- Lifecycle trait impl block found in identity surface
+  - `lifecycle_impl.self_type_name == "Pl011FullSpec"` -- correct self type
+  - `method_names.contains("init")` and `method_names.contains("deinit")` -- both methods present
+  - `init_fn.kind == Callback { trait_name: "Lifecycle", method_name: "init" }` -- correct callback classification
+  - `init_fn.receiver == "ref_mut"` -- `&mut self` receiver
+  - `init_fn.return_type contains "Result<(), RegseqError>"` -- full generic return type preserved
+  - `init_fn.params.is_empty()` -- no extra parameters
+  - (same four predicates for `deinit`)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_trait_surface_lifecycle_identity`: extracts `TraitSurface` from the reduced specimen and asserts exactly one `Lifecycle` impl for `Pl011FullSpec`
+  - `check_group_1_trait_surface_lifecycle_identity`: asserts exactly one Lifecycle impl for Pl011FullSpec on `TraitSurface`
+  - `check_group_1_identity_enrichment_lifecycle_impl_block`: asserts Lifecycle impl block with init and deinit methods on `IdentityEnrichmentSurface`
+  - `check_group_1_body_surface_init_signature`: asserts init is a Lifecycle Callback with ref_mut receiver, `Result<(), RegseqError>` return, no extra params on `MirBodySurface`
+  - `check_group_1_body_surface_deinit_signature`: asserts deinit is a Lifecycle Callback with ref_mut receiver, `Result<(), RegseqError>` return, no extra params on `MirBodySurface`
+- Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs`
 - Reasoning Trace:
-  - Authored Fact (Verbatim): `impl Lifecycle for Pl011FullSpec`
-  - Extracted Fact (Verbatim): `lifecycle_impls[0].driver_type == "Pl011FullSpec"` with length 1
+  - Authored Fact (Verbatim): `fn init(&mut self) -> Result<(), RegseqError>` and `fn deinit(&mut self) -> Result<(), RegseqError>` in `impl Lifecycle for Pl011FullSpec`
+  - Extracted Fact (Verbatim): `MirFnKind::Callback { trait_name: "Lifecycle", method_name: "init" }`, `receiver: "ref_mut"`, `return_type: Some("Result<(), RegseqError>")`; same for deinit
   - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: the extraction surface yields exactly one lifecycle impl for the correct driver type
+  - Gap / Loss Description: none. The `render_path_segment` helper was enhanced to include generic type arguments in the rendered return type string (previously only the bare type name was emitted).
+  - Why This Status Follows: all four named properties (identity, trait role, signature, return type) are independently verified by non-tautological assertions against the extraction surfaces
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass -- lifecycle callback identity, trait association, signature, and return type are fully preserved through extraction
 
-### Check: Lifecycle impl block identity survives in enrichment surface
-
-- Status: `pass`
-- Premise: lifecycle callback identity and trait association survive in identity enrichment
-- Assertion Predicate(s):
-  - `lifecycle_impl.trait_name == Some("Lifecycle")`
-  - `lifecycle_impl.self_type_name == "Pl011FullSpec"`
-  - `method_names.contains(&"init")`
-  - `method_names.contains(&"deinit")`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_identity_enrichment_lifecycle_impl_block`: finds the Lifecycle impl block in `IdentityEnrichmentSurface.impl_blocks` and asserts init and deinit methods are present
-- Reasoning Trace:
-  - Authored Fact (Verbatim): `impl Lifecycle for Pl011FullSpec { fn init...; fn deinit...; }`
-  - Extracted Fact (Verbatim): impl block with `trait_name=Some("Lifecycle")`, `self_type_name="Pl011FullSpec"`, methods ["init", "deinit"]
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: identity enrichment surfaces both methods under the correct trait impl
-
-### Check: init callback signature survives extraction
-
-- Status: `pass`
-- Premise: init callback identity, trait classification, receiver, return type, and parameter count survive
-- Assertion Predicate(s):
-  - `init_fn.kind == Callback { trait_name: "Lifecycle", method_name: "init" }`
-  - `init_fn.receiver == "ref_mut"`
-  - `init_fn.return_type contains "Result"`
-  - `init_fn.params.is_empty()`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_body_surface_init_signature`: inspects `MirBodySurface.functions` for the init function and asserts all four properties
-- Reasoning Trace:
-  - Authored Fact (Verbatim): `fn init(&mut self) -> Result<(), RegseqError>` with no extra params
-  - Extracted Fact (Verbatim): `kind=Callback{Lifecycle,init}`, `receiver=ref_mut`, `return_type=...Result...`, `params=[]`
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: all four signature properties match
-
-### Check: deinit callback signature survives extraction
-
-- Status: `pass`
-- Premise: deinit callback identity, trait classification, receiver, return type, and parameter count survive
-- Assertion Predicate(s):
-  - `deinit_fn.kind == Callback { trait_name: "Lifecycle", method_name: "deinit" }`
-  - `deinit_fn.receiver == "ref_mut"`
-  - `deinit_fn.return_type contains "Result"`
-  - `deinit_fn.params.is_empty()`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_1_body_surface_deinit_signature`: inspects `MirBodySurface.functions` for the deinit function and asserts all four properties
-- Reasoning Trace:
-  - Authored Fact (Verbatim): `fn deinit(&mut self) -> Result<(), RegseqError>` with no extra params
-  - Extracted Fact (Verbatim): `kind=Callback{Lifecycle,deinit}`, `receiver=ref_mut`, `return_type=...Result...`, `params=[]`
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: all four signature properties match
+---
 
 ## Check Group 2
 
-### Check: init helper-call order survives extraction
-
+- Check: lifecycle callback bodies preserve the downstream checks captured in the authored-source entries
 - Status: `pass`
-- Premise: init helper-call ordering is preserved exactly: toggle_reset_if_present, apply_default_pins_if_present, enable_clock_if_present, program_polling_port
+- Premise: extraction preserves enough body information to prove helper sequencing, fallible propagation, success return, and argument flow
 - Assertion Predicate(s):
-  - `init_fn.helper_calls` contains all five helpers (including uart_clock_hz)
-  - `pos(toggle_reset_if_present) < pos(apply_default_pins_if_present)`
-  - `pos(apply_default_pins_if_present) < pos(enable_clock_if_present)`
-  - `pos(enable_clock_if_present) < pos(program_polling_port)`
+  - **init helper sequencing**: `pos(toggle_reset_if_present) < pos(apply_default_pins_if_present) < pos(enable_clock_if_present) < pos(program_polling_port)` -- ordering verified from `extract_call_sequence` over non-cleanup MIR basic blocks
+  - **init error propagation**: `has_error_propagation_after_call(body, "toggle_reset_if_present")`, `has_error_propagation_after_call(body, "apply_default_pins_if_present")`, `has_error_propagation_after_call(body, "enable_clock_if_present")` all return true (verified by following Call -> Try::branch -> Discriminant+SwitchInt pattern in MIR)
+  - **init infallible program_polling_port**: `!has_error_propagation_after_call(body, "program_polling_port")` -- program_polling_port has no `?` propagation
+  - **init success return**: `has_ok_unit_return(body)` -- MIR body contains `Aggregate { Adt { variant_index: 0 } }` assigned to local 0 (return place)
+  - **init argument flow (uart_clock_hz -> program_polling_port arg 1)**:
+    - `find_call_terminator(body, "uart_clock_hz")` yields destination local `L_clk`
+    - `find_call_terminator(body, "program_polling_port")` yields args list with >= 3 entries
+    - `operand_references_local(args[1], L_clk)` -- arg 1 of program_polling_port is a Copy/Move of the local holding uart_clock_hz()'s return value
+  - **init argument flow (self.current_speed -> program_polling_port arg 2)**:
+    - `operand_is_field_on_local(args[2], 1)` or indirect field assignment tracing -- arg 2 is a field projection on the self parameter (local 1), proving `self.current_speed` flows as the second argument
+  - **deinit helper sequencing**: `pos(shutdown_port) < pos(disable_clock_if_present) < pos(apply_sleep_pins_if_present)` -- ordering verified
+  - **deinit error propagation**: `!has_error_propagation_after_call(body, "shutdown_port")` and `!has_error_propagation_after_call(body, "disable_clock_if_present")` -- both infallible; `has_error_propagation_after_call(body, "apply_sleep_pins_if_present")` -- fallible with `?`
+  - **deinit success return**: `has_ok_unit_return(body)` -- same Ok(()) return pattern
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_init_helper_call_order`: extracts call sequence from MIR basic blocks (non-cleanup) via `extract_call_sequence()`, finds positional indices of each helper, asserts strict ordering
+  - `check_group_2_init_helper_call_order`: asserts helper_calls membership and positional ordering for all four init helpers
+  - `check_group_2_init_error_propagation`: asserts `?` propagation present for first three helpers and absent for program_polling_port
+  - `check_group_2_init_success_return`: asserts Ok(()) return path exists
+  - `check_group_2_init_argument_flow`: inspects MIR Call terminator operands -- verifies that program_polling_port's arg 1 references the destination local of the uart_clock_hz() call, and arg 2 references a Field projection on self (local 1), proving actual operand data flow rather than mere call ordering
+  - `check_group_2_deinit_helper_call_order`: asserts helper_calls membership and positional ordering for all three deinit helpers
+  - `check_group_2_deinit_error_propagation`: asserts infallible helpers have no `?` and apply_sleep_pins_if_present has `?`
+  - `check_group_2_deinit_success_return`: asserts Ok(()) return path exists
+- Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs`
 - Reasoning Trace:
-  - Authored Fact (Verbatim): init calls toggle_reset_if_present, apply_default_pins_if_present, enable_clock_if_present, program_polling_port in that order
-  - Extracted Fact (Verbatim): MIR call sequence yields these functions in strictly increasing position order
+  - Authored Fact (Verbatim): init calls `toggle_reset_if_present()?`, `apply_default_pins_if_present()?`, `enable_clock_if_present()?`, `program_polling_port(self.uart_clock_hz(), self.current_speed)`, then `Ok(())`; deinit calls `shutdown_port()`, `disable_clock_if_present()`, `apply_sleep_pins_if_present()?`, then `Ok(())`
+  - Extracted Fact (Verbatim): MIR body call sequence preserves the exact helper ordering; `?` desugars to `Try::branch` + `Discriminant` + `SwitchInt` + `FromResidual::from_residual` pattern in the CFG; Ok(()) constructed as `Aggregate { Adt { variant_index: 0 } }` on return place; program_polling_port Call terminator args[1] is Move/Copy of uart_clock_hz destination local, args[2] is a Field projection on self (local 1)
   - Correspondence: `exact`
   - Gap / Loss Description: none
-  - Why This Status Follows: positional ordering in MIR call sequence matches authored order exactly
-
-### Check: init error propagation survives extraction
-
-- Status: `pass`
-- Premise: first three init calls preserve early RegseqError propagation; program_polling_port is infallible
-- Assertion Predicate(s):
-  - `has_error_propagation_after_call(body, "toggle_reset_if_present") == true`
-  - `has_error_propagation_after_call(body, "apply_default_pins_if_present") == true`
-  - `has_error_propagation_after_call(body, "enable_clock_if_present") == true`
-  - `has_error_propagation_after_call(body, "program_polling_port") == false`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_init_error_propagation`: walks MIR CFG forward from each call site looking for Try::branch -> Discriminant+SwitchInt pattern (the MIR desugaring of `?`)
-- Reasoning Trace:
-  - Authored Fact (Verbatim): first three calls use `?`, fourth is infallible
-  - Extracted Fact (Verbatim): first three show Try::branch+SwitchInt pattern; fourth does not
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: the `?` desugaring pattern is present for exactly the fallible calls and absent for the infallible one
-
-### Check: init success return path survives extraction
-
-- Status: `pass`
-- Premise: init success path returns Ok(())
-- Assertion Predicate(s):
-  - `has_ok_unit_return(init_fn.body) == true`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_init_success_return`: scans MIR for Aggregate(Adt, variant_index=0) assigned to _0 (return place)
-- Reasoning Trace:
-  - Authored Fact (Verbatim): `Ok(())`
-  - Extracted Fact (Verbatim): Adt construction with variant_index 0 (Ok) at local 0 (return place)
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: variant_index 0 of Result is Ok; assignment to _0 is the return place
-
-### Check: init argument flow into program_polling_port survives extraction
-
-- Status: `pass`
-- Premise: first argument to program_polling_port comes from self.uart_clock_hz(); second from self.current_speed
-- Assertion Predicate(s):
-  - `pos(uart_clock_hz) < pos(program_polling_port)` in call sequence
-  - `args.len() >= 3` (self + 2 params)
-  - `local_traces_to_call(body, args[1].local, "uart_clock_hz") == true`
-  - `local_traces_to_self_field(body, args[2].local) == true` OR `operand_is_self_field_access(args[2]) == true`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_init_argument_flow_into_program_polling_port`:
-    1. Verifies uart_clock_hz is called before program_polling_port
-    2. Finds the Call terminator for program_polling_port and inspects its args
-    3. Traces args[1] backward through the def-chain to prove it originates from the uart_clock_hz call destination
-    4. Traces args[2] backward through the def-chain to prove it originates from a self-field access (local 1 with Deref+Field projection)
-- Reasoning Trace:
-  - Authored Fact (Verbatim): `self.program_polling_port(self.uart_clock_hz(), self.current_speed)`
-  - Extracted Fact (Verbatim): MIR Call to program_polling_port with arg[1] defined by uart_clock_hz call result, arg[2] defined by field projection on _1 (self)
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: def-chain tracing proves the actual data flow, not just call ordering
-
-### Check: deinit helper-call order survives extraction
-
-- Status: `pass`
-- Premise: deinit helper-call ordering is preserved exactly: shutdown_port, disable_clock_if_present, apply_sleep_pins_if_present
-- Assertion Predicate(s):
-  - `deinit_fn.helper_calls` contains all three helpers
-  - `pos(shutdown_port) < pos(disable_clock_if_present)`
-  - `pos(disable_clock_if_present) < pos(apply_sleep_pins_if_present)`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_deinit_helper_call_order`: extracts call sequence from MIR basic blocks and asserts strict positional ordering
-- Reasoning Trace:
-  - Authored Fact (Verbatim): deinit calls shutdown_port, disable_clock_if_present, apply_sleep_pins_if_present in that order
-  - Extracted Fact (Verbatim): MIR call sequence yields these in strictly increasing position order
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: positional ordering matches authored order
-
-### Check: deinit error propagation survives extraction
-
-- Status: `pass`
-- Premise: shutdown_port and disable_clock_if_present are infallible; apply_sleep_pins_if_present preserves early RegseqError propagation
-- Assertion Predicate(s):
-  - `has_error_propagation_after_call(body, "shutdown_port") == false`
-  - `has_error_propagation_after_call(body, "disable_clock_if_present") == false`
-  - `has_error_propagation_after_call(body, "apply_sleep_pins_if_present") == true`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_deinit_error_propagation`: walks MIR CFG forward from each call site checking for Try::branch+SwitchInt pattern
-- Reasoning Trace:
-  - Authored Fact (Verbatim): first two are infallible, third uses `?`
-  - Extracted Fact (Verbatim): first two lack Try::branch pattern; third has it
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: error propagation pattern present only for the fallible call
-
-### Check: deinit success return path survives extraction
-
-- Status: `pass`
-- Premise: deinit success path returns Ok(())
-- Assertion Predicate(s):
-  - `has_ok_unit_return(deinit_fn.body) == true`
-- Target Evidence (Exercised by Test; Exact Citations):
-  - `check_group_2_deinit_success_return`: scans MIR for Aggregate(Adt, variant_index=0) assigned to _0
-- Reasoning Trace:
-  - Authored Fact (Verbatim): `Ok(())`
-  - Extracted Fact (Verbatim): Adt construction with variant_index 0 at local 0
-  - Correspondence: `exact`
-  - Gap / Loss Description: none
-  - Why This Status Follows: variant_index 0 of Result is Ok; _0 is the return place
-
-## Conclusion
-
-All checks pass. The authored lifecycle-callback facts for PL011 -- callback identity,
-trait association, signature, helper-call sequencing, error propagation patterns,
-success return paths, and argument flow into `program_polling_port` -- are fully
-preserved at the compiler-side extraction boundary.
+  - Why This Status Follows: every callback-specific required predicate from the check specification (helper ordering, fallible propagation, infallible absence of propagation, success return, argument flow) is covered by non-tautological assertions that inspect the actual MIR body structure, including operand-level data flow for argument flow
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass -- lifecycle callback bodies preserve helper sequencing, error propagation patterns, success return, and argument flow through MIR extraction
