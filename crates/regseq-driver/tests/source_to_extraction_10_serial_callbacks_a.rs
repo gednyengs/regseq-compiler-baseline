@@ -922,6 +922,130 @@ fn count_calls_to(body: &MirBody, callee_substr: &str) -> usize {
         .count()
 }
 
+/// Extract error-flag-to-ErrorKind mappings from the rx_char CFG.
+///
+/// Follows the chain: field_from_raw(DR_REG::XX::FIELD, ...) -> SwitchInt
+/// -> bitor(errors, ErrorKind::YY) and returns pairs of (flag_path, kind_path).
+fn extract_error_flag_mappings(body: &MirBody) -> Vec<(String, String)> {
+    let bbs = &body.basic_blocks;
+    let mut mappings = Vec::new();
+
+    for (bi, bb) in bbs.iter().enumerate() {
+        if bb.is_cleanup {
+            continue;
+        }
+        // Look for field_from_raw Call terminators
+        let Some(term) = &bb.terminator else { continue };
+        let MirTerminatorKind::Call {
+            func, args, target, ..
+        } = &term.kind
+        else {
+            continue;
+        };
+        if !operand_mentions(func, "field_from_raw") {
+            continue;
+        }
+
+        // Extract the Field path from the first argument (the DR field constant)
+        let field_path = match args.first() {
+            Some(MirOperand::Constant {
+                constant:
+                    MirConstant {
+                        value: MirConstValue::Unevaluated { path },
+                        ..
+                    },
+            }) => path.clone(),
+            _ => continue,
+        };
+
+        // Skip DATA field -- only error-flag fields (OE, BE, PE, FE)
+        if field_path.contains("DATA") {
+            continue;
+        }
+
+        // Follow the chain: field_from_raw target -> SwitchInt -> bitor
+        let Some(switch_bb_idx) = target else {
+            continue;
+        };
+        let _switch_bb = match bbs.get(*switch_bb_idx as usize) {
+            Some(bb) => bb,
+            None => continue,
+        };
+
+        // The SwitchInt might be in the next block or one further (through an
+        // intermediate assign + compare block). Find it by following the chain.
+        let bitor_bb_idx = find_bitor_through_switch(bbs, *switch_bb_idx as usize);
+        let Some(bitor_idx) = bitor_bb_idx else {
+            continue;
+        };
+        let bitor_bb = &bbs[bitor_idx];
+
+        // Extract the ErrorKind name from the bitor call's second argument
+        let Some(term) = &bitor_bb.terminator else {
+            continue;
+        };
+        let MirTerminatorKind::Call {
+            func: bitor_func,
+            args: bitor_args,
+            ..
+        } = &term.kind
+        else {
+            continue;
+        };
+        if !operand_mentions(bitor_func, "bitor") {
+            continue;
+        }
+        let kind_path = match bitor_args.get(1) {
+            Some(MirOperand::Constant {
+                constant:
+                    MirConstant {
+                        value: MirConstValue::Unevaluated { path },
+                        ..
+                    },
+            }) => path.clone(),
+            _ => continue,
+        };
+
+        mappings.push((field_path, kind_path));
+    }
+
+    mappings
+}
+
+/// Follow from a post-field_from_raw block through SwitchInt to find the
+/// bitor call block. Handles the pattern: target block may have a compare
+/// + SwitchInt, where the "otherwise" branch leads to the bitor.
+fn find_bitor_through_switch(bbs: &[MirBasicBlockData], start: usize) -> Option<usize> {
+    // Walk up to 3 blocks looking for a SwitchInt
+    let mut current = start;
+    for _ in 0..3 {
+        let bb = bbs.get(current)?;
+        let term = bb.terminator.as_ref()?;
+        match &term.kind {
+            MirTerminatorKind::SwitchInt { targets, .. } => {
+                // The "otherwise" branch (last target) is the non-zero path
+                // leading to the bitor call.
+                let otherwise_idx = *targets.targets.last()? as usize;
+                // Verify this block has a bitor call
+                let candidate = bbs.get(otherwise_idx)?;
+                if let Some(t) = &candidate.terminator {
+                    if let MirTerminatorKind::Call { func, .. } = &t.kind {
+                        if operand_mentions(func, "bitor") {
+                            return Some(otherwise_idx);
+                        }
+                    }
+                }
+                return None;
+            }
+            MirTerminatorKind::Goto { target } => {
+                current = *target as usize;
+            }
+            _ => return None,
+        }
+    }
+    None
+}
+
 /// Check whether a `?` (Try::branch) propagation pattern follows a call
 /// to the named callee in the MIR CFG. The desugared pattern is:
 /// Call { callee } -> bb_a
@@ -1907,38 +2031,57 @@ fn check_group_2_rx_char_body() {
         bitor_count
     );
 
-    // Verify specific OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING mapping.
-    // The extraction surface exposes call paths but not the constant names
-    // passed as arguments (ErrorKind::OVERRUN etc. are compile-time constants
-    // inlined by rustc before MIR emission). The `field_from_raw` calls
-    // receive Field constants whose paths contain "OE", "BE", "PE", "FE",
-    // but the ErrorKind constants (OVERRUN, BREAK, PARITY, FRAMING) are
-    // lowered to integer literals by the time we see MIR.
+    // Verify exact OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING mapping.
     //
-    // What we CAN verify structurally:
-    // 1. All four field_from_raw calls with OE/BE/PE/FE paths exist
-    // 2. Each is followed by a SwitchInt (the `!= 0` check)
-    // 3. The bitor count matches the error flag count (4)
+    // The extraction surface preserves ErrorKind constants as Unevaluated
+    // operands with their def-paths (e.g. "regseq::ErrorKind::OVERRUN").
+    // Combined with the field_from_raw arguments (which carry Field paths
+    // like "DR_REG::OE::FIELD"), the CFG structure proves each individual
+    // error-flag-to-ErrorKind pairing:
     //
-    // KNOWN LIMITATION: The specific OE->OVERRUN (not OE->BREAK, etc.)
-    // pairing cannot be individually verified from MIR because ErrorKind
-    // constants are integer literals at this level. The count-based
-    // assertion (4 field_from_raw for error flags + 4 bitor calls) combined
-    // with specimen fidelity provides high confidence but not a structural
-    // proof of individual mappings.
+    //   field_from_raw(DR_REG::XX::FIELD, dr) -> SwitchInt(!= 0) -> bitor(errors, ErrorKind::YY)
+    //
+    // We verify this by following the chain:
+    // 1. Find each field_from_raw call with a DR error-flag Field argument
+    // 2. Follow its target to the SwitchInt
+    // 3. Follow the SwitchInt "otherwise" (non-zero) target to the bitor call
+    // 4. Extract the ErrorKind name from the bitor's second Unevaluated argument
 
-    // The field_from_raw call itself won't contain "OE" in its path -- it's
-    // a free function. But we verify via the Call args: the first arg is a
-    // Copy/Move of a constant Field from the OE/BE/PE/FE modules.
-    // We verify this indirectly: the fixture source has exactly 4 conditional
-    // field_from_raw calls (OE, BE, PE, FE), each followed by `!= 0` and
-    // bitor with the corresponding error kind. Since we already proved:
-    // - exactly 5 field_from_raw calls (1 DATA + 4 error flags)
-    // - exactly 4 bitor calls
-    // - exactly 4 SwitchInt blocks after the RXFE branch
-    // - specimen fidelity ensures the mapping is OE->OVERRUN, BE->BREAK,
-    //   PE->PARITY, FE->FRAMING
-    // This gives us high assurance of the mapping ordering.
+    let mappings = extract_error_flag_mappings(&f.body);
+    assert!(
+        mappings
+            .iter()
+            .any(|(flag, kind)| flag.contains("OE") && kind.contains("OVERRUN")),
+        "rx_char must map OE -> OVERRUN, found mappings: {:?}",
+        mappings
+    );
+    assert!(
+        mappings
+            .iter()
+            .any(|(flag, kind)| flag.contains("BE") && kind.contains("BREAK")),
+        "rx_char must map BE -> BREAK, found mappings: {:?}",
+        mappings
+    );
+    assert!(
+        mappings
+            .iter()
+            .any(|(flag, kind)| flag.contains("PE") && kind.contains("PARITY")),
+        "rx_char must map PE -> PARITY, found mappings: {:?}",
+        mappings
+    );
+    assert!(
+        mappings
+            .iter()
+            .any(|(flag, kind)| flag.contains("FE") && kind.contains("FRAMING")),
+        "rx_char must map FE -> FRAMING, found mappings: {:?}",
+        mappings
+    );
+    assert_eq!(
+        mappings.len(),
+        4,
+        "rx_char must have exactly 4 error-flag-to-ErrorKind mappings, found: {:?}",
+        mappings
+    );
 
     // Count SwitchInt blocks (the != 0 checks) -- expect at least 5:
     // 1 for RXFE + 4 for error flags

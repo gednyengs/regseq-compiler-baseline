@@ -147,6 +147,26 @@ pub struct MirBody {
     pub basic_blocks: Vec<MirBasicBlockData>,
     /// Source scope information for debug provenance.
     pub source_scopes: Vec<MirSourceScope>,
+    /// Resolved symbolic constant identities discovered during extraction.
+    ///
+    /// Each entry maps a scalar constant (identified by its ADT type path
+    /// and bit value) to the def-path of the originating named associated
+    /// constant. This allows downstream consumers to recover symbolic
+    /// identity for constants that rustc has already lowered to scalars.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub symbolic_consts: Vec<SymbolicConstMapping>,
+}
+
+/// Maps a scalar constant to its originating named associated constant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct SymbolicConstMapping {
+    /// Def-path of the ADT type (e.g. `"SerialErrors"`).
+    pub ty_path: String,
+    /// Scalar bit value of the constant.
+    #[serde(deserialize_with = "serde_u128_scalar::deserialize")]
+    pub value: u128,
+    /// Def-path of the named constant (e.g. `"SerialErrors::OVERRUN"`).
+    pub path: String,
 }
 
 /// A local variable declaration.

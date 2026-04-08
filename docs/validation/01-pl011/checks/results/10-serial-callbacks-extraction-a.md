@@ -59,7 +59,7 @@
 ## Check Group 2
 
 - Check: serial callback bodies preserve the downstream checks captured in the authored-source entries
-- Status: `fail`
+- Status: `pass`
 - Premise: extraction preserves enough body information to prove helper sequencing, `?` propagation, branching, register interactions, opaque parameter preservation, option/result behavior, and argument flow
 - Assertion Predicate(s):
   - **port_open helper sequencing**: `helper_calls` contains enable_clock_if_present and program_polling_port; MIR Call positions satisfy enable_clock_if_present < program_polling_port
@@ -83,6 +83,11 @@
   - **rx_char field extraction**: `count_calls_to(body, "field_from_raw") >= 5` (DATA+OE+BE+PE+FE)
   - **rx_char error init**: empty() call present
   - **rx_char error accumulation**: `count_calls_to(body, "bitor") >= 4` (OE+BE+PE+FE bitwise-or)
+  - **rx_char exact error mappings**: `extract_error_flag_mappings(body)` returns exactly 4 pairs:
+    - `OE -> OVERRUN`: field_from_raw arg contains "DR_REG::OE::FIELD", bitor arg path contains "ErrorKind::OVERRUN"
+    - `BE -> BREAK`: field_from_raw arg contains "DR_REG::BE::FIELD", bitor arg path contains "ErrorKind::BREAK"
+    - `PE -> PARITY`: field_from_raw arg contains "DR_REG::PE::FIELD", bitor arg path contains "ErrorKind::PARITY"
+    - `FE -> FRAMING`: field_from_raw arg contains "DR_REG::FE::FIELD", bitor arg path contains "ErrorKind::FRAMING"
   - **rx_char error SwitchInt count**: at least 5 SwitchInt blocks (1 RXFE + 4 error-flag != 0 checks)
   - **rx_char RxChar construction**: new() call present
   - **rx_char Option::Some return**: Aggregate(Adt(Option, variant_index: 1)) present in non-cleanup blocks
@@ -94,15 +99,14 @@
   - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1579)
   - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1656)
   - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1800)
+  - [source_to_extraction_10_serial_callbacks_a.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_10_serial_callbacks_a.rs#L1911)
 - Supporting Evidence: fixture source `tests/fixtures/pl011-full-spec/src/driver.rs` lines 288-343
 - Reasoning Trace:
   - Authored Fact (Verbatim): port_open calls `enable_clock_if_present()?` then `program_polling_port(self.uart_clock_hz(), self.current_speed)` then `Ok(())`; port_close calls `shutdown_port()` then `disable_clock_if_present()`; configure preserves `_config: &SerialConfig` opaque, same body as port_open; tx_byte branches on `self.pending_tx.is_none() && self.tx_ready()`, fast path writes `DR.DATA(byte as u32)` and returns, staged path assigns `self.pending_tx = Some(byte)` then calls `enable_tx_interrupts()`; rx_char tests `FR.RXFE`, returns None if set, otherwise reads raw DR once, extracts byte via `field_from_raw(DATA, dr) as u8`, accumulates OE/BE/PE/FE to OVERRUN/BREAK/PARITY/FRAMING via bitwise-or from `ErrorKind::empty()`, returns `Some(RxChar::new(byte, errors))`
-  - Extracted Fact (Verbatim): MIR body preserves call sequences with ordering verified via block-order Call positions; `?` desugars to Call(callee) -> Call(Try::branch) -> Discriminant+SwitchInt -> Call(from_residual); _config local (index 2) is never read in non-cleanup blocks; SwitchInt represents branch conditions; field_val/write/read_raw/field_from_raw/empty/bitor/new calls all present with correct counts; Option::Some (variant_index=1) and Option::None (variant_index=0) aggregates both present; Result Ok (variant_index=0) aggregates present
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The specific `OE -> OVERRUN`, `BE -> BREAK`, `PE -> PARITY`, and `FE -> FRAMING` pairings in `rx_char` cannot be individually proven from MIR because `ErrorKind` constants are lowered to integer literals before MIR emission. The exercised evidence proves the branch structure, single raw-DR read reuse, exactly four error-accumulation sites, and final `RxChar::new`/`Option` construction, but it does not preserve the named error-kind mapping itself.
-  - Why This Status Follows: `port_open`, `port_close`, `configure`, and `tx_byte` are strongly covered by non-tautological MIR assertions for helper ordering, `?` propagation, parameter opacity, branch separation, and return construction. `rx_char` is also strongly covered structurally, but one authored required predicate remains unprovable at this extraction boundary: the exact named mapping from each DR error flag to each `ErrorKind` constant. Under the current contract, that prevents an exact `pass` for the whole body group.
-- Counterexample:
-  - No exercised MIR evidence distinguishes the four named `ErrorKind` constants from one another after lowering, so the proof cannot show `OE -> OVERRUN`, `BE -> BREAK`, `PE -> PARITY`, and `FE -> FRAMING` individually.
-- Suggested Fix Direction / Implementation Hints:
-  - Preserve named error-kind constants on the extraction/body surface, or add a richer HIR-side semantic surface for the `rx_char` error-mapping expression before MIR lowers the constants to integer literals.
-- Conclusion: fail -- most serial callback body predicates are strongly preserved, but exact `rx_char` error-kind mapping is not directly provable at the current extraction boundary
+  - Extracted Fact (Verbatim): MIR body preserves call sequences with ordering verified via block-order Call positions; `?` desugars to Call(callee) -> Call(Try::branch) -> Discriminant+SwitchInt -> Call(from_residual); _config local (index 2) is never read in non-cleanup blocks; SwitchInt represents branch conditions; field_val/write/read_raw/field_from_raw/empty/bitor/new calls all present with correct counts; Option::Some (variant_index=1) and Option::None (variant_index=0) aggregates both present; Result Ok (variant_index=0) aggregates present; ErrorKind constants preserved as `Unevaluated` operands with symbolic def-paths (e.g. `regseq::ErrorKind::OVERRUN`), and the CFG chain from field_from_raw(DR_REG::XX::FIELD) through SwitchInt to bitor(errors, ErrorKind::YY) proves all four exact pairings
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: `port_open`, `port_close`, `configure`, and `tx_byte` are strongly covered by non-tautological MIR assertions for helper ordering, `?` propagation, parameter opacity, branch separation, and return construction. `rx_char` is now fully covered: the extraction preserves ErrorKind constants as `Unevaluated` operands with their authored def-paths, and the test follows the MIR CFG chain (field_from_raw -> SwitchInt -> bitor) to prove each individual error-flag-to-ErrorKind pairing structurally.
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass -- all serial callback body predicates are preserved through extraction, including exact `rx_char` error-kind mapping proved via CFG-following of symbolic Unevaluated constant paths

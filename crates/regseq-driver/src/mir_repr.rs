@@ -13,6 +13,7 @@ pub use regseq_model::declaration::mir_body::{
     MirMutability, MirOperand, MirPlace, MirProjectionElem, MirRvalue, MirSourceInfo,
     MirSourceScope, MirStatement, MirStatementKind, MirSwitchTargets, MirTerminator,
     MirTerminatorKind, MirTy, MirUnOp, MirUnwindAction, MirVariantTy, MonomorphizationKey,
+    SymbolicConstMapping,
 };
 
 use serde::{Deserialize, Serialize};

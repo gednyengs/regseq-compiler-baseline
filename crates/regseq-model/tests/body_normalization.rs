@@ -318,6 +318,7 @@ fn minimal_mir_body() -> MirBody {
             index: 0,
             name: None,
         }],
+        symbolic_consts: vec![],
     }
 }
 
@@ -489,6 +490,7 @@ fn make_input_with_cleanup() -> RawArtifactInput {
             index: 0,
             name: None,
         }],
+        symbolic_consts: vec![],
     };
     make_minimal_input(Some(RawBodySurfaceInput {
         functions: vec![make_fn(
@@ -573,6 +575,7 @@ fn make_input_with_drop() -> RawArtifactInput {
             index: 0,
             name: None,
         }],
+        symbolic_consts: vec![],
     };
     make_minimal_input(Some(RawBodySurfaceInput {
         functions: vec![make_fn(
@@ -655,6 +658,7 @@ fn make_input_with_statements() -> RawArtifactInput {
             index: 0,
             name: None,
         }],
+        symbolic_consts: vec![],
     };
     make_minimal_input(Some(RawBodySurfaceInput {
         functions: vec![make_fn(
@@ -701,6 +705,7 @@ fn make_input_with_unsupported() -> RawArtifactInput {
             index: 0,
             name: None,
         }],
+        symbolic_consts: vec![],
     };
     make_minimal_input(Some(RawBodySurfaceInput {
         functions: vec![make_fn(
