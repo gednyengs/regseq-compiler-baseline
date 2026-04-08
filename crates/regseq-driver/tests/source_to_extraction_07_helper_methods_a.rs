@@ -435,7 +435,7 @@ fn collect_calls(body: &MirBody) -> Vec<(String, usize)> {
             {
                 let path = match func {
                     MirOperand::Constant { constant } => match &constant.ty {
-                        MirTy::FnDef { path, .. } => path.clone(),
+                        MirTy::Fn { path, .. } => path.clone(),
                         _ => "<non-fndef>".to_string(),
                     },
                     _ => "<non-const>".to_string(),
@@ -499,8 +499,8 @@ fn collect_all_constants(body: &MirBody) -> Vec<MirConstant> {
 /// contains the given substring.
 fn has_unevaluated_const(body: &MirBody, name_substring: &str) -> bool {
     collect_all_constants(body).iter().any(|c| {
-        matches!(&c.value, MirConstValue::Unsupported { description }
-            if description.contains(name_substring))
+        matches!(&c.value, MirConstValue::Unevaluated { path }
+            if path.contains(name_substring))
     })
 }
 
@@ -508,7 +508,7 @@ fn has_unevaluated_const(body: &MirBody, name_substring: &str) -> bool {
 fn has_scalar_const(body: &MirBody, expected_bits: u128) -> bool {
     collect_all_constants(body)
         .iter()
-        .any(|c| matches!(&c.value, MirConstValue::Scalar { bits, .. } if *bits == expected_bits))
+        .any(|c| matches!(&c.value, MirConstValue::Bits { value, .. } if *value == expected_bits))
 }
 
 /// Count unevaluated constant references matching a substring.
@@ -516,10 +516,39 @@ fn count_unevaluated_const(body: &MirBody, name_substring: &str) -> usize {
     collect_all_constants(body)
         .iter()
         .filter(|c| {
-            matches!(&c.value, MirConstValue::Unsupported { description }
-                if description.contains(name_substring))
+            matches!(&c.value, MirConstValue::Unevaluated { path }
+                if path.contains(name_substring))
         })
         .count()
+}
+
+/// Recursively check if a MirTy mentions a given substring in any path.
+fn ty_mentions(ty: &MirTy, substr: &str) -> bool {
+    match ty {
+        MirTy::Struct { path, fields } => {
+            path.contains(substr) || fields.iter().any(|f| ty_mentions(&f.ty, substr))
+        }
+        MirTy::Enum { path, variants } => {
+            path.contains(substr)
+                || variants
+                    .iter()
+                    .any(|v| v.fields.iter().any(|f| ty_mentions(&f.ty, substr)))
+        }
+        MirTy::Fn { path, params, ret } => {
+            path.contains(substr)
+                || params.iter().any(|p| ty_mentions(p, substr))
+                || ty_mentions(ret, substr)
+        }
+        MirTy::Ref { ty: inner, .. } | MirTy::RawPtr { ty: inner, .. } => {
+            ty_mentions(inner, substr)
+        }
+        MirTy::Tuple { elements } => elements.iter().any(|e| ty_mentions(e, substr)),
+        MirTy::Array { element, .. } | MirTy::Slice { element } => ty_mentions(element, substr),
+        MirTy::NominalRef { path } => path.contains(substr),
+        MirTy::ZeroSizedLike { description } => description.contains(substr),
+        MirTy::Unsupported { description } => description.contains(substr),
+        _ => false,
+    }
 }
 
 /// Check if a body has a field projection accessing a specific register name.
@@ -531,15 +560,8 @@ fn has_register_field_access(body: &MirBody, register_type_name: &str) -> bool {
                 if let MirRvalue::Ref { ref place, .. } = rvalue.as_ref() {
                     for proj in &place.projection {
                         if let MirProjectionElem::Field { ref ty, .. } = proj {
-                            if let MirTy::Adt { ref path, ref args } = ty {
-                                if path == "Register" {
-                                    if args.iter().any(|a| {
-                                        matches!(a, MirTy::Adt { path, .. }
-                                            if path.contains(register_type_name))
-                                    }) {
-                                        return true;
-                                    }
-                                }
+                            if ty_mentions(ty, register_type_name) {
+                                return true;
                             }
                         }
                     }
@@ -565,7 +587,7 @@ fn ordered_call_paths(body: &MirBody) -> Vec<String> {
         if let Some(ref term) = bb.terminator {
             if let MirTerminatorKind::Call { ref func, .. } = term.kind {
                 if let MirOperand::Constant { constant } = func {
-                    if let MirTy::FnDef { ref path, .. } = constant.ty {
+                    if let MirTy::Fn { ref path, .. } = constant.ty {
                         paths.push(path.clone());
                     }
                 }
@@ -588,26 +610,38 @@ fn count_calls_containing(body: &MirBody, substring: &str) -> usize {
         .count()
 }
 
-/// Retrieve the resolved scalar field at the given index for an unevaluated
-/// constant matching the given name substring. The extraction encodes resolved
-/// fields in the description string as `unevaluated:path[0=0x...,1=0x...]`.
+/// Retrieve the resolved scalar field at the given index for a constant
+/// whose type path contains the given name substring. Resolved unevaluated
+/// constants now appear as `MirConstValue::Struct { fields }` with
+/// `ConstField` entries containing `MirConstValue::Bits { value }`.
 /// Returns `None` if the constant is not found or has no resolved field at
 /// that index.
 fn resolved_field_bits(body: &MirBody, name_substring: &str, field_index: u32) -> Option<u128> {
     collect_all_constants(body).iter().find_map(|c| {
-        if let MirConstValue::Unsupported { description } = &c.value {
-            if description.contains(name_substring) {
-                // Parse "[idx=0xHEX,...]" suffix.
-                let bracket_start = description.find('[')?;
-                let bracket_end = description.find(']')?;
-                let fields_str = &description[bracket_start + 1..bracket_end];
-                for entry in fields_str.split(',') {
-                    let (idx_str, val_str) = entry.split_once('=')?;
-                    let idx: u32 = idx_str.parse().ok()?;
-                    if idx == field_index {
-                        let bits =
-                            u128::from_str_radix(val_str.trim_start_matches("0x"), 16).ok()?;
-                        return Some(bits);
+        // Resolved unevaluated constants use Unevaluated { path } with bracket
+        // notation: "path[0=0x1,1=0x0]". Check if path contains the substring
+        // and then parse the bracket fields.
+        if let MirConstValue::Unevaluated { path } = &c.value {
+            if !path.contains(name_substring) {
+                return None;
+            }
+            // Parse bracket notation: "path[idx=val,idx=val]"
+            if let Some(bracket_start) = path.find('[') {
+                let bracket_content = &path[bracket_start + 1..path.len() - 1];
+                for entry in bracket_content.split(',') {
+                    let parts: Vec<&str> = entry.splitn(2, '=').collect();
+                    if parts.len() == 2 {
+                        if let Ok(idx) = parts[0].parse::<u32>() {
+                            if idx == field_index {
+                                let val_str = parts[1].trim();
+                                if let Ok(val) = u128::from_str_radix(
+                                    val_str.strip_prefix("0x").unwrap_or(val_str),
+                                    16,
+                                ) {
+                                    return Some(val);
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -834,9 +868,21 @@ fn check_group_1_body_surface_all_helpers_present_with_correct_signatures() {
         if *name == "set_baud_rate" || *name == "program_polling_port" {
             assert_eq!(func.params.len(), 2, "`{name}` should have 2 parameters");
             assert_eq!(func.params[0].name, "uart_clk_hz");
-            assert_eq!(func.params[0].ty, "u32");
+            assert_eq!(
+                func.params[0].ty,
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32
+                }
+            );
             assert_eq!(func.params[1].name, "baud_rate");
-            assert_eq!(func.params[1].ty, "u32");
+            assert_eq!(
+                func.params[1].ty,
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32
+                }
+            );
         } else {
             assert_eq!(
                 func.params.len(),
@@ -1051,9 +1097,21 @@ fn check_group_2_set_baud_rate_body() {
     // Parameters preserved.
     assert_eq!(func.params.len(), 2);
     assert_eq!(func.params[0].name, "uart_clk_hz");
-    assert_eq!(func.params[0].ty, "u32");
+    assert_eq!(
+        func.params[0].ty,
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U32
+        }
+    );
     assert_eq!(func.params[1].name, "baud_rate");
-    assert_eq!(func.params[1].ty, "u32");
+    assert_eq!(
+        func.params[1].ty,
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U32
+        }
+    );
 
     // u64 widening: check for IntToInt casts in the body (u32 -> u64).
     let has_cast = func.body.basic_blocks.iter().any(|bb| {

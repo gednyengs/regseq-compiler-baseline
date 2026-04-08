@@ -540,7 +540,7 @@ fn check_group_1b_identity_surface_preserves_generics_params_return_type() {
 fn operand_mentions(op: &MirOperand, substr: &str) -> bool {
     match op {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.contains(substr),
+            MirTy::Fn { path, .. } => path.contains(substr),
             _ => false,
         },
         _ => false,

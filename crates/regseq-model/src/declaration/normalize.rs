@@ -814,6 +814,7 @@ fn normalize_mir_bodies(input: &RawArtifactInput) -> MirBodyDeclSet {
             return_type: f.return_type.clone(),
             body: f.body.clone(),
             helper_calls: f.helper_calls.clone(),
+            monomorphization: f.monomorphization.clone(),
             provenance: Provenance::new("bodies").with_containing_item(f.name.clone()),
         })
         .collect();
@@ -862,10 +863,10 @@ fn normalize_bodies(input: &RawArtifactInput) -> BodyDeclSet {
                 .iter()
                 .map(|p| FnParamDecl {
                     name: p.name.clone(),
-                    ty: p.ty.clone(),
+                    ty: mir_ty_display(&p.ty),
                 })
                 .collect(),
-            return_type: f.return_type.clone(),
+            return_type: f.return_type.as_ref().map(mir_ty_display),
             body: BodyExpr::Unsupported {
                 hir_kind: "MirBody".to_string(),
                 span_text: Some("mir_body_pending_normalization".to_string()),
@@ -889,5 +890,60 @@ fn normalize_fn_kind(raw: &super::raw_input::RawFnKindInput) -> FnKind {
         super::raw_input::RawFnKindInput::Isr => FnKind::Isr,
         super::raw_input::RawFnKindInput::Helper => FnKind::Helper,
         super::raw_input::RawFnKindInput::FreeFunction => FnKind::FreeFunction,
+    }
+}
+
+/// Render a `MirTy` as a display string for the legacy body model.
+fn mir_ty_display(ty: &super::mir_body::MirTy) -> String {
+    use super::mir_body::{FloatWidth, IntWidth, MirTy};
+    match ty {
+        MirTy::Bool => "bool".to_string(),
+        MirTy::Char => "char".to_string(),
+        MirTy::Int { width, .. } => match width {
+            IntWidth::I8 => "i8",
+            IntWidth::I16 => "i16",
+            IntWidth::I32 => "i32",
+            IntWidth::I64 => "i64",
+            IntWidth::I128 => "i128",
+            IntWidth::Isize => "isize",
+            IntWidth::U8 => "u8",
+            IntWidth::U16 => "u16",
+            IntWidth::U32 => "u32",
+            IntWidth::U64 => "u64",
+            IntWidth::U128 => "u128",
+            IntWidth::Usize => "usize",
+        }
+        .to_string(),
+        MirTy::Float { width } => match width {
+            FloatWidth::F32 => "f32",
+            FloatWidth::F64 => "f64",
+        }
+        .to_string(),
+        MirTy::Str => "str".to_string(),
+        MirTy::Bytes => "[u8]".to_string(),
+        MirTy::Never => "!".to_string(),
+        MirTy::Struct { path, .. } | MirTy::Enum { path, .. } | MirTy::Fn { path, .. } => {
+            path.clone()
+        }
+        MirTy::Ref { mutbl, ty } => {
+            let m = if *mutbl { "mut " } else { "" };
+            format!("&{m}{}", mir_ty_display(ty))
+        }
+        MirTy::RawPtr { mutbl, ty } => {
+            let m = if *mutbl { "mut " } else { "const " };
+            format!("*{m}{}", mir_ty_display(ty))
+        }
+        MirTy::Tuple { elements } if elements.is_empty() => "()".to_string(),
+        MirTy::Tuple { elements } => {
+            let inner: Vec<_> = elements.iter().map(mir_ty_display).collect();
+            format!("({})", inner.join(", "))
+        }
+        MirTy::Array { element, len } => {
+            format!("[{}; {len}]", mir_ty_display(element))
+        }
+        MirTy::Slice { element } => format!("[{}]", mir_ty_display(element)),
+        MirTy::ZeroSizedLike { description } => description.clone(),
+        MirTy::NominalRef { path } => path.clone(),
+        MirTy::Unsupported { description } => description.clone(),
     }
 }

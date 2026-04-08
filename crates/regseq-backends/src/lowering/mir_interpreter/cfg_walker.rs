@@ -437,8 +437,8 @@ fn is_semantic_local(ctx: &FnContext<'_>, index: u32, rvalue: &MirRvalue) -> boo
 /// Check if a MIR type is a simple scalar suitable for C local declaration.
 fn is_simple_scalar_type(ty: &MirTy, ctx: &FnContext<'_>) -> bool {
     match ty {
-        MirTy::Uint { .. } | MirTy::Int { .. } | MirTy::Bool => true,
-        MirTy::Adt { path, .. } => {
+        MirTy::Int { .. } | MirTy::Bool => true,
+        MirTy::Struct { path, .. } | MirTy::Enum { path, .. } => {
             // Reject register wrappers, resource types, Option, Result, etc.
             if ctx.shared.is_register_wrapper_type(path) {
                 return false;
@@ -459,7 +459,7 @@ fn is_simple_scalar_type(ty: &MirTy, ctx: &FnContext<'_>) -> bool {
             {
                 return false;
             }
-            false // Conservative: unknown ADTs are not simple scalars
+            false // Conservative: unknown nominal types are not simple scalars
         }
         MirTy::Ref { .. } | MirTy::Tuple { .. } => false,
         _ => false,

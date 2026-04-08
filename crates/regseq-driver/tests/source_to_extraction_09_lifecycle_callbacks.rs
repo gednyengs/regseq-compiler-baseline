@@ -482,11 +482,11 @@ fn check_group_1_body_surface_init_signature() {
     // Return type must be Result<(), RegseqError>
     let ret = init_fn
         .return_type
-        .as_deref()
+        .as_ref()
         .expect("init must have a return type");
     assert!(
-        ret.contains("Result<(), RegseqError>"),
-        "init return type must contain Result<(), RegseqError>, got: {}",
+        matches!(ret, MirTy::Enum { path, .. } if path.contains("Result")),
+        "init return type must be a Result enum, got: {:?}",
         ret
     );
 
@@ -532,11 +532,11 @@ fn check_group_1_body_surface_deinit_signature() {
     // Return type must be Result<(), RegseqError>
     let ret = deinit_fn
         .return_type
-        .as_deref()
+        .as_ref()
         .expect("deinit must have a return type");
     assert!(
-        ret.contains("Result<(), RegseqError>"),
-        "deinit return type must contain Result<(), RegseqError>, got: {}",
+        matches!(ret, MirTy::Enum { path, .. } if path.contains("Result")),
+        "deinit return type must be a Result enum, got: {:?}",
         ret
     );
 
@@ -566,7 +566,7 @@ fn extract_call_sequence(body: &MirBody) -> Vec<String> {
                 ..
             } = term.kind
             {
-                if let MirTy::FnDef { ref path, .. } = constant.ty {
+                if let MirTy::Fn { ref path, .. } = constant.ty {
                     // Extract the short function name from the path
                     let short_name = path.rsplit("::").next().unwrap_or(path).to_string();
                     calls.push(short_name);
@@ -609,9 +609,7 @@ fn has_error_propagation_after_call(body: &MirBody, fn_name: &str) -> bool {
 
         let is_target_fn = match func {
             MirOperand::Constant { ref constant } => match &constant.ty {
-                MirTy::FnDef { ref path, .. } => {
-                    path.rsplit("::").next().unwrap_or(path) == fn_name
-                }
+                MirTy::Fn { ref path, .. } => path.rsplit("::").next().unwrap_or(path) == fn_name,
                 _ => false,
             },
             _ => false,
@@ -662,7 +660,7 @@ fn has_error_propagation_after_call(body: &MirBody, fn_name: &str) -> bool {
                     // to precede a fallible one).
                     let is_try_branch = match call_func {
                         MirOperand::Constant { constant } => match &constant.ty {
-                            MirTy::FnDef { path, .. } => path.contains("Try::branch"),
+                            MirTy::Fn { path, .. } => path.contains("Try::branch"),
                             _ => false,
                         },
                         _ => false,
@@ -850,7 +848,7 @@ fn find_call_terminator(body: &MirBody, fn_name: &str) -> Option<(Vec<MirOperand
                 ..
             } = term.kind
             {
-                if let MirTy::FnDef { ref path, .. } = constant.ty {
+                if let MirTy::Fn { ref path, .. } = constant.ty {
                     let short_name = path.rsplit("::").next().unwrap_or(path);
                     if short_name == fn_name {
                         return Some((args.clone(), destination.clone()));

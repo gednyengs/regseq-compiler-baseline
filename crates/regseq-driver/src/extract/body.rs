@@ -79,7 +79,7 @@ pub fn extract_body_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<MirBodySurface, B
             }
         }
 
-        let (receiver, params, return_type) = extract_fn_signature(tcx, owner_id);
+        let (receiver, params, return_type) = extract_fn_signature(tcx, owner_id, &mir_body);
 
         functions.push(MirExtractedFn {
             name,
@@ -90,6 +90,7 @@ pub fn extract_body_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<MirBodySurface, B
             return_type,
             body: mir_body,
             helper_calls,
+            monomorphization: None,
         });
     }
 
@@ -108,7 +109,7 @@ pub fn extract_body_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<MirBodySurface, B
 
         let mir_body = super::mir_extract::convert_body(tcx, &body_ref);
         let helper_calls = Vec::new();
-        let (params, return_type) = extract_free_fn_signature(tcx, root.owner_id);
+        let (params, return_type) = extract_free_fn_signature(tcx, root.owner_id, &mir_body);
 
         functions.push(MirExtractedFn {
             name,
@@ -119,6 +120,7 @@ pub fn extract_body_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<MirBodySurface, B
             return_type,
             body: mir_body,
             helper_calls,
+            monomorphization: None,
         });
     }
 
@@ -288,7 +290,8 @@ fn discover_called_helpers<'tcx>(
 fn extract_fn_signature(
     tcx: TyCtxt<'_>,
     owner_id: rustc_hir::OwnerId,
-) -> (String, Vec<MirFnParam>, Option<String>) {
+    mir_body: &MirBody,
+) -> (String, Vec<MirFnParam>, Option<MirTy>) {
     let impl_item = tcx.hir_impl_item(rustc_hir::ImplItemId { owner_id });
     let ImplItemKind::Fn(ref sig, body_id) = impl_item.kind else {
         return ("none".to_string(), vec![], None);
@@ -301,27 +304,37 @@ fn extract_fn_signature(
         "none".to_string()
     };
     let skip = if has_self { 1 } else { 0 };
+    // Get param names from HIR; types from the already-converted MIR locals.
+    // MIR layout: local_decls[0] = return place, [1..=arg_count] = args.
+    let mir_param_start = 1 + skip;
     let params: Vec<MirFnParam> = body
         .params
         .iter()
         .skip(skip)
-        .zip(sig.decl.inputs.iter().skip(skip))
-        .map(|(param, ty)| MirFnParam {
-            name: render_pat(param.pat),
-            ty: render_hir_ty(ty),
+        .enumerate()
+        .map(|(i, param)| {
+            let mir_idx = mir_param_start + i;
+            let ty = mir_body
+                .local_decls
+                .get(mir_idx)
+                .map(|d| d.ty.clone())
+                .unwrap_or(MirTy::Unsupported {
+                    description: "missing_local".to_string(),
+                });
+            MirFnParam {
+                name: render_pat(param.pat),
+                ty,
+            }
         })
         .collect();
-    let return_type = match &sig.decl.output {
-        rustc_hir::FnRetTy::DefaultReturn(_) => None,
-        rustc_hir::FnRetTy::Return(ty) => {
-            let r = render_hir_ty(ty);
-            if r == "()" {
-                None
-            } else {
-                Some(r)
-            }
+    // Return type from local_decls[0] (return place).
+    let return_type = mir_body.local_decls.first().and_then(|d| {
+        if matches!(&d.ty, MirTy::Tuple { elements } if elements.is_empty()) {
+            None
+        } else {
+            Some(d.ty.clone())
         }
-    };
+    });
     (receiver, params, return_type)
 }
 
@@ -329,35 +342,44 @@ fn extract_fn_signature(
 fn extract_free_fn_signature(
     tcx: TyCtxt<'_>,
     owner_id: rustc_hir::OwnerId,
-) -> (Vec<MirFnParam>, Option<String>) {
+    mir_body: &MirBody,
+) -> (Vec<MirFnParam>, Option<MirTy>) {
     let node = tcx.hir_owner_node(owner_id);
     let rustc_hir::OwnerNode::Item(item) = node else {
         return (vec![], None);
     };
-    let ItemKind::Fn { sig, .. } = &item.kind else {
+    let ItemKind::Fn { .. } = &item.kind else {
         return (vec![], None);
     };
     let body = tcx.hir_body_owned_by(owner_id.def_id);
+    // Get param names from HIR; types from MIR local_decls.
     let params: Vec<MirFnParam> = body
         .params
         .iter()
-        .zip(sig.decl.inputs.iter())
-        .map(|(param, ty)| MirFnParam {
-            name: render_pat(param.pat),
-            ty: render_hir_ty(ty),
+        .enumerate()
+        .map(|(i, param)| {
+            let mir_idx = 1 + i; // skip return place
+            let ty = mir_body
+                .local_decls
+                .get(mir_idx)
+                .map(|d| d.ty.clone())
+                .unwrap_or(MirTy::Unsupported {
+                    description: "missing_local".to_string(),
+                });
+            MirFnParam {
+                name: render_pat(param.pat),
+                ty,
+            }
         })
         .collect();
-    let return_type = match &sig.decl.output {
-        rustc_hir::FnRetTy::DefaultReturn(_) => None,
-        rustc_hir::FnRetTy::Return(ty) => {
-            let r = render_hir_ty(ty);
-            if r == "()" {
-                None
-            } else {
-                Some(r)
-            }
+    // Return type from local_decls[0].
+    let return_type = mir_body.local_decls.first().and_then(|d| {
+        if matches!(&d.ty, MirTy::Tuple { elements } if elements.is_empty()) {
+            None
+        } else {
+            Some(d.ty.clone())
         }
-    };
+    });
     (params, return_type)
 }
 
@@ -445,60 +467,5 @@ fn render_pat(pat: &rustc_hir::Pat<'_>) -> String {
         rustc_hir::PatKind::Binding(_, _, ident, _) => ident.name.as_str().to_string(),
         rustc_hir::PatKind::Wild => "_".to_string(),
         _ => "<pattern>".to_string(),
-    }
-}
-
-fn render_hir_ty<A>(ty: &rustc_hir::Ty<'_, A>) -> String {
-    match &ty.kind {
-        rustc_hir::TyKind::Path(qpath) => render_qpath(qpath),
-        rustc_hir::TyKind::Ref(_, mut_ty) => {
-            let m = if mut_ty.mutbl.is_mut() { "mut " } else { "" };
-            format!("&{m}{}", render_hir_ty(mut_ty.ty))
-        }
-        rustc_hir::TyKind::Slice(elem) => format!("[{}]", render_hir_ty(elem)),
-        rustc_hir::TyKind::Tup([]) => "()".to_string(),
-        rustc_hir::TyKind::Tup(elems) => {
-            let inner: Vec<_> = elems.iter().map(|e| render_hir_ty(e)).collect();
-            format!("({})", inner.join(", "))
-        }
-        rustc_hir::TyKind::Never => "!".to_string(),
-        _ => "<type>".to_string(),
-    }
-}
-
-fn render_qpath(qpath: &QPath<'_>) -> String {
-    match qpath {
-        QPath::Resolved(_, path) => path
-            .segments
-            .iter()
-            .map(|s| render_path_segment(s))
-            .collect::<Vec<_>>()
-            .join("::"),
-        QPath::TypeRelative(ty, segment) => {
-            format!("{}::{}", render_hir_ty(ty), render_path_segment(segment))
-        }
-    }
-}
-
-/// Render a single path segment including any generic type arguments.
-fn render_path_segment(seg: &rustc_hir::PathSegment<'_>) -> String {
-    let name = seg.ident.name.as_str().to_string();
-    match seg.args {
-        Some(args) if !args.args.is_empty() => {
-            let type_args: Vec<String> = args
-                .args
-                .iter()
-                .filter_map(|arg| match arg {
-                    rustc_hir::GenericArg::Type(ty) => Some(render_hir_ty(ty.as_unambig_ty())),
-                    _ => None,
-                })
-                .collect();
-            if type_args.is_empty() {
-                name
-            } else {
-                format!("{}<{}>", name, type_args.join(", "))
-            }
-        }
-        _ => name,
     }
 }

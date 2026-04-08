@@ -19,17 +19,19 @@ pub fn lower_operand(ctx: &FnContext<'_>, operand: &MirOperand) -> ValueExpr {
     match operand {
         MirOperand::Copy { place } | MirOperand::Move { place } => lower_place_to_value(ctx, place),
         MirOperand::Constant { constant } => match &constant.value {
-            MirConstValue::Scalar { bits, .. } => {
+            MirConstValue::Bits { value } => {
                 if constant.ty == MirTy::Bool {
-                    ValueExpr::BoolLit(*bits != 0)
+                    ValueExpr::BoolLit(*value != 0)
                 } else {
-                    ValueExpr::IntLit(*bits as u64)
+                    ValueExpr::IntLit(*value as u64)
                 }
             }
             MirConstValue::ZeroSized => ValueExpr::IntLit(0),
-            MirConstValue::Unsupported { description } => {
+            MirConstValue::Unevaluated { path } => ValueExpr::Param(format!("unevaluated_{path}")),
+            MirConstValue::Unsupported { description, .. } => {
                 ValueExpr::Param(format!("unsupported_{description}"))
             }
+            _ => ValueExpr::IntLit(0),
         },
     }
 }
@@ -362,24 +364,22 @@ fn is_zero(expr: &ValueExpr) -> bool {
 /// Extract a constant integer value from an operand.
 pub fn extract_constant_value(operand: &MirOperand) -> Option<u32> {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Scalar { bits, .. } = &constant.value {
-            return Some(*bits as u32);
+        if let MirConstValue::Bits { value } = &constant.value {
+            return Some(*value as u32);
         }
     }
     None
 }
 
-/// Extract a symbolic constant path from an `Unsupported` operand.
+/// Extract a symbolic constant path from an `Unevaluated` operand.
 ///
 /// When the MIR has unevaluated constant references (e.g.,
-/// `"unevaluated:driver::Foo::SOME_MASK"`), this extracts the path
-/// so the interpreter can still recognize interrupt class patterns.
+/// `driver::Foo::SOME_MASK`), this extracts the path so the
+/// interpreter can still recognize interrupt class patterns.
 pub fn extract_constant_path(operand: &MirOperand) -> Option<String> {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Unsupported { description } = &constant.value {
-            if let Some(path) = description.strip_prefix("unevaluated:") {
-                return Some(path.to_string());
-            }
+        if let MirConstValue::Unevaluated { path } = &constant.value {
+            return Some(path.clone());
         }
     }
     None
@@ -432,7 +432,7 @@ pub fn determine_return_semantic(ctx: &FnContext<'_>, body: &MirBody) -> ReturnS
             }
             ReturnSemantic::Bool(false)
         }
-        MirTy::Adt { path, .. } => {
+        MirTy::Enum { path, .. } => {
             if path.contains("Result") {
                 ReturnSemantic::Ok
             } else if path.contains("Option") {
@@ -473,10 +473,9 @@ fn find_return_value(body: &MirBody) -> Option<MirOperand> {
 /// Format a MIR type for display in ValueExpr.
 fn format_mir_ty(ty: &MirTy) -> String {
     match ty {
-        MirTy::Uint { uint_ty } => format!("{uint_ty:?}").to_lowercase(),
-        MirTy::Int { int_ty } => format!("{int_ty:?}").to_lowercase(),
+        MirTy::Int { width, .. } => format!("{width:?}").to_lowercase(),
         MirTy::Bool => "bool".into(),
-        MirTy::Adt { path, .. } => path.clone(),
+        MirTy::Struct { path, .. } | MirTy::Enum { path, .. } => path.clone(),
         _ => "unknown".into(),
     }
 }

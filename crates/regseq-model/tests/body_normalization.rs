@@ -46,7 +46,12 @@ fn single_callback_normalizes_mir_metadata() {
     );
     assert_eq!(f.receiver, "ref_mut");
     assert!(f.params.is_empty());
-    assert_eq!(f.return_type.as_deref(), Some("Result<(), RegseqError>"));
+    assert_eq!(
+        f.return_type,
+        Some(MirTy::Unsupported {
+            description: "Result<(), RegseqError>".into()
+        })
+    );
     assert_eq!(f.def_path, "TestDriver::init");
 }
 
@@ -72,7 +77,13 @@ fn callback_params_preserved_in_mir() {
     let f = &model.mir_bodies.functions[0];
     assert_eq!(f.params.len(), 1);
     assert_eq!(f.params[0].name, "byte");
-    assert_eq!(f.params[0].ty, "u8");
+    assert_eq!(
+        f.params[0].ty,
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U8
+        }
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -341,7 +352,7 @@ fn make_fn(
     kind: RawFnKindInput,
     receiver: &str,
     params: Vec<RawFnParamInput>,
-    return_type: Option<&str>,
+    return_type: Option<MirTy>,
     helper_calls: Vec<String>,
     body: MirBody,
 ) -> RawMirExtractedFnInput {
@@ -351,9 +362,10 @@ fn make_fn(
         kind,
         receiver: receiver.into(),
         params,
-        return_type: return_type.map(Into::into),
+        return_type,
         body,
         helper_calls,
+        monomorphization: None,
     }
 }
 
@@ -367,7 +379,9 @@ fn make_input_with_callback() -> RawArtifactInput {
             },
             "ref_mut",
             vec![],
-            Some("Result<(), RegseqError>"),
+            Some(MirTy::Unsupported {
+                description: "Result<(), RegseqError>".into(),
+            }),
             vec!["disable_uart".into()],
             minimal_mir_body(),
         )],
@@ -385,7 +399,9 @@ fn make_input_with_mixed() -> RawArtifactInput {
                 },
                 "ref_mut",
                 vec![],
-                Some("Result<(), RegseqError>"),
+                Some(MirTy::Unsupported {
+                    description: "Result<(), RegseqError>".into(),
+                }),
                 vec!["disable_uart".into()],
                 minimal_mir_body(),
             ),
@@ -403,7 +419,9 @@ fn make_input_with_mixed() -> RawArtifactInput {
                 RawFnKindInput::Isr,
                 "ref_mut",
                 vec![],
-                Some("IrqResult"),
+                Some(MirTy::Unsupported {
+                    description: "IrqResult".into(),
+                }),
                 vec![],
                 minimal_mir_body(),
             ),
@@ -422,7 +440,10 @@ fn make_input_with_params() -> RawArtifactInput {
             "ref_mut",
             vec![RawFnParamInput {
                 name: "byte".into(),
-                ty: "u8".into(),
+                ty: MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U8,
+                },
             }],
             None,
             vec![],
@@ -496,9 +517,9 @@ fn make_input_with_drop() -> RawArtifactInput {
             },
             MirLocalDecl {
                 index: 1,
-                ty: MirTy::Adt {
+                ty: MirTy::Struct {
                     path: "String".into(),
-                    args: vec![],
+                    fields: vec![],
                 },
                 mutability: MirMutability::Mut,
                 name: Some("_1".to_string()),
@@ -581,8 +602,9 @@ fn make_input_with_statements() -> RawArtifactInput {
             },
             MirLocalDecl {
                 index: 1,
-                ty: MirTy::Uint {
-                    uint_ty: MirUintTy::U32,
+                ty: MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32,
                 },
                 mutability: MirMutability::Mut,
                 name: Some("_1".to_string()),
@@ -605,10 +627,11 @@ fn make_input_with_statements() -> RawArtifactInput {
                         rvalue: Box::new(MirRvalue::Use {
                             operand: MirOperand::Constant {
                                 constant: MirConstant {
-                                    ty: MirTy::Uint {
-                                        uint_ty: MirUintTy::U32,
+                                    ty: MirTy::Int {
+                                        signed: false,
+                                        width: IntWidth::U32,
                                     },
-                                    value: MirConstValue::Scalar { bits: 42, size: 4 },
+                                    value: MirConstValue::Bits { value: 42 },
                                 },
                             },
                         }),
@@ -690,4 +713,168 @@ fn make_input_with_unsupported() -> RawArtifactInput {
             body,
         )],
     }))
+}
+
+// ---------------------------------------------------------------------------
+// Monomorphization identity tests
+// ---------------------------------------------------------------------------
+
+/// Prove that same-path/different-args monomorphization is tracked.
+///
+/// Two extracted functions share the same `origin_path` (the authored generic)
+/// but differ in their instantiated type arguments. This test verifies that
+/// `MonomorphizationKey` preserves that distinction.
+#[test]
+fn monomorphization_key_distinguishes_same_path_different_args() {
+    let body = minimal_mir_body();
+    let input = make_minimal_input(Some(RawBodySurfaceInput {
+        functions: vec![
+            RawMirExtractedFnInput {
+                name: "type_size_u8".into(),
+                def_path: "driver::type_size".into(),
+                kind: RawFnKindInput::FreeFunction,
+                receiver: "none".into(),
+                params: vec![],
+                return_type: Some(MirTy::Int {
+                    signed: false,
+                    width: IntWidth::Usize,
+                }),
+                body: body.clone(),
+                helper_calls: vec![],
+                monomorphization: Some(MonomorphizationKey {
+                    origin_path: "driver::type_size".into(),
+                    args: vec![MirTy::Int {
+                        signed: false,
+                        width: IntWidth::U8,
+                    }],
+                }),
+            },
+            RawMirExtractedFnInput {
+                name: "type_size_u64".into(),
+                def_path: "driver::type_size".into(),
+                kind: RawFnKindInput::FreeFunction,
+                receiver: "none".into(),
+                params: vec![],
+                return_type: Some(MirTy::Int {
+                    signed: false,
+                    width: IntWidth::Usize,
+                }),
+                body: body.clone(),
+                helper_calls: vec![],
+                monomorphization: Some(MonomorphizationKey {
+                    origin_path: "driver::type_size".into(),
+                    args: vec![MirTy::Int {
+                        signed: false,
+                        width: IntWidth::U64,
+                    }],
+                }),
+            },
+        ],
+    }));
+
+    let model = normalize(&input).unwrap();
+    let fns = &model.mir_bodies.functions;
+    assert_eq!(fns.len(), 2);
+
+    // Both share the same def_path (origin).
+    assert_eq!(fns[0].def_path, "driver::type_size");
+    assert_eq!(fns[1].def_path, "driver::type_size");
+
+    // Monomorphization keys differ.
+    let k0 = fns[0].monomorphization.as_ref().unwrap();
+    let k1 = fns[1].monomorphization.as_ref().unwrap();
+    assert_eq!(k0.origin_path, k1.origin_path);
+    assert_ne!(k0.args, k1.args);
+
+    // Verify specific arg types.
+    assert_eq!(
+        k0.args[0],
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U8
+        }
+    );
+    assert_eq!(
+        k1.args[0],
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U64
+        }
+    );
+}
+
+/// Prove that MonomorphizationKey is observable from the normalized model
+/// (downstream consumer test).
+#[test]
+fn monomorphization_key_observable_in_downstream_lookup() {
+    let body = minimal_mir_body();
+    let input = make_minimal_input(Some(RawBodySurfaceInput {
+        functions: vec![
+            RawMirExtractedFnInput {
+                name: "type_size_u8".into(),
+                def_path: "driver::type_size".into(),
+                kind: RawFnKindInput::FreeFunction,
+                receiver: "none".into(),
+                params: vec![],
+                return_type: Some(MirTy::Int {
+                    signed: false,
+                    width: IntWidth::Usize,
+                }),
+                body: body.clone(),
+                helper_calls: vec![],
+                monomorphization: Some(MonomorphizationKey {
+                    origin_path: "driver::type_size".into(),
+                    args: vec![MirTy::Int {
+                        signed: false,
+                        width: IntWidth::U8,
+                    }],
+                }),
+            },
+            RawMirExtractedFnInput {
+                name: "type_size_u64".into(),
+                def_path: "driver::type_size".into(),
+                kind: RawFnKindInput::FreeFunction,
+                receiver: "none".into(),
+                params: vec![],
+                return_type: Some(MirTy::Int {
+                    signed: false,
+                    width: IntWidth::Usize,
+                }),
+                body: body.clone(),
+                helper_calls: vec![],
+                monomorphization: Some(MonomorphizationKey {
+                    origin_path: "driver::type_size".into(),
+                    args: vec![MirTy::Int {
+                        signed: false,
+                        width: IntWidth::U64,
+                    }],
+                }),
+            },
+        ],
+    }));
+
+    let model = normalize(&input).unwrap();
+
+    // Downstream consumer: find all instances of a given generic origin
+    // and collect their monomorphization args.
+    let instances: Vec<_> = model
+        .mir_bodies
+        .functions
+        .iter()
+        .filter(|f| {
+            f.monomorphization
+                .as_ref()
+                .map_or(false, |k| k.origin_path == "driver::type_size")
+        })
+        .collect();
+
+    assert_eq!(instances.len(), 2);
+
+    // A downstream consumer can distinguish instances by their args.
+    let arg_sets: Vec<&[MirTy]> = instances
+        .iter()
+        .map(|f| f.monomorphization.as_ref().unwrap().args.as_slice())
+        .collect();
+
+    assert_ne!(arg_sets[0], arg_sets[1]);
 }

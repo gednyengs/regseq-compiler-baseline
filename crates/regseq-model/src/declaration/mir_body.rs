@@ -49,11 +49,14 @@ pub struct MirFnBodyDecl {
     /// Parameters (excluding receiver).
     pub params: Vec<FnParamDecl>,
     /// Return type, if non-unit.
-    pub return_type: Option<String>,
+    pub return_type: Option<MirTy>,
     /// The MIR body (CFG form).
     pub body: MirBody,
     /// Names of helpers called from this function's MIR.
     pub helper_calls: Vec<String>,
+    /// Monomorphization key for generic-instantiated functions.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub monomorphization: Option<MonomorphizationKey>,
     /// Provenance back to the raw artifact.
     pub provenance: Provenance,
 }
@@ -80,8 +83,8 @@ pub enum FnKind {
 pub struct FnParamDecl {
     /// Parameter name.
     pub name: String,
-    /// Parameter type as a string.
-    pub ty: String,
+    /// Parameter type.
+    pub ty: MirTy,
 }
 
 impl MirFnBodyDecl {
@@ -467,62 +470,120 @@ pub enum MirCastKind {
 // Types
 // ---------------------------------------------------------------------------
 
-/// Owned type representation for MIR locals and expressions.
+/// Resolved, backend-friendly type representation for MIR locals and
+/// expressions.
+///
+/// This enum carries fully resolved type schemas rather than
+/// rustc-shaped `Adt`/`FnDef` wrappers. Struct and enum types include
+/// their field layouts; function types include parameter and return
+/// types. Recursive or mutually recursive nominal types use
+/// [`NominalRef`](MirTy::NominalRef) to break infinite expansion.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind")]
 pub enum MirTy {
+    /// Boolean type.
     Bool,
+    /// Character type.
     Char,
-    Int { int_ty: MirIntTy },
-    Uint { uint_ty: MirUintTy },
-    Float { float_ty: MirFloatTy },
+    /// Integer type (signed or unsigned).
+    Int { signed: bool, width: IntWidth },
+    /// Floating-point type.
+    Float { width: FloatWidth },
+    /// Reference type.
     Ref { mutbl: bool, ty: Box<MirTy> },
+    /// Raw pointer type.
     RawPtr { mutbl: bool, ty: Box<MirTy> },
-    Adt { path: String, args: Vec<MirTy> },
-    FnDef { path: String, args: Vec<MirTy> },
+    /// Struct type with resolved field layout.
+    Struct {
+        path: String,
+        fields: Vec<MirFieldTy>,
+    },
+    /// Enum type with resolved variant layout.
+    Enum {
+        path: String,
+        variants: Vec<MirVariantTy>,
+    },
+    /// Tuple type.
     Tuple { elements: Vec<MirTy> },
-    Array { ty: Box<MirTy>, len: u64 },
-    Slice { ty: Box<MirTy> },
+    /// Fixed-size array type.
+    Array { element: Box<MirTy>, len: u64 },
+    /// Slice type.
+    Slice { element: Box<MirTy> },
+    /// Function type with resolved parameter and return types.
+    Fn {
+        path: String,
+        params: Vec<MirTy>,
+        ret: Box<MirTy>,
+    },
+    /// String slice type (`&str` payload).
     Str,
+    /// Byte slice type (`&[u8]` payload).
+    Bytes,
+    /// Never type (`!`).
     Never,
-    Param { name: String },
+    /// Zero-sized type placeholder (e.g. `PhantomData`, closures).
+    ZeroSizedLike { description: String },
+    /// Nominal reference to a type defined elsewhere.
+    ///
+    /// Used to break infinite recursion when resolving recursive or
+    /// mutually recursive nominal types. The `path` is the canonical
+    /// def-path of the referenced type. Consumers should treat this as
+    /// an opaque nominal identity rather than attempting to inline the
+    /// referenced schema.
+    NominalRef { path: String },
+    /// A type outside the supported subset.
     Unsupported { description: String },
 }
 
-/// Signed integer type.
+/// Integer width (covers both signed and unsigned).
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MirIntTy {
-    Isize,
+pub enum IntWidth {
     I8,
     I16,
     I32,
     I64,
     I128,
-}
-
-/// Unsigned integer type.
-#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MirUintTy {
-    Usize,
+    Isize,
     U8,
     U16,
     U32,
     U64,
     U128,
+    Usize,
 }
 
-/// Float type.
+/// Floating-point width.
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
-pub enum MirFloatTy {
+pub enum FloatWidth {
     F32,
     F64,
+}
+
+/// A field within a struct type schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MirFieldTy {
+    /// Field index within the struct.
+    pub index: u32,
+    /// Field name.
+    pub name: String,
+    /// Field type.
+    pub ty: MirTy,
+}
+
+/// A variant within an enum type schema.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MirVariantTy {
+    /// Variant name.
+    pub name: String,
+    /// Variant fields.
+    pub fields: Vec<MirFieldTy>,
 }
 
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
 
-/// A constant value in MIR.
+/// A typed constant value in MIR.
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct MirConstant {
     /// Type of the constant.
@@ -531,19 +592,80 @@ pub struct MirConstant {
     pub value: MirConstValue,
 }
 
-/// Constant value representation.
+/// Structured constant value representation.
+///
+/// This enum carries resolved constant data instead of encoding
+/// structured payloads into opaque strings. Struct, enum, tuple, and
+/// array constants are represented with their field/element structure
+/// intact. Constants that cannot be evaluated at extraction time are
+/// represented as [`Unevaluated`](MirConstValue::Unevaluated).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(tag = "kind")]
 pub enum MirConstValue {
-    Scalar {
+    /// Raw bit pattern (integers, booleans encoded as 0/1, etc.).
+    Bits {
         #[serde(deserialize_with = "serde_u128_scalar::deserialize")]
-        bits: u128,
-        size: u8,
+        value: u128,
     },
+    /// Boolean constant.
+    Bool { value: bool },
+    /// Character constant (as Unicode scalar value).
+    Char { value: u32 },
+    /// String constant.
+    Str { value: String },
+    /// Byte string constant.
+    Bytes { value: Vec<u8> },
+    /// Struct constant with named fields.
+    Struct { fields: Vec<ConstField> },
+    /// Enum variant constant with optional fields.
+    Enum {
+        variant: String,
+        fields: Vec<ConstField>,
+    },
+    /// Tuple constant.
+    Tuple { elements: Vec<MirConstValue> },
+    /// Array constant.
+    Array { elements: Vec<MirConstValue> },
+    /// A constant that could not be evaluated at extraction time.
+    Unevaluated { path: String },
+    /// Zero-sized constant (e.g. unit, PhantomData).
     ZeroSized,
+    /// A constant outside the supported subset.
     Unsupported {
+        #[serde(skip_serializing_if = "Option::is_none")]
+        path: Option<String>,
         description: String,
     },
+}
+
+/// A field within a struct or enum constant.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct ConstField {
+    /// Field index within the aggregate.
+    pub index: u32,
+    /// Field name, if available (None for tuple-struct fields).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub name: Option<String>,
+    /// Field value.
+    pub value: Box<MirConstValue>,
+}
+
+// ---------------------------------------------------------------------------
+// Monomorphization
+// ---------------------------------------------------------------------------
+
+/// Tracks generic-instantiation identity for monomorphized functions.
+///
+/// Two extracted functions may share the same `origin_path` (authored
+/// generic function) but differ in their instantiated type arguments.
+/// This key distinguishes them without requiring backends to perform
+/// generic substitution.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct MonomorphizationKey {
+    /// The authored generic function path.
+    pub origin_path: String,
+    /// The instantiated type arguments.
+    pub args: Vec<MirTy>,
 }
 
 // ---------------------------------------------------------------------------
@@ -605,7 +727,7 @@ pub fn collect_mir_call_targets(body: &MirBody) -> Vec<String> {
             ..
         } = term.kind
         {
-            if let MirTy::FnDef { ref path, .. } = constant.ty {
+            if let MirTy::Fn { ref path, .. } = constant.ty {
                 if let Some(short) = path.rsplit("::").next() {
                     targets.push(short.to_string());
                 }

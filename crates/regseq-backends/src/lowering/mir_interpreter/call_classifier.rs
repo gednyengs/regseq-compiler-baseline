@@ -1,7 +1,7 @@
 //! MIR Call terminator classification.
 //!
 //! Classifies function calls in MIR based on three inputs:
-//! 1. Function path from `MirTy::FnDef`
+//! 1. Function path from `MirTy::Fn`
 //! 2. Resolved receiver place from declaration metadata
 //! 3. Known type shapes (register wrappers, resource types, intrinsics)
 
@@ -154,7 +154,7 @@ fn is_try_branch_path(path: &str) -> bool {
 fn extract_fn_path(func: &MirOperand) -> String {
     match func {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.clone(),
+            MirTy::Fn { path, .. } => path.clone(),
             _ => String::new(),
         },
         _ => String::new(),

@@ -363,11 +363,14 @@ pub struct RawMirExtractedFnInput {
     pub params: Vec<RawFnParamInput>,
     /// Return type, if non-unit.
     #[serde(default)]
-    pub return_type: Option<String>,
+    pub return_type: Option<super::mir_body::MirTy>,
     /// MIR body (typed deserialization matching driver's MIR extraction output).
     pub body: super::mir_body::MirBody,
     /// Helper functions called from this body.
     pub helper_calls: Vec<String>,
+    /// Monomorphization key for generic-instantiated functions.
+    #[serde(default)]
+    pub monomorphization: Option<super::mir_body::MonomorphizationKey>,
 }
 
 /// Function classification.
@@ -393,7 +396,7 @@ pub struct RawFnParamInput {
     /// Parameter name.
     pub name: String,
     /// Parameter type.
-    pub ty: String,
+    pub ty: super::mir_body::MirTy,
 }
 
 // ---- Identity enrichment ----

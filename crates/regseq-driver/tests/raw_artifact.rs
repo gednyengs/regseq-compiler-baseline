@@ -167,9 +167,12 @@ fn sample_body_surface() -> RawBodySurface {
                 },
                 receiver: "ref_mut".to_string(),
                 params: vec![],
-                return_type: Some("Result<(), RegseqError>".to_string()),
+                return_type: Some(MirTy::Unsupported {
+                    description: "Result<(), RegseqError>".to_string(),
+                }),
                 body: minimal_mir_body(),
                 helper_calls: vec!["disable_uart".to_string()],
+                monomorphization: None,
             },
             MirExtractedFn {
                 name: "disable_uart".to_string(),
@@ -180,6 +183,7 @@ fn sample_body_surface() -> RawBodySurface {
                 return_type: None,
                 body: minimal_mir_body(),
                 helper_calls: vec![],
+                monomorphization: None,
             },
             MirExtractedFn {
                 name: "handle_irq".to_string(),
@@ -187,9 +191,12 @@ fn sample_body_surface() -> RawBodySurface {
                 kind: MirFnKind::Isr,
                 receiver: "ref_mut".to_string(),
                 params: vec![],
-                return_type: Some("IrqResult".to_string()),
+                return_type: Some(MirTy::Unsupported {
+                    description: "IrqResult".to_string(),
+                }),
                 body: minimal_mir_body(),
                 helper_calls: vec![],
+                monomorphization: None,
             },
         ],
     }
@@ -445,7 +452,12 @@ fn raw_artifact_mir_body_captures_isr() {
         .find(|f| f.name == "handle_irq")
         .unwrap();
     assert!(matches!(&isr.kind, MirFnKind::Isr));
-    assert!(isr.return_type.as_deref() == Some("IrqResult"));
+    assert!(
+        isr.return_type.as_ref()
+            == Some(&MirTy::Unsupported {
+                description: "IrqResult".to_string()
+            })
+    );
 }
 
 #[test]
