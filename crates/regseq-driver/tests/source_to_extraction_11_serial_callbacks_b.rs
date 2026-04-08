@@ -576,6 +576,103 @@ fn extract_generic_args_from_path(path: &str) -> Vec<String> {
     args
 }
 
+/// Collect the Unevaluated constant paths from Call terminator arguments for
+/// calls matching `callee_substr`, in block order. Each entry is a Vec of
+/// constant paths (one per arg that is a Constant with Unevaluated value).
+fn collect_call_arg_const_paths(body: &MirBody, callee_substr: &str) -> Vec<Vec<String>> {
+    let mut result = Vec::new();
+    for bb in &body.basic_blocks {
+        if let Some(t) = &bb.terminator {
+            if let MirTerminatorKind::Call { func, args, .. } = &t.kind {
+                if operand_mentions(func, callee_substr) {
+                    let paths: Vec<String> = args
+                        .iter()
+                        .filter_map(|arg| match arg {
+                            MirOperand::Constant { constant } => match &constant.value {
+                                MirConstValue::Unevaluated { path } => Some(path.clone()),
+                                _ => None,
+                            },
+                            _ => None,
+                        })
+                        .collect();
+                    result.push(paths);
+                }
+            }
+        }
+    }
+    result
+}
+
+/// For a SwitchInt on a bool discriminant, find the constant arg paths of
+/// calls matching `callee_substr` in each branch.
+///
+/// Returns `(true_branch_paths, false_branch_paths)` where each entry is
+/// the set of Unevaluated constant paths found in Call args reachable from
+/// the respective branch target before converging.
+///
+/// SwitchInt encodes bool as: value 0 -> first target (false), otherwise -> second target (true).
+fn collect_branch_call_arg_paths(
+    body: &MirBody,
+    callee_substr: &str,
+) -> (Vec<String>, Vec<String>) {
+    // Find the SwitchInt terminator
+    let switch_bb = body.basic_blocks.iter().find_map(|bb| {
+        if let Some(t) = &bb.terminator {
+            if let MirTerminatorKind::SwitchInt { targets, .. } = &t.kind {
+                // Bool SwitchInt: values=[0], targets=[false_bb, true_bb]
+                if targets.values == [0] && targets.targets.len() == 2 {
+                    return Some((targets.targets[0], targets.targets[1]));
+                }
+            }
+        }
+        None
+    });
+
+    let Some((false_bb, true_bb)) = switch_bb else {
+        return (vec![], vec![]);
+    };
+
+    let extract_paths = |start_bb: u32| -> Vec<String> {
+        let mut paths = Vec::new();
+        let mut bb_idx = start_bb as usize;
+        // Walk blocks from the branch entry until we hit a Goto (convergence)
+        // or Return, collecting call arg const paths along the way.
+        loop {
+            if bb_idx >= body.basic_blocks.len() {
+                break;
+            }
+            let bb = &body.basic_blocks[bb_idx];
+            if let Some(t) = &bb.terminator {
+                if let MirTerminatorKind::Call {
+                    func, args, target, ..
+                } = &t.kind
+                {
+                    if operand_mentions(func, callee_substr) {
+                        for arg in args {
+                            if let MirOperand::Constant { constant } = arg {
+                                if let MirConstValue::Unevaluated { path } = &constant.value {
+                                    paths.push(path.clone());
+                                }
+                            }
+                        }
+                    }
+                    // Follow the call's continuation target
+                    if let Some(next) = target {
+                        bb_idx = *next as usize;
+                        continue;
+                    }
+                }
+                // Stop at Goto (convergence point) or Return
+                break;
+            }
+            break;
+        }
+        paths
+    };
+
+    (extract_paths(true_bb), extract_paths(false_bb))
+}
+
 /// Count how many times a given callee name appears in Call terminators.
 fn count_calls_to(body: &MirBody, callee_substr: &str) -> usize {
     body.basic_blocks
@@ -960,10 +1057,20 @@ fn check_group_2_tx_ready_body() {
         "tx_ready must return bool"
     );
 
-    // NOTE: The MIR does not expose which specific Field constant (TXFF vs
-    // BUSY) is passed to read(). Both use the same FR_REG::Register type arg.
-    // The authored fact that tx_ready tests FR.TXFF specifically cannot be
-    // proven at the field level from MIR alone. Correspondence is weakened.
+    // Exact field identity: the read call argument must be FR_REG::TXFF::FIELD
+    let read_arg_paths = collect_call_arg_const_paths(&f.body, "read");
+    assert!(
+        !read_arg_paths.is_empty(),
+        "tx_ready must have at least one read call with constant args"
+    );
+    assert!(
+        read_arg_paths
+            .iter()
+            .any(|paths| { paths.iter().any(|p| p.contains("FR_REG::TXFF::FIELD")) }),
+        "tx_ready read call must pass FR_REG::TXFF::FIELD as argument, \
+         got paths: {:?}",
+        read_arg_paths
+    );
 }
 
 #[test]
@@ -998,10 +1105,20 @@ fn check_group_2_tx_empty_body() {
         "tx_empty must return bool"
     );
 
-    // NOTE: The MIR does not expose which specific Field constant (BUSY vs
-    // TXFF) is passed to read(). Both use the same FR_REG::Register type arg.
-    // The authored fact that tx_empty tests FR.BUSY specifically cannot be
-    // proven at the field level from MIR alone. Correspondence is weakened.
+    // Exact field identity: the read call argument must be FR_REG::BUSY::FIELD
+    let read_arg_paths = collect_call_arg_const_paths(&f.body, "read");
+    assert!(
+        !read_arg_paths.is_empty(),
+        "tx_empty must have at least one read call with constant args"
+    );
+    assert!(
+        read_arg_paths
+            .iter()
+            .any(|paths| { paths.iter().any(|p| p.contains("FR_REG::BUSY::FIELD")) }),
+        "tx_empty read call must pass FR_REG::BUSY::FIELD as argument, \
+         got paths: {:?}",
+        read_arg_paths
+    );
 }
 
 #[test]
@@ -1101,12 +1218,27 @@ fn check_group_2_flush_tx_fifo_body() {
         "first modify must come before second modify"
     );
 
-    // NOTE: The MIR does not expose which FieldValue constant (FEN::DISABLED
-    // vs FEN::ENABLED) is passed to each modify call. The authored fact that
-    // the first call applies FEN::DISABLED and the second FEN::ENABLED cannot
-    // be distinguished from MIR alone. We prove two ordered modify calls to
-    // LCRH_REG but not the specific constant identity. Correspondence is
-    // weakened.
+    // Exact value ordering: first modify must pass FEN::DISABLED, second FEN::ENABLED
+    let modify_arg_paths = collect_call_arg_const_paths(&f.body, "modify");
+    assert_eq!(
+        modify_arg_paths.len(),
+        2,
+        "flush_tx_fifo must have exactly 2 modify calls with arg paths"
+    );
+    assert!(
+        modify_arg_paths[0]
+            .iter()
+            .any(|p| p.contains("FEN::DISABLED")),
+        "flush_tx_fifo first modify must pass FEN::DISABLED, got: {:?}",
+        modify_arg_paths[0]
+    );
+    assert!(
+        modify_arg_paths[1]
+            .iter()
+            .any(|p| p.contains("FEN::ENABLED")),
+        "flush_tx_fifo second modify must pass FEN::ENABLED, got: {:?}",
+        modify_arg_paths[1]
+    );
 
     // Must have a Return terminator
     assert!(
@@ -1162,12 +1294,18 @@ fn check_group_2_send_break_body() {
         );
     }
 
-    // NOTE: The MIR does not expose which FieldValue constant (BRK::ENABLED
-    // vs BRK::DISABLED) is passed to each modify call, nor which branch maps
-    // to which constant. The authored fact that on==true maps to BRK::ENABLED
-    // and on==false maps to BRK::DISABLED cannot be proven from MIR alone.
-    // We prove SwitchInt branching and two modify calls to LCRH_REG but not
-    // the branch-to-value mapping. Correspondence is weakened.
+    // Exact branch-to-value mapping: on==true -> BRK::ENABLED, on==false -> BRK::DISABLED
+    let (true_paths, false_paths) = collect_branch_call_arg_paths(&f.body, "modify");
+    assert!(
+        true_paths.iter().any(|p| p.contains("BRK::ENABLED")),
+        "send_break true branch must pass BRK::ENABLED to modify, got: {:?}",
+        true_paths
+    );
+    assert!(
+        false_paths.iter().any(|p| p.contains("BRK::DISABLED")),
+        "send_break false branch must pass BRK::DISABLED to modify, got: {:?}",
+        false_paths
+    );
 
     // Must have a Return terminator
     assert!(

@@ -1496,7 +1496,7 @@
           "id": "extraction-remediation-11",
           "name": "PL011 serial-callbacks B extraction remediation",
           "spec": ".harness/tasks/extraction-remediation/11-pl011-serial-callbacks-b-extraction-remediation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "source-to-extraction-11"
           ],
