@@ -277,7 +277,7 @@ pub fn is_value_producing_rvalue(rvalue: &MirRvalue) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use regseq_model::declaration::mir_body::{MirLocalDecl, MirMutability, MirTy, MirUintTy};
+    use regseq_model::declaration::mir_body::{IntWidth, MirLocalDecl, MirMutability, MirTy};
 
     fn make_local(index: u32, ty: MirTy, name: Option<&str>) -> MirLocalDecl {
         MirLocalDecl {
@@ -299,8 +299,9 @@ mod tests {
     fn return_place_is_local_zero() {
         let decls = vec![make_local(
             0,
-            MirTy::Uint {
-                uint_ty: MirUintTy::U32,
+            MirTy::Int {
+                signed: false,
+                width: IntWidth::U32,
             },
             None,
         )];
@@ -319,9 +320,9 @@ mod tests {
                 1,
                 MirTy::Ref {
                     mutbl: true,
-                    ty: Box::new(MirTy::Adt {
+                    ty: Box::new(MirTy::Struct {
                         path: "Pl011FullSpec".into(),
-                        args: vec![],
+                        fields: vec![],
                     }),
                 },
                 Some("self"),
@@ -348,15 +349,17 @@ mod tests {
             ),
             make_local(
                 2,
-                MirTy::Uint {
-                    uint_ty: MirUintTy::U32,
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32,
                 },
                 Some("uart_clk_hz"),
             ),
             make_local(
                 3,
-                MirTy::Uint {
-                    uint_ty: MirUintTy::U32,
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32,
                 },
                 Some("baud_rate"),
             ),
@@ -391,8 +394,9 @@ mod tests {
             make_local(0, MirTy::Bool, None),
             make_local(
                 1,
-                MirTy::Uint {
-                    uint_ty: MirUintTy::U32,
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32,
                 },
                 Some("_7"),
             ),

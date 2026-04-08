@@ -741,9 +741,12 @@ fn make_analysis_input_with_mir() -> AnalysisInput {
                 },
                 receiver: "ref_mut".into(),
                 params: vec![],
-                return_type: Some("Result<(), RegseqError>".into()),
+                return_type: Some(MirTy::Unsupported {
+                    description: "Result<(), RegseqError>".into(),
+                }),
                 body: trivial_mir_body(),
                 helper_calls: vec!["setup_device".into()],
+                monomorphization: None,
                 provenance: Provenance::new("mir_bodies").with_containing_item("init"),
             },
             MirFnBodyDecl {
@@ -758,6 +761,7 @@ fn make_analysis_input_with_mir() -> AnalysisInput {
                 return_type: None,
                 body: trivial_mir_body(),
                 helper_calls: vec![],
+                monomorphization: None,
                 provenance: Provenance::new("mir_bodies").with_containing_item("tx_byte"),
             },
             MirFnBodyDecl {
@@ -769,6 +773,7 @@ fn make_analysis_input_with_mir() -> AnalysisInput {
                 return_type: None,
                 body: trivial_mir_body(),
                 helper_calls: vec![],
+                monomorphization: None,
                 provenance: Provenance::new("mir_bodies").with_containing_item("setup_device"),
             },
         ],

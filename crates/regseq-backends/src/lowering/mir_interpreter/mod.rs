@@ -159,10 +159,10 @@ fn interpret_mir_function(
         .iter()
         .map(|p| FunctionParam {
             name: p.name.clone(),
-            ty: parse_portable_type(&p.ty),
+            ty: mir_ty_to_portable(&p.ty),
         })
         .collect();
-    let return_type = func.return_type.as_ref().map(|t| parse_portable_type(t));
+    let return_type = func.return_type.as_ref().map(mir_ty_to_portable);
 
     FunctionBehavior {
         name: func.name.clone(),
@@ -173,19 +173,33 @@ fn interpret_mir_function(
     }
 }
 
-/// Parse a Rust type string into a `PortableType`.
-fn parse_portable_type(ty: &str) -> PortableType {
+/// Convert a resolved `MirTy` into a `PortableType`.
+fn mir_ty_to_portable(ty: &regseq_model::declaration::mir_body::MirTy) -> PortableType {
+    use regseq_model::declaration::mir_body::{IntWidth, MirTy};
     match ty {
-        "u8" => PortableType::U8,
-        "u16" => PortableType::U16,
-        "u32" => PortableType::U32,
-        "u64" => PortableType::U64,
-        "i8" => PortableType::I8,
-        "i16" => PortableType::I16,
-        "i32" => PortableType::I32,
-        "i64" => PortableType::I64,
-        "bool" => PortableType::Bool,
-        other => PortableType::Opaque(other.to_string()),
+        MirTy::Bool => PortableType::Bool,
+        MirTy::Int {
+            signed: false,
+            width,
+        } => match width {
+            IntWidth::U8 | IntWidth::I8 => PortableType::U8,
+            IntWidth::U16 | IntWidth::I16 => PortableType::U16,
+            IntWidth::U32 | IntWidth::I32 => PortableType::U32,
+            IntWidth::U64 | IntWidth::I64 => PortableType::U64,
+            _ => PortableType::U32,
+        },
+        MirTy::Int {
+            signed: true,
+            width,
+        } => match width {
+            IntWidth::I8 | IntWidth::U8 => PortableType::I8,
+            IntWidth::I16 | IntWidth::U16 => PortableType::I16,
+            IntWidth::I32 | IntWidth::U32 => PortableType::I32,
+            IntWidth::I64 | IntWidth::U64 => PortableType::I64,
+            _ => PortableType::I32,
+        },
+        MirTy::Struct { path, .. } | MirTy::Enum { path, .. } => PortableType::Opaque(path.clone()),
+        _ => PortableType::Opaque("unknown".into()),
     }
 }
 

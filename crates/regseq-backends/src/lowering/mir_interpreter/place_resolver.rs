@@ -195,7 +195,7 @@ fn advance_field(
 /// Extract the type path string from a MirTy.
 fn type_path(ty: &MirTy) -> String {
     match ty {
-        MirTy::Adt { path, .. } => path.clone(),
+        MirTy::Struct { path, .. } | MirTy::Enum { path, .. } => path.clone(),
         MirTy::Ref { ty: inner, .. } => type_path(inner),
         _ => String::new(),
     }
@@ -227,20 +227,34 @@ fn identify_field_from_type(ctx: &FnContext<'_>, ty: &MirTy) -> String {
     }
 
     // Check for Option wrapper around resource types.
-    if let MirTy::Adt { path: outer, args } = ty {
-        if outer.contains("Option") && !args.is_empty() {
-            let inner_path = type_path(&args[0]);
-            for prefix in &ctx.shared.resource_type_paths {
-                if inner_path.starts_with(prefix) {
-                    for (name, _) in &ctx.shared.resource_fields {
-                        if inner_path.contains("Clock") && name.contains("clock") {
-                            return name.clone();
-                        }
-                        if inner_path.contains("Reset") && name.contains("reset") {
-                            return name.clone();
-                        }
-                        if inner_path.contains("PinCtrl") && name.contains("pinctrl") {
-                            return name.clone();
+    // Option<T> is an enum; its first variant ("None") has no fields,
+    // the second variant ("Some") has one field whose type is T.
+    if let MirTy::Enum {
+        path: outer,
+        variants,
+    } = ty
+    {
+        if outer.contains("Option") {
+            // Find the "Some" variant and extract its inner type.
+            let inner_ty = variants
+                .iter()
+                .find(|v| v.name == "Some")
+                .and_then(|v| v.fields.first())
+                .map(|f| &f.ty);
+            if let Some(inner) = inner_ty {
+                let inner_path = type_path(inner);
+                for prefix in &ctx.shared.resource_type_paths {
+                    if inner_path.starts_with(prefix) {
+                        for (name, _) in &ctx.shared.resource_fields {
+                            if inner_path.contains("Clock") && name.contains("clock") {
+                                return name.clone();
+                            }
+                            if inner_path.contains("Reset") && name.contains("reset") {
+                                return name.clone();
+                            }
+                            if inner_path.contains("PinCtrl") && name.contains("pinctrl") {
+                                return name.clone();
+                            }
                         }
                     }
                 }
@@ -338,9 +352,9 @@ fn unwrap_ref_ty(ty: &MirTy) -> &MirTy {
 /// the captured MIR references.
 fn extract_register_name_from_type_arg(ty: &MirTy) -> Option<String> {
     let ty = unwrap_ref_ty(ty);
-    if let MirTy::Adt { args, .. } = ty {
-        if args.len() >= 2 {
-            let reg_type_path = type_path(&args[1]);
+    if let MirTy::Struct { fields, .. } = ty {
+        if fields.len() >= 2 {
+            let reg_type_path = type_path(&fields[1].ty);
             let parts: Vec<&str> = reg_type_path.split("::").collect();
             if let Some(reg_module) = parts.iter().rev().nth(1) {
                 let name = reg_module
@@ -361,10 +375,10 @@ fn extract_register_name_from_type_arg(ty: &MirTy) -> Option<String> {
 /// The type path carries the register module (e.g.,
 /// `regseq::ReadWrite<u32, registers::CR_REG::Register>` → "cr").
 fn identify_register_from_type(ctx: &FnContext<'_>, ty: &MirTy) -> String {
-    if let MirTy::Adt { args, .. } = ty {
-        // The register type is typically the second generic argument.
-        if args.len() >= 2 {
-            let reg_type_path = type_path(&args[1]);
+    if let MirTy::Struct { fields, .. } = ty {
+        // The register type is typically the second field (was second generic arg).
+        if fields.len() >= 2 {
+            let reg_type_path = type_path(&fields[1].ty);
             // Extract register name from path like "registers::CR_REG::Register".
             let parts: Vec<&str> = reg_type_path.split("::").collect();
             if let Some(reg_module) = parts.iter().rev().nth(1) {

@@ -564,8 +564,8 @@ fn check1e_closed_world_constant_set() {
 /// references.
 ///
 /// The `IdentityEnrichmentSurface` does not carry constant values directly.
-/// In MIR, associated constants appear as `MirConstValue::Unsupported` with
-/// a description containing `"unevaluated:<crate>::<path>::<CONST_NAME>"`.
+/// In MIR, associated constants appear as `MirConstValue::Unevaluated { path }`
+/// where `path` is the def-path of the constant.
 /// This preserves the constant name reference at use sites, but NOT the
 /// evaluated literal value.
 #[test]
@@ -584,23 +584,20 @@ fn check1f_constant_references_in_mir_body() {
     let unevaluated_refs = collect_unevaluated_constant_refs(&use_constants_fn.body);
 
     // Verify each authored constant appears as a named unevaluated reference.
-    // The unevaluated description uses `def_path_str` which omits the crate
-    // name prefix, so the format is `unevaluated:<module>::<Type>::<CONST>`.
-    // We strip the crate prefix from the authored canonical path for matching,
-    // then verify the constant name is present.
+    // Unevaluated constants now use MirConstValue::Unevaluated { path } where
+    // path is the def_path_str (without crate prefix).
     for authored in AUTHORED_CONSTANTS {
         // Strip "pl011_full_spec::" prefix from authored canonical path
         let without_crate = authored
             .canonical_path
             .strip_prefix("pl011_full_spec::")
             .expect("authored canonical path must start with 'pl011_full_spec::'");
-        let expected = format!("unevaluated:{}", without_crate);
         assert!(
-            unevaluated_refs.iter().any(|desc| desc == &expected),
+            unevaluated_refs.iter().any(|p| p == without_crate),
             "constant '{}' must appear as an unevaluated reference '{}' in MIR body; \
              found: {:?}",
             authored.name,
-            expected,
+            without_crate,
             unevaluated_refs
         );
     }
@@ -832,8 +829,8 @@ fn collect_unevaluated_from_rvalue(rvalue: &MirRvalue, out: &mut Vec<String>) {
 
 fn collect_unevaluated_from_operand(operand: &MirOperand, out: &mut Vec<String>) {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Unsupported { description } = &constant.value {
-            out.push(description.clone());
+        if let MirConstValue::Unevaluated { path } = &constant.value {
+            out.push(path.clone());
         }
     }
 }

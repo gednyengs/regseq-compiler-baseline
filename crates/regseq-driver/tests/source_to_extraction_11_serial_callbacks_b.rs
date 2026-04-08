@@ -399,7 +399,7 @@ fn has_call_to(body: &MirBody, callee_substr: &str) -> bool {
 fn operand_mentions(op: &MirOperand, substr: &str) -> bool {
     match op {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.contains(substr),
+            MirTy::Fn { path, .. } => path.contains(substr),
             _ => false,
         },
         _ => false,
@@ -413,7 +413,7 @@ fn collect_call_names(body: &MirBody) -> Vec<String> {
         if let Some(t) = &bb.terminator {
             if let MirTerminatorKind::Call { func, .. } = &t.kind {
                 if let MirOperand::Constant { constant } = func {
-                    if let MirTy::FnDef { path, .. } = &constant.ty {
+                    if let MirTy::Fn { path, .. } = &constant.ty {
                         names.push(path.clone());
                     }
                 }
@@ -453,7 +453,77 @@ fn has_goto(body: &MirBody) -> bool {
     })
 }
 
-/// Check if a Call terminator for `callee_substr` has a FnDef type argument
+/// Recursively check if a MirTy mentions a given substring in any path.
+fn mir_ty_mentions(ty: &MirTy, substr: &str) -> bool {
+    match ty {
+        MirTy::Struct { path, fields } => {
+            path.contains(substr) || fields.iter().any(|f| mir_ty_mentions(&f.ty, substr))
+        }
+        MirTy::Enum { path, variants } => {
+            path.contains(substr)
+                || variants
+                    .iter()
+                    .any(|v| v.fields.iter().any(|f| mir_ty_mentions(&f.ty, substr)))
+        }
+        MirTy::Fn { path, params, ret } => {
+            path.contains(substr)
+                || params.iter().any(|p| mir_ty_mentions(p, substr))
+                || mir_ty_mentions(ret, substr)
+        }
+        MirTy::Ref { ty: inner, .. } | MirTy::RawPtr { ty: inner, .. } => {
+            mir_ty_mentions(inner, substr)
+        }
+        MirTy::Tuple { elements } => elements.iter().any(|e| mir_ty_mentions(e, substr)),
+        MirTy::Array { element, .. } | MirTy::Slice { element } => mir_ty_mentions(element, substr),
+        MirTy::NominalRef { path } => path.contains(substr),
+        MirTy::ZeroSizedLike { description } => description.contains(substr),
+        MirTy::Unsupported { description, .. } => description.contains(substr),
+        _ => false,
+    }
+}
+
+/// Collect all nominal (Struct/Enum/NominalRef) path strings from a type tree.
+fn collect_nominal_paths(ty: &MirTy, out: &mut Vec<String>) {
+    match ty {
+        MirTy::Struct { path, fields } => {
+            out.push(path.clone());
+            for f in fields {
+                collect_nominal_paths(&f.ty, out);
+            }
+        }
+        MirTy::Enum { path, variants } => {
+            out.push(path.clone());
+            for v in variants {
+                for f in &v.fields {
+                    collect_nominal_paths(&f.ty, out);
+                }
+            }
+        }
+        MirTy::Fn { params, ret, .. } => {
+            for p in params {
+                collect_nominal_paths(p, out);
+            }
+            collect_nominal_paths(ret, out);
+        }
+        MirTy::Ref { ty: inner, .. } | MirTy::RawPtr { ty: inner, .. } => {
+            collect_nominal_paths(inner, out);
+        }
+        MirTy::Tuple { elements } => {
+            for e in elements {
+                collect_nominal_paths(e, out);
+            }
+        }
+        MirTy::Array { element, .. } | MirTy::Slice { element } => {
+            collect_nominal_paths(element, out);
+        }
+        MirTy::NominalRef { path } => {
+            out.push(path.clone());
+        }
+        _ => {}
+    }
+}
+
+/// Check if a Call terminator for `callee_substr` has a Fn type argument
 /// whose path contains `type_arg_substr`. This proves which register module
 /// the generic `R` parameter is instantiated with.
 fn call_has_type_arg(body: &MirBody, callee_substr: &str, type_arg_substr: &str) -> bool {
@@ -461,12 +531,10 @@ fn call_has_type_arg(body: &MirBody, callee_substr: &str, type_arg_substr: &str)
         bb.terminator.as_ref().is_some_and(|t| match &t.kind {
             MirTerminatorKind::Call { func, .. } => match func {
                 MirOperand::Constant { constant } => match &constant.ty {
-                    MirTy::FnDef { path, args } => {
+                    MirTy::Fn { path, params, ret } => {
                         path.contains(callee_substr)
-                            && args.iter().any(|a| match a {
-                                MirTy::Adt { path: p, .. } => p.contains(type_arg_substr),
-                                _ => false,
-                            })
+                            && (params.iter().any(|p| mir_ty_mentions(p, type_arg_substr))
+                                || mir_ty_mentions(ret, type_arg_substr))
                     }
                     _ => false,
                 },
@@ -477,24 +545,23 @@ fn call_has_type_arg(body: &MirBody, callee_substr: &str, type_arg_substr: &str)
     })
 }
 
-/// Collect (callee_path, type_args) pairs from Call terminators, in block
-/// order, filtering to calls whose path contains `callee_substr`.
+/// Collect (callee_path, type_args_from_path) pairs from Call terminators.
+///
+/// The type arguments are extracted from the Fn path's embedded generic
+/// annotations (e.g. `modify::<u32, regs::LCRH_REG::Register>`), not from
+/// recursive field scanning. This gives the top-level generic instantiation
+/// without noise from deeply nested field types.
 fn collect_calls_with_type_args(body: &MirBody, callee_substr: &str) -> Vec<(String, Vec<String>)> {
     let mut result = Vec::new();
     for bb in &body.basic_blocks {
         if let Some(t) = &bb.terminator {
             if let MirTerminatorKind::Call { func, .. } = &t.kind {
                 if let MirOperand::Constant { constant } = func {
-                    if let MirTy::FnDef { path, args } = &constant.ty {
+                    if let MirTy::Fn { path, .. } = &constant.ty {
                         if path.contains(callee_substr) {
-                            let arg_paths: Vec<String> = args
-                                .iter()
-                                .filter_map(|a| match a {
-                                    MirTy::Adt { path: p, .. } => Some(p.clone()),
-                                    _ => None,
-                                })
-                                .collect();
-                            result.push((path.clone(), arg_paths));
+                            // Extract type args from the path's `<...>` annotations.
+                            let type_args = extract_generic_args_from_path(path);
+                            result.push((path.clone(), type_args));
                         }
                     }
                 }
@@ -502,6 +569,48 @@ fn collect_calls_with_type_args(body: &MirBody, callee_substr: &str) -> Vec<(Str
         }
     }
     result
+}
+
+/// Extract generic type argument strings from a Fn path.
+///
+/// For `Register::modify::<u32, regs::LCRH_REG::Register>`, returns
+/// `["u32", "regs::LCRH_REG::Register"]`.
+fn extract_generic_args_from_path(path: &str) -> Vec<String> {
+    let mut args = Vec::new();
+    // Find the outermost `<...>` at the end of the path.
+    if let Some(start) = path.rfind("::<") {
+        let inner = &path[start + 3..path.len().saturating_sub(1)];
+        // Split on commas, respecting nested `<>`.
+        let mut depth = 0u32;
+        let mut current = String::new();
+        for ch in inner.chars() {
+            match ch {
+                '<' => {
+                    depth += 1;
+                    current.push(ch);
+                }
+                '>' => {
+                    if depth > 0 {
+                        depth -= 1;
+                    }
+                    current.push(ch);
+                }
+                ',' if depth == 0 => {
+                    let trimmed = current.trim().to_string();
+                    if !trimmed.is_empty() {
+                        args.push(trimmed);
+                    }
+                    current.clear();
+                }
+                _ => current.push(ch),
+            }
+        }
+        let trimmed = current.trim().to_string();
+        if !trimmed.is_empty() {
+            args.push(trimmed);
+        }
+    }
+    args
 }
 
 /// Count how many times a given callee name appears in Call terminators.
@@ -728,7 +837,7 @@ fn check_group_1_callback_signatures_and_return_types() {
         tx_ready
             .return_type
             .as_ref()
-            .is_some_and(|r| r.contains("bool")),
+            .is_some_and(|r| matches!(r, MirTy::Bool)),
         "tx_ready must return bool, got: {:?}",
         tx_ready.return_type
     );
@@ -755,7 +864,7 @@ fn check_group_1_callback_signatures_and_return_types() {
         tx_empty
             .return_type
             .as_ref()
-            .is_some_and(|r| r.contains("bool")),
+            .is_some_and(|r| matches!(r, MirTy::Bool)),
         "tx_empty must return bool, got: {:?}",
         tx_empty.return_type
     );
@@ -832,8 +941,8 @@ fn check_group_1_callback_signatures_and_return_types() {
         "send_break param must be named 'on'"
     );
     assert!(
-        send_break.params[0].ty.contains("bool"),
-        "send_break param type must be bool, got: {}",
+        matches!(&send_break.params[0].ty, MirTy::Bool),
+        "send_break param type must be bool, got: {:?}",
         send_break.params[0].ty
     );
     assert!(
@@ -882,7 +991,9 @@ fn check_group_2_tx_ready_body() {
 
     // Returns bool (predicate callback)
     assert!(
-        f.return_type.as_ref().is_some_and(|r| r.contains("bool")),
+        f.return_type
+            .as_ref()
+            .is_some_and(|r| matches!(r, MirTy::Bool)),
         "tx_ready must return bool"
     );
 
@@ -918,7 +1029,9 @@ fn check_group_2_tx_empty_body() {
 
     // Returns bool
     assert!(
-        f.return_type.as_ref().is_some_and(|r| r.contains("bool")),
+        f.return_type
+            .as_ref()
+            .is_some_and(|r| matches!(r, MirTy::Bool)),
         "tx_empty must return bool"
     );
 
@@ -1109,7 +1222,7 @@ fn check_group_2_send_break_body() {
         "send_break param must be named 'on'"
     );
     assert!(
-        f.params[0].ty.contains("bool"),
+        matches!(&f.params[0].ty, MirTy::Bool),
         "send_break param type must be bool"
     );
 }

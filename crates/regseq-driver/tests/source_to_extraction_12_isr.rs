@@ -284,7 +284,7 @@ fn find_call_bb(bbs: &[MirBasicBlockData], name_fragment: &str) -> Option<usize>
                         MirOperand::Constant {
                             constant:
                                 MirConstant {
-                                    ty: MirTy::FnDef { ref path, .. },
+                                    ty: MirTy::Fn { ref path, .. },
                                     ..
                                 },
                         },
@@ -765,10 +765,14 @@ fn check1c_mir_isr_identity_and_signature() {
     );
 
     // Return type must be IrqResult
-    assert_eq!(
-        handle_irq.return_type.as_deref(),
-        Some("IrqResult"),
-        "handle_irq return type must be 'IrqResult'"
+    assert!(
+        handle_irq.return_type.as_ref().is_some_and(|ty| match ty {
+            MirTy::Enum { path, .. } | MirTy::Struct { path, .. } => path.contains("IrqResult"),
+            MirTy::NominalRef { path } => path.contains("IrqResult"),
+            _ => false,
+        }),
+        "handle_irq return type must be 'IrqResult', got: {:?}",
+        handle_irq.return_type
     );
 
     // No extra parameters
@@ -862,7 +866,7 @@ fn check2b_status_read_and_branch_conditions() {
         if let MirOperand::Constant {
             constant:
                 MirConstant {
-                    value: MirConstValue::Scalar { bits, .. },
+                    value: MirConstValue::Bits { value: bits, .. },
                     ..
                 },
         } = op
@@ -904,12 +908,12 @@ fn check2b_status_read_and_branch_conditions() {
             if let MirOperand::Constant {
                 constant:
                     MirConstant {
-                        value: MirConstValue::Unsupported { ref description },
+                        value: MirConstValue::Unevaluated { ref path },
                         ..
                     },
             } = op
             {
-                description.contains(name)
+                path.contains(name)
             } else {
                 false
             }
@@ -977,7 +981,7 @@ fn check2c_explicit_clear_mask_in_final_condition() {
         if let MirOperand::Constant {
             constant:
                 MirConstant {
-                    value: MirConstValue::Scalar { bits, .. },
+                    value: MirConstValue::Bits { value: bits, .. },
                     ..
                 },
         } = op
@@ -991,12 +995,12 @@ fn check2c_explicit_clear_mask_in_final_condition() {
         if let MirOperand::Constant {
             constant:
                 MirConstant {
-                    value: MirConstValue::Unsupported { ref description },
+                    value: MirConstValue::Unevaluated { ref path },
                     ..
                 },
         } = op
         {
-            description.contains(name)
+            path.contains(name)
         } else {
             false
         }
@@ -1447,12 +1451,12 @@ fn check2g_handled_local_is_bool() {
                     if let MirOperand::Constant {
                         constant:
                             MirConstant {
-                                value: MirConstValue::Scalar { bits, size },
+                                value: MirConstValue::Bits { value: bits },
                                 ref ty,
                             },
                     } = operand
                     {
-                        return matches!(ty, MirTy::Bool) && *bits == 0 && *size == 1;
+                        return matches!(ty, MirTy::Bool) && *bits == 0;
                     }
                 }
             }
@@ -1462,7 +1466,7 @@ fn check2g_handled_local_is_bool() {
 
     assert!(
         initialized_to_false,
-        "handled local_{} must be initialized to false (Scalar {{ bits: 0, size: 1 }})",
+        "handled local_{} must be initialized to false (Bits {{ value: 0 }})",
         handled_idx
     );
 }
@@ -1487,7 +1491,7 @@ fn check2h_status_read_call_present() {
                 kind: MirTerminatorKind::Call {
                     func: MirOperand::Constant {
                         constant: MirConstant {
-                            ty: MirTy::FnDef { ref path, .. },
+                            ty: MirTy::Fn { ref path, .. },
                             ..
                         },
                     },
@@ -1743,17 +1747,17 @@ fn check2j_control_flow_ordering() {
                         MirOperand::Constant {
                             constant:
                                 MirConstant {
-                                    value: MirConstValue::Scalar { bits, .. },
+                                    value: MirConstValue::Bits { value: bits, .. },
                                     ..
                                 },
                         } => *bits == 0x0780,
                         MirOperand::Constant {
                             constant:
                                 MirConstant {
-                                    value: MirConstValue::Unsupported { ref description },
+                                    value: MirConstValue::Unevaluated { ref path },
                                     ..
                                 },
-                        } => description.contains("EXPLICIT_ISR_CLEAR_MASK"),
+                        } => path.contains("EXPLICIT_ISR_CLEAR_MASK"),
                         _ => false,
                     }
                 };

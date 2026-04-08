@@ -44,33 +44,31 @@ pub fn lower_operand(
         }
         MirOperand::Constant { constant } => {
             // Check for unevaluated constant (symbolic path).
-            if let MirConstValue::Unsupported { description } = &constant.value {
-                if let Some(path) = description.strip_prefix("unevaluated:") {
-                    // Register field value paths (e.g., "registers::LCRH_REG::FEN::DISABLED")
-                    // are not authored ConstantDef items — they are register descriptor
-                    // named values. Produce an IntLit placeholder.
-                    if path.contains("_REG::") || path.contains("registers::") {
-                        return Ok(Expr::IntLit {
-                            value: 0,
-                            ty: SemanticType::U32,
-                        });
-                    }
-                    // Authored constants (e.g., driver::Pl011FullSpec::DEFAULT_UART_CLOCK_HZ).
-                    let constant_ref = resolver.resolve_constant(path)?;
-                    return Ok(Expr::Constant {
-                        constant: constant_ref,
+            if let MirConstValue::Unevaluated { path } = &constant.value {
+                // Register field value paths (e.g., "registers::LCRH_REG::FEN::DISABLED")
+                // are not authored ConstantDef items — they are register descriptor
+                // named values. Produce an IntLit placeholder.
+                if path.contains("_REG::") || path.contains("registers::") {
+                    return Ok(Expr::IntLit {
+                        value: 0,
+                        ty: SemanticType::U32,
                     });
                 }
+                // Authored constants (e.g., driver::Pl011FullSpec::DEFAULT_UART_CLOCK_HZ).
+                let constant_ref = resolver.resolve_constant(path)?;
+                return Ok(Expr::Constant {
+                    constant: constant_ref,
+                });
             }
 
             match &constant.value {
-                MirConstValue::Scalar { bits, .. } => {
+                MirConstValue::Bits { value } => {
                     if constant.ty == MirTy::Bool {
-                        Ok(Expr::BoolLit { value: *bits != 0 })
+                        Ok(Expr::BoolLit { value: *value != 0 })
                     } else {
                         let ty = lower_mir_ty(&constant.ty, tc.0, tc.1);
                         Ok(Expr::IntLit {
-                            value: *bits as i128,
+                            value: *value as i128,
                             ty,
                         })
                     }
@@ -79,11 +77,17 @@ pub fn lower_operand(
                     value: 0,
                     ty: SemanticType::Void,
                 }),
-                MirConstValue::Unsupported { description } => Ok(Expr::IntLit {
+                MirConstValue::Unsupported { description, .. } => Ok(Expr::IntLit {
                     value: 0,
                     ty: SemanticType::Opaque {
                         description: format!("unsupported constant: {description}"),
                     },
+                }),
+                // Other constant kinds (Bool, Char, Str, Struct, Enum, etc.)
+                // are not expected in operand position for this lowering.
+                _ => Ok(Expr::IntLit {
+                    value: 0,
+                    ty: SemanticType::Void,
                 }),
             }
         }
@@ -729,20 +733,18 @@ fn lower_unary_op(op: &MirUnOp) -> regseq_model::semantic::ops::UnaryOp {
 /// Extract a scalar constant value from a MIR operand.
 pub fn extract_constant_value(operand: &MirOperand) -> Option<u32> {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Scalar { bits, .. } = &constant.value {
-            return Some(*bits as u32);
+        if let MirConstValue::Bits { value } = &constant.value {
+            return Some(*value as u32);
         }
     }
     None
 }
 
-/// Extract a symbolic constant path from an unsupported MIR operand.
+/// Extract a symbolic constant path from an unevaluated MIR operand.
 pub fn extract_constant_path(operand: &MirOperand) -> Option<String> {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Unsupported { description } = &constant.value {
-            if let Some(path) = description.strip_prefix("unevaluated:") {
-                return Some(path.to_string());
-            }
+        if let MirConstValue::Unevaluated { path } = &constant.value {
+            return Some(path.clone());
         }
     }
     None
@@ -786,8 +788,8 @@ fn operand_local(operand: &MirOperand) -> Option<u32> {
 /// Check if a MIR operand is the zero constant.
 fn is_zero_operand(operand: &MirOperand) -> bool {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Scalar { bits, .. } = &constant.value {
-            return *bits == 0;
+        if let MirConstValue::Bits { value } = &constant.value {
+            return *value == 0;
         }
     }
     false

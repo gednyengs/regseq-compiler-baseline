@@ -263,9 +263,9 @@ fn is_supported_external_crate(path: &str) -> bool {
 ///
 /// Scans all MIR bodies in scope for external references from supported
 /// crates:
-/// - `MirTy::Adt` paths (types)
-/// - `MirTy::FnDef` paths in Call terminators (functions)
-/// - `MirConstValue::Unsupported { "unevaluated:regseq::..." }` (constants)
+/// - `MirTy::Struct`/`MirTy::Enum` paths (types)
+/// - `MirTy::Fn` paths in Call terminators (functions)
+/// - `MirConstValue::Unevaluated { path: "regseq::..." }` (constants)
 ///
 /// Materializes discovered items as real `ItemStore` entries with
 /// coherent ownership (ImplDef, FunctionDef, ConstantDef).
@@ -455,18 +455,28 @@ pub fn discover_and_materialize(
 /// Recursively collect external ADT paths from a MIR type.
 fn collect_external_adts(ty: &MirTy, discovered: &mut BTreeSet<String>) {
     match ty {
-        MirTy::Adt { path, args } => {
+        MirTy::Struct { path, fields } => {
             if path.starts_with("regseq::") {
                 discovered.insert(path.clone());
             }
-            for arg in args {
-                collect_external_adts(arg, discovered);
+            for field in fields {
+                collect_external_adts(&field.ty, discovered);
+            }
+        }
+        MirTy::Enum { path, variants } => {
+            if path.starts_with("regseq::") {
+                discovered.insert(path.clone());
+            }
+            for variant in variants {
+                for field in &variant.fields {
+                    collect_external_adts(&field.ty, discovered);
+                }
             }
         }
         MirTy::Ref { ty: inner, .. } => collect_external_adts(inner, discovered),
         MirTy::RawPtr { ty: inner, .. } => collect_external_adts(inner, discovered),
-        MirTy::Array { ty: inner, .. } => collect_external_adts(inner, discovered),
-        MirTy::Slice { ty: inner } => collect_external_adts(inner, discovered),
+        MirTy::Array { element: inner, .. } => collect_external_adts(inner, discovered),
+        MirTy::Slice { element: inner } => collect_external_adts(inner, discovered),
         MirTy::Tuple { elements } => {
             for e in elements {
                 collect_external_adts(e, discovered);
@@ -498,7 +508,7 @@ fn collect_external_adts_from_rvalue(rvalue: &MirRvalue, discovered: &mut BTreeS
 
 /// Discover external function calls from MIR Call terminators.
 ///
-/// Scans all reachable MIR bodies for `MirTy::FnDef { path }` in Call
+/// Scans all reachable MIR bodies for `MirTy::Fn { path }` in Call
 /// terminators where the path belongs to a supported external crate and
 /// is not already handled by a dedicated semantic classification.
 fn collect_external_function_calls(
@@ -513,7 +523,7 @@ fn collect_external_function_calls(
                     ..
                 } = &term.kind
                 {
-                    if let MirTy::FnDef { path, .. } = &constant.ty {
+                    if let MirTy::Fn { path, .. } = &constant.ty {
                         if path.starts_with("regseq::") {
                             discovered.insert(path.clone());
                         }
@@ -530,8 +540,8 @@ fn collect_external_function_calls(
 
 /// Discover external unevaluated constants from MIR operands.
 ///
-/// Scans all reachable MIR bodies for `MirConstValue::Unsupported`
-/// values with `"unevaluated:regseq::..."` descriptions.
+/// Scans all reachable MIR bodies for `MirConstValue::Unevaluated`
+/// values with `"regseq::..."` paths.
 fn collect_external_constants(all_bodies: &[&&MirFnBodyDecl], discovered: &mut BTreeSet<String>) {
     for func in all_bodies {
         for bb in &func.body.basic_blocks {
@@ -571,11 +581,9 @@ fn collect_constants_from_rvalue(rvalue: &MirRvalue, discovered: &mut BTreeSet<S
 /// Collect external constant path from a single operand.
 fn collect_constant_from_operand(operand: &MirOperand, discovered: &mut BTreeSet<String>) {
     if let MirOperand::Constant { constant } = operand {
-        if let MirConstValue::Unsupported { description } = &constant.value {
-            if let Some(path) = description.strip_prefix("unevaluated:") {
-                if path.starts_with("regseq::") {
-                    discovered.insert(path.to_string());
-                }
+        if let MirConstValue::Unevaluated { path } = &constant.value {
+            if path.starts_with("regseq::") {
+                discovered.insert(path.clone());
             }
         }
     }
@@ -836,12 +844,27 @@ mod tests {
 
     #[test]
     fn discovery_collects_from_option_inner() {
-        let ty = MirTy::Adt {
+        use regseq_model::declaration::mir_body::{MirFieldTy, MirVariantTy};
+        let rx_char_ty = MirTy::Struct {
+            path: "regseq::RxChar".into(),
+            fields: vec![],
+        };
+        let ty = MirTy::Enum {
             path: "core::option::Option".into(),
-            args: vec![MirTy::Adt {
-                path: "regseq::RxChar".into(),
-                args: vec![],
-            }],
+            variants: vec![
+                MirVariantTy {
+                    name: "None".into(),
+                    fields: vec![],
+                },
+                MirVariantTy {
+                    name: "Some".into(),
+                    fields: vec![MirFieldTy {
+                        index: 0,
+                        name: "0".into(),
+                        ty: rx_char_ty,
+                    }],
+                },
+            ],
         };
         let mut discovered = BTreeSet::new();
         collect_external_adts(&ty, &mut discovered);

@@ -155,7 +155,7 @@ fn extract_write_fields(ctx: &FnContext<'_>, args: &[MirOperand]) -> Vec<FieldWr
         }],
         ValueExpr::Param(name) => {
             // Check for unevaluated named constants from MIR.
-            if let Some(path) = name.strip_prefix("unsupported_unevaluated:") {
+            if let Some(path) = name.strip_prefix("unevaluated_") {
                 parse_named_value_from_constant_path(path)
             } else {
                 vec![FieldWrite {
@@ -532,7 +532,7 @@ pub fn successor_blocks(kind: &MirTerminatorKind) -> Vec<usize> {
 pub fn extract_call_path(func: &MirOperand) -> String {
     match func {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.clone(),
+            MirTy::Fn { path, .. } => path.clone(),
             _ => String::new(),
         },
         _ => String::new(),

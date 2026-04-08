@@ -9,7 +9,7 @@
 //! `Opaque` is a diagnostic fallback for genuinely unrecognized types.
 //! It is NOT an accepted success mode for representative-set bodies.
 
-use regseq_model::declaration::mir_body::{MirIntTy, MirTy, MirUintTy};
+use regseq_model::declaration::mir_body::{IntWidth, MirTy};
 use regseq_model::item::cross_link::CrossLinkTable;
 use regseq_model::item::identity::{CanonicalPath, ItemStore};
 use regseq_model::item::types::Item;
@@ -25,8 +25,7 @@ pub fn lower_mir_ty(ty: &MirTy, cross_link: &CrossLinkTable, store: &ItemStore) 
     match ty {
         // --- Scalars ---
         MirTy::Bool => SemanticType::Bool,
-        MirTy::Uint { uint_ty } => lower_uint(*uint_ty),
-        MirTy::Int { int_ty } => lower_int(*int_ty),
+        MirTy::Int { signed, width } => lower_int(*signed, *width),
 
         // --- Unit ---
         MirTy::Tuple { elements } if elements.is_empty() => SemanticType::Void,
@@ -46,7 +45,8 @@ pub fn lower_mir_ty(ty: &MirTy, cross_link: &CrossLinkTable, store: &ItemStore) 
         },
 
         // --- ADTs: carrier types and nominal types ---
-        MirTy::Adt { path, args } => lower_adt(path, args, cross_link, store),
+        MirTy::Struct { path, fields } => lower_adt(path, Some(fields), cross_link, store),
+        MirTy::Enum { path, variants } => lower_adt_enum(path, variants, cross_link, store),
 
         // --- Never type ---
         MirTy::Never => SemanticType::Void,
@@ -58,85 +58,42 @@ pub fn lower_mir_ty(ty: &MirTy, cross_link: &CrossLinkTable, store: &ItemStore) 
     }
 }
 
-fn lower_uint(ty: MirUintTy) -> SemanticType {
-    match ty {
-        MirUintTy::U8 => SemanticType::U8,
-        MirUintTy::U16 => SemanticType::U16,
-        MirUintTy::U32 => SemanticType::U32,
-        MirUintTy::U64 => SemanticType::U64,
-        MirUintTy::Usize => SemanticType::U64,
-        MirUintTy::U128 => SemanticType::Opaque {
+fn lower_int(signed: bool, width: IntWidth) -> SemanticType {
+    match (signed, width) {
+        (false, IntWidth::U8) => SemanticType::U8,
+        (false, IntWidth::U16) => SemanticType::U16,
+        (false, IntWidth::U32) => SemanticType::U32,
+        (false, IntWidth::U64) => SemanticType::U64,
+        (false, IntWidth::Usize) => SemanticType::U64,
+        (false, IntWidth::U128) => SemanticType::Opaque {
             description: "u128".into(),
         },
-    }
-}
-
-fn lower_int(ty: MirIntTy) -> SemanticType {
-    match ty {
-        MirIntTy::I8 => SemanticType::I8,
-        MirIntTy::I16 => SemanticType::I16,
-        MirIntTy::I32 => SemanticType::I32,
-        MirIntTy::I64 => SemanticType::I64,
-        MirIntTy::Isize => SemanticType::I64,
-        MirIntTy::I128 => SemanticType::Opaque {
+        (true, IntWidth::I8) => SemanticType::I8,
+        (true, IntWidth::I16) => SemanticType::I16,
+        (true, IntWidth::I32) => SemanticType::I32,
+        (true, IntWidth::I64) => SemanticType::I64,
+        (true, IntWidth::Isize) => SemanticType::I64,
+        (true, IntWidth::I128) => SemanticType::Opaque {
             description: "i128".into(),
+        },
+        // Mismatched sign/width (e.g. signed=true with U32) — treat as opaque.
+        _ => SemanticType::Opaque {
+            description: format!("int(signed={signed}, width={width:?})"),
         },
     }
 }
 
-/// Lower an ADT type.
+/// Lower a struct ADT type.
 ///
-/// Carrier types (Option, Result, ControlFlow) are handled structurally.
-/// All other nominal ADTs are resolved through the hierarchy.
+/// Domain infrastructure types (register wrappers, resource handles) are
+/// handled structurally. All other nominal structs are resolved through
+/// the hierarchy.
 fn lower_adt(
     path: &str,
-    args: &[MirTy],
+    _fields: Option<&Vec<regseq_model::declaration::mir_body::MirFieldTy>>,
     cross_link: &CrossLinkTable,
     store: &ItemStore,
 ) -> SemanticType {
-    // --- Carrier types (structural, not hierarchy-resolved) ---
-
-    // Option<T>
-    if path.contains("Option") && !path.contains("ControlFlow") {
-        let inner = if !args.is_empty() {
-            lower_mir_ty(&args[0], cross_link, store)
-        } else {
-            SemanticType::Opaque {
-                description: "Option<?>".into(),
-            }
-        };
-        return SemanticType::Option {
-            inner: Box::new(inner),
-        };
-    }
-
-    // Result<T, E>
-    if path.contains("Result") && !path.contains("ControlFlow") {
-        let ok = if !args.is_empty() {
-            lower_mir_ty(&args[0], cross_link, store)
-        } else {
-            SemanticType::Void
-        };
-        let err = if args.len() >= 2 {
-            lower_mir_ty(&args[1], cross_link, store)
-        } else {
-            SemanticType::Opaque {
-                description: "Result error type".into(),
-            }
-        };
-        return SemanticType::Result {
-            ok: Box::new(ok),
-            err: Box::new(err),
-        };
-    }
-
-    // ControlFlow<B, C> -- structural MIR type from ? desugaring
-    if path.contains("ControlFlow") {
-        return SemanticType::Opaque {
-            description: "ControlFlow (structural)".into(),
-        };
-    }
-
     // --- Domain infrastructure types (register/resource wrappers) ---
 
     // Register wrappers (ReadWrite, ReadOnly, WriteOnly)
@@ -184,8 +141,75 @@ fn lower_adt(
     }
 
     // --- Hierarchy resolution for all other nominal types ---
-    // This handles both local authored types and discovered external items.
+    resolve_nominal(path, cross_link, store)
+}
 
+/// Lower an enum ADT type.
+///
+/// Carrier types (Option, Result, ControlFlow) are handled structurally
+/// by extracting inner types from variant fields. All other nominal enums
+/// are resolved through the hierarchy.
+fn lower_adt_enum(
+    path: &str,
+    variants: &[regseq_model::declaration::mir_body::MirVariantTy],
+    cross_link: &CrossLinkTable,
+    store: &ItemStore,
+) -> SemanticType {
+    // --- Carrier types (structural, not hierarchy-resolved) ---
+
+    // Option<T>
+    if path.contains("Option") && !path.contains("ControlFlow") {
+        // Extract T from the Some variant's first field.
+        let inner = variants
+            .iter()
+            .find(|v| v.name == "Some")
+            .and_then(|v| v.fields.first())
+            .map(|f| lower_mir_ty(&f.ty, cross_link, store))
+            .unwrap_or(SemanticType::Opaque {
+                description: "Option<?>".into(),
+            });
+        return SemanticType::Option {
+            inner: Box::new(inner),
+        };
+    }
+
+    // Result<T, E>
+    if path.contains("Result") && !path.contains("ControlFlow") {
+        let ok = variants
+            .iter()
+            .find(|v| v.name == "Ok")
+            .and_then(|v| v.fields.first())
+            .map(|f| lower_mir_ty(&f.ty, cross_link, store))
+            .unwrap_or(SemanticType::Void);
+        let err = variants
+            .iter()
+            .find(|v| v.name == "Err")
+            .and_then(|v| v.fields.first())
+            .map(|f| lower_mir_ty(&f.ty, cross_link, store))
+            .unwrap_or(SemanticType::Opaque {
+                description: "Result error type".into(),
+            });
+        return SemanticType::Result {
+            ok: Box::new(ok),
+            err: Box::new(err),
+        };
+    }
+
+    // ControlFlow<B, C> -- structural MIR type from ? desugaring
+    if path.contains("ControlFlow") {
+        return SemanticType::Opaque {
+            description: "ControlFlow (structural)".into(),
+        };
+    }
+
+    // --- Hierarchy resolution for all other nominal types ---
+    resolve_nominal(path, cross_link, store)
+}
+
+/// Resolve a nominal type through the hierarchy.
+///
+/// This handles both local authored types and discovered external items.
+fn resolve_nominal(path: &str, cross_link: &CrossLinkTable, store: &ItemStore) -> SemanticType {
     // Normalize aliases before lookup.
     let normalized = normalize_external_alias(path);
     let canonical = CanonicalPath::new(normalized);
@@ -220,14 +244,16 @@ fn format_mir_ty_description(ty: &MirTy) -> String {
         MirTy::Char => "char".into(),
         MirTy::Float { .. } => "float".into(),
         MirTy::RawPtr { .. } => "raw pointer".into(),
-        MirTy::FnDef { path, .. } => format!("fn def: {path}"),
+        MirTy::Fn { path, .. } => format!("fn: {path}"),
         MirTy::Tuple { elements } => format!("tuple({} elements)", elements.len()),
-        MirTy::Array { ty, len } => {
-            format!("[{}; {len}]", format_mir_ty_description(ty))
+        MirTy::Array { element, len } => {
+            format!("[{}; {len}]", format_mir_ty_description(element))
         }
         MirTy::Slice { .. } => "slice".into(),
         MirTy::Str => "str".into(),
-        MirTy::Param { name } => format!("type param: {name}"),
+        MirTy::Bytes => "bytes".into(),
+        MirTy::ZeroSizedLike { description } => format!("zero-sized: {description}"),
+        MirTy::NominalRef { path } => format!("nominal ref: {path}"),
         MirTy::Unsupported { description } => format!("unsupported: {description}"),
         _ => "unknown MIR type".into(),
     }
@@ -253,8 +279,9 @@ mod tests {
         assert_eq!(lower_mir_ty(&MirTy::Bool, &cl, &st), SemanticType::Bool);
         assert_eq!(
             lower_mir_ty(
-                &MirTy::Uint {
-                    uint_ty: MirUintTy::U32
+                &MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32,
                 },
                 &cl,
                 &st
@@ -275,13 +302,28 @@ mod tests {
 
     #[test]
     fn option_type() {
+        use regseq_model::declaration::mir_body::{MirFieldTy, MirVariantTy};
         let cl = empty_cross_link();
         let st = empty_store();
-        let ty = MirTy::Adt {
+        let ty = MirTy::Enum {
             path: "core::option::Option".into(),
-            args: vec![MirTy::Uint {
-                uint_ty: MirUintTy::U8,
-            }],
+            variants: vec![
+                MirVariantTy {
+                    name: "None".into(),
+                    fields: vec![],
+                },
+                MirVariantTy {
+                    name: "Some".into(),
+                    fields: vec![MirFieldTy {
+                        index: 0,
+                        name: "0".into(),
+                        ty: MirTy::Int {
+                            signed: false,
+                            width: IntWidth::U8,
+                        },
+                    }],
+                },
+            ],
         };
         assert_eq!(
             lower_mir_ty(&ty, &cl, &st),
@@ -293,6 +335,7 @@ mod tests {
 
     #[test]
     fn result_type_with_hierarchy() {
+        use regseq_model::declaration::mir_body::{MirFieldTy, MirVariantTy};
         // RegseqError should resolve through hierarchy if materialized.
         let mut cl = CrossLinkTable::new();
         let mut st = ItemStore::new();
@@ -305,13 +348,27 @@ mod tests {
         }));
         cl.insert_item(CanonicalPath::new("regseq::RegseqError"), id);
 
-        let ty = MirTy::Adt {
+        let ty = MirTy::Enum {
             path: "core::result::Result".into(),
-            args: vec![
-                MirTy::Tuple { elements: vec![] },
-                MirTy::Adt {
-                    path: "regseq::RegseqError".into(),
-                    args: vec![],
+            variants: vec![
+                MirVariantTy {
+                    name: "Ok".into(),
+                    fields: vec![MirFieldTy {
+                        index: 0,
+                        name: "0".into(),
+                        ty: MirTy::Tuple { elements: vec![] },
+                    }],
+                },
+                MirVariantTy {
+                    name: "Err".into(),
+                    fields: vec![MirFieldTy {
+                        index: 0,
+                        name: "0".into(),
+                        ty: MirTy::Enum {
+                            path: "regseq::RegseqError".into(),
+                            variants: vec![],
+                        },
+                    }],
                 },
             ],
         };
@@ -340,9 +397,9 @@ mod tests {
         }));
         cl.insert_item(CanonicalPath::new("regseq::RxChar"), id);
 
-        let ty = MirTy::Adt {
+        let ty = MirTy::Struct {
             path: "regseq::RxChar".into(),
-            args: vec![],
+            fields: vec![],
         };
         match lower_mir_ty(&ty, &cl, &st) {
             SemanticType::Struct { name, .. } => assert_eq!(name, "RxChar"),
@@ -354,9 +411,9 @@ mod tests {
     fn unrecognized_adt_is_opaque() {
         let cl = empty_cross_link();
         let st = empty_store();
-        let ty = MirTy::Adt {
+        let ty = MirTy::Struct {
             path: "some::unknown::Type".into(),
-            args: vec![],
+            fields: vec![],
         };
         assert!(matches!(
             lower_mir_ty(&ty, &cl, &st),
@@ -379,9 +436,9 @@ mod tests {
         cl.insert_item(CanonicalPath::new("regseq::SerialErrors"), id);
 
         // ErrorKind should normalize to SerialErrors.
-        let ty = MirTy::Adt {
+        let ty = MirTy::Struct {
             path: "regseq::ErrorKind".into(),
-            args: vec![],
+            fields: vec![],
         };
         match lower_mir_ty(&ty, &cl, &st) {
             SemanticType::Struct { name, .. } => assert_eq!(name, "SerialErrors"),

@@ -500,14 +500,29 @@ fn find_fn<'a>(surface: &'a MirBodySurface, name: &str) -> Option<&'a MirExtract
 /// matching the given substring.
 fn mir_ty_contains(ty: &MirTy, substr: &str) -> bool {
     match ty {
-        MirTy::FnDef { path, args } | MirTy::Adt { path, args } => {
-            path.contains(substr) || args.iter().any(|a| mir_ty_contains(a, substr))
+        MirTy::Fn { path, params, ret } => {
+            path.contains(substr)
+                || params.iter().any(|a| mir_ty_contains(a, substr))
+                || mir_ty_contains(ret, substr)
         }
-        MirTy::Ref { ty, .. } | MirTy::RawPtr { ty, .. } | MirTy::Slice { ty, .. } => {
+        MirTy::Struct { path, fields } => {
+            path.contains(substr) || fields.iter().any(|f| mir_ty_contains(&f.ty, substr))
+        }
+        MirTy::Enum { path, variants } => {
+            path.contains(substr)
+                || variants
+                    .iter()
+                    .any(|v| v.fields.iter().any(|f| mir_ty_contains(&f.ty, substr)))
+        }
+        MirTy::Ref { ty, .. } | MirTy::RawPtr { ty, .. } | MirTy::Slice { element: ty, .. } => {
             mir_ty_contains(ty, substr)
         }
-        MirTy::Array { ty, .. } => mir_ty_contains(ty, substr),
+        MirTy::Array { element: ty, .. } => mir_ty_contains(ty, substr),
+        MirTy::NominalRef { path } => path.contains(substr),
         MirTy::Tuple { elements } => elements.iter().any(|e| mir_ty_contains(e, substr)),
+        MirTy::ZeroSizedLike { description } | MirTy::Unsupported { description } => {
+            description.contains(substr)
+        }
         _ => false,
     }
 }
@@ -548,7 +563,7 @@ fn body_has_call_containing(func: &MirExtractedFn, substr: &str) -> bool {
                         MirOperand::Constant {
                             constant:
                                 MirConstant {
-                                    ty: MirTy::FnDef { path, .. },
+                                    ty: MirTy::Fn { path, .. },
                                     ..
                                 },
                         },
@@ -645,7 +660,19 @@ fn operand_has_const_ref(op: &MirOperand, substr: &str) -> bool {
     if let MirOperand::Constant {
         constant:
             MirConstant {
-                value: MirConstValue::Unsupported { description },
+                value: MirConstValue::Unevaluated { path },
+                ..
+            },
+    } = op
+    {
+        if path.contains(substr) {
+            return true;
+        }
+    }
+    if let MirOperand::Constant {
+        constant:
+            MirConstant {
+                value: MirConstValue::Unsupported { description, .. },
                 ..
             },
     } = op
@@ -655,11 +682,10 @@ fn operand_has_const_ref(op: &MirOperand, substr: &str) -> bool {
         }
     }
     if let MirOperand::Constant {
-        constant:
-            MirConstant {
-                value: MirConstValue::Scalar { .. },
-                ty: MirTy::FnDef { path, .. },
-            },
+        constant: MirConstant {
+            ty: MirTy::Fn { path, .. },
+            ..
+        },
     } = op
     {
         if path.contains(substr) {
@@ -695,16 +721,16 @@ fn rvalue_has_const_scalar(rv: &MirRvalue, value: u128) -> bool {
     }
 }
 
-fn operand_has_const_scalar(op: &MirOperand, value: u128) -> bool {
+fn operand_has_const_scalar(op: &MirOperand, expected: u128) -> bool {
     if let MirOperand::Constant {
         constant:
             MirConstant {
-                value: MirConstValue::Scalar { bits, .. },
+                value: MirConstValue::Bits { value, .. },
                 ..
             },
     } = op
     {
-        *bits == value
+        *value == expected
     } else {
         false
     }
@@ -765,7 +791,7 @@ fn ordered_call_names_matching(func: &MirExtractedFn, needles: &[&str]) -> Vec<S
                     MirOperand::Constant {
                         constant:
                             MirConstant {
-                                ty: MirTy::FnDef { path, .. },
+                                ty: MirTy::Fn { path, .. },
                                 ..
                             },
                     },
@@ -816,8 +842,9 @@ fn return_type_is_u32(func: &MirExtractedFn) -> bool {
         .map(|d| {
             matches!(
                 &d.ty,
-                MirTy::Uint {
-                    uint_ty: MirUintTy::U32
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U32
                 }
             )
         })
@@ -828,7 +855,7 @@ fn return_type_is_result(func: &MirExtractedFn) -> bool {
     func.body
         .local_decls
         .first()
-        .map(|d| matches!(&d.ty, MirTy::Adt { path, .. } if path.contains("Result")))
+        .map(|d| matches!(&d.ty, MirTy::Enum { path, .. } if path.contains("Result")))
         .unwrap_or(false)
 }
 
@@ -1046,8 +1073,11 @@ fn check_group_1_helper_identity_and_signature() {
         "uart_clock_hz has no params beyond self"
     );
     assert_eq!(
-        f.return_type.as_deref(),
-        Some("u32"),
+        f.return_type.as_ref(),
+        Some(&MirTy::Int {
+            signed: false,
+            width: IntWidth::U32
+        }),
         "uart_clock_hz returns u32"
     );
     assert!(f.kind == MirFnKind::Helper, "uart_clock_hz is a helper");
@@ -1066,7 +1096,7 @@ fn check_group_1_helper_identity_and_signature() {
     assert!(
         f.return_type
             .as_ref()
-            .map(|r| r.contains("Result"))
+            .map(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result")))
             .unwrap_or(false),
         "enable_clock_if_present returns Result"
     );
@@ -1104,7 +1134,7 @@ fn check_group_1_helper_identity_and_signature() {
     assert!(
         f.return_type
             .as_ref()
-            .map(|r| r.contains("Result"))
+            .map(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result")))
             .unwrap_or(false),
         "toggle_reset_if_present returns Result"
     );
@@ -1118,7 +1148,7 @@ fn check_group_1_helper_identity_and_signature() {
     assert!(
         f.return_type
             .as_ref()
-            .map(|r| r.contains("Result"))
+            .map(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result")))
             .unwrap_or(false),
         "apply_default_pins_if_present returns Result"
     );
@@ -1132,7 +1162,7 @@ fn check_group_1_helper_identity_and_signature() {
     assert!(
         f.return_type
             .as_ref()
-            .map(|r| r.contains("Result"))
+            .map(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result")))
             .unwrap_or(false),
         "apply_sleep_pins_if_present returns Result"
     );
@@ -1154,8 +1184,8 @@ fn check_group_1_helper_identity_and_signature() {
     );
     assert!(f.params.is_empty(), "service_rx_fifo has no params");
     assert_eq!(
-        f.return_type.as_deref(),
-        Some("bool"),
+        f.return_type.as_ref(),
+        Some(&MirTy::Bool),
         "service_rx_fifo returns bool"
     );
     assert!(return_type_is_bool(f), "service_rx_fifo MIR return is bool");
@@ -1168,8 +1198,8 @@ fn check_group_1_helper_identity_and_signature() {
     );
     assert!(f.params.is_empty(), "service_tx_fifo has no params");
     assert_eq!(
-        f.return_type.as_deref(),
-        Some("bool"),
+        f.return_type.as_ref(),
+        Some(&MirTy::Bool),
         "service_tx_fifo returns bool"
     );
     assert!(return_type_is_bool(f), "service_tx_fifo MIR return is bool");
@@ -1186,7 +1216,14 @@ fn check_group_1_helper_identity_and_signature() {
         "clear_explicit_interrupts has 1 param (status)"
     );
     assert_eq!(f.params[0].name, "status", "param name is status");
-    assert_eq!(f.params[0].ty, "u32", "param type is u32");
+    assert_eq!(
+        f.params[0].ty,
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U32
+        },
+        "param type is u32"
+    );
     assert!(
         f.return_type.is_none(),
         "clear_explicit_interrupts returns ()"
@@ -1315,8 +1352,8 @@ fn check_group_2_apply_default_pins_if_present_body() {
     );
 
     // Must reference the DefaultState type parameter to distinguish from
-    // apply_sleep_pins_if_present.  The type param appears in FnDef args,
-    // not in the path, so we check the full type tree.
+    // apply_sleep_pins_if_present. The type param appears in the Fn type's
+    // path as embedded generic args (e.g. `apply::<DefaultState>`).
     assert!(
         body_has_call_containing_in_type(f, "DefaultState"),
         "apply_default_pins_if_present must reference DefaultState type parameter"

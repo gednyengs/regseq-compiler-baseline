@@ -2,7 +2,7 @@
 //!
 //! Maps `CallClassification` variants to semantic IR with structured
 //! refs resolved through the `ReferenceResolver`. The call lowering
-//! module receives the full MIR function path (from `MirTy::FnDef`)
+//! module receives the full MIR function path (from `MirTy::Fn`)
 //! and passes it to `resolve_call()` for canonical resolution.
 //!
 //! Serial trait method calls are lowered as `HelperCall` with
@@ -27,7 +27,7 @@ use crate::lowering::mir_interpreter::context::FnContext;
 
 /// Lower a classified MIR call to semantic `Stmt`s.
 ///
-/// `mir_fn_path` is the full function path from `MirTy::FnDef { path }`.
+/// `mir_fn_path` is the full function path from `MirTy::Fn { path }`.
 /// Used for canonical resolution of helper calls and serial trait methods.
 ///
 /// Returns a list of statements (often 0 or 1). Transparent calls (Deref,
@@ -279,7 +279,7 @@ pub fn placeholder_reg_field_ref(
 pub fn extract_fn_path(func: &MirOperand) -> String {
     match func {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.clone(),
+            MirTy::Fn { path, .. } => path.clone(),
             _ => String::new(),
         },
         _ => String::new(),

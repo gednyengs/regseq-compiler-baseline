@@ -931,7 +931,6 @@ fn is_simple_scalar_local(
         matches!(
             &decl.ty,
             regseq_model::declaration::mir_body::MirTy::Bool
-                | regseq_model::declaration::mir_body::MirTy::Uint { .. }
                 | regseq_model::declaration::mir_body::MirTy::Int { .. }
         )
     } else {
@@ -953,6 +952,7 @@ fn is_option_carrier_rvalue(rvalue: &MirRvalue) -> bool {
 /// Extract the error type from a MIR body's return place.
 ///
 /// If the return type is `Result<T, E>`, returns `lower_mir_ty(E)`.
+/// Result is an enum: variant 0 = Ok(T), variant 1 = Err(E).
 fn extract_result_error_from_mir(
     body: &MirBody,
     tc: super::expr_lowering::TypeCtx<'_>,
@@ -960,8 +960,10 @@ fn extract_result_error_from_mir(
     use regseq_model::declaration::mir_body::MirTy;
     let ret_decl = body.local_decls.first()?;
     match &ret_decl.ty {
-        MirTy::Adt { path, args } if path.contains("Result") && args.len() >= 2 => {
-            Some(lower_mir_ty(&args[1], tc.0, tc.1))
+        MirTy::Enum { path, variants } if path.contains("Result") && variants.len() >= 2 => {
+            // Err variant (index 1) has one field whose type is E.
+            let err_field = variants[1].fields.first()?;
+            Some(lower_mir_ty(&err_field.ty, tc.0, tc.1))
         }
         _ => None,
     }
@@ -1024,6 +1026,8 @@ fn extract_option_inner_from_switchint(
 }
 
 /// Extract `T` from a MIR `Option<T>` type.
+///
+/// Option is an enum: variant 0 = None, variant 1 = Some(T).
 fn extract_option_inner_from_mir_ty(
     ty: &regseq_model::declaration::mir_body::MirTy,
     tc: super::expr_lowering::TypeCtx<'_>,
@@ -1031,8 +1035,10 @@ fn extract_option_inner_from_mir_ty(
     use regseq_model::declaration::mir_body::MirTy;
 
     match ty {
-        MirTy::Adt { path, args } if path.contains("Option") && !args.is_empty() => {
-            Some(lower_mir_ty(&args[0], tc.0, tc.1))
+        MirTy::Enum { path, variants } if path.contains("Option") && variants.len() >= 2 => {
+            // Some variant (index 1) has one field whose type is T.
+            let some_field = variants[1].fields.first()?;
+            Some(lower_mir_ty(&some_field.ty, tc.0, tc.1))
         }
         MirTy::Ref { ty: inner, .. } => extract_option_inner_from_mir_ty(inner, tc),
         _ => None,

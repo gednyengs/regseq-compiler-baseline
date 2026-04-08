@@ -605,6 +605,20 @@ const SPECIMEN: &str = r#"
 "#;
 
 // ---------------------------------------------------------------------------
+// Helper: check if a MirTy recursively contains a path with the given substring
+// ---------------------------------------------------------------------------
+
+fn mir_ty_contains_path(ty: &MirTy, substr: &str) -> bool {
+    match ty {
+        MirTy::Fn { path, .. } => path.contains(substr),
+        MirTy::Struct { path, .. } => path.contains(substr),
+        MirTy::Enum { path, .. } => path.contains(substr),
+        MirTy::NominalRef { path } => path.contains(substr),
+        MirTy::Ref { ty, .. } | MirTy::RawPtr { ty, .. } => mir_ty_contains_path(ty, substr),
+        _ => false,
+    }
+}
+
 // Helper: find an extracted function by name
 // ---------------------------------------------------------------------------
 
@@ -630,7 +644,7 @@ fn has_call_to(body: &MirBody, callee_substr: &str) -> bool {
 fn operand_mentions(op: &MirOperand, substr: &str) -> bool {
     match op {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.contains(substr),
+            MirTy::Fn { path, .. } => path.contains(substr),
             _ => false,
         },
         _ => false,
@@ -642,14 +656,40 @@ fn operand_mentions(op: &MirOperand, substr: &str) -> bool {
 fn operand_mentions_exact(op: &MirOperand, name: &str) -> bool {
     match op {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => {
-                let suffix = format!("::{}", name);
-                path.ends_with(&suffix)
+            MirTy::Fn { path, .. } => {
+                // Strip all generic `<...>` annotations to get a clean path,
+                // then check the last `::segment`.
+                let clean = strip_generic_annotations(path);
+                let suffix = format!("::{name}");
+                clean.ends_with(&suffix)
             }
             _ => false,
         },
         _ => false,
     }
+}
+
+/// Remove all `<...>` generic annotations from a path string.
+fn strip_generic_annotations(s: &str) -> String {
+    let mut result = String::with_capacity(s.len());
+    let mut depth = 0u32;
+    for ch in s.chars() {
+        match ch {
+            '<' => depth += 1,
+            '>' => {
+                if depth > 0 {
+                    depth -= 1;
+                }
+            }
+            _ if depth == 0 => result.push(ch),
+            _ => {}
+        }
+    }
+    // Remove trailing "::" left after stripping generics.
+    while result.ends_with("::") {
+        result.truncate(result.len() - 2);
+    }
+    result
 }
 
 /// Like `has_call_to` but uses exact suffix matching (`::name`) to avoid
@@ -827,7 +867,7 @@ fn collect_call_names(body: &MirBody) -> Vec<String> {
                         MirOperand::Constant {
                             constant:
                                 MirConstant {
-                                    ty: MirTy::FnDef { path, .. },
+                                    ty: MirTy::Fn { path, .. },
                                     ..
                                 },
                         },
@@ -1344,7 +1384,7 @@ fn check_group_1_callback_signatures_and_return_types() {
         port_open
             .return_type
             .as_ref()
-            .is_some_and(|r| r.contains("Result")),
+            .is_some_and(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result"))),
         "port_open must return Result, got: {:?}",
         port_open.return_type
     );
@@ -1384,15 +1424,15 @@ fn check_group_1_callback_signatures_and_return_types() {
         "configure param must be named _config"
     );
     assert!(
-        configure.params[0].ty.contains("SerialConfig"),
-        "configure param type must reference SerialConfig, got: {}",
+        mir_ty_contains_path(&configure.params[0].ty, "SerialConfig"),
+        "configure param type must reference SerialConfig, got: {:?}",
         configure.params[0].ty
     );
     assert!(
         configure
             .return_type
             .as_ref()
-            .is_some_and(|r| r.contains("Result")),
+            .is_some_and(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result"))),
         "configure must return Result, got: {:?}",
         configure.return_type
     );
@@ -1410,10 +1450,13 @@ fn check_group_1_callback_signatures_and_return_types() {
     assert_eq!(tx_byte.receiver, "ref_mut", "tx_byte receiver");
     assert_eq!(tx_byte.params.len(), 1, "tx_byte has 1 extra param");
     assert_eq!(tx_byte.params[0].name, "byte", "tx_byte param name");
-    assert!(
-        tx_byte.params[0].ty.contains("u8"),
-        "tx_byte param type must be u8, got: {}",
-        tx_byte.params[0].ty
+    assert_eq!(
+        tx_byte.params[0].ty,
+        MirTy::Int {
+            signed: false,
+            width: IntWidth::U8
+        },
+        "tx_byte param type must be u8"
     );
     assert!(
         tx_byte.return_type.is_none(),
@@ -1437,7 +1480,7 @@ fn check_group_1_callback_signatures_and_return_types() {
         rx_char
             .return_type
             .as_ref()
-            .is_some_and(|r| r.contains("Option")),
+            .is_some_and(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Option"))),
         "rx_char must return Option, got: {:?}",
         rx_char.return_type
     );
@@ -1584,7 +1627,7 @@ fn check_group_2_configure_body() {
     assert_eq!(f.params.len(), 1, "configure must have 1 param");
     assert_eq!(f.params[0].name, "_config", "param name must be _config");
     assert!(
-        f.params[0].ty.contains("SerialConfig"),
+        mir_ty_contains_path(&f.params[0].ty, "SerialConfig"),
         "param type must reference SerialConfig"
     );
     assert!(
@@ -1642,7 +1685,9 @@ fn check_group_2_configure_body() {
 
     // Success path
     assert!(
-        f.return_type.as_ref().is_some_and(|r| r.contains("Result")),
+        f.return_type
+            .as_ref()
+            .is_some_and(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Result"))),
         "configure must return Result"
     );
     assert!(
@@ -1803,7 +1848,9 @@ fn check_group_2_rx_char_body() {
 
     // Return type: Option
     assert!(
-        f.return_type.as_ref().is_some_and(|r| r.contains("Option")),
+        f.return_type
+            .as_ref()
+            .is_some_and(|r| matches!(r, MirTy::Enum { path, .. } if path.contains("Option"))),
         "rx_char must return Option, got: {:?}",
         f.return_type
     );

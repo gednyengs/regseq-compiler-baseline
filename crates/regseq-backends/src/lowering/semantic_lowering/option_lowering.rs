@@ -309,7 +309,7 @@ fn find_constant_default_in_arm(
 fn extract_call_fn_path(func: &MirOperand) -> String {
     match func {
         MirOperand::Constant { constant } => match &constant.ty {
-            MirTy::FnDef { path, .. } => path.clone(),
+            MirTy::Fn { path, .. } => path.clone(),
             _ => String::new(),
         },
         _ => String::new(),

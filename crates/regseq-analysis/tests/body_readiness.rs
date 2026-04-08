@@ -15,10 +15,10 @@ use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
 use regseq_model::declaration::mir_body::{
-    FnKind, FnParamDecl, MirBasicBlockData, MirBody, MirBodyDeclSet, MirConstValue, MirConstant,
-    MirFnBodyDecl, MirLocalDecl, MirMutability, MirOperand, MirPlace, MirProjectionElem,
-    MirQueryFlavor, MirRvalue, MirSourceInfo, MirSourceScope, MirStatement, MirStatementKind,
-    MirSwitchTargets, MirTerminator, MirTerminatorKind, MirTy, MirUnwindAction,
+    FnKind, FnParamDecl, IntWidth, MirBasicBlockData, MirBody, MirBodyDeclSet, MirConstValue,
+    MirConstant, MirFnBodyDecl, MirLocalDecl, MirMutability, MirOperand, MirPlace,
+    MirProjectionElem, MirQueryFlavor, MirRvalue, MirSourceInfo, MirSourceScope, MirStatement,
+    MirStatementKind, MirSwitchTargets, MirTerminator, MirTerminatorKind, MirTy, MirUnwindAction,
 };
 use regseq_model::declaration::operations::{LoggingDeclSet, PmGateDeclSet, TimedDelayDeclSet};
 use regseq_model::declaration::properties::{PropertyDeclSet, PropertyFieldDecl};
@@ -90,9 +90,10 @@ fn calling_mir_body(callee_path: &str) -> MirBody {
                     kind: MirTerminatorKind::Call {
                         func: MirOperand::Constant {
                             constant: MirConstant {
-                                ty: MirTy::FnDef {
+                                ty: MirTy::Fn {
                                     path: callee_path.into(),
-                                    args: vec![],
+                                    params: vec![],
+                                    ret: Box::new(MirTy::Tuple { elements: vec![] }),
                                 },
                                 value: MirConstValue::ZeroSized,
                             },
@@ -131,36 +132,25 @@ fn fallible_mir_body() -> MirBody {
         local_decls: vec![
             local_decl(
                 0,
-                MirTy::Adt {
+                MirTy::Enum {
                     path: "core::result::Result".into(),
-                    args: vec![
-                        MirTy::Tuple { elements: vec![] },
-                        MirTy::Adt {
-                            path: "RegseqError".into(),
-                            args: vec![],
-                        },
-                    ],
+                    variants: vec![],
                 },
                 None,
             ),
             local_decl(
                 1,
-                MirTy::Adt {
+                MirTy::Enum {
                     path: "core::result::Result".into(),
-                    args: vec![
-                        MirTy::Tuple { elements: vec![] },
-                        MirTy::Adt {
-                            path: "RegseqError".into(),
-                            args: vec![],
-                        },
-                    ],
+                    variants: vec![],
                 },
                 Some("_result"),
             ),
             local_decl(
                 2,
-                MirTy::Uint {
-                    uint_ty: regseq_model::declaration::mir_body::MirUintTy::U8,
+                MirTy::Int {
+                    signed: false,
+                    width: IntWidth::U8,
                 },
                 Some("_discr"),
             ),
@@ -175,9 +165,10 @@ fn fallible_mir_body() -> MirBody {
                     kind: MirTerminatorKind::Call {
                         func: MirOperand::Constant {
                             constant: MirConstant {
-                                ty: MirTy::FnDef {
+                                ty: MirTy::Fn {
                                     path: "some_fallible_op".into(),
-                                    args: vec![],
+                                    params: vec![],
+                                    ret: Box::new(MirTy::Tuple { elements: vec![] }),
                                 },
                                 value: MirConstValue::ZeroSized,
                             },
@@ -286,9 +277,12 @@ fn mir_callback(
         },
         receiver: "ref_mut".into(),
         params: vec![],
-        return_type: Some("Result<(), RegseqError>".into()),
+        return_type: Some(MirTy::Unsupported {
+            description: "Result<(), RegseqError>".into(),
+        }),
         body,
         helper_calls: helpers.into_iter().map(|s| s.into()).collect(),
+        monomorphization: None,
         provenance: Provenance::new("mir_bodies").with_containing_item(method_name),
     }
 }
@@ -304,6 +298,7 @@ fn mir_helper(name: &str, body: MirBody, helpers: Vec<&str>) -> MirFnBodyDecl {
         return_type: None,
         body,
         helper_calls: helpers.into_iter().map(|s| s.into()).collect(),
+        monomorphization: None,
         provenance: Provenance::new("mir_bodies").with_containing_item(name),
     }
 }
@@ -316,15 +311,18 @@ fn mir_isr(name: &str, body: MirBody, helpers: Vec<&str>) -> MirFnBodyDecl {
         kind: FnKind::Isr,
         receiver: "ref_mut".into(),
         params: vec![],
-        return_type: Some("IrqResult".into()),
+        return_type: Some(MirTy::Unsupported {
+            description: "IrqResult".into(),
+        }),
         body,
         helper_calls: helpers.into_iter().map(|s| s.into()).collect(),
+        monomorphization: None,
         provenance: Provenance::new("mir_bodies").with_containing_item(name),
     }
 }
 
 /// Build a MIR free function body declaration.
-fn mir_free_fn(name: &str, params: Vec<(&str, &str)>, body: MirBody) -> MirFnBodyDecl {
+fn mir_free_fn(name: &str, params: Vec<(&str, MirTy)>, body: MirBody) -> MirFnBodyDecl {
     MirFnBodyDecl {
         name: name.into(),
         def_path: format!("crate::{}", name),
@@ -334,12 +332,13 @@ fn mir_free_fn(name: &str, params: Vec<(&str, &str)>, body: MirBody) -> MirFnBod
             .into_iter()
             .map(|(n, t)| FnParamDecl {
                 name: n.into(),
-                ty: t.into(),
+                ty: t,
             })
             .collect(),
         return_type: None,
         body,
         helper_calls: vec![],
+        monomorphization: None,
         provenance: Provenance::new("mir_bodies").with_containing_item(name),
     }
 }
@@ -385,27 +384,45 @@ fn representative_mir_bodies() -> MirBodyDeclSet {
             // Free function: compute_divisor
             mir_free_fn(
                 "compute_divisor",
-                vec![("clock_hz", "u32"), ("baud", "u32")],
+                vec![
+                    (
+                        "clock_hz",
+                        MirTy::Int {
+                            signed: false,
+                            width: IntWidth::U32,
+                        },
+                    ),
+                    (
+                        "baud",
+                        MirTy::Int {
+                            signed: false,
+                            width: IntWidth::U32,
+                        },
+                    ),
+                ],
                 MirBody {
                     local_decls: vec![
                         local_decl(
                             0,
-                            MirTy::Uint {
-                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            MirTy::Int {
+                                signed: false,
+                                width: IntWidth::U32,
                             },
                             None,
                         ),
                         local_decl(
                             1,
-                            MirTy::Uint {
-                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            MirTy::Int {
+                                signed: false,
+                                width: IntWidth::U32,
                             },
                             Some("clock_hz"),
                         ),
                         local_decl(
                             2,
-                            MirTy::Uint {
-                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            MirTy::Int {
+                                signed: false,
+                                width: IntWidth::U32,
                             },
                             Some("baud"),
                         ),
@@ -811,8 +828,9 @@ fn unsupported_rvalue_surfaced() {
                         local_decl(0, MirTy::Tuple { elements: vec![] }, None),
                         local_decl(
                             1,
-                            MirTy::Uint {
-                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            MirTy::Int {
+                                signed: false,
+                                width: IntWidth::U32,
                             },
                             None,
                         ),
@@ -871,8 +889,9 @@ fn unsupported_projection_surfaced() {
                         local_decl(0, MirTy::Tuple { elements: vec![] }, None),
                         local_decl(
                             1,
-                            MirTy::Uint {
-                                uint_ty: regseq_model::declaration::mir_body::MirUintTy::U32,
+                            MirTy::Int {
+                                signed: false,
+                                width: IntWidth::U32,
                             },
                             None,
                         ),
@@ -1035,6 +1054,7 @@ fn empty_provenance_produces_caution() {
                 return_type: None,
                 body: trivial_mir_body(),
                 helper_calls: vec![],
+                monomorphization: None,
                 provenance: Provenance::new(""), // empty raw_family
             },
         ],

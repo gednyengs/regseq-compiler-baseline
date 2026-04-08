@@ -4,6 +4,8 @@
 //! fully-owned representations that can be serialized without any rustc
 //! arena dependency.
 
+use std::collections::HashSet;
+
 use rustc_middle::mir;
 use rustc_middle::ty::{self, TyCtxt};
 
@@ -314,6 +316,7 @@ pub(crate) fn convert_operand<'tcx>(tcx: TyCtxt<'tcx>, operand: &mir::Operand<'t
                     description: "runtime_checks_operand".to_string(),
                 },
                 value: MirConstValue::Unsupported {
+                    path: None,
                     description: "runtime_checks".to_string(),
                 },
             },
@@ -417,49 +420,177 @@ fn convert_cast_kind(kind: &mir::CastKind) -> MirCastKind {
 // Type conversion
 // ---------------------------------------------------------------------------
 
+/// Convert a rustc type into an owned `MirTy`.
+///
+/// This is the public entry point. It creates a fresh recursion-tracking
+/// set and delegates to the inner converter. Recursive or mutually
+/// recursive nominal types are represented via `MirTy::NominalRef`.
 pub(crate) fn convert_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> MirTy {
+    let mut expanding = HashSet::new();
+    convert_ty_inner(tcx, ty, &mut expanding)
+}
+
+/// Inner type conversion with recursion tracking.
+///
+/// The `expanding` set tracks which ADT `DefId`s are currently being
+/// resolved. When a type is encountered that is already in the set,
+/// we emit `MirTy::NominalRef` to break the cycle.
+fn convert_ty_inner<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: ty::Ty<'tcx>,
+    expanding: &mut HashSet<rustc_hir::def_id::DefId>,
+) -> MirTy {
     match ty.kind() {
         ty::TyKind::Bool => MirTy::Bool,
         ty::TyKind::Char => MirTy::Char,
         ty::TyKind::Int(int_ty) => MirTy::Int {
-            int_ty: convert_int_ty(*int_ty),
+            signed: true,
+            width: convert_int_width(*int_ty),
         },
-        ty::TyKind::Uint(uint_ty) => MirTy::Uint {
-            uint_ty: convert_uint_ty(*uint_ty),
+        ty::TyKind::Uint(uint_ty) => MirTy::Int {
+            signed: false,
+            width: convert_uint_width(*uint_ty),
         },
         ty::TyKind::Float(float_ty) => MirTy::Float {
-            float_ty: convert_float_ty(*float_ty),
+            width: convert_float_width(*float_ty),
         },
         ty::TyKind::Ref(_, inner, mutbl) => MirTy::Ref {
             mutbl: mutbl.is_mut(),
-            ty: Box::new(convert_ty(tcx, *inner)),
+            ty: Box::new(convert_ty_inner(tcx, *inner, expanding)),
         },
         ty::TyKind::RawPtr(inner, mutbl) => MirTy::RawPtr {
             mutbl: mutbl.is_mut(),
-            ty: Box::new(convert_ty(tcx, *inner)),
+            ty: Box::new(convert_ty_inner(tcx, *inner, expanding)),
         },
-        ty::TyKind::Adt(adt_def, args) => MirTy::Adt {
-            path: tcx.def_path_str(adt_def.did()),
-            args: args.types().map(|t| convert_ty(tcx, t)).collect(),
-        },
-        ty::TyKind::FnDef(def_id, args) => MirTy::FnDef {
-            path: tcx.def_path_str(*def_id),
-            args: args.types().map(|t| convert_ty(tcx, t)).collect(),
-        },
+        ty::TyKind::Adt(adt_def, args) => {
+            let did = adt_def.did();
+            let path = tcx.def_path_str(did);
+
+            // Recursion guard: if this type is already being expanded,
+            // emit a nominal reference instead of recursing.
+            if !expanding.insert(did) {
+                return MirTy::NominalRef { path };
+            }
+
+            let result = if adt_def.is_enum() {
+                let variants = adt_def
+                    .variants()
+                    .iter()
+                    .map(|variant| {
+                        let fields = variant
+                            .fields
+                            .iter()
+                            .enumerate()
+                            .map(|(i, field)| {
+                                let field_ty = field.ty(tcx, args);
+                                // Zero-sized fields (PhantomData, etc.)
+                                let ty = if let Ok(layout) = tcx.layout_of(
+                                    ty::TypingEnv::fully_monomorphized().as_query_input(field_ty),
+                                ) {
+                                    if layout.is_zst() {
+                                        MirTy::ZeroSizedLike {
+                                            description: format!("{field_ty}"),
+                                        }
+                                    } else {
+                                        convert_ty_inner(tcx, field_ty, expanding)
+                                    }
+                                } else {
+                                    convert_ty_inner(tcx, field_ty, expanding)
+                                };
+                                MirFieldTy {
+                                    index: i as u32,
+                                    name: field.name.to_string(),
+                                    ty,
+                                }
+                            })
+                            .collect();
+                        MirVariantTy {
+                            name: variant.name.to_string(),
+                            fields,
+                        }
+                    })
+                    .collect();
+                MirTy::Enum { path, variants }
+            } else if adt_def.is_struct() {
+                let variant = adt_def.non_enum_variant();
+                let fields = variant
+                    .fields
+                    .iter()
+                    .enumerate()
+                    .map(|(i, field)| {
+                        let field_ty = field.ty(tcx, args);
+                        let ty = if let Ok(layout) = tcx.layout_of(
+                            ty::TypingEnv::fully_monomorphized().as_query_input(field_ty),
+                        ) {
+                            if layout.is_zst() {
+                                MirTy::ZeroSizedLike {
+                                    description: format!("{field_ty}"),
+                                }
+                            } else {
+                                convert_ty_inner(tcx, field_ty, expanding)
+                            }
+                        } else {
+                            convert_ty_inner(tcx, field_ty, expanding)
+                        };
+                        MirFieldTy {
+                            index: i as u32,
+                            name: field.name.to_string(),
+                            ty,
+                        }
+                    })
+                    .collect();
+                MirTy::Struct { path, fields }
+            } else {
+                // Union type - not supported in the MIR schema.
+                MirTy::Unsupported {
+                    description: format!("union: {path}"),
+                }
+            };
+
+            expanding.remove(&did);
+            result
+        }
+        ty::TyKind::FnDef(def_id, args) => {
+            let base_path = tcx.def_path_str(*def_id);
+            // Embed generic type arguments in the path so that downstream
+            // consumers can discover type-parameter identities (e.g.
+            // distinguishing `apply::<DefaultState>` from `apply::<SleepState>`)
+            // without needing a separate generic-args field.
+            let type_args: Vec<String> = args.types().map(|t| format!("{t}")).collect();
+            let path = if type_args.is_empty() {
+                base_path
+            } else {
+                format!("{base_path}::<{}>", type_args.join(", "))
+            };
+            let fn_sig = tcx.fn_sig(*def_id).instantiate(tcx, args).skip_binder();
+            let params = fn_sig
+                .inputs()
+                .iter()
+                .map(|t| convert_ty_inner(tcx, *t, expanding))
+                .collect();
+            let ret = Box::new(convert_ty_inner(tcx, fn_sig.output(), expanding));
+            MirTy::Fn { path, params, ret }
+        }
         ty::TyKind::Tuple(elems) => MirTy::Tuple {
-            elements: elems.iter().map(|t| convert_ty(tcx, t)).collect(),
+            elements: elems
+                .iter()
+                .map(|t| convert_ty_inner(tcx, t, expanding))
+                .collect(),
         },
         ty::TyKind::Array(elem, len) => MirTy::Array {
-            ty: Box::new(convert_ty(tcx, *elem)),
+            element: Box::new(convert_ty_inner(tcx, *elem, expanding)),
             len: len.try_to_target_usize(tcx).unwrap_or(0),
         },
         ty::TyKind::Slice(elem) => MirTy::Slice {
-            ty: Box::new(convert_ty(tcx, *elem)),
+            element: Box::new(convert_ty_inner(tcx, *elem, expanding)),
         },
         ty::TyKind::Str => MirTy::Str,
         ty::TyKind::Never => MirTy::Never,
-        ty::TyKind::Param(param) => MirTy::Param {
-            name: param.name.to_string(),
+        ty::TyKind::Closure(def_id, _) => MirTy::ZeroSizedLike {
+            description: format!("closure:{}", tcx.def_path_str(*def_id)),
+        },
+        ty::TyKind::Param(param) => MirTy::Unsupported {
+            description: format!("param:{}", param.name),
         },
         _ => MirTy::Unsupported {
             description: format!("{ty}"),
@@ -467,33 +598,33 @@ pub(crate) fn convert_ty<'tcx>(tcx: TyCtxt<'tcx>, ty: ty::Ty<'tcx>) -> MirTy {
     }
 }
 
-fn convert_int_ty(ty: ty::IntTy) -> MirIntTy {
+fn convert_int_width(ty: ty::IntTy) -> IntWidth {
     match ty {
-        ty::IntTy::Isize => MirIntTy::Isize,
-        ty::IntTy::I8 => MirIntTy::I8,
-        ty::IntTy::I16 => MirIntTy::I16,
-        ty::IntTy::I32 => MirIntTy::I32,
-        ty::IntTy::I64 => MirIntTy::I64,
-        ty::IntTy::I128 => MirIntTy::I128,
+        ty::IntTy::Isize => IntWidth::Isize,
+        ty::IntTy::I8 => IntWidth::I8,
+        ty::IntTy::I16 => IntWidth::I16,
+        ty::IntTy::I32 => IntWidth::I32,
+        ty::IntTy::I64 => IntWidth::I64,
+        ty::IntTy::I128 => IntWidth::I128,
     }
 }
 
-fn convert_uint_ty(ty: ty::UintTy) -> MirUintTy {
+fn convert_uint_width(ty: ty::UintTy) -> IntWidth {
     match ty {
-        ty::UintTy::Usize => MirUintTy::Usize,
-        ty::UintTy::U8 => MirUintTy::U8,
-        ty::UintTy::U16 => MirUintTy::U16,
-        ty::UintTy::U32 => MirUintTy::U32,
-        ty::UintTy::U64 => MirUintTy::U64,
-        ty::UintTy::U128 => MirUintTy::U128,
+        ty::UintTy::Usize => IntWidth::Usize,
+        ty::UintTy::U8 => IntWidth::U8,
+        ty::UintTy::U16 => IntWidth::U16,
+        ty::UintTy::U32 => IntWidth::U32,
+        ty::UintTy::U64 => IntWidth::U64,
+        ty::UintTy::U128 => IntWidth::U128,
     }
 }
 
-fn convert_float_ty(ty: ty::FloatTy) -> MirFloatTy {
+fn convert_float_width(ty: ty::FloatTy) -> FloatWidth {
     match ty {
-        ty::FloatTy::F32 => MirFloatTy::F32,
-        ty::FloatTy::F64 => MirFloatTy::F64,
-        _ => MirFloatTy::F64,
+        ty::FloatTy::F32 => FloatWidth::F32,
+        ty::FloatTy::F64 => FloatWidth::F64,
+        _ => FloatWidth::F64,
     }
 }
 
@@ -521,24 +652,37 @@ fn convert_const_operand<'tcx>(
         mir::Const::Ty(_, _) => MirConstant {
             ty,
             value: MirConstValue::Unsupported {
+                path: None,
                 description: "ty_const".to_string(),
             },
         },
         mir::Const::Unevaluated(uneval, eval_ty) => {
             let path = tcx.def_path_str(uneval.def);
             let resolved = try_resolve_const_fields(tcx, const_op, &uneval, eval_ty);
-            let description = if resolved.is_empty() {
-                format!("unevaluated:{path}")
+            // Always emit Unevaluated to preserve the constant's def-path
+            // identity. When field resolution succeeds, encode the resolved
+            // scalar fields in the path using bracket notation so downstream
+            // consumers can extract them without losing the constant's name.
+            let annotated_path = if resolved.is_empty() {
+                path.clone()
             } else {
                 let fields: Vec<String> = resolved
                     .iter()
-                    .map(|(idx, bits)| format!("{idx}={bits:#x}"))
+                    .map(|f| {
+                        let val = match f.value.as_ref() {
+                            MirConstValue::Bits { value } => format!("{:#x}", value),
+                            _ => "?".to_string(),
+                        };
+                        format!("{}={}", f.index, val)
+                    })
                     .collect();
-                format!("unevaluated:{path}[{}]", fields.join(","))
+                format!("{}[{}]", path, fields.join(","))
             };
             MirConstant {
                 ty,
-                value: MirConstValue::Unsupported { description },
+                value: MirConstValue::Unevaluated {
+                    path: annotated_path,
+                },
             }
         }
     }
@@ -547,16 +691,17 @@ fn convert_const_operand<'tcx>(
 fn convert_const_value(val: &mir::ConstValue) -> MirConstValue {
     match val {
         mir::ConstValue::Scalar(scalar) => match scalar {
-            mir::interpret::Scalar::Int(int) => MirConstValue::Scalar {
-                bits: int.to_bits(int.size()),
-                size: int.size().bytes() as u8,
+            mir::interpret::Scalar::Int(int) => MirConstValue::Bits {
+                value: int.to_bits(int.size()),
             },
             mir::interpret::Scalar::Ptr(_, _) => MirConstValue::Unsupported {
+                path: None,
                 description: "scalar_ptr".to_string(),
             },
         },
         mir::ConstValue::ZeroSized => MirConstValue::ZeroSized,
         other => MirConstValue::Unsupported {
+            path: None,
             description: format!("{other:?}"),
         },
     }
@@ -567,15 +712,14 @@ fn convert_const_value(val: &mir::ConstValue) -> MirConstValue {
 // ---------------------------------------------------------------------------
 
 /// Attempt to evaluate an unevaluated constant and extract its scalar struct
-/// fields. Returns field index/bits pairs for every non-ZST scalar field in
-/// the struct layout. Returns an empty vec if evaluation fails or the constant
-/// is not a struct.
+/// fields as structured `ConstField` values. Returns an empty vec if
+/// evaluation fails or the constant is not a struct.
 fn try_resolve_const_fields<'tcx>(
     tcx: TyCtxt<'tcx>,
     const_op: &mir::ConstOperand<'tcx>,
     uneval: &mir::UnevaluatedConst<'tcx>,
     eval_ty: ty::Ty<'tcx>,
-) -> Vec<(u32, u128)> {
+) -> Vec<ConstField> {
     // Only attempt resolution for ADT (struct) types.
     let ty::TyKind::Adt(adt_def, args) = eval_ty.kind() else {
         return vec![];
@@ -632,7 +776,13 @@ fn try_resolve_const_fields<'tcx>(
             continue;
         };
 
-        fields.push((i as u32, int.to_bits(field_size)));
+        fields.push(ConstField {
+            index: i as u32,
+            name: Some(field_def.name.to_string()),
+            value: Box::new(MirConstValue::Bits {
+                value: int.to_bits(field_size),
+            }),
+        });
     }
 
     fields
