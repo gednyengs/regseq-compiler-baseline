@@ -8,38 +8,34 @@ Reviewed certificate:
 
 ## Current Status
 
-- Passing:
-  - identity / trait role / signature / return-type group
-- Failing:
-  - body group
+- Implemented via `extraction-remediation-10`
+- The corresponding validation task `source-to-extraction-10` is complete
 
-## Extraction Gap To Fix
+## Resolution Summary
 
-- Most callback body predicates are strongly preserved, but `rx_char` does not
-  preserve the exact named mapping:
+- Serial-callback extraction now preserves exact symbolic constant identity and
+  branch-local correspondence strongly enough to prove all four authored
+  `rx_char` error-flag to `ErrorKind` pairings:
   - `OE -> OVERRUN`
   - `BE -> BREAK`
   - `PE -> PARITY`
   - `FE -> FRAMING`
+- The previously passing serial-callbacks-A facts remain preserved, including:
+  - identity / trait role / signature / return-type facts
+  - `port_open`
+  - `port_close`
+  - `configure`
+  - `tx_byte`
+  - the already-strong structural facts for `rx_char`
 
-MIR currently preserves the branch/count structure and aggregate construction,
-but not the named `ErrorKind` identity needed for an exact body pass.
+## Evidence Notes
 
-## Likely Touchpoints
+- The current validation certificate records exact proof of the `rx_char`
+  mapping by following MIR CFG structure together with symbolic `Unevaluated`
+  constant paths for the named `ErrorKind` values.
 
-- MIR/body extraction for named constants used in `rx_char`
-- Any HIR-side semantic layer that can preserve enum/bitflag constant identity
-  before MIR lowers them to integer literals
+## Current Backlog State
 
-## Minimal Facts To Preserve
-
-- Symbolic identity for the four `ErrorKind` values used in `rx_char`
-- Enough argument or expression metadata to tie each DR error flag check to the
-  correct named `ErrorKind`
-
-## Acceptance Checklist
-
-- [ ] `rx_char` proves all four authored error-flag to `ErrorKind` pairings
-- [ ] `source-to-extraction-10` body group upgrades from `fail` to `pass`
-- [ ] no regression in the already-strong proofs for `port_open`, `port_close`,
-      `configure`, and `tx_byte`
+- No current remediation work is required for this check.
+- If this boundary regresses, reopen remediation only against the reviewed
+  certificate and current `source-to-extraction-10` evidence.
