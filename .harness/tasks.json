@@ -1425,6 +1425,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "extraction-remediation-03",
+          "name": "PL011 driver-struct extraction remediation",
+          "spec": ".harness/tasks/extraction-remediation/03-pl011-driver-struct-extraction-remediation.md",
+          "status": "done",
+          "depends_on": [
+            "source-to-extraction-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },

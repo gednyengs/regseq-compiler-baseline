@@ -432,6 +432,7 @@ pub struct RawClockField {
     pub field_name: String,
     pub clock_id: String,
     pub required: bool,
+    pub field_type: String,
 }
 
 impl From<&ClockField> for RawClockField {
@@ -440,6 +441,7 @@ impl From<&ClockField> for RawClockField {
             field_name: f.field_name.clone(),
             clock_id: f.clock_id.clone(),
             required: f.required,
+            field_type: f.field_type.clone(),
         }
     }
 }
@@ -487,6 +489,7 @@ impl From<&ResetSurface> for RawResetSurface {
 pub struct RawResetField {
     pub field_name: String,
     pub required: bool,
+    pub field_type: String,
 }
 
 impl From<&ResetField> for RawResetField {
@@ -494,6 +497,7 @@ impl From<&ResetField> for RawResetField {
         Self {
             field_name: f.field_name.clone(),
             required: f.required,
+            field_type: f.field_type.clone(),
         }
     }
 }
@@ -542,6 +546,7 @@ pub struct RawPinCtrlField {
     pub field_name: String,
     pub required: bool,
     pub pinctrl_id: Option<String>,
+    pub field_type: String,
 }
 
 impl From<&PinCtrlField> for RawPinCtrlField {
@@ -550,6 +555,7 @@ impl From<&PinCtrlField> for RawPinCtrlField {
             field_name: f.field_name.clone(),
             required: f.required,
             pinctrl_id: f.pinctrl_id.clone(),
+            field_type: f.field_type.clone(),
         }
     }
 }
@@ -593,6 +599,7 @@ pub struct RawInterruptResourceDecl {
     pub field_name: String,
     pub interrupt_id: String,
     pub shape: String,
+    pub field_type: String,
     pub layer2: RawInterruptLayer2Properties,
 }
 
@@ -606,6 +613,7 @@ impl From<&InterruptResourceDecl> for RawInterruptResourceDecl {
                 InterruptFieldShape::Optional => "optional".to_string(),
                 InterruptFieldShape::Array(n) => format!("array({n})"),
             },
+            field_type: r.field_type.clone(),
             layer2: (&r.layer2).into(),
         }
     }

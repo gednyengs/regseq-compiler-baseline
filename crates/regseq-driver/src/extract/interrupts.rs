@@ -22,6 +22,8 @@ pub struct InterruptResourceDecl {
     pub field_name: String,
     pub interrupt_id: String,
     pub shape: InterruptFieldShape,
+    /// Exact rendered Rust type of this field (e.g. `"Interrupt"`, `"Option<Interrupt>"`).
+    pub field_type: String,
     pub layer2: InterruptLayer2Properties,
 }
 
@@ -148,6 +150,7 @@ fn extract_interrupt_fields<'tcx>(
             field_name: field.ident.name.as_str().to_string(),
             interrupt_id,
             shape,
+            field_type: hir_ty_to_string(field.ty),
             layer2,
         });
     }
@@ -434,6 +437,59 @@ fn parse_isr_bind_target(attr: &Attribute) -> Result<IsrBindTarget, InterruptErr
         }
         _ => Ok(IsrBindTarget::Auto),
     }
+}
+
+// ---------------------------------------------------------------------------
+// HIR type rendering
+// ---------------------------------------------------------------------------
+
+/// Produce a recoverable string representation of a HIR type.
+fn hir_ty_to_string(ty: &rustc_hir::Ty<'_>) -> String {
+    let rustc_hir::TyKind::Path(qpath) = &ty.kind else {
+        return "<unsupported>".to_string();
+    };
+    let path = match qpath {
+        rustc_hir::QPath::Resolved(_, path) => path,
+        _ => return "<unsupported>".to_string(),
+    };
+
+    let mut parts = Vec::new();
+    for seg in path.segments.iter() {
+        let mut s = seg.ident.name.as_str().to_string();
+        if let Some(args) = seg.args {
+            let inner: Vec<String> = args
+                .args
+                .iter()
+                .filter_map(|arg| {
+                    if let rustc_hir::GenericArg::Type(inner_ty) = arg {
+                        if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, p)) =
+                            &inner_ty.kind
+                        {
+                            Some(
+                                p.segments
+                                    .iter()
+                                    .map(|s| s.ident.name.as_str().to_string())
+                                    .collect::<Vec<_>>()
+                                    .join("::"),
+                            )
+                        } else {
+                            Some("<unsupported>".to_string())
+                        }
+                    } else {
+                        None
+                    }
+                })
+                .collect();
+            if !inner.is_empty() {
+                s.push('<');
+                s.push_str(&inner.join(", "));
+                s.push('>');
+            }
+        }
+        parts.push(s);
+    }
+
+    parts.join("::")
 }
 
 // ---------------------------------------------------------------------------

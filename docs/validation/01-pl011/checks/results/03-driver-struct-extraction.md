@@ -99,107 +99,93 @@ Fidelity Evidence (Exact Citations):
 ### 3b: irq (interrupt resource)
 
 - Check: `irq` resource preserves field name, kind, Rust type, requiredness, resource properties, join-key semantics
-- Status: `fail`
+- Status: `pass`
 - Premise: `irq`: field name `irq`, kind `interrupt`, type `Interrupt`, required, `id = "uart_irq"`, join key `Properties.id`
 - Assertion Predicate(s):
   - `assert_eq!(irq.field_name, "irq")`
   - `assert_eq!(irq.interrupt_id, "uart_irq")`
-  - `assert_eq!(irq.shape, InterruptFieldShape::Single)` (weaker requiredness/shape fact)
+  - `assert_eq!(irq.shape, InterruptFieldShape::Single)`
+  - `assert_eq!(irq.field_type, "Interrupt")` (exact Rust type fidelity)
   - `assert!(matches!(irq_field.rseq_kind, Some(RseqFieldKind::Interrupt { id }) if id == "uart_irq"))`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_03_driver_struct.rs:662`
-  - The test asserts field name, interrupt_id, `shape == Single`, and interrupt-field classification.
-- Supporting Evidence:
-  - `InterruptResourceDecl` carries `field_name`, `interrupt_id`, and `shape`, but no rendered Rust type string.
+  - Test `check_group_3_irq_interrupt_resource` in `source_to_extraction_03_driver_struct.rs` asserts field name, interrupt_id, shape, exact Rust type via `field_type`, and interrupt-field classification.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pub irq: Interrupt`, `#[rseq::interrupt(id = "uart_irq")]`
-  - Extracted Fact (Verbatim): `InterruptResourceDecl { field_name: "irq", interrupt_id: "uart_irq", shape: Single, .. }`, `RseqFieldKind::Interrupt { id: "uart_irq" }`
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The extraction preserves resource identity, id, and `shape == Single`, but it does not preserve the exact Rust type `Interrupt` explicitly. Under the current task contract, `shape` is weaker evidence and may not stand in for exact type fidelity.
-  - Why This Status Follows: The task spec requires exact Rust type preservation for resources and forbids treating shape/requiredness as a proxy. This surface does not expose a type string or equivalent exact type fact for `irq`.
-- Counterexample: There is no extraction field carrying the exact type `Interrupt`; only `InterruptFieldShape::Single` survives.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/interrupts.rs`
-  - Minimal Missing Fact To Preserve: Add an explicit rendered Rust type field to `InterruptResourceDecl`, or preserve enough exact type information to distinguish `Interrupt` from other shape-equivalent encodings without proxy reasoning.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `InterruptResourceDecl { field_name: "irq", interrupt_id: "uart_irq", shape: Single, field_type: "Interrupt", .. }`, `RseqFieldKind::Interrupt { id: "uart_irq" }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: all authored resource facts including exact Rust type are preserved explicitly in the extraction surface via `field_type`
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass
 
 ### 3c: clock resource
 
 - Check: `clock` resource preserves field name, kind, Rust type, requiredness, resource properties, join-key semantics
-- Status: `fail`
+- Status: `pass`
 - Premise: `clock`: field name `clock`, kind `clock`, type `Option<Clock>`, optional, `id = "uart_clk"`, join key `Properties.id`
 - Assertion Predicate(s):
   - `assert_eq!(clk.field_name, "clock")`
   - `assert_eq!(clk.clock_id, "uart_clk")`
-  - `assert!(!clk.required)` (weaker optionality fact)
+  - `assert!(!clk.required)`
+  - `assert_eq!(clk.field_type, "Option<Clock>")` (exact Rust type fidelity)
   - `assert!(matches!(clock_field.rseq_kind, Some(RseqFieldKind::Clock { id }) if id == "uart_clk"))`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_03_driver_struct.rs:734`
-  - The test asserts field name, clock id, `required == false`, and clock-field classification.
-- Supporting Evidence:
-  - `ClockField` carries `field_name`, `clock_id`, and `required`, but no rendered Rust type string.
+  - Test `check_group_3_clock_resource` in `source_to_extraction_03_driver_struct.rs` asserts field name, clock id, requiredness, exact Rust type via `field_type`, and clock-field classification.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pub clock: Option<Clock>`, `#[rseq::clock(id = "uart_clk")]`
-  - Extracted Fact (Verbatim): `ClockField { field_name: "clock", clock_id: "uart_clk", required: false }`, `RseqFieldKind::Clock { id: "uart_clk" }`
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The extraction preserves optionality and resource classification, but does not preserve the exact Rust type `Option<Clock>` explicitly. Under the current task contract, `required == false` is weaker evidence and may not stand in for exact type fidelity.
-  - Why This Status Follows: The task spec requires exact Rust type preservation for resources and forbids treating requiredness as a proxy. This surface does not expose a type string or equivalent exact type fact for `clock`.
-- Counterexample: There is no extraction field carrying the exact type `Option<Clock>`; only `required == false` survives.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/clock.rs`
-  - Minimal Missing Fact To Preserve: Add an explicit rendered Rust type field to `ClockField`, or preserve enough exact type information to distinguish `Option<Clock>` from other optional resources without proxy reasoning.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `ClockField { field_name: "clock", clock_id: "uart_clk", required: false, field_type: "Option<Clock>" }`, `RseqFieldKind::Clock { id: "uart_clk" }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: all authored resource facts including exact Rust type are preserved explicitly in the extraction surface via `field_type`
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass
 
 ### 3d: reset resource
 
 - Check: `reset` resource preserves field name, kind, Rust type, requiredness, join-key semantics
-- Status: `fail`
+- Status: `pass`
 - Premise: `reset`: field name `reset`, kind `reset`, type `Option<ResetLine>`, optional, join key `Field name`
 - Assertion Predicate(s):
   - `assert_eq!(rst.field_name, "reset")`
-  - `assert!(!rst.required)` (weaker optionality fact)
+  - `assert!(!rst.required)`
+  - `assert_eq!(rst.field_type, "Option<ResetLine>")` (exact Rust type fidelity)
   - `assert!(reset_field.rseq_kind.is_none())` (no rseq attribute; discovered by type)
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_03_driver_struct.rs:801`
-  - The test asserts field name, `required == false`, and absence of any `#[rseq::*]` field classification.
-- Supporting Evidence:
-  - `ResetField` carries `field_name` and `required`, but no rendered Rust type string.
+  - Test `check_group_3_reset_resource` in `source_to_extraction_03_driver_struct.rs` asserts field name, requiredness, exact Rust type via `field_type`, and absence of any `#[rseq::*]` field classification.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pub reset: Option<ResetLine>` (no rseq attribute)
-  - Extracted Fact (Verbatim): `ResetField { field_name: "reset", required: false }`, `FieldFact { rseq_kind: None }`
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The extraction preserves optionality and the field-name join key, but does not preserve the exact Rust type `Option<ResetLine>` explicitly. Under the current task contract, `required == false` is weaker evidence and may not stand in for exact type fidelity.
-  - Why This Status Follows: The task spec requires exact Rust type preservation for resources and forbids treating requiredness as a proxy. This surface does not expose a type string or equivalent exact type fact for `reset`.
-- Counterexample: There is no extraction field carrying the exact type `Option<ResetLine>`; only `required == false` survives.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/reset.rs`
-  - Minimal Missing Fact To Preserve: Add an explicit rendered Rust type field to `ResetField`, or preserve enough exact type information to distinguish `Option<ResetLine>` from other optional resources without proxy reasoning.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `ResetField { field_name: "reset", required: false, field_type: "Option<ResetLine>" }`, `FieldFact { rseq_kind: None }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: all authored resource facts including exact Rust type are preserved explicitly in the extraction surface via `field_type`
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass
 
 ### 3e: pinctrl resource
 
 - Check: `pinctrl` resource preserves field name, kind, Rust type, requiredness, resource properties, join-key semantics
-- Status: `fail`
+- Status: `pass`
 - Premise: `pinctrl`: field name `pinctrl`, kind `pinctrl`, type `Option<PinCtrl>`, optional, `id = "uart_pins"`, join key `Properties.id`
 - Assertion Predicate(s):
   - `assert_eq!(pin.field_name, "pinctrl")`
   - `assert_eq!(pin.pinctrl_id.as_deref(), Some("uart_pins"))`
-  - `assert!(!pin.required)` (weaker optionality fact)
+  - `assert!(!pin.required)`
+  - `assert_eq!(pin.field_type, "Option<PinCtrl>")` (exact Rust type fidelity)
   - `assert!(matches!(pinctrl_field.rseq_kind, Some(RseqFieldKind::PinCtrl { id }) if id == "uart_pins"))`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_03_driver_struct.rs:859`
-  - The test asserts field name, pinctrl id, `required == false`, and pinctrl-field classification.
+  - Test `check_group_3_pinctrl_resource` in `source_to_extraction_03_driver_struct.rs` asserts field name, pinctrl id, requiredness, exact Rust type via `field_type`, and pinctrl-field classification.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `pub pinctrl: Option<PinCtrl>`, `#[rseq::pinctrl(id = "uart_pins")]`
-  - Extracted Fact (Verbatim): `PinCtrlField { field_name: "pinctrl", required: false, pinctrl_id: Some("uart_pins") }`, `RseqFieldKind::PinCtrl { id: "uart_pins" }`
-  - Correspondence: `weakened`
-  - Gap / Loss Description: The extraction preserves optionality and resource classification, but does not preserve the exact Rust type `Option<PinCtrl>` explicitly. Under the current task contract, `required == false` is weaker evidence and may not stand in for exact type fidelity.
-  - Why This Status Follows: The task spec requires exact Rust type preservation for resources and forbids treating requiredness as a proxy. This surface does not expose a type string or equivalent exact type fact for `pinctrl`.
-- Counterexample: There is no extraction field carrying the exact type `Option<PinCtrl>`; only `required == false` survives.
-- Suggested Fix Direction / Implementation Hints:
-  - Likely Touchpoint: `crates/regseq-driver/src/extract/pinctrl.rs`
-  - Minimal Missing Fact To Preserve: Add an explicit rendered Rust type field to `PinCtrlField`, or preserve enough exact type information to distinguish `Option<PinCtrl>` from other optional resources without proxy reasoning.
-- Conclusion: fail
+  - Extracted Fact (Verbatim): `PinCtrlField { field_name: "pinctrl", required: false, pinctrl_id: Some("uart_pins"), field_type: "Option<PinCtrl>" }`, `RseqFieldKind::PinCtrl { id: "uart_pins" }`
+  - Correspondence: `exact`
+  - Gap / Loss Description: none
+  - Why This Status Follows: all authored resource facts including exact Rust type are preserved explicitly in the extraction surface via `field_type`
+- Counterexample: n/a
+- Suggested Fix Direction / Implementation Hints: n/a
+- Conclusion: pass
 
 ### 3f: canonical paths for driver struct and resource fields
 
@@ -308,20 +294,13 @@ Fidelity Evidence (Exact Citations):
 | Group 1: driver identity (name, compatible, bus) | pass |
 | Group 2: device class (serial) | pass |
 | Group 3a: regs MMIO resource | pass |
-| Group 3b: irq interrupt resource | fail |
-| Group 3c: clock resource | fail |
-| Group 3d: reset resource | fail |
-| Group 3e: pinctrl resource | fail |
+| Group 3b: irq interrupt resource | pass |
+| Group 3c: clock resource | pass |
+| Group 3d: reset resource | pass |
+| Group 3e: pinctrl resource | pass |
 | Group 3f: canonical paths | pass |
 | Group 4a: current_speed property | pass |
 | Group 4b: fifo_size property | pass |
 | Group 5: pending_tx user field not reclassified | pass |
 
-The declaration and classification facts are largely preserved, but exact Rust type fidelity currently fails for four resource surfaces:
-
-1. `irq`: only `InterruptFieldShape::Single` survives, not an exact `Interrupt` type fact
-2. `clock`: only `required == false` survives, not an exact `Option<Clock>` type fact
-3. `reset`: only `required == false` survives, not an exact `Option<ResetLine>` type fact
-4. `pinctrl`: only `required == false` survives, not an exact `Option<PinCtrl>` type fact
-
-So the current extraction boundary preserves driver identity, device class, canonical paths, property fields, and user-field non-reclassification, but weakens several resource-type facts below the current task-contract threshold for `pass`.
+All checks pass. The extraction boundary preserves driver identity, device class, canonical paths, exact Rust type fidelity for all resources (including `irq`, `clock`, `reset`, `pinctrl` via the `field_type` field added to each resource declaration struct), property fields, and user-field non-reclassification.

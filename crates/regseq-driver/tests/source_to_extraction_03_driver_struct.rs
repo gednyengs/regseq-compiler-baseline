@@ -699,10 +699,12 @@ fn check_group_3_irq_interrupt_resource() {
         irq.shape
     );
 
-    // The interrupt surface preserves a weaker structural fact here:
-    // `shape == Single`. It does not expose a rendered Rust type string, so the
-    // exact authored type `Interrupt` is not directly recoverable from this
-    // surface alone.
+    // Exact Rust type fidelity
+    assert_eq!(
+        irq.field_type, AUTHORED_IRQ_TYPE,
+        "irq field_type must be '{}'; got '{}'",
+        AUTHORED_IRQ_TYPE, irq.field_type
+    );
 
     // Identity enrichment field classification
     let enrichment = result
@@ -767,9 +769,12 @@ fn check_group_3_clock_resource() {
         "clock must be optional (required == false); got required == true"
     );
 
-    // The clock surface preserves the weaker structural fact `required == false`.
-    // It does not expose a rendered Rust type string, so the exact authored
-    // type `Option<Clock>` is not directly recoverable from this surface alone.
+    // Exact Rust type fidelity
+    assert_eq!(
+        clk.field_type, AUTHORED_CLOCK_TYPE,
+        "clock field_type must be '{}'; got '{}'",
+        AUTHORED_CLOCK_TYPE, clk.field_type
+    );
 
     // Identity enrichment field classification
     let enrichment = result
@@ -827,9 +832,12 @@ fn check_group_3_reset_resource() {
         "reset must be optional (required == false); got required == true"
     );
 
-    // The reset surface preserves the weaker structural fact `required == false`.
-    // It does not expose a rendered Rust type string, so the exact authored
-    // type `Option<ResetLine>` is not directly recoverable from this surface alone.
+    // Exact Rust type fidelity
+    assert_eq!(
+        rst.field_type, AUTHORED_RESET_TYPE,
+        "reset field_type must be '{}'; got '{}'",
+        AUTHORED_RESET_TYPE, rst.field_type
+    );
 
     // Reset uses field-name join key, no id attribute. Verify there is no
     // rseq classification in enrichment (reset has no #[rseq::*] attr).
@@ -894,9 +902,12 @@ fn check_group_3_pinctrl_resource() {
         "pinctrl must be optional (required == false); got required == true"
     );
 
-    // The pinctrl surface preserves the weaker structural fact `required == false`.
-    // It does not expose a rendered Rust type string, so the exact authored
-    // type `Option<PinCtrl>` is not directly recoverable from this surface alone.
+    // Exact Rust type fidelity
+    assert_eq!(
+        pin.field_type, AUTHORED_PINCTRL_TYPE,
+        "pinctrl field_type must be '{}'; got '{}'",
+        AUTHORED_PINCTRL_TYPE, pin.field_type
+    );
 
     // Identity enrichment field classification
     let enrichment = result

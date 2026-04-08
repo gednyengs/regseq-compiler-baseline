@@ -97,6 +97,7 @@ fn sample_artifact() -> RawFrontendArtifact {
                 field_name: "uartclk".to_string(),
                 clock_id: "uartclk".to_string(),
                 required: true,
+                field_type: "Clock".to_string(),
             }],
             call_sites: vec![RawClockCallSite {
                 method: "enable".to_string(),
@@ -112,6 +113,7 @@ fn sample_artifact() -> RawFrontendArtifact {
                 field_name: "pins".to_string(),
                 required: false,
                 pinctrl_id: Some("default".to_string()),
+                field_type: "Option<PinCtrl>".to_string(),
             }],
             call_sites: vec![],
         }),
