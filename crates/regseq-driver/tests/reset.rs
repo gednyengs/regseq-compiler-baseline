@@ -72,6 +72,11 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
                 .unstable_opts
                 .crate_attr
                 .push("register_tool(rseq)".to_string());
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push("allow(dead_code)".to_string());
         }
 
         fn after_analysis<'tcx>(

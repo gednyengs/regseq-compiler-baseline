@@ -16,11 +16,13 @@
 //! overly coarse lowering that forces the backend to reconstruct
 //! authored behavior.
 
+#![allow(dead_code)]
+
 use std::collections::BTreeSet;
 
 use regseq_analysis::{check_body_readiness, AnalysisInput};
 use regseq_backends::linux::planner::build_linux_backend_plan;
-use regseq_backends::lowering::behavior::{BehaviorNode, BranchCondition, FunctionRole};
+use regseq_backends::lowering::behavior::{BehaviorNode, FunctionRole};
 use regseq_backends::lowering::mir_interpreter::resolve_interrupt_class_masks;
 use regseq_backends::lowering::plan::BusType;
 use regseq_backends::lowering::planner::build_driver_lowering_plan;

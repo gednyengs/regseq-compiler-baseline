@@ -16,7 +16,7 @@ use regseq_model::binding::{
 use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
-use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
+use regseq_model::declaration::mir_body::MirBodyDeclSet;
 use regseq_model::declaration::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LogCallSiteDecl, LogLevel,
     LoggingDeclSet, PmGateDecl, PmGateDeclSet, PmGateProperties, TimedDelayCallSiteDecl,

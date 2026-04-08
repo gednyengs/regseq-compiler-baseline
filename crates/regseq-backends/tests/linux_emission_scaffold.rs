@@ -22,7 +22,7 @@ use regseq_model::declaration::callbacks::{
     CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
 };
 use regseq_model::declaration::driver::BusType as ModelBusType;
-use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
+use regseq_model::declaration::mir_body::MirBodyDeclSet;
 use regseq_model::declaration::operations::{
     DelayIntrinsic, DelayPathKind, DurationCtor, DurationCtorSiteDecl, LoggingDeclSet,
     PmGateDeclSet, TimedDelayCallSiteDecl, TimedDelayDeclSet,
@@ -1240,7 +1240,7 @@ fn module_has_register_accessors() {
 
 #[test]
 fn register_header_has_plan_driven_offsets() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let regs = set
         .artifacts
@@ -1267,7 +1267,7 @@ fn register_header_has_plan_driven_offsets() {
 
 #[test]
 fn register_header_has_plan_driven_bitfields_and_named_values() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let regs = set
         .artifacts
@@ -1356,7 +1356,7 @@ fn probe_has_real_api_calls() {
 
 #[test]
 fn interrupt_masks_come_from_plan_data() {
-    let (portable, linux) = make_plans();
+    let (portable, _linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let main = set
         .artifacts
@@ -1377,7 +1377,7 @@ fn interrupt_masks_come_from_plan_data() {
 
 #[test]
 fn property_defaults_use_authored_literals() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let main = set
         .artifacts
@@ -1405,7 +1405,7 @@ fn property_defaults_use_authored_literals() {
 
 #[test]
 fn port_type_comes_from_plan() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let main = set
         .artifacts
@@ -1425,7 +1425,7 @@ fn port_type_comes_from_plan() {
 
 #[test]
 fn dev_name_comes_from_plan() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let main = set
         .artifacts

@@ -4,6 +4,8 @@
 //! a portable `DriverLoweringPlan` and a Linux-specific `LinuxBackendPlan`
 //! that carry real compiler-owned semantics.
 
+#![allow(dead_code)]
+
 use regseq_analysis::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole, LinuxProbeStep};
 use regseq_backends::linux::planner::build_linux_backend_plan;

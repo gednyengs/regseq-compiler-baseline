@@ -104,6 +104,14 @@ fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
                 .unstable_opts
                 .crate_attr
                 .push("register_tool(rseq)".to_string());
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push(
+                    "allow(unused, non_snake_case, nonstandard_style, redundant_semicolons)"
+                        .to_string(),
+                );
             config.opts.unstable_opts.mir_opt_level = Some(0);
             config.opts.unstable_opts.always_encode_mir = true;
         }

@@ -6,11 +6,10 @@
 use regseq_model::item::identity::{CanonicalPath, ItemId};
 use regseq_model::item::interrupt::InterruptClassDef;
 use regseq_model::semantic::{
-    AssignTarget, BinOp, Block, ConstantRef, DriverFieldRef, Expr, FieldWrite, FieldWriteValue,
-    FunctionRef, InterruptClassId, InterruptClassRef, LocalId, LocalOrigin, PinCtrlState,
-    RegisterFieldRef, RegisterRef, ResourceKind, ResourceOperation, ResourceProperty, ResourceRef,
-    SemanticBody, SemanticLocal, SemanticModel, SemanticType, Stmt, SubsystemActionKind,
-    SubsystemActionRef, SubsystemKind, UnaryOp,
+    BinOp, Block, ConstantRef, DriverFieldRef, Expr, FieldWrite, FieldWriteValue, FunctionRef,
+    InterruptClassId, LocalId, LocalOrigin, RegisterFieldRef, RegisterRef, ResourceKind,
+    ResourceProperty, ResourceRef, SemanticBody, SemanticLocal, SemanticModel, SemanticType, Stmt,
+    UnaryOp,
 };
 
 // ---------------------------------------------------------------------------

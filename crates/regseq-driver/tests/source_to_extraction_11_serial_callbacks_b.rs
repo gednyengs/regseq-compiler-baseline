@@ -122,6 +122,14 @@ fn compile_and_extract_all(source: &str, test_name: &str) -> ExtractionTriple {
                 .unstable_opts
                 .crate_attr
                 .push("register_tool(rseq)".to_string());
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push(
+                    "allow(unused, non_snake_case, nonstandard_style, redundant_semicolons)"
+                        .to_string(),
+                );
         }
 
         fn after_analysis<'tcx>(
@@ -479,47 +487,6 @@ fn mir_ty_mentions(ty: &MirTy, substr: &str) -> bool {
         MirTy::ZeroSizedLike { description } => description.contains(substr),
         MirTy::Unsupported { description, .. } => description.contains(substr),
         _ => false,
-    }
-}
-
-/// Collect all nominal (Struct/Enum/NominalRef) path strings from a type tree.
-fn collect_nominal_paths(ty: &MirTy, out: &mut Vec<String>) {
-    match ty {
-        MirTy::Struct { path, fields } => {
-            out.push(path.clone());
-            for f in fields {
-                collect_nominal_paths(&f.ty, out);
-            }
-        }
-        MirTy::Enum { path, variants } => {
-            out.push(path.clone());
-            for v in variants {
-                for f in &v.fields {
-                    collect_nominal_paths(&f.ty, out);
-                }
-            }
-        }
-        MirTy::Fn { params, ret, .. } => {
-            for p in params {
-                collect_nominal_paths(p, out);
-            }
-            collect_nominal_paths(ret, out);
-        }
-        MirTy::Ref { ty: inner, .. } | MirTy::RawPtr { ty: inner, .. } => {
-            collect_nominal_paths(inner, out);
-        }
-        MirTy::Tuple { elements } => {
-            for e in elements {
-                collect_nominal_paths(e, out);
-            }
-        }
-        MirTy::Array { element, .. } | MirTy::Slice { element } => {
-            collect_nominal_paths(element, out);
-        }
-        MirTy::NominalRef { path } => {
-            out.push(path.clone());
-        }
-        _ => {}
     }
 }
 
