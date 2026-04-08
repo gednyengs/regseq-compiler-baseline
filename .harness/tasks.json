@@ -1329,7 +1329,7 @@
           "id": "source-to-extraction-06",
           "name": "PL011 driver constants authored->extraction boundary validation",
           "spec": ".harness/tasks/source-to-extraction/06-pl011-driver-constants-authored-to-extraction.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-driver-19",
             "track-a-pl011-04"
