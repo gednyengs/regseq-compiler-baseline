@@ -1473,6 +1473,27 @@
       ]
     },
     {
+      "id": "mir-schema-refactor",
+      "name": "MIR schema refactor",
+      "tasks": [
+        {
+          "id": "mir-schema-refactor-01",
+          "name": "MIR type and constant schema refactor",
+          "spec": ".harness/tasks/mir-schema-refactor/01-mir-type-and-constant-schema-refactor.md",
+          "status": "pending",
+          "depends_on": [
+            "extraction-remediation-01",
+            "extraction-remediation-03",
+            "extraction-remediation-04",
+            "extraction-remediation-06",
+            "extraction-remediation-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        }
+      ]
+    },
+    {
       "id": "track-a-eval",
       "name": "evaluation packaging",
       "tasks": []
