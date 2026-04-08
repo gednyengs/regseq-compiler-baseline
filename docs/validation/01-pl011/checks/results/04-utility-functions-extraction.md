@@ -108,16 +108,19 @@
 - Status: `pass`
 - Premise: `field_val` body is `FieldValue::new(field.mask, raw << field.shift)`
 - Assertion Predicate(s):
-  - MIR body contains a `Call` terminator with callee `FnDef` path containing `FieldValue` and `new`
-  - MIR body contains an `Assign` statement with `BinaryOp { op: Shl, .. }` rvalue
+  - MIR body copies `field.mask` into a temp local
+  - MIR body copies `raw` into a temp local
+  - MIR body copies `field.shift` into a temp local
+  - MIR body computes `Shl(temp_raw, temp_shift)` into a temp local
+  - MIR body calls `FieldValue::new(temp_mask, temp_shl)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:575`
-  - The test finds a `Call` terminator targeting `FieldValue::new` and a `Shl` binary operation in the extracted MIR body.
+  - [source_to_extraction_04_utility_functions.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs#L694)
+  - The test proves the exact copied-operand flow from `field.mask`, `raw`, and `field.shift` into the `Shl` temp and then into the `FieldValue::new` call.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `FieldValue::new(field.mask, raw << field.shift)`
-  - Extracted Fact (Verbatim): MIR body contains `Call { func: Constant { ty: FnDef { path: "...FieldValue...new..." } } }` and `Assign { rvalue: BinaryOp { op: Shl, .. } }`
+  - Extracted Fact (Verbatim): MIR body copies `field.mask` to one temp, copies `raw` and `field.shift` to temps, computes `Shl(temp_raw, temp_shift)` into another temp, and then calls `FieldValue::new(temp_mask, temp_shl)`
   - Correspondence: `exact`
-  - Why This Status Follows: The callee identity (`FieldValue::new`) and the shift operation (`Shl`) together prove the authored body shape: a constructor call with a shifted argument.
+  - Why This Status Follows: The exercised MIR assertions now prove exact operand flow, not just the presence of a call and a shift somewhere in the body.
 
 ### Check 2c: raw_reg_val body structure
 
@@ -125,15 +128,17 @@
 - Status: `pass`
 - Premise: `raw_reg_val` body is `FieldValue::new(mask, value)`
 - Assertion Predicate(s):
-  - MIR body contains a `Call` terminator with callee `FnDef` path containing `FieldValue` and `new`
+  - MIR body copies `mask` into a temp local
+  - MIR body copies `value` into a temp local
+  - MIR body calls `FieldValue::new(temp_mask, temp_value)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:636`
-  - The test finds a `Call` terminator targeting `FieldValue::new` in the extracted MIR body.
+  - [source_to_extraction_04_utility_functions.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs#L747)
+  - The test proves exact parameter forwarding through the copied temp locals into the `FieldValue::new` call.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `FieldValue::new(mask, value)`
-  - Extracted Fact (Verbatim): MIR body contains `Call { func: Constant { ty: FnDef { path: "...FieldValue...new..." } } }`
+  - Extracted Fact (Verbatim): MIR body copies `mask` and `value` into temps and then calls `FieldValue::new(temp_mask, temp_value)`
   - Correspondence: `exact`
-  - Why This Status Follows: The body is a direct constructor call with parameter forwarding. The callee identity proves the authored body shape.
+  - Why This Status Follows: The exercised MIR assertions prove direct parameter forwarding into the authored constructor call.
 
 ### Check 2d: field_from_raw body structure
 
@@ -141,21 +146,24 @@
 - Status: `pass`
 - Premise: `field_from_raw` body is `(raw & field.mask) >> field.shift`
 - Assertion Predicate(s):
-  - MIR body contains an `Assign` statement with `BinaryOp { op: BitAnd, .. }` rvalue
-  - MIR body contains an `Assign` statement with `BinaryOp { op: Shr, .. }` rvalue
+  - MIR body copies `raw` into a temp local
+  - MIR body copies `field.mask` into a temp local
+  - MIR body computes `BitAnd(temp_raw, temp_mask)` into a temp local
+  - MIR body copies `field.shift` into a temp local
+  - MIR body assigns the return place with `Shr(temp_bitand, temp_shift)`
 - Target Evidence (Exercised by Test; Exact Citations):
-  - `crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs:666`
-  - The test finds both a `BitAnd` and a `Shr` binary operation in the extracted MIR body.
+  - [source_to_extraction_04_utility_functions.rs](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/crates/regseq-driver/tests/source_to_extraction_04_utility_functions.rs#L780)
+  - The test proves the exact copied-operand flow into the `BitAnd` temp and then into the return-place `Shr`.
 - Reasoning Trace:
   - Authored Fact (Verbatim): `(raw & field.mask) >> field.shift`
-  - Extracted Fact (Verbatim): MIR body contains `Assign { rvalue: BinaryOp { op: BitAnd, .. } }` and `Assign { rvalue: BinaryOp { op: Shr, .. } }`
+  - Extracted Fact (Verbatim): MIR body copies `raw`, `field.mask`, and `field.shift` into temps, computes `BitAnd(temp_raw, temp_mask)`, and assigns the return place with `Shr(temp_bitand, temp_shift)`
   - Correspondence: `exact`
-  - Why This Status Follows: The masking (`BitAnd`) and shifting (`Shr`) operations together prove the authored arithmetic structure without source-only reasoning.
+  - Why This Status Follows: The exercised MIR assertions prove exact operand flow from the authored inputs into the final returned shift expression.
 
 ## Conclusion
 
 - Check Group 1 (identity/canonical path): **pass** -- names and full canonical paths are preserved exactly
 - Check Group 1 (generics/params/return type): **pass** -- `FunctionFact` now carries `generics`, `params`, and `return_type` fields with exact authored values
 - Check Group 2 (body presence): **pass** -- free functions are now included in body extraction root discovery
-- Check Group 2 (body structure): **pass** -- MIR bodies prove callee identity, argument flow, and arithmetic/masking/shifting structure for all three helpers
+- Check Group 2 (body structure): **pass** -- MIR bodies prove exact temp-copy and operand flow for all three helpers, not just coarse structural markers
 - Overall: **pass** -- all authored utility-function facts are preserved at the extraction boundary

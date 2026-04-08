@@ -534,6 +534,128 @@ fn check_group_1b_identity_surface_preserves_generics_params_return_type() {
 }
 
 // ---------------------------------------------------------------------------
+// MIR body helpers
+// ---------------------------------------------------------------------------
+
+fn operand_mentions(op: &MirOperand, substr: &str) -> bool {
+    match op {
+        MirOperand::Constant { constant } => match &constant.ty {
+            MirTy::FnDef { path, .. } => path.contains(substr),
+            _ => false,
+        },
+        _ => false,
+    }
+}
+
+fn operand_is_local(op: &MirOperand, local: u32) -> bool {
+    match op {
+        MirOperand::Copy { place } | MirOperand::Move { place } => place.local == local,
+        MirOperand::Constant { .. } => false,
+    }
+}
+
+fn place_is_field_projection(place: &MirPlace, base_local: u32, field_index: u32) -> bool {
+    place.local == base_local
+        && place.projection.iter().any(|proj| {
+            matches!(
+                proj,
+                MirProjectionElem::Field {
+                    index,
+                    ..
+                } if *index == field_index
+            )
+        })
+}
+
+fn operand_is_field_projection(op: &MirOperand, base_local: u32, field_index: u32) -> bool {
+    match op {
+        MirOperand::Copy { place } | MirOperand::Move { place } => {
+            place_is_field_projection(place, base_local, field_index)
+        }
+        MirOperand::Constant { .. } => false,
+    }
+}
+
+fn find_binary_op_assign_local<F, G>(
+    body: &MirBody,
+    expected_op: MirBinOp,
+    lhs_matches: F,
+    rhs_matches: G,
+) -> Option<u32>
+where
+    F: Fn(&MirOperand) -> bool,
+    G: Fn(&MirOperand) -> bool,
+{
+    for bb in &body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            let MirStatementKind::Assign { place, rvalue } = &stmt.kind else {
+                continue;
+            };
+            let MirRvalue::BinaryOp { op, lhs, rhs } = rvalue.as_ref() else {
+                continue;
+            };
+            if *op == expected_op && lhs_matches(lhs) && rhs_matches(rhs) {
+                return Some(place.local);
+            }
+        }
+    }
+    None
+}
+
+fn has_call_with_two_args<F, G>(
+    body: &MirBody,
+    callee_substr: &str,
+    arg0_matches: F,
+    arg1_matches: G,
+) -> bool
+where
+    F: Fn(&MirOperand) -> bool,
+    G: Fn(&MirOperand) -> bool,
+{
+    body.basic_blocks.iter().any(|bb| {
+        if bb.is_cleanup {
+            return false;
+        }
+        let Some(term) = &bb.terminator else {
+            return false;
+        };
+        let MirTerminatorKind::Call { func, args, .. } = &term.kind else {
+            return false;
+        };
+        args.len() == 2
+            && operand_mentions(func, callee_substr)
+            && arg0_matches(&args[0])
+            && arg1_matches(&args[1])
+    })
+}
+
+fn find_use_assign_local<F>(body: &MirBody, operand_matches: F) -> Option<u32>
+where
+    F: Fn(&MirOperand) -> bool,
+{
+    for bb in &body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            let MirStatementKind::Assign { place, rvalue } = &stmt.kind else {
+                continue;
+            };
+            let MirRvalue::Use { operand } = rvalue.as_ref() else {
+                continue;
+            };
+            if operand_matches(operand) {
+                return Some(place.local);
+            }
+        }
+    }
+    None
+}
+
+// ---------------------------------------------------------------------------
 // Check Group 2: body extraction for free functions
 // ---------------------------------------------------------------------------
 
@@ -588,44 +710,36 @@ fn check_group_2_field_val_body_proves_authored_facts() {
         !func.body.basic_blocks.is_empty(),
         "field_val body must have basic blocks"
     );
-
-    // Find a Call terminator whose callee is FieldValue::new.
-    let has_field_value_new_call = func.body.basic_blocks.iter().any(|bb| {
-        if let Some(term) = &bb.terminator {
-            if let MirTerminatorKind::Call { func: callee, .. } = &term.kind {
-                if let MirOperand::Constant { constant } = callee {
-                    if let MirTy::FnDef { path, .. } = &constant.ty {
-                        return path.contains("FieldValue") && path.contains("new");
-                    }
-                }
-            }
-        }
-        false
-    });
-    assert!(
-        has_field_value_new_call,
-        "field_val body must contain a call to FieldValue::new"
+    assert_eq!(
+        func.body.arg_count, 2,
+        "field_val body must have exactly 2 parameter locals"
     );
 
-    // Find a Shl operation (raw << field.shift).
-    let has_shl = func.body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
-                matches!(
-                    rvalue.as_ref(),
-                    MirRvalue::BinaryOp {
-                        op: MirBinOp::Shl,
-                        ..
-                    }
-                )
-            } else {
-                false
-            }
-        })
-    });
+    // Param locals are 1 and 2: `field`, `raw`.
+    let mask_local = find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 0))
+        .expect("field_val must copy `field.mask` into a temp local");
+    let raw_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 2))
+        .expect("field_val must copy `raw` into a temp local");
+    let shift_local =
+        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 1))
+            .expect("field_val must copy `field.shift` into a temp local");
+
+    let shl_local = find_binary_op_assign_local(
+        &func.body,
+        MirBinOp::Shl,
+        |lhs| operand_is_local(lhs, raw_local),
+        |rhs| operand_is_local(rhs, shift_local),
+    )
+    .expect("field_val must compute `raw << field.shift` from copied operand locals");
+
     assert!(
-        has_shl,
-        "field_val body must contain a Shl operation (raw << field.shift)"
+        has_call_with_two_args(
+            &func.body,
+            "FieldValue",
+            |arg0| operand_is_local(arg0, mask_local),
+            |arg1| operand_is_local(arg1, shl_local),
+        ),
+        "field_val must call FieldValue::new(mask_temp, shl_temp) where those temps come from `field.mask` and `raw << field.shift`"
     );
 }
 
@@ -647,23 +761,18 @@ fn check_group_2_raw_reg_val_body_proves_authored_facts() {
         !func.body.basic_blocks.is_empty(),
         "raw_reg_val body must have basic blocks"
     );
-
-    // Find a Call terminator whose callee is FieldValue::new.
-    let has_field_value_new_call = func.body.basic_blocks.iter().any(|bb| {
-        if let Some(term) = &bb.terminator {
-            if let MirTerminatorKind::Call { func: callee, .. } = &term.kind {
-                if let MirOperand::Constant { constant } = callee {
-                    if let MirTy::FnDef { path, .. } = &constant.ty {
-                        return path.contains("FieldValue") && path.contains("new");
-                    }
-                }
-            }
-        }
-        false
-    });
+    let mask_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 1))
+        .expect("raw_reg_val must copy `mask` into a temp local");
+    let value_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 2))
+        .expect("raw_reg_val must copy `value` into a temp local");
     assert!(
-        has_field_value_new_call,
-        "raw_reg_val body must contain a call to FieldValue::new"
+        has_call_with_two_args(
+            &func.body,
+            "FieldValue",
+            |arg0| operand_is_local(arg0, mask_local),
+            |arg1| operand_is_local(arg1, value_local),
+        ),
+        "raw_reg_val must call FieldValue::new(mask_temp, value_temp) where those temps come directly from `mask` and `value`"
     );
 }
 
@@ -685,46 +794,54 @@ fn check_group_2_field_from_raw_body_proves_authored_facts() {
         !func.body.basic_blocks.is_empty(),
         "field_from_raw body must have basic blocks"
     );
-
-    // Find a BitAnd operation (raw & field.mask).
-    let has_bitand = func.body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
-                matches!(
-                    rvalue.as_ref(),
-                    MirRvalue::BinaryOp {
-                        op: MirBinOp::BitAnd,
-                        ..
-                    }
-                )
-            } else {
-                false
-            }
-        })
-    });
-    assert!(
-        has_bitand,
-        "field_from_raw body must contain a BitAnd operation (raw & field.mask)"
+    assert_eq!(
+        func.body.arg_count, 2,
+        "field_from_raw body must have exactly 2 parameter locals"
     );
 
-    // Find a Shr operation (result >> field.shift).
-    let has_shr = func.body.basic_blocks.iter().any(|bb| {
-        bb.statements.iter().any(|stmt| {
-            if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
-                matches!(
-                    rvalue.as_ref(),
-                    MirRvalue::BinaryOp {
-                        op: MirBinOp::Shr,
-                        ..
-                    }
-                )
-            } else {
-                false
-            }
+    let raw_local = find_use_assign_local(&func.body, |operand| operand_is_local(operand, 2))
+        .expect("field_from_raw must copy `raw` into a temp local");
+    let mask_local =
+        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 0))
+            .expect("field_from_raw must copy `field.mask` into a temp local");
+    let bitand_local = find_binary_op_assign_local(
+        &func.body,
+        MirBinOp::BitAnd,
+        |lhs| operand_is_local(lhs, raw_local),
+        |rhs| operand_is_local(rhs, mask_local),
+    )
+    .expect("field_from_raw must compute `raw & field.mask` from copied operand locals");
+
+    let shift_local =
+        find_use_assign_local(&func.body, |operand| operand_is_field_projection(operand, 1, 1))
+            .expect("field_from_raw must copy `field.shift` into a temp local");
+    let shr_local = find_binary_op_assign_local(
+        &func.body,
+        MirBinOp::Shr,
+        |lhs| operand_is_local(lhs, bitand_local),
+        |rhs| operand_is_local(rhs, shift_local),
+    )
+    .expect("field_from_raw must compute `(raw & field.mask) >> field.shift`");
+
+    let return_assigns_shr = func.body.basic_blocks.iter().any(|bb| {
+        if bb.is_cleanup {
+            return false;
+        }
+        bb.statements.iter().any(|stmt| match &stmt.kind {
+            MirStatementKind::Assign { place, rvalue } if place.local == 0 => match rvalue.as_ref() {
+                MirRvalue::BinaryOp { op, lhs, rhs } => {
+                    *op == MirBinOp::Shr
+                        && operand_is_local(lhs, bitand_local)
+                        && operand_is_local(rhs, shift_local)
+                        && place.local == shr_local
+                }
+                _ => false,
+            },
+            _ => false,
         })
     });
     assert!(
-        has_shr,
-        "field_from_raw body must contain a Shr operation (result >> field.shift)"
+        return_assigns_shr,
+        "field_from_raw return place must be assigned the exact `(raw & field.mask) >> field.shift` binary operation"
     );
 }
