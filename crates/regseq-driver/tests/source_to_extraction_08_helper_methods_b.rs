@@ -128,14 +128,10 @@ fn compile_and_extract(source: &str, test_name: &str) -> DualSurface {
                 .unstable_opts
                 .crate_attr
                 .push("register_tool(rseq)".to_string());
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push(
-                    "allow(unused, non_snake_case, nonstandard_style, redundant_semicolons)"
-                        .to_string(),
-                );
+            config.opts.unstable_opts.crate_attr.push(
+                "allow(unused, non_snake_case, nonstandard_style, redundant_semicolons)"
+                    .to_string(),
+            );
         }
 
         fn after_analysis<'tcx>(
@@ -876,6 +872,512 @@ fn return_type_is_unit(func: &MirExtractedFn) -> bool {
 }
 
 // ---------------------------------------------------------------------------
+// Path-sensitive MIR analysis helpers
+// ---------------------------------------------------------------------------
+
+/// Get all successor BB indices from a terminator kind.
+fn terminator_successors(kind: &MirTerminatorKind) -> Vec<u32> {
+    match kind {
+        MirTerminatorKind::Goto { target } => vec![*target],
+        MirTerminatorKind::SwitchInt { targets, .. } => targets.targets.clone(),
+        MirTerminatorKind::Call { target, .. } => target.iter().copied().collect(),
+        MirTerminatorKind::Drop { target, .. } => vec![*target],
+        MirTerminatorKind::Assert { target, .. } => vec![*target],
+        _ => vec![],
+    }
+}
+
+/// Collect all non-cleanup BBs reachable from `start` following all edge types.
+fn reachable_bbs_from(func: &MirExtractedFn, start: u32) -> std::collections::HashSet<u32> {
+    let bbs = &func.body.basic_blocks;
+    let mut visited = std::collections::HashSet::new();
+    let mut queue = std::collections::VecDeque::new();
+    queue.push_back(start);
+    while let Some(idx) = queue.pop_front() {
+        if !visited.insert(idx) {
+            continue;
+        }
+        let Some(bb) = bbs.get(idx as usize) else {
+            continue;
+        };
+        if bb.is_cleanup {
+            visited.remove(&idx);
+            continue;
+        }
+        let Some(term) = &bb.terminator else {
+            continue;
+        };
+        for target in terminator_successors(&term.kind) {
+            queue.push_back(target);
+        }
+    }
+    visited
+}
+
+/// Collect BB indices along a straight-line path (Call.target, Goto.target,
+/// Drop.target, Assert.target -- stops at SwitchInt or Return).
+fn straight_line_bbs(func: &MirExtractedFn, start: u32) -> Vec<u32> {
+    let bbs = &func.body.basic_blocks;
+    let mut path = vec![start];
+    let mut visited = std::collections::HashSet::new();
+    visited.insert(start);
+    let mut current = start;
+    loop {
+        let Some(bb) = bbs.get(current as usize) else {
+            break;
+        };
+        if bb.is_cleanup {
+            break;
+        }
+        let Some(term) = &bb.terminator else {
+            break;
+        };
+        let next = match &term.kind {
+            MirTerminatorKind::Call {
+                target: Some(t), ..
+            } => *t,
+            MirTerminatorKind::Goto { target } => *target,
+            MirTerminatorKind::Drop { target, .. } => *target,
+            MirTerminatorKind::Assert { target, .. } => *target,
+            _ => break,
+        };
+        if visited.insert(next) {
+            path.push(next);
+            current = next;
+        } else {
+            break;
+        }
+    }
+    path
+}
+
+/// Check if any non-cleanup BB in the set has a Call to a function matching
+/// `substr`.
+fn bb_set_has_call(
+    func: &MirExtractedFn,
+    bbs: &std::collections::HashSet<u32>,
+    substr: &str,
+) -> bool {
+    for &idx in bbs {
+        let Some(bb) = func.body.basic_blocks.get(idx as usize) else {
+            continue;
+        };
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(MirTerminator {
+            kind:
+                MirTerminatorKind::Call {
+                    func:
+                        MirOperand::Constant {
+                            constant:
+                                MirConstant {
+                                    ty: MirTy::Fn { path, .. },
+                                    ..
+                                },
+                        },
+                    ..
+                },
+            ..
+        }) = &bb.terminator
+        {
+            if path.contains(substr) {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Check if any non-cleanup BB in the set has a None assignment
+/// (SetDiscriminant with variant 0, or Aggregate with Option variant 0).
+fn bb_set_has_none_assignment(func: &MirExtractedFn, bbs: &std::collections::HashSet<u32>) -> bool {
+    for &idx in bbs {
+        let Some(bb) = func.body.basic_blocks.get(idx as usize) else {
+            continue;
+        };
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            match &stmt.kind {
+                MirStatementKind::SetDiscriminant {
+                    variant_index: 0, ..
+                } => return true,
+                MirStatementKind::Assign { rvalue, .. } => {
+                    if let MirRvalue::Aggregate {
+                        agg_kind:
+                            MirAggregateKind::Adt {
+                                path,
+                                variant_index: 0,
+                                ..
+                            },
+                        ..
+                    } = rvalue.as_ref()
+                    {
+                        if path.contains("Option") {
+                            return true;
+                        }
+                    }
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// Find BB index of a Call to a function whose path contains `call_substr`,
+/// where at least one argument is a FnDef constant with path containing
+/// `arg_fn_substr`.
+fn find_call_bb_with_fn_arg(
+    func: &MirExtractedFn,
+    call_substr: &str,
+    arg_fn_substr: &str,
+) -> Option<u32> {
+    for (idx, bb) in func.body.basic_blocks.iter().enumerate() {
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(MirTerminator {
+            kind:
+                MirTerminatorKind::Call {
+                    func:
+                        MirOperand::Constant {
+                            constant:
+                                MirConstant {
+                                    ty: MirTy::Fn { path, .. },
+                                    ..
+                                },
+                        },
+                    args,
+                    ..
+                },
+            ..
+        }) = &bb.terminator
+        {
+            if path.contains(call_substr) {
+                for arg in args {
+                    if let MirOperand::Constant {
+                        constant:
+                            MirConstant {
+                                ty: MirTy::Fn { path: ap, .. },
+                                ..
+                            },
+                    } = arg
+                    {
+                        if ap.contains(arg_fn_substr) {
+                            return Some(idx as u32);
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find BB index of a Call to a function whose path contains `call_substr`,
+/// where at least one argument is a scalar constant matching `scalar` or an
+/// unevaluated const ref containing `const_substr`.
+fn find_call_bb_with_const_arg(
+    func: &MirExtractedFn,
+    call_substr: &str,
+    scalar: u128,
+    const_substr: &str,
+) -> Option<u32> {
+    for (idx, bb) in func.body.basic_blocks.iter().enumerate() {
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(MirTerminator {
+            kind:
+                MirTerminatorKind::Call {
+                    func:
+                        MirOperand::Constant {
+                            constant:
+                                MirConstant {
+                                    ty: MirTy::Fn { path, .. },
+                                    ..
+                                },
+                        },
+                    args,
+                    ..
+                },
+            ..
+        }) = &bb.terminator
+        {
+            if path.contains(call_substr) {
+                for arg in args {
+                    if operand_has_const_scalar(arg, scalar)
+                        || operand_has_const_ref(arg, const_substr)
+                    {
+                        return Some(idx as u32);
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Find a MIR local by its authored debug name.
+fn find_local_by_name(func: &MirExtractedFn, name: &str) -> Option<u32> {
+    func.body
+        .local_decls
+        .iter()
+        .find(|d| d.name.as_deref() == Some(name))
+        .map(|d| d.index)
+}
+
+/// Check if local 0 (return place) is ever assigned from the specified source
+/// local via a Use(Copy/Move) statement in any non-cleanup BB.
+fn return_assigned_from_local(func: &MirExtractedFn, source: u32) -> bool {
+    for bb in &func.body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if place.local == 0 && place.projection.is_empty() {
+                    match rvalue.as_ref() {
+                        MirRvalue::Use {
+                            operand: MirOperand::Copy { place: src },
+                        }
+                        | MirRvalue::Use {
+                            operand: MirOperand::Move { place: src },
+                        } => {
+                            if src.local == source && src.projection.is_empty() {
+                                return true;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if the CFG has a back-edge (non-cleanup BB targets a BB with lower
+/// or equal index), indicating a loop.
+fn has_back_edge(func: &MirExtractedFn) -> bool {
+    for (idx, bb) in func.body.basic_blocks.iter().enumerate() {
+        if bb.is_cleanup {
+            continue;
+        }
+        let Some(term) = &bb.terminator else {
+            continue;
+        };
+        for target in terminator_successors(&term.kind) {
+            if (target as usize) <= idx {
+                return true;
+            }
+        }
+    }
+    false
+}
+
+/// Find all non-cleanup BB indices containing a SwitchInt terminator.
+fn find_switch_int_bb_indices(func: &MirExtractedFn) -> Vec<usize> {
+    func.body
+        .basic_blocks
+        .iter()
+        .enumerate()
+        .filter(|(_, bb)| {
+            !bb.is_cleanup
+                && bb
+                    .terminator
+                    .as_ref()
+                    .is_some_and(|t| matches!(&t.kind, MirTerminatorKind::SwitchInt { .. }))
+        })
+        .map(|(idx, _)| idx)
+        .collect()
+}
+
+/// Check if any non-cleanup BB in the set assigns a constant scalar to a
+/// specific local.
+fn bb_set_assigns_local_scalar(
+    func: &MirExtractedFn,
+    bbs: &std::collections::HashSet<u32>,
+    local: u32,
+    value: u128,
+) -> bool {
+    for &bb_idx in bbs {
+        let Some(bb) = func.body.basic_blocks.get(bb_idx as usize) else {
+            continue;
+        };
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if place.local == local && place.projection.is_empty() {
+                    if let MirRvalue::Use { operand } = rvalue.as_ref() {
+                        if operand_has_const_scalar(operand, value) {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if a Call in any non-cleanup BB in the set has two non-constant
+/// arguments (both Copy/Move of locals) that share a common source, proving
+/// the same computed value is used in both argument positions.
+///
+/// This handles the case where the compiler creates a temporary copy for one
+/// of the arguments (e.g. `raw_reg_val(copy _3, move _5)` where `_5 = copy _3`).
+fn bb_set_has_call_with_dual_use_args(
+    func: &MirExtractedFn,
+    bbs: &std::collections::HashSet<u32>,
+    call_substr: &str,
+) -> bool {
+    for &idx in bbs {
+        let Some(bb) = func.body.basic_blocks.get(idx as usize) else {
+            continue;
+        };
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(MirTerminator {
+            kind:
+                MirTerminatorKind::Call {
+                    func:
+                        MirOperand::Constant {
+                            constant:
+                                MirConstant {
+                                    ty: MirTy::Fn { path, .. },
+                                    ..
+                                },
+                        },
+                    args,
+                    ..
+                },
+            ..
+        }) = &bb.terminator
+        {
+            if path.contains(call_substr) && args.len() >= 2 {
+                let l0 = match &args[0] {
+                    MirOperand::Copy { place } | MirOperand::Move { place }
+                        if place.projection.is_empty() =>
+                    {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                let l1 = match &args[1] {
+                    MirOperand::Copy { place } | MirOperand::Move { place }
+                        if place.projection.is_empty() =>
+                    {
+                        Some(place.local)
+                    }
+                    _ => None,
+                };
+                if let (Some(a), Some(b)) = (l0, l1) {
+                    // Same local: direct dual-use.
+                    if a == b {
+                        return true;
+                    }
+                    // One local is a copy of the other.
+                    if local_is_copy_of(func, a, b) || local_is_copy_of(func, b, a) {
+                        return true;
+                    }
+                    // Both locals are copies of a common third local
+                    // (compiler creates two temporaries from the same source).
+                    let src_a = copy_source(func, a);
+                    let src_b = copy_source(func, b);
+                    if let (Some(sa), Some(sb)) = (src_a, src_b) {
+                        if sa == sb {
+                            return true;
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Find the source local that `local` was assigned from via Use(Copy/Move),
+/// if such a simple assignment exists.
+fn copy_source(func: &MirExtractedFn, local: u32) -> Option<u32> {
+    for bb in &func.body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if place.local == local && place.projection.is_empty() {
+                    if let MirRvalue::Use { operand } = rvalue.as_ref() {
+                        match operand {
+                            MirOperand::Copy { place: src } | MirOperand::Move { place: src } => {
+                                if src.projection.is_empty() {
+                                    return Some(src.local);
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    None
+}
+
+/// Check if `local` was assigned as a Use(Copy/Move) of `source` in any
+/// non-cleanup BB.
+fn local_is_copy_of(func: &MirExtractedFn, local: u32, source: u32) -> bool {
+    for bb in &func.body.basic_blocks {
+        if bb.is_cleanup {
+            continue;
+        }
+        for stmt in &bb.statements {
+            if let MirStatementKind::Assign { place, rvalue } = &stmt.kind {
+                if place.local == local && place.projection.is_empty() {
+                    if let MirRvalue::Use { operand } = rvalue.as_ref() {
+                        match operand {
+                            MirOperand::Copy { place: src } | MirOperand::Move { place: src } => {
+                                if src.local == source && src.projection.is_empty() {
+                                    return true;
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+    }
+    false
+}
+
+/// Check if any non-cleanup BB in the set has a Return terminator.
+fn bb_set_has_return(func: &MirExtractedFn, bbs: &std::collections::HashSet<u32>) -> bool {
+    for &idx in bbs {
+        let Some(bb) = func.body.basic_blocks.get(idx as usize) else {
+            continue;
+        };
+        if bb.is_cleanup {
+            continue;
+        }
+        if let Some(MirTerminator {
+            kind: MirTerminatorKind::Return,
+            ..
+        }) = &bb.terminator
+        {
+            return true;
+        }
+    }
+    false
+}
+
+// ---------------------------------------------------------------------------
 // Precondition: specimen fidelity against real fixture source
 // ---------------------------------------------------------------------------
 
@@ -1276,6 +1778,39 @@ fn check_group_2_uart_clock_hz_body() {
         has_branch || calls_unwrap_or,
         "uart_clock_hz must have SwitchInt for Option branching or call unwrap_or"
     );
+
+    // -- Path-sensitive assertions --
+
+    // Higher-order combinator proof: the `map` call carries `Clock::get_rate`
+    // as a FnDef argument, proving the authored
+    // `self.clock.as_ref().map(Clock::get_rate)` combinator structure.
+    let map_bb = find_call_bb_with_fn_arg(f, "map", "get_rate");
+    assert!(
+        map_bb.is_some(),
+        "uart_clock_hz: map must carry Clock::get_rate as FnDef argument \
+         (proves higher-order combinator flow from self.clock)"
+    );
+
+    // Fallback proof: the `unwrap_or` call carries the DEFAULT_UART_CLOCK_HZ
+    // constant (48_000_000) as an argument, proving the authored fallback path.
+    let unwrap_bb =
+        find_call_bb_with_const_arg(f, "unwrap_or", 48_000_000, "DEFAULT_UART_CLOCK_HZ");
+    assert!(
+        unwrap_bb.is_some(),
+        "uart_clock_hz: unwrap_or must carry DEFAULT_UART_CLOCK_HZ (48_000_000) \
+         as fallback argument (proves exact fallback path)"
+    );
+
+    // Flow ordering proof: unwrap_or BB is on the straight-line path from map
+    // BB, proving the authored `map(...).unwrap_or(...)` combinator chain.
+    let map_idx = map_bb.unwrap();
+    let unwrap_idx = unwrap_bb.unwrap();
+    let path_from_map = straight_line_bbs(f, map_idx);
+    assert!(
+        path_from_map.contains(&unwrap_idx),
+        "uart_clock_hz: unwrap_or must be reachable from map's straight-line \
+         path (proves combinator->fallback ordering)"
+    );
 }
 
 #[test]
@@ -1455,6 +1990,68 @@ fn check_group_2_shutdown_port_body() {
         body_assigns_none_option(f),
         "shutdown_port must set pending_tx to None"
     );
+
+    // -- Path-sensitive assertion --
+    // Prove that `pending_tx = None` occurs after the four helper calls.
+    // Find the BB containing the `disable_uart` call (last helper in the
+    // authored sequence) and verify the None assignment appears on the
+    // straight-line path from its target.
+    let disable_uart_bb = f
+        .body
+        .basic_blocks
+        .iter()
+        .enumerate()
+        .find_map(|(idx, bb)| {
+            if bb.is_cleanup {
+                return None;
+            }
+            if let Some(MirTerminator {
+                kind:
+                    MirTerminatorKind::Call {
+                        func:
+                            MirOperand::Constant {
+                                constant:
+                                    MirConstant {
+                                        ty: MirTy::Fn { path, .. },
+                                        ..
+                                    },
+                            },
+                        target: Some(_),
+                        ..
+                    },
+                ..
+            }) = &bb.terminator
+            {
+                if path.contains("disable_uart") {
+                    return Some(idx as u32);
+                }
+            }
+            None
+        });
+    assert!(
+        disable_uart_bb.is_some(),
+        "shutdown_port must have a disable_uart call with a target BB"
+    );
+    let du_bb = disable_uart_bb.unwrap();
+    // Get the target BB of the disable_uart Call terminator.
+    let du_target = match &f.body.basic_blocks[du_bb as usize]
+        .terminator
+        .as_ref()
+        .unwrap()
+        .kind
+    {
+        MirTerminatorKind::Call {
+            target: Some(t), ..
+        } => *t,
+        _ => panic!("expected Call terminator for disable_uart"),
+    };
+    let path_after_disable_uart: std::collections::HashSet<u32> =
+        straight_line_bbs(f, du_target).into_iter().collect();
+    assert!(
+        bb_set_has_none_assignment(f, &path_after_disable_uart),
+        "shutdown_port: pending_tx = None must occur after disable_uart \
+         in the MIR control-flow path (proves exact placement)"
+    );
 }
 
 #[test]
@@ -1488,6 +2085,74 @@ fn check_group_2_service_rx_fifo_body() {
     assert!(
         body_has_switch_int(f),
         "service_rx_fifo must have SwitchInt for loop condition"
+    );
+
+    // -- Path-sensitive assertions --
+
+    // Loop proof: the CFG must have a back-edge (proving a while-loop exists).
+    assert!(
+        has_back_edge(f),
+        "service_rx_fifo: CFG must have a back-edge (proves while loop)"
+    );
+
+    // `handled` local proof: find the authored `handled` variable, verify it
+    // is assigned false (0) and true (1) at different points, and that the
+    // return place (local 0) is assigned from it.
+    let handled = find_local_by_name(f, "handled");
+    assert!(
+        handled.is_some(),
+        "service_rx_fifo: must have a local named 'handled'"
+    );
+    let handled = handled.unwrap();
+
+    // `handled` is initialized to false (0).
+    let all_bbs: std::collections::HashSet<u32> = (0..f.body.basic_blocks.len() as u32).collect();
+    assert!(
+        bb_set_assigns_local_scalar(f, &all_bbs, handled, 0),
+        "service_rx_fifo: 'handled' must be assigned false (0)"
+    );
+
+    // `handled = true` on the loop-body path. Find the SwitchInt for the loop
+    // condition (rx_char result discriminant). The "Some" branch (loop body)
+    // must assign handled = true.
+    let switch_bbs = find_switch_int_bb_indices(f);
+    assert!(
+        !switch_bbs.is_empty(),
+        "service_rx_fifo: must have SwitchInt for loop condition"
+    );
+    // At least one SwitchInt branch must lead to a path where handled = true.
+    let mut found_true_on_branch = false;
+    for &sbb in &switch_bbs {
+        let Some(MirTerminator {
+            kind: MirTerminatorKind::SwitchInt { targets, .. },
+            ..
+        }) = &f.body.basic_blocks[sbb].terminator
+        else {
+            continue;
+        };
+        for &target in &targets.targets {
+            let branch_bbs = reachable_bbs_from(f, target);
+            if bb_set_assigns_local_scalar(f, &branch_bbs, handled, 1) {
+                found_true_on_branch = true;
+                break;
+            }
+        }
+        if found_true_on_branch {
+            break;
+        }
+    }
+    assert!(
+        found_true_on_branch,
+        "service_rx_fifo: 'handled = true' must occur on a branch of the \
+         loop condition SwitchInt (proves handled is set on successful iteration)"
+    );
+
+    // Return value proof: the return place (local 0) must be assigned from
+    // the `handled` local, proving the returned bool is exactly `handled`.
+    assert!(
+        return_assigned_from_local(f, handled),
+        "service_rx_fifo: return place must be assigned from 'handled' local \
+         (proves the returned bool is exactly the handled variable)"
     );
 }
 
@@ -1529,6 +2194,120 @@ fn check_group_2_service_tx_fifo_body() {
 
     // Return type is bool
     assert!(return_type_is_bool(f), "service_tx_fifo returns bool");
+
+    // -- Path-sensitive assertions --
+    // The authored function has three distinct paths:
+    //   Some(byte) + tx_ready:     write DR, pending_tx=None, disable_tx, return true
+    //   Some(byte) + !tx_ready:    return false
+    //   None:                      disable_tx, return true
+    //
+    // Prove the exact branch structure by finding two SwitchInt terminators
+    // and verifying that specific operations appear only on the correct paths.
+
+    let switch_bbs = find_switch_int_bb_indices(f);
+    assert!(
+        switch_bbs.len() >= 2,
+        "service_tx_fifo must have at least 2 SwitchInt terminators \
+         (pending_tx Option + tx_ready bool), found {}",
+        switch_bbs.len()
+    );
+
+    // The first SwitchInt is the pending_tx Option discriminant (Some/None).
+    let first_switch_bb = switch_bbs[0];
+    let MirTerminator {
+        kind:
+            MirTerminatorKind::SwitchInt {
+                targets: first_targets,
+                ..
+            },
+        ..
+    } = f.body.basic_blocks[first_switch_bb]
+        .terminator
+        .as_ref()
+        .unwrap()
+    else {
+        panic!("expected SwitchInt");
+    };
+
+    // For Option, value 1 = Some; otherwise = None.
+    // targets layout: [value_1_target, ..., otherwise_target]
+    let some_target = first_targets.targets[0]; // value 1 = Some
+    let none_target = *first_targets.targets.last().unwrap(); // otherwise = None
+
+    // None path: must have disable_tx_interrupts, must NOT have write (field_val).
+    let none_bbs = reachable_bbs_from(f, none_target);
+    // Exclude BBs also reachable from Some (reconvergence) by checking that
+    // the None path reaches Return directly.
+    assert!(
+        bb_set_has_call(f, &none_bbs, "disable_tx_interrupts"),
+        "service_tx_fifo None path must call disable_tx_interrupts"
+    );
+    assert!(
+        bb_set_has_return(f, &none_bbs),
+        "service_tx_fifo None path must reach Return"
+    );
+
+    // Some path: must contain tx_ready call and a second SwitchInt.
+    let some_bbs = reachable_bbs_from(f, some_target);
+    assert!(
+        bb_set_has_call(f, &some_bbs, "tx_ready"),
+        "service_tx_fifo Some path must call tx_ready"
+    );
+
+    // Find the second SwitchInt (tx_ready result) on the Some path.
+    let second_switch = switch_bbs
+        .iter()
+        .find(|&&sbb| sbb != first_switch_bb && some_bbs.contains(&(sbb as u32)));
+    assert!(
+        second_switch.is_some(),
+        "service_tx_fifo Some path must have a second SwitchInt for tx_ready"
+    );
+    let second_switch_bb = *second_switch.unwrap();
+    let MirTerminator {
+        kind:
+            MirTerminatorKind::SwitchInt {
+                targets: second_targets,
+                ..
+            },
+        ..
+    } = f.body.basic_blocks[second_switch_bb]
+        .terminator
+        .as_ref()
+        .unwrap()
+    else {
+        panic!("expected SwitchInt");
+    };
+
+    // For bool SwitchInt: value 0 = false (not ready); otherwise = true (ready).
+    let not_ready_target = second_targets.targets[0]; // value 0 = not ready
+    let ready_target = *second_targets.targets.last().unwrap(); // otherwise = ready
+
+    // Ready path: must have DR write (field_val), pending_tx=None,
+    // disable_tx_interrupts.
+    let ready_bbs = reachable_bbs_from(f, ready_target);
+    assert!(
+        bb_set_has_call(f, &ready_bbs, "field_val"),
+        "service_tx_fifo ready path must call field_val (DR.DATA write)"
+    );
+    assert!(
+        bb_set_has_none_assignment(f, &ready_bbs),
+        "service_tx_fifo ready path must set pending_tx = None"
+    );
+    assert!(
+        bb_set_has_call(f, &ready_bbs, "disable_tx_interrupts"),
+        "service_tx_fifo ready path must call disable_tx_interrupts"
+    );
+
+    // Not-ready path: must NOT have DR write or pending_tx=None.
+    let not_ready_bbs = reachable_bbs_from(f, not_ready_target);
+    assert!(
+        !bb_set_has_call(f, &not_ready_bbs, "field_val"),
+        "service_tx_fifo not-ready path must NOT call field_val (no DR write)"
+    );
+    assert!(
+        !bb_set_has_none_assignment(f, &not_ready_bbs),
+        "service_tx_fifo not-ready path must NOT assign pending_tx = None"
+    );
 }
 
 #[test]
@@ -1573,5 +2352,69 @@ fn check_group_2_clear_explicit_interrupts_body() {
     assert!(
         body_has_call_containing(f, "write"),
         "clear_explicit_interrupts must call write on ICR"
+    );
+
+    // -- Path-sensitive assertions --
+    // Prove the exact conditional-write behavior:
+    //   clear_mask = status & EXPLICIT_ISR_CLEAR_MASK
+    //   if clear_mask != 0 { write icr using clear_mask as both mask and value }
+
+    // Find the SwitchInt for the `clear_mask != 0` guard.
+    let switch_bbs = find_switch_int_bb_indices(f);
+    assert!(
+        !switch_bbs.is_empty(),
+        "clear_explicit_interrupts must have SwitchInt for clear_mask guard"
+    );
+
+    // The SwitchInt for `!= 0`: value 0 = zero branch; otherwise = nonzero.
+    let guard_bb = switch_bbs[0];
+    let MirTerminator {
+        kind:
+            MirTerminatorKind::SwitchInt {
+                targets: guard_targets,
+                ..
+            },
+        ..
+    } = f.body.basic_blocks[guard_bb].terminator.as_ref().unwrap()
+    else {
+        panic!("expected SwitchInt");
+    };
+
+    // value 0 -> zero branch (no write); otherwise -> nonzero branch (write).
+    let zero_target = guard_targets.targets[0]; // value 0
+    let nonzero_target = *guard_targets.targets.last().unwrap(); // otherwise
+
+    // Nonzero branch: must have raw_reg_val + write calls.
+    let nonzero_bbs = reachable_bbs_from(f, nonzero_target);
+    assert!(
+        bb_set_has_call(f, &nonzero_bbs, "raw_reg_val"),
+        "clear_explicit_interrupts nonzero branch must call raw_reg_val"
+    );
+    assert!(
+        bb_set_has_call(f, &nonzero_bbs, "write"),
+        "clear_explicit_interrupts nonzero branch must call write"
+    );
+
+    // Zero branch: must NOT have raw_reg_val or write calls (write only when
+    // clear_mask != 0).
+    let zero_bbs = reachable_bbs_from(f, zero_target);
+    assert!(
+        !bb_set_has_call(f, &zero_bbs, "raw_reg_val"),
+        "clear_explicit_interrupts zero branch must NOT call raw_reg_val \
+         (write path occurs only when clear_mask != 0)"
+    );
+    assert!(
+        !bb_set_has_call(f, &zero_bbs, "write"),
+        "clear_explicit_interrupts zero branch must NOT call write \
+         (write path occurs only when clear_mask != 0)"
+    );
+
+    // Dual-use proof: raw_reg_val must be called with the same local as both
+    // arguments, proving clear_mask is used as both the raw write mask and
+    // the raw write value.
+    assert!(
+        bb_set_has_call_with_dual_use_args(f, &nonzero_bbs, "raw_reg_val"),
+        "clear_explicit_interrupts: raw_reg_val must receive clear_mask as \
+         both mask and value arguments (proves dual-use)"
     );
 }

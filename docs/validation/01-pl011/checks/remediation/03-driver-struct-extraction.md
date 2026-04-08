@@ -8,49 +8,25 @@ Reviewed certificate:
 
 ## Current Status
 
-- Passing:
-  - driver identity
-  - device class
-  - `regs` resource
-  - both property fields
-  - `pending_tx` user field classification
-- Failing:
-  - `irq` exact Rust type fidelity
-  - `clock` exact Rust type fidelity
-  - `reset` exact Rust type fidelity
-  - `pinctrl` exact Rust type fidelity
+- Implemented via `extraction-remediation-03`
+- The corresponding validation task `source-to-extraction-03` is complete
 
-## Extraction Gaps To Fix
+## Resolution Summary
 
-- Resource extraction preserves shape, ids, requiredness, and classification,
-  but does not preserve exact Rust types for:
+- Resource extraction now preserves exact rendered Rust types for:
   - `Interrupt`
   - `Option<Clock>`
   - `Option<ResetLine>`
   - `Option<PinCtrl>`
-
-## Likely Touchpoints
-
-- Driver/resource extraction surfaces in `regseq-driver`
-- Resource declaration structs for interrupt, clock, reset, and pinctrl
-- Any type-rendering helpers already used by property extraction
-
-## Minimal Facts To Preserve
-
-- Add an explicit rendered type field, or equivalent exact type representation,
-  to the affected resource surfaces.
-- Keep the currently passing facts intact:
+- The previously passing facts remain preserved:
   - field name
   - resource id
   - requiredness
   - classification
   - canonical path reconstruction
 
-## Acceptance Checklist
+## Current Backlog State
 
-- [ ] `irq` resource proves exact type `Interrupt`
-- [ ] `clock` resource proves exact type `Option<Clock>`
-- [ ] `reset` resource proves exact type `Option<ResetLine>`
-- [ ] `pinctrl` resource proves exact type `Option<PinCtrl>`
-- [ ] `source-to-extraction-03` rerun passes all resource subchecks without
-      proxy reasoning from requiredness or shape
+- No current remediation work is required for this check.
+- If this boundary regresses, reopen remediation only against the reviewed
+  certificate and current `source-to-extraction-03` evidence.

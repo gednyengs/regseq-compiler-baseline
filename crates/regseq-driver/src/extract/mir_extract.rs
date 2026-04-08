@@ -28,11 +28,26 @@ fn convert_source_info(info: &mir::SourceInfo) -> MirSourceInfo {
 
 /// Convert a borrowed post-drop-elaboration MIR body into an owned `MirBody`.
 pub(crate) fn convert_body<'tcx>(tcx: TyCtxt<'tcx>, body: &mir::Body<'tcx>) -> MirBody {
-    let local_decls = body
+    let mut local_decls: Vec<MirLocalDecl> = body
         .local_decls
         .iter_enumerated()
         .map(|(local, decl)| convert_local_decl(tcx, local, decl, body.arg_count))
         .collect();
+
+    // Patch in authored debug variable names from MIR var_debug_info.
+    // This preserves user-authored local names (e.g. `handled`, `clear_mask`)
+    // so that downstream analysis can trace exact variable identity through
+    // the CFG without relying on positional indices alone.
+    for debug_info in &body.var_debug_info {
+        if let mir::VarDebugInfoContents::Place(place) = &debug_info.value {
+            if place.projection.is_empty() {
+                let local_idx = place.local.as_u32() as usize;
+                if let Some(decl) = local_decls.get_mut(local_idx) {
+                    decl.name = Some(debug_info.name.to_string());
+                }
+            }
+        }
+    }
 
     let basic_blocks = body
         .basic_blocks

@@ -8,41 +8,20 @@ Reviewed certificate:
 
 ## Current Status
 
-- Passing:
-  - function identity
-  - canonical-path reconstruction
-- Failing:
-  - generics / parameter-list / return-type richness
-  - free-function body extraction
+- Implemented via `extraction-remediation-04`
+- The corresponding validation task `source-to-extraction-04` is complete
 
-## Extraction Gaps To Fix
+## Resolution Summary
 
-- Free helper functions are not extracted with enough signature richness to
-  prove the authored parameter and return-type contract exactly.
-- Free helper function bodies are not extracted strongly enough to prove the
-  authored body-level facts.
-
-## Likely Touchpoints
-
-- Free-function extraction in the body surface
-- Function-signature extraction for non-method functions
-- Any path that currently classifies only inherent methods and trait callbacks
-
-## Minimal Facts To Preserve
-
-- Exact parameter list for:
-  - `field_val`
-  - `raw_reg_val`
-  - `field_from_raw`
-- Exact return-type rendering for all three helpers
-- A body surface for free functions that can prove:
+- Free helper-function extraction now preserves exact parameter and return-type
+  facts strongly enough for the authored signature contract.
+- Free helper-function bodies are extracted strongly enough to prove:
   - callee identity
   - argument flow
   - arithmetic / masking / shifting structure
 
-## Acceptance Checklist
+## Current Backlog State
 
-- [ ] signature check passes with exact generics, parameters, and return types
-- [ ] body check passes for all three utilities without relying on source-only
-      reasoning
-- [ ] `source-to-extraction-04` rerun passes both failing groups
+- No current remediation work is required for this check.
+- If this boundary regresses, reopen remediation only against the reviewed
+  certificate and current `source-to-extraction-04` evidence.
