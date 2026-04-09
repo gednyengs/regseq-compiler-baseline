@@ -13,7 +13,7 @@ __pycache__/
 .idea/
 .vscode/
 .codex/
-.claude
+.claude/
 
 # Tool config
 .mcp.json
