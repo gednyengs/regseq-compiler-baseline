@@ -57,9 +57,9 @@ A `Module` has:
   - `Normal` -- contains only general-purpose items.
 - **items**: The module's items (see Section 3).
 - **constructs_used**: `BTreeSet<RegseqConstruct>` -- Regseq abstractions referenced
-  within this module (see Section 8).
+  within this module (see Section 9).
 - **intrinsics_used**: `BTreeSet<RegseqIntrinsic>` -- Regseq intrinsic functions
-  invoked within this module (see Section 8).
+  invoked within this module (see Section 9).
 
 ### Nesting rules
 
@@ -88,7 +88,7 @@ Top-level function definitions (typically helper functions used in various bodie
 
 - **name**: The function's identifier.
 - **signature**: Parameters and return type.
-- **body**: MIR-based function body (see Section 7).
+- **body**: MIR-based function body (see Section 8).
 
 ### 3.4 Type Definitions
 
@@ -406,9 +406,104 @@ Interrupt service routine functions marked with `#[rseq::isr]`.
 - **context**: Always `HandlerManaged (H)`.
 - **body**: MIR-based function body.
 
-## 7. Bodies
+## 7. Identity Scheme
 
-Function bodies use a MIR-based representation in CFG (control-flow graph) form.
+The Regseq Model uses typed flat IDs to reference entities. All cross-references
+between items use typed IDs rather than string paths or name matching.
+
+### Declaration-level IDs
+
+A base type `StmtId(u32)` provides a single flat namespace for all declarations.
+Typed newtype wrappers enforce that cross-references point to the correct kind of
+entity:
+
+| ID type | What it identifies |
+|---|---|
+| `ModuleId(StmtId)` | A module in the tree |
+| `ConstantId(StmtId)` | A constant or static item |
+| `FunctionId(StmtId)` | A free function, helper method, trait method, or ISR handler |
+| `TypeDefId(StmtId)` | A non-driver struct or enum |
+| `RegisterDescriptorId(StmtId)` | A register bitfield descriptor |
+| `RegisterBlockId(StmtId)` | A register block struct |
+| `ResourceId(StmtId)` | A resource field on the driver struct |
+| `PropertyId(StmtId)` | A property field on the driver struct |
+| `UserDataId(StmtId)` | A user data field on the driver struct |
+
+Cross-references use the typed wrapper — e.g., an MMIO resource holds a
+`RegisterBlockId`, not a raw `StmtId`. This makes invalid references a
+compile-time error in the compiler itself.
+
+A dispatch enum is derivable from `StmtId` when consumers need to branch on
+the kind of declaration.
+
+A name-resolution side table maps each ID to its human-readable name/path for
+error messages and diagnostics.
+
+### Body-level IDs
+
+Within function bodies:
+
+- **`LocalId(u32)`** -- identifies local variables and temporaries, scoped to
+  the containing function body.
+- **`BasicBlockId(u32)`** -- identifies basic blocks within a function body.
+
+These do not use `StmtId` — they are internal to each function and do not
+participate in cross-body references.
+
+### Operand
+
+The `Operand` type bridges declaration-level and body-level identities. It is the
+common currency for anything that can flow into an expression:
+
+```
+enum Operand {
+    Local(LocalId),          // body-scoped temporary or variable
+    Constant(ConstantId),    // reference to a named constant declaration
+    Literal(LiteralValue),   // inline scalar value (e.g., 0x07ff, true)
+}
+```
+
+This allows expressions to mix locals, named constants, and literals naturally.
+For example, `status & Self::RX_INTERRUPT_MASK` becomes:
+
+```
+BinaryOp {
+    op: BitAnd,
+    lhs: Operand::Local(status_local),
+    rhs: Operand::Constant(rx_interrupt_mask_id),
+}
+```
+
+### Verified: constant identity preservation
+
+At the MIR stage used by the compiler (`mir_drops_elaborated_and_const_checked`
+with `mir_opt_level = 0`), associated constants appear as `Const::Unevaluated`
+with their def-path preserved (e.g., `"driver::Pl011FullSpec::RX_INTERRUPT_MASK"`).
+This holds even when the constant is an operand inside a binary expression.
+During Regseq IR construction, these paths are resolved to the appropriate
+`ConstantId`.
+
+## 8. Bodies
+
+The Regseq Model uses its own custom IR constructed from rustc's MIR. This IR is
+not a Rust model — it is a domain-specific IR that speaks in Regseq concepts.
+
+### IR design
+
+The custom IR contains:
+
+- **Standard expressions**: arithmetic, logical, bitwise, comparison — operations
+  common to any C-like language.
+- **Augmented expressions**: domain-specific operations elevated to first-class IR
+  constructs (e.g., register read, register write, intrinsic calls). These carry
+  typed references back to declarations via the identity scheme (Section 7).
+- **Special blocks/regions**: structural constructs with semantic meaning (e.g.,
+  `OrderedFlatRegion`).
+- **Augmented statements**: domain-specific statement forms as needed.
+
+By elevating domain operations to first-class constructs, analyses and backends
+work with semantic operations directly rather than reverse-engineering intent from
+generic function calls.
 
 ### Ownership
 
@@ -417,19 +512,17 @@ Every body is attached to the item that declares it:
 - Trait method bodies live under Section 5.
 - Driver helper method bodies live under Section 6.
 - ISR handler bodies live under Section 6.
-- Impl method bodies live under Section 3.5.
+- Impl method bodies live under Section 3.7.
 
 There is no separate global body collection.
 
 ### Structure
 
 Each body contains:
-- **Local declarations**: Typed local variables and temporaries.
-- **Basic blocks**: A CFG of basic blocks, each containing a sequence of statements
-  and a terminator.
-
-The detailed MIR body representation is defined by the existing `MirBodyDeclSet` /
-`MirBody` types and is not further specified here.
+- **Local declarations**: Typed local variables and temporaries, identified by
+  `LocalId`.
+- **Basic blocks**: A CFG of basic blocks (identified by `BasicBlockId`), each
+  containing a sequence of statements and a terminator.
 
 ### Ordered Flat Regions
 
@@ -452,7 +545,7 @@ preserves the author's sequencing intent without altering scoping semantics.
 **Backend lowering**: Backends see the `OrderedFlatRegion` and emit appropriate
 ordering barriers (e.g., compiler barriers in C) around the enclosed statements.
 
-## 8. Construct and Intrinsic IDs
+## 9. Construct and Intrinsic IDs
 
 Each module carries two dependency sets that allow backends to determine required
 includes without scanning bodies.
@@ -504,7 +597,7 @@ corresponding function.
 Both sets are derived during normalization by scanning the bodies and field types
 within each module. No spec-level annotation is required from the author.
 
-## 9. Platform Binding
+## 10. Platform Binding
 
 Platform binding data comes from a platform file (e.g., `platform.toml`) and is
 joined into the model after normalization.
@@ -540,7 +633,7 @@ properties by `property_id` and stored in the `bound_value` field (Section 4.3).
 - An optional resource declaration with no matching platform section leaves the
   binding as `None` (valid -- the resource is absent on this platform).
 
-## 10. Normalization Contract
+## 11. Normalization Contract
 
 ### Phase 1: Extraction normalization
 
