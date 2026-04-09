@@ -1,11 +1,11 @@
-# Declaration Model Spec
+# Regseq Model Spec
 
 ## 1. Overview
 
-The Declaration Model is the unified, progressively-filled intermediate
-representation that the compiler owns. It starts with normalized extraction data
-(spec-side declarations), then absorbs platform binding data, becoming the single
-model that both internal analyses and backend code generators operate on.
+The Regseq Model is the unified, progressively-filled intermediate representation
+that the compiler owns. It starts with normalized extraction data (spec-side
+declarations), then absorbs platform binding data, becoming the single model that
+both internal analyses and backend code generators operate on.
 
 ### Role in the pipeline
 
@@ -13,10 +13,10 @@ model that both internal analyses and backend code generators operate on.
 Extraction Surfaces (13 surfaces, JSON)
     |  normalization (Phase 1: declarations populated, bindings empty)
     v
-Declaration Model
+Regseq Model
     |  platform file parsing + join (Phase 2: bindings populated)
     v
-Declaration Model (fully populated)
+Regseq Model (fully populated)
     |
     v
 Internal Regseq-specific analyses
@@ -25,9 +25,9 @@ Internal Regseq-specific analyses
 Backend code generators (Linux, Zephyr, ...)
 ```
 
-The Declaration Model replaces what were previously three separate representations
-(Declaration Model, Binding Model, Joined Artifact) with a single structure that
-progressively fills in.
+The Regseq Model replaces what were previously three separate representations
+(Declaration Model, Binding Model, Joined Artifact), merging them into the
+Regseq Model as a single structure that progressively fills in.
 
 ### Design principles
 
@@ -45,7 +45,7 @@ progressively fills in.
 
 ## 2. Module Tree
 
-The Declaration Model is a tree of `Module`s rooted at the crate module.
+The Regseq Model is a tree of `Module`s rooted at the crate module.
 
 ### Module definition
 
@@ -92,29 +92,82 @@ Top-level function definitions (typically helper functions used in various bodie
 
 ### 3.4 Type Definitions
 
-Top-level struct and enum definitions (non-driver types).
+Top-level struct and enum definitions (non-driver, non-register-block types).
 
 - **name**: The type's identifier.
 - **kind**: Struct or Enum.
 - **fields / variants**: Structural definition.
 
-### 3.5 Impl Blocks for Non-Driver Types
+### 3.5 Register Descriptors
 
-`impl` blocks for types defined in Section 3.4.
+Bitfield definitions for individual registers, expanded from the `register_bitfields!`
+macro. Register descriptors are standalone, reusable items -- they are not owned by
+any single register block and may be referenced by multiple blocks.
+
+- **name**: The descriptor's identifier (e.g., `DR_REG`).
+- **access_width**: The register width in bits (e.g., 32 from `u32`).
+- **fields**: List of bitfield definitions, each with:
+  - **name**: Field identifier (e.g., `DATA`, `OE`).
+  - **offset**: Bit offset within the register.
+  - **width**: Number of bits.
+  - **named_values**: Optional list of named constants, each with:
+    - **name**: Value identifier (e.g., `ENABLED`, `DISABLED`).
+    - **value**: The numeric value.
+
+### 3.6 Register Blocks
+
+Memory-mapped register layout definitions. A register block is a struct with
+`#[rseq::register_block(..)]` that defines the ordered layout of registers at
+fixed offsets. Register blocks reference register descriptors (Section 3.5) but
+do not own them.
+
+- **name**: The block's identifier (e.g., `Pl011Registers`).
+- **block_attributes**: Block-level properties from `#[rseq::register_block(..)]`:
+  - **endian**: Byte order (e.g., `little`, `big`).
+  - **access_width**: Default access width in bits (e.g., 32).
+- **fields**: Ordered list of register fields, each with:
+  - **name**: Field identifier (e.g., `dr`, `cr`).
+  - **access_kind**: One of `ReadWrite`, `ReadOnly`, `WriteOnly`, `Reserved`.
+  - **descriptor**: Reference to a register descriptor (Section 3.5), if not
+    `Reserved`. This is the descriptor type from the generic parameter
+    (e.g., `DR_REG::Register` → `DR_REG`).
+  - **byte_offset**: Offset within the block (derived from field ordering and
+    access width).
+  - **array_count**: For reserved gaps expressed as arrays (e.g.,
+    `[Reserved<u32>; 4]`), the element count. `None` for single fields.
+
+The reference relationship between register blocks and descriptors forms a DAG:
+
+```
+Register Descriptors (shared, standalone)
+    ^              ^
+    |              |
+Register Block A   Register Block B
+    ^
+    |
+MMIO Resource (driver struct field)
+```
+
+### 3.7 Impl Blocks for Non-Driver Types
+
+Both inherent and trait impl blocks for non-driver types (Sections 3.4, 3.5, 3.6).
 
 - **target_type**: The type being implemented.
+- **trait_name**: The trait being implemented, if this is a trait impl. `None` for
+  inherent impls.
 - **methods**: Associated functions, each with signature and body.
+- **associated_constants**: Named constants defined in the impl block.
 
-### 3.6 Driver Struct (Driver module only)
+### 3.8 Driver Struct (Driver module only)
 
 The driver struct declaration. See Section 4 for detail.
 
-### 3.7 Regseq Trait Impls (Driver module only)
+### 3.9 Regseq Trait Impls (Driver module only)
 
 Implementations of Regseq-defined traits for the driver struct. See Section 5
 for detail.
 
-### 3.8 Driver Impl Blocks (Driver module only)
+### 3.10 Driver Impl Blocks (Driver module only)
 
 `impl DriverType` blocks providing helper methods and ISR handlers. See Section 6
 for detail.
@@ -182,8 +235,11 @@ Binding (from `[clock.<id>]` in platform file):
 
 From `ResetLine` / `Option<ResetLine>` / `[ResetLine; N]` with `#[rseq::reset(..)]`.
 
+The `#[rseq::reset(id = "...")]` attribute is required, consistent with all other
+resource kinds.
+
 Declaration properties:
-- (TBD as extraction surfaces evolve.)
+- **id**: Reset line identifier (required).
 
 Binding (from `[reset.<id>]` in platform file):
 - **reset_line_id**: Reset line identifier string.
@@ -217,7 +273,8 @@ From `Mmio<T>` / `Option<Mmio<T>>` / `[Mmio<T>; N]` with `#[rseq::mmio(..)]`.
 
 Declaration properties:
 - **id**: Optional MMIO identifier.
-- **register_block_type**: The register block type parameter `T`.
+- **register_block**: Reference to a register block definition (Section 3.6).
+  Derived from the type parameter `T` in `Mmio<T>`.
 
 Binding (from `[mmio.<id>]` in platform file):
 - **base**: Base physical address.
@@ -321,6 +378,14 @@ Each trait impl carries a callback context classification:
 
 `impl DriverType` blocks that provide:
 
+### Associated Constants
+
+Named constants defined on the driver type.
+
+- **name**: Constant identifier.
+- **type**: The constant's type.
+- **value**: The constant's value.
+
 ### Helper Methods
 
 Normal associated functions used internally by the driver.
@@ -365,6 +430,27 @@ Each body contains:
 
 The detailed MIR body representation is defined by the existing `MirBodyDeclSet` /
 `MirBody` types and is not further specified here.
+
+### Ordered Flat Regions
+
+The `ordered!` macro in spec source enforces sequential execution of a sequence of
+statements without introducing a new scope (no lifetime or drop-order changes).
+
+**Source-level expansion**: The macro expands to flat statements bracketed by
+compiler hint calls:
+- `regseq::internal::ordered_region_begin()`
+- `regseq::internal::ordered_region_end()`
+
+The `regseq::internal` namespace is reserved for compiler markers and hints that
+are not real intrinsics — they are not lowered by backends directly.
+
+**Regseq Model representation**: During model construction, the compiler
+recognizes the paired markers and folds them into an `OrderedFlatRegion` construct
+— a first-class body-level IR element that contains the enclosed statements. This
+preserves the author's sequencing intent without altering scoping semantics.
+
+**Backend lowering**: Backends see the `OrderedFlatRegion` and emit appropriate
+ordering barriers (e.g., compiler barriers in C) around the enclosed statements.
 
 ## 8. Construct and Intrinsic IDs
 
@@ -464,7 +550,7 @@ The 13 Extraction Surfaces serialized as `RawFrontendArtifact` JSON.
 
 #### Output
 
-A `DeclarationModel` with all declaration-side fields populated and all binding
+A `RegseqModel` with all declaration-side fields populated and all binding
 slots set to `None`.
 
 #### Properties
@@ -487,11 +573,11 @@ slots set to `None`.
 
 #### Input
 
-A Phase 1 `DeclarationModel` and a parsed platform file.
+A Phase 1 `RegseqModel` and a parsed platform file.
 
 #### Output
 
-The same `DeclarationModel` with binding slots populated.
+The same `RegseqModel` with binding slots populated.
 
 #### Properties
 
