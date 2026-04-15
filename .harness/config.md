@@ -14,13 +14,17 @@ Current active workspace members:
 - `regseq-config` -- shared configuration types (no rustc dependency)
 - `regseq-diagnostics` -- shared diagnostics engine
 - `regseq-driver` -- rustc wrapper (HIR/MIR extraction, pipeline orchestration)
-- `regseq-macros` -- helper macro crate, including `register_bitfields!`
-- `regseq-model` -- rustc-independent declaration, binding, and joined-artifact models
+- `regseq-macros` -- helper macro crate, including `register_block!` and `ordered!`
+- `regseq-model` -- rustc-independent unified RegseqModel with CFG-based IR
 - `tests/e2e` -- end-to-end test workspace member
 
 Active implementation stream notes:
 - inert `#[rseq::...]` tool attributes are registered by `regseq-driver`, not provided by `regseq-macros`
 - `regseq-backends` remains a single crate for now, even though Linux and Zephyr are separate harness task groups
+- The implementation follows the RegseqModel execution plan at `docs/discussions/models/regseq-model/execution-plan.md`
+- The old architecture (DeclarationModel/BindingModel/JoinedArtifact, expression-tree IR) is being replaced by a unified RegseqModel with CFG-based IR
+- Register access intrinsics are methods on `Mmio<T>`, not on ReadOnly/WriteOnly/ReadWrite wrappers
+- Old harness tasks and batch briefs are archived at `.harness/archive/`
 
 ## Coding Conventions
 

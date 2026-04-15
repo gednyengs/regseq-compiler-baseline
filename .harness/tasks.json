@@ -380,6 +380,15 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-25",
+          "name": "Release-profile MIR compiler config",
+          "spec": ".harness/tasks/regseq-driver/25-release-profile-mir-config.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -562,6 +571,46 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-20",
+          "name": "Symbol interning and string identity",
+          "spec": ".harness/tasks/regseq-model/20-symbol-interning.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-21",
+          "name": "Declaration IDs, body-level IDs, and source locations",
+          "spec": ".harness/tasks/regseq-model/21-decl-ids-and-source-locations.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-20"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-22",
+          "name": "RegseqType, ScalarType, and Mutability",
+          "spec": ".harness/tasks/regseq-model/22-regseq-type-system.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-21"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-23",
+          "name": "Binary and unary operators",
+          "spec": ".harness/tasks/regseq-model/23-binary-and-unary-operators.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -598,6 +647,18 @@
           "depends_on": [
             "regseq-macros-01",
             "regseq-facade-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-macros-04",
+          "name": "register_block! proc macro",
+          "spec": ".harness/tasks/regseq-macros/04-register-block-macro.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-facade-22",
+            "regseq-facade-23"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -902,6 +963,55 @@
           "depends_on": [
             "regseq-facade-10"
           ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-20",
+          "name": "Framework type and abstraction attribute annotations",
+          "spec": ".harness/tasks/regseq-facade/20-framework-and-abstraction-annotations.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-21",
+          "name": "Non-register intrinsic annotations",
+          "spec": ".harness/tasks/regseq-facade/21-non-register-intrinsic-annotations.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-facade-20"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-22",
+          "name": "RegisterOf trait, access control types, and RegisterId",
+          "spec": ".harness/tasks/regseq-facade/22-register-of-trait-and-access-types.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-23",
+          "name": "Mmio<T> register access methods with intrinsic annotations",
+          "spec": ".harness/tasks/regseq-facade/23-mmio-register-methods.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-facade-22"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-facade-24",
+          "name": "Ordered region marker functions and ordered! macro migration",
+          "spec": ".harness/tasks/regseq-facade/24-ordered-region-markers-and-macro-migration.md",
+          "status": "pending",
+          "depends_on": [],
           "artifacts": [],
           "fail_reason": null
         }

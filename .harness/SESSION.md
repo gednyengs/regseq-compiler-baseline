@@ -33,25 +33,36 @@ You are a worker agent for the Regseq compiler project.
 9. Replace `todo!()` with real implementation.
 10. Run the test command from the task spec to verify.
 11. Iterate until all tests pass.
-12. Run `cargo fmt` to format code, then `cargo test --workspace` to check
-    for regressions.
+
+## Review
+
+12. Once tests pass, request a Codex review of your implementation. Use the
+    `codex:codex-rescue` agent (or `/codex:rescue` skill) with a prompt that:
+    - References the task spec file path
+    - Asks Codex to review the implementation against the task spec
+    - Asks Codex to check for spec deviations, correctness issues, generality loss in the solution, and design misalignment
+13. If Codex identifies issues, fix them and re-submit for review.
+14. Iterate (fix -> Codex review) until Codex agrees the implementation
+    matches the task spec. Do not skip this step.
 
 ## Finishing
 
-13. If you executed a real harness task, run `uv run python scripts/python/task.py done <id>` to complete the task.
+15. Run `cargo fmt` to format code, then `cargo test --workspace` to check
+    for regressions.
+16. If you executed a real harness task, run `uv run python scripts/python/task.py done <id>` to complete the task.
     - This runs verification (tests + fmt check + clippy) automatically.
     - If verification fails, fix the issues and try again.
     - If you cannot resolve an issue, run:
       `uv run python scripts/python/task.py fail <id> --reason "description of the problem"`
-14. Commit your changes:
+17. Commit your changes:
     - Stage all files you created or modified: `git add <files>`
     - Commit with a message referencing the task ID:
       `git commit -m "<task-id>: brief description of what was done"`
     - Example: `git commit -m "cargo-regseq-02: CLI argument parsing with clap"`
-15. If you authored or updated harness task specs or batch briefs instead of executing a real task:
+18. If you authored or updated harness task specs or batch briefs instead of executing a real task:
     - Update `.harness/task-spec-status.yaml` to reflect the new spec-authoring status.
     - If you created executable harness tasks, ensure the corresponding `generated_task_ids` are recorded.
-16. After completing either execution work or spec-authoring work, run `uv run python scripts/python/task.py next-step` to determine the next action.
+19. After completing either execution work or spec-authoring work, run `uv run python scripts/python/task.py next-step` to determine the next action.
     - If the next action is another executable task, continue.
     - If the next action is a task-spec batch, consult `.harness/task-spec-workflow.md`.
     - If the next action is a brief-authoring batch, create that brief first.
