@@ -15,16 +15,19 @@ pub struct ResetLine {
 
 impl ResetLine {
     /// Assert the reset line (drive device into reset).
+    #[rseq::intrinsic("reset_assert")]
     pub fn assert(&self) -> Result<(), RegseqError> {
         unimplemented!("compiler-managed: ResetLine::assert")
     }
 
     /// Deassert the reset line (release device from reset).
+    #[rseq::intrinsic("reset_deassert")]
     pub fn deassert(&self) -> Result<(), RegseqError> {
         unimplemented!("compiler-managed: ResetLine::deassert")
     }
 
     /// Assert, wait for `delay`, then deassert the reset line.
+    #[rseq::intrinsic("reset_toggle")]
     pub fn toggle(&self, _delay: Duration) -> Result<(), RegseqError> {
         unimplemented!("compiler-managed: ResetLine::toggle")
     }

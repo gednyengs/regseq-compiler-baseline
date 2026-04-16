@@ -11,7 +11,7 @@ use crate::{Duration, RegseqError};
 /// Returns `Ok(())` when the condition is met, or `Err(RegseqError::Timeout)`
 /// if the timeout elapses first.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("poll_until")]
 pub fn poll_until<C>(_condition: C, _delay: Duration, _timeout: Duration) -> Result<(), RegseqError>
 where
     C: FnMut() -> bool,

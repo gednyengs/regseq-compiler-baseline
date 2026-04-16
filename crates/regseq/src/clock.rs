@@ -17,6 +17,7 @@ impl Clock {
     /// Enable the peripheral clock.
     ///
     /// Fallible: returns an error if the clock cannot be enabled.
+    #[rseq::intrinsic("clock_enable")]
     pub fn enable(&self) -> Result<(), RegseqError> {
         unimplemented!("compiler-managed: Clock::enable")
     }
@@ -24,6 +25,7 @@ impl Clock {
     /// Disable the peripheral clock.
     ///
     /// Infallible on the stable facade surface.
+    #[rseq::intrinsic("clock_disable")]
     pub fn disable(&self) {
         unimplemented!("compiler-managed: Clock::disable")
     }
@@ -31,6 +33,7 @@ impl Clock {
     /// Query the clock rate in Hz.
     ///
     /// Infallible on the stable facade surface.
+    #[rseq::intrinsic("clock_get_rate")]
     pub fn get_rate(&self) -> u32 {
         unimplemented!("compiler-managed: Clock::get_rate")
     }

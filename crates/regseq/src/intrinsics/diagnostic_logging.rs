@@ -89,28 +89,28 @@ impl From<*const ()> for LogArg<'_> {
 
 /// Canonical logging anchor: error level.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("log_error")]
 pub fn error<'a, const N: usize>(_template: &'static str, _args: [LogArg<'a>; N]) {
     unimplemented!("compiler-managed: diagnostic_logging::error")
 }
 
 /// Canonical logging anchor: warn level.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("log_warn")]
 pub fn warn<'a, const N: usize>(_template: &'static str, _args: [LogArg<'a>; N]) {
     unimplemented!("compiler-managed: diagnostic_logging::warn")
 }
 
 /// Canonical logging anchor: info level.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("log_info")]
 pub fn info<'a, const N: usize>(_template: &'static str, _args: [LogArg<'a>; N]) {
     unimplemented!("compiler-managed: diagnostic_logging::info")
 }
 
 /// Canonical logging anchor: debug level.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("log_debug")]
 pub fn debug<'a, const N: usize>(_template: &'static str, _args: [LogArg<'a>; N]) {
     unimplemented!("compiler-managed: diagnostic_logging::debug")
 }

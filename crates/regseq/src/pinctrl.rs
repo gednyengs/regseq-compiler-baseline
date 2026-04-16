@@ -22,6 +22,7 @@ pub trait PinState {}
 
 impl PinCtrl {
     /// Apply the pin configuration described by state `S`.
+    #[rseq::intrinsic("pinctrl_apply")]
     pub fn apply<S: PinState>(&self) -> Result<(), RegseqError> {
         unimplemented!("compiler-managed: PinCtrl::apply")
     }

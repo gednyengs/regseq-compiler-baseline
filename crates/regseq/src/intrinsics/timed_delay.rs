@@ -5,7 +5,7 @@ use crate::Duration;
 /// Canonical intrinsic: the compiler recognizes this call site and lowers
 /// it to the target OS busy-wait primitive.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("busy_wait")]
 pub fn busy_wait(_duration: Duration) {
     unimplemented!("compiler-managed: timed_delay::busy_wait")
 }
@@ -15,7 +15,7 @@ pub fn busy_wait(_duration: Duration) {
 /// Canonical intrinsic: the compiler recognizes this call site and lowers
 /// it to the target OS sleep primitive.
 #[inline(never)]
-#[rseq::intrinsic]
+#[rseq::intrinsic("sleep")]
 pub fn sleep(_duration: Duration) {
     unimplemented!("compiler-managed: timed_delay::sleep")
 }
