@@ -664,7 +664,7 @@
           "id": "regseq-model-28",
           "name": "StatementKind and MirIntrinsic",
           "spec": ".harness/tasks/regseq-model/28-statement-types.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-24",
             "regseq-model-25"
