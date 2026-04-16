@@ -889,7 +889,7 @@
           "id": "regseq-model-38",
           "name": "ImplBlock",
           "spec": ".harness/tasks/regseq-model/38-impl-block.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-35",
             "regseq-model-34"
