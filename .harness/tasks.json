@@ -639,7 +639,7 @@
           "id": "regseq-model-26",
           "name": "Rvalue, BorrowKind, CastKind, AggregateKind",
           "spec": ".harness/tasks/regseq-model/26-rvalue-and-supporting-types.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-24",
             "regseq-model-25"
