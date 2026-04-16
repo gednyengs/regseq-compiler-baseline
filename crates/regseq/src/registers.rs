@@ -1,8 +1,9 @@
-/// Register support types and typed access wrappers for the Register Access surface.
+/// Register support types, access control traits, and layout-only wrappers.
 ///
-/// These types form the compile-time facade for authored register operations.
-/// Wrapper methods have placeholder bodies; the compiler replaces them with
-/// backend-specific MMIO reads/writes during lowering.
+/// Access control types (`RegisterOf`, `ReadAccess`, `WriteAccess`, marker types)
+/// and `RegisterId` support the register access methods on `Mmio<T>`.
+/// `ReadOnly`, `WriteOnly`, and `ReadWrite` are layout-only `#[repr(transparent)]`
+/// wrappers used in `#[repr(C)]` register block structs.
 use core::marker::PhantomData;
 use core::ops::Add;
 
@@ -162,7 +163,8 @@ impl<R> Add for FieldValue<u32, R> {
 
 /// Read-only register wrapper.
 ///
-/// Layout-sized so `#[repr(C)]` register blocks stay mechanically coherent.
+/// Layout-only type for `#[repr(C)]` register block layout. Access methods
+/// are on `Mmio<Block>`, not on the wrapper types.
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct ReadOnly<T, R> {
@@ -170,21 +172,10 @@ pub struct ReadOnly<T, R> {
     _reg: PhantomData<R>,
 }
 
-impl<T: Copy, R> ReadOnly<T, R> {
-    /// Read the full raw register value in one hardware operation.
-    pub fn read_raw(&self) -> T {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-
-    /// Read the value of the given field from this register.
-    pub fn read(&self, _field: Field<T, R>) -> T {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-}
-
 /// Write-only register wrapper.
 ///
-/// Layout-sized so `#[repr(C)]` register blocks stay mechanically coherent.
+/// Layout-only type for `#[repr(C)]` register block layout. Access methods
+/// are on `Mmio<Block>`, not on the wrapper types.
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct WriteOnly<T, R> {
@@ -192,53 +183,15 @@ pub struct WriteOnly<T, R> {
     _reg: PhantomData<R>,
 }
 
-impl<T: Copy, R> WriteOnly<T, R> {
-    /// Write the given field values to this register.
-    pub fn write(&self, _values: FieldValue<T, R>) {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-
-    /// Set the given field values in this register (alias for write).
-    pub fn set(&self, _values: FieldValue<T, R>) {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-}
-
 /// Read-write register wrapper.
 ///
-/// Layout-sized so `#[repr(C)]` register blocks stay mechanically coherent.
+/// Layout-only type for `#[repr(C)]` register block layout. Access methods
+/// are on `Mmio<Block>`, not on the wrapper types.
 #[repr(transparent)]
 #[derive(Debug)]
 pub struct ReadWrite<T, R> {
     value: T,
     _reg: PhantomData<R>,
-}
-
-impl<T: Copy, R> ReadWrite<T, R> {
-    /// Read the full raw register value in one hardware operation.
-    pub fn read_raw(&self) -> T {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-
-    /// Read the value of the given field from this register.
-    pub fn read(&self, _field: Field<T, R>) -> T {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-
-    /// Write the given field values to this register.
-    pub fn write(&self, _values: FieldValue<T, R>) {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-
-    /// Modify: read-modify-write with the given field values.
-    pub fn modify(&self, _values: FieldValue<T, R>) {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
-
-    /// Set the given field values in this register (alias for write).
-    pub fn set(&self, _values: FieldValue<T, R>) {
-        unimplemented!("facade stub: lowered by the compiler backend")
-    }
 }
 
 // ---------------------------------------------------------------------------

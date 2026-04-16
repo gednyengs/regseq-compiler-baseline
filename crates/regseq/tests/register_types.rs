@@ -13,59 +13,8 @@ fn support_types_are_exported() {
 }
 
 #[test]
-fn readonly_has_read_method() {
-    // Verify the read method signature compiles on ReadOnly<T, R>.
-    fn assert_read_compiles(reg: &ReadOnly<u32, TestReg>, field: Field<u32, TestReg>) {
-        let _: u32 = reg.read(field);
-    }
-    fn assert_read_raw_compiles(reg: &ReadOnly<u32, TestReg>) {
-        let _: u32 = reg.read_raw();
-    }
-    let _ = (assert_read_compiles, assert_read_raw_compiles);
-}
-
-#[test]
-fn writeonly_has_write_and_set_methods() {
-    // Verify write and set method signatures compile on WriteOnly<T, R>.
-    fn assert_write_compiles(reg: &WriteOnly<u32, TestReg>, values: FieldValue<u32, TestReg>) {
-        reg.write(values);
-    }
-    fn assert_set_compiles(reg: &WriteOnly<u32, TestReg>, values: FieldValue<u32, TestReg>) {
-        reg.set(values);
-    }
-    let _ = (assert_write_compiles, assert_set_compiles);
-}
-
-#[test]
-fn readwrite_has_all_four_methods() {
-    // Verify read_raw, read, write, modify, set method signatures compile on ReadWrite<T, R>.
-    fn assert_read_raw(reg: &ReadWrite<u32, TestReg>) {
-        let _: u32 = reg.read_raw();
-    }
-    fn assert_read(reg: &ReadWrite<u32, TestReg>, field: Field<u32, TestReg>) {
-        let _: u32 = reg.read(field);
-    }
-    fn assert_write(reg: &ReadWrite<u32, TestReg>, values: FieldValue<u32, TestReg>) {
-        reg.write(values);
-    }
-    fn assert_modify(reg: &ReadWrite<u32, TestReg>, values: FieldValue<u32, TestReg>) {
-        reg.modify(values);
-    }
-    fn assert_set(reg: &ReadWrite<u32, TestReg>, values: FieldValue<u32, TestReg>) {
-        reg.set(values);
-    }
-    let _ = (
-        assert_read_raw,
-        assert_read,
-        assert_write,
-        assert_modify,
-        assert_set,
-    );
-}
-
-#[test]
-fn wrapper_types_are_distinct() {
-    // ReadOnly, WriteOnly, and ReadWrite are distinct types -- no implicit conversion.
+fn wrapper_types_are_layout_only() {
+    // ReadOnly, WriteOnly, and ReadWrite are layout-only types -- no access methods.
     fn takes_ro(_: &ReadOnly<u32, TestReg>) {}
     fn takes_wo(_: &WriteOnly<u32, TestReg>) {}
     fn takes_rw(_: &ReadWrite<u32, TestReg>) {}
