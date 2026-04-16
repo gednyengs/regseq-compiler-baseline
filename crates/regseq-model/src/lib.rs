@@ -14,6 +14,7 @@ pub mod identity;
 pub mod ir;
 pub mod item;
 pub mod joined;
+pub mod model;
 pub mod platform;
 pub mod platform_parser;
 pub mod properties;

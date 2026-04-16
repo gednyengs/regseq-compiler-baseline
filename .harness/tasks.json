@@ -806,7 +806,7 @@
           "id": "regseq-model-31",
           "name": "FrameworkTypeKind and TypeDefClassification",
           "spec": ".harness/tasks/regseq-model/31-framework-type-kind.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-27"
           ],
