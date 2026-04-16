@@ -49,6 +49,9 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             .push("register_tool(rseq)".to_string());
         config.opts.unstable_opts.mir_opt_level = Some(0);
         config.opts.unstable_opts.always_encode_mir = true;
+        config.opts.cg.overflow_checks = Some(false);
+        config.opts.cg.debug_assertions = Some(false);
+        config.opts.debug_assertions = false;
     }
 
     fn after_analysis<'tcx>(

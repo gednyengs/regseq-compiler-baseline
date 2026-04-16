@@ -39,7 +39,7 @@ You are a worker agent for the Regseq compiler project.
 12. Once tests pass, request a Codex review of your implementation. Use the
     `codex:codex-rescue` agent (or `/codex:rescue` skill) with a prompt that:
     - References the task spec file path
-    - Asks Codex to review the implementation against the task spec
+    - Asks Codex to review the implementation against the task spec. ALL CHECKS MUST BE SCOPED TO THE TASK DEFINED BY THE TASK SPEC.
     - Asks Codex to check for spec deviations, correctness issues, generality loss in the solution, and design misalignment
 13. If Codex identifies issues, fix them and re-submit for review.
 14. Iterate (fix -> Codex review) until Codex agrees the implementation

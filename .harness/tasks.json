@@ -596,7 +596,7 @@
           "id": "regseq-model-22",
           "name": "RegseqType, ScalarType, and Mutability",
           "spec": ".harness/tasks/regseq-model/22-regseq-type-system.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-21"
           ],
@@ -607,7 +607,7 @@
           "id": "regseq-model-23",
           "name": "Binary and unary operators",
           "spec": ".harness/tasks/regseq-model/23-binary-and-unary-operators.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
@@ -970,7 +970,7 @@
           "id": "regseq-facade-20",
           "name": "Framework type and abstraction attribute annotations",
           "spec": ".harness/tasks/regseq-facade/20-framework-and-abstraction-annotations.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
@@ -979,7 +979,7 @@
           "id": "regseq-facade-21",
           "name": "Non-register intrinsic annotations",
           "spec": ".harness/tasks/regseq-facade/21-non-register-intrinsic-annotations.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-facade-20"
           ],
