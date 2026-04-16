@@ -451,7 +451,7 @@
           "id": "regseq-driver-31",
           "name": "Source location extraction",
           "spec": ".harness/tasks/regseq-driver/31-source-location-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-26"
           ],

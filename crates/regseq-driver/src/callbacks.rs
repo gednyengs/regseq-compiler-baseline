@@ -127,6 +127,14 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let logging_surface = crate::extract::logging::extract_logging_surface(tcx);
         eprintln!("regseq-driver: logging extraction: {logging_surface:?}");
 
+        // --- source locations ---
+        let source_location_surface =
+            crate::extract::source_locations::extract_source_locations(tcx);
+        eprintln!(
+            "regseq-driver: source location extraction: {} item(s)",
+            source_location_surface.len(),
+        );
+
         // --- body extraction ---
         let body_surface = crate::extract::body::extract_body_surface(tcx);
         eprintln!("regseq-driver: body extraction: {body_surface:?}");

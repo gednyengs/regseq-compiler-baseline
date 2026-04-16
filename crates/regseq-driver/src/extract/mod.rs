@@ -28,6 +28,8 @@ pub(crate) mod property;
 pub(crate) mod register_access;
 #[allow(dead_code)]
 pub(crate) mod reset;
+#[allow(dead_code)]
+pub(crate) mod source_locations;
 pub(crate) mod synchronization;
 #[allow(dead_code)]
 pub(crate) mod timed_delay;
