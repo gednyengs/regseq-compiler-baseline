@@ -462,7 +462,7 @@
           "id": "regseq-driver-32",
           "name": "RawFrontendArtifact expansion and callback wiring",
           "spec": ".harness/tasks/regseq-driver/32-raw-artifact-expansion.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-27",
             "regseq-driver-28",

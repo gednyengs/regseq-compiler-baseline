@@ -38,7 +38,7 @@ pub struct RawSourceLocation {
 }
 
 /// Collected source locations for all extracted items.
-#[derive(Clone, Debug, Default, Serialize, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RawSourceLocationSurface {
     /// Map from item path (as rendered by `tcx.def_path_str`) to the
     /// item's source location. `BTreeMap` gives deterministic JSON

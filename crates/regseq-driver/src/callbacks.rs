@@ -70,6 +70,33 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             attr_report.log();
         }
 
+        // --- attribute registries (read-only context for downstream passes) ---
+        let intrinsic_registry = crate::extract::intrinsic_registry::IntrinsicRegistry::build(tcx);
+        eprintln!(
+            "regseq-driver: intrinsic registry: {} entry(ies)",
+            intrinsic_registry.len(),
+        );
+        let framework_type_registry =
+            crate::extract::framework_types::FrameworkTypeRegistry::build(tcx);
+        eprintln!(
+            "regseq-driver: framework type registry: {} entry(ies)",
+            framework_type_registry.len(),
+        );
+        let abstraction_type_registry =
+            crate::extract::abstraction_types::AbstractionTypeRegistry::build(tcx);
+        eprintln!(
+            "regseq-driver: abstraction type registry: {} entry(ies)",
+            abstraction_type_registry.len(),
+        );
+
+        // --- source locations (runs after all items are known) ---
+        let source_location_surface =
+            crate::extract::source_locations::extract_source_locations(tcx);
+        eprintln!(
+            "regseq-driver: source location extraction: {} item(s)",
+            source_location_surface.len(),
+        );
+
         // --- identity ---
         let identities = crate::extract::driver_identity::extract_driver_identities(tcx);
         eprintln!("regseq-driver: identity extraction: {identities:?}");
@@ -127,14 +154,6 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let logging_surface = crate::extract::logging::extract_logging_surface(tcx);
         eprintln!("regseq-driver: logging extraction: {logging_surface:?}");
 
-        // --- source locations ---
-        let source_location_surface =
-            crate::extract::source_locations::extract_source_locations(tcx);
-        eprintln!(
-            "regseq-driver: source location extraction: {} item(s)",
-            source_location_surface.len(),
-        );
-
         // --- body extraction ---
         let body_surface = crate::extract::body::extract_body_surface(tcx);
         eprintln!("regseq-driver: body extraction: {body_surface:?}");
@@ -184,8 +203,12 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
                             pm: &pm_surface,
                             body: &body_surface,
                             enrichment: &enrichment_surface,
+                            intrinsic_registry: &intrinsic_registry,
+                            framework_type_registry: &framework_type_registry,
+                            abstraction_type_registry: &abstraction_type_registry,
+                            source_locations: &source_location_surface,
                         };
-                        let artifact = build_raw_artifact(primary, &self.options, &ex);
+                        let artifact = build_raw_artifact(tcx, primary, &self.options, &ex);
 
                         // --- raw artifact emission ---
                         if self.wants_raw_artifact() {
@@ -267,14 +290,49 @@ struct ExtractionResults<'a> {
         crate::extract::identity_enrichment::IdentityEnrichmentSurface,
         crate::extract::identity_enrichment::IdentityEnrichmentError,
     >,
+    intrinsic_registry: &'a crate::extract::intrinsic_registry::IntrinsicRegistry,
+    framework_type_registry: &'a crate::extract::framework_types::FrameworkTypeRegistry,
+    abstraction_type_registry: &'a crate::extract::abstraction_types::AbstractionTypeRegistry,
+    source_locations: &'a crate::extract::source_locations::RawSourceLocationSurface,
 }
 
-fn build_raw_artifact(
+fn build_raw_artifact<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
     primary_id: &crate::extract::driver_identity::DriverIdentity,
     options: &regseq_config::CompilerOptions,
     ex: &ExtractionResults<'_>,
 ) -> crate::raw_artifact::RawFrontendArtifact {
     use crate::raw_artifact::*;
+
+    let intrinsic_registry = if ex.intrinsic_registry.is_empty() {
+        None
+    } else {
+        Some(RawIntrinsicRegistrySurface::from_registry(
+            ex.intrinsic_registry,
+            tcx,
+        ))
+    };
+    let framework_types = if ex.framework_type_registry.is_empty() {
+        None
+    } else {
+        Some(RawFrameworkTypeSurface::from_registry(
+            ex.framework_type_registry,
+            tcx,
+        ))
+    };
+    let abstraction_types = if ex.abstraction_type_registry.is_empty() {
+        None
+    } else {
+        Some(RawAbstractionTypeSurface::from_registry(
+            ex.abstraction_type_registry,
+            tcx,
+        ))
+    };
+    let source_locations = if ex.source_locations.is_empty() {
+        None
+    } else {
+        Some(ex.source_locations.clone())
+    };
 
     RawFrontendArtifact {
         driver_name: primary_id.driver_name.clone(),
@@ -297,6 +355,10 @@ fn build_raw_artifact(
         pm_gate: ex.pm.as_ref().ok().map(RawPmGateSurface::from),
         bodies: ex.body.as_ref().ok().cloned(),
         identity_enrichment: ex.enrichment.as_ref().ok().cloned(),
+        intrinsic_registry,
+        framework_types,
+        abstraction_types,
+        source_locations,
     }
 }
 

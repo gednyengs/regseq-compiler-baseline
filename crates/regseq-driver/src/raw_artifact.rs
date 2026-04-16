@@ -1,12 +1,16 @@
+use rustc_middle::ty::TyCtxt;
 use serde::{Deserialize, Serialize};
 
+use crate::extract::abstraction_types::AbstractionTypeRegistry;
 use crate::extract::callback_context::CallbackContext;
 use crate::extract::clock::{ClockCallSite, ClockField, ClockMethod, ClockSurface};
 use crate::extract::driver_identity::DriverIdentity;
+use crate::extract::framework_types::FrameworkTypeRegistry;
 use crate::extract::interrupts::{
     InterruptFieldShape, InterruptLayer2Properties, InterruptResourceDecl, InterruptSurface,
     IsrBindTarget, IsrBinding,
 };
+use crate::extract::intrinsic_registry::IntrinsicRegistry;
 use crate::extract::logging::{LogArgKind, LogCallSite, LogLevel, LoggingSurface};
 use crate::extract::pinctrl::{PinCtrlCallSite, PinCtrlField, PinCtrlSurface};
 use crate::extract::pm::{PmGate, PmGateProperties, PmGateSurface};
@@ -74,6 +78,21 @@ pub struct RawFrontendArtifact {
     /// Identity enrichment surface: canonical paths, ownership, field identity.
     #[serde(skip_serializing_if = "Option::is_none")]
     pub identity_enrichment: Option<RawIdentityEnrichmentSurface>,
+    /// Intrinsic registry: `#[rseq::intrinsic("...")]` annotations reachable
+    /// through the `regseq` facade crate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub intrinsic_registry: Option<RawIntrinsicRegistrySurface>,
+    /// Framework type registry: `#[rseq::framework_type("...")]` annotations
+    /// reachable through the `regseq` facade crate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub framework_types: Option<RawFrameworkTypeSurface>,
+    /// Abstraction type registry: `#[rseq::abstraction("...")]` annotations
+    /// reachable through the `regseq` facade crate.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub abstraction_types: Option<RawAbstractionTypeSurface>,
+    /// Declaration-level source location surface.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub source_locations: Option<RawSourceLocationSurface>,
 }
 
 // ---------------------------------------------------------------------------
@@ -927,6 +946,118 @@ pub use crate::extract::identity_enrichment::{
     AssociatedConstantFact, CanonicalPath, EnumFact, FieldFact, FnParamFact, FunctionFact,
     ImplBlockFact, ImplMethodFact, ModuleFact, RseqFieldKind, StructFact,
 };
+
+// Re-export the source-location surface so consumers can build it directly.
+pub use crate::extract::source_locations::{RawSourceLocation, RawSourceLocationSurface};
+
+// ---------------------------------------------------------------------------
+// Intrinsic registry surface
+// ---------------------------------------------------------------------------
+
+/// Serializable snapshot of the intrinsic registry for artifact emission.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RawIntrinsicRegistrySurface {
+    pub entries: Vec<RawIntrinsicEntry>,
+}
+
+impl RawIntrinsicRegistrySurface {
+    /// Build a serializable surface from a live [`IntrinsicRegistry`].
+    ///
+    /// Entries are rendered with `tcx.def_path_str` and sorted to guarantee
+    /// deterministic JSON ordering.
+    pub fn from_registry(registry: &IntrinsicRegistry, tcx: TyCtxt<'_>) -> Self {
+        let mut entries: Vec<RawIntrinsicEntry> = registry
+            .iter()
+            .map(|(def_id, name)| RawIntrinsicEntry {
+                canonical_name: name.to_string(),
+                method_path: tcx.def_path_str(def_id),
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            a.canonical_name
+                .cmp(&b.canonical_name)
+                .then_with(|| a.method_path.cmp(&b.method_path))
+        });
+        Self { entries }
+    }
+}
+
+/// Canonical intrinsic name paired with the method's fully-qualified path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RawIntrinsicEntry {
+    pub canonical_name: String,
+    pub method_path: String,
+}
+
+// ---------------------------------------------------------------------------
+// Framework type registry surface
+// ---------------------------------------------------------------------------
+
+/// Serializable snapshot of the framework type registry for artifact emission.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RawFrameworkTypeSurface {
+    pub entries: Vec<RawFrameworkTypeEntry>,
+}
+
+impl RawFrameworkTypeSurface {
+    pub fn from_registry(registry: &FrameworkTypeRegistry, tcx: TyCtxt<'_>) -> Self {
+        let mut entries: Vec<RawFrameworkTypeEntry> = registry
+            .iter()
+            .map(|(def_id, name)| RawFrameworkTypeEntry {
+                framework_type_id: name.to_string(),
+                type_path: tcx.def_path_str(def_id),
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            a.framework_type_id
+                .cmp(&b.framework_type_id)
+                .then_with(|| a.type_path.cmp(&b.type_path))
+        });
+        Self { entries }
+    }
+}
+
+/// Framework-type id paired with the fully-qualified type path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RawFrameworkTypeEntry {
+    pub framework_type_id: String,
+    pub type_path: String,
+}
+
+// ---------------------------------------------------------------------------
+// Abstraction type registry surface
+// ---------------------------------------------------------------------------
+
+/// Serializable snapshot of the abstraction type registry for artifact emission.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq, Default)]
+pub struct RawAbstractionTypeSurface {
+    pub entries: Vec<RawAbstractionTypeEntry>,
+}
+
+impl RawAbstractionTypeSurface {
+    pub fn from_registry(registry: &AbstractionTypeRegistry, tcx: TyCtxt<'_>) -> Self {
+        let mut entries: Vec<RawAbstractionTypeEntry> = registry
+            .iter()
+            .map(|(def_id, name)| RawAbstractionTypeEntry {
+                abstraction_id: name.to_string(),
+                type_path: tcx.def_path_str(def_id),
+            })
+            .collect();
+        entries.sort_by(|a, b| {
+            a.abstraction_id
+                .cmp(&b.abstraction_id)
+                .then_with(|| a.type_path.cmp(&b.type_path))
+        });
+        Self { entries }
+    }
+}
+
+/// Abstraction id paired with the fully-qualified type path.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+pub struct RawAbstractionTypeEntry {
+    pub abstraction_id: String,
+    pub type_path: String,
+}
 
 // ---------------------------------------------------------------------------
 // Shared label helpers

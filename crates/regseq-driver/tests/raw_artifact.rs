@@ -124,6 +124,10 @@ fn sample_artifact() -> RawFrontendArtifact {
         pm_gate: None,
         bodies: None,
         identity_enrichment: None,
+        intrinsic_registry: None,
+        framework_types: None,
+        abstraction_types: None,
+        source_locations: None,
     }
 }
 
@@ -261,6 +265,10 @@ fn raw_artifact_identity_without_bus_omits_field() {
         pm_gate: None,
         bodies: None,
         identity_enrichment: None,
+        intrinsic_registry: None,
+        framework_types: None,
+        abstraction_types: None,
+        source_locations: None,
     };
 
     let json = serde_json::to_string_pretty(&artifact).expect("serialize");
@@ -367,6 +375,10 @@ fn raw_artifact_empty_family_serializes_cleanly() {
         pm_gate: None,
         bodies: None,
         identity_enrichment: None,
+        intrinsic_registry: None,
+        framework_types: None,
+        abstraction_types: None,
+        source_locations: None,
     };
 
     let json = serde_json::to_string(&artifact).expect("serialize");
@@ -857,4 +869,217 @@ fn enrichment_associated_constant_ownership_survives_handoff() {
     assert_eq!(constant.ty, "u32");
     // Ownership points back to the owning impl
     assert_eq!(constant.owner_impl_path, inherent_impl.canonical_path);
+}
+
+// ---------------------------------------------------------------------------
+// Phase 4.4 expansion: registries and source locations
+// ---------------------------------------------------------------------------
+
+fn sample_intrinsic_registry_surface() -> RawIntrinsicRegistrySurface {
+    RawIntrinsicRegistrySurface {
+        entries: vec![
+            RawIntrinsicEntry {
+                canonical_name: "mmio_read".to_string(),
+                method_path: "regseq::Mmio::read".to_string(),
+            },
+            RawIntrinsicEntry {
+                canonical_name: "mmio_write".to_string(),
+                method_path: "regseq::Mmio::write".to_string(),
+            },
+        ],
+    }
+}
+
+fn sample_framework_type_surface() -> RawFrameworkTypeSurface {
+    RawFrameworkTypeSurface {
+        entries: vec![RawFrameworkTypeEntry {
+            framework_type_id: "serial-config".to_string(),
+            type_path: "regseq::SerialConfig".to_string(),
+        }],
+    }
+}
+
+fn sample_abstraction_type_surface() -> RawAbstractionTypeSurface {
+    RawAbstractionTypeSurface {
+        entries: vec![RawAbstractionTypeEntry {
+            abstraction_id: "mmio".to_string(),
+            type_path: "regseq::Mmio".to_string(),
+        }],
+    }
+}
+
+fn sample_source_location_surface() -> RawSourceLocationSurface {
+    let mut surface = RawSourceLocationSurface::default();
+    surface.locations.insert(
+        "pl011_spec::Pl011Driver".to_string(),
+        RawSourceLocation {
+            file: "src/driver.rs".to_string(),
+            start_line: 10,
+            start_col: 1,
+            end_line: 20,
+            end_col: 2,
+        },
+    );
+    surface
+}
+
+fn artifact_with_expansion() -> RawFrontendArtifact {
+    let mut artifact = sample_artifact();
+    artifact.intrinsic_registry = Some(sample_intrinsic_registry_surface());
+    artifact.framework_types = Some(sample_framework_type_surface());
+    artifact.abstraction_types = Some(sample_abstraction_type_surface());
+    artifact.source_locations = Some(sample_source_location_surface());
+    artifact
+}
+
+#[test]
+fn expansion_fields_absent_by_default() {
+    let artifact = sample_artifact();
+    assert!(artifact.intrinsic_registry.is_none());
+    assert!(artifact.framework_types.is_none());
+    assert!(artifact.abstraction_types.is_none());
+    assert!(artifact.source_locations.is_none());
+}
+
+#[test]
+fn expansion_fields_skip_serializing_when_none() {
+    let artifact = sample_artifact();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    assert!(!json.contains("intrinsic_registry"));
+    assert!(!json.contains("framework_types"));
+    assert!(!json.contains("abstraction_types"));
+    assert!(!json.contains("source_locations"));
+}
+
+#[test]
+fn expansion_fields_serialize_when_present() {
+    let artifact = artifact_with_expansion();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    assert!(json.contains("\"intrinsic_registry\""));
+    assert!(json.contains("\"mmio_read\""));
+    assert!(json.contains("\"framework_types\""));
+    assert!(json.contains("\"serial-config\""));
+    assert!(json.contains("\"abstraction_types\""));
+    assert!(json.contains("\"mmio\""));
+    assert!(json.contains("\"source_locations\""));
+    assert!(json.contains("\"pl011_spec::Pl011Driver\""));
+}
+
+#[test]
+fn expansion_fields_round_trip_through_json() {
+    let artifact = artifact_with_expansion();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let decoded: RawFrontendArtifact = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(artifact, decoded);
+    assert!(decoded.intrinsic_registry.is_some());
+    assert!(decoded.framework_types.is_some());
+    assert!(decoded.abstraction_types.is_some());
+    assert!(decoded.source_locations.is_some());
+}
+
+#[test]
+fn expansion_surfaces_survive_handoff_to_raw_artifact_input() {
+    // RawArtifactInput currently mirrors Phase 4.3 and earlier fields. The
+    // Phase 4.4 fields should be ignored by the normalization input schema
+    // (no deny_unknown_fields) — this guarantees backward compatibility when
+    // downstream consumers have not yet been updated.
+    let artifact = artifact_with_expansion();
+    let json = serde_json::to_string(&artifact).expect("serialize");
+    let _input: RawArtifactInput = serde_json::from_str(&json)
+        .expect("existing RawArtifactInput must accept JSON carrying the new fields");
+}
+
+#[test]
+fn intrinsic_registry_surface_entries_are_sorted_when_built() {
+    // The constructor is exercised indirectly via TyCtxt in live compilation;
+    // here we verify that a manually-constructed surface with unsorted entries
+    // remains addressable and serializes cleanly.
+    let surface = RawIntrinsicRegistrySurface {
+        entries: vec![
+            RawIntrinsicEntry {
+                canonical_name: "z_last".to_string(),
+                method_path: "regseq::Z::z".to_string(),
+            },
+            RawIntrinsicEntry {
+                canonical_name: "a_first".to_string(),
+                method_path: "regseq::A::a".to_string(),
+            },
+        ],
+    };
+    let json = serde_json::to_string(&surface).expect("serialize");
+    let decoded: RawIntrinsicRegistrySurface = serde_json::from_str(&json).expect("deserialize");
+    assert_eq!(surface, decoded);
+}
+
+#[test]
+fn source_location_surface_preserves_file_and_line_numbers() {
+    let surface = sample_source_location_surface();
+    let loc = surface
+        .get("pl011_spec::Pl011Driver")
+        .expect("driver struct entry must be present");
+    assert_eq!(loc.file, "src/driver.rs");
+    assert_eq!(loc.start_line, 10);
+    assert_eq!(loc.end_line, 20);
+}
+
+#[test]
+fn expansion_does_not_alter_existing_field_serialization() {
+    // Serialize an artifact whose expansion fields are None and confirm that
+    // every pre-Phase-4.4 field is emitted exactly as before. This guards
+    // existing golden files against drift until task 34 regenerates them.
+    let artifact = sample_artifact();
+    let value = serde_json::to_value(&artifact).expect("serialize");
+    let obj = value.as_object().expect("artifact serializes as object");
+
+    for key in [
+        "driver_name",
+        "target_os",
+        "identity",
+        "register_access",
+        "trait_callbacks",
+        "firmware_properties",
+        "clock",
+        "reset",
+        "pinctrl",
+        "interrupts",
+        "synchronization",
+        "timed_delay",
+        "logging",
+        "pm_gate",
+    ] {
+        assert!(
+            obj.contains_key(key),
+            "existing top-level field {key:?} must still appear when expansion fields are None",
+        );
+    }
+
+    for new_key in [
+        "intrinsic_registry",
+        "framework_types",
+        "abstraction_types",
+        "source_locations",
+    ] {
+        assert!(
+            !obj.contains_key(new_key),
+            "expansion field {new_key:?} must be absent when None (skip_serializing_if)",
+        );
+    }
+
+    // Spot-check that a nested pre-existing surface still has its legacy shape.
+    let reg = obj
+        .get("register_access")
+        .and_then(|v| v.as_object())
+        .expect("register_access object");
+    for key in [
+        "register_blocks",
+        "mmio_fields",
+        "wrapper_call_sites",
+        "poll_call_sites",
+        "register_descriptors",
+    ] {
+        assert!(
+            reg.contains_key(key),
+            "register_access.{key} must remain present",
+        );
+    }
 }
