@@ -13,7 +13,7 @@ import sys
 # Known enum types (by substring match on path)
 KNOWN_ENUMS = [
     "Option", "Result", "ControlFlow", "IrqResult", "Ordering",
-    "ErrorKind", "SerialErrors",
+    "SerialErrors",
 ]
 
 

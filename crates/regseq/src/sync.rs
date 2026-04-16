@@ -7,6 +7,7 @@ use crate::{Duration, RegseqError};
 ///
 /// Opaque resource shell. The compiler lowers this to the appropriate
 /// OS-specific mutex implementation.
+#[rseq::abstraction("mutex")]
 pub struct Mutex<T> {
     _marker: PhantomData<T>,
 }
@@ -14,6 +15,7 @@ pub struct Mutex<T> {
 /// Spin lock wrapper.
 ///
 /// Opaque resource shell for spin-based locking.
+#[rseq::abstraction("spinlock")]
 pub struct SpinLock<T> {
     _marker: PhantomData<T>,
 }
@@ -21,6 +23,7 @@ pub struct SpinLock<T> {
 /// IRQ-safe spin lock wrapper.
 ///
 /// Opaque resource shell for interrupt-disabling spin-based locking.
+#[rseq::abstraction("irq-spinlock")]
 pub struct IrqSpinLock<T> {
     _marker: PhantomData<T>,
 }
@@ -28,6 +31,7 @@ pub struct IrqSpinLock<T> {
 /// Completion event wrapper.
 ///
 /// Opaque resource shell for wait/signal completion primitives.
+#[rseq::abstraction("completion")]
 pub struct Completion {
     _private: (),
 }

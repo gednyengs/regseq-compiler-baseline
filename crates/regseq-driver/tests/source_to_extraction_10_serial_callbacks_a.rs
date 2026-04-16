@@ -215,25 +215,25 @@ const SPECIMEN: &str = r#"
         pub struct SerialConfig { _private: () }
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub struct ErrorKind(u32);
+        pub struct SerialErrors(u32);
 
-        impl ErrorKind {
-            pub const OVERRUN: ErrorKind = ErrorKind(1);
-            pub const BREAK: ErrorKind = ErrorKind(2);
-            pub const PARITY: ErrorKind = ErrorKind(4);
-            pub const FRAMING: ErrorKind = ErrorKind(8);
+        impl SerialErrors {
+            pub const OVERRUN: SerialErrors = SerialErrors(1);
+            pub const BREAK: SerialErrors = SerialErrors(2);
+            pub const PARITY: SerialErrors = SerialErrors(4);
+            pub const FRAMING: SerialErrors = SerialErrors(8);
 
-            pub fn empty() -> ErrorKind { ErrorKind(0) }
+            pub fn empty() -> SerialErrors { SerialErrors(0) }
         }
 
-        impl std::ops::BitOr for ErrorKind {
-            type Output = ErrorKind;
-            fn bitor(self, rhs: ErrorKind) -> ErrorKind { ErrorKind(self.0 | rhs.0) }
+        impl std::ops::BitOr for SerialErrors {
+            type Output = SerialErrors;
+            fn bitor(self, rhs: SerialErrors) -> SerialErrors { SerialErrors(self.0 | rhs.0) }
         }
 
-        pub struct RxChar { byte: u8, errors: ErrorKind }
+        pub struct RxChar { byte: u8, errors: SerialErrors }
         impl RxChar {
-            pub fn new(byte: u8, errors: ErrorKind) -> RxChar {
+            pub fn new(byte: u8, errors: SerialErrors) -> RxChar {
                 RxChar { byte, errors }
             }
         }
@@ -576,18 +576,18 @@ const SPECIMEN: &str = r#"
             }
             let dr = self.regs.dr.read_raw();
             let byte = field_from_raw(DR_REG::DATA::FIELD, dr) as u8;
-            let mut errors = ErrorKind::empty();
+            let mut errors = SerialErrors::empty();
             if field_from_raw(DR_REG::OE::FIELD, dr) != 0 {
-                errors = errors | ErrorKind::OVERRUN;
+                errors = errors | SerialErrors::OVERRUN;
             }
             if field_from_raw(DR_REG::BE::FIELD, dr) != 0 {
-                errors = errors | ErrorKind::BREAK;
+                errors = errors | SerialErrors::BREAK;
             }
             if field_from_raw(DR_REG::PE::FIELD, dr) != 0 {
-                errors = errors | ErrorKind::PARITY;
+                errors = errors | SerialErrors::PARITY;
             }
             if field_from_raw(DR_REG::FE::FIELD, dr) != 0 {
-                errors = errors | ErrorKind::FRAMING;
+                errors = errors | SerialErrors::FRAMING;
             }
             Some(RxChar::new(byte, errors))
         }
@@ -922,10 +922,10 @@ fn count_calls_to(body: &MirBody, callee_substr: &str) -> usize {
         .count()
 }
 
-/// Extract error-flag-to-ErrorKind mappings from the rx_char CFG.
+/// Extract error-flag-to-SerialErrors mappings from the rx_char CFG.
 ///
 /// Follows the chain: field_from_raw(DR_REG::XX::FIELD, ...) -> SwitchInt
-/// -> bitor(errors, ErrorKind::YY) and returns pairs of (flag_path, kind_path).
+/// -> bitor(errors, SerialErrors::YY) and returns pairs of (flag_path, kind_path).
 fn extract_error_flag_mappings(body: &MirBody) -> Vec<(String, String)> {
     let bbs = &body.basic_blocks;
     let mut mappings = Vec::new();
@@ -979,7 +979,7 @@ fn extract_error_flag_mappings(body: &MirBody) -> Vec<(String, String)> {
         };
         let bitor_bb = &bbs[bitor_idx];
 
-        // Extract the ErrorKind name from the bitor call's second argument
+        // Extract the SerialErrors name from the bitor call's second argument
         let Some(term) = &bitor_bb.terminator else {
             continue;
         };
@@ -1335,15 +1335,15 @@ fn precondition_specimen_fidelity() {
         "fixture rx_char must extract byte via field_from_raw(DATA, dr) as u8"
     );
     assert!(
-        fixture.contains("ErrorKind::empty()"),
-        "fixture rx_char must init errors from ErrorKind::empty()"
+        fixture.contains("SerialErrors::empty()"),
+        "fixture rx_char must init errors from SerialErrors::empty()"
     );
     assert!(
         fixture.contains("field_from_raw(DR_REG::OE::FIELD, dr) != 0"),
         "fixture rx_char OE check must use same dr"
     );
     assert!(
-        fixture.contains("ErrorKind::OVERRUN"),
+        fixture.contains("SerialErrors::OVERRUN"),
         "fixture rx_char must reference OVERRUN"
     );
     assert!(
@@ -1351,7 +1351,7 @@ fn precondition_specimen_fidelity() {
         "fixture rx_char BE check must use same dr"
     );
     assert!(
-        fixture.contains("ErrorKind::BREAK"),
+        fixture.contains("SerialErrors::BREAK"),
         "fixture rx_char must reference BREAK"
     );
     assert!(
@@ -1359,7 +1359,7 @@ fn precondition_specimen_fidelity() {
         "fixture rx_char PE check must use same dr"
     );
     assert!(
-        fixture.contains("ErrorKind::PARITY"),
+        fixture.contains("SerialErrors::PARITY"),
         "fixture rx_char must reference PARITY"
     );
     assert!(
@@ -1367,7 +1367,7 @@ fn precondition_specimen_fidelity() {
         "fixture rx_char FE check must use same dr"
     );
     assert!(
-        fixture.contains("ErrorKind::FRAMING"),
+        fixture.contains("SerialErrors::FRAMING"),
         "fixture rx_char must reference FRAMING"
     );
     assert!(
@@ -2010,10 +2010,10 @@ fn check_group_2_rx_char_body() {
         field_from_raw_count
     );
 
-    // ErrorKind::empty initialization
+    // SerialErrors::empty initialization
     assert!(
         has_call_to(&f.body, "empty"),
-        "rx_char MIR must call ErrorKind::empty"
+        "rx_char MIR must call SerialErrors::empty"
     );
 
     // Bitwise-or error accumulation
@@ -2032,19 +2032,19 @@ fn check_group_2_rx_char_body() {
 
     // Verify exact OE->OVERRUN, BE->BREAK, PE->PARITY, FE->FRAMING mapping.
     //
-    // The extraction surface preserves ErrorKind constants as Unevaluated
-    // operands with their def-paths (e.g. "regseq::ErrorKind::OVERRUN").
+    // The extraction surface preserves SerialErrors constants as Unevaluated
+    // operands with their def-paths (e.g. "regseq::SerialErrors::OVERRUN").
     // Combined with the field_from_raw arguments (which carry Field paths
     // like "DR_REG::OE::FIELD"), the CFG structure proves each individual
-    // error-flag-to-ErrorKind pairing:
+    // error-flag-to-SerialErrors pairing:
     //
-    //   field_from_raw(DR_REG::XX::FIELD, dr) -> SwitchInt(!= 0) -> bitor(errors, ErrorKind::YY)
+    //   field_from_raw(DR_REG::XX::FIELD, dr) -> SwitchInt(!= 0) -> bitor(errors, SerialErrors::YY)
     //
     // We verify this by following the chain:
     // 1. Find each field_from_raw call with a DR error-flag Field argument
     // 2. Follow its target to the SwitchInt
     // 3. Follow the SwitchInt "otherwise" (non-zero) target to the bitor call
-    // 4. Extract the ErrorKind name from the bitor's second Unevaluated argument
+    // 4. Extract the SerialErrors name from the bitor's second Unevaluated argument
 
     let mappings = extract_error_flag_mappings(&f.body);
     assert!(
@@ -2078,7 +2078,7 @@ fn check_group_2_rx_char_body() {
     assert_eq!(
         mappings.len(),
         4,
-        "rx_char must have exactly 4 error-flag-to-ErrorKind mappings, found: {:?}",
+        "rx_char must have exactly 4 error-flag-to-SerialErrors mappings, found: {:?}",
         mappings
     );
 

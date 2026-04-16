@@ -8,6 +8,7 @@ use crate::RegseqError;
 ///
 /// `Clock` vs `Option<Clock>` encodes whether the clock resource is
 /// required or optional for the device.
+#[rseq::abstraction("clock")]
 pub struct Clock {
     _opaque: (),
 }

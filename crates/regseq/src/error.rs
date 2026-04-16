@@ -3,6 +3,7 @@
 /// `RegseqError` is the common error type that fallible Regseq trait callback
 /// exits converge on. It stays abstract inside authored DSL flow and is lowered
 /// by backends when it escapes a fallible callback boundary.
+#[rseq::framework_type("regseq-error")]
 #[non_exhaustive]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RegseqError {

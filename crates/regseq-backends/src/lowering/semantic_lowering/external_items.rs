@@ -229,14 +229,11 @@ fn is_already_classified_infrastructure(path: &str) -> bool {
 
 /// Normalize external type alias paths to their real target type.
 ///
-/// `regseq::ErrorKind` is `pub type ErrorKind = SerialErrors` — a type
-/// alias, not a real nominal type. Alias paths are normalized before
-/// hierarchy lookup/materialization.
+/// Alias paths are normalized before hierarchy lookup/materialization.
+/// Currently a passthrough — retained as the extension point for future
+/// aliases in the `regseq` facade crate.
 pub fn normalize_external_alias(path: &str) -> &str {
-    match path {
-        "regseq::ErrorKind" => "regseq::SerialErrors",
-        other => other,
-    }
+    path
 }
 
 /// Check if a path belongs to a supported external crate.
@@ -812,14 +809,6 @@ fn clone_hierarchy(hierarchy: &ItemHierarchy) -> ItemHierarchy {
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    #[test]
-    fn normalize_alias_error_kind() {
-        assert_eq!(
-            normalize_external_alias("regseq::ErrorKind"),
-            "regseq::SerialErrors"
-        );
-    }
 
     #[test]
     fn normalize_alias_passthrough() {

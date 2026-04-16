@@ -422,7 +422,7 @@ mod tests {
     }
 
     #[test]
-    fn error_kind_alias_resolves_to_serial_errors() {
+    fn serial_errors_resolves_directly() {
         let mut cl = CrossLinkTable::new();
         let mut st = ItemStore::new();
         let id = st.push(Item::Struct(regseq_model::item::types::StructDef {
@@ -435,9 +435,8 @@ mod tests {
         }));
         cl.insert_item(CanonicalPath::new("regseq::SerialErrors"), id);
 
-        // ErrorKind should normalize to SerialErrors.
         let ty = MirTy::Struct {
-            path: "regseq::ErrorKind".into(),
+            path: "regseq::SerialErrors".into(),
             fields: vec![],
         };
         match lower_mir_ty(&ty, &cl, &st) {

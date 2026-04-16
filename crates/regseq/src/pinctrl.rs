@@ -8,6 +8,7 @@ use crate::RegseqError;
 ///
 /// `PinCtrl` vs `Option<PinCtrl>` encodes whether pin-controller support
 /// is required or optional for the device.
+#[rseq::abstraction("pinctrl")]
 pub struct PinCtrl {
     _opaque: (),
 }

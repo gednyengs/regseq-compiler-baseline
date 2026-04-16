@@ -215,25 +215,25 @@ const SPECIMEN: &str = r#"
         pub struct SerialConfig { _private: () }
 
         #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-        pub struct ErrorKind(u32);
+        pub struct SerialErrors(u32);
 
-        impl ErrorKind {
-            pub const OVERRUN: ErrorKind = ErrorKind(1);
-            pub const BREAK: ErrorKind = ErrorKind(2);
-            pub const PARITY: ErrorKind = ErrorKind(4);
-            pub const FRAMING: ErrorKind = ErrorKind(8);
+        impl SerialErrors {
+            pub const OVERRUN: SerialErrors = SerialErrors(1);
+            pub const BREAK: SerialErrors = SerialErrors(2);
+            pub const PARITY: SerialErrors = SerialErrors(4);
+            pub const FRAMING: SerialErrors = SerialErrors(8);
 
-            pub fn empty() -> ErrorKind { ErrorKind(0) }
+            pub fn empty() -> SerialErrors { SerialErrors(0) }
         }
 
-        impl std::ops::BitOr for ErrorKind {
-            type Output = ErrorKind;
-            fn bitor(self, rhs: ErrorKind) -> ErrorKind { ErrorKind(self.0 | rhs.0) }
+        impl std::ops::BitOr for SerialErrors {
+            type Output = SerialErrors;
+            fn bitor(self, rhs: SerialErrors) -> SerialErrors { SerialErrors(self.0 | rhs.0) }
         }
 
-        pub struct RxChar { byte: u8, errors: ErrorKind }
+        pub struct RxChar { byte: u8, errors: SerialErrors }
         impl RxChar {
-            pub fn new(byte: u8, errors: ErrorKind) -> RxChar {
+            pub fn new(byte: u8, errors: SerialErrors) -> RxChar {
                 RxChar { byte, errors }
             }
         }

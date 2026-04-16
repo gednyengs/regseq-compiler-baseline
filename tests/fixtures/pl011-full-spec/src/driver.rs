@@ -1,6 +1,6 @@
 use regseq::{
-    ordered, Clock, Duration, ErrorKind, Field, FieldValue, Interrupt, IrqResult, Lifecycle, Mmio,
-    PinCtrl, PinState, RegseqError, ResetLine, RxChar, Serial, SerialConfig,
+    ordered, Clock, Duration, Field, FieldValue, Interrupt, IrqResult, Lifecycle, Mmio, PinCtrl,
+    PinState, RegseqError, ResetLine, RxChar, Serial, SerialConfig, SerialErrors,
 };
 
 use crate::registers::{
@@ -325,18 +325,18 @@ impl Serial for Pl011FullSpec {
         let dr = self.regs.dr.read_raw();
         let byte = field_from_raw(DR_REG::DATA::FIELD, dr) as u8;
 
-        let mut errors = ErrorKind::empty();
+        let mut errors = SerialErrors::empty();
         if field_from_raw(DR_REG::OE::FIELD, dr) != 0 {
-            errors = errors | ErrorKind::OVERRUN;
+            errors = errors | SerialErrors::OVERRUN;
         }
         if field_from_raw(DR_REG::BE::FIELD, dr) != 0 {
-            errors = errors | ErrorKind::BREAK;
+            errors = errors | SerialErrors::BREAK;
         }
         if field_from_raw(DR_REG::PE::FIELD, dr) != 0 {
-            errors = errors | ErrorKind::PARITY;
+            errors = errors | SerialErrors::PARITY;
         }
         if field_from_raw(DR_REG::FE::FIELD, dr) != 0 {
-            errors = errors | ErrorKind::FRAMING;
+            errors = errors | SerialErrors::FRAMING;
         }
 
         Some(RxChar::new(byte, errors))

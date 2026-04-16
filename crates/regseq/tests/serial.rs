@@ -1,6 +1,6 @@
 use regseq::{
-    DataBits, ErrorKind, FlowControl, Parity, RegseqError, RxChar, Serial, SerialConfig,
-    SerialConsole, SerialErrors, StopBits,
+    DataBits, FlowControl, Parity, RegseqError, RxChar, Serial, SerialConfig, SerialConsole,
+    SerialErrors, StopBits,
 };
 
 struct TestUart;
@@ -43,13 +43,12 @@ fn serial_types_are_publicly_exported() {
     fn assert_serial_console<T: SerialConsole>() {}
     assert_serial::<TestUart>();
 
-    // SerialConfig, SerialErrors, ErrorKind, and RxChar are usable as types.
+    // SerialConfig, SerialErrors, and RxChar are usable as types.
     fn _takes_config(_c: &SerialConfig) {}
     fn _returns_rx() -> Option<RxChar> {
         None
     }
     fn _takes_errors(_e: SerialErrors) {}
-    fn _takes_error_kind(_e: ErrorKind) {}
 
     // SerialConsole is independently implementable.
     struct ConsoleDev;
@@ -145,12 +144,11 @@ fn rx_char_carries_byte_and_serial_errors() {
 }
 
 #[test]
-fn rx_char_error_kind_compat_accessor_works() {
-    // ErrorKind is a type alias for SerialErrors.
-    let rx = RxChar::new(0x42, ErrorKind::FRAMING);
+fn rx_char_error_compat_accessor_works() {
+    let rx = RxChar::new(0x42, SerialErrors::FRAMING);
 
     // The error() compat accessor still works.
-    assert!(rx.error().contains(ErrorKind::FRAMING));
+    assert!(rx.error().contains(SerialErrors::FRAMING));
     // errors() is the preferred v1 accessor.
     assert!(rx.errors().contains(SerialErrors::FRAMING));
 }
@@ -162,10 +160,6 @@ fn serial_errors_naming_is_publicly_usable() {
     assert!(e.contains(SerialErrors::OVERRUN));
     assert!(e.contains(SerialErrors::BREAK));
     assert!(!e.contains(SerialErrors::PARITY));
-
-    // ErrorKind alias is interchangeable.
-    let e2: ErrorKind = SerialErrors::PARITY;
-    assert!(e2.contains(ErrorKind::PARITY));
 }
 
 #[test]

@@ -6,6 +6,7 @@ use core::ops::BitOr;
 // ---------------------------------------------------------------------------
 
 /// Number of data bits per serial frame.
+#[rseq::framework_type("data-bits")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DataBits {
     Five,
@@ -16,6 +17,7 @@ pub enum DataBits {
 }
 
 /// Parity mode for serial framing.
+#[rseq::framework_type("parity")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Parity {
     None,
@@ -24,6 +26,7 @@ pub enum Parity {
 }
 
 /// Number of stop bits per serial frame.
+#[rseq::framework_type("stop-bits")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum StopBits {
     One,
@@ -31,6 +34,7 @@ pub enum StopBits {
 }
 
 /// Hardware flow-control mode.
+#[rseq::framework_type("flow-control")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum FlowControl {
     None,
@@ -43,6 +47,7 @@ pub enum FlowControl {
 // ---------------------------------------------------------------------------
 
 /// Serial port configuration covering baud rate, framing, and flow control.
+#[rseq::framework_type("serial-config")]
 pub struct SerialConfig {
     pub baud_rate: u32,
     pub data_bits: DataBits,
@@ -60,13 +65,11 @@ pub struct SerialConfig {
 /// This is a small Regseq-owned semantic carrier rather than a device-local
 /// raw bitfield. It is intentionally limited to the stable v1 UART RX error
 /// set: overrun, parity, framing, and break.
+#[rseq::framework_type("serial-errors")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct SerialErrors {
     bits: u8,
 }
-
-/// Backward-compatible alias for `SerialErrors`.
-pub type ErrorKind = SerialErrors;
 
 impl SerialErrors {
     pub const NONE: Self = Self { bits: 0 };
@@ -107,6 +110,7 @@ impl BitOr for SerialErrors {
 // ---------------------------------------------------------------------------
 
 /// Received UART character plus semantic RX error status.
+#[rseq::framework_type("rx-char")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct RxChar {
     byte: u8,

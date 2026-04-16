@@ -8,6 +8,7 @@ use crate::{Duration, RegseqError};
 ///
 /// `ResetLine` vs `Option<ResetLine>` encodes whether the reset resource
 /// is required or optional for the device.
+#[rseq::abstraction("reset")]
 pub struct ResetLine {
     _opaque: (),
 }

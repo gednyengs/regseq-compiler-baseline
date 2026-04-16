@@ -4,6 +4,7 @@
 /// It carries no driver-callable methods; interrupt operations are managed by
 /// the compiler through `#[rseq::*]` attributes and lowered to OS-specific
 /// registration and dispatch code.
+#[rseq::abstraction("interrupt")]
 pub struct Interrupt {
     _private: (),
 }
@@ -12,6 +13,7 @@ pub struct Interrupt {
 ///
 /// This is a dispatch result, not an error type. Handlers return one of these
 /// variants to indicate how the interrupt was handled.
+#[rseq::framework_type("irq-result")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum IrqResult {
     Handled,

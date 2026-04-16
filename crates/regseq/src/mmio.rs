@@ -8,6 +8,7 @@
 /// compiler-side extraction check, not a facade trait contract.
 use core::ops::Deref;
 
+#[rseq::abstraction("mmio")]
 #[derive(Debug)]
 pub struct Mmio<T> {
     inner: T,

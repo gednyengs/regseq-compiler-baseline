@@ -2,6 +2,7 @@
 ///
 /// Storage is in microseconds. The type is opaque; only the three stable
 /// constructors are part of the public surface.
+#[rseq::framework_type("duration")]
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Duration {
     us: u64,

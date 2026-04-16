@@ -39,8 +39,8 @@ pub use registers::{Field, FieldValue, ReadOnly, ReadWrite, Reserved, WriteOnly}
 pub use regseq_macros::ordered;
 pub use reset::ResetLine;
 pub use serial::{
-    DataBits, ErrorKind, FlowControl, Parity, RxChar, Serial, SerialConfig, SerialConsole,
-    SerialErrors, StopBits,
+    DataBits, FlowControl, Parity, RxChar, Serial, SerialConfig, SerialConsole, SerialErrors,
+    StopBits,
 };
 pub use sync::{Completion, Guard, IrqSpinLock, Mutex, SpinLock};
 pub use time::Duration;
