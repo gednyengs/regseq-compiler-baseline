@@ -21,6 +21,7 @@ pub struct FileId(u32);
 ///
 /// Owns a single pool of strings shared by both [`Symbol`] and [`FileId`].
 /// The distinct newtypes prevent accidental mixing at call sites.
+#[derive(Clone, Debug)]
 pub struct SymbolInterner {
     strings: Vec<String>,
     lookup: HashMap<String, u32>,

@@ -12,6 +12,7 @@ pub mod function;
 pub mod impl_block;
 pub mod module;
 pub mod register;
+pub mod regseq_model;
 pub mod resources;
 pub mod type_def;
 
@@ -25,6 +26,7 @@ pub use register::{
     AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,
     RegisterBlockField, RegisterDescriptor,
 };
+pub use regseq_model::RegseqModel;
 pub use resources::{
     ClockBinding, ClockDecl, ClockResource, InterruptBinding, InterruptDecl, InterruptResource,
     MmioBinding, MmioDecl, MmioResource, PinCtrlBinding, PinCtrlDecl, PinCtrlResource,

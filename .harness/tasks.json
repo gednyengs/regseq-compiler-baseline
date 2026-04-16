@@ -919,7 +919,7 @@
           "id": "regseq-model-40",
           "name": "RegseqModel root struct, mod.rs, and lib.rs update",
           "spec": ".harness/tasks/regseq-model/40-regseq-model-root.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-39"
           ],
