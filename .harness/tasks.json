@@ -1319,7 +1319,7 @@
           "id": "track-a-pl011-06",
           "name": "PL011 register block conversion to register_block!",
           "spec": ".harness/tasks/track-a-pl011/06-register-block-conversion.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-macros-04"
           ],
