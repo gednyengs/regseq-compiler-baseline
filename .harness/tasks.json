@@ -651,7 +651,7 @@
           "id": "regseq-model-27",
           "name": "RegseqIntrinsic, RegseqAbstraction, IntrinsicMetadata",
           "spec": ".harness/tasks/regseq-model/27-intrinsic-types.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-20",
             "regseq-model-21",
