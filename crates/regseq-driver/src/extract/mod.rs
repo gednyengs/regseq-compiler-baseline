@@ -9,6 +9,8 @@ pub(crate) mod identity_enrichment;
 pub(crate) mod identity_enrichment_types;
 pub(crate) mod interrupts;
 #[allow(dead_code)]
+pub(crate) mod intrinsic_registry;
+#[allow(dead_code)]
 pub(crate) mod logging;
 pub(crate) mod mir_extract;
 #[allow(dead_code)]

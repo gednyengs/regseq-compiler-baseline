@@ -407,7 +407,7 @@
           "id": "regseq-driver-27",
           "name": "Intrinsic registry extraction",
           "spec": ".harness/tasks/regseq-driver/27-intrinsic-registry.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-26"
           ],
