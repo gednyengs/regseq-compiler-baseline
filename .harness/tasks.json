@@ -1330,7 +1330,7 @@
           "id": "track-a-pl011-07",
           "name": "PL011 driver.rs conversion to Mmio methods and pin_state attrs",
           "spec": ".harness/tasks/track-a-pl011/07-driver-mmio-and-attribute-conversion.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "track-a-pl011-06",
             "regseq-facade-23"

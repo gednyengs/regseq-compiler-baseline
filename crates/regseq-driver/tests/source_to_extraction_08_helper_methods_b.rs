@@ -1510,7 +1510,7 @@ fn specimen_fidelity_against_fixture() {
         "fixture must branch on pending_tx"
     );
     assert!(
-        fixture.contains("DR_REG::DATA::FIELD, byte as u32"),
+        fixture.contains("dr::DATA, byte as u32"),
         "fixture must write DR.DATA with byte as u32"
     );
 

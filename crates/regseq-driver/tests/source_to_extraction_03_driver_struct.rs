@@ -102,7 +102,7 @@ const AUTHORED_STRUCT_CANONICAL_PATH: &str = "pl011_full_spec::driver::Pl011Full
 
 // --- Resource authored facts ---
 const AUTHORED_REGS_FIELD: &str = "regs";
-const AUTHORED_REGS_TYPE: &str = "Mmio<Pl011Registers>";
+const AUTHORED_REGS_TYPE: &str = "Mmio<pl011::Regs>";
 const AUTHORED_REGS_MMIO_ID: &str = "uart_regs";
 
 const AUTHORED_IRQ_FIELD: &str = "irq";
@@ -141,7 +141,7 @@ const AUTHORED_DRIVER_ATTR: &str =
 const AUTHORED_DEVICE_CLASS_ATTR: &str = "#[rseq::device_class(serial)]";
 const AUTHORED_STRUCT_DECL: &str = "pub struct Pl011FullSpec {";
 const AUTHORED_REGS_DECL: &str = r#"#[rseq::mmio(id = "uart_regs")]"#;
-const AUTHORED_REGS_FIELD_DECL: &str = "pub regs: Mmio<Pl011Registers>,";
+const AUTHORED_REGS_FIELD_DECL: &str = "pub regs: Mmio<pl011::Regs>,";
 const AUTHORED_IRQ_ATTR: &str = r#"#[rseq::interrupt(id = "uart_irq")]"#;
 const AUTHORED_IRQ_FIELD_DECL: &str = "pub irq: Interrupt,";
 const AUTHORED_CLOCK_ATTR: &str = r#"#[rseq::clock(id = "uart_clk")]"#;
@@ -336,7 +336,7 @@ fn compile_and_extract_all(source: &str, test_name: &str) -> AllExtractionResult
 /// the real `regseq` crate.
 const SPECIMEN: &str = r#"
 pub struct Mmio<T> { _marker: core::marker::PhantomData<T> }
-pub struct Pl011Registers;
+pub mod pl011 { pub struct Regs; }
 pub struct Interrupt;
 pub struct Clock;
 pub struct ResetLine;
@@ -349,7 +349,7 @@ pub mod driver {
     #[rseq::device_class(serial)]
     pub struct Pl011FullSpec {
         #[rseq::mmio(id = "uart_regs")]
-        pub regs: Mmio<Pl011Registers>,
+        pub regs: Mmio<pl011::Regs>,
 
         #[rseq::property(id = "current-speed", default = 115200)]
         pub current_speed: u32,
@@ -612,13 +612,13 @@ fn check_group_3_regs_mmio_resource() {
     // register_block_type: extraction captures the inner generic type name
     assert_eq!(
         mmio.register_block_type.as_deref(),
-        Some("Pl011Registers"),
-        "register_block_type must be Some('Pl011Registers'); got {:?}",
+        Some("pl011::Regs"),
+        "register_block_type must be Some('pl011::Regs'); got {:?}",
         mmio.register_block_type
     );
 
-    // Rust type assertion: AUTHORED_REGS_TYPE is "Mmio<Pl011Registers>".
-    // The extraction surface captures register_block_type = "Pl011Registers"
+    // Rust type assertion: AUTHORED_REGS_TYPE is "Mmio<pl011::Regs>".
+    // The extraction surface captures register_block_type = "pl011::Regs"
     // and presence in mmio_fields proves the wrapper type is Mmio.
     // Verify the authored type is consistent with the extraction encoding.
     assert_eq!(

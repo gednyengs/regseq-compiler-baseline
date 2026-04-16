@@ -704,7 +704,7 @@ fn precondition_specimen_fidelity() {
         "fixture must contain tx_ready signature"
     );
     assert!(
-        fixture.contains("self.regs.fr.read(FR_REG::TXFF::FIELD) == 0"),
+        fixture.contains("self.regs.read_field(fr::TXFF) == 0"),
         "fixture tx_ready must test FR.TXFF == 0"
     );
 
@@ -714,7 +714,7 @@ fn precondition_specimen_fidelity() {
         "fixture must contain tx_empty signature"
     );
     assert!(
-        fixture.contains("self.regs.fr.read(FR_REG::BUSY::FIELD) == 0"),
+        fixture.contains("self.regs.read_field(fr::BUSY) == 0"),
         "fixture tx_empty must test FR.BUSY == 0"
     );
 
@@ -724,12 +724,12 @@ fn precondition_specimen_fidelity() {
         "fixture must contain flush_rx_fifo signature"
     );
     assert!(
-        fixture.contains("while self.regs.fr.read(FR_REG::RXFE::FIELD) == 0"),
+        fixture.contains("while self.regs.read_field(fr::RXFE) == 0"),
         "fixture flush_rx_fifo must loop while FR.RXFE == 0"
     );
     assert!(
-        fixture.contains("let _ = self.regs.dr.read_raw()"),
-        "fixture flush_rx_fifo must drain DR via read_raw()"
+        fixture.contains("let _ = self.regs.read(dr::REG)"),
+        "fixture flush_rx_fifo must drain DR via read(dr::REG)"
     );
 
     // -- flush_tx_fifo authored facts --
@@ -738,11 +738,11 @@ fn precondition_specimen_fidelity() {
         "fixture must contain flush_tx_fifo signature"
     );
     assert!(
-        fixture.contains("self.regs.lcr_h.modify(LCRH_REG::FEN::DISABLED)"),
+        fixture.contains("self.regs.modify(lcr_h::REG, lcr_h::FEN::DISABLED)"),
         "fixture flush_tx_fifo must apply FEN::DISABLED"
     );
     assert!(
-        fixture.contains("self.regs.lcr_h.modify(LCRH_REG::FEN::ENABLED)"),
+        fixture.contains("self.regs.modify(lcr_h::REG, lcr_h::FEN::ENABLED)"),
         "fixture flush_tx_fifo must apply FEN::ENABLED"
     );
 
@@ -752,11 +752,11 @@ fn precondition_specimen_fidelity() {
         "fixture must contain send_break signature"
     );
     assert!(
-        fixture.contains("self.regs.lcr_h.modify(LCRH_REG::BRK::ENABLED)"),
+        fixture.contains("self.regs.modify(lcr_h::REG, lcr_h::BRK::ENABLED)"),
         "fixture send_break must apply BRK::ENABLED"
     );
     assert!(
-        fixture.contains("self.regs.lcr_h.modify(LCRH_REG::BRK::DISABLED)"),
+        fixture.contains("self.regs.modify(lcr_h::REG, lcr_h::BRK::DISABLED)"),
         "fixture send_break must apply BRK::DISABLED"
     );
 

@@ -3,9 +3,8 @@ use regseq::{
     PinState, RegseqError, ResetLine, RxChar, Serial, SerialConfig, SerialErrors,
 };
 
-use crate::registers::{
-    Pl011Registers, CR_REG, DR_REG, FBRD_REG, FR_REG, IBRD_REG, ICR_REG, IFLS_REG, IMSC_REG,
-    LCRH_REG,
+use crate::registers::pl011::{
+    self, cr, dr, fbrd, fr, ibrd, icr, ifls, imsc, lcr_h, mis,
 };
 
 /// Construct a `FieldValue` from a field descriptor and a raw shifted value.
@@ -23,9 +22,11 @@ fn field_from_raw<R>(field: Field<u32, R>, raw: u32) -> u32 {
     (raw & field.mask) >> field.shift
 }
 
+#[rseq::pin_state(id = "default")]
 pub struct DefaultState;
 impl PinState for DefaultState {}
 
+#[rseq::pin_state(id = "sleep")]
 pub struct SleepState;
 impl PinState for SleepState {}
 
@@ -33,7 +34,7 @@ impl PinState for SleepState {}
 #[rseq::device_class(serial)]
 pub struct Pl011FullSpec {
     #[rseq::mmio(id = "uart_regs")]
-    pub regs: Mmio<Pl011Registers>,
+    pub regs: Mmio<pl011::Regs>,
 
     #[rseq::property(id = "current-speed", default = 115200)]
     pub current_speed: u32,
@@ -47,6 +48,7 @@ pub struct Pl011FullSpec {
     #[rseq::clock(id = "uart_clk")]
     pub clock: Option<Clock>,
 
+    #[rseq::reset(id = "uart_rst")]
     pub reset: Option<ResetLine>,
 
     #[rseq::pinctrl(id = "uart_pins")]
@@ -66,18 +68,17 @@ impl Pl011FullSpec {
     /// Disable UART operation before reprogramming divisors or line control.
     fn disable_uart(&mut self) {
         self.regs
-            .cr
-            .write(CR_REG::UARTEN::DISABLED + CR_REG::TXE::DISABLED + CR_REG::RXE::DISABLED);
+            .write_field(cr::UARTEN::DISABLED + cr::TXE::DISABLED + cr::RXE::DISABLED);
     }
 
     /// Disable FIFO mode to begin from a clean bring-up state.
     fn disable_fifo(&mut self) {
-        self.regs.lcr_h.modify(LCRH_REG::FEN::DISABLED);
+        self.regs.modify(lcr_h::REG, lcr_h::FEN::DISABLED);
     }
 
     /// Mask all interrupt sources during polling-oriented bring-up.
     fn mask_all_interrupts(&mut self) {
-        self.regs.imsc.write(raw_reg_val::<IMSC_REG::Register>(
+        self.regs.write_field(raw_reg_val::<imsc::Register>(
             Self::ALL_UART_INTERRUPTS_MASK,
             0,
         ));
@@ -85,7 +86,7 @@ impl Pl011FullSpec {
 
     /// Clear all pending PL011 interrupt sources.
     fn clear_all_interrupts(&mut self) {
-        self.regs.icr.write(raw_reg_val::<ICR_REG::Register>(
+        self.regs.write_field(raw_reg_val::<icr::Register>(
             Self::ALL_UART_INTERRUPTS_MASK,
             Self::ALL_UART_INTERRUPTS_MASK,
         ));
@@ -94,8 +95,7 @@ impl Pl011FullSpec {
     /// Program FIFO trigger levels for interrupt-driven service.
     fn configure_interrupt_levels(&mut self) {
         self.regs
-            .ifls
-            .write(IFLS_REG::RXIFLSEL::ONE_HALF + IFLS_REG::TXIFLSEL::ONE_EIGHTH);
+            .write_field(ifls::RXIFLSEL::ONE_HALF + ifls::TXIFLSEL::ONE_EIGHTH);
     }
 
     /// Program integer and fractional baud divisors.
@@ -104,15 +104,13 @@ impl Pl011FullSpec {
     /// `(uart_clk_hz * 4) / baud_rate`, with integer/fractional split at 6 bits.
     fn set_baud_rate(&mut self, uart_clk_hz: u32, baud_rate: u32) {
         let div_times_64 = (uart_clk_hz as u64 * 4) / baud_rate as u64;
-        let ibrd = (div_times_64 >> 6) as u32;
-        let fbrd = (div_times_64 & 0x3f) as u32;
+        let ibrd_val = (div_times_64 >> 6) as u32;
+        let fbrd_val = (div_times_64 & 0x3f) as u32;
 
         self.regs
-            .ibrd
-            .write(field_val(IBRD_REG::BAUD_DIVINT::FIELD, ibrd));
+            .write_field(field_val(ibrd::BAUD_DIVINT, ibrd_val));
         self.regs
-            .fbrd
-            .write(field_val(FBRD_REG::BAUD_DIVFRAC::FIELD, fbrd));
+            .write_field(field_val(fbrd::BAUD_DIVFRAC, fbrd_val));
     }
 
     /// Program 8N1 with FIFOs enabled.
@@ -121,39 +119,37 @@ impl Pl011FullSpec {
     /// after `IBRD`/`FBRD` so the divisor update commits.
     fn configure_line_control(&mut self) {
         self.regs
-            .lcr_h
-            .write(LCRH_REG::WLEN::EIGHT_BITS + LCRH_REG::FEN::ENABLED);
+            .write_field(lcr_h::WLEN::EIGHT_BITS + lcr_h::FEN::ENABLED);
     }
 
     /// Enable UART operation with both RX and TX active.
     fn enable_uart(&mut self) {
         self.regs
-            .cr
-            .write(CR_REG::UARTEN::ENABLED + CR_REG::TXE::ENABLED + CR_REG::RXE::ENABLED);
+            .write_field(cr::UARTEN::ENABLED + cr::TXE::ENABLED + cr::RXE::ENABLED);
     }
 
     /// Enable RX and receive-timeout interrupts for the interrupt-driven path.
     fn enable_rx_interrupts(&mut self) {
-        self.regs.imsc.modify(raw_reg_val::<IMSC_REG::Register>(
-            Self::RX_INTERRUPT_MASK,
-            Self::RX_INTERRUPT_MASK,
-        ));
+        self.regs.modify(
+            imsc::REG,
+            raw_reg_val::<imsc::Register>(Self::RX_INTERRUPT_MASK, Self::RX_INTERRUPT_MASK),
+        );
     }
 
     /// Enable TX interrupts when transmit work is pending.
     fn enable_tx_interrupts(&mut self) {
-        self.regs.imsc.modify(raw_reg_val::<IMSC_REG::Register>(
-            Self::TX_INTERRUPT_MASK,
-            Self::TX_INTERRUPT_MASK,
-        ));
+        self.regs.modify(
+            imsc::REG,
+            raw_reg_val::<imsc::Register>(Self::TX_INTERRUPT_MASK, Self::TX_INTERRUPT_MASK),
+        );
     }
 
     /// Disable TX interrupts when no more transmit work remains.
     fn disable_tx_interrupts(&mut self) {
-        self.regs.imsc.modify(raw_reg_val::<IMSC_REG::Register>(
-            Self::TX_INTERRUPT_MASK,
-            0,
-        ));
+        self.regs.modify(
+            imsc::REG,
+            raw_reg_val::<imsc::Register>(Self::TX_INTERRUPT_MASK, 0),
+        );
     }
 
     /// Shared polling-oriented bring-up sequence.
@@ -241,8 +237,7 @@ impl Pl011FullSpec {
         if let Some(byte) = self.pending_tx {
             if self.tx_ready() {
                 self.regs
-                    .dr
-                    .write(field_val(DR_REG::DATA::FIELD, byte as u32));
+                    .write_field(field_val(dr::DATA, byte as u32));
                 self.pending_tx = None;
                 self.disable_tx_interrupts();
                 return true;
@@ -259,8 +254,7 @@ impl Pl011FullSpec {
         let clear_mask = status & Self::EXPLICIT_ISR_CLEAR_MASK;
         if clear_mask != 0 {
             self.regs
-                .icr
-                .write(raw_reg_val::<ICR_REG::Register>(clear_mask, clear_mask));
+                .write_field(raw_reg_val::<icr::Register>(clear_mask, clear_mask));
         }
     }
 }
@@ -308,8 +302,7 @@ impl Serial for Pl011FullSpec {
     fn tx_byte(&mut self, byte: u8) {
         if self.pending_tx.is_none() && self.tx_ready() {
             self.regs
-                .dr
-                .write(field_val(DR_REG::DATA::FIELD, byte as u32));
+                .write_field(field_val(dr::DATA, byte as u32));
             return;
         }
 
@@ -318,24 +311,24 @@ impl Serial for Pl011FullSpec {
     }
 
     fn rx_char(&mut self) -> Option<RxChar> {
-        if self.regs.fr.read(FR_REG::RXFE::FIELD) != 0 {
+        if self.regs.read_field(fr::RXFE) != 0 {
             return None;
         }
 
-        let dr = self.regs.dr.read_raw();
-        let byte = field_from_raw(DR_REG::DATA::FIELD, dr) as u8;
+        let dr_raw = self.regs.read(dr::REG);
+        let byte = field_from_raw(dr::DATA, dr_raw) as u8;
 
         let mut errors = SerialErrors::empty();
-        if field_from_raw(DR_REG::OE::FIELD, dr) != 0 {
+        if field_from_raw(dr::OE, dr_raw) != 0 {
             errors = errors | SerialErrors::OVERRUN;
         }
-        if field_from_raw(DR_REG::BE::FIELD, dr) != 0 {
+        if field_from_raw(dr::BE, dr_raw) != 0 {
             errors = errors | SerialErrors::BREAK;
         }
-        if field_from_raw(DR_REG::PE::FIELD, dr) != 0 {
+        if field_from_raw(dr::PE, dr_raw) != 0 {
             errors = errors | SerialErrors::PARITY;
         }
-        if field_from_raw(DR_REG::FE::FIELD, dr) != 0 {
+        if field_from_raw(dr::FE, dr_raw) != 0 {
             errors = errors | SerialErrors::FRAMING;
         }
 
@@ -343,29 +336,29 @@ impl Serial for Pl011FullSpec {
     }
 
     fn tx_ready(&mut self) -> bool {
-        self.regs.fr.read(FR_REG::TXFF::FIELD) == 0
+        self.regs.read_field(fr::TXFF) == 0
     }
 
     fn tx_empty(&mut self) -> bool {
-        self.regs.fr.read(FR_REG::BUSY::FIELD) == 0
+        self.regs.read_field(fr::BUSY) == 0
     }
 
     fn flush_rx_fifo(&mut self) {
-        while self.regs.fr.read(FR_REG::RXFE::FIELD) == 0 {
-            let _ = self.regs.dr.read_raw();
+        while self.regs.read_field(fr::RXFE) == 0 {
+            let _ = self.regs.read(dr::REG);
         }
     }
 
     fn flush_tx_fifo(&mut self) {
-        self.regs.lcr_h.modify(LCRH_REG::FEN::DISABLED);
-        self.regs.lcr_h.modify(LCRH_REG::FEN::ENABLED);
+        self.regs.modify(lcr_h::REG, lcr_h::FEN::DISABLED);
+        self.regs.modify(lcr_h::REG, lcr_h::FEN::ENABLED);
     }
 
     fn send_break(&mut self, on: bool) {
         if on {
-            self.regs.lcr_h.modify(LCRH_REG::BRK::ENABLED);
+            self.regs.modify(lcr_h::REG, lcr_h::BRK::ENABLED);
         } else {
-            self.regs.lcr_h.modify(LCRH_REG::BRK::DISABLED);
+            self.regs.modify(lcr_h::REG, lcr_h::BRK::DISABLED);
         }
     }
 }
@@ -373,7 +366,7 @@ impl Serial for Pl011FullSpec {
 impl Pl011FullSpec {
     #[rseq::isr]
     pub fn handle_irq(&mut self) -> IrqResult {
-        let status = self.regs.mis.read_raw();
+        let status = self.regs.read(mis::REG);
 
         if status == 0 {
             return IrqResult::NotHandled;

@@ -1323,48 +1323,48 @@ fn precondition_specimen_fidelity() {
         "fixture must contain rx_char signature"
     );
     assert!(
-        fixture.contains("self.regs.fr.read(FR_REG::RXFE::FIELD) != 0"),
+        fixture.contains("self.regs.read_field(fr::RXFE) != 0"),
         "fixture rx_char must test FR.RXFE"
     );
     assert!(
-        fixture.contains("let dr = self.regs.dr.read_raw()"),
+        fixture.contains("let dr_raw = self.regs.read(dr::REG)"),
         "fixture rx_char must perform one raw DR read"
     );
     assert!(
-        fixture.contains("field_from_raw(DR_REG::DATA::FIELD, dr) as u8"),
-        "fixture rx_char must extract byte via field_from_raw(DATA, dr) as u8"
+        fixture.contains("field_from_raw(dr::DATA, dr_raw) as u8"),
+        "fixture rx_char must extract byte via field_from_raw(DATA, dr_raw) as u8"
     );
     assert!(
         fixture.contains("SerialErrors::empty()"),
         "fixture rx_char must init errors from SerialErrors::empty()"
     );
     assert!(
-        fixture.contains("field_from_raw(DR_REG::OE::FIELD, dr) != 0"),
-        "fixture rx_char OE check must use same dr"
+        fixture.contains("field_from_raw(dr::OE, dr_raw) != 0"),
+        "fixture rx_char OE check must use same dr_raw"
     );
     assert!(
         fixture.contains("SerialErrors::OVERRUN"),
         "fixture rx_char must reference OVERRUN"
     );
     assert!(
-        fixture.contains("field_from_raw(DR_REG::BE::FIELD, dr) != 0"),
-        "fixture rx_char BE check must use same dr"
+        fixture.contains("field_from_raw(dr::BE, dr_raw) != 0"),
+        "fixture rx_char BE check must use same dr_raw"
     );
     assert!(
         fixture.contains("SerialErrors::BREAK"),
         "fixture rx_char must reference BREAK"
     );
     assert!(
-        fixture.contains("field_from_raw(DR_REG::PE::FIELD, dr) != 0"),
-        "fixture rx_char PE check must use same dr"
+        fixture.contains("field_from_raw(dr::PE, dr_raw) != 0"),
+        "fixture rx_char PE check must use same dr_raw"
     );
     assert!(
         fixture.contains("SerialErrors::PARITY"),
         "fixture rx_char must reference PARITY"
     );
     assert!(
-        fixture.contains("field_from_raw(DR_REG::FE::FIELD, dr) != 0"),
-        "fixture rx_char FE check must use same dr"
+        fixture.contains("field_from_raw(dr::FE, dr_raw) != 0"),
+        "fixture rx_char FE check must use same dr_raw"
     );
     assert!(
         fixture.contains("SerialErrors::FRAMING"),

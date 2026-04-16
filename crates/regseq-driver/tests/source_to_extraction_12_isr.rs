@@ -496,8 +496,8 @@ fn precondition_specimen_fidelity() {
 
     // Fact 3: reads raw MIS once into status
     assert!(
-        fixture.contains("let status = self.regs.mis.read_raw();"),
-        "fixture must contain `let status = self.regs.mis.read_raw();`"
+        fixture.contains("let status = self.regs.read(mis::REG);"),
+        "fixture must contain `let status = self.regs.read(mis::REG);`"
     );
 
     // Fact 4: early NotHandled return for status == 0
