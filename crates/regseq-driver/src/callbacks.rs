@@ -64,6 +64,12 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             self.options.target_os,
         );
 
+        // --- cross-crate attribute validation (gate test, Phase 4) ---
+        if std::env::var("REGSEQ_VALIDATE_ATTRS").is_ok() {
+            let attr_report = crate::extract::attr_validation::validate_cross_crate_attrs(tcx);
+            attr_report.log();
+        }
+
         // --- identity ---
         let identities = crate::extract::driver_identity::extract_driver_identities(tcx);
         eprintln!("regseq-driver: identity extraction: {identities:?}");

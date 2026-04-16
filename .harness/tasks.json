@@ -389,6 +389,111 @@
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-26",
+          "name": "Cross-crate attribute validation gate test",
+          "spec": ".harness/tasks/regseq-driver/26-cross-crate-attr-validation.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-facade-20",
+            "regseq-facade-21",
+            "regseq-facade-23"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-27",
+          "name": "Intrinsic registry extraction",
+          "spec": ".harness/tasks/regseq-driver/27-intrinsic-registry.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-26"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-28",
+          "name": "Framework type registry extraction",
+          "spec": ".harness/tasks/regseq-driver/28-framework-type-registry.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-26"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-29",
+          "name": "Abstraction type registry extraction",
+          "spec": ".harness/tasks/regseq-driver/29-abstraction-type-registry.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-26"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-30",
+          "name": "Pin-state attribute extraction",
+          "spec": ".harness/tasks/regseq-driver/30-pin-state-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-26"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-31",
+          "name": "Source location extraction",
+          "spec": ".harness/tasks/regseq-driver/31-source-location-extraction.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-26"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-32",
+          "name": "RawFrontendArtifact expansion and callback wiring",
+          "spec": ".harness/tasks/regseq-driver/32-raw-artifact-expansion.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-27",
+            "regseq-driver-28",
+            "regseq-driver-29",
+            "regseq-driver-30",
+            "regseq-driver-31"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-33",
+          "name": "Unit test specimen attribute updates",
+          "spec": ".harness/tasks/regseq-driver/33-test-specimen-updates.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-32"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-34",
+          "name": "Golden file regeneration",
+          "spec": ".harness/tasks/regseq-driver/34-golden-file-regeneration.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-33"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -693,6 +798,130 @@
           "depends_on": [
             "regseq-model-28",
             "regseq-model-29"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-31",
+          "name": "FrameworkTypeKind and TypeDefClassification",
+          "spec": ".harness/tasks/regseq-model/31-framework-type-kind.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-27"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-32",
+          "name": "TypeDef, FieldDef, VariantDef, Attrs",
+          "spec": ".harness/tasks/regseq-model/32-type-def.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-31",
+            "regseq-model-22",
+            "regseq-model-25"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-33",
+          "name": "RegisterDescriptor and RegisterBlock",
+          "spec": ".harness/tasks/regseq-model/33-register-descriptor-and-block.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-21"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-34",
+          "name": "Constant",
+          "spec": ".harness/tasks/regseq-model/34-constant.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-22",
+            "regseq-model-25"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-35",
+          "name": "Function, Param, ParamKind",
+          "spec": ".harness/tasks/regseq-model/35-function-and-param.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-30",
+            "regseq-model-32"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-36",
+          "name": "Resource, Property, and UserData field types",
+          "spec": ".harness/tasks/regseq-model/36-resources-and-fields.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-33",
+            "regseq-model-22",
+            "regseq-model-25"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-37",
+          "name": "DriverStruct and driver metadata",
+          "spec": ".harness/tasks/regseq-model/37-driver-struct.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-36"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-38",
+          "name": "ImplBlock",
+          "spec": ".harness/tasks/regseq-model/38-impl-block.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-35",
+            "regseq-model-34"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-39",
+          "name": "Module",
+          "spec": ".harness/tasks/regseq-model/39-module.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-31",
+            "regseq-model-32",
+            "regseq-model-33",
+            "regseq-model-34",
+            "regseq-model-35",
+            "regseq-model-36",
+            "regseq-model-37",
+            "regseq-model-38"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-40",
+          "name": "RegseqModel root struct, mod.rs, and lib.rs update",
+          "spec": ".harness/tasks/regseq-model/40-regseq-model-root.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-39"
           ],
           "artifacts": [],
           "fail_reason": null
