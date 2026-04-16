@@ -59,7 +59,7 @@ items:
   - id: regseqmodel-phase-1
     phase: "1"
     title: CFG-based IR types -- Place, Operand, Rvalue, Statement, Terminator, Body
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - regseqmodel-phase-0
     target_harness_groups:
@@ -72,17 +72,25 @@ items:
       Operand with LiteralValue, Rvalue with BorrowKind/CastKind/AggregateKind,
       RegseqIntrinsic and IntrinsicMetadata, StatementKind and TerminatorKind,
       Body with BasicBlock/LocalDecl/OrderedRegion/BodySourceMap.
+    brief: .harness/spec-batches/regseqmodel-phase-1.md
     spec_authoring_notes:
       - All types live under ir/ module.
       - Existing declaration/mir_body.rs types remain as extraction serialization format.
       - New ir/ types are the processed output after domain enrichment.
       - Serde uses adjacently-tagged enums, Symbol serialized as string.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-model-24
+      - regseq-model-25
+      - regseq-model-26
+      - regseq-model-27
+      - regseq-model-28
+      - regseq-model-29
+      - regseq-model-30
 
   - id: regseqmodel-phase-2
     phase: "2"
     title: Unified RegseqModel structure -- Module tree, driver struct, type defs
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - regseqmodel-phase-0
       - regseqmodel-phase-1
@@ -187,7 +195,7 @@ items:
   - id: regseqmodel-phase-3d
     phase: "3"
     title: PL011 fixture comprehensive update
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - regseqmodel-phase-3b
     target_harness_groups:
@@ -200,18 +208,21 @@ items:
       Convert PL011 fixture to new register architecture: register_block!
       macro, Mmio<pl011::Regs>, all register access via Mmio methods,
       scoped module imports, pin_state attributes on marker types.
+    brief: .harness/spec-batches/regseqmodel-phase-3d.md
     spec_authoring_notes:
       - Depends on register_block! macro and Mmio method restructure being done.
       - Every register access statement changes form.
       - Must compile against the updated facade and macros crates.
-    generated_task_ids: []
+    generated_task_ids:
+      - track-a-pl011-06
+      - track-a-pl011-07
 
   # ---- Phase 4: Extraction pipeline ----
 
   - id: regseqmodel-phase-4
     phase: "4"
     title: Extraction pipeline updates -- attribute registries, new surfaces, tests
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - regseqmodel-phase-3a
       - regseqmodel-phase-3b

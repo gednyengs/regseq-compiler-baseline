@@ -611,6 +611,91 @@
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-24",
+          "name": "Place and Projection",
+          "spec": ".harness/tasks/regseq-model/24-place-and-projection.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-20",
+            "regseq-model-21"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-25",
+          "name": "Operand and LiteralValue",
+          "spec": ".harness/tasks/regseq-model/25-operand-and-literal-value.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-21"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-26",
+          "name": "Rvalue, BorrowKind, CastKind, AggregateKind",
+          "spec": ".harness/tasks/regseq-model/26-rvalue-and-supporting-types.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-24",
+            "regseq-model-25"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-27",
+          "name": "RegseqIntrinsic, RegseqAbstraction, IntrinsicMetadata",
+          "spec": ".harness/tasks/regseq-model/27-intrinsic-types.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-20",
+            "regseq-model-21",
+            "regseq-model-22"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-28",
+          "name": "StatementKind and MirIntrinsic",
+          "spec": ".harness/tasks/regseq-model/28-statement-types.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-24",
+            "regseq-model-25"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-29",
+          "name": "TerminatorKind and SwitchTargets",
+          "spec": ".harness/tasks/regseq-model/29-terminator-types.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-24",
+            "regseq-model-25",
+            "regseq-model-27"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-30",
+          "name": "Body, BasicBlock, LocalDecl, OrderedRegion, BodySourceMap",
+          "spec": ".harness/tasks/regseq-model/30-body-and-source-map.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-28",
+            "regseq-model-29"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -655,7 +740,7 @@
           "id": "regseq-macros-04",
           "name": "register_block! proc macro",
           "spec": ".harness/tasks/regseq-macros/04-register-block-macro.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-facade-22",
             "regseq-facade-23"
@@ -990,7 +1075,7 @@
           "id": "regseq-facade-22",
           "name": "RegisterOf trait, access control types, and RegisterId",
           "spec": ".harness/tasks/regseq-facade/22-register-of-trait-and-access-types.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
@@ -999,7 +1084,7 @@
           "id": "regseq-facade-23",
           "name": "Mmio<T> register access methods with intrinsic annotations",
           "spec": ".harness/tasks/regseq-facade/23-mmio-register-methods.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-facade-22"
           ],
@@ -1010,7 +1095,7 @@
           "id": "regseq-facade-24",
           "name": "Ordered region marker functions and ordered! macro migration",
           "spec": ".harness/tasks/regseq-facade/24-ordered-region-markers-and-macro-migration.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null
@@ -1226,6 +1311,29 @@
             "track-a-pl011-04",
             "regseq-facade-19",
             "regseq-driver-20"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-pl011-06",
+          "name": "PL011 register block conversion to register_block!",
+          "spec": ".harness/tasks/track-a-pl011/06-register-block-conversion.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-macros-04"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-pl011-07",
+          "name": "PL011 driver.rs conversion to Mmio methods and pin_state attrs",
+          "spec": ".harness/tasks/track-a-pl011/07-driver-mmio-and-attribute-conversion.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-pl011-06",
+            "regseq-facade-23"
           ],
           "artifacts": [],
           "fail_reason": null
