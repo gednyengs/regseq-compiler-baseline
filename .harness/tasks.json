@@ -865,7 +865,7 @@
           "id": "regseq-model-36",
           "name": "Resource, Property, and UserData field types",
           "spec": ".harness/tasks/regseq-model/36-resources-and-fields.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-33",
             "regseq-model-22",

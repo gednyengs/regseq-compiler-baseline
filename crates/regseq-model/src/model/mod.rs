@@ -9,6 +9,7 @@ pub mod constant;
 pub mod framework;
 pub mod function;
 pub mod register;
+pub mod resources;
 pub mod type_def;
 
 pub use constant::Constant;
@@ -17,5 +18,11 @@ pub use function::{Function, Param, ParamKind};
 pub use register::{
     AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,
     RegisterBlockField, RegisterDescriptor,
+};
+pub use resources::{
+    ClockBinding, ClockDecl, ClockResource, InterruptBinding, InterruptDecl, InterruptResource,
+    MmioBinding, MmioDecl, MmioResource, PinCtrlBinding, PinCtrlDecl, PinCtrlResource,
+    PropertyField, ResetBinding, ResetDecl, ResetResource, Shape, SyncKind, SyncResource,
+    UserDataField,
 };
 pub use type_def::{AttrEntry, AttrValue, Attrs, FieldDef, TypeDef, TypeDefKind, VariantDef};
