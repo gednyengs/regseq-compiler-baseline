@@ -24,15 +24,14 @@ re-export.
 // ir/place.rs
 
 /// A memory location: a local variable plus an optional chain of projections.
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub struct Place {
     pub local: LocalId,
     pub projection: Vec<Projection>,
 }
 
 /// A single projection step applied to a place.
-#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data")]
+#[derive(Clone, Eq, PartialEq, Hash, Debug)]
 pub enum Projection {
     /// Dereference a pointer or reference.
     Deref,
@@ -75,12 +74,14 @@ pub enum Projection {
 - `Field` carries `name` and `ty` directly so consumers don't need
   type-definition lookups.
 - `name` is `Option<Symbol>` because tuple struct fields are positional.
-- Serde: adjacently-tagged enum for `Projection`. `Place` is a plain struct.
-- `Symbol` fields will not serialize standalone (they are opaque handles).
-  For now, derive Serialize/Deserialize on the types assuming they will be
-  serialized within a model-level context that resolves symbols. If this
-  conflicts with Symbol not implementing Serialize, use `#[serde(skip)]`
-  on Symbol fields and add a TODO for model-level serialization.
+- **Serde**: These types contain `Symbol` fields (`Field.name`,
+  `Downcast.name`) which do not implement `Serialize`/`Deserialize`
+  standalone. Do NOT derive serde traits on these types yet. Serde
+  will be added in a later phase when model-level serialization
+  (which resolves symbols to strings) is implemented. For now, focus
+  on construction, equality, and Debug.
+- Adjacently-tagged enum format will be applied to `Projection` when
+  serde is added.
 
 ## Non-Goals
 

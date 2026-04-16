@@ -58,8 +58,7 @@ pub enum RegseqAbstraction {
     Completion,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data")]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum IntrinsicMetadata {
     Log {
         template: String,
@@ -93,7 +92,7 @@ pub enum FormatKind {
     Pointer,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct RegisterFieldMeta {
     pub mask: u64,
     pub shift: u32,
@@ -107,9 +106,13 @@ pub struct RegisterFieldMeta {
 - `IntrinsicMetadata::Log.template` is a `String`, not `Symbol`, because
   templates may be long and are not identifiers.
 - `RegisterFieldMeta.mask` is `u64` to accommodate registers up to 64 bits wide.
-- `Symbol` fields in `IntrinsicMetadata::PinCtrl` and `RegisterFieldMeta`
-  are opaque handles. Same serde note as Place: they will be resolved at
-  model-level serialization.
+- **Serde**: `IntrinsicMetadata::PinCtrl.state_id` and
+  `RegisterFieldMeta.name` are `Symbol` fields which do not implement
+  standalone serde. Do NOT derive serde on types containing Symbol
+  fields yet. Serde will be added when model-level serialization is
+  built. Types without Symbol fields (`RegseqIntrinsic`,
+  `RegseqAbstraction`, `FormatPlaceholder`, `FormatKind`) CAN derive
+  serde with adjacently-tagged format.
 
 ## Non-Goals
 

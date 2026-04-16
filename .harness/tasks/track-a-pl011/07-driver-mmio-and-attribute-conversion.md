@@ -79,6 +79,13 @@ parameter `R` is unchanged in shape but call sites change from
    pub reset: Option<ResetLine>,
    ```
 
+### lib.rs re-export update
+
+Task track-a-pl011-06 updates registers.rs but may leave lib.rs
+re-exports stale. Verify that `lib.rs` does not re-export the
+now-removed `Pl011Registers`. If needed, update re-exports to use
+`registers::pl011` paths.
+
 ### Unused import cleanup
 
 Remove `Field` and `FieldValue` from the top-level regseq import if

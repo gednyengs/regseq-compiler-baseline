@@ -25,13 +25,12 @@ Create `crates/regseq-model/src/ir/terminator.rs`. Update `ir/mod.rs`.
 // ir/terminator.rs
 
 /// A terminator: semantic content only. Source location in BodySourceMap.
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Terminator {
     pub kind: TerminatorKind,
 }
 
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
-#[serde(tag = "kind", content = "data")]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub enum TerminatorKind {
     Goto(BasicBlockId),
 
@@ -86,7 +85,14 @@ pub struct SwitchTargets {
   folding during IR construction (Phase 5). `None` for infallible ops.
 - `Drop` has no `error_target` -- `Drop::drop` returns `()`.
 - `SwitchTargets.targets` has one more entry than `values` (last = default).
-- Serde: adjacently-tagged for TerminatorKind.
+- **Option field serialization**: All `Option` fields (`Call.target`,
+  `Call.error_target`, `IntrinsicCall.metadata`, `IntrinsicCall.error_target`)
+  use `#[serde(skip_serializing_if = "Option::is_none")]` with
+  `#[serde(default)]` so they are omitted from JSON when `None`, not
+  serialized as `null`.
+- **Serde**: TerminatorKind contains Place and Operand which have Symbol
+  fields. Serde derives cannot be added until model-level serialization
+  is built. The Option-field convention above will apply when serde is added.
 
 ## Non-Goals
 

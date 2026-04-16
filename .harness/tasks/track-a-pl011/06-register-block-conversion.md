@@ -77,9 +77,13 @@ maintain byte offset alignment matching the PL011 hardware specification.
 
 ### Update lib.rs
 
-Update `tests/fixtures/pl011-full-spec/src/lib.rs` to export the new
-module path if needed. The old `pub mod registers;` should still work
-since the file still exists.
+Update `tests/fixtures/pl011-full-spec/src/lib.rs`:
+- Keep `pub mod registers;` (the file still exists).
+- Remove or update the `pub use registers::Pl011Registers;` re-export
+  (if present). `Pl011Registers` no longer exists -- the layout type
+  is now `registers::pl011::Regs`. Add `pub use registers::pl011;`
+  if a top-level re-export is desired, or let driver.rs import directly
+  from `crate::registers::pl011`.
 
 ### Key transformation
 
@@ -98,12 +102,12 @@ since the file still exists.
 
 ## Test Plan
 
-- `cargo build -p pl011-full-spec` compiles (registers.rs only -- driver.rs
-  will NOT compile until track-a-pl011-07 updates it).
-  Actually, driver.rs imports from `crate::registers::*` so compilation
-  will fail. Use `cargo check -p regseq-macros` and manual inspection to
-  verify the macro expansion is correct. Or temporarily comment out
-  driver.rs imports.
+- The PL011 fixture will NOT compile until track-a-pl011-07 updates
+  driver.rs. To verify the register block conversion independently,
+  write a small standalone test in registers.rs (e.g., a #[cfg(test)]
+  module) that uses the generated types: access `pl011::Regs`,
+  `pl011::dr::REG`, `pl011::cr::UARTEN::ENABLED`, etc.
+- Verify byte offsets match the PL011 hardware spec.
 - Verify the generated module has: `pl011::Regs`, `pl011::dr::Register`,
   `pl011::dr::REG`, `pl011::dr::OFFSET`, `pl011::dr::DATA`,
   `pl011::cr::UARTEN::ENABLED`, etc.

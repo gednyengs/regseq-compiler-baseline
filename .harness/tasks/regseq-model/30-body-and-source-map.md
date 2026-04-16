@@ -27,7 +27,7 @@ Create `crates/regseq-model/src/ir/body.rs`. Update `ir/mod.rs`.
 use std::collections::BTreeMap;
 
 /// A function body: local declarations + control flow graph.
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct Body {
     pub local_decls: Vec<LocalDecl>,
     pub arg_count: usize,
@@ -37,7 +37,7 @@ pub struct Body {
 }
 
 /// A local variable, temporary, or the return place.
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct LocalDecl {
     pub ty: RegseqType,
     pub mutable: bool,
@@ -45,7 +45,7 @@ pub struct LocalDecl {
 }
 
 /// A basic block: statements followed by a terminator.
-#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[derive(Clone, Eq, PartialEq, Debug)]
 pub struct BasicBlock {
     pub statements: Vec<Statement>,
     pub terminator: Terminator,
@@ -97,12 +97,14 @@ impl Body {
 
 - No model structure types (Module, Function) -- Phase 2.
 - No IR construction logic -- Phase 5.
-- No serialization of Symbol values within BodySourceMap (model-level concern).
+- No standalone serde on Body or types containing Symbol fields
+  (LocalDecl.name is a Symbol -- model-level serialization concern).
 
 ## Test Plan
 
 - Construct a minimal Body: 1 local (return place), 1 block with
-  `Return` terminator, empty source map, no ordered regions.
+  `Return` terminator, source map with 1 local entry and 1 block entry
+  (structurally parallel), no ordered regions.
 - Construct a 3-block Body: entry -> branch (SwitchInt) -> return.
   Verify `predecessors()` returns correct map.
 - `BodySourceMap` structurally parallel: `locals.len() == local_decls.len()`,
