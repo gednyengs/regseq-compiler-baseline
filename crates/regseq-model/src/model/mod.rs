@@ -10,6 +10,7 @@ pub mod driver;
 pub mod framework;
 pub mod function;
 pub mod impl_block;
+pub mod module;
 pub mod register;
 pub mod resources;
 pub mod type_def;
@@ -19,6 +20,7 @@ pub use driver::{DeviceClass, DriverIdentity, DriverStruct, PmInfo};
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
 pub use function::{Function, Param, ParamKind};
 pub use impl_block::ImplBlock;
+pub use module::{Module, ModuleKind};
 pub use register::{
     AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,
     RegisterBlockField, RegisterDescriptor,

@@ -15,7 +15,7 @@ use crate::identity::{RegisterBlockId, Symbol};
 /// Each variant maps to a specific `#[rseq::intrinsic("...")]` attribute
 /// on a method. These operations flow through `IntrinsicCall` terminators,
 /// not rvalues.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum RegseqIntrinsic {
     /// Read a full register value.
@@ -60,7 +60,7 @@ pub enum RegseqIntrinsic {
 ///
 /// Used during IR construction to classify framework types and during
 /// analysis to reason about resource usage patterns.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Debug, Serialize, Deserialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum RegseqAbstraction {
     /// Clock resource.

@@ -901,7 +901,7 @@
           "id": "regseq-model-39",
           "name": "Module",
           "spec": ".harness/tasks/regseq-model/39-module.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-31",
             "regseq-model-32",
