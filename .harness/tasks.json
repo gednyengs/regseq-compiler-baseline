@@ -853,7 +853,7 @@
           "id": "regseq-model-35",
           "name": "Function, Param, ParamKind",
           "spec": ".harness/tasks/regseq-model/35-function-and-param.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-30",
             "regseq-model-32"

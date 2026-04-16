@@ -7,11 +7,13 @@
 
 pub mod constant;
 pub mod framework;
+pub mod function;
 pub mod register;
 pub mod type_def;
 
 pub use constant::Constant;
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
+pub use function::{Function, Param, ParamKind};
 pub use register::{
     AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,
     RegisterBlockField, RegisterDescriptor,
