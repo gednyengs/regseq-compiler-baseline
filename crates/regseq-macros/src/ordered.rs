@@ -1,18 +1,18 @@
 use proc_macro2::TokenStream;
 use quote::quote;
 
-/// Expand `ordered! { ... }` into a block bracketed by canonical barrier
-/// intrinsic calls.
+/// Expand `ordered! { ... }` into ordered region markers bracketing
+/// the user block.
+///
+/// The expansion uses `ordered_region_begin()`/`ordered_region_end()`
+/// marker functions that the compiler recognizes during IR construction
+/// for OrderedRegion detection.
 pub fn expand(input: TokenStream) -> TokenStream {
     quote! {
         {
-            ::regseq::intrinsics::sync::memory_barrier(
-                ::regseq::intrinsics::sync::BarrierKind::Full,
-            );
+            ::regseq::internal::ordered_region_begin();
             let __regseq_ordered_result = { #input };
-            ::regseq::intrinsics::sync::memory_barrier(
-                ::regseq::intrinsics::sync::BarrierKind::Full,
-            );
+            ::regseq::internal::ordered_region_end();
             __regseq_ordered_result
         }
     }

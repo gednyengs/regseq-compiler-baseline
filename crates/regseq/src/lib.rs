@@ -14,6 +14,7 @@
 mod clock;
 pub mod delay;
 mod error;
+pub mod internal;
 pub mod intrinsics;
 mod irq;
 mod lifecycle;
