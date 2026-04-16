@@ -432,6 +432,7 @@ const SPECIMEN: &str = r#"
     pub struct Pl011FullSpec {
         pub regs: Pl011Registers,
         pub current_speed: u32,
+        #[rseq::clock(id = "uart_clk")]
         pub clock: Option<Clock>,
         pending_tx: Option<u8>,
     }

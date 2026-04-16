@@ -191,9 +191,11 @@ const SPECIMEN: &str = r#"
             pub fn apply<S: PinState>(&self) -> Result<(), RegseqError> { unimplemented!() }
         }
 
+        #[rseq::pin_state(id = "default")]
         pub struct DefaultState;
         impl PinState for DefaultState {}
 
+        #[rseq::pin_state(id = "sleep")]
         pub struct SleepState;
         impl PinState for SleepState {}
 

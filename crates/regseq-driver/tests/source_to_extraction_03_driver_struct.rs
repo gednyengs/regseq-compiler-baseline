@@ -363,6 +363,7 @@ pub mod driver {
         #[rseq::clock(id = "uart_clk")]
         pub clock: Option<Clock>,
 
+        #[rseq::reset(id = "uart_rst")]
         pub reset: Option<ResetLine>,
 
         #[rseq::pinctrl(id = "uart_pins")]

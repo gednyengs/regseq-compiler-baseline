@@ -154,10 +154,12 @@ fn recognize_resetline_and_option_resetline_fields() {
         {preamble}
 
         pub struct Dev {{
+            #[rseq::reset(id = "main_rst")]
             pub reset: ResetLine,
         }}
 
         pub struct OptDev {{
+            #[rseq::reset(id = "aux_rst")]
             pub reset: Option<ResetLine>,
         }}
     "#,
@@ -186,7 +188,9 @@ fn required_vs_optional_shape_preserved() {
         {preamble}
 
         pub struct Dev {{
+            #[rseq::reset(id = "main_rst")]
             pub main_rst: ResetLine,
+            #[rseq::reset(id = "aux_rst")]
             pub aux_rst: Option<ResetLine>,
         }}
     "#,
@@ -221,6 +225,7 @@ fn recognize_reset_wrapper_call_sites() {
         {preamble}
 
         pub struct Dev {{
+            #[rseq::reset(id = "main_rst")]
             pub reset: ResetLine,
         }}
 
@@ -307,6 +312,7 @@ fn unrelated_methods_not_misclassified() {
         }}
 
         pub struct Dev {{
+            #[rseq::reset(id = "main_rst")]
             pub reset: ResetLine,
             pub fake: FakeDevice,
         }}

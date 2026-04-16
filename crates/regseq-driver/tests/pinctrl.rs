@@ -327,9 +327,11 @@ const FIXTURE_PREAMBLE: &str = r#"
         pub fn apply<S: PinState>(&self) -> Result<(), RegseqError> { unimplemented!() }
     }
 
+    #[rseq::pin_state(id = "default")]
     pub struct DefaultState;
     impl PinState for DefaultState {}
 
+    #[rseq::pin_state(id = "sleep")]
     pub struct SleepState;
     impl PinState for SleepState {}
 "#;
@@ -340,6 +342,10 @@ const FIXTURE_PREAMBLE: &str = r#"
 
 #[test]
 fn recognize_pinctrl_and_option_pinctrl_fields() {
+    // The `PinCtrl` fields here are intentionally left unattributed: this test
+    // verifies the extractor's default behavior when no
+    // `#[rseq::pinctrl(id = "...")]` override is present. The attribute-present
+    // case is covered separately by `capture_pinctrl_id_override`.
     let source = format!(
         r#"
         {preamble}
@@ -403,6 +409,7 @@ fn recognize_apply_call_sites_with_state() {
         {preamble}
 
         pub struct Dev {{
+            #[rseq::pinctrl(id = "uart_pins")]
             pub pins: PinCtrl,
         }}
 
@@ -465,14 +472,17 @@ fn reject_malformed_pinctrl_attribute() {
 
 #[test]
 fn discover_pin_state_markers() {
+    // Uses the FIXTURE_PREAMBLE (which already declares DefaultState/SleepState
+    // as pin_state markers per spec 4.2) plus two test-local markers to verify
+    // that discovery picks up every annotated marker in the crate.
     let source = format!(
         r#"
         {preamble}
 
-        #[rseq::pin_state(id = "default")]
+        #[rseq::pin_state(id = "extra_default")]
         pub struct DefaultPins;
 
-        #[rseq::pin_state(id = "sleep")]
+        #[rseq::pin_state(id = "extra_sleep")]
         pub struct SleepPins;
     "#,
         preamble = FIXTURE_PREAMBLE
@@ -480,34 +490,30 @@ fn discover_pin_state_markers() {
 
     let surface = compile_and_extract(&source, "pinctrl_pin_states").unwrap();
 
-    assert_eq!(
-        surface.pin_states.len(),
-        2,
-        "expected 2 pin states, got {:?}",
-        surface.pin_states,
-    );
+    let find_by_path = |suffix: &str| {
+        surface
+            .pin_states
+            .iter()
+            .find(|s| s.type_path.ends_with(suffix))
+            .unwrap_or_else(|| {
+                panic!(
+                    "{suffix} marker must be discovered in {:?}",
+                    surface.pin_states
+                )
+            })
+    };
 
-    let default = surface
-        .pin_states
-        .iter()
-        .find(|s| s.state_id == "default")
-        .expect("default pin state must be discovered");
-    assert!(
-        default.type_path.ends_with("DefaultPins"),
-        "default state should map to DefaultPins marker, got {}",
-        default.type_path,
-    );
+    let preamble_default = find_by_path("DefaultState");
+    assert_eq!(preamble_default.state_id, "default");
 
-    let sleep = surface
-        .pin_states
-        .iter()
-        .find(|s| s.state_id == "sleep")
-        .expect("sleep pin state must be discovered");
-    assert!(
-        sleep.type_path.ends_with("SleepPins"),
-        "sleep state should map to SleepPins marker, got {}",
-        sleep.type_path,
-    );
+    let preamble_sleep = find_by_path("SleepState");
+    assert_eq!(preamble_sleep.state_id, "sleep");
+
+    let local_default = find_by_path("DefaultPins");
+    assert_eq!(local_default.state_id, "extra_default");
+
+    let local_sleep = find_by_path("SleepPins");
+    assert_eq!(local_sleep.state_id, "extra_sleep");
 }
 
 // ---------------------------------------------------------------------------
@@ -584,6 +590,7 @@ fn unrelated_apply_not_misclassified() {
         }}
 
         pub struct Dev {{
+            #[rseq::pinctrl(id = "uart_pins")]
             pub pins: PinCtrl,
             pub fake: FakeDevice,
         }}

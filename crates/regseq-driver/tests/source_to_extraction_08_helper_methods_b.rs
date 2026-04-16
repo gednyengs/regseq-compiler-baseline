@@ -304,9 +304,11 @@ fn raw_reg_val<R>(_mask: u32, _value: u32) -> FieldValue<u32, R> {
     FieldValue::new(0, 0)
 }
 
+#[rseq::pin_state(id = "default")]
 pub struct DefaultState;
 impl PinState for DefaultState {}
 
+#[rseq::pin_state(id = "sleep")]
 pub struct SleepState;
 impl PinState for SleepState {}
 
@@ -332,10 +334,14 @@ pub struct Pl011Registers {
 
 #[rseq::driver(name = "pl011-full-spec", compatible = ["arm,pl011"], bus = "amba")]
 pub struct Pl011FullSpec {
+    #[rseq::mmio(id = "uart_regs")]
     pub regs: Mmio<Pl011Registers>,
     pub current_speed: u32,
+    #[rseq::clock(id = "uart_clk")]
     pub clock: Option<Clock>,
+    #[rseq::reset(id = "uart_rst")]
     pub reset: Option<ResetLine>,
+    #[rseq::pinctrl(id = "uart_pins")]
     pub pinctrl: Option<PinCtrl>,
     pub pending_tx: Option<u8>,
 }

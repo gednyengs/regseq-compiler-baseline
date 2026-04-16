@@ -477,7 +477,7 @@
           "id": "regseq-driver-33",
           "name": "Unit test specimen attribute updates",
           "spec": ".harness/tasks/regseq-driver/33-test-specimen-updates.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-32"
           ],
