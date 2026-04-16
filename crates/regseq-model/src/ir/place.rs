@@ -5,6 +5,8 @@
 //! indexing, etc.). Places appear on both sides of assignments -- as
 //! read sources (inside operands) and as write targets.
 
+use serde::{Deserialize, Serialize};
+
 use crate::identity::{LocalId, Symbol};
 use crate::ir::types::RegseqType;
 
@@ -14,7 +16,7 @@ use crate::ir::types::RegseqType;
 /// (not arena-interned) since the Regseq IR uses owned types throughout.
 ///
 /// An empty projection `Vec` means the place is just the local itself.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
 pub struct Place {
     /// The base local variable.
     pub local: LocalId,
@@ -23,7 +25,8 @@ pub struct Place {
 }
 
 /// A single projection step applied to a place.
-#[derive(Clone, Eq, PartialEq, Hash, Debug)]
+#[derive(Clone, Eq, PartialEq, Hash, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum Projection {
     /// Dereference a pointer or reference.
     ///

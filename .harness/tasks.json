@@ -628,7 +628,7 @@
           "id": "regseq-model-25",
           "name": "Operand and LiteralValue",
           "spec": ".harness/tasks/regseq-model/25-operand-and-literal-value.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-21"
           ],
