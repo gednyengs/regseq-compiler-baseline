@@ -429,7 +429,7 @@
           "id": "regseq-driver-29",
           "name": "Abstraction type registry extraction",
           "spec": ".harness/tasks/regseq-driver/29-abstraction-type-registry.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-26"
           ],
