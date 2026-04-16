@@ -585,7 +585,7 @@
           "id": "regseq-model-21",
           "name": "Declaration IDs, body-level IDs, and source locations",
           "spec": ".harness/tasks/regseq-model/21-decl-ids-and-source-locations.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-20"
           ],

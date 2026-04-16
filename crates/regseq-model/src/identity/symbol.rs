@@ -7,12 +7,14 @@
 
 use std::collections::HashMap;
 
+use serde::{Deserialize, Serialize};
+
 /// An interned string identifier. Copy, Eq, Hash -- all O(1).
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct Symbol(u32);
 
 /// An interned file path. Distinct newtype over the same pool.
-#[derive(Copy, Clone, Eq, PartialEq, Hash)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
 pub struct FileId(u32);
 
 /// The string intern table.
