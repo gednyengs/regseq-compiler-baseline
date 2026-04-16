@@ -6,6 +6,7 @@
 //! execution plan progresses.
 
 pub mod constant;
+pub mod driver;
 pub mod framework;
 pub mod function;
 pub mod register;
@@ -13,6 +14,7 @@ pub mod resources;
 pub mod type_def;
 
 pub use constant::Constant;
+pub use driver::{DeviceClass, DriverIdentity, DriverStruct, PmInfo};
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
 pub use function::{Function, Param, ParamKind};
 pub use register::{

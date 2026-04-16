@@ -878,7 +878,7 @@
           "id": "regseq-model-37",
           "name": "DriverStruct and driver metadata",
           "spec": ".harness/tasks/regseq-model/37-driver-struct.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-36"
           ],
