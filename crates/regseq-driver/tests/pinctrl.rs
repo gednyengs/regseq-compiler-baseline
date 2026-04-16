@@ -7,6 +7,7 @@ extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
 
+use std::path::{Path, PathBuf};
 use std::sync::{Arc, Mutex, Once};
 
 #[path = "../src/extract/pinctrl.rs"]
@@ -36,8 +37,204 @@ fn get_sysroot() -> String {
     String::from_utf8(output.stdout).unwrap().trim().to_string()
 }
 
+fn workspace_root() -> PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .parent()
+        .unwrap()
+        .parent()
+        .unwrap()
+        .to_path_buf()
+}
+
+#[derive(Debug, Clone)]
+struct BuildArtifacts {
+    regseq_rlib: PathBuf,
+    regseq_macros_dylib: PathBuf,
+    deps_dir: PathBuf,
+}
+
+fn build_deps() -> BuildArtifacts {
+    let root = workspace_root();
+
+    let output = std::process::Command::new("cargo")
+        .args([
+            "build",
+            "-p",
+            "regseq",
+            "-p",
+            "regseq-macros",
+            "--message-format=json",
+        ])
+        .current_dir(&root)
+        .output()
+        .expect("failed to run cargo build for regseq deps");
+
+    assert!(
+        output.status.success(),
+        "cargo build for regseq deps failed:\n{}",
+        String::from_utf8_lossy(&output.stderr),
+    );
+
+    let stdout = String::from_utf8(output.stdout).expect("cargo output is valid UTF-8");
+    let mut regseq_rlib: Option<PathBuf> = None;
+    let mut regseq_macros_dylib: Option<PathBuf> = None;
+
+    for line in stdout.lines() {
+        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
+            continue;
+        };
+        if msg.get("reason").and_then(|v| v.as_str()) != Some("compiler-artifact") {
+            continue;
+        }
+        let Some(target) = msg.get("target") else {
+            continue;
+        };
+        let Some(name) = target.get("name").and_then(|v| v.as_str()) else {
+            continue;
+        };
+        let Some(filenames) = msg.get("filenames").and_then(|v| v.as_array()) else {
+            continue;
+        };
+
+        match name {
+            "regseq" => {
+                for f in filenames {
+                    let p = f.as_str().unwrap_or("");
+                    if p.ends_with(".rlib") {
+                        regseq_rlib = Some(PathBuf::from(p));
+                        break;
+                    }
+                }
+            }
+            "regseq-macros" | "regseq_macros" => {
+                for f in filenames {
+                    let p = f.as_str().unwrap_or("");
+                    if p.ends_with(".dylib") || p.ends_with(".so") || p.ends_with(".dll") {
+                        regseq_macros_dylib = Some(PathBuf::from(p));
+                        break;
+                    }
+                }
+            }
+            _ => {}
+        }
+    }
+
+    let regseq_rlib = regseq_rlib.expect("regseq rlib not found in cargo build output");
+    let regseq_macros_dylib =
+        regseq_macros_dylib.expect("regseq-macros dylib not found in cargo build output");
+
+    let deps_dir = regseq_rlib
+        .parent()
+        .expect("regseq rlib path must have a parent")
+        .to_path_buf();
+
+    BuildArtifacts {
+        regseq_rlib,
+        regseq_macros_dylib,
+        deps_dir,
+    }
+}
+
+fn artifacts() -> &'static BuildArtifacts {
+    use std::sync::OnceLock;
+    static A: OnceLock<BuildArtifacts> = OnceLock::new();
+    A.get_or_init(build_deps)
+}
+
+fn compile_pl011_and_extract(test_name: &str) -> ExtractionResult {
+    let artifacts = artifacts();
+    let _lock = COMPILER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
+    init_rustc();
+
+    let src_path = workspace_root().join("tests/fixtures/pl011-full-spec/src/lib.rs");
+    let test_dir = std::env::temp_dir()
+        .join("regseq-driver-tests")
+        .join(test_name);
+    if test_dir.exists() {
+        std::fs::remove_dir_all(&test_dir).unwrap();
+    }
+    std::fs::create_dir_all(&test_dir).unwrap();
+
+    let sysroot = get_sysroot();
+    let result: Arc<Mutex<Option<ExtractionResult>>> = Arc::new(Mutex::new(None));
+
+    struct ExtractCallbacks {
+        result: Arc<Mutex<Option<ExtractionResult>>>,
+    }
+
+    impl rustc_driver::Callbacks for ExtractCallbacks {
+        fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+            config.opts.unstable_opts.no_codegen = true;
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push("feature(register_tool)".to_string());
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push("register_tool(rseq)".to_string());
+            config
+                .opts
+                .unstable_opts
+                .crate_attr
+                .push("allow(unused)".to_string());
+        }
+
+        fn after_analysis<'tcx>(
+            &mut self,
+            _compiler: &rustc_interface::interface::Compiler,
+            tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        ) -> rustc_driver::Compilation {
+            *self.result.lock().unwrap() = Some(extract_pinctrl_surface(tcx));
+            rustc_driver::Compilation::Stop
+        }
+    }
+
+    let mut callbacks = ExtractCallbacks {
+        result: result.clone(),
+    };
+
+    let args = vec![
+        "rustc".to_string(),
+        src_path.to_str().unwrap().to_string(),
+        "--sysroot".to_string(),
+        sysroot,
+        "--edition".to_string(),
+        "2021".to_string(),
+        "--crate-type".to_string(),
+        "lib".to_string(),
+        "--crate-name".to_string(),
+        "pl011_full_spec".to_string(),
+        "--out-dir".to_string(),
+        test_dir.to_str().unwrap().to_string(),
+        "--extern".to_string(),
+        format!("regseq={}", artifacts.regseq_rlib.display()),
+        "--extern".to_string(),
+        format!("regseq_macros={}", artifacts.regseq_macros_dylib.display()),
+        "-L".to_string(),
+        format!("dependency={}", artifacts.deps_dir.display()),
+    ];
+
+    rustc_driver::run_compiler(&args, &mut callbacks);
+
+    let extracted = result
+        .lock()
+        .unwrap()
+        .take()
+        .expect("after_analysis should have been called");
+
+    std::fs::remove_dir_all(&test_dir).ok();
+    extracted
+}
+
 fn compile_and_extract(source: &str, test_name: &str) -> ExtractionResult {
-    let _lock = COMPILER_LOCK.lock().unwrap();
+    let _lock = COMPILER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     init_rustc();
 
     let test_dir = std::env::temp_dir()
@@ -260,6 +457,119 @@ fn reject_malformed_pinctrl_attribute() {
 
 // ---------------------------------------------------------------------------
 // Test 5: non-generic or unrelated apply methods not misclassified
+// ---------------------------------------------------------------------------
+
+// ---------------------------------------------------------------------------
+// Test 6: #[rseq::pin_state(id = "...")] marker types discovered
+// ---------------------------------------------------------------------------
+
+#[test]
+fn discover_pin_state_markers() {
+    let source = format!(
+        r#"
+        {preamble}
+
+        #[rseq::pin_state(id = "default")]
+        pub struct DefaultPins;
+
+        #[rseq::pin_state(id = "sleep")]
+        pub struct SleepPins;
+    "#,
+        preamble = FIXTURE_PREAMBLE
+    );
+
+    let surface = compile_and_extract(&source, "pinctrl_pin_states").unwrap();
+
+    assert_eq!(
+        surface.pin_states.len(),
+        2,
+        "expected 2 pin states, got {:?}",
+        surface.pin_states,
+    );
+
+    let default = surface
+        .pin_states
+        .iter()
+        .find(|s| s.state_id == "default")
+        .expect("default pin state must be discovered");
+    assert!(
+        default.type_path.ends_with("DefaultPins"),
+        "default state should map to DefaultPins marker, got {}",
+        default.type_path,
+    );
+
+    let sleep = surface
+        .pin_states
+        .iter()
+        .find(|s| s.state_id == "sleep")
+        .expect("sleep pin state must be discovered");
+    assert!(
+        sleep.type_path.ends_with("SleepPins"),
+        "sleep state should map to SleepPins marker, got {}",
+        sleep.type_path,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 6b: PL011 full-spec compilation yields the expected 2 pin states
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pin_states_from_pl011_full_spec_compilation() {
+    let surface = compile_pl011_and_extract("pinctrl_pl011_full_spec").unwrap();
+
+    assert_eq!(
+        surface.pin_states.len(),
+        2,
+        "PL011 fixture should expose 2 pin states, got {:?}",
+        surface.pin_states,
+    );
+
+    let default = surface
+        .pin_states
+        .iter()
+        .find(|s| s.state_id == "default")
+        .expect("PL011 default pin state must be discovered");
+    assert!(
+        default.type_path.ends_with("DefaultState"),
+        "default state should map to DefaultState marker, got {}",
+        default.type_path,
+    );
+
+    let sleep = surface
+        .pin_states
+        .iter()
+        .find(|s| s.state_id == "sleep")
+        .expect("PL011 sleep pin state must be discovered");
+    assert!(
+        sleep.type_path.ends_with("SleepState"),
+        "sleep state should map to SleepState marker, got {}",
+        sleep.type_path,
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Test 7: pin_state attribute without id is rejected
+// ---------------------------------------------------------------------------
+
+#[test]
+fn reject_pin_state_without_id() {
+    let source = format!(
+        r#"
+        {preamble}
+
+        #[rseq::pin_state()]
+        pub struct BadState;
+    "#,
+        preamble = FIXTURE_PREAMBLE
+    );
+
+    let result = compile_and_extract(&source, "pinctrl_pin_state_no_id");
+    assert!(matches!(result, Err(PinCtrlError::MalformedAttribute(_))));
+}
+
+// ---------------------------------------------------------------------------
+// Test 8: unrelated apply methods not misclassified
 // ---------------------------------------------------------------------------
 
 #[test]

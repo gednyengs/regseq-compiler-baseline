@@ -13,6 +13,18 @@ use rustc_middle::ty::{Ty, TyCtxt};
 pub struct PinCtrlSurface {
     pub fields: Vec<PinCtrlField>,
     pub call_sites: Vec<PinCtrlCallSite>,
+    /// Types annotated with `#[rseq::pin_state(id = "...")]` in the local crate.
+    pub pin_states: Vec<PinStateInfo>,
+}
+
+/// A marker type annotated with `#[rseq::pin_state(id = "...")]`.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct PinStateInfo {
+    /// Fully-qualified path of the marker type (e.g.
+    /// `"pl011_full_spec::driver::DefaultState"`).
+    pub type_path: String,
+    /// The pin state identifier declared by the attribute.
+    pub state_id: String,
 }
 
 /// A `PinCtrl` or `Option<PinCtrl>` field.
@@ -49,6 +61,7 @@ pub enum PinCtrlError {
 pub fn extract_pinctrl_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<PinCtrlSurface, PinCtrlError> {
     let mut fields = Vec::new();
     let mut call_sites = Vec::new();
+    let mut pin_states = Vec::new();
 
     for item_id in tcx.hir_free_items() {
         let item = tcx.hir_item(item_id);
@@ -57,6 +70,15 @@ pub fn extract_pinctrl_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<PinCtrlSurface
             ItemKind::Struct(_ident, _generics, variant_data) => {
                 let extracted = extract_pinctrl_fields(tcx, variant_data)?;
                 fields.extend(extracted);
+
+                if let Some(info) = extract_pin_state_info(tcx, item)? {
+                    pin_states.push(info);
+                }
+            }
+            ItemKind::Enum(..) => {
+                if let Some(info) = extract_pin_state_info(tcx, item)? {
+                    pin_states.push(info);
+                }
             }
             ItemKind::Impl(impl_block) => {
                 for impl_item_ref in impl_block.items {
@@ -70,7 +92,75 @@ pub fn extract_pinctrl_surface<'tcx>(tcx: TyCtxt<'tcx>) -> Result<PinCtrlSurface
         }
     }
 
-    Ok(PinCtrlSurface { fields, call_sites })
+    Ok(PinCtrlSurface {
+        fields,
+        call_sites,
+        pin_states,
+    })
+}
+
+/// If `item` carries `#[rseq::pin_state(id = "...")]`, return the matching
+/// [`PinStateInfo`]. Errors if the attribute is malformed.
+fn extract_pin_state_info<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    item: &'tcx rustc_hir::Item<'tcx>,
+) -> Result<Option<PinStateInfo>, PinCtrlError> {
+    let def_id = item.owner_id.def_id.to_def_id();
+    let attrs = tcx.get_all_attrs(def_id);
+    for attr in attrs {
+        if rseq_attr_name(attr) != Some("pin_state") {
+            continue;
+        }
+        let state_id = parse_pin_state_attr(attr)?
+            .ok_or_else(|| malformed("pin_state attribute missing `id = \"...\"`"))?;
+        return Ok(Some(PinStateInfo {
+            type_path: tcx.def_path_str(def_id),
+            state_id,
+        }));
+    }
+    Ok(None)
+}
+
+/// Parse `#[rseq::pin_state(id = "value")]`, returning the `id` value.
+fn parse_pin_state_attr(attr: &Attribute) -> Result<Option<String>, PinCtrlError> {
+    let Attribute::Unparsed(item) = attr else {
+        return Err(malformed("expected tool attribute"));
+    };
+    let tokens = match &item.args {
+        AttrArgs::Delimited(d) => &d.tokens,
+        _ => return Ok(None),
+    };
+
+    let trees: Vec<&TokenTree> = tokens.iter().collect();
+    let mut state_id = None;
+    let mut i = 0;
+
+    while i < trees.len() {
+        if is_comma(trees[i]) {
+            i += 1;
+            continue;
+        }
+
+        let key = extract_ident(trees[i])
+            .ok_or_else(|| malformed("expected key in pin_state attribute"))?;
+        i += 1;
+
+        if i >= trees.len() || !is_eq(trees[i]) {
+            return Err(malformed(&format!("expected '=' after '{key}'")));
+        }
+        i += 1;
+
+        if i >= trees.len() {
+            return Err(malformed(&format!("expected value for '{key}'")));
+        }
+
+        if key == "id" {
+            state_id = extract_string_literal(trees[i]);
+        }
+        i += 1;
+    }
+
+    Ok(state_id)
 }
 
 // ---------------------------------------------------------------------------

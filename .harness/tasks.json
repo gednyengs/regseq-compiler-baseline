@@ -440,7 +440,7 @@
           "id": "regseq-driver-30",
           "name": "Pin-state attribute extraction",
           "spec": ".harness/tasks/regseq-driver/30-pin-state-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-26"
           ],
