@@ -40,6 +40,7 @@ pub use registers::{
     RegisterId, RegisterOf, Reserved, WriteAccess, WriteOnly, WriteOnlyAccess,
 };
 pub use regseq_macros::ordered;
+pub use regseq_macros::register_block;
 pub use reset::ResetLine;
 pub use serial::{
     DataBits, FlowControl, Parity, RxChar, Serial, SerialConfig, SerialConsole, SerialErrors,

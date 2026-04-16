@@ -12,6 +12,7 @@ use proc_macro::TokenStream;
 
 mod ordered;
 mod register_bitfields;
+mod register_block;
 
 /// Declare register bitfield layouts for typed register access.
 ///
@@ -36,6 +37,32 @@ mod register_bitfields;
 #[proc_macro]
 pub fn register_bitfields(input: TokenStream) -> TokenStream {
     let parsed = syn::parse_macro_input!(input as register_bitfields::RegisterBitfields);
+    parsed.expand().into()
+}
+
+/// Define a register block with layout struct, per-register modules, field
+/// descriptors, and `RegisterOf` trait impls.
+///
+/// Replaces both `register_bitfields!` and manual `#[repr(C)]` struct
+/// definitions with a single unified block declaration.
+///
+/// # Syntax
+///
+/// ```text
+/// register_block! {
+///     #[endian = "little", access_width = 32]
+///     pub block_name {
+///         reg_name: AccessKind {
+///             FIELD_NAME OFFSET(n) NUMBITS(n) [],
+///             FIELD_NAME OFFSET(n) NUMBITS(n) [VALUE_A = 0, VALUE_B = 1],
+///         },
+///         _reserved0: Reserved<u32> [count],
+///     }
+/// }
+/// ```
+#[proc_macro]
+pub fn register_block(input: TokenStream) -> TokenStream {
+    let parsed = syn::parse_macro_input!(input as register_block::RegisterBlock);
     parsed.expand().into()
 }
 
