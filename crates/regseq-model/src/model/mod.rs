@@ -5,10 +5,12 @@
 //! pipeline. Types are added incrementally as Phase 2 of the regseq-model
 //! execution plan progresses.
 
+pub mod constant;
 pub mod framework;
 pub mod register;
 pub mod type_def;
 
+pub use constant::Constant;
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
 pub use register::{
     AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,

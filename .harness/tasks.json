@@ -841,7 +841,7 @@
           "id": "regseq-model-34",
           "name": "Constant",
           "spec": ".harness/tasks/regseq-model/34-constant.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-22",
             "regseq-model-25"
