@@ -418,7 +418,7 @@
           "id": "regseq-driver-28",
           "name": "Framework type registry extraction",
           "spec": ".harness/tasks/regseq-driver/28-framework-type-registry.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-26"
           ],

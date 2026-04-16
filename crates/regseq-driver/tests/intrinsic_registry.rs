@@ -55,64 +55,26 @@ fn workspace_root() -> PathBuf {
         .to_path_buf()
 }
 
-fn build_regseq_rlib() -> PathBuf {
-    let root = workspace_root();
-
-    let output = std::process::Command::new("cargo")
-        .args(["build", "-p", "regseq", "--message-format=json"])
-        .current_dir(&root)
-        .output()
-        .expect("failed to run cargo build -p regseq");
-
-    assert!(
-        output.status.success(),
-        "cargo build -p regseq failed:\n{}",
-        String::from_utf8_lossy(&output.stderr),
-    );
-
-    let stdout = String::from_utf8(output.stdout).expect("cargo output is valid UTF-8");
-    for line in stdout.lines() {
-        let Ok(msg) = serde_json::from_str::<serde_json::Value>(line) else {
-            continue;
-        };
-        if msg.get("reason").and_then(|v| v.as_str()) != Some("compiler-artifact") {
-            continue;
-        }
-        let Some(target) = msg.get("target") else {
-            continue;
-        };
-        if target.get("name").and_then(|v| v.as_str()) != Some("regseq") {
-            continue;
-        }
-        if let Some(filenames) = msg.get("filenames").and_then(|v| v.as_array()) {
-            for f in filenames {
-                let path = f.as_str().unwrap_or("");
-                if path.ends_with(".rlib") {
-                    return PathBuf::from(path);
-                }
-            }
-        }
-    }
-
-    panic!("could not find regseq rlib in cargo build output");
-}
-
-/// Resolved paths for compiling the PL011 full-spec fixture via a rustc driver.
+/// Paths to dependency artifacts needed by the rustc-driver harness.
+///
+/// Built once per test binary so the synthetic-stub tests and the PL011
+/// full-spec test share a single `cargo build` invocation, avoiding races in
+/// the shared `target/debug/deps/` directory.
 #[derive(Debug, Clone)]
-struct Pl011BuildArtifacts {
+struct BuildArtifacts {
     regseq_rlib: PathBuf,
     regseq_macros_dylib: PathBuf,
     deps_dir: PathBuf,
 }
 
 /// Build `regseq` and `regseq-macros` from the main workspace and collect the
-/// artifact paths needed to drive rustc against the PL011 source.
+/// artifact paths needed to drive rustc.
 ///
 /// The PL011 fixture uses `#[rseq::*]` tool attributes which are only legal
 /// under the `register_tool(rseq)` feature; plain `cargo build` on the fixture
 /// therefore fails. We instead build only the dependencies via cargo and invoke
 /// rustc directly on the PL011 source with `register_tool(rseq)` injected.
-fn build_pl011_deps() -> Pl011BuildArtifacts {
+fn build_deps() -> BuildArtifacts {
     let root = workspace_root();
 
     let output = std::process::Command::new("cargo")
@@ -126,11 +88,11 @@ fn build_pl011_deps() -> Pl011BuildArtifacts {
         ])
         .current_dir(&root)
         .output()
-        .expect("failed to run cargo build for PL011 deps");
+        .expect("failed to run cargo build for regseq deps");
 
     assert!(
         output.status.success(),
-        "cargo build for PL011 deps failed:\n{}",
+        "cargo build for regseq deps failed:\n{}",
         String::from_utf8_lossy(&output.stderr),
     );
 
@@ -187,27 +149,26 @@ fn build_pl011_deps() -> Pl011BuildArtifacts {
         .expect("regseq rlib path must have a parent")
         .to_path_buf();
 
-    Pl011BuildArtifacts {
+    BuildArtifacts {
         regseq_rlib,
         regseq_macros_dylib,
         deps_dir,
     }
 }
 
-fn pl011_artifacts() -> &'static Pl011BuildArtifacts {
+fn artifacts() -> &'static BuildArtifacts {
     use std::sync::OnceLock;
-    static A: OnceLock<Pl011BuildArtifacts> = OnceLock::new();
-    A.get_or_init(build_pl011_deps)
+    static A: OnceLock<BuildArtifacts> = OnceLock::new();
+    A.get_or_init(build_deps)
 }
 
 /// Compile the PL011 full-spec fixture and build an [`IntrinsicRegistry`].
 fn compile_pl011_and_build_registry(test_name: &str) -> RegistrySnapshot {
+    let artifacts = artifacts();
     let _lock = COMPILER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     init_rustc();
-
-    let artifacts = pl011_artifacts();
     let src_path = workspace_root().join("tests/fixtures/pl011-full-spec/src/lib.rs");
     let test_dir = std::env::temp_dir()
         .join("regseq-driver-tests")
@@ -316,11 +277,8 @@ struct RegistrySnapshot {
     lookup_results: Vec<Option<String>>,
 }
 
-fn compile_and_build_registry(
-    source: &str,
-    test_name: &str,
-    regseq_rlib: &Path,
-) -> RegistrySnapshot {
+fn compile_and_build_registry(source: &str, test_name: &str) -> RegistrySnapshot {
+    let artifacts = artifacts();
     let _lock = COMPILER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -338,7 +296,6 @@ fn compile_and_build_registry(
     std::fs::write(&src_path, source).unwrap();
 
     let sysroot = get_sysroot();
-    let deps_dir = workspace_root().join("target/debug/deps");
 
     let result: Arc<Mutex<Option<RegistrySnapshot>>> = Arc::new(Mutex::new(None));
 
@@ -405,9 +362,9 @@ fn compile_and_build_registry(
         "--out-dir".to_string(),
         test_dir.to_str().unwrap().to_string(),
         "--extern".to_string(),
-        format!("regseq={}", regseq_rlib.display()),
+        format!("regseq={}", artifacts.regseq_rlib.display()),
         "-L".to_string(),
-        format!("dependency={}", deps_dir.display()),
+        format!("dependency={}", artifacts.deps_dir.display()),
     ];
 
     rustc_driver::run_compiler(&args, &mut callbacks);
@@ -426,12 +383,6 @@ fn compile_and_build_registry(
 // ---------------------------------------------------------------------------
 // Tests
 // ---------------------------------------------------------------------------
-
-fn regseq_rlib() -> &'static PathBuf {
-    use std::sync::OnceLock;
-    static RLIB: OnceLock<PathBuf> = OnceLock::new();
-    RLIB.get_or_init(build_regseq_rlib)
-}
 
 const DEPENDENT_SOURCE: &str = r#"
     extern crate regseq;
@@ -463,8 +414,7 @@ const EXPECTED_INTRINSICS: &[&str] = &[
 
 #[test]
 fn registry_discovers_all_canonical_intrinsics() {
-    let rlib = regseq_rlib();
-    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_all_canonical", rlib);
+    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_all_canonical");
 
     assert!(
         !snap.is_empty,
@@ -488,8 +438,7 @@ fn registry_discovers_all_canonical_intrinsics() {
 
 #[test]
 fn registry_contains_specific_sentinels() {
-    let rlib = regseq_rlib();
-    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_sentinels", rlib);
+    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_sentinels");
 
     let names: HashSet<&str> = snap.entries.iter().map(|(_, n)| n.as_str()).collect();
     assert!(names.contains("mmio_read"), "mmio_read must be registered");
@@ -505,8 +454,7 @@ fn registry_contains_specific_sentinels() {
 
 #[test]
 fn registry_lookup_returns_canonical_name_for_known_def_id() {
-    let rlib = regseq_rlib();
-    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_lookup", rlib);
+    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_lookup");
 
     // `lookup_results[i]` is `registry.lookup(def_id_i)` captured inside
     // `after_analysis`. It must equal the canonical name stored at `entries[i]`.
@@ -572,8 +520,7 @@ fn registry_against_pl011_full_spec_compilation() {
 
 #[test]
 fn registry_names_are_unique_per_def_id() {
-    let rlib = regseq_rlib();
-    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_unique", rlib);
+    let snap = compile_and_build_registry(DEPENDENT_SOURCE, "registry_unique");
 
     let mut seen_paths: HashSet<&str> = HashSet::new();
     for (path, _) in &snap.entries {

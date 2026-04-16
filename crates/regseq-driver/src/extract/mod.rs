@@ -5,6 +5,8 @@ pub(crate) mod callback_context;
 #[allow(dead_code)]
 pub(crate) mod clock;
 pub(crate) mod driver_identity;
+#[allow(dead_code)]
+pub(crate) mod framework_types;
 pub(crate) mod identity_enrichment;
 pub(crate) mod identity_enrichment_types;
 pub(crate) mod interrupts;
