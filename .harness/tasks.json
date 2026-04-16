@@ -488,7 +488,7 @@
           "id": "regseq-driver-34",
           "name": "Golden file regeneration",
           "spec": ".harness/tasks/regseq-driver/34-golden-file-regeneration.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-33"
           ],

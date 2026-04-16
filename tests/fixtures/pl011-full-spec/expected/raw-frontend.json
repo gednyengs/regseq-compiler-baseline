@@ -39153,5 +39153,2913 @@
         "monomorphization": null
       }
     ]
+  },
+  "intrinsic_registry": {
+    "entries": [
+      {
+        "canonical_name": "busy_wait",
+        "method_path": "regseq::delay::busy_wait"
+      },
+      {
+        "canonical_name": "clock_disable",
+        "method_path": "regseq::Clock::disable"
+      },
+      {
+        "canonical_name": "clock_enable",
+        "method_path": "regseq::Clock::enable"
+      },
+      {
+        "canonical_name": "clock_get_rate",
+        "method_path": "regseq::Clock::get_rate"
+      },
+      {
+        "canonical_name": "log_debug",
+        "method_path": "regseq::intrinsics::diagnostic_logging::debug"
+      },
+      {
+        "canonical_name": "log_error",
+        "method_path": "regseq::intrinsics::diagnostic_logging::error"
+      },
+      {
+        "canonical_name": "log_info",
+        "method_path": "regseq::intrinsics::diagnostic_logging::info"
+      },
+      {
+        "canonical_name": "log_warn",
+        "method_path": "regseq::intrinsics::diagnostic_logging::warn"
+      },
+      {
+        "canonical_name": "mmio_read",
+        "method_path": "regseq::Mmio::<Block>::read"
+      },
+      {
+        "canonical_name": "mmio_read_field",
+        "method_path": "regseq::Mmio::<Block>::read_field"
+      },
+      {
+        "canonical_name": "mmio_write",
+        "method_path": "regseq::Mmio::<Block>::write"
+      },
+      {
+        "canonical_name": "mmio_write_field",
+        "method_path": "regseq::Mmio::<Block>::write_field"
+      },
+      {
+        "canonical_name": "pinctrl_apply",
+        "method_path": "regseq::PinCtrl::apply"
+      },
+      {
+        "canonical_name": "poll_until",
+        "method_path": "regseq::poll::poll_until"
+      },
+      {
+        "canonical_name": "reset_assert",
+        "method_path": "regseq::ResetLine::assert"
+      },
+      {
+        "canonical_name": "reset_deassert",
+        "method_path": "regseq::ResetLine::deassert"
+      },
+      {
+        "canonical_name": "reset_toggle",
+        "method_path": "regseq::ResetLine::toggle"
+      },
+      {
+        "canonical_name": "sleep",
+        "method_path": "regseq::delay::sleep"
+      }
+    ]
+  },
+  "framework_types": {
+    "entries": [
+      {
+        "framework_type_id": "data-bits",
+        "type_path": "regseq::DataBits"
+      },
+      {
+        "framework_type_id": "duration",
+        "type_path": "regseq::Duration"
+      },
+      {
+        "framework_type_id": "flow-control",
+        "type_path": "regseq::FlowControl"
+      },
+      {
+        "framework_type_id": "irq-result",
+        "type_path": "regseq::IrqResult"
+      },
+      {
+        "framework_type_id": "parity",
+        "type_path": "regseq::Parity"
+      },
+      {
+        "framework_type_id": "regseq-error",
+        "type_path": "regseq::RegseqError"
+      },
+      {
+        "framework_type_id": "rx-char",
+        "type_path": "regseq::RxChar"
+      },
+      {
+        "framework_type_id": "serial-config",
+        "type_path": "regseq::SerialConfig"
+      },
+      {
+        "framework_type_id": "serial-errors",
+        "type_path": "regseq::SerialErrors"
+      },
+      {
+        "framework_type_id": "stop-bits",
+        "type_path": "regseq::StopBits"
+      }
+    ]
+  },
+  "abstraction_types": {
+    "entries": [
+      {
+        "abstraction_id": "clock",
+        "type_path": "regseq::Clock"
+      },
+      {
+        "abstraction_id": "completion",
+        "type_path": "regseq::Completion"
+      },
+      {
+        "abstraction_id": "interrupt",
+        "type_path": "regseq::Interrupt"
+      },
+      {
+        "abstraction_id": "irq-spinlock",
+        "type_path": "regseq::IrqSpinLock"
+      },
+      {
+        "abstraction_id": "mmio",
+        "type_path": "regseq::Mmio"
+      },
+      {
+        "abstraction_id": "mutex",
+        "type_path": "regseq::Mutex"
+      },
+      {
+        "abstraction_id": "pinctrl",
+        "type_path": "regseq::PinCtrl"
+      },
+      {
+        "abstraction_id": "reset",
+        "type_path": "regseq::ResetLine"
+      },
+      {
+        "abstraction_id": "spinlock",
+        "type_path": "regseq::SpinLock"
+      }
+    ]
+  },
+  "source_locations": {
+    "locations": {
+      "<driver::DefaultState as regseq::PinState>::{impl#0}": {
+        "file": "src/driver.rs",
+        "start_line": 27,
+        "start_col": 1,
+        "end_line": 27,
+        "end_col": 31
+      },
+      "<driver::Pl011FullSpec as regseq::Lifecycle>::deinit": {
+        "file": "src/driver.rs",
+        "start_line": 274,
+        "start_col": 5,
+        "end_line": 274,
+        "end_col": 52
+      },
+      "<driver::Pl011FullSpec as regseq::Lifecycle>::init": {
+        "file": "src/driver.rs",
+        "start_line": 263,
+        "start_col": 5,
+        "end_line": 263,
+        "end_col": 50
+      },
+      "<driver::Pl011FullSpec as regseq::Lifecycle>::{impl#3}": {
+        "file": "src/driver.rs",
+        "start_line": 262,
+        "start_col": 1,
+        "end_line": 262,
+        "end_col": 33
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::configure": {
+        "file": "src/driver.rs",
+        "start_line": 294,
+        "start_col": 5,
+        "end_line": 294,
+        "end_col": 79
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::flush_rx_fifo": {
+        "file": "src/driver.rs",
+        "start_line": 346,
+        "start_col": 5,
+        "end_line": 346,
+        "end_col": 32
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::flush_tx_fifo": {
+        "file": "src/driver.rs",
+        "start_line": 352,
+        "start_col": 5,
+        "end_line": 352,
+        "end_col": 32
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::port_close": {
+        "file": "src/driver.rs",
+        "start_line": 289,
+        "start_col": 5,
+        "end_line": 289,
+        "end_col": 29
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::port_open": {
+        "file": "src/driver.rs",
+        "start_line": 283,
+        "start_col": 5,
+        "end_line": 283,
+        "end_col": 55
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::rx_char": {
+        "file": "src/driver.rs",
+        "start_line": 313,
+        "start_col": 5,
+        "end_line": 313,
+        "end_col": 44
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::send_break": {
+        "file": "src/driver.rs",
+        "start_line": 357,
+        "start_col": 5,
+        "end_line": 357,
+        "end_col": 39
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::tx_byte": {
+        "file": "src/driver.rs",
+        "start_line": 302,
+        "start_col": 5,
+        "end_line": 302,
+        "end_col": 36
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::tx_empty": {
+        "file": "src/driver.rs",
+        "start_line": 342,
+        "start_col": 5,
+        "end_line": 342,
+        "end_col": 35
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::tx_ready": {
+        "file": "src/driver.rs",
+        "start_line": 338,
+        "start_col": 5,
+        "end_line": 338,
+        "end_col": 35
+      },
+      "<driver::Pl011FullSpec as regseq::Serial>::{impl#4}": {
+        "file": "src/driver.rs",
+        "start_line": 282,
+        "start_col": 1,
+        "end_line": 282,
+        "end_col": 30
+      },
+      "<driver::SleepState as regseq::PinState>::{impl#1}": {
+        "file": "src/driver.rs",
+        "start_line": 31,
+        "start_col": 1,
+        "end_line": 31,
+        "end_col": 29
+      },
+      "<registers::pl011::cr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::cr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::dmacr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::dmacr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::dr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::dr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::fbrd::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::fbrd::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::fr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::fr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ibrd::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ibrd::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::icr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::icr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ifls::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ifls::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ilpr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ilpr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::imsc::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::imsc::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::lcr_h::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::lcr_h::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::mis::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::mis::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id0::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id0::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id1::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id1::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id2::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id2::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id3::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::pcell_id3::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id0::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id0::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id1::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id1::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id2::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id2::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id3::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::periph_id3::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ris::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::ris::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::rsr_ecr::Register as regseq::RegisterOf<registers::pl011::Regs>>::Access": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "<registers::pl011::rsr_ecr::Register as regseq::RegisterOf<registers::pl011::Regs>>::{impl#0}": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "driver": {
+        "file": "src/lib.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 3,
+        "end_col": 11
+      },
+      "driver::DefaultState": {
+        "file": "src/driver.rs",
+        "start_line": 26,
+        "start_col": 1,
+        "end_line": 26,
+        "end_col": 24
+      },
+      "driver::Pl011FullSpec": {
+        "file": "src/driver.rs",
+        "start_line": 35,
+        "start_col": 1,
+        "end_line": 35,
+        "end_col": 25
+      },
+      "driver::Pl011FullSpec::ALL_UART_INTERRUPTS_MASK": {
+        "file": "src/driver.rs",
+        "start_line": 61,
+        "start_col": 5,
+        "end_line": 61,
+        "end_col": 40
+      },
+      "driver::Pl011FullSpec::DEFAULT_UART_CLOCK_HZ": {
+        "file": "src/driver.rs",
+        "start_line": 66,
+        "start_col": 5,
+        "end_line": 66,
+        "end_col": 37
+      },
+      "driver::Pl011FullSpec::ERROR_INTERRUPT_MASK": {
+        "file": "src/driver.rs",
+        "start_line": 64,
+        "start_col": 5,
+        "end_line": 64,
+        "end_col": 36
+      },
+      "driver::Pl011FullSpec::EXPLICIT_ISR_CLEAR_MASK": {
+        "file": "src/driver.rs",
+        "start_line": 65,
+        "start_col": 5,
+        "end_line": 65,
+        "end_col": 39
+      },
+      "driver::Pl011FullSpec::RX_INTERRUPT_MASK": {
+        "file": "src/driver.rs",
+        "start_line": 62,
+        "start_col": 5,
+        "end_line": 62,
+        "end_col": 33
+      },
+      "driver::Pl011FullSpec::TX_INTERRUPT_MASK": {
+        "file": "src/driver.rs",
+        "start_line": 63,
+        "start_col": 5,
+        "end_line": 63,
+        "end_col": 33
+      },
+      "driver::Pl011FullSpec::apply_default_pins_if_present": {
+        "file": "src/driver.rs",
+        "start_line": 202,
+        "start_col": 5,
+        "end_line": 202,
+        "end_col": 71
+      },
+      "driver::Pl011FullSpec::apply_sleep_pins_if_present": {
+        "file": "src/driver.rs",
+        "start_line": 210,
+        "start_col": 5,
+        "end_line": 210,
+        "end_col": 69
+      },
+      "driver::Pl011FullSpec::clear_all_interrupts": {
+        "file": "src/driver.rs",
+        "start_line": 88,
+        "start_col": 5,
+        "end_line": 88,
+        "end_col": 39
+      },
+      "driver::Pl011FullSpec::clear_explicit_interrupts": {
+        "file": "src/driver.rs",
+        "start_line": 253,
+        "start_col": 5,
+        "end_line": 253,
+        "end_col": 57
+      },
+      "driver::Pl011FullSpec::configure_interrupt_levels": {
+        "file": "src/driver.rs",
+        "start_line": 96,
+        "start_col": 5,
+        "end_line": 96,
+        "end_col": 45
+      },
+      "driver::Pl011FullSpec::configure_line_control": {
+        "file": "src/driver.rs",
+        "start_line": 120,
+        "start_col": 5,
+        "end_line": 120,
+        "end_col": 41
+      },
+      "driver::Pl011FullSpec::disable_clock_if_present": {
+        "file": "src/driver.rs",
+        "start_line": 187,
+        "start_col": 5,
+        "end_line": 187,
+        "end_col": 39
+      },
+      "driver::Pl011FullSpec::disable_fifo": {
+        "file": "src/driver.rs",
+        "start_line": 75,
+        "start_col": 5,
+        "end_line": 75,
+        "end_col": 31
+      },
+      "driver::Pl011FullSpec::disable_tx_interrupts": {
+        "file": "src/driver.rs",
+        "start_line": 148,
+        "start_col": 5,
+        "end_line": 148,
+        "end_col": 40
+      },
+      "driver::Pl011FullSpec::disable_uart": {
+        "file": "src/driver.rs",
+        "start_line": 69,
+        "start_col": 5,
+        "end_line": 69,
+        "end_col": 31
+      },
+      "driver::Pl011FullSpec::enable_clock_if_present": {
+        "file": "src/driver.rs",
+        "start_line": 179,
+        "start_col": 5,
+        "end_line": 179,
+        "end_col": 65
+      },
+      "driver::Pl011FullSpec::enable_rx_interrupts": {
+        "file": "src/driver.rs",
+        "start_line": 132,
+        "start_col": 5,
+        "end_line": 132,
+        "end_col": 39
+      },
+      "driver::Pl011FullSpec::enable_tx_interrupts": {
+        "file": "src/driver.rs",
+        "start_line": 140,
+        "start_col": 5,
+        "end_line": 140,
+        "end_col": 39
+      },
+      "driver::Pl011FullSpec::enable_uart": {
+        "file": "src/driver.rs",
+        "start_line": 126,
+        "start_col": 5,
+        "end_line": 126,
+        "end_col": 30
+      },
+      "driver::Pl011FullSpec::handle_irq": {
+        "file": "src/driver.rs",
+        "start_line": 368,
+        "start_col": 5,
+        "end_line": 368,
+        "end_col": 46
+      },
+      "driver::Pl011FullSpec::mask_all_interrupts": {
+        "file": "src/driver.rs",
+        "start_line": 80,
+        "start_col": 5,
+        "end_line": 80,
+        "end_col": 38
+      },
+      "driver::Pl011FullSpec::program_polling_port": {
+        "file": "src/driver.rs",
+        "start_line": 156,
+        "start_col": 5,
+        "end_line": 156,
+        "end_col": 73
+      },
+      "driver::Pl011FullSpec::service_rx_fifo": {
+        "file": "src/driver.rs",
+        "start_line": 227,
+        "start_col": 5,
+        "end_line": 227,
+        "end_col": 42
+      },
+      "driver::Pl011FullSpec::service_tx_fifo": {
+        "file": "src/driver.rs",
+        "start_line": 236,
+        "start_col": 5,
+        "end_line": 236,
+        "end_col": 42
+      },
+      "driver::Pl011FullSpec::set_baud_rate": {
+        "file": "src/driver.rs",
+        "start_line": 105,
+        "start_col": 5,
+        "end_line": 105,
+        "end_col": 66
+      },
+      "driver::Pl011FullSpec::shutdown_port": {
+        "file": "src/driver.rs",
+        "start_line": 218,
+        "start_col": 5,
+        "end_line": 218,
+        "end_col": 32
+      },
+      "driver::Pl011FullSpec::toggle_reset_if_present": {
+        "file": "src/driver.rs",
+        "start_line": 194,
+        "start_col": 5,
+        "end_line": 194,
+        "end_col": 65
+      },
+      "driver::Pl011FullSpec::uart_clock_hz": {
+        "file": "src/driver.rs",
+        "start_line": 171,
+        "start_col": 5,
+        "end_line": 171,
+        "end_col": 35
+      },
+      "driver::Pl011FullSpec::{impl#2}": {
+        "file": "src/driver.rs",
+        "start_line": 60,
+        "start_col": 1,
+        "end_line": 60,
+        "end_col": 19
+      },
+      "driver::Pl011FullSpec::{impl#5}": {
+        "file": "src/driver.rs",
+        "start_line": 366,
+        "start_col": 1,
+        "end_line": 366,
+        "end_col": 19
+      },
+      "driver::SleepState": {
+        "file": "src/driver.rs",
+        "start_line": 30,
+        "start_col": 1,
+        "end_line": 30,
+        "end_col": 22
+      },
+      "driver::field_from_raw": {
+        "file": "src/driver.rs",
+        "start_line": 21,
+        "start_col": 1,
+        "end_line": 21,
+        "end_col": 60
+      },
+      "driver::field_val": {
+        "file": "src/driver.rs",
+        "start_line": 11,
+        "start_col": 1,
+        "end_line": 11,
+        "end_col": 70
+      },
+      "driver::raw_reg_val": {
+        "file": "src/driver.rs",
+        "start_line": 16,
+        "start_col": 1,
+        "end_line": 16,
+        "end_col": 63
+      },
+      "registers": {
+        "file": "src/lib.rs",
+        "start_line": 4,
+        "start_col": 1,
+        "end_line": 4,
+        "end_col": 18
+      },
+      "registers::pl011": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 5,
+        "end_col": 14
+      },
+      "registers::pl011::Regs": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 92,
+        "end_col": 11
+      },
+      "registers::pl011::cr::CTSEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 137,
+        "end_col": 18
+      },
+      "registers::pl011::cr::CTSEN::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::CTSEN::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::CTSEN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::DTR": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 117,
+        "end_col": 16
+      },
+      "registers::pl011::cr::DTR::ACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::DTR::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::DTR::INACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::LBE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 105,
+        "end_col": 16
+      },
+      "registers::pl011::cr::LBE::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::LBE::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::LBE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OUT1": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 125,
+        "end_col": 17
+      },
+      "registers::pl011::cr::OUT1::ACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OUT1::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OUT1::INACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OUT2": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 129,
+        "end_col": 17
+      },
+      "registers::pl011::cr::OUT2::ACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OUT2::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::OUT2::INACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RTS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 121,
+        "end_col": 16
+      },
+      "registers::pl011::cr::RTS::ACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RTS::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RTS::INACTIVE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RTSEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 133,
+        "end_col": 18
+      },
+      "registers::pl011::cr::RTSEN::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RTSEN::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RTSEN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RXE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 113,
+        "end_col": 16
+      },
+      "registers::pl011::cr::RXE::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RXE::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::RXE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::SIREN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 97,
+        "end_col": 18
+      },
+      "registers::pl011::cr::SIREN::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::SIREN::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::SIREN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::SIRLP": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 101,
+        "end_col": 18
+      },
+      "registers::pl011::cr::SIRLP::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::SIRLP::LOW_POWER": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::SIRLP::NORMAL": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::TXE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 109,
+        "end_col": 16
+      },
+      "registers::pl011::cr::TXE::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::TXE::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::TXE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::UARTEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 93,
+        "end_col": 19
+      },
+      "registers::pl011::cr::UARTEN::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::UARTEN::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::cr::UARTEN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 222,
+        "end_col": 14
+      },
+      "registers::pl011::dmacr::DMAONERR": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 231,
+        "end_col": 21
+      },
+      "registers::pl011::dmacr::DMAONERR::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::DMAONERR::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::DMAONERR::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::RXDMAE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 223,
+        "end_col": 19
+      },
+      "registers::pl011::dmacr::RXDMAE::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::RXDMAE::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::RXDMAE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::TXDMAE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 227,
+        "end_col": 19
+      },
+      "registers::pl011::dmacr::TXDMAE::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::TXDMAE::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dmacr::TXDMAE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 7,
+        "end_col": 11
+      },
+      "registers::pl011::dr::BE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::DATA": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::FE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::OE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::PE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::dr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fbrd": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 53,
+        "end_col": 13
+      },
+      "registers::pl011::fbrd::BAUD_DIVFRAC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fbrd::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fbrd::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fbrd::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 27,
+        "end_col": 11
+      },
+      "registers::pl011::fr::BUSY": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::CTS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::DCD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::DSR": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::RI": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::RXFE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::RXFF": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::TXFE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::fr::TXFF": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ibrd": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 48,
+        "end_col": 13
+      },
+      "registers::pl011::ibrd::BAUD_DIVINT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ibrd::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ibrd::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ibrd::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 207,
+        "end_col": 12
+      },
+      "registers::pl011::icr::BEIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::CTSMIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::DCDMIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::DSRMIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::FEIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::OEIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::PEIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::RIMIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::RTIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::RXIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::icr::TXIC": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 144,
+        "end_col": 13
+      },
+      "registers::pl011::ifls::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::RXIFLSEL": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 152,
+        "end_col": 21
+      },
+      "registers::pl011::ifls::RXIFLSEL::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::RXIFLSEL::ONE_EIGHTH": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::RXIFLSEL::ONE_HALF": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::RXIFLSEL::ONE_QUARTER": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::RXIFLSEL::SEVEN_EIGHTHS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::RXIFLSEL::THREE_QUARTERS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::TXIFLSEL": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 145,
+        "end_col": 21
+      },
+      "registers::pl011::ifls::TXIFLSEL::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::TXIFLSEL::ONE_EIGHTH": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::TXIFLSEL::ONE_HALF": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::TXIFLSEL::ONE_QUARTER": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::TXIFLSEL::SEVEN_EIGHTHS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ifls::TXIFLSEL::THREE_QUARTERS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ilpr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 43,
+        "end_col": 13
+      },
+      "registers::pl011::ilpr::ILPDVSR": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ilpr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ilpr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ilpr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 162,
+        "end_col": 13
+      },
+      "registers::pl011::imsc::BEIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::CTSMIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::DCDMIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::DSRMIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::FEIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::OEIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::PEIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::RIMIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::RTIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::RXIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::imsc::TXIM": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 58,
+        "end_col": 14
+      },
+      "registers::pl011::lcr_h::BRK": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 59,
+        "end_col": 16
+      },
+      "registers::pl011::lcr_h::BRK::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::BRK::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::BRK::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::EPS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 67,
+        "end_col": 16
+      },
+      "registers::pl011::lcr_h::EPS::EVEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::EPS::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::EPS::ODD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::FEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 75,
+        "end_col": 16
+      },
+      "registers::pl011::lcr_h::FEN::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::FEN::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::FEN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::PEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 63,
+        "end_col": 16
+      },
+      "registers::pl011::lcr_h::PEN::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::PEN::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::PEN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::SPS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 85,
+        "end_col": 16
+      },
+      "registers::pl011::lcr_h::SPS::DISABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::SPS::ENABLED": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::SPS::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::STP2": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 71,
+        "end_col": 17
+      },
+      "registers::pl011::lcr_h::STP2::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::STP2::ONE_STOP_BIT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::STP2::TWO_STOP_BITS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::WLEN": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 79,
+        "end_col": 17
+      },
+      "registers::pl011::lcr_h::WLEN::EIGHT_BITS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::WLEN::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::WLEN::FIVE_BITS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::WLEN::SEVEN_BITS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::lcr_h::WLEN::SIX_BITS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 192,
+        "end_col": 12
+      },
+      "registers::pl011::mis::BEMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::CTSMMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::DCDMMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::DSRMMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::FEMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::OEMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::PEMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::RIMMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::RTMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::RXMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::mis::TXMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id0": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 279,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id0::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id0::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id0::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id0::VALUE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 280,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id0::VALUE::DEFAULT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id0::VALUE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id1": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 286,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id1::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id1::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id1::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id1::VALUE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 287,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id1::VALUE::DEFAULT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id1::VALUE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id2": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 293,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id2::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id2::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id2::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id2::VALUE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 294,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id2::VALUE::DEFAULT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id2::VALUE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id3": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 300,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id3::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id3::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id3::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id3::VALUE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 301,
+        "end_col": 18
+      },
+      "registers::pl011::pcell_id3::VALUE::DEFAULT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::pcell_id3::VALUE::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id0": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 241,
+        "end_col": 19
+      },
+      "registers::pl011::periph_id0::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id0::PARTNUMBER0": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 242,
+        "end_col": 24
+      },
+      "registers::pl011::periph_id0::PARTNUMBER0::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id0::PARTNUMBER0::PL011": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id0::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id0::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 248,
+        "end_col": 19
+      },
+      "registers::pl011::periph_id1::DESIGNER0": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 252,
+        "end_col": 22
+      },
+      "registers::pl011::periph_id1::DESIGNER0::ARM_LOW": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1::DESIGNER0::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1::PARTNUMBER1": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 249,
+        "end_col": 24
+      },
+      "registers::pl011::periph_id1::PARTNUMBER1::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1::PARTNUMBER1::PL011": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id1::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 258,
+        "end_col": 19
+      },
+      "registers::pl011::periph_id2::DESIGNER1": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 259,
+        "end_col": 22
+      },
+      "registers::pl011::periph_id2::DESIGNER1::ARM_HIGH": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::DESIGNER1::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REVISION": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 262,
+        "end_col": 21
+      },
+      "registers::pl011::periph_id2::REVISION::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REVISION::R1P0": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REVISION::R1P1": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REVISION::R1P3": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REVISION::R1P4": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::REVISION::R1P5": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id2::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id3": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 272,
+        "end_col": 19
+      },
+      "registers::pl011::periph_id3::CONFIGURATION": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 273,
+        "end_col": 26
+      },
+      "registers::pl011::periph_id3::CONFIGURATION::DEFAULT": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id3::CONFIGURATION::FIELD": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id3::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id3::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::periph_id3::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 177,
+        "end_col": 12
+      },
+      "registers::pl011::ris::BERIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::CTSRMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::DCDRMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::DSRRMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::FERIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::OERIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::PERIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::RIRMIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::RTRIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::RXRIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::ris::TXRIS": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 16,
+        "end_col": 16
+      },
+      "registers::pl011::rsr_ecr::BE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr::FE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr::OE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr::OFFSET": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr::PE": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr::REG": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      },
+      "registers::pl011::rsr_ecr::Register": {
+        "file": "src/registers.rs",
+        "start_line": 3,
+        "start_col": 1,
+        "end_line": 306,
+        "end_col": 2
+      }
+    }
   }
 }
