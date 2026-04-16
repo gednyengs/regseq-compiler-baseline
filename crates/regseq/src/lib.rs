@@ -35,7 +35,10 @@ pub use lifecycle::Lifecycle;
 pub use mmio::Mmio;
 pub use pinctrl::{PinCtrl, PinState};
 pub use power::PowerManagement;
-pub use registers::{Field, FieldValue, ReadOnly, ReadWrite, Reserved, WriteOnly};
+pub use registers::{
+    Field, FieldValue, ReadAccess, ReadOnly, ReadOnlyAccess, ReadWrite, ReadWriteAccess, RegWidth,
+    RegisterId, RegisterOf, Reserved, WriteAccess, WriteOnly, WriteOnlyAccess,
+};
 pub use regseq_macros::ordered;
 pub use reset::ResetLine;
 pub use serial::{

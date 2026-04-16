@@ -1,4 +1,7 @@
-use regseq::{Field, FieldValue, ReadOnly, ReadWrite, Reserved, WriteOnly};
+use regseq::{
+    Field, FieldValue, ReadAccess, ReadOnly, ReadOnlyAccess, ReadWrite, ReadWriteAccess, RegWidth,
+    RegisterId, RegisterOf, Reserved, WriteAccess, WriteOnly, WriteOnlyAccess,
+};
 
 // A dummy register marker type for testing.
 struct TestReg;
@@ -126,4 +129,113 @@ fn register_block_layout_coherence() {
         core::mem::size_of::<MockRegs>(),
         4 * core::mem::size_of::<u32>()
     );
+}
+
+// ---------------------------------------------------------------------------
+// Access marker tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn read_only_access_implements_read_access() {
+    fn assert_read<T: ReadAccess>() {}
+    assert_read::<ReadOnlyAccess>();
+}
+
+#[test]
+fn read_only_access_does_not_implement_write_access() {
+    // Negative bound: ReadOnlyAccess must NOT implement WriteAccess.
+    // Rust has no negative trait bounds or built-in compile-fail testing, so
+    // correctness here relies on the absence of `impl WriteAccess for ReadOnlyAccess`
+    // in registers.rs. If someone accidentally adds that impl, the type system
+    // will silently accept writes to read-only registers -- catch in code review.
+    fn takes_write<T: WriteAccess>(_: &T) {}
+    // Uncommenting the next line must fail to compile:
+    // takes_write(&ReadOnlyAccess);
+    let _ = takes_write::<WriteOnlyAccess>;
+}
+
+#[test]
+fn write_only_access_implements_write_access() {
+    fn assert_write<T: WriteAccess>() {}
+    assert_write::<WriteOnlyAccess>();
+}
+
+#[test]
+fn write_only_access_does_not_implement_read_access() {
+    // Negative bound: WriteOnlyAccess must NOT implement ReadAccess.
+    // Same reasoning as read_only_access_does_not_implement_write_access above.
+    fn takes_read<T: ReadAccess>(_: &T) {}
+    // Uncommenting the next line must fail to compile:
+    // takes_read(&WriteOnlyAccess);
+    let _ = takes_read::<ReadOnlyAccess>;
+}
+
+#[test]
+fn read_write_access_implements_both() {
+    fn assert_read<T: ReadAccess>() {}
+    fn assert_write<T: WriteAccess>() {}
+    assert_read::<ReadWriteAccess>();
+    assert_write::<ReadWriteAccess>();
+}
+
+// ---------------------------------------------------------------------------
+// RegisterId tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn register_id_is_const_constructible() {
+    const REG: RegisterId<u32, TestReg> = RegisterId::new();
+    let _ = REG;
+}
+
+#[test]
+fn register_id_is_copy_and_clone() {
+    let reg: RegisterId<u32, TestReg> = RegisterId::new();
+    let copied = reg;
+    let cloned = reg.clone();
+    let _ = (copied, cloned);
+}
+
+// ---------------------------------------------------------------------------
+// RegWidth tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn u8_implements_reg_width() {
+    fn assert_reg_width<T: RegWidth>() {}
+    assert_reg_width::<u8>();
+}
+
+#[test]
+fn u16_implements_reg_width() {
+    fn assert_reg_width<T: RegWidth>() {}
+    assert_reg_width::<u16>();
+}
+
+#[test]
+fn u32_implements_reg_width() {
+    fn assert_reg_width<T: RegWidth>() {}
+    assert_reg_width::<u32>();
+}
+
+// ---------------------------------------------------------------------------
+// RegisterOf trait tests
+// ---------------------------------------------------------------------------
+
+#[test]
+fn register_of_trait_usable_in_bounds() {
+    // Dummy block and register types to verify the trait compiles in bounds.
+    struct DummyBlock;
+    struct DummyReg;
+
+    impl RegisterOf<DummyBlock> for DummyReg {
+        type Access = ReadWriteAccess;
+    }
+
+    fn assert_register_of<Block, R: RegisterOf<Block>>()
+    where
+        R::Access: ReadAccess,
+    {
+    }
+    assert_register_of::<DummyBlock, DummyReg>();
 }
