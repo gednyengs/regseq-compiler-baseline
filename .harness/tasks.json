@@ -830,7 +830,7 @@
           "id": "regseq-model-33",
           "name": "RegisterDescriptor and RegisterBlock",
           "spec": ".harness/tasks/regseq-model/33-register-descriptor-and-block.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-21"
           ],

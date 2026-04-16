@@ -6,7 +6,12 @@
 //! execution plan progresses.
 
 pub mod framework;
+pub mod register;
 pub mod type_def;
 
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
+pub use register::{
+    AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,
+    RegisterBlockField, RegisterDescriptor,
+};
 pub use type_def::{AttrEntry, AttrValue, Attrs, FieldDef, TypeDef, TypeDefKind, VariantDef};
