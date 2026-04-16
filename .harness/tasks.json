@@ -385,10 +385,10 @@
           "id": "regseq-driver-25",
           "name": "Release-profile MIR compiler config",
           "spec": ".harness/tasks/regseq-driver/25-release-profile-mir-config.md",
-          "status": "failed",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": "Implementation complete and Codex-approved. Verification blocked by pre-existing test failure in source_to_extraction_10_serial_callbacks_a::precondition_specimen_fidelity \u2014 caused by uncommitted ErrorKind->SerialErrors rename in tests/fixtures/pl011-full-spec/src/driver.rs (unrelated to this task). All other workspace tests pass. fmt and clippy clean."
+          "fail_reason": null
         }
       ]
     },
