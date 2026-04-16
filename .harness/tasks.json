@@ -616,7 +616,7 @@
           "id": "regseq-model-24",
           "name": "Place and Projection",
           "spec": ".harness/tasks/regseq-model/24-place-and-projection.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-20",
             "regseq-model-21"
