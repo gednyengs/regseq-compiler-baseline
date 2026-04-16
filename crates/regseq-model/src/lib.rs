@@ -11,6 +11,7 @@
 pub mod binding;
 pub mod declaration;
 pub mod identity;
+pub mod ir;
 pub mod item;
 pub mod joined;
 pub mod platform;
