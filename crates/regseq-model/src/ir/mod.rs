@@ -1,5 +1,6 @@
 //! CFG-based IR types for the Regseq Model.
 
+pub mod body;
 pub mod intrinsic;
 pub mod operand;
 pub mod ops;
@@ -9,6 +10,7 @@ pub mod statement;
 pub mod terminator;
 pub mod types;
 
+pub use body::{BasicBlock, BasicBlockSourceMap, Body, BodySourceMap, LocalDecl, OrderedRegion};
 pub use intrinsic::{
     FormatKind, FormatPlaceholder, IntrinsicMetadata, RegisterFieldMeta, RegseqAbstraction,
     RegseqIntrinsic,

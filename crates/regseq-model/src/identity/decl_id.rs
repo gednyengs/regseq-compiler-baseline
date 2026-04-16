@@ -132,7 +132,7 @@ impl std::fmt::Debug for LocalId {
 }
 
 /// Identifies a basic block within a function body.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
 pub struct BasicBlockId(pub u32);
 
 impl BasicBlockId {

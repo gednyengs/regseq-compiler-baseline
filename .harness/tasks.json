@@ -689,7 +689,7 @@
           "id": "regseq-model-30",
           "name": "Body, BasicBlock, LocalDecl, OrderedRegion, BodySourceMap",
           "spec": ".harness/tasks/regseq-model/30-body-and-source-map.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-28",
             "regseq-model-29"
