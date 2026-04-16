@@ -817,7 +817,7 @@
           "id": "regseq-model-32",
           "name": "TypeDef, FieldDef, VariantDef, Attrs",
           "spec": ".harness/tasks/regseq-model/32-type-def.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-31",
             "regseq-model-22",

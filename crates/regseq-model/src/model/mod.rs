@@ -6,5 +6,7 @@
 //! execution plan progresses.
 
 pub mod framework;
+pub mod type_def;
 
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
+pub use type_def::{AttrEntry, AttrValue, Attrs, FieldDef, TypeDef, TypeDefKind, VariantDef};
