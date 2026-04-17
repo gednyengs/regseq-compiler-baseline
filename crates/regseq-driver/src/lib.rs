@@ -11,8 +11,9 @@ extern crate rustc_span;
 
 pub mod args;
 mod callbacks;
+pub mod construction;
 pub(crate) mod emit_driver;
-pub(crate) mod extract;
+pub mod extract;
 pub mod mir_repr;
 pub mod raw_artifact;
 pub use callbacks::RegseqCallbacks;
