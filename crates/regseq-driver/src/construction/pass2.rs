@@ -9,7 +9,10 @@
 //!
 //! Scope restrictions for this task:
 //!
-//! - `SwitchInt` translation is out of scope (task 44).
+//! - `SwitchInt` translation is handled here via
+//!   [`super::switch_and_loops::translate_switch_int`] (task 44). Loop
+//!   recovery surfaces as a natural back-edge `Goto` with no dedicated
+//!   IR construct.
 //! - Intrinsic recognition is out of scope (task 45).
 //! - `?`-pattern folding is out of scope (task 46). `error_target` is
 //!   always `None`.
@@ -491,13 +494,20 @@ fn translate_terminator<'tcx>(
                 error_target: None,
             })
         }
-        mir::TerminatorKind::SwitchInt { .. } => Err(ConstructionError::UnsupportedTerminator {
-            provenance: ErrorProvenance {
-                item_path: tcx.def_path_str(owner_def_id),
-                span: term.source_info.span,
-            },
-            rendered: "SwitchInt (handled by task 44)".to_owned(),
-        }),
+        mir::TerminatorKind::SwitchInt { discr, targets } => {
+            super::switch_and_loops::translate_switch_int(
+                tcx,
+                owner_def_id,
+                term,
+                discr,
+                targets,
+                block_map,
+                locals,
+                type_def_index,
+                constants,
+                interner,
+            )
+        }
         other => {
             let tag = match other {
                 mir::TerminatorKind::Assert { .. } => "Assert",
@@ -509,10 +519,10 @@ fn translate_terminator<'tcx>(
                 mir::TerminatorKind::InlineAsm { .. } => "InlineAsm",
                 mir::TerminatorKind::FalseEdge { .. } => "FalseEdge",
                 mir::TerminatorKind::FalseUnwind { .. } => "FalseUnwind",
-                // Exhaustively covered above -- the four supported
-                // cases (Goto/Return/Unreachable/Drop/Call) plus
-                // SwitchInt are already matched in earlier arms, so
-                // this arm is unreachable for them.
+                // Exhaustively covered above -- the supported cases
+                // (Goto/Return/Unreachable/Drop/Call/SwitchInt) are
+                // already matched in earlier arms, so this arm is
+                // unreachable for them.
                 _ => "Unknown",
             };
             Err(ConstructionError::UnsupportedTerminator {

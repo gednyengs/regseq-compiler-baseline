@@ -219,15 +219,23 @@ pub enum ConstructionError {
         rendered: String,
     },
     /// A MIR terminator has no Regseq IR representation in Pass 2's
-    /// basic-terminator subset (task 43). Covers `TailCall`, `Yield`,
+    /// basic-terminator subset. Covers `TailCall`, `Yield`,
     /// `CoroutineDrop`, `InlineAsm`, `FalseEdge`, `FalseUnwind`,
-    /// `Assert`, `UnwindResume`, `UnwindTerminate`, and -- for this
-    /// task -- `SwitchInt` (handled by task 44).
+    /// `Assert`, `UnwindResume`, `UnwindTerminate`.
     UnsupportedTerminator {
         /// Provenance of the offending terminator.
         provenance: ErrorProvenance,
         /// Rendered terminator kind for diagnostics.
         rendered: String,
+    },
+    /// A `SwitchInt` terminator's original target indexed a cleanup
+    /// block that Pass 2 dropped. Non-cleanup control flow must not
+    /// route into the cleanup subtree.
+    SwitchTargetIntoCleanup {
+        /// Provenance of the offending SwitchInt.
+        provenance: ErrorProvenance,
+        /// The original MIR basic-block index of the dropped target.
+        block_index: u32,
     },
     /// A MIR `Call` terminator's `func` operand does not resolve to a
     /// known [`FunctionId`]: the operand is not an `FnDef` constant, or
@@ -339,6 +347,14 @@ impl std::fmt::Display for ConstructionError {
                 f,
                 "MIR call target `{}` cannot be resolved to a FunctionId (at `{}`)",
                 rendered, provenance.item_path,
+            ),
+            Self::SwitchTargetIntoCleanup {
+                provenance,
+                block_index,
+            } => write!(
+                f,
+                "SwitchInt target bb{block_index} is a cleanup block (at `{}`)",
+                provenance.item_path,
             ),
         }
     }

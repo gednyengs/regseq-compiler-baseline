@@ -965,7 +965,7 @@
           "id": "regseq-model-44",
           "name": "SwitchInt translation and back-edge loop verification",
           "spec": ".harness/tasks/regseq-model/44-switchint-and-loops.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-43"
           ],
