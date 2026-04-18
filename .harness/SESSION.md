@@ -36,21 +36,69 @@ You are a worker agent for the Regseq compiler project.
 
 ## Review
 
-12. Once tests pass, request a Codex review of your implementation. Launch
-    the `codex:codex-rescue` agent as a BACKGROUND agent via the Agent tool
-    with `run_in_background: true`. Do NOT invoke `/codex:rescue` as a
-    foreground skill -- Codex runs can take minutes and will appear to hang
-    the main session. The background invocation keeps the main session
-    interactive and delivers a completion notification when Codex finishes.
-    The prompt should:
-    - Reference the task spec file path
-    - Ask Codex to review the implementation against the task spec. ALL CHECKS MUST BE SCOPED TO THE TASK DEFINED BY THE TASK SPEC.
-    - Ask Codex to check for spec deviations, correctness issues, generality loss in the solution, and design misalignment
-13. If Codex identifies issues, fix them and re-submit for review (again as
-    a background agent).
-14. Iterate (fix -> Codex review) until Codex agrees the implementation
-    matches the task spec. Do not skip this step. Every Codex invocation in
-    this loop must be launched as a background agent.
+12. Once tests pass, request a Codex review of your implementation by
+    invoking `scripts/python/codex_runner.py` via the Bash tool. Do NOT
+    use the `codex:codex-rescue` agent / `/codex:rescue` skill -- that
+    path goes through a background helper that has hung for hours in
+    the past. `codex_runner.py` shells out to `codex exec --json`
+    directly, parses the JSONL event stream, and returns a
+    `CodexResult` as JSON on stdout. Invoke it like this (use the
+    Bash tool's `timeout` parameter, max 600000 ms):
+
+    ```bash
+    cat <<'EOF' | uv run python scripts/python/codex_runner.py --timeout 540
+    <task>
+    Review the implementation of <TASK_ID> against its task spec at
+    <SPEC_PATH>. ALL CHECKS MUST BE SCOPED TO THE TASK DEFINED BY THE
+    TASK SPEC.
+
+    Files to audit:
+    - <file1>
+    - <file2>
+    ...
+
+    Focus on:
+    - Spec deviations (every rule in the Implementation Notes section).
+    - Correctness issues and generality loss.
+    - Design misalignment with the spec's public API / architecture.
+    - Test coverage vs. the spec's Test Plan.
+    Do NOT flag anything explicitly marked out of scope (Non-Goals,
+    later task IDs).
+    </task>
+
+    <grounding_rules>
+    Cite file:line for every claim and every required fix. Do not
+    speculate about code you did not read. Mark hypotheses as
+    hypotheses.
+    </grounding_rules>
+
+    <structured_output_contract>
+    First line: VERDICT: APPROVED | REQUIRES FIXES
+    If REQUIRES FIXES: numbered list, each entry exactly
+      <file>:<line-range> -- <what is wrong> -- <what the spec requires>
+    If APPROVED: one paragraph (<=120 words) summarizing what was
+    verified and why any deliberate deviations are acceptable.
+    Total response <= 400 words.
+    </structured_output_contract>
+
+    <default_follow_through_policy>
+    Do not ask clarifying questions. Read the files, form a verdict,
+    stop.
+    </default_follow_through_policy>
+    EOF
+    ```
+
+    Parse the `final_message` field from the returned JSON (or pass
+    `--message-only` to print just that text). The first line carries
+    the verdict. If Codex takes longer than 540 seconds you will hit
+    the script's internal timeout; raise it with `--timeout N` (max
+    ~595 to stay under the Bash tool's 10-minute ceiling).
+13. If Codex returns REQUIRES FIXES, address each cited fix (unless
+    you have strong reason to disagree -- in which case document that
+    in the fix rationale) and re-invoke `codex_runner.py` with a
+    fresh prompt.
+14. Iterate (fix -> `codex_runner.py` review) until Codex returns
+    VERDICT: APPROVED. Do not skip this step.
 
 ## Finishing
 
