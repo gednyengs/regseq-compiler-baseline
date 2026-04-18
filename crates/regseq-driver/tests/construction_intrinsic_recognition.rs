@@ -34,8 +34,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
-    ExtractionRegistries, FunctionIndex, IntrinsicLookup, Pass1Output, PinStateRegistry,
-    TypeDefIndex,
+    ExtractionRegistries, FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output,
+    PinStateRegistry, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -313,6 +313,7 @@ fn method_intrinsic_preserves_self_as_first_arg() {
             let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
+            let ordered_markers = OrderedMarkers::default();
             let body = build_body(
                 tcx,
                 caller,
@@ -322,6 +323,7 @@ fn method_intrinsic_preserves_self_as_first_arg() {
                 &functions,
                 &lookup,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -423,6 +425,7 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
             let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
+            let ordered_markers = OrderedMarkers::default();
             let body = build_body(
                 tcx,
                 caller,
@@ -432,6 +435,7 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
                 &functions,
                 &lookup,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -513,6 +517,7 @@ fn free_function_intrinsic_does_not_prepend_receiver() {
             let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
+            let ordered_markers = OrderedMarkers::default();
             let body = build_body(
                 tcx,
                 caller,
@@ -522,6 +527,7 @@ fn free_function_intrinsic_does_not_prepend_receiver() {
                 &functions,
                 &lookup,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -585,6 +591,7 @@ fn unregistered_callee_falls_through_to_regular_call() {
             let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
+            let ordered_markers = OrderedMarkers::default();
             let body = build_body(
                 tcx,
                 caller,
@@ -594,6 +601,7 @@ fn unregistered_callee_falls_through_to_regular_call() {
                 &functions,
                 &lookup,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -662,6 +670,7 @@ fn intrinsic_lookup_build_integrates_with_extraction_registry() {
             let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
+            let ordered_markers = OrderedMarkers::default();
             let body = build_body(
                 tcx,
                 caller,
@@ -671,6 +680,7 @@ fn intrinsic_lookup_build_integrates_with_extraction_registry() {
                 &functions,
                 &lookup,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed when threaded with IntrinsicLookup::build output");

@@ -44,7 +44,7 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, DerefCollapseLookup, ExtractionRegistries,
-    FunctionIndex, IntrinsicLookup, Pass1Output, PinStateRegistry, TypeDefIndex,
+    FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output, PinStateRegistry, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -477,6 +477,7 @@ fn transport_deref_call_is_dropped_and_place_reroots_to_receiver() {
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
             let intrinsics = IntrinsicLookup::default();
+            let ordered_markers = OrderedMarkers::default();
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -487,6 +488,7 @@ fn transport_deref_call_is_dropped_and_place_reroots_to_receiver() {
                 &functions,
                 &intrinsics,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller function");
@@ -585,6 +587,7 @@ fn non_transport_deref_is_preserved_as_regular_call() {
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
             let intrinsics = IntrinsicLookup::default();
+            let ordered_markers = OrderedMarkers::default();
             let mut interner = SymbolInterner::new();
             // The non-transport caller translates to a regular `Call`
             // for the `Deref::deref` invocation. Since `Deref::deref`'s
@@ -604,6 +607,7 @@ fn non_transport_deref_is_preserved_as_regular_call() {
                 &functions,
                 &intrinsics,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             );
             match result {
@@ -671,6 +675,7 @@ fn two_consecutive_transport_derefs_collapse_independently() {
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
             let intrinsics = IntrinsicLookup::default();
+            let ordered_markers = OrderedMarkers::default();
             let mut interner = SymbolInterner::new();
             build_body(
                 tcx,
@@ -681,6 +686,7 @@ fn two_consecutive_transport_derefs_collapse_independently() {
                 &functions,
                 &intrinsics,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             )
             .expect("build_body must succeed on the double-deref caller")
@@ -765,6 +771,7 @@ fn collapse_is_gated_by_registry_entry_not_by_type_name() {
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
             let intrinsics = IntrinsicLookup::default();
+            let ordered_markers = OrderedMarkers::default();
             let mut interner = SymbolInterner::new();
             let result = build_body(
                 tcx,
@@ -775,6 +782,7 @@ fn collapse_is_gated_by_registry_entry_not_by_type_name() {
                 &functions,
                 &intrinsics,
                 &deref_lookup,
+                &ordered_markers,
                 &mut interner,
             );
             match result {
@@ -826,6 +834,7 @@ fn constructed_module_has_zero_residual_deref_calls() {
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
             let intrinsics = IntrinsicLookup::default();
+            let ordered_markers = OrderedMarkers::default();
             let mut interner = SymbolInterner::new();
 
             // Enumerate every function-bearing item in the specimen's
@@ -886,6 +895,7 @@ fn constructed_module_has_zero_residual_deref_calls() {
                     &functions,
                     &intrinsics,
                     &deref_lookup,
+                    &ordered_markers,
                     &mut interner,
                 );
                 match result {

@@ -55,6 +55,7 @@ pub use mir_mapping::{
     map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex,
     LocalIdMap, MapOperandResult, TypeDefIndex,
 };
+pub use ordered_region::OrderedMarkers;
 pub use pass2::build_body;
 
 use id_allocator::DeclIdAllocator;
@@ -274,6 +275,30 @@ pub enum ConstructionError {
         /// not).
         crate_root: ErrorProvenance,
     },
+    /// The `regseq` facade crate is in the dependency graph but at
+    /// least one of the `regseq::internal::ordered_region_*` marker
+    /// functions could not be resolved. Raised at Pass 2 setup when
+    /// [`construction::ordered_region`](self::ordered_region) builds
+    /// its marker cache -- defends against facade renames that would
+    /// otherwise silently disable `ordered!` region detection.
+    OrderedMarkerLookupFailed {
+        /// Provenance anchored at the best-effort facade item (the
+        /// crate root, or the `internal` submodule if it was found).
+        provenance: ErrorProvenance,
+        /// Diagnostic rendering naming the missing marker(s).
+        rendered: String,
+    },
+    /// An `ordered!` region has an unmatched begin/end marker: a
+    /// `regseq::internal::ordered_region_begin()` with no matching
+    /// `ordered_region_end()` in the same body (or vice versa). Raised
+    /// at Pass 2 when [`construction::ordered_region`](self::ordered_region)
+    /// folds the captured marker sites into regions.
+    UnpairedOrderedMarker {
+        /// Provenance of the enclosing function body.
+        provenance: ErrorProvenance,
+        /// Diagnostic rendering naming the unmatched marker.
+        rendered: String,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -396,6 +421,22 @@ impl std::fmt::Display for ConstructionError {
                 f,
                 "SwitchInt target bb{block_index} is a cleanup block (at `{}`)",
                 provenance.item_path,
+            ),
+            Self::OrderedMarkerLookupFailed {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "ordered-region marker lookup failed: `{}` (at `{}`)",
+                rendered, provenance.item_path,
+            ),
+            Self::UnpairedOrderedMarker {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "unpaired ordered-region marker: `{}` (at `{}`)",
+                rendered, provenance.item_path,
             ),
         }
     }

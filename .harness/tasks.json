@@ -1024,7 +1024,7 @@
           "id": "regseq-model-49",
           "name": "Rule 5 - OrderedRegion detection",
           "spec": ".harness/tasks/regseq-model/49-ordered-region-detection.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-model-45",
             "regseq-facade-24"

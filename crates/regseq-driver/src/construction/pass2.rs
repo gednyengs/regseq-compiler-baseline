@@ -57,6 +57,7 @@ use super::mir_mapping::{
     map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex, LocalIdMap,
     MapOperandResult, TypeDefIndex,
 };
+use super::ordered_region::{pair_ordered_regions, OrderedMarkerSite, OrderedMarkers};
 use super::{resolve_origin, ConstructionError, ErrorProvenance};
 
 /// Build a Regseq IR [`Body`] for the function identified by `def_id`
@@ -80,6 +81,7 @@ pub fn build_body<'tcx>(
     functions: &FunctionIndex<'_>,
     intrinsics: &IntrinsicLookup,
     deref_lookup: &DerefCollapseLookup<'_>,
+    ordered_markers: &OrderedMarkers,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -102,10 +104,15 @@ pub fn build_body<'tcx>(
     // every block is built, `rewrite_body_places` splices the collapsed
     // destinations back through the receiver Places recorded here.
     let mut deref_rewrites = DerefCollapseRewrites::default();
+    // Recognition rule 5 side channel (see
+    // `construction::ordered_region`): every dropped marker `Call`
+    // pushes an entry here so the post-translation pairing pass can
+    // fold them into `Body.ordered_regions`.
+    let mut ordered_sites: Vec<OrderedMarkerSite> = Vec::new();
     for (mir_bb, data) in mir_body.basic_blocks.iter_enumerated() {
-        if block_map[mir_bb.as_usize()].is_none() {
+        let Some(current_id) = block_map[mir_bb.as_usize()] else {
             continue;
-        }
+        };
 
         let mut statements: Vec<Statement> = Vec::new();
         let mut statement_sources: Vec<SourceOrigin> = Vec::new();
@@ -144,6 +151,9 @@ pub fn build_body<'tcx>(
             intrinsics,
             deref_lookup,
             &mut deref_rewrites,
+            ordered_markers,
+            current_id,
+            &mut ordered_sites,
             interner,
         )?;
         basic_blocks.push(BasicBlock {
@@ -163,6 +173,8 @@ pub fn build_body<'tcx>(
 
     let body_span = resolve_origin(tcx, interner, mir_body.span);
 
+    let ordered_regions = pair_ordered_regions(tcx, def_id, &ordered_sites)?;
+
     Ok(Body {
         local_decls,
         arg_count: mir_body.arg_count,
@@ -172,7 +184,7 @@ pub fn build_body<'tcx>(
             locals: local_sources,
             blocks: block_sources,
         },
-        ordered_regions: Vec::new(),
+        ordered_regions,
     })
 }
 
@@ -481,6 +493,9 @@ fn translate_terminator<'tcx>(
     intrinsics: &IntrinsicLookup,
     deref_lookup: &DerefCollapseLookup<'_>,
     deref_rewrites: &mut DerefCollapseRewrites,
+    ordered_markers: &OrderedMarkers,
+    current_block: BasicBlockId,
+    ordered_sites: &mut Vec<OrderedMarkerSite>,
     interner: &mut SymbolInterner,
 ) -> Result<TerminatorKind, ConstructionError> {
     match &term.kind {
@@ -507,6 +522,39 @@ fn translate_terminator<'tcx>(
             ..
         } => {
             let callee_def_id = resolve_callee_def_id(func, term.source_info.span)?;
+
+            // Recognition rule 5 (ir-reference.md Section 8): paired
+            // `regseq::internal::ordered_region_begin()` /
+            // `ordered_region_end()` marker calls are dropped from the
+            // CFG. The marker's basic block becomes a `Goto` to the
+            // call's original return target, preserving preceding
+            // statements. The `(block, kind, target)` triple is
+            // recorded so the post-translation pairing pass can fold
+            // matched markers into `Body.ordered_regions`. This rule
+            // runs *before* intrinsic recognition -- the markers are
+            // compiler markers, not `#[rseq::intrinsic]` intrinsics.
+            if let Some(kind) = ordered_markers.classify(callee_def_id) {
+                let marker_target = match target {
+                    Some(t) => require_block(block_map, *t, term.source_info.span)?,
+                    None => {
+                        return Err(ConstructionError::UnsupportedTerminator {
+                            provenance: ErrorProvenance {
+                                item_path: tcx.def_path_str(callee_def_id),
+                                span: term.source_info.span,
+                            },
+                            rendered:
+                                "ordered-region marker called as a diverging `Call` (no return target)"
+                                    .to_string(),
+                        });
+                    }
+                };
+                ordered_sites.push(OrderedMarkerSite {
+                    owning_block: current_block,
+                    kind,
+                    target: marker_target,
+                });
+                return Ok(TerminatorKind::Goto(marker_target));
+            }
 
             // Recognition rule 4 (ir-reference.md Section 8): collapse
             // `<Mmio<T> as Deref>::deref` (and any other transport
