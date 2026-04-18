@@ -533,6 +533,14 @@ fn resolve_span(tcx: TyCtxt<'_>, symbols: &mut SymbolInterner, span: Span) -> Op
     if span.is_dummy() {
         return None;
     }
+    // Drill through macro expansions to the originating user call
+    // site. Pass 2's spec says `Source(...)` whenever a rustc `Span`
+    // is available and non-dummy, and reserves `CompilerGenerated`
+    // for genuinely synthesized nodes (see ir-reference.md Section 7
+    // design rationale: "use the originating user span"). A macro
+    // body's span points at a synthetic expansion file; walking to
+    // `source_callsite()` recovers the author-visible location.
+    let span = span.source_callsite();
     let source_map = tcx.sess.source_map();
     let lo = source_map.lookup_char_pos(span.lo());
     let hi = source_map.lookup_char_pos(span.hi());

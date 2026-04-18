@@ -304,15 +304,23 @@ pub struct Drv {
 }
 "#;
 
-/// Specimen body for the disable_uart-like test: local helpers and a
-/// driver method that chains calls to them. Every `Call` terminator in
-/// the method's MIR resolves to a LocallyAssigned `FunctionId`.
+/// Specimen body for the disable_uart-like test: local helpers, a
+/// Drop-having type, and a driver method that chains calls through
+/// that live local. The Drop-elaborated MIR puts an unwind cleanup
+/// chain on each call site so the test exercises cleanup-block
+/// dropping in addition to call translation.
 const DRIVER_SPECIMEN_BODY: &str = r#"
 pub fn helper_a(x: u32) -> u32 { x + 1 }
 pub fn helper_b(x: u32, y: u32) -> u32 { x + y }
 
+pub struct DisableGuard { pub n: u32 }
+impl Drop for DisableGuard {
+    fn drop(&mut self) { let _ = self.n; }
+}
+
 impl Drv {
     pub fn disable_uart(&mut self) {
+        let _g = DisableGuard { n: 1 };
         let a = helper_a(7);
         let b = helper_b(a, 9);
         let _c = a + b;
@@ -327,67 +335,76 @@ fn compose(body: &str) -> String {
 #[test]
 fn disable_uart_like_method_translates_to_straight_line_body() {
     let src = compose(DRIVER_SPECIMEN_BODY);
-    let (body, arg_count_from_model, locals_len, cleanup_dropped, fn_id, body_after_attach) =
-        with_specimen(
-            &src,
-            "construction_pass2_disable_uart_like",
-            |tcx, pass1| {
-                let def_id = find_method_def_id(tcx, "Drv", "disable_uart");
-                let mir_body = tcx.optimized_mir(def_id);
-                let locals_len = mir_body.local_decls.len();
-                let cleanup_dropped = mir_body
-                    .basic_blocks
-                    .iter()
-                    .filter(|d| d.is_cleanup)
-                    .count();
+    let (
+        body,
+        arg_count_from_model,
+        locals_len,
+        total_mir_blocks,
+        cleanup_dropped,
+        fn_id,
+        body_after_attach,
+    ) = with_specimen(
+        &src,
+        "construction_pass2_disable_uart_like",
+        |tcx, pass1| {
+            let def_id = find_method_def_id(tcx, "Drv", "disable_uart");
+            let mir_body = tcx.optimized_mir(def_id);
+            let locals_len = mir_body.local_decls.len();
+            let total_mir_blocks = mir_body.basic_blocks.len();
+            let cleanup_dropped = mir_body
+                .basic_blocks
+                .iter()
+                .filter(|d| d.is_cleanup)
+                .count();
 
-                let fn_id = *pass1
-                    .cross_refs
-                    .functions
-                    .get(&def_id)
-                    .expect("disable_uart FunctionId must be present after Pass 1");
+            let fn_id = *pass1
+                .cross_refs
+                .functions
+                .get(&def_id)
+                .expect("disable_uart FunctionId must be present after Pass 1");
 
-                let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
-                let constants = ConstantIndex::new(&pass1.cross_refs.constants);
-                let functions = FunctionIndex::new(&pass1.cross_refs.functions);
-                let mut interner = SymbolInterner::new();
-                let body = build_body(
-                    tcx,
-                    def_id,
-                    fn_id,
-                    &type_def_index,
-                    &constants,
-                    &functions,
-                    &mut interner,
-                )
-                .expect("build_body must succeed on straight-line MIR");
+            let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
+            let constants = ConstantIndex::new(&pass1.cross_refs.constants);
+            let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let mut interner = SymbolInterner::new();
+            let body = build_body(
+                tcx,
+                def_id,
+                fn_id,
+                &type_def_index,
+                &constants,
+                &functions,
+                &mut interner,
+            )
+            .expect("build_body must succeed on straight-line MIR");
 
-                // Mutate the Pass 1 model to attach the real body for
-                // the spec's "attached to the function in the Driver
-                // impl block" assertion. We clone the Pass 1 model so
-                // the rest of this closure has full freedom; only the
-                // outputs surfaced below need to survive rustc shutdown.
-                let mut model = pass1.model.clone();
-                {
-                    let function = find_function_mut(&mut model, fn_id);
-                    function.body = body.clone();
-                }
-                // Re-retrieve the attached body from the model to
-                // confirm the attachment wired through.
-                let attached = find_function_ro(&model, fn_id).body.clone();
+            // Mutate the Pass 1 model to attach the real body for
+            // the spec's "attached to the function in the Driver
+            // impl block" assertion. We clone the Pass 1 model so
+            // the rest of this closure has full freedom; only the
+            // outputs surfaced below need to survive rustc shutdown.
+            let mut model = pass1.model.clone();
+            {
+                let function = find_function_mut(&mut model, fn_id);
+                function.body = body.clone();
+            }
+            // Re-retrieve the attached body from the model to
+            // confirm the attachment wired through.
+            let attached = find_function_ro(&model, fn_id).body.clone();
 
-                let arg_count = find_function_ro(&model, fn_id).body.arg_count;
+            let arg_count = find_function_ro(&model, fn_id).body.arg_count;
 
-                (
-                    body,
-                    arg_count,
-                    locals_len,
-                    cleanup_dropped,
-                    fn_id.0.index(),
-                    attached,
-                )
-            },
-        );
+            (
+                body,
+                arg_count,
+                locals_len,
+                total_mir_blocks,
+                cleanup_dropped,
+                fn_id.0.index(),
+                attached,
+            )
+        },
+    );
 
     let _ = fn_id;
 
@@ -459,25 +476,25 @@ fn disable_uart_like_method_translates_to_straight_line_body() {
         }
     }
 
-    // (5) All cleanup blocks dropped; remaining block IDs renumbered
-    // contiguously [0..N). `locals_len`-sized check is implicit in
-    // counts: if any cleanup block survived, basic_blocks.len() would
-    // exceed `mir_body.basic_blocks.len() - cleanup_dropped`.
-    let expected_blocks = {
-        // Total MIR blocks minus the cleanup ones we dropped. We
-        // recover the "total MIR blocks" by summing dropped + kept,
-        // but we only know dropped + kept via body.basic_blocks.len()
-        // (after translation) + cleanup_dropped; so the check here is
-        // tautological unless we also expose the MIR block count.
-        // Simpler: assert no cleanup block survived by asserting the
-        // block layout matches what we expect for this specimen.
-        let _ = cleanup_dropped;
-        body.basic_blocks.len()
-    };
-    assert_eq!(body.basic_blocks.len(), expected_blocks);
-    // Contiguous renumbering: IDs are implicit by Vec index, so simply
-    // assert the block count is non-zero and all targets reference IDs
-    // within range.
+    // (5) Cleanup blocks dropped per ir-reference.md Section 6.
+    // Every `is_cleanup` MIR block is either the spec-literal
+    // UnwindResume leaf (dropped directly) or an interior block
+    // reachable only through unwind edges (which translation
+    // strips, rendering it unreachable). So the kept block count
+    // must exactly equal the number of non-cleanup MIR blocks --
+    // no cleanup block survives.
+    assert!(
+        cleanup_dropped > 0,
+        "specimen must exercise cleanup blocks so the drop rule is actually tested"
+    );
+    assert_eq!(
+        body.basic_blocks.len(),
+        total_mir_blocks - cleanup_dropped,
+        "kept block count must match non-cleanup MIR block count",
+    );
+    // Contiguous renumbering: IDs are Vec indices. Check every
+    // terminator-target BasicBlockId lands in `[0, N)` so no edge
+    // references a dropped block.
     assert!(!body.basic_blocks.is_empty(), "at least one block");
     for bb in &body.basic_blocks {
         match &bb.terminator.kind {
@@ -740,3 +757,89 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
         .expect("build_body must succeed on the free-fn specimen")
     })
 }
+
+// ---------------------------------------------------------------------------
+// SetDiscriminant statement
+// ---------------------------------------------------------------------------
+//
+// Direct enum construction (`Color::Blue(42)`) lowers to
+// `Rvalue::Aggregate(AggregateKind::Adt, [...])` at
+// `mir_drops_elaborated_and_const_checked` with `mir_opt_level = 0`,
+// not to a `StatementKind::SetDiscriminant`. The latter is emitted
+// almost exclusively by coroutine/state-machine transforms, drop
+// elaboration's tag-only writes, and `try_trait_v2` desugarings --
+// none of which appear through straight-line user code in Pass 2's
+// scope.
+//
+// The translation is a one-liner (`variant_index.as_u32()`), covered
+// structurally by the exhaustive `match` in `translate_statement`
+// and unit-tested in `crates/regseq-model/src/ir/statement.rs`. A
+// dedicated end-to-end test is deferred until task 44 (SwitchInt) or
+// task 46 (?-folding) land, both of which naturally surface
+// SetDiscriminant through their respective MIR patterns.
+
+// ---------------------------------------------------------------------------
+// Unreachable terminator
+// ---------------------------------------------------------------------------
+//
+// `TerminatorKind::Unreachable` is hard to surface from straight-line
+// user code at our MIR stage:
+//
+// - `loop {}` lowers to `Goto(bb0)`, not Unreachable.
+// - `panic!()` / `unreachable!()` lower to Call terminators targeting
+//   std panic intrinsics, which are cross-crate and resolve to
+//   `UnresolvedCallTarget` before the Unreachable ever appears.
+// - `core::hint::unreachable_unchecked()` is a wrapper fn -- the
+//   MIR emits a Call to it, not an Unreachable terminator.
+// - Exhaustive `match` on an uninhabited type synthesizes
+//   `SwitchInt -> Unreachable`, but SwitchInt is task 44.
+//
+// The translation for Unreachable is a one-liner
+// (`TerminatorKind::Unreachable`) with no data to misplace, and it is
+// reachable as a compile-time-checked arm of the exhaustive
+// `match` in `translate_terminator`. A dedicated end-to-end test is
+// therefore deferred until task 44 lands SwitchInt, which enables
+// surfacing Unreachable through exhaustive-match code paths.
+
+// ---------------------------------------------------------------------------
+// Dropped-statement fixture (Nop / FakeRead / Retag / PlaceMention /
+// Coverage / ConstEvalCounter / AscribeUserType / BackwardIncompatibleDropHint)
+// ---------------------------------------------------------------------------
+//
+// The Pass 2 spec's Test Plan suggests a fixture that surfaces these
+// statements so their `Ok(None)` drop arms are exercised end-to-end.
+// However, at `mir_drops_elaborated_and_const_checked` with
+// `mir_opt_level = 0` and release-profile semantics:
+//
+// - `FakeRead` and `AscribeUserType` are disallowed after drop
+//   elaboration; they never appear in the MIR Pass 2 reads.
+// - `Retag` is only generated under `-Z mir-emit-retag`, which we do
+//   not pass.
+// - `Coverage` / `ConstEvalCounter` / `BackwardIncompatibleDropHint`
+//   require specific rustc flags or edition settings not exercised
+//   by the harness.
+// - `Nop` is never emitted by the front-end at this phase.
+//
+// The task spec explicitly permits skipping this fixture "if not
+// reachable through normal code, skip and note in the test comment"
+// (see the Test Plan section). The drop arms are still structurally
+// exercised: the `match` in `translate_statement` is exhaustive, so
+// every un-reached arm is a compile-time no-op that would break the
+// build if renamed or removed.
+
+// ---------------------------------------------------------------------------
+// CopyNonOverlapping sub-variant
+// ---------------------------------------------------------------------------
+//
+// Exercising `MirIntrinsic::CopyNonOverlapping` end-to-end through
+// Pass 2 requires function locals typed as raw pointers (`*const T`
+// / `*mut T`): MIR builds the intrinsic statement directly from
+// pointer-typed operands. `map_ty` rejects raw pointers as
+// `UnsupportedRustType` because the Regseq IR has no raw-pointer
+// variant yet, so the translation cannot proceed far enough to
+// emit the `CopyNonOverlapping` statement. Adding raw-pointer
+// support is an IR-level change outside task 43's scope; until
+// then the `CopyNonOverlapping` mapping is covered structurally
+// by the unit tests in `crates/regseq-model/src/ir/statement.rs`
+// and by the `translate_non_diverging_intrinsic` exhaustive match
+// in `pass2.rs`.

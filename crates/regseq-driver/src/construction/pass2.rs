@@ -144,19 +144,110 @@ pub fn build_body<'tcx>(
 // ---------------------------------------------------------------------------
 
 /// Build a dense `mir::BasicBlock` -> `Option<BasicBlockId>` table.
-/// `None` entries correspond to cleanup blocks dropped by Pass 2.
+/// `None` entries correspond to blocks dropped by Pass 2 -- the
+/// spec-literal cleanup resume blocks plus any other block left
+/// unreachable from entry after `unwind` edges on Call/Drop are
+/// stripped during terminator translation.
+///
+/// The algorithm matches the two rules from the task spec's
+/// Cleanup-block dropping section (drop `is_cleanup && UnwindResume`)
+/// and ir-reference.md Section 6 ("cleanup blocks ending in resume are
+/// dropped"; Call/Drop unwind fields are dropped during translation)
+/// together. Steps:
+///
+/// 1. Mark every block whose MIR data is `is_cleanup == true` and
+///    whose terminator is `UnwindResume`. These are the leaves of the
+///    MIR cleanup subtree -- dropping them per the spec literal rule.
+/// 2. Walk reachability from `START_BLOCK` considering only the edges
+///    Pass 2 preserves (Call::target, Drop::target, Goto, SwitchInt,
+///    Assert::target, FalseEdge::real_target, etc.). `Call::unwind`
+///    and `Drop::unwind` edges into the cleanup subtree are not
+///    traversed because translation drops those fields.
+/// 3. Any MIR block neither marked in step 1 nor reached in step 2 is
+///    unreachable. In practice this catches the non-resume interior
+///    cleanup blocks (`Drop { .. -> resume }`, cleanup `Call` chains)
+///    so their translation never produces dangling `BasicBlockId`
+///    references.
+/// 4. Blocks that survive are assigned contiguous `BasicBlockId`s in
+///    MIR order.
 fn build_block_map<'tcx>(mir_body: &mir::Body<'tcx>) -> Vec<Option<BasicBlockId>> {
     let count = mir_body.basic_blocks.len();
-    let mut map: Vec<Option<BasicBlockId>> = vec![None; count];
-    let mut next: u32 = 0;
+    let mut drop_by_rule = vec![false; count];
     for (mir_bb, data) in mir_body.basic_blocks.iter_enumerated() {
-        if data.is_cleanup {
+        if data.is_cleanup && matches!(data.terminator().kind, mir::TerminatorKind::UnwindResume) {
+            drop_by_rule[mir_bb.as_usize()] = true;
+        }
+    }
+
+    let mut reachable = vec![false; count];
+    let mut stack = vec![mir::START_BLOCK];
+    while let Some(bb) = stack.pop() {
+        let idx = bb.as_usize();
+        if drop_by_rule[idx] || reachable[idx] {
             continue;
         }
-        map[mir_bb.as_usize()] = Some(BasicBlockId(next));
-        next += 1;
+        reachable[idx] = true;
+        let data = &mir_body.basic_blocks[bb];
+        for succ in non_unwind_successors(data) {
+            if !drop_by_rule[succ.as_usize()] && !reachable[succ.as_usize()] {
+                stack.push(succ);
+            }
+        }
+    }
+
+    let mut map: Vec<Option<BasicBlockId>> = vec![None; count];
+    let mut next: u32 = 0;
+    for idx in 0..count {
+        if reachable[idx] {
+            map[idx] = Some(BasicBlockId(next));
+            next += 1;
+        }
     }
     map
+}
+
+/// MIR basic-block successors considering only the edges that survive
+/// Pass 2 translation -- i.e., excluding every `UnwindAction::Cleanup(bb)`
+/// or similar unwind-side field that the translation drops. Used by
+/// [`build_block_map`] to compute reachability with the same edge set
+/// the translated IR will expose.
+fn non_unwind_successors<'tcx>(data: &mir::BasicBlockData<'tcx>) -> Vec<mir::BasicBlock> {
+    let mut out: Vec<mir::BasicBlock> = Vec::new();
+    match &data.terminator().kind {
+        mir::TerminatorKind::Goto { target } => out.push(*target),
+        mir::TerminatorKind::SwitchInt { targets, .. } => {
+            for t in targets.all_targets() {
+                out.push(*t);
+            }
+        }
+        mir::TerminatorKind::Call { target, .. } => {
+            if let Some(t) = target {
+                out.push(*t);
+            }
+        }
+        mir::TerminatorKind::Drop { target, .. } => out.push(*target),
+        mir::TerminatorKind::Assert { target, .. } => out.push(*target),
+        mir::TerminatorKind::FalseEdge { real_target, .. } => out.push(*real_target),
+        mir::TerminatorKind::FalseUnwind { real_target, .. } => out.push(*real_target),
+        mir::TerminatorKind::Yield { resume, drop, .. } => {
+            out.push(*resume);
+            if let Some(t) = drop {
+                out.push(*t);
+            }
+        }
+        mir::TerminatorKind::InlineAsm { targets, .. } => {
+            for t in targets.iter() {
+                out.push(*t);
+            }
+        }
+        mir::TerminatorKind::TailCall { .. }
+        | mir::TerminatorKind::Return
+        | mir::TerminatorKind::Unreachable
+        | mir::TerminatorKind::UnwindResume
+        | mir::TerminatorKind::UnwindTerminate(_)
+        | mir::TerminatorKind::CoroutineDrop => {}
+    }
+    out
 }
 
 // ---------------------------------------------------------------------------
