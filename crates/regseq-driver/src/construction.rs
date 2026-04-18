@@ -33,6 +33,27 @@ pub mod pin_state_registry;
 pub mod registers;
 pub mod walk;
 
+pub(crate) mod cross_crate;
+pub(crate) mod deref_collapse;
+pub(crate) mod intrinsics;
+pub(crate) mod log_metadata;
+pub(crate) mod mir_mapping;
+pub(crate) mod module_deps;
+pub(crate) mod ordered_region;
+pub(crate) mod pass2;
+pub(crate) mod pinctrl_metadata;
+pub(crate) mod register_metadata;
+pub(crate) mod switch_and_loops;
+pub(crate) mod try_folding;
+
+// Re-export the Pass 2 mapping helpers so integration tests and Pass
+// 2 task code can reach them without the sub-module itself being part
+// of the public `construction::*` surface.
+pub use mir_mapping::{
+    map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, LocalIdMap,
+    MapOperandResult, TypeDefIndex,
+};
+
 use id_allocator::DeclIdAllocator;
 
 pub use pin_state_registry::PinStateRegistry;
@@ -154,6 +175,48 @@ pub enum ConstructionError {
         /// The canonical name string that failed the lookup.
         canonical: String,
     },
+    /// An ADT encountered during MIR-to-IR type mapping resolves to a
+    /// `std::*` path. Driver specs must not depend on `std`.
+    StdTypeNotPermitted {
+        /// Provenance of the offending type reference.
+        provenance: ErrorProvenance,
+        /// Rendered `std::*` path for diagnostics.
+        path: String,
+    },
+    /// A rustc `ty::TyKind` encountered during MIR-to-IR type mapping
+    /// has no `RegseqType` representation (closures, coroutines, raw
+    /// pointers, function pointers, trait objects, etc.).
+    UnsupportedRustType {
+        /// Provenance of the offending type reference.
+        provenance: ErrorProvenance,
+        /// Rendered rustc type for diagnostics.
+        rendered: String,
+    },
+    /// A MIR constant operand cannot be evaluated to a scalar or named
+    /// constant reference (e.g., aggregate constants, slice constants).
+    UnsupportedConstShape {
+        /// Provenance of the offending constant operand.
+        provenance: ErrorProvenance,
+        /// Short description of the unsupported constant shape.
+        rendered: String,
+    },
+    /// A MIR place projection has no Regseq IR representation
+    /// (`OpaqueCast`, `UnwrapUnsafeBinder`).
+    UnsupportedProjection {
+        /// Provenance of the offending projection.
+        provenance: ErrorProvenance,
+        /// Rendered projection kind for diagnostics.
+        rendered: String,
+    },
+    /// A MIR `Rvalue` has no Regseq IR representation
+    /// (`ThreadLocalRef`, `RawPtr`, `ShallowInitBox`, `WrapUnsafeBinder`,
+    /// and similar pointer-centric constructs).
+    UnsupportedRvalue {
+        /// Provenance of the offending rvalue.
+        provenance: ErrorProvenance,
+        /// Rendered rvalue kind for diagnostics.
+        rendered: String,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -203,6 +266,43 @@ impl std::fmt::Display for ConstructionError {
                 "registry-mapped canonical name `{}` is not recognized (item `{}`)",
                 canonical, provenance.item_path,
             ),
+            Self::StdTypeNotPermitted { provenance, path } => write!(
+                f,
+                "driver specs must not use `std`: `{}` at `{}`",
+                path, provenance.item_path,
+            ),
+            Self::UnsupportedRustType {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "rustc type `{}` has no Regseq IR representation (at `{}`)",
+                rendered, provenance.item_path,
+            ),
+            Self::UnsupportedConstShape {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "unsupported constant shape `{}` (at `{}`)",
+                rendered, provenance.item_path,
+            ),
+            Self::UnsupportedProjection {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "unsupported MIR projection `{}` (at `{}`)",
+                rendered, provenance.item_path,
+            ),
+            Self::UnsupportedRvalue {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "unsupported MIR rvalue `{}` (at `{}`)",
+                rendered, provenance.item_path,
+            ),
         }
     }
 }
@@ -228,6 +328,10 @@ pub struct CrossRefMaps {
     /// `register_bitfields!`-style descriptor modules.
     pub register_descriptors:
         std::collections::HashMap<DefId, regseq_model::identity::RegisterDescriptorId>,
+    /// Named constants and statics (free or associated), used by Pass 2
+    /// to resolve `Operand::Constant` references from unevaluated MIR
+    /// constants.
+    pub constants: std::collections::HashMap<DefId, regseq_model::identity::ConstantId>,
 }
 
 /// Full Pass 1 output: the declaration-level [`RegseqModel`] plus the
@@ -286,6 +390,7 @@ fn build_declaration_skeleton_inner<'tcx>(
         register_block_map: std::collections::HashMap::new(),
         function_map: std::collections::HashMap::new(),
         descriptor_map: std::collections::HashMap::new(),
+        constant_map: std::collections::HashMap::new(),
     };
 
     let mut root_module = Module {
@@ -331,6 +436,7 @@ fn build_declaration_skeleton_inner<'tcx>(
         register_blocks: cx.register_block_map,
         functions: cx.function_map,
         register_descriptors: cx.descriptor_map,
+        constants: cx.constant_map,
     };
 
     Ok(Pass1Output {

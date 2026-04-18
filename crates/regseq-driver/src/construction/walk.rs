@@ -55,6 +55,11 @@ pub struct BuildContext<'a, 'tcx> {
     /// fields can resolve `ReadWrite<T, DR_REG::Register>` descriptor
     /// references without deferring them past Pass 1.
     pub descriptor_map: HashMap<DefId, RegisterDescriptorId>,
+    /// Crate-wide `DefId -> ConstantId` map, populated as each free or
+    /// associated constant/static is assigned an ID. Pass 2 uses this to
+    /// map MIR `Operand::Constant(Unevaluated { def, .. })` to the
+    /// model's typed constant surface.
+    pub constant_map: HashMap<DefId, ConstantId>,
 }
 
 impl<'a, 'tcx> BuildContext<'a, 'tcx> {
@@ -606,6 +611,7 @@ fn framework_from_canonical(s: &str) -> Option<regseq_model::model::FrameworkTyp
 
 pub(crate) fn build_constant(cx: &mut BuildContext<'_, '_>, def_id: DefId, name: &str) -> Constant {
     let id = ConstantId::from(cx.alloc_and_record(def_id));
+    cx.constant_map.insert(def_id, id);
     let name_sym = cx.intern(name);
     let ty = ty_to_regseq(
         cx.tcx,

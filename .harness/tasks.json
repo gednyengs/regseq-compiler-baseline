@@ -943,7 +943,7 @@
           "id": "regseq-model-42",
           "name": "MIR mapping helpers (Type, Operand, Place, Rvalue)",
           "spec": ".harness/tasks/regseq-model/42-mir-mapping-helpers.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-41"
           ],
