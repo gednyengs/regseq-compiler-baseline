@@ -33,8 +33,9 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
-    build_body, build_pass1_output, ConstantIndex, ConstructionError, ExtractionRegistries,
-    FunctionIndex, IntrinsicLookup, Pass1Output, PinStateRegistry, TypeDefIndex,
+    build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
+    ExtractionRegistries, FunctionIndex, IntrinsicLookup, Pass1Output, PinStateRegistry,
+    TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -308,6 +309,9 @@ fn method_intrinsic_preserves_self_as_first_arg() {
             let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let abstraction_registry = AbstractionTypeRegistry::default();
+            let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
+                .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -317,6 +321,7 @@ fn method_intrinsic_preserves_self_as_first_arg() {
                 &constants,
                 &functions,
                 &lookup,
+                &deref_lookup,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -414,6 +419,9 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
             let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let abstraction_registry = AbstractionTypeRegistry::default();
+            let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
+                .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -423,6 +431,7 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
                 &constants,
                 &functions,
                 &lookup,
+                &deref_lookup,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -500,6 +509,9 @@ fn free_function_intrinsic_does_not_prepend_receiver() {
             let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let abstraction_registry = AbstractionTypeRegistry::default();
+            let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
+                .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -509,6 +521,7 @@ fn free_function_intrinsic_does_not_prepend_receiver() {
                 &constants,
                 &functions,
                 &lookup,
+                &deref_lookup,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -568,6 +581,9 @@ fn unregistered_callee_falls_through_to_regular_call() {
             let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let abstraction_registry = AbstractionTypeRegistry::default();
+            let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
+                .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -577,6 +593,7 @@ fn unregistered_callee_falls_through_to_regular_call() {
                 &constants,
                 &functions,
                 &lookup,
+                &deref_lookup,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -641,6 +658,9 @@ fn intrinsic_lookup_build_integrates_with_extraction_registry() {
             let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let abstraction_registry = AbstractionTypeRegistry::default();
+            let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
+                .expect("Deref lang item must be resolvable on the specimen crate");
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -650,6 +670,7 @@ fn intrinsic_lookup_build_integrates_with_extraction_registry() {
                 &constants,
                 &functions,
                 &lookup,
+                &deref_lookup,
                 &mut interner,
             )
             .expect("build_body must succeed when threaded with IntrinsicLookup::build output");

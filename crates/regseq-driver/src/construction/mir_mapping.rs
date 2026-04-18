@@ -126,6 +126,13 @@ impl<'a, 'tcx> LocalIdMap<'a, 'tcx> {
     pub fn local_ty(&self, local: mir::Local) -> ty::Ty<'tcx> {
         self.local_decls[local].ty
     }
+
+    /// Borrow the underlying [`mir::LocalDecls`] so Pass 2 can delegate
+    /// operand-type queries through `mir::Operand::ty(local_decls, tcx)`
+    /// without re-plumbing the body reference.
+    pub fn local_decls(&self) -> &'a mir::LocalDecls<'tcx> {
+        self.local_decls
+    }
 }
 
 /// Outcome of mapping a single MIR [`mir::Operand`]. Most operands map

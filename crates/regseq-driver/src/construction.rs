@@ -34,7 +34,7 @@ pub mod registers;
 pub mod walk;
 
 pub(crate) mod cross_crate;
-pub(crate) mod deref_collapse;
+pub mod deref_collapse;
 pub mod intrinsics;
 pub(crate) mod log_metadata;
 pub(crate) mod mir_mapping;
@@ -49,6 +49,7 @@ pub(crate) mod try_folding;
 // Re-export the Pass 2 mapping helpers so integration tests and Pass
 // 2 task code can reach them without the sub-module itself being part
 // of the public `construction::*` surface.
+pub use deref_collapse::{DerefCollapseLookup, DerefCollapseRewrites, TRANSPORT_ABSTRACTIONS};
 pub use intrinsics::IntrinsicLookup;
 pub use mir_mapping::{
     map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex,
@@ -259,6 +260,20 @@ pub enum ConstructionError {
         /// Rendered callee for diagnostics.
         rendered: String,
     },
+    /// Pass 2 setup could not resolve `core::ops::Deref::deref` via
+    /// [`TyCtxt::lang_items`] on the current crate. The pinned
+    /// toolchain always exposes `Deref` on every `#![no_std]` crate
+    /// that depends on `core`; a failure here indicates the
+    /// toolchain is broken or the crate omits `core`. Rule 4 deref
+    /// collapse cannot run without a resolved `Deref::deref` DefId,
+    /// so construction aborts rather than silently disabling the
+    /// rule.
+    NoDerefLangItem {
+        /// Provenance anchored at the crate root (or at the Deref
+        /// trait, when that resolved but the `deref` assoc fn did
+        /// not).
+        crate_root: ErrorProvenance,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -368,6 +383,11 @@ impl std::fmt::Display for ConstructionError {
                 f,
                 "MIR call target `{}` cannot be resolved to a FunctionId (at `{}`)",
                 rendered, provenance.item_path,
+            ),
+            Self::NoDerefLangItem { crate_root } => write!(
+                f,
+                "core::ops::Deref lang item is not available for Pass 2 setup (at `{}`)",
+                crate_root.item_path,
             ),
             Self::SwitchTargetIntoCleanup {
                 provenance,

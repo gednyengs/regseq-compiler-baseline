@@ -24,6 +24,29 @@ pub struct AbstractionTypeRegistry {
 }
 
 impl AbstractionTypeRegistry {
+    /// Construct the registry directly from an iterator of
+    /// `(DefId, canonical_name)` pairs.
+    ///
+    /// Used by integration tests that need to stand up a synthetic
+    /// registry around arbitrary local ADTs without rebuilding the
+    /// real `regseq` facade. The production entry point is
+    /// [`Self::build`].
+    //
+    // Marked `allow(dead_code)` because `tests/abstraction_types.rs`
+    // includes this file via `#[path = ...]` to test the production
+    // walker in isolation; that test harness does not call the
+    // synthetic constructor, which would otherwise flag a dead-code
+    // warning inside the test-target build.
+    #[allow(dead_code)]
+    pub fn from_entries<I>(entries: I) -> Self
+    where
+        I: IntoIterator<Item = (DefId, String)>,
+    {
+        Self {
+            entries: entries.into_iter().collect(),
+        }
+    }
+
     /// Build the registry by scanning all items in the `regseq` facade crate
     /// for `#[rseq::abstraction("...")]` attributes.
     pub fn build(tcx: TyCtxt<'_>) -> Self {

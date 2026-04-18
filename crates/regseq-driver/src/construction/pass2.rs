@@ -20,6 +20,14 @@
 //!   through to [`TerminatorKind::Call`]. Metadata population (tasks
 //!   50-52) and `?`-pattern folding (task 46) remain out of scope, so
 //!   `metadata` and `error_target` are always `None`.
+//! - Rule 4 deref collapse (task 48) consults a
+//!   [`DerefCollapseLookup`](super::deref_collapse::DerefCollapseLookup)
+//!   built from the Phase 4 `AbstractionTypeRegistry`. Transport
+//!   `Deref::deref` Calls (currently `Mmio<T>`) are dropped, replaced
+//!   with an unconditional `Goto` to the Call's return target, and
+//!   their destination temporaries are rewritten downstream via
+//!   [`rewrite_body_places`](super::deref_collapse::rewrite_body_places).
+//!   Non-transport `Deref::deref` Calls are untouched.
 //! - `?`-pattern folding is out of scope (task 46). `error_target` is
 //!   always `None`.
 //! - Non-straight-line terminators (`TailCall`, `Yield`, `CoroutineDrop`,
@@ -41,6 +49,9 @@ use regseq_model::ir::{
     StatementKind, Terminator, TerminatorKind,
 };
 
+use super::deref_collapse::{
+    receiver_mir_place, rewrite_body_places, DerefCollapseLookup, DerefCollapseRewrites,
+};
 use super::intrinsics::IntrinsicLookup;
 use super::mir_mapping::{
     map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex, LocalIdMap,
@@ -68,6 +79,7 @@ pub fn build_body<'tcx>(
     constants: &ConstantIndex<'_>,
     functions: &FunctionIndex<'_>,
     intrinsics: &IntrinsicLookup,
+    deref_lookup: &DerefCollapseLookup<'_>,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -85,6 +97,11 @@ pub fn build_body<'tcx>(
 
     let mut basic_blocks: Vec<BasicBlock> = Vec::new();
     let mut block_sources: Vec<BasicBlockSourceMap> = Vec::new();
+    // Rule 4 deref-collapse rewrite table, populated during terminator
+    // translation as transport `Deref::deref` Calls are dropped. After
+    // every block is built, `rewrite_body_places` splices the collapsed
+    // destinations back through the receiver Places recorded here.
+    let mut deref_rewrites = DerefCollapseRewrites::default();
     for (mir_bb, data) in mir_body.basic_blocks.iter_enumerated() {
         if block_map[mir_bb.as_usize()].is_none() {
             continue;
@@ -125,6 +142,8 @@ pub fn build_body<'tcx>(
             constants,
             functions,
             intrinsics,
+            deref_lookup,
+            &mut deref_rewrites,
             interner,
         )?;
         basic_blocks.push(BasicBlock {
@@ -136,6 +155,11 @@ pub fn build_body<'tcx>(
             terminator: term_origin,
         });
     }
+
+    // Apply collected Rule 4 rewrites to every Place reference in the
+    // constructed body. When `deref_rewrites` is empty (no transport
+    // deref was collapsed), this is a cheap no-op.
+    rewrite_body_places(&mut basic_blocks, &deref_rewrites);
 
     let body_span = resolve_origin(tcx, interner, mir_body.span);
 
@@ -455,6 +479,8 @@ fn translate_terminator<'tcx>(
     constants: &ConstantIndex<'_>,
     functions: &FunctionIndex<'_>,
     intrinsics: &IntrinsicLookup,
+    deref_lookup: &DerefCollapseLookup<'_>,
+    deref_rewrites: &mut DerefCollapseRewrites,
     interner: &mut SymbolInterner,
 ) -> Result<TerminatorKind, ConstructionError> {
     match &term.kind {
@@ -481,6 +507,33 @@ fn translate_terminator<'tcx>(
             ..
         } => {
             let callee_def_id = resolve_callee_def_id(func, term.source_info.span)?;
+
+            // Recognition rule 4 (ir-reference.md Section 8): collapse
+            // `<Mmio<T> as Deref>::deref` (and any other transport
+            // abstraction registered in `AbstractionTypeRegistry`)
+            // before operand translation. The Call is replaced with an
+            // unconditional `Goto` to the return target, and the
+            // destination temporary is recorded in `deref_rewrites` so
+            // downstream uses splice back through the receiver Place
+            // (see `super::deref_collapse`). Non-transport derefs are
+            // left for regular Call translation below.
+            if let Some(collapse) = try_collapse_transport_deref(
+                tcx,
+                callee_def_id,
+                args,
+                destination,
+                target,
+                block_map,
+                locals,
+                type_def_index,
+                term.source_info.span,
+                deref_lookup,
+                deref_rewrites,
+                interner,
+            )? {
+                return Ok(collapse);
+            }
+
             let mut mapped_args: Vec<regseq_model::ir::Operand> = Vec::with_capacity(args.len());
             for arg in args.iter() {
                 mapped_args.push(require_operand(
@@ -587,6 +640,118 @@ fn translate_terminator<'tcx>(
             })
         }
     }
+}
+
+/// Attempt to recognize a transport `<T as Deref>::deref` Call and
+/// collapse it into a `Goto` to the Call's return target.
+///
+/// Returns:
+///
+/// - `Ok(Some(Goto))` when the Call's callee resolves to `Deref::deref`
+///   (trait method or its impl) AND the receiver's type is an ADT
+///   whose `DefId` is registered in
+///   [`AbstractionTypeRegistry`](crate::extract::abstraction_types::AbstractionTypeRegistry)
+///   with a transport abstraction identifier (currently `"mmio"`).
+///   The caller drops its own Call translation; the return value
+///   becomes the block's terminator. The destination local (the
+///   `&Block` temporary) is recorded in `deref_rewrites` so downstream
+///   uses splice through the receiver Place.
+/// - `Ok(None)` when the Call is not a transport deref. The caller
+///   translates it as a regular `Call` (or, via Rule 1, an
+///   `IntrinsicCall`).
+/// - `Err(_)` when a transport-deref Call has a shape the collapse
+///   cannot handle (no return target, non-`Copy`/`Move` receiver
+///   operand, or a destination whose Regseq `LocalId` has no
+///   assignment).
+#[allow(clippy::too_many_arguments)]
+fn try_collapse_transport_deref<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    callee_def_id: DefId,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+    destination: &mir::Place<'tcx>,
+    target: &Option<mir::BasicBlock>,
+    block_map: &[Option<BasicBlockId>],
+    locals: &LocalIdMap<'_, 'tcx>,
+    type_def_index: &TypeDefIndex<'_>,
+    span: rustc_span::Span,
+    deref_lookup: &DerefCollapseLookup<'_>,
+    deref_rewrites: &mut DerefCollapseRewrites,
+    interner: &mut SymbolInterner,
+) -> Result<Option<TerminatorKind>, ConstructionError> {
+    // `Deref::deref(&self)` takes exactly one argument. If the MIR
+    // shape deviates, the caller handles it via its normal fallback.
+    let Some(first_arg) = args.first() else {
+        return Ok(None);
+    };
+    let receiver_ty = first_arg.node.ty(locals.local_decls(), tcx);
+    let Some(_transport_adt) = deref_lookup.match_transport_deref(tcx, callee_def_id, receiver_ty)
+    else {
+        return Ok(None);
+    };
+
+    // The receiver must be a Place-backed operand so we can record its
+    // Regseq Place as the rewrite root. A literal `Deref::deref`
+    // receiver would indicate a malformed specimen.
+    let receiver_mir = receiver_mir_place(&first_arg.node).ok_or_else(|| {
+        ConstructionError::UnresolvedCallTarget {
+            provenance: ErrorProvenance {
+                item_path: tcx.def_path_str(callee_def_id),
+                span,
+            },
+            rendered: format!(
+                "transport Deref::deref receiver is not a Place operand: {:?}",
+                first_arg.node,
+            ),
+        }
+    })?;
+    let receiver_place = map_place(tcx, receiver_mir, locals, type_def_index, interner)?;
+
+    // `Deref::deref` is infallible and always returns, so `target` must
+    // be Some in well-formed MIR. Treat a missing target as a hard
+    // error -- the backend would otherwise silently lose the
+    // collapse's exit edge.
+    let return_target = match target {
+        Some(t) => require_block(block_map, *t, span)?,
+        None => {
+            return Err(ConstructionError::UnsupportedTerminator {
+                provenance: ErrorProvenance {
+                    item_path: tcx.def_path_str(callee_def_id),
+                    span,
+                },
+                rendered: "transport Deref::deref called as a diverging Call (no target)"
+                    .to_string(),
+            });
+        }
+    };
+
+    // The destination is the `&Block` temporary; MIR assigns the call
+    // result to a bare local before any projections. Reject any other
+    // shape because the rewrite rule only makes sense when the result
+    // is held in a single named local.
+    if !destination.projection.is_empty() {
+        return Err(ConstructionError::UnsupportedProjection {
+            provenance: ErrorProvenance {
+                item_path: tcx.def_path_str(callee_def_id),
+                span,
+            },
+            rendered: format!(
+                "transport Deref::deref destination has projections: {:?}",
+                destination,
+            ),
+        });
+    }
+    let dest_local_id = locals.lookup(destination.local).ok_or_else(|| {
+        ConstructionError::UnsupportedProjection {
+            provenance: ErrorProvenance::for_span(span),
+            rendered: format!(
+                "MIR local _{} (deref destination) not assigned a Regseq LocalId",
+                destination.local.as_u32(),
+            ),
+        }
+    })?;
+
+    deref_rewrites.record(dest_local_id, receiver_place);
+    Ok(Some(TerminatorKind::Goto(return_target)))
 }
 
 /// Resolve a MIR `Call::func` operand to a rustc [`DefId`].
