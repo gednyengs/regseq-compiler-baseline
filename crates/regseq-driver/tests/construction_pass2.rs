@@ -23,7 +23,7 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, ExtractionRegistries,
-    FunctionIndex, Pass1Output, PinStateRegistry, TypeDefIndex,
+    FunctionIndex, IntrinsicLookup, Pass1Output, PinStateRegistry, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -366,6 +366,7 @@ fn disable_uart_like_method_translates_to_straight_line_body() {
             let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
             let constants = ConstantIndex::new(&pass1.cross_refs.constants);
             let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+            let intrinsics = IntrinsicLookup::default();
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -374,6 +375,7 @@ fn disable_uart_like_method_translates_to_straight_line_body() {
                 &type_def_index,
                 &constants,
                 &functions,
+                &intrinsics,
                 &mut interner,
             )
             .expect("build_body must succeed on straight-line MIR");
@@ -705,6 +707,7 @@ fn inline_asm_surfaces_unsupported_terminator() {
         let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
         let constants = ConstantIndex::new(&pass1.cross_refs.constants);
         let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+        let intrinsics = IntrinsicLookup::default();
         let mut interner = SymbolInterner::new();
         build_body(
             tcx,
@@ -713,6 +716,7 @@ fn inline_asm_surfaces_unsupported_terminator() {
             &type_def_index,
             &constants,
             &functions,
+            &intrinsics,
             &mut interner,
         )
         .map(|_| ())
@@ -744,6 +748,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
         let type_def_index = TypeDefIndex::new(&pass1.cross_refs.type_defs);
         let constants = ConstantIndex::new(&pass1.cross_refs.constants);
         let functions = FunctionIndex::new(&pass1.cross_refs.functions);
+        let intrinsics = IntrinsicLookup::default();
         let mut interner = SymbolInterner::new();
         build_body(
             tcx,
@@ -752,6 +757,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
             &type_def_index,
             &constants,
             &functions,
+            &intrinsics,
             &mut interner,
         )
         .expect("build_body must succeed on the free-fn specimen")

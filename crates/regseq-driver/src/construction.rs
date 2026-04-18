@@ -35,7 +35,7 @@ pub mod walk;
 
 pub(crate) mod cross_crate;
 pub(crate) mod deref_collapse;
-pub(crate) mod intrinsics;
+pub mod intrinsics;
 pub(crate) mod log_metadata;
 pub(crate) mod mir_mapping;
 pub(crate) mod module_deps;
@@ -49,6 +49,7 @@ pub(crate) mod try_folding;
 // Re-export the Pass 2 mapping helpers so integration tests and Pass
 // 2 task code can reach them without the sub-module itself being part
 // of the public `construction::*` surface.
+pub use intrinsics::IntrinsicLookup;
 pub use mir_mapping::{
     map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex,
     LocalIdMap, MapOperandResult, TypeDefIndex,
@@ -176,6 +177,18 @@ pub enum ConstructionError {
         /// The canonical name string that failed the lookup.
         canonical: String,
     },
+    /// The Phase 4 [`IntrinsicRegistry`] carries a canonical-name string
+    /// that does not match any [`RegseqIntrinsic`] variant. Raised at
+    /// Pass 2 setup when building the [`IntrinsicLookup`] (see
+    /// [`construction::intrinsics`](self::intrinsics)), so bad entries
+    /// surface once up-front instead of masquerading as silent
+    /// fall-through at every unrelated call site.
+    UnknownIntrinsicCanonicalName {
+        /// Provenance of the registry-mapped item.
+        provenance: ErrorProvenance,
+        /// The canonical-name string that failed to parse.
+        canonical: String,
+    },
     /// An ADT encountered during MIR-to-IR type mapping resolves to a
     /// `std::*` path. Driver specs must not depend on `std`.
     StdTypeNotPermitted {
@@ -293,6 +306,14 @@ impl std::fmt::Display for ConstructionError {
             } => write!(
                 f,
                 "registry-mapped canonical name `{}` is not recognized (item `{}`)",
+                canonical, provenance.item_path,
+            ),
+            Self::UnknownIntrinsicCanonicalName {
+                provenance,
+                canonical,
+            } => write!(
+                f,
+                "unknown #[rseq::intrinsic] canonical name `{}` on `{}`",
                 canonical, provenance.item_path,
             ),
             Self::StdTypeNotPermitted { provenance, path } => write!(

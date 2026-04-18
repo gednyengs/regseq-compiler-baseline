@@ -56,6 +56,67 @@ pub enum RegseqIntrinsic {
     PollUntil,
 }
 
+impl RegseqIntrinsic {
+    /// Return the canonical-name string used in `#[rseq::intrinsic("...")]`
+    /// attributes.
+    ///
+    /// Each variant has exactly one canonical name; the mapping is the
+    /// inverse of [`parse_canonical_intrinsic_name`].
+    pub fn canonical_name(self) -> &'static str {
+        match self {
+            RegseqIntrinsic::RegisterRead => "mmio_read",
+            RegseqIntrinsic::RegisterReadField => "mmio_read_field",
+            RegseqIntrinsic::RegisterWrite => "mmio_write",
+            RegseqIntrinsic::RegisterWriteField => "mmio_write_field",
+            RegseqIntrinsic::ClockEnable => "clock_enable",
+            RegseqIntrinsic::ClockDisable => "clock_disable",
+            RegseqIntrinsic::ClockGetRate => "clock_get_rate",
+            RegseqIntrinsic::ResetAssert => "reset_assert",
+            RegseqIntrinsic::ResetDeassert => "reset_deassert",
+            RegseqIntrinsic::ResetToggle => "reset_toggle",
+            RegseqIntrinsic::PinCtrlApply => "pinctrl_apply",
+            RegseqIntrinsic::BusyWait => "busy_wait",
+            RegseqIntrinsic::Sleep => "sleep",
+            RegseqIntrinsic::LogError => "log_error",
+            RegseqIntrinsic::LogWarn => "log_warn",
+            RegseqIntrinsic::LogInfo => "log_info",
+            RegseqIntrinsic::LogDebug => "log_debug",
+            RegseqIntrinsic::PollUntil => "poll_until",
+        }
+    }
+}
+
+/// Parse a canonical-name string (as carried by `#[rseq::intrinsic("...")]`)
+/// into its [`RegseqIntrinsic`] variant.
+///
+/// Returns [`None`] for any unrecognized name. The accepted set is the
+/// exhaustive list defined in
+/// `docs/discussions/models/regseq-model/compiler-knowledge.md`
+/// Section 2.
+pub fn parse_canonical_intrinsic_name(name: &str) -> Option<RegseqIntrinsic> {
+    Some(match name {
+        "mmio_read" => RegseqIntrinsic::RegisterRead,
+        "mmio_read_field" => RegseqIntrinsic::RegisterReadField,
+        "mmio_write" => RegseqIntrinsic::RegisterWrite,
+        "mmio_write_field" => RegseqIntrinsic::RegisterWriteField,
+        "clock_enable" => RegseqIntrinsic::ClockEnable,
+        "clock_disable" => RegseqIntrinsic::ClockDisable,
+        "clock_get_rate" => RegseqIntrinsic::ClockGetRate,
+        "reset_assert" => RegseqIntrinsic::ResetAssert,
+        "reset_deassert" => RegseqIntrinsic::ResetDeassert,
+        "reset_toggle" => RegseqIntrinsic::ResetToggle,
+        "pinctrl_apply" => RegseqIntrinsic::PinCtrlApply,
+        "busy_wait" => RegseqIntrinsic::BusyWait,
+        "sleep" => RegseqIntrinsic::Sleep,
+        "log_error" => RegseqIntrinsic::LogError,
+        "log_warn" => RegseqIntrinsic::LogWarn,
+        "log_info" => RegseqIntrinsic::LogInfo,
+        "log_debug" => RegseqIntrinsic::LogDebug,
+        "poll_until" => RegseqIntrinsic::PollUntil,
+        _ => return None,
+    })
+}
+
 /// Identifies the abstraction kind a type belongs to.
 ///
 /// Used during IR construction to classify framework types and during
@@ -271,6 +332,49 @@ mod tests {
             width: 8,
         };
         let _ = FormatKind::Pointer;
+    }
+
+    // -- parse_canonical_intrinsic_name round-trips every variant --
+
+    #[test]
+    fn parse_canonical_intrinsic_name_round_trips_every_variant() {
+        let variants = [
+            RegseqIntrinsic::RegisterRead,
+            RegseqIntrinsic::RegisterReadField,
+            RegseqIntrinsic::RegisterWrite,
+            RegseqIntrinsic::RegisterWriteField,
+            RegseqIntrinsic::ClockEnable,
+            RegseqIntrinsic::ClockDisable,
+            RegseqIntrinsic::ClockGetRate,
+            RegseqIntrinsic::ResetAssert,
+            RegseqIntrinsic::ResetDeassert,
+            RegseqIntrinsic::ResetToggle,
+            RegseqIntrinsic::PinCtrlApply,
+            RegseqIntrinsic::BusyWait,
+            RegseqIntrinsic::Sleep,
+            RegseqIntrinsic::LogError,
+            RegseqIntrinsic::LogWarn,
+            RegseqIntrinsic::LogInfo,
+            RegseqIntrinsic::LogDebug,
+            RegseqIntrinsic::PollUntil,
+        ];
+        assert_eq!(variants.len(), 18);
+        for v in variants {
+            let name = v.canonical_name();
+            assert_eq!(
+                parse_canonical_intrinsic_name(name),
+                Some(v),
+                "canonical name `{name}` must parse back to {v:?}",
+            );
+        }
+    }
+
+    #[test]
+    fn parse_canonical_intrinsic_name_rejects_unknown() {
+        assert!(parse_canonical_intrinsic_name("").is_none());
+        assert!(parse_canonical_intrinsic_name("future_intrinsic").is_none());
+        assert!(parse_canonical_intrinsic_name("Clock_Enable").is_none());
+        assert!(parse_canonical_intrinsic_name(" clock_enable").is_none());
     }
 
     // -- Construction: RegisterFieldMeta --

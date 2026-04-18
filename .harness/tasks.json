@@ -976,7 +976,7 @@
           "id": "regseq-model-45",
           "name": "Rule 1 - intrinsic recognition",
           "spec": ".harness/tasks/regseq-model/45-intrinsic-recognition.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-43",
             "regseq-driver-27"

@@ -13,7 +13,13 @@
 //!   [`super::switch_and_loops::translate_switch_int`] (task 44). Loop
 //!   recovery surfaces as a natural back-edge `Goto` with no dedicated
 //!   IR construct.
-//! - Intrinsic recognition is out of scope (task 45).
+//! - Regseq intrinsic recognition (task 45) consults an
+//!   [`IntrinsicLookup`] built from Phase 4's `IntrinsicRegistry`.
+//!   Registered callee `DefId`s produce
+//!   [`TerminatorKind::IntrinsicCall`]; unregistered callees fall
+//!   through to [`TerminatorKind::Call`]. Metadata population (tasks
+//!   50-52) and `?`-pattern folding (task 46) remain out of scope, so
+//!   `metadata` and `error_target` are always `None`.
 //! - `?`-pattern folding is out of scope (task 46). `error_target` is
 //!   always `None`.
 //! - Non-straight-line terminators (`TailCall`, `Yield`, `CoroutineDrop`,
@@ -35,6 +41,7 @@ use regseq_model::ir::{
     StatementKind, Terminator, TerminatorKind,
 };
 
+use super::intrinsics::IntrinsicLookup;
 use super::mir_mapping::{
     map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex, LocalIdMap,
     MapOperandResult, TypeDefIndex,
@@ -52,6 +59,7 @@ use super::{resolve_origin, ConstructionError, ErrorProvenance};
 /// (statements), 5 (terminators, basic subset), and 6 (body layout).
 /// Cleanup blocks (`is_cleanup == true`) are dropped wholesale and the
 /// remaining block indices are renumbered contiguously.
+#[allow(clippy::too_many_arguments)]
 pub fn build_body<'tcx>(
     tcx: TyCtxt<'tcx>,
     def_id: DefId,
@@ -59,6 +67,7 @@ pub fn build_body<'tcx>(
     type_def_index: &TypeDefIndex<'_>,
     constants: &ConstantIndex<'_>,
     functions: &FunctionIndex<'_>,
+    intrinsics: &IntrinsicLookup,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -115,6 +124,7 @@ pub fn build_body<'tcx>(
             type_def_index,
             constants,
             functions,
+            intrinsics,
             interner,
         )?;
         basic_blocks.push(BasicBlock {
@@ -444,6 +454,7 @@ fn translate_terminator<'tcx>(
     type_def_index: &TypeDefIndex<'_>,
     constants: &ConstantIndex<'_>,
     functions: &FunctionIndex<'_>,
+    intrinsics: &IntrinsicLookup,
     interner: &mut SymbolInterner,
 ) -> Result<TerminatorKind, ConstructionError> {
     match &term.kind {
@@ -469,7 +480,7 @@ fn translate_terminator<'tcx>(
             target,
             ..
         } => {
-            let callee = resolve_callee(tcx, func, functions, term.source_info.span)?;
+            let callee_def_id = resolve_callee_def_id(func, term.source_info.span)?;
             let mut mapped_args: Vec<regseq_model::ir::Operand> = Vec::with_capacity(args.len());
             for arg in args.iter() {
                 mapped_args.push(require_operand(
@@ -482,6 +493,48 @@ fn translate_terminator<'tcx>(
                 )?);
             }
             let dest = map_place(tcx, destination, locals, type_def_index, interner)?;
+
+            // Recognition rule 1 (ir-reference.md Section 8): callees
+            // whose `DefId` is registered as a Regseq intrinsic become
+            // `IntrinsicCall`. Method intrinsics preserve `&self` as
+            // `args[0]`; free-function intrinsics call directly -- the
+            // lookup does not distinguish, and the translated arg
+            // order matches MIR's verbatim (spec.md Section 10).
+            if let Some(variant) = intrinsics.lookup(callee_def_id) {
+                let intrinsic_target = match target {
+                    Some(t) => require_block(block_map, *t, term.source_info.span)?,
+                    None => {
+                        return Err(ConstructionError::UnsupportedTerminator {
+                            provenance: ErrorProvenance {
+                                item_path: tcx.def_path_str(callee_def_id),
+                                span: term.source_info.span,
+                            },
+                            rendered: format!(
+                                "intrinsic `{}` called as a diverging `Call` (no return target)",
+                                variant.canonical_name(),
+                            ),
+                        });
+                    }
+                };
+                return Ok(TerminatorKind::IntrinsicCall {
+                    intrinsic: variant,
+                    args: mapped_args,
+                    metadata: None,
+                    destination: dest,
+                    target: intrinsic_target,
+                    error_target: None,
+                });
+            }
+
+            let callee = functions.lookup(callee_def_id).ok_or_else(|| {
+                ConstructionError::UnresolvedCallTarget {
+                    provenance: ErrorProvenance {
+                        item_path: tcx.def_path_str(callee_def_id),
+                        span: term.source_info.span,
+                    },
+                    rendered: tcx.def_path_str(callee_def_id),
+                }
+            })?;
             let target = match target {
                 Some(t) => Some(require_block(block_map, *t, term.source_info.span)?),
                 None => None,
@@ -536,31 +589,24 @@ fn translate_terminator<'tcx>(
     }
 }
 
-/// Resolve a MIR `Call::func` operand to a Regseq [`FunctionId`].
+/// Resolve a MIR `Call::func` operand to a rustc [`DefId`].
 ///
 /// In monomorphized MIR at `mir_drops_elaborated_and_const_checked`
 /// with `mir_opt_level = 0`, direct function calls appear as
 /// `Operand::Constant(Const::Val(_, TyKind::FnDef(def_id, _args)))`.
 /// Any other shape (indirect pointer call, unresolved constant) is
-/// flagged as [`ConstructionError::UnresolvedCallTarget`].
-fn resolve_callee<'tcx>(
-    tcx: TyCtxt<'tcx>,
+/// flagged as [`ConstructionError::UnresolvedCallTarget`]. Callers
+/// choose between the [`IntrinsicLookup`] (Rule 1) and the
+/// [`FunctionIndex`] to turn the [`DefId`] into either an
+/// [`TerminatorKind::IntrinsicCall`] or a [`TerminatorKind::Call`].
+fn resolve_callee_def_id<'tcx>(
     func: &mir::Operand<'tcx>,
-    functions: &FunctionIndex<'_>,
     span: rustc_span::Span,
-) -> Result<FunctionId, ConstructionError> {
+) -> Result<DefId, ConstructionError> {
     if let mir::Operand::Constant(const_op) = func {
         if let mir::Const::Val(_, ty) = const_op.const_ {
             if let ty::TyKind::FnDef(def_id, _args) = ty.kind() {
-                return functions.lookup(*def_id).ok_or_else(|| {
-                    ConstructionError::UnresolvedCallTarget {
-                        provenance: ErrorProvenance {
-                            item_path: tcx.def_path_str(*def_id),
-                            span,
-                        },
-                        rendered: tcx.def_path_str(*def_id),
-                    }
-                });
+                return Ok(*def_id);
             }
         }
     }

@@ -12,8 +12,8 @@ pub mod types;
 
 pub use body::{BasicBlock, BasicBlockSourceMap, Body, BodySourceMap, LocalDecl, OrderedRegion};
 pub use intrinsic::{
-    FormatKind, FormatPlaceholder, IntrinsicMetadata, RegisterFieldMeta, RegseqAbstraction,
-    RegseqIntrinsic,
+    parse_canonical_intrinsic_name, FormatKind, FormatPlaceholder, IntrinsicMetadata,
+    RegisterFieldMeta, RegseqAbstraction, RegseqIntrinsic,
 };
 pub use operand::{LiteralValue, Operand};
 pub use ops::{BinOp, UnOp};
