@@ -1012,7 +1012,7 @@
           "id": "regseq-model-48",
           "name": "Rule 4 - Deref collapse for transports",
           "spec": ".harness/tasks/regseq-model/48-deref-collapse.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-45",
             "regseq-driver-29"
