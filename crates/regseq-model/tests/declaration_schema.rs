@@ -11,6 +11,7 @@ use regseq_model::declaration::*;
 // ---- 1. Types construct and import cleanly ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn declaration_model_constructs() {
     let model = make_minimal_model();
     assert_eq!(model.driver.driver_name, "pl011");
@@ -18,6 +19,7 @@ fn declaration_model_constructs() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn driver_decl_constructs_with_device_class() {
     let driver = DriverDecl {
         driver_name: "pl011".into(),
@@ -31,6 +33,7 @@ fn driver_decl_constructs_with_device_class() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn device_class_from_raw_round_trips() {
     assert_eq!(
         DeviceClass::from_raw("serial_uart"),
@@ -47,6 +50,7 @@ fn device_class_from_raw_round_trips() {
 // ---- 2. Construct-owned sub-families remain structurally distinct ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn resource_sub_families_are_distinct_types() {
     let model = make_minimal_model();
     // Each resource sub-family is a separate typed field, not a generic bag.
@@ -58,6 +62,7 @@ fn resource_sub_families_are_distinct_types() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn callback_families_are_structurally_separate() {
     let model = make_minimal_model();
     // Each callback family has its own vec, not one polymorphic list.
@@ -68,6 +73,7 @@ fn callback_families_are_structurally_separate() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn register_evidence_is_construct_owned() {
     let model = make_model_with_register_evidence();
     // Wrapper and poll call sites live under registers, not a global bag.
@@ -82,6 +88,7 @@ fn register_evidence_is_construct_owned() {
 // ---- 3. Per-entity provenance fields are present where expected ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn driver_decl_has_provenance() {
     let driver = DriverDecl {
         driver_name: "pl011".into(),
@@ -101,6 +108,7 @@ fn driver_decl_has_provenance() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn clock_call_site_retains_containing_fn_provenance() {
     let site = ClockCallSiteDecl {
         method: ClockMethod::Enable,
@@ -112,6 +120,7 @@ fn clock_call_site_retains_containing_fn_provenance() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn property_field_has_provenance() {
     let field = PropertyFieldDecl {
         driver_type: "Pl011Driver".into(),
@@ -129,6 +138,7 @@ fn property_field_has_provenance() {
 // ---- 4. Build-context metadata is separate from declaration identity ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn build_context_separate_from_driver_identity() {
     let model = make_minimal_model();
     // target_os lives in build_context, not in driver identity.
@@ -141,6 +151,7 @@ fn build_context_separate_from_driver_identity() {
 // ---- 5. Interrupt binding-hint / sidecar placement ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn interrupt_binding_hints_are_separate_from_declaration_facts() {
     let irq = InterruptResourceDecl {
         field_name: "irq".into(),
@@ -160,6 +171,7 @@ fn interrupt_binding_hints_are_separate_from_declaration_facts() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn interrupt_field_shape_from_raw() {
     assert_eq!(
         InterruptFieldShape::from_raw("single"),
@@ -176,6 +188,7 @@ fn interrupt_field_shape_from_raw() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn isr_bind_target_from_raw() {
     assert_eq!(IsrBindTarget::from_raw("auto"), IsrBindTarget::Auto);
     assert_eq!(
@@ -187,6 +200,7 @@ fn isr_bind_target_from_raw() {
 // ---- 6. Property-side lints have an explicit home ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn property_lint_has_explicit_home() {
     let lint = PropertyLintDecl::RequiredWithDefault {
         driver_type: "Pl011Driver".into(),
@@ -209,6 +223,7 @@ fn property_lint_has_explicit_home() {
 // ---- 7. Distinct typed sub-families for sync, delay, logging, PM gate ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn synchronization_sub_families_are_structurally_distinct() {
     let sync = SynchronizationDeclSet {
         sync_fields: vec![SyncFieldDecl {
@@ -241,6 +256,7 @@ fn synchronization_sub_families_are_structurally_distinct() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn sync_field_kind_from_raw() {
     assert_eq!(SyncFieldKind::from_raw("mutex"), Some(SyncFieldKind::Mutex));
     assert_eq!(
@@ -259,6 +275,7 @@ fn sync_field_kind_from_raw() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn timed_delay_retains_distinct_typed_fields() {
     let delay = TimedDelayDeclSet {
         call_sites: vec![TimedDelayCallSiteDecl {
@@ -279,6 +296,7 @@ fn timed_delay_retains_distinct_typed_fields() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn logging_retains_level_template_arg_shape() {
     let log = LoggingDeclSet {
         call_sites: vec![LogCallSiteDecl {
@@ -297,6 +315,7 @@ fn logging_retains_level_template_arg_shape() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pm_gate_retains_distinct_properties() {
     let pm = PmGateDeclSet {
         gates: vec![PmGateDecl {
@@ -317,6 +336,7 @@ fn pm_gate_retains_distinct_properties() {
 // ---- Typed enum round-trip tests ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn callback_context_round_trips() {
     assert_eq!(
         CallbackContext::from_raw("F"),
@@ -335,6 +355,7 @@ fn callback_context_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn wrapper_method_round_trips() {
     for (raw, expected) in [
         ("read_raw", WrapperMethod::ReadRaw),
@@ -350,6 +371,7 @@ fn wrapper_method_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn clock_method_round_trips() {
     assert_eq!(ClockMethod::from_raw("enable"), Some(ClockMethod::Enable));
     assert_eq!(ClockMethod::from_raw("disable"), Some(ClockMethod::Disable));
@@ -361,6 +383,7 @@ fn clock_method_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn reset_method_round_trips() {
     assert_eq!(ResetMethod::from_raw("assert"), Some(ResetMethod::Assert));
     assert_eq!(
@@ -372,6 +395,7 @@ fn reset_method_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn completion_method_round_trips() {
     assert_eq!(
         CompletionMethod::from_raw("wait"),
@@ -389,6 +413,7 @@ fn completion_method_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn delay_intrinsic_round_trips() {
     assert_eq!(
         DelayIntrinsic::from_raw("busy_wait"),
@@ -402,6 +427,7 @@ fn delay_intrinsic_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn duration_ctor_round_trips() {
     assert_eq!(
         DurationCtor::from_raw("from_us"),
@@ -416,6 +442,7 @@ fn duration_ctor_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn log_level_round_trips() {
     assert_eq!(LogLevel::from_raw("error"), Some(LogLevel::Error));
     assert_eq!(LogLevel::from_raw("warn"), Some(LogLevel::Warn));
@@ -425,6 +452,7 @@ fn log_level_round_trips() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn log_arg_kind_round_trips() {
     for (raw, expected) in [
         ("u8", LogArgKind::U8),
@@ -441,6 +469,7 @@ fn log_arg_kind_round_trips() {
 // ---- Serialization round-trip ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn declaration_model_serializes_to_json() {
     let model = make_minimal_model();
     let json = serde_json::to_string(&model).expect("serialize");

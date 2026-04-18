@@ -36,14 +36,21 @@ You are a worker agent for the Regseq compiler project.
 
 ## Review
 
-12. Once tests pass, request a Codex review of your implementation. Use the
-    `codex:codex-rescue` agent (or `/codex:rescue` skill) with a prompt that:
-    - References the task spec file path
-    - Asks Codex to review the implementation against the task spec. ALL CHECKS MUST BE SCOPED TO THE TASK DEFINED BY THE TASK SPEC.
-    - Asks Codex to check for spec deviations, correctness issues, generality loss in the solution, and design misalignment
-13. If Codex identifies issues, fix them and re-submit for review.
+12. Once tests pass, request a Codex review of your implementation. Launch
+    the `codex:codex-rescue` agent as a BACKGROUND agent via the Agent tool
+    with `run_in_background: true`. Do NOT invoke `/codex:rescue` as a
+    foreground skill -- Codex runs can take minutes and will appear to hang
+    the main session. The background invocation keeps the main session
+    interactive and delivers a completion notification when Codex finishes.
+    The prompt should:
+    - Reference the task spec file path
+    - Ask Codex to review the implementation against the task spec. ALL CHECKS MUST BE SCOPED TO THE TASK DEFINED BY THE TASK SPEC.
+    - Ask Codex to check for spec deviations, correctness issues, generality loss in the solution, and design misalignment
+13. If Codex identifies issues, fix them and re-submit for review (again as
+    a background agent).
 14. Iterate (fix -> Codex review) until Codex agrees the implementation
-    matches the task spec. Do not skip this step.
+    matches the task spec. Do not skip this step. Every Codex invocation in
+    this loop must be launched as a background agent.
 
 ## Finishing
 

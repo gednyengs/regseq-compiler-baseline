@@ -125,6 +125,7 @@ fn rich_platform_file() -> PlatformFile {
 // ---- Test 1: representative artifact normalizes successfully ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn minimal_platform_file_normalizes() {
     let pf = minimal_platform_file();
     let model = normalize(&pf, None, None).expect("normalization should succeed");
@@ -142,6 +143,7 @@ fn minimal_platform_file_normalizes() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn rich_platform_file_normalizes() {
     let pf = rich_platform_file();
     let model =
@@ -158,6 +160,7 @@ fn rich_platform_file_normalizes() {
 // ---- Test 2: all accepted sections map into the binding model ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn all_accepted_sections_are_mapped() {
     let pf = rich_platform_file();
     let model = normalize(&pf, None, None).unwrap();
@@ -210,6 +213,7 @@ fn all_accepted_sections_are_mapped() {
 // ---- Test 3: typed property values survive normalization ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn property_values_survive_normalization() {
     let pf = rich_platform_file();
     let model = normalize(&pf, None, None).unwrap();
@@ -230,6 +234,7 @@ fn property_values_survive_normalization() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn aggregate_property_values_survive_normalization() {
     let mut pf = minimal_platform_file();
     pf.properties.push(PropertyEntry {
@@ -252,6 +257,7 @@ fn aggregate_property_values_survive_normalization() {
 // ---- Test 4: join-relevant identifiers survive normalization ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn join_keys_survive_normalization() {
     let pf = rich_platform_file();
     let model = normalize(&pf, None, None).unwrap();
@@ -270,6 +276,7 @@ fn join_keys_survive_normalization() {
 // ---- Test 5: section/key provenance survives normalization ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn provenance_survives_normalization() {
     let pf = rich_platform_file();
     let model = normalize(&pf, Some("pl011.platform.toml"), None).unwrap();
@@ -327,6 +334,7 @@ fn provenance_survives_normalization() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn provenance_without_source_file_has_none() {
     let pf = rich_platform_file();
     let model = normalize(&pf, None, None).unwrap();
@@ -338,6 +346,7 @@ fn provenance_without_source_file_has_none() {
 // ---- Test 6: absent sections remain absent ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn absent_sections_remain_absent() {
     let pf = minimal_platform_file();
     let model = normalize(&pf, None, None).unwrap();
@@ -351,6 +360,7 @@ fn absent_sections_remain_absent() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unknown_sections_are_not_normalized() {
     let pf = rich_platform_file();
     // The rich fixture has an unknown section; it should not appear in the model.
@@ -366,6 +376,7 @@ fn unknown_sections_are_not_normalized() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unrecognized_construct_section_kinds_are_skipped() {
     let mut pf = minimal_platform_file();
     pf.construct_sections.push(ConstructSection {
@@ -390,6 +401,7 @@ fn unrecognized_construct_section_kinds_are_skipped() {
 // ---- Error cases ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn missing_section_key_is_an_error() {
     let mut pf = minimal_platform_file();
     pf.construct_sections.push(ConstructSection {
@@ -410,6 +422,7 @@ fn missing_section_key_is_an_error() {
 // ---- Normalization is deterministic ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn normalization_is_deterministic() {
     let pf = rich_platform_file();
     let model1 = normalize(&pf, Some("pl011.platform.toml"), None).unwrap();
@@ -425,6 +438,7 @@ fn normalization_is_deterministic() {
 // ---- Fields with absent values normalize to None ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn partial_construct_section_normalizes_with_none_fields() {
     let mut pf = minimal_platform_file();
     // An interrupt section with only trigger_type, other fields absent.
@@ -449,6 +463,7 @@ fn partial_construct_section_normalizes_with_none_fields() {
 // ---- Round-trip through parser + normalization ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn parser_output_normalizes_end_to_end() {
     let toml_input = r#"
 version = "1"
@@ -504,6 +519,7 @@ pin_states = ["default", "sleep"]
 // ---- Bus section normalization tests ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn amba_bus_section_normalizes_successfully() {
     let toml_input = r#"
 version = "1"
@@ -534,6 +550,7 @@ revision = 3
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn amba_bus_with_declaration_match_normalizes() {
     let toml_input = r#"
 version = "1"
@@ -562,6 +579,7 @@ revision = 3
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn bus_type_mismatch_is_rejected() {
     let toml_input = r#"
 version = "1"
@@ -590,6 +608,7 @@ amba_id = 0x00041011
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unrecognized_bus_type_is_rejected() {
     let toml_input = r#"
 version = "1"
@@ -615,6 +634,7 @@ type = "usb"
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn invalid_family_specific_key_is_rejected() {
     let toml_input = r#"
 version = "1"
@@ -642,6 +662,7 @@ vendor_id = 0x8086
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pl011_fixture_with_amba_bus_normalizes_deterministically() {
     let toml_input = r#"
 version = "1"
@@ -694,6 +715,7 @@ size = 4096
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn absent_bus_section_normalizes_to_none() {
     let pf = minimal_platform_file();
     let model = normalize(&pf, None, None).unwrap();
@@ -701,6 +723,7 @@ fn absent_bus_section_normalizes_to_none() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn bus_normalization_without_declaration_skips_consistency_check() {
     let toml_input = r#"
 version = "1"

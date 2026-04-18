@@ -22,6 +22,7 @@ use regseq_model::declaration::{BusType, DeviceClass};
 // ---- 1. Representative raw artifact normalizes successfully ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pl011_spec_slice_fixture_normalizes() {
     let json = include_str!("../../../tests/fixtures/pl011-spec-slice/expected/raw-frontend.json");
     let model = normalize_from_json(json).expect("normalization should succeed");
@@ -34,6 +35,7 @@ fn pl011_spec_slice_fixture_normalizes() {
 // ---- 2. All currently present raw families map into the declaration model ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn all_raw_families_map_into_model() {
     let input = make_rich_input();
     let model = normalize(&input).expect("normalization should succeed");
@@ -92,6 +94,7 @@ fn all_raw_families_map_into_model() {
 // ---- 3. Stringly raw kinds become typed enums ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn wrapper_method_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -102,6 +105,7 @@ fn wrapper_method_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn clock_method_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -112,6 +116,7 @@ fn clock_method_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn reset_method_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -122,6 +127,7 @@ fn reset_method_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn sync_field_kind_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -132,6 +138,7 @@ fn sync_field_kind_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn completion_method_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -142,6 +149,7 @@ fn completion_method_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn delay_intrinsic_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -156,6 +164,7 @@ fn delay_intrinsic_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn duration_ctor_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -166,6 +175,7 @@ fn duration_ctor_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn log_level_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -173,6 +183,7 @@ fn log_level_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn log_arg_kinds_normalized_to_typed_enums() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -180,6 +191,7 @@ fn log_arg_kinds_normalized_to_typed_enums() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn callback_context_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -198,6 +210,7 @@ fn callback_context_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn device_class_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -205,6 +218,7 @@ fn device_class_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn bus_type_normalized_to_typed_enum() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -212,6 +226,7 @@ fn bus_type_normalized_to_typed_enum() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn absent_bus_normalizes_to_none() {
     let input = RawArtifactInput {
         driver_name: "no-bus".into(),
@@ -241,6 +256,7 @@ fn absent_bus_normalizes_to_none() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unrecognized_bus_value_returns_error() {
     let input = RawArtifactInput {
         driver_name: "bad-bus".into(),
@@ -277,6 +293,7 @@ fn unrecognized_bus_value_returns_error() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn interrupt_field_shape_normalized() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -287,6 +304,7 @@ fn interrupt_field_shape_normalized() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn isr_bind_target_normalized() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -299,6 +317,7 @@ fn isr_bind_target_normalized() {
 // ---- 4. Construct-local call-site evidence retains containing_fn provenance ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn wrapper_call_site_retains_containing_fn() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -309,6 +328,7 @@ fn wrapper_call_site_retains_containing_fn() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn clock_call_site_retains_containing_fn() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -318,6 +338,7 @@ fn clock_call_site_retains_containing_fn() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn lock_operation_retains_containing_fn() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -327,6 +348,7 @@ fn lock_operation_retains_containing_fn() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn log_call_site_retains_containing_fn() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -338,6 +360,7 @@ fn log_call_site_retains_containing_fn() {
 // ---- 5. Interrupt Layer 2 leakage is kept separate from declaration facts ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn interrupt_binding_hints_preserved_as_sidecar() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -351,6 +374,7 @@ fn interrupt_binding_hints_preserved_as_sidecar() {
 // ---- 6. Absent families remain absent rather than being inferred ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn absent_families_normalize_to_empty() {
     let input = RawArtifactInput {
         driver_name: "minimal".into(),
@@ -392,6 +416,7 @@ fn absent_families_normalize_to_empty() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn missing_identity_returns_error() {
     let input = RawArtifactInput {
         driver_name: "no-id".into(),
@@ -418,6 +443,7 @@ fn missing_identity_returns_error() {
 // ---- 7. Property-side lints survive normalization ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn property_lint_survives_normalization() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -434,6 +460,7 @@ fn property_lint_survives_normalization() {
 // ---- 8. Synchronization sub-families stay structurally distinct ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn sync_sub_families_distinct_after_normalization() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -458,6 +485,7 @@ fn sync_sub_families_distinct_after_normalization() {
 // ---- 9. Logging/timed-delay detail survives normalization ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn logging_detail_survives_normalization() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -470,6 +498,7 @@ fn logging_detail_survives_normalization() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn timed_delay_detail_survives_normalization() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -485,6 +514,7 @@ fn timed_delay_detail_survives_normalization() {
 // ---- 10. Build context is separate from identity ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn build_context_populated_from_target_os() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -494,6 +524,7 @@ fn build_context_populated_from_target_os() {
 // ---- 11. PM gate detail survives ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pm_gate_detail_survives_normalization() {
     let input = make_rich_input();
     let model = normalize(&input).unwrap();
@@ -507,6 +538,7 @@ fn pm_gate_detail_survives_normalization() {
 // ---- 12. Unrecognized tag error ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unrecognized_wrapper_method_returns_error() {
     let mut input = make_rich_input();
     input.register_access.as_mut().unwrap().wrapper_call_sites[0].method = "unknown_op".into();

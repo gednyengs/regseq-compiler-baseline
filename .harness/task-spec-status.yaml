@@ -90,7 +90,7 @@ items:
   - id: regseqmodel-phase-2
     phase: "2"
     title: Unified RegseqModel structure -- Module tree, driver struct, type defs
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - regseqmodel-phase-0
       - regseqmodel-phase-1
@@ -105,10 +105,21 @@ items:
       RegisterDescriptor/RegisterBlock, Function with Param/ParamKind,
       resource/property/user-data fields with Shape, Module with
       Driver/Normal kind, and the RegseqModel root struct.
+    brief: .harness/spec-batches/regseqmodel-phase-2.md
     spec_authoring_notes:
       - New model/ module alongside existing modules.
       - Progressive population: declaration fields populated first, binding slots start as None.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-model-31
+      - regseq-model-32
+      - regseq-model-33
+      - regseq-model-34
+      - regseq-model-35
+      - regseq-model-36
+      - regseq-model-37
+      - regseq-model-38
+      - regseq-model-39
+      - regseq-model-40
 
   # ---- Phase 3: Facade, macros, fixture (parallel with 0-2) ----
 
@@ -222,7 +233,7 @@ items:
   - id: regseqmodel-phase-4
     phase: "4"
     title: Extraction pipeline updates -- attribute registries, new surfaces, tests
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - regseqmodel-phase-3a
       - regseqmodel-phase-3b
@@ -241,18 +252,28 @@ items:
       type, and abstraction registries. Add pin-state and source-location
       extraction. Expand RawFrontendArtifact. Update unit test specimens
       and golden files.
+    brief: .harness/spec-batches/regseqmodel-phase-4.md
     spec_authoring_notes:
       - Cross-crate attribute validation gates the rest of this phase.
       - 33+ unit test specimens need #[rseq::] attribute updates.
       - Golden files must be regenerated after extraction output changes.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-driver-26
+      - regseq-driver-27
+      - regseq-driver-28
+      - regseq-driver-29
+      - regseq-driver-30
+      - regseq-driver-31
+      - regseq-driver-32
+      - regseq-driver-33
+      - regseq-driver-34
 
   # ---- Phase 5: IR construction ----
 
   - id: regseqmodel-phase-5
     phase: "5"
     title: MIR-to-Regseq-IR construction pass
-    status: not_ready
+    status: tasked
     depends_on:
       - regseqmodel-phase-1
       - regseqmodel-phase-2
@@ -263,6 +284,7 @@ items:
       - docs/discussions/models/regseq-model/execution-plan.md
       - docs/discussions/models/regseq-model/ir-reference.md
       - docs/discussions/models/regseq-model/compiler-knowledge.md
+    brief: .harness/spec-batches/regseqmodel-phase-5.md
     summary: >
       Build the two-pass IR construction: declaration skeleton (Pass 1)
       and body construction (Pass 2) with 7 recognition rules. Incremental
@@ -272,14 +294,28 @@ items:
       - Hardest phase. Recommend splitting into multiple tasks per recognition rule.
       - Start with straight-line code, then branches, then ?-pattern, then loops.
       - No intermediate AnnotatedMirBody -- construct directly from MirBody JSON + registries.
-    generated_task_ids: []
+    generated_task_ids:
+      - regseq-model-41
+      - regseq-model-42
+      - regseq-model-43
+      - regseq-model-44
+      - regseq-model-45
+      - regseq-model-46
+      - regseq-model-47
+      - regseq-model-48
+      - regseq-model-49
+      - regseq-model-50
+      - regseq-model-51
+      - regseq-model-52
+      - regseq-model-53
+      - regseq-model-54
 
   # ---- Phase 6: Normalization + join ----
 
   - id: regseqmodel-phase-6
     phase: "6"
     title: RegseqModel normalization, platform join, and legality verification
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - regseqmodel-phase-5
     target_harness_groups:
@@ -287,6 +323,7 @@ items:
     source_refs:
       - docs/discussions/models/regseq-model/execution-plan.md
       - docs/discussions/models/regseq-model/spec.md
+    brief: .harness/spec-batches/regseqmodel-phase-6.md
     summary: >
       Wire IR construction into the pipeline. Implement normalize() to
       produce RegseqModel, populate_bindings() for in-place platform join,
@@ -309,6 +346,7 @@ items:
       - regseq-driver
     source_refs:
       - docs/discussions/models/regseq-model/execution-plan.md
+    brief: .harness/spec-batches/regseqmodel-phase-7.md
     summary: >
       Migrate all consumers from old model types to RegseqModel: analysis,
       lowering planner, Linux backend, pipeline glue, E2E tests. Uses
@@ -332,6 +370,7 @@ items:
     source_refs:
       - docs/discussions/models/regseq-model/execution-plan.md
       - docs/discussions/models/regseq-model/compiler-knowledge.md
+    brief: .harness/spec-batches/regseqmodel-phase-8.md
     summary: >
       Implement goto-based C emitter from CFG-based IR. Implement
       dominator-based resource cleanup for lifecycle callback error paths.
@@ -354,6 +393,7 @@ items:
       - track-a-validation
     source_refs:
       - docs/discussions/models/regseq-model/execution-plan.md
+    brief: .harness/spec-batches/regseqmodel-phase-9.md
     summary: >
       Remove old model modules (declaration/, binding/, joined/, semantic/,
       item/, compat.rs). Final golden file regeneration with new JSON

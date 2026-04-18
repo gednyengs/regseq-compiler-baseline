@@ -15,4 +15,5 @@ members = [
 exclude = [
     "tests/fixtures/minimal-driver",
     "tests/fixtures/pl011-spec-slice",
+    "experiments/mir-error-handling",
 ]

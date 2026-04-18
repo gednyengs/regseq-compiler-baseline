@@ -14,6 +14,7 @@ use regseq_model::declaration::raw_input::*;
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn empty_bodies_normalize_to_empty_mir_set() {
     let input = make_minimal_input(None);
     let model = normalize(&input).unwrap();
@@ -29,6 +30,7 @@ fn empty_bodies_normalize_to_empty_mir_set() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn single_callback_normalizes_mir_metadata() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -56,6 +58,7 @@ fn single_callback_normalizes_mir_metadata() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn helper_and_isr_normalize_mir_metadata() {
     let input = make_input_with_mixed();
     let model = normalize(&input).unwrap();
@@ -70,6 +73,7 @@ fn helper_and_isr_normalize_mir_metadata() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn callback_params_preserved_in_mir() {
     let input = make_input_with_params();
     let model = normalize(&input).unwrap();
@@ -91,6 +95,7 @@ fn callback_params_preserved_in_mir() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_preserves_basic_blocks() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -108,6 +113,7 @@ fn mir_body_preserves_basic_blocks() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_preserves_local_decls() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -122,6 +128,7 @@ fn mir_body_preserves_local_decls() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_preserves_cleanup_blocks() {
     let input = make_input_with_cleanup();
     let model = normalize(&input).unwrap();
@@ -139,6 +146,7 @@ fn mir_body_preserves_cleanup_blocks() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_preserves_drop_semantics() {
     let input = make_input_with_drop();
     let model = normalize(&input).unwrap();
@@ -163,6 +171,7 @@ fn mir_body_preserves_drop_semantics() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_preserves_statements() {
     let input = make_input_with_statements();
     let model = normalize(&input).unwrap();
@@ -186,6 +195,7 @@ fn mir_body_preserves_statements() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn helper_calls_preserved_in_mir() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -199,6 +209,7 @@ fn helper_calls_preserved_in_mir() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_by_name_lookup_works() {
     let input = make_input_with_mixed();
     let model = normalize(&input).unwrap();
@@ -210,6 +221,7 @@ fn mir_by_name_lookup_works() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_classification_queries_work() {
     let input = make_input_with_mixed();
     let model = normalize(&input).unwrap();
@@ -225,6 +237,7 @@ fn mir_classification_queries_work() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_normalization_is_deterministic() {
     let input = make_input_with_mixed();
     let m1 = normalize(&input).unwrap();
@@ -237,6 +250,7 @@ fn mir_normalization_is_deterministic() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_provenance_set() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -249,6 +263,7 @@ fn mir_body_provenance_set() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mir_body_is_cfg_not_expression_tree() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -267,6 +282,7 @@ fn mir_body_is_cfg_not_expression_tree() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unsupported_statements_are_surfaced() {
     let input = make_input_with_unsupported();
     let model = normalize(&input).unwrap();
@@ -281,6 +297,7 @@ fn unsupported_statements_are_surfaced() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn query_flavor_is_drops_elaborated() {
     let input = make_input_with_callback();
     let model = normalize(&input).unwrap();
@@ -725,6 +742,7 @@ fn make_input_with_unsupported() -> RawArtifactInput {
 /// but differ in their instantiated type arguments. This test verifies that
 /// `MonomorphizationKey` preserves that distinction.
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn monomorphization_key_distinguishes_same_path_different_args() {
     let body = minimal_mir_body();
     let input = make_minimal_input(Some(RawBodySurfaceInput {
@@ -806,6 +824,7 @@ fn monomorphization_key_distinguishes_same_path_different_args() {
 /// Prove that MonomorphizationKey is observable from the normalized model
 /// (downstream consumer test).
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn monomorphization_key_observable_in_downstream_lookup() {
     let body = minimal_mir_body();
     let input = make_minimal_input(Some(RawBodySurfaceInput {

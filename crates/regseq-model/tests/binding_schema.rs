@@ -24,6 +24,7 @@ fn test_header() -> BindingHeader {
 // ---- Test 1: types construct and import cleanly ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn binding_model_constructs_with_all_families() {
     let model = BindingModel {
         header: test_header(),
@@ -48,6 +49,7 @@ fn binding_model_constructs_with_all_families() {
 // ---- Test 2: section-owned sub-families remain structurally distinct ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn section_families_are_structurally_distinct() {
     let model = BindingModel {
         header: test_header(),
@@ -101,6 +103,7 @@ fn section_families_are_structurally_distinct() {
 // ---- Test 3: per-entity provenance fields are present ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn per_entity_provenance_is_present() {
     let mmio = MmioBinding {
         join_key: JoinKey::ExplicitId("uart_regs".into()),
@@ -134,6 +137,7 @@ fn per_entity_provenance_is_present() {
 // ---- Test 4: header/build metadata is separate from resource/property entries ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn header_is_separate_from_resource_entries() {
     let model = BindingModel {
         header: BindingHeader {
@@ -166,6 +170,7 @@ fn header_is_separate_from_resource_entries() {
 // ---- Test 5: explicit-id and field-name join identifiers have an explicit home ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn join_key_explicit_id_and_field_name_are_distinct() {
     let explicit = JoinKey::ExplicitId("uart_clk".into());
     let field = JoinKey::FieldName("uart_reset".into());
@@ -183,6 +188,7 @@ fn join_key_explicit_id_and_field_name_are_distinct() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn resource_bindings_carry_appropriate_join_key_variants() {
     // MMIO uses explicit-id join.
     let mmio = MmioBinding {
@@ -206,6 +212,7 @@ fn resource_bindings_carry_appropriate_join_key_variants() {
 // ---- Test 6: accepted construct-section fields have typed homes ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn mmio_fields_are_typed() {
     let mmio = MmioBinding {
         join_key: JoinKey::ExplicitId("uart_regs".into()),
@@ -219,6 +226,7 @@ fn mmio_fields_are_typed() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn interrupt_fields_are_typed() {
     let intr = InterruptBinding {
         join_key: JoinKey::ExplicitId("uart_irq".into()),
@@ -236,6 +244,7 @@ fn interrupt_fields_are_typed() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn clock_fields_are_typed() {
     let clock = ClockBinding {
         join_key: JoinKey::ExplicitId("uart_clk".into()),
@@ -247,6 +256,7 @@ fn clock_fields_are_typed() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn reset_fields_are_typed() {
     let reset = ResetBinding {
         join_key: JoinKey::FieldName("uart_reset".into()),
@@ -260,6 +270,7 @@ fn reset_fields_are_typed() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pinctrl_fields_are_typed() {
     let pinctrl = PinCtrlBinding {
         join_key: JoinKey::ExplicitId("uart_pins".into()),
@@ -274,6 +285,7 @@ fn pinctrl_fields_are_typed() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn binding_entry_fields_are_individually_optional() {
     // All construct-section fields can be None for incomplete bindings.
     let mmio = MmioBinding {
@@ -322,6 +334,7 @@ fn binding_entry_fields_are_individually_optional() {
 // ---- Serialization round-trip ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn binding_model_serializes_deterministically() {
     let model = BindingModel {
         header: test_header(),

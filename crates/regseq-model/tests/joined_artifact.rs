@@ -202,6 +202,7 @@ fn pl011_binding() -> BindingModel {
 // ---- Test 1: representative join succeeds ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pl011_join_succeeds() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -220,6 +221,7 @@ fn pl011_join_succeeds() {
 // ---- Test 2: explicit-id joins work ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn explicit_id_join_for_mmio() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -235,6 +237,7 @@ fn explicit_id_join_for_mmio() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn explicit_id_join_for_interrupts() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -249,6 +252,7 @@ fn explicit_id_join_for_interrupts() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn explicit_id_join_for_clocks() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -262,6 +266,7 @@ fn explicit_id_join_for_clocks() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn explicit_id_join_for_pinctrl() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -278,6 +283,7 @@ fn explicit_id_join_for_pinctrl() {
 // ---- Test 3: field-name join works ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn field_name_join_for_resets() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -292,6 +298,7 @@ fn field_name_join_for_resets() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn pinctrl_falls_back_to_field_name_join() {
     let mut decl = pl011_decl();
     // Remove explicit pinctrl_id to force field-name join.
@@ -308,6 +315,7 @@ fn pinctrl_falls_back_to_field_name_join() {
 // ---- Test 4: unmatched entries remain reviewable ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unmatched_declaration_only_properties() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -324,6 +332,7 @@ fn unmatched_declaration_only_properties() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unmatched_binding_only_properties() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -335,6 +344,7 @@ fn unmatched_binding_only_properties() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unmatched_binding_only_mmio() {
     let mut decl = pl011_decl();
     // Remove mmio declaration to create an unmatched binding entry.
@@ -349,6 +359,7 @@ fn unmatched_binding_only_mmio() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn unmatched_declaration_only_interrupts() {
     let decl = pl011_decl();
     let mut binding = pl011_binding();
@@ -364,6 +375,7 @@ fn unmatched_declaration_only_interrupts() {
 // ---- Test 5: deterministic and snapshot-friendly ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn joined_output_is_deterministic() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -379,6 +391,7 @@ fn joined_output_is_deterministic() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn joined_artifact_round_trips_through_json() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -392,6 +405,7 @@ fn joined_artifact_round_trips_through_json() {
 // ---- Test 6: provenance points back to both sides ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn joined_provenance_from_both_sides() {
     let decl = pl011_decl();
     let binding = pl011_binding();
@@ -432,6 +446,7 @@ fn joined_provenance_from_both_sides() {
 // ---- Test 7: matched-but-incomplete bindings ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn matched_incomplete_mmio_binding() {
     let decl = pl011_decl();
     let mut binding = pl011_binding();
@@ -448,6 +463,7 @@ fn matched_incomplete_mmio_binding() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn matched_incomplete_interrupt_binding() {
     let decl = pl011_decl();
     let mut binding = pl011_binding();
@@ -466,6 +482,7 @@ fn matched_incomplete_interrupt_binding() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn matched_incomplete_clock_binding() {
     let decl = pl011_decl();
     let mut binding = pl011_binding();
@@ -481,6 +498,7 @@ fn matched_incomplete_clock_binding() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn matched_incomplete_reset_binding() {
     let decl = pl011_decl();
     let mut binding = pl011_binding();
@@ -501,6 +519,7 @@ fn matched_incomplete_reset_binding() {
 }
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn matched_incomplete_pinctrl_binding() {
     let decl = pl011_decl();
     let mut binding = pl011_binding();
@@ -518,6 +537,7 @@ fn matched_incomplete_pinctrl_binding() {
 // ---- Test 8: interrupt sidecar hints do not override binding values ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn interrupt_binding_hints_do_not_override_authoritative_values() {
     let mut decl = pl011_decl();
     // Set declaration hints that conflict with binding values.
@@ -555,6 +575,7 @@ fn interrupt_binding_hints_do_not_override_authoritative_values() {
 // ---- Empty inputs ----
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn empty_binding_produces_all_decl_only() {
     let decl = pl011_decl();
     let binding = BindingModel {

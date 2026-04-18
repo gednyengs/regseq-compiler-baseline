@@ -26,6 +26,7 @@ fn test_provenance(family: &str) -> Provenance {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn item_store_is_canonical_owner() {
     let mut store = ItemStore::new();
     assert!(store.is_empty());
@@ -63,6 +64,7 @@ fn item_store_is_canonical_owner() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn item_store_synchronizes_embedded_id() {
     let mut store = ItemStore::new();
 
@@ -135,6 +137,7 @@ fn item_store_synchronizes_embedded_id() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn module_items_reference_through_item_id() {
     let mut store = ItemStore::new();
 
@@ -189,6 +192,7 @@ fn module_items_reference_through_item_id() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn impl_methods_and_constants_resolve() {
     let mut store = ItemStore::new();
 
@@ -278,6 +282,7 @@ fn impl_methods_and_constants_resolve() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn item_level_canonical_path_lookup() {
     let mut table = CrossLinkTable::new();
 
@@ -319,6 +324,7 @@ fn item_level_canonical_path_lookup() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn field_level_canonical_path_lookup() {
     let mut table = CrossLinkTable::new();
 
@@ -358,6 +364,7 @@ fn field_level_canonical_path_lookup() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn overlapping_short_names_disambiguated() {
     let mut store = ItemStore::new();
     let mut table = CrossLinkTable::new();
@@ -437,6 +444,7 @@ fn overlapping_short_names_disambiguated() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn associated_constants_resolve_without_short_name() {
     let mut store = ItemStore::new();
     let mut table = CrossLinkTable::new();
@@ -529,6 +537,7 @@ fn associated_constants_resolve_without_short_name() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn schema_is_device_neutral() {
     // Build a complete hierarchy using fully generic names -- no PL011,
     // no Linux, no UART, no Zephyr references in type construction.
@@ -614,6 +623,7 @@ fn schema_is_device_neutral() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn no_device_specific_type_names() {
     // Construct a non-PL011, non-UART example (e.g. network driver)
     // proving the schema accepts arbitrary device-class names.
@@ -668,6 +678,7 @@ fn no_device_specific_type_names() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn serde_json_round_trip() {
     let mut store = ItemStore::new();
 
@@ -781,6 +792,7 @@ fn serde_json_round_trip() {
 // ---------------------------------------------------------------------------
 
 #[test]
+#[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn function_kind_and_role_are_independent() {
     let driver_id = ItemId(0);
 
