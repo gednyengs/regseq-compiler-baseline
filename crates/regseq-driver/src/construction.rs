@@ -50,9 +50,10 @@ pub(crate) mod try_folding;
 // 2 task code can reach them without the sub-module itself being part
 // of the public `construction::*` surface.
 pub use mir_mapping::{
-    map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, LocalIdMap,
-    MapOperandResult, TypeDefIndex,
+    map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex,
+    LocalIdMap, MapOperandResult, TypeDefIndex,
 };
+pub use pass2::build_body;
 
 use id_allocator::DeclIdAllocator;
 
@@ -217,6 +218,26 @@ pub enum ConstructionError {
         /// Rendered rvalue kind for diagnostics.
         rendered: String,
     },
+    /// A MIR terminator has no Regseq IR representation in Pass 2's
+    /// basic-terminator subset (task 43). Covers `TailCall`, `Yield`,
+    /// `CoroutineDrop`, `InlineAsm`, `FalseEdge`, `FalseUnwind`,
+    /// `Assert`, `UnwindResume`, `UnwindTerminate`, and -- for this
+    /// task -- `SwitchInt` (handled by task 44).
+    UnsupportedTerminator {
+        /// Provenance of the offending terminator.
+        provenance: ErrorProvenance,
+        /// Rendered terminator kind for diagnostics.
+        rendered: String,
+    },
+    /// A MIR `Call` terminator's `func` operand does not resolve to a
+    /// known [`FunctionId`]: the operand is not an `FnDef` constant, or
+    /// its [`DefId`] is missing from the Pass 1 `FunctionIndex`.
+    UnresolvedCallTarget {
+        /// Provenance of the offending call site.
+        provenance: ErrorProvenance,
+        /// Rendered callee for diagnostics.
+        rendered: String,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -301,6 +322,22 @@ impl std::fmt::Display for ConstructionError {
             } => write!(
                 f,
                 "unsupported MIR rvalue `{}` (at `{}`)",
+                rendered, provenance.item_path,
+            ),
+            Self::UnsupportedTerminator {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "unsupported MIR terminator `{}` (at `{}`)",
+                rendered, provenance.item_path,
+            ),
+            Self::UnresolvedCallTarget {
+                provenance,
+                rendered,
+            } => write!(
+                f,
+                "MIR call target `{}` cannot be resolved to a FunctionId (at `{}`)",
                 rendered, provenance.item_path,
             ),
         }

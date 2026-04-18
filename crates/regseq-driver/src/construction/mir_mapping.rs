@@ -20,7 +20,7 @@ use rustc_hir::def_id::DefId;
 use rustc_middle::mir;
 use rustc_middle::ty::{self, TyCtxt};
 
-use regseq_model::identity::{ConstantId, LocalId, SymbolInterner, TypeDefId};
+use regseq_model::identity::{ConstantId, FunctionId, LocalId, SymbolInterner, TypeDefId};
 use regseq_model::ir::{
     AggregateKind, BinOp, BorrowKind, CastKind, LiteralValue, Mutability, Operand, Place,
     Projection, RegseqType, Rvalue, ScalarType, UnOp,
@@ -66,6 +66,27 @@ impl<'a> ConstantIndex<'a> {
     /// Resolve an unevaluated MIR constant's `DefId` to its assigned
     /// [`ConstantId`], if any.
     pub fn lookup(&self, did: DefId) -> Option<ConstantId> {
+        self.0.get(&did).copied()
+    }
+}
+
+/// Pass 1 cross-reference index from rustc [`DefId`] to Regseq
+/// [`FunctionId`]. Populated by `walk::populate_module_items_and_submodules`
+/// during Pass 1 and exposed as `CrossRefMaps::functions`. Pass 2
+/// [`build_body`](super::build_body) consults it to resolve `Call`
+/// targets without re-walking the HIR.
+#[derive(Copy, Clone)]
+pub struct FunctionIndex<'a>(&'a HashMap<DefId, FunctionId>);
+
+impl<'a> FunctionIndex<'a> {
+    /// Wrap the Pass 1 `functions` map.
+    pub fn new(inner: &'a HashMap<DefId, FunctionId>) -> Self {
+        Self(inner)
+    }
+
+    /// Resolve a callee's rustc `DefId` to its assigned [`FunctionId`],
+    /// if any.
+    pub fn lookup(&self, did: DefId) -> Option<FunctionId> {
         self.0.get(&did).copied()
     }
 }
@@ -612,6 +633,15 @@ pub fn map_rvalue<'tcx>(
 ) -> Result<Rvalue, ConstructionError> {
     match rv {
         mir::Rvalue::Use(op) => {
+            // MIR emits `_0 = const ()` at function exit for `()`-returning
+            // bodies, with the operand being a `ZeroSized` constant of
+            // type `()`. The Regseq `LiteralValue` enum does not model
+            // `()` directly, so map the use to the equivalent empty
+            // tuple aggregate; this preserves the unit-assignment
+            // semantics without requiring a new literal variant.
+            if is_unit_constant(op) {
+                return Ok(Rvalue::Aggregate(AggregateKind::Tuple, Vec::new()));
+            }
             let mapped =
                 map_operand_required(tcx, op, locals, constants, type_def_index, interner)?;
             Ok(Rvalue::Use(mapped))
@@ -703,6 +733,17 @@ pub fn map_rvalue<'tcx>(
             rendered: format!("{rv:?}"),
         }),
     }
+}
+
+/// True when `op` is a MIR `ConstValue::ZeroSized` of type `()`.
+fn is_unit_constant<'tcx>(op: &mir::Operand<'tcx>) -> bool {
+    let mir::Operand::Constant(const_op) = op else {
+        return false;
+    };
+    let mir::Const::Val(mir::ConstValue::ZeroSized, ty) = const_op.const_ else {
+        return false;
+    };
+    matches!(ty.kind(), ty::TyKind::Tuple(elems) if elems.is_empty())
 }
 
 fn map_operand_required<'tcx>(

@@ -954,11 +954,12 @@
           "id": "regseq-model-43",
           "name": "Pass 2 straight-line body construction",
           "spec": ".harness/tasks/regseq-model/43-pass2-straight-line.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-42"
           ],
-          "artifacts": []
+          "artifacts": [],
+          "fail_reason": null
         },
         {
           "id": "regseq-model-44",
