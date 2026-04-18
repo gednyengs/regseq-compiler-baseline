@@ -958,8 +958,7 @@
           "depends_on": [
             "regseq-model-42"
           ],
-          "artifacts": [],
-          "fail_reason": null
+          "artifacts": []
         },
         {
           "id": "regseq-model-44",

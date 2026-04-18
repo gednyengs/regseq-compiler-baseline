@@ -490,6 +490,43 @@ def cmd_fail(args: argparse.Namespace) -> None:
     print("ACTION: End session. A human will review and reassign this task.")
 
 
+def cmd_reset(args: argparse.Namespace) -> None:
+    """Reset a task back to `pending` (recovery path for misuse of fail/start).
+
+    Refuses to touch tasks already `pending`. For `done` tasks, requires
+    `--force` so accidental resets don't wipe a completed result. Clears
+    `fail_reason` as part of the transition. `artifacts` is left in place;
+    remove them separately if the reset is meant to discard output.
+    """
+    data = load_tasks()
+    result = find_task(data, args.id)
+    if result is None:
+        print(f"ERROR: Task '{args.id}' not found.")
+        sys.exit(1)
+
+    _, task = result
+    current = task["status"]
+
+    if current == "pending":
+        print(f"ERROR: '{args.id}' is already pending; nothing to reset.")
+        sys.exit(1)
+
+    if current == "done" and not args.force:
+        print(f"ERROR: '{args.id}' is done. Re-run with --force to reset a completed task.")
+        print("ACTION: Consider whether downstream tasks already consumed its artifacts first.")
+        sys.exit(1)
+
+    task["status"] = "pending"
+    task.pop("fail_reason", None)
+    save_tasks(data)
+    print(f"RESET: {args.id}")
+    print(f"FROM: {current}")
+    print(f"REASON: {args.reason}")
+    if task.get("artifacts"):
+        print("NOTE: `artifacts` field retained; clear manually if the reset should discard output.")
+    print("ACTION: Task is now available for reassignment.")
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     data = load_tasks()
     tasks = all_tasks(data)
@@ -682,6 +719,22 @@ def main() -> None:
     fail_parser.add_argument("id", help="Task ID")
     fail_parser.add_argument("--reason", required=True, help="Reason for failure")
 
+    reset_parser = subparsers.add_parser(
+        "reset",
+        help="Reset a task back to pending (recovery path)",
+    )
+    reset_parser.add_argument("id", help="Task ID")
+    reset_parser.add_argument(
+        "--reason",
+        required=True,
+        help="Why the task is being reset (goes to console audit trail only)",
+    )
+    reset_parser.add_argument(
+        "--force",
+        action="store_true",
+        help="Permit resetting a task whose current status is `done`",
+    )
+
     subparsers.add_parser("status", help="Show status summary")
 
     list_parser = subparsers.add_parser("list", help="List tasks")
@@ -701,6 +754,7 @@ def main() -> None:
         "start": cmd_start,
         "done": cmd_done,
         "fail": cmd_fail,
+        "reset": cmd_reset,
         "status": cmd_status,
         "list": cmd_list,
         "blocked": cmd_blocked,
