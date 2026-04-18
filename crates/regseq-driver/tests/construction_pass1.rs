@@ -23,8 +23,9 @@ use regseq_driver::construction::{
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
 use regseq_driver::extract::intrinsic_registry::IntrinsicRegistry;
-use regseq_model::identity::SourceOrigin;
-use regseq_model::model::{ModuleKind, RegseqModel, TypeDefClassification};
+use regseq_model::identity::{SourceOrigin, TypeDefId};
+use regseq_model::ir::{Mutability, RegseqType};
+use regseq_model::model::{AttrValue, ModuleKind, RegseqModel, TypeDefClassification, TypeDefKind};
 
 type ConstructionOutcome = Result<RegseqModel, ConstructionError>;
 
@@ -53,7 +54,9 @@ fn get_sysroot() -> String {
 }
 
 fn compile_and_build(source: &str, test_name: &str) -> ConstructionOutcome {
-    let _lock = COMPILER_LOCK.lock().unwrap();
+    let _lock = COMPILER_LOCK
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner);
     init_rustc();
 
     let test_dir = std::env::temp_dir()
@@ -189,11 +192,20 @@ pub const BAUD_RATE: u32 = 115200;
 // --- Free helper function ---
 pub fn double(x: u32) -> u32 { x * 2 }
 
+// --- User-defined Copy type for user_data inner field ---
+#[derive(Copy, Clone)]
+pub struct Stats {
+    pub count: u32,
+    pub last: u32,
+}
+
 // --- Driver struct ---
 #[rseq::driver(name = "specimen-drv", compatible = ["acme,widget"], bus = "amba")]
 pub struct MyDriver {
     #[rseq::clock(id = "core_clk")]
     pub clk: Clock,
+    #[rseq::clock(id = "bus_clks")]
+    pub bus_clks: [Clock; 4],
     #[rseq::reset(id = "core_rst")]
     pub rst: Option<ResetLine>,
     #[rseq::pinctrl(id = "pinmux")]
@@ -203,9 +215,10 @@ pub struct MyDriver {
     #[rseq::mmio(id = "regs")]
     pub regs: Mmio<MyBlock>,
     pub lock: Mutex<u32>,
-    #[rseq::property(id = "sample-rate", default = 48000)]
+    #[rseq::property(id = "sample-rate", default = 48000, vendor_prefix = "acme")]
     pub sample_rate: u32,
     pub pending: Option<u8>,
+    pub stats: Option<Stats>,
 }
 
 // --- Trait impl ---
@@ -240,15 +253,17 @@ fn positive_specimen_constructs_declaration_skeleton() {
         .as_ref()
         .expect("driver module must carry a DriverStruct");
 
-    // Each field category populated.
-    assert_eq!(driver.clocks.len(), 1, "one clock resource");
+    // Each field category populated (specimen has two clocks: one
+    // scalar and one [Clock; 4] array; two user-data fields: pending and
+    // stats).
+    assert_eq!(driver.clocks.len(), 2, "two clock resources");
     assert_eq!(driver.resets.len(), 1, "one reset resource");
     assert_eq!(driver.pinctrl.len(), 1, "one pinctrl resource");
     assert_eq!(driver.interrupts.len(), 1, "one interrupt resource");
     assert_eq!(driver.mmio.len(), 1, "one mmio resource");
     assert_eq!(driver.sync.len(), 1, "one sync primitive");
     assert_eq!(driver.properties.len(), 1, "one property");
-    assert_eq!(driver.user_data.len(), 1, "one user-data field");
+    assert_eq!(driver.user_data.len(), 2, "two user-data fields");
 
     // All binding slots None.
     assert!(driver.clocks[0].binding.is_none());
@@ -257,6 +272,54 @@ fn positive_specimen_constructs_declaration_skeleton() {
     assert!(driver.interrupts[0].binding.is_none());
     assert!(driver.mmio[0].binding.is_none());
     assert!(driver.properties[0].bound_value.is_none());
+
+    // Array shapes come from middle-ty: `bus_clks: [Clock; 4]` must be
+    // `Shape::Array(4)`, not `Shape::Array(0)`. Before 41d this defaulted
+    // to 0 since HIR-based shape lookup did not evaluate the const.
+    let bus_clks = driver
+        .clocks
+        .iter()
+        .find(|c| model.symbols.resolve(c.field_name) == "bus_clks")
+        .expect("bus_clks clock resource");
+    assert_eq!(
+        bus_clks.shape,
+        regseq_model::model::Shape::Array(4),
+        "Array shape must be derived from the const length, not hardcoded to 0"
+    );
+
+    // Sync payloads: Mutex<u32> resolves to Scalar(U32), not a hardcoded
+    // placeholder (before 41d this was always U32 by accident, not by
+    // middle-ty resolution).
+    let lock = &driver.sync[0];
+    assert_eq!(
+        lock.payload_type,
+        Some(RegseqType::Scalar(regseq_model::ir::ScalarType::U32)),
+        "Mutex<u32> payload must resolve to Scalar(U32) via middle-ty"
+    );
+
+    // Property vendor_prefix: `#[rseq::property(..., vendor_prefix = "acme")]`
+    // must surface as `Some(Symbol::"acme")` (this field was never parsed
+    // before 41d).
+    let prop = &driver.properties[0];
+    let vp = prop
+        .vendor_prefix
+        .expect("vendor_prefix must be captured from property attr");
+    assert_eq!(model.symbols.resolve(vp), "acme");
+
+    // `Copy` enforcement is now a real trait query. The specimen's
+    // `stats: Option<Stats>` field uses a `#[derive(Copy, Clone)]` struct,
+    // which would fail the pre-41d name-whitelist but passes
+    // `type_is_copy_modulo_regions`.
+    let stats_ud = driver
+        .user_data
+        .iter()
+        .find(|u| model.symbols.resolve(u.field_name) == "stats")
+        .expect("stats user_data field");
+    assert!(
+        matches!(stats_ud.inner_type, RegseqType::Defined(_)),
+        "Stats inner_type must resolve to Defined(TypeDefId), got {:?}",
+        stats_ud.inner_type
+    );
 
     // Constants populated.
     assert!(
@@ -320,15 +383,21 @@ fn positive_specimen_constructs_declaration_skeleton() {
         );
     }
 
-    // Source locations: every assigned DeclId has an entry; all Source
-    // (no CompilerGenerated after a successful walk except the root
-    // module fallback).
-    let source_count = model
+    // Source locations: every assigned DeclId must be `Source(..)` in
+    // Pass 1 -- the spec forbids `CompilerGenerated` for Pass 1 outputs
+    // (obligation 8).
+    let compiler_generated: Vec<_> = model
         .source_locations
-        .values()
-        .filter(|o| matches!(o, SourceOrigin::Source(_)))
-        .count();
-    assert!(source_count >= 5, "most DeclIds should have Source origin");
+        .iter()
+        .filter(|(_, o)| matches!(o, SourceOrigin::CompilerGenerated))
+        .map(|(id, _)| *id)
+        .collect();
+    assert!(
+        compiler_generated.is_empty(),
+        "Pass 1 must not emit CompilerGenerated source origins; found {} such entries: {:?}",
+        compiler_generated.len(),
+        compiler_generated,
+    );
 
     // Root module type defs include the register block struct + driver
     // struct + helpers; classification should mark no Abstraction or
@@ -339,6 +408,294 @@ fn positive_specimen_constructs_declaration_skeleton() {
             .iter()
             .any(|c| matches!(c, TypeDefClassification::UserDefined)),
         "at least one UserDefined type should exist"
+    );
+
+    // Attribute payloads must survive Pass 1 -- task 52 (PinCtrl metadata)
+    // and task 43 (ISR lowering) read these structured values back out of
+    // the Attrs bag. Before task 41a, every payload collapsed to Unit.
+    let default_state_attr = find_type_def_attr(&model, "DefaultState", "rseq::pin_state")
+        .expect("DefaultState must carry rseq::pin_state attr");
+    assert_eq!(
+        keyval_lookup(default_state_attr, "id"),
+        Some(&AttrValue::String("default".to_owned())),
+        "pin_state id payload must survive as String(\"default\")"
+    );
+
+    let driver_type_attr = find_type_def_attr(&model, "MyDriver", "rseq::driver")
+        .expect("MyDriver must carry rseq::driver attr");
+    assert_eq!(
+        keyval_lookup(driver_type_attr, "name"),
+        Some(&AttrValue::String("specimen-drv".to_owned())),
+        "driver name keyword arg must survive in Attrs bag"
+    );
+    assert_eq!(
+        keyval_lookup(driver_type_attr, "bus"),
+        Some(&AttrValue::String("amba".to_owned())),
+        "driver bus keyword arg must survive even when a sibling list arg is unparseable"
+    );
+
+    let isr_fn = functions
+        .iter()
+        .find(|f| model.symbols.resolve(f.name) == "on_irq")
+        .expect("ISR method on_irq must be present");
+    assert!(
+        isr_fn.attrs.entries.iter().any(|e| e.key == "rseq::isr"),
+        "ISR method must retain rseq::isr attr entry"
+    );
+
+    // Locally-defined ADT fields must resolve through the DefId->TypeDefId
+    // map and surface as `RegseqType::Defined(TypeDefId)`, not `Unit`. The
+    // specimen's `regs: Mmio<MyBlock>` field on the driver struct points to
+    // the inline `Mmio<T>` type definition (a local ADT) -- before 41b this
+    // collapsed to `Unit` and Pass 2 had no way to walk field types.
+    let mmio_tid =
+        find_type_def_id(&model, "Mmio").expect("Mmio type definition must exist in the specimen");
+    let my_driver_tid =
+        find_type_def_id(&model, "MyDriver").expect("MyDriver type definition must exist");
+    let my_driver_fields =
+        type_def_fields(&model, my_driver_tid).expect("MyDriver must have struct fields");
+    let regs_field_ty = my_driver_fields
+        .iter()
+        .find(|(name, _)| model.symbols.resolve(*name) == "regs")
+        .map(|(_, ty)| ty.clone())
+        .expect("MyDriver must have a `regs` field");
+    assert_eq!(
+        regs_field_ty,
+        RegseqType::Defined(mmio_tid),
+        "regs: Mmio<MyBlock> must resolve to Defined(Mmio TypeDefId)"
+    );
+
+    // Register block fields must resolve their descriptor references via
+    // `descriptor_map`. Before 41c, `descriptor` was always `None`.
+    let my_block =
+        find_register_block(&model, "MyBlock").expect("MyBlock register block must exist");
+    let dr_field = my_block
+        .fields
+        .iter()
+        .find(|f| model.symbols.resolve(f.name) == "dr")
+        .expect("MyBlock.dr field must exist");
+    assert!(
+        dr_field.descriptor.is_some(),
+        "dr field must resolve to a RegisterDescriptorId (was None before 41c)"
+    );
+    let dr_reg = find_register_descriptor(&model, "DR_REG")
+        .expect("DR_REG descriptor must be synthesized from its submodule");
+    assert_eq!(
+        dr_field.descriptor,
+        Some(dr_reg.id),
+        "dr field's descriptor ID must match the DR_REG descriptor"
+    );
+
+    // Method receivers must resolve to `Ref(Defined(self_tid), Shared)`,
+    // not `Unit`. Before 41b, `&self` parameter types collapsed to Unit.
+    let helper = functions
+        .iter()
+        .find(|f| model.symbols.resolve(f.name) == "helper")
+        .expect("helper method must be present");
+    let recv_ty = &helper.params[0].ty;
+    match recv_ty {
+        RegseqType::Ref(inner, Mutability::Shared) => {
+            assert_eq!(
+                **inner,
+                RegseqType::Defined(my_driver_tid),
+                "helper `&self` receiver must be &MyDriver (Defined({my_driver_tid:?}))",
+            );
+        }
+        other => panic!("helper receiver must be Ref(_, Shared), got {other:?}"),
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Register descriptor extraction (task 41c)
+// ---------------------------------------------------------------------------
+
+/// The existing positive specimen only sketches `pub mod DR_REG { pub struct
+/// Register; }` -- the parser returns a descriptor with zero fields. This
+/// test enriches a descriptor module to mimic the `register_bitfields!`
+/// expansion (field sub-modules each with a `FIELD` const plus named
+/// values) so 41c's field extraction + reserved-array-count evaluation
+/// is exercised end to end.
+#[test]
+fn descriptor_extraction_populates_fields_and_named_values() {
+    const SRC: &str = r#"
+#![no_std]
+
+pub struct FieldDef<T> { _m: core::marker::PhantomData<T> }
+impl<T> FieldDef<T> {
+    pub const fn new(_mask: u32, _shift: u32) -> Self { Self { _m: core::marker::PhantomData } }
+}
+pub struct FieldValue<T> { _m: core::marker::PhantomData<T> }
+impl<T> FieldValue<T> {
+    pub const fn new(_mask: u32, _value: u32) -> Self { Self { _m: core::marker::PhantomData } }
+}
+
+pub struct ReadWrite<T, R> { _v: T, _r: core::marker::PhantomData<R> }
+pub struct Reserved<T> { _v: T }
+pub struct Mmio<T> { _m: core::marker::PhantomData<T> }
+
+#[allow(non_snake_case)]
+pub mod CTRL_REG {
+    use super::{FieldDef, FieldValue};
+    pub struct Register;
+
+    #[allow(non_snake_case)]
+    pub mod MODE {
+        use super::{FieldDef, FieldValue};
+        pub const FIELD: FieldDef<u32> = FieldDef::new(0x3, 0);
+        pub const DISABLED: FieldValue<u32> = FieldValue::new(0x3, 0);
+        pub const ENABLED: FieldValue<u32> = FieldValue::new(0x3, 1);
+    }
+
+    #[allow(non_snake_case)]
+    pub mod IE {
+        use super::FieldDef;
+        pub const FIELD: FieldDef<u32> = FieldDef::new(0x10, 4);
+    }
+}
+
+#[repr(C)]
+#[rseq::register_block(endian = "little", access_width = 32)]
+pub struct Block {
+    pub ctrl: ReadWrite<u32, CTRL_REG::Register>,
+    pub _gap: [Reserved<u32>; 3],
+    pub also_ctrl: ReadWrite<u32, CTRL_REG::Register>,
+}
+
+#[rseq::driver(name = "desc-drv", compatible = ["acme,desc"], bus = "amba")]
+pub struct DescDriver {
+    #[rseq::mmio(id = "regs")]
+    pub regs: Mmio<Block>,
+}
+"#;
+    let model =
+        compile_and_build(SRC, "construction_pass1_descriptors").expect("specimen must build");
+
+    let ctrl_reg = find_register_descriptor(&model, "CTRL_REG")
+        .expect("CTRL_REG descriptor must be synthesized");
+    assert_eq!(
+        ctrl_reg.fields.len(),
+        2,
+        "CTRL_REG must surface both MODE and IE fields (got {:?})",
+        ctrl_reg.fields,
+    );
+
+    let mode = ctrl_reg
+        .fields
+        .iter()
+        .find(|f| model.symbols.resolve(f.name) == "MODE")
+        .expect("MODE field");
+    assert_eq!(mode.offset, 0, "MODE field offset is 0");
+    assert_eq!(mode.width, 2, "MODE field width is 2 (mask 0x3 has 2 bits)");
+    assert_eq!(
+        mode.named_values.len(),
+        2,
+        "MODE should expose DISABLED + ENABLED named values"
+    );
+    let enabled = mode
+        .named_values
+        .iter()
+        .find(|nv| model.symbols.resolve(nv.name) == "ENABLED")
+        .expect("ENABLED named value");
+    assert_eq!(enabled.value, 1, "ENABLED value resolves to 1 (un-shifted)");
+
+    let ie = ctrl_reg
+        .fields
+        .iter()
+        .find(|f| model.symbols.resolve(f.name) == "IE")
+        .expect("IE field");
+    assert_eq!(ie.offset, 4, "IE field offset");
+    assert_eq!(ie.width, 1, "IE field width (mask 0x10 has 1 bit)");
+
+    // Access width is derived from the maximum touched bit (offset 4 +
+    // width 1 = 5 -> rounded to 8).
+    assert_eq!(
+        ctrl_reg.access_width, 8,
+        "access_width derived from highest used bit, not hardcoded to 32"
+    );
+
+    // Register block fields resolve the same descriptor for both entries.
+    let block = find_register_block(&model, "Block").expect("Block must exist");
+    let ctrl_fields: Vec<_> = block
+        .fields
+        .iter()
+        .filter(|f| matches!(model.symbols.resolve(f.name), "ctrl" | "also_ctrl"))
+        .collect();
+    assert_eq!(ctrl_fields.len(), 2);
+    for f in &ctrl_fields {
+        assert_eq!(
+            f.descriptor,
+            Some(ctrl_reg.id),
+            "both CTRL-typed fields resolve to the same descriptor ID"
+        );
+    }
+
+    // Reserved array count must be evaluated, not defaulted to 1.
+    let gap = block
+        .fields
+        .iter()
+        .find(|f| model.symbols.resolve(f.name) == "_gap")
+        .expect("_gap field exists");
+    assert_eq!(
+        gap.array_count,
+        Some(3),
+        "[Reserved<u32>; 3] must produce array_count = 3 (was defaulting to 1)"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// MMIO source-order independence
+// ---------------------------------------------------------------------------
+
+/// Regression test for 41b's pre-pass ordering: if the driver struct
+/// appears in source before its register block, MMIO resolution must still
+/// produce a real `RegisterBlockId`, not a `CompilerGenerated` placeholder.
+#[test]
+fn mmio_resolves_regardless_of_source_order() {
+    const SRC: &str = r#"
+#![no_std]
+pub struct Mmio<T> { _m: core::marker::PhantomData<T> }
+pub struct ReadWrite<T, R> { _v: T, _r: core::marker::PhantomData<R> }
+
+#[allow(non_snake_case)]
+pub mod STATUS_REG {
+    pub struct Register;
+}
+
+#[rseq::driver(name = "order-drv", compatible = ["acme,ordered"], bus = "amba")]
+pub struct DriverFirst {
+    #[rseq::mmio(id = "regs")]
+    pub regs: Mmio<BlockLater>,
+}
+
+#[repr(C)]
+#[rseq::register_block(endian = "little", access_width = 32)]
+pub struct BlockLater {
+    pub status: ReadWrite<u32, STATUS_REG::Register>,
+}
+"#;
+    let model = compile_and_build(SRC, "mmio_order_driver_first").expect("specimen must build");
+    let driver = find_driver_module(&model)
+        .expect("driver module exists")
+        .driver
+        .as_ref()
+        .expect("driver struct exists");
+    let mmio_block_id = driver.mmio[0].decl.register_block;
+    let blocks = collect_register_block_ids(&model);
+    assert_eq!(
+        blocks.len(),
+        1,
+        "exactly one register block in the specimen"
+    );
+    assert_eq!(
+        mmio_block_id, blocks[0],
+        "MMIO register_block must resolve to the actual RegisterBlockId even when the driver is declared first"
+    );
+    assert!(
+        matches!(
+            model.source_locations.get(&mmio_block_id.decl_id()),
+            Some(SourceOrigin::Source(_))
+        ),
+        "MMIO-referenced block must have a Source origin, not CompilerGenerated"
     );
 }
 
@@ -354,7 +711,55 @@ pub struct NothingHere;
 pub const X: u32 = 1;
 "#;
     let outcome = compile_and_build(SRC, "construction_pass1_no_driver");
-    assert!(matches!(outcome, Err(ConstructionError::NoDriverStruct)));
+    assert!(matches!(
+        outcome,
+        Err(ConstructionError::NoDriverStruct { .. })
+    ));
+}
+
+#[test]
+fn negative_unknown_rseq_attribute() {
+    // A typo'd or out-of-set `#[rseq::<name>]` on a Pass 1 item must be
+    // rejected as `UnknownRseqAttribute`. Previously these were silently
+    // preserved in the Attrs bag (the audit flagged this variant as
+    // dead code).
+    const SRC: &str = r#"
+#![no_std]
+#[rseq::driver(name = "typo", compatible = ["x"], bus = "amba")]
+pub struct Drv {}
+
+#[rseq::typoed_name]
+pub struct Typo {}
+"#;
+    let outcome = compile_and_build(SRC, "construction_pass1_unknown_attr");
+    match outcome {
+        Err(ConstructionError::UnknownRseqAttribute { attr, .. }) => {
+            assert_eq!(attr, "rseq::typoed_name", "unrecognized attr reported");
+        }
+        other => panic!("expected UnknownRseqAttribute, got {:?}", other),
+    }
+}
+
+#[test]
+fn negative_duplicate_item_name() {
+    // A named-field struct and a const may share a name (they live in
+    // separate namespaces at the language level), but Pass 1 tracks items
+    // by identifier string to guarantee an unambiguous path for
+    // downstream lookups.
+    const SRC: &str = r#"
+#![no_std]
+#[rseq::driver(name = "dup", compatible = ["x"], bus = "amba")]
+pub struct Dup {}
+
+pub const Dup: u32 = 0;
+"#;
+    let outcome = compile_and_build(SRC, "construction_pass1_duplicate_name");
+    match outcome {
+        Err(ConstructionError::DuplicateItemName { name, .. }) => {
+            assert_eq!(name, "Dup", "duplicate name reported");
+        }
+        other => panic!("expected DuplicateItemName, got {:?}", other),
+    }
 }
 
 #[test]
@@ -621,4 +1026,137 @@ fn collect_classifications(model: &RegseqModel) -> Vec<TypeDefClassification> {
     let mut out = Vec::new();
     walk(&model.root_module, &mut out);
     out
+}
+
+fn find_type_def_attr<'m>(
+    model: &'m RegseqModel,
+    type_name: &str,
+    attr_key: &str,
+) -> Option<&'m AttrValue> {
+    fn walk<'m>(
+        m: &'m regseq_model::model::Module,
+        symbols: &regseq_model::identity::SymbolInterner,
+        type_name: &str,
+        attr_key: &str,
+    ) -> Option<&'m AttrValue> {
+        for td in &m.type_defs {
+            if symbols.resolve(td.name) == type_name {
+                return td
+                    .attrs
+                    .entries
+                    .iter()
+                    .find(|e| e.key == attr_key)
+                    .map(|e| &e.value);
+            }
+        }
+        for sub in &m.submodules {
+            if let Some(v) = walk(sub, symbols, type_name, attr_key) {
+                return Some(v);
+            }
+        }
+        None
+    }
+    walk(&model.root_module, &model.symbols, type_name, attr_key)
+}
+
+fn keyval_lookup<'v>(value: &'v AttrValue, key: &str) -> Option<&'v AttrValue> {
+    match value {
+        AttrValue::KeyValues(entries) => entries.iter().find(|e| e.key == key).map(|e| &e.value),
+        _ => None,
+    }
+}
+
+fn find_type_def_id(model: &RegseqModel, type_name: &str) -> Option<TypeDefId> {
+    fn walk(
+        m: &regseq_model::model::Module,
+        symbols: &regseq_model::identity::SymbolInterner,
+        name: &str,
+    ) -> Option<TypeDefId> {
+        for td in &m.type_defs {
+            if symbols.resolve(td.name) == name {
+                return Some(td.id);
+            }
+        }
+        for sub in &m.submodules {
+            if let Some(id) = walk(sub, symbols, name) {
+                return Some(id);
+            }
+        }
+        None
+    }
+    walk(&model.root_module, &model.symbols, type_name)
+}
+
+fn find_register_block<'m>(
+    model: &'m RegseqModel,
+    name: &str,
+) -> Option<&'m regseq_model::model::RegisterBlock> {
+    fn walk<'m>(
+        m: &'m regseq_model::model::Module,
+        symbols: &regseq_model::identity::SymbolInterner,
+        name: &str,
+    ) -> Option<&'m regseq_model::model::RegisterBlock> {
+        for b in &m.register_blocks {
+            if symbols.resolve(b.name) == name {
+                return Some(b);
+            }
+        }
+        for sub in &m.submodules {
+            if let Some(b) = walk(sub, symbols, name) {
+                return Some(b);
+            }
+        }
+        None
+    }
+    walk(&model.root_module, &model.symbols, name)
+}
+
+fn find_register_descriptor<'m>(
+    model: &'m RegseqModel,
+    name: &str,
+) -> Option<&'m regseq_model::model::RegisterDescriptor> {
+    fn walk<'m>(
+        m: &'m regseq_model::model::Module,
+        symbols: &regseq_model::identity::SymbolInterner,
+        name: &str,
+    ) -> Option<&'m regseq_model::model::RegisterDescriptor> {
+        for d in &m.register_descriptors {
+            if symbols.resolve(d.name) == name {
+                return Some(d);
+            }
+        }
+        for sub in &m.submodules {
+            if let Some(d) = walk(sub, symbols, name) {
+                return Some(d);
+            }
+        }
+        None
+    }
+    walk(&model.root_module, &model.symbols, name)
+}
+
+fn type_def_fields(
+    model: &RegseqModel,
+    id: TypeDefId,
+) -> Option<Vec<(regseq_model::identity::Symbol, RegseqType)>> {
+    fn walk(
+        m: &regseq_model::model::Module,
+        id: TypeDefId,
+    ) -> Option<Vec<(regseq_model::identity::Symbol, RegseqType)>> {
+        for td in &m.type_defs {
+            if td.id == id {
+                if let TypeDefKind::Struct { fields } = &td.kind {
+                    return Some(fields.iter().map(|f| (f.name, f.ty.clone())).collect());
+                }
+                return None;
+            }
+        }
+        for sub in &m.submodules {
+            if let Some(v) = walk(sub, id) {
+                return Some(v);
+            }
+        }
+        None
+    }
+    walk(&model.root_module, id)
 }

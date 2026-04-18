@@ -91,12 +91,18 @@ pub struct AttrEntry {
 /// The value of an attribute entry.
 #[derive(Clone, Eq, PartialEq, Debug)]
 pub enum AttrValue {
-    /// A string value.
+    /// A string value (positional or scalar).
     String(String),
     /// A boolean value.
     Bool(bool),
+    /// An integer value.
+    Int(i64),
     /// No value (presence-only attribute).
     Unit,
+    /// A keyword-argument map, e.g. `#[rseq::pin_state(id = "default")]`
+    /// or `#[rseq::isr(bind_target = "IRQ_UART", has_index_param = true)]`.
+    /// Inner entries preserve authored order.
+    KeyValues(Vec<AttrEntry>),
 }
 
 #[cfg(test)]

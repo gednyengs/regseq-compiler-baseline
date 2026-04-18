@@ -56,15 +56,17 @@ pub fn build_driver_struct(
         let field_name_str = f.ident.name.as_str().to_owned();
         let field_name_sym = cx.intern_public(&field_name_str);
 
-        // Record the struct field on the TypeDef side.
-        type_fields.push(FieldDef {
-            name: field_name_sym,
-            ty: super::walk::render_ty_for_field(cx.tcx, f.ty),
-        });
-
-        // Collect per-field attributes.
+        // Collect per-field attributes and middle-ty.
         let hir_attrs = cx.tcx.hir_attrs(f.hir_id);
         let field_def_id = f.def_id.to_def_id();
+
+        // Record the struct field on the TypeDef side using the field's
+        // middle-ty so locally-defined ADTs (e.g. Mmio<MyBlock>) resolve
+        // through the DefId -> TypeDefId map instead of collapsing to Unit.
+        type_fields.push(FieldDef {
+            name: field_name_sym,
+            ty: super::walk::resolve_field_ty(cx, field_def_id),
+        });
 
         // Resource attributes.
         if let Some(attr) = find_rseq_attr(hir_attrs, "clock") {
@@ -72,7 +74,7 @@ pub fn build_driver_struct(
                 field: field_prov.clone(),
                 kind: "clock",
             })?;
-            let shape = shape_of_field(f.ty, "Clock");
+            let shape = shape_of_field(cx, field_def_id, f.ty);
             let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
             let clock_id_sym = cx.intern_public(&id_str);
             driver.clocks.push(ClockResource {
@@ -91,7 +93,7 @@ pub fn build_driver_struct(
                 field: field_prov.clone(),
                 kind: "reset",
             })?;
-            let shape = shape_of_field(f.ty, "ResetLine");
+            let shape = shape_of_field(cx, field_def_id, f.ty);
             let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
             let reset_id_sym = cx.intern_public(&id_str);
             driver.resets.push(ResetResource {
@@ -110,7 +112,7 @@ pub fn build_driver_struct(
                 field: field_prov.clone(),
                 kind: "pinctrl",
             })?;
-            let shape = shape_of_field(f.ty, "PinCtrl");
+            let shape = shape_of_field(cx, field_def_id, f.ty);
             let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
             let pin_id_sym = cx.intern_public(&id_str);
             driver.pinctrl.push(PinCtrlResource {
@@ -129,7 +131,7 @@ pub fn build_driver_struct(
                 field: field_prov.clone(),
                 kind: "interrupt",
             })?;
-            let shape = shape_of_field(f.ty, "Interrupt");
+            let shape = shape_of_field(cx, field_def_id, f.ty);
             let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
             let irq_id_sym = cx.intern_public(&id_str);
             driver.interrupts.push(InterruptResource {
@@ -148,24 +150,21 @@ pub fn build_driver_struct(
                 field: field_prov.clone(),
                 kind: "mmio",
             })?;
-            let shape = shape_of_field(f.ty, "Mmio");
+            let shape = shape_of_field(cx, field_def_id, f.ty);
             let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
             let id_sym = cx.intern_public(&id_str);
             // Resolve the T in Mmio<T> against the crate-wide
-            // `DefId -> RegisterBlockId` map built during the walk. If
-            // no matching register-block struct has been seen yet, fall
-            // back to an allocator-fresh id so Pass 1's invariant
-            // (every DeclId in the model is also a key in
-            // `source_locations`) stays intact; tests currently only
-            // inspect `mmio_id`, so an unresolved reference is silent.
-            let register_block = resolve_mmio_register_block(cx, f.ty).unwrap_or_else(|| {
-                let fresh = cx.allocator.alloc();
-                cx.source_locations.insert(
-                    fresh,
-                    regseq_model::identity::SourceOrigin::CompilerGenerated,
-                );
-                regseq_model::identity::RegisterBlockId::from(fresh)
-            });
+            // `DefId -> RegisterBlockId` map. The register-block pre-pass
+            // in `walk.rs` populates this map before any driver struct
+            // is visited, so unresolved references here indicate a real
+            // authoring error (Mmio<T> where T is not a
+            // `#[rseq::register_block]` struct in the crate).
+            let register_block = resolve_mmio_register_block(cx, f.ty).ok_or(
+                ConstructionError::MissingResourceId {
+                    field: field_prov.clone(),
+                    kind: "mmio-register-block",
+                },
+            )?;
             driver.mmio.push(MmioResource {
                 id: res_id,
                 field_name: field_name_sym,
@@ -179,13 +178,14 @@ pub fn build_driver_struct(
             continue;
         }
         if let Some(attr) = find_rseq_attr(hir_attrs, "property") {
-            let (id_str, default) = parse_property_attr(attr);
+            let (id_str, default, vendor_prefix) = parse_property_attr(attr);
             let id_str = id_str.ok_or(ConstructionError::MissingResourceId {
                 field: field_prov.clone(),
                 kind: "property",
             })?;
             let scalar = scalar_of_field(f.ty).unwrap_or(ScalarType::U32);
             let id_sym = cx.intern_public(&id_str);
+            let vendor_prefix_sym = vendor_prefix.as_deref().map(|vp| cx.intern_public(vp));
             let prop_id = PropertyId::from(cx.alloc_and_record_public(field_def_id));
             driver.properties.push(PropertyField {
                 id: prop_id,
@@ -193,7 +193,7 @@ pub fn build_driver_struct(
                 field_type: scalar,
                 property_id: id_sym,
                 default_value: default,
-                vendor_prefix: None,
+                vendor_prefix: vendor_prefix_sym,
                 required: !is_option(f.ty),
                 bound_value: None,
             });
@@ -201,7 +201,7 @@ pub fn build_driver_struct(
         }
 
         // Sync primitive (by type name).
-        if let Some((sync_kind, payload)) = sync_kind_for_field(f.ty) {
+        if let Some((sync_kind, payload)) = sync_kind_for_field(cx, field_def_id, f.ty) {
             let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
             driver.sync.push(SyncResource {
                 id: res_id,
@@ -215,9 +215,19 @@ pub fn build_driver_struct(
         // User-data field: must be Option<T> with T scalar-ish (Copy).
         let rendered = super::walk::rendered_ty_string(f.ty);
         if is_option(f.ty) {
-            let inner = extract_option_inner(f.ty);
-            if !is_copy_inner(inner) {
-                let inner_str = inner
+            // Resolve Option's inner type through middle-ty and test `Copy`
+            // via `tcx.type_implements_trait` rather than matching a fixed
+            // list of primitive names. This accepts any user type that
+            // genuinely implements `Copy` (e.g., `#[derive(Copy, Clone)]`
+            // structs) and correctly rejects ones that do not.
+            let middle_field_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
+            let inner_middle = option_inner_middle_ty(middle_field_ty);
+            let inner_hir = extract_option_inner(f.ty);
+            let inner_is_copy = inner_middle
+                .map(|inner| type_implements_copy(cx.tcx, inner))
+                .unwrap_or(false);
+            if !inner_is_copy {
+                let inner_str = inner_hir
                     .map(super::walk::rendered_ty_string)
                     .unwrap_or_default();
                 return Err(ConstructionError::UserDataNotCopy {
@@ -225,8 +235,8 @@ pub fn build_driver_struct(
                     inner_type: inner_str,
                 });
             }
-            let inner_type = inner
-                .map(|t| super::walk::render_ty_for_field(cx.tcx, t))
+            let inner_type = inner_middle
+                .and_then(|inner| super::walk::ty_to_regseq(cx.tcx, &cx.type_def_map, inner))
                 .unwrap_or(RegseqType::Scalar(ScalarType::U32));
             let ud_id = UserDataId::from(cx.alloc_and_record_public(field_def_id));
             driver.user_data.push(UserDataField {
@@ -251,25 +261,15 @@ pub fn build_driver_struct(
             fields: type_fields,
         },
         classification: TypeDefClassification::UserDefined,
-        attrs: collect_rseq_attrs_for(cx.tcx, def_id),
+        attrs: collect_rseq_attrs_for(cx.tcx, def_id)?,
     })
 }
 
-fn collect_rseq_attrs_for(tcx: rustc_middle::ty::TyCtxt<'_>, def_id: DefId) -> Attrs {
-    use regseq_model::model::{AttrEntry, AttrValue};
-    let mut entries = Vec::new();
-    for attr in tcx.get_all_attrs(def_id) {
-        if let Attribute::Unparsed(item) = attr {
-            let segs = &item.path.segments;
-            if segs.len() == 2 && segs[0].as_str() == "rseq" {
-                entries.push(AttrEntry {
-                    key: format!("rseq::{}", segs[1].as_str()),
-                    value: AttrValue::Unit,
-                });
-            }
-        }
-    }
-    Attrs { entries }
+fn collect_rseq_attrs_for(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    def_id: DefId,
+) -> Result<Attrs, ConstructionError> {
+    super::attrs::collect_rseq_attrs(tcx, def_id)
 }
 
 fn parse_driver_identity(cx: &mut BuildContext<'_, '_>, def_id: DefId) -> DriverIdentity {
@@ -381,15 +381,16 @@ fn parse_resource_id(attr: &Attribute) -> Option<String> {
     None
 }
 
-fn parse_property_attr(attr: &Attribute) -> (Option<String>, Option<LiteralValue>) {
+fn parse_property_attr(attr: &Attribute) -> (Option<String>, Option<LiteralValue>, Option<String>) {
     let mut id: Option<String> = None;
     let mut default: Option<LiteralValue> = None;
+    let mut vendor_prefix: Option<String> = None;
     let Attribute::Unparsed(item) = attr else {
-        return (id, default);
+        return (id, default, vendor_prefix);
     };
     let tokens = match &item.args {
         AttrArgs::Delimited(d) => &d.tokens,
-        _ => return (id, default),
+        _ => return (id, default, vendor_prefix),
     };
     let trees: Vec<&TokenTree> = tokens.iter().collect();
     let mut i = 0;
@@ -401,17 +402,20 @@ fn parse_property_attr(attr: &Attribute) -> (Option<String>, Option<LiteralValue
         let key = match &trees[i] {
             TokenTree::Token(tok, _) => match tok.kind {
                 TokenKind::Ident(sym, _) => sym.as_str().to_owned(),
-                _ => return (id, default),
+                _ => return (id, default, vendor_prefix),
             },
-            _ => return (id, default),
+            _ => return (id, default, vendor_prefix),
         };
         i += 2;
         if i >= trees.len() {
-            return (id, default);
+            return (id, default, vendor_prefix);
         }
         match key.as_str() {
             "id" => {
                 id = extract_string(trees[i]);
+            }
+            "vendor_prefix" => {
+                vendor_prefix = extract_string(trees[i]);
             }
             "default" => {
                 if let TokenTree::Token(tok, _) = trees[i] {
@@ -428,7 +432,7 @@ fn parse_property_attr(attr: &Attribute) -> (Option<String>, Option<LiteralValue
         }
         i += 1;
     }
-    (id, default)
+    (id, default, vendor_prefix)
 }
 
 fn extract_string(tree: &TokenTree) -> Option<String> {
@@ -501,18 +505,19 @@ fn mmio_inner_ty<'hir>(ty: &'hir rustc_hir::Ty<'hir>) -> Option<&'hir rustc_hir:
     None
 }
 
-fn shape_of_field(ty: &rustc_hir::Ty<'_>, _inner_name_hint: &str) -> Shape {
+fn shape_of_field(cx: &BuildContext<'_, '_>, field_def_id: DefId, ty: &rustc_hir::Ty<'_>) -> Shape {
     if is_option(ty) {
-        Shape::Optional
-    } else if let rustc_hir::TyKind::Array(_, len) = &ty.kind {
-        let n = match &len.kind {
-            rustc_hir::ConstArgKind::Anon(_) => 0,
-            _ => 0,
-        };
-        Shape::Array(n)
-    } else {
-        Shape::Single
+        return Shape::Optional;
     }
+    let middle_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
+    if let rustc_middle::ty::TyKind::Array(_, len_const) = middle_ty.kind() {
+        let n = len_const
+            .try_to_target_usize(cx.tcx)
+            .map(|n| n as usize)
+            .unwrap_or(0);
+        return Shape::Array(n);
+    }
+    Shape::Single
 }
 
 fn is_option(ty: &rustc_hir::Ty<'_>) -> bool {
@@ -540,30 +545,25 @@ fn extract_option_inner<'hir>(ty: &'hir rustc_hir::Ty<'hir>) -> Option<&'hir rus
     None
 }
 
-fn is_copy_inner(inner: Option<&rustc_hir::Ty<'_>>) -> bool {
-    let Some(inner) = inner else {
-        return false;
-    };
-    if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &inner.kind {
-        if let Some(seg) = path.segments.last() {
-            let n = seg.ident.name.as_str();
-            return matches!(
-                n,
-                "u8" | "u16"
-                    | "u32"
-                    | "u64"
-                    | "usize"
-                    | "i8"
-                    | "i16"
-                    | "i32"
-                    | "i64"
-                    | "isize"
-                    | "bool"
-                    | "char"
-            );
-        }
+/// Return the middle-ty of the inner `T` in a `Option<T>` type.
+fn option_inner_middle_ty<'tcx>(
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> Option<rustc_middle::ty::Ty<'tcx>> {
+    if let rustc_middle::ty::TyKind::Adt(_, args) = ty.kind() {
+        return args.types().next();
     }
-    false
+    None
+}
+
+/// Query the trait system to decide whether `ty` implements `Copy`. This
+/// replaces the earlier hardcoded primitive-name whitelist so any
+/// user-defined type that derives `Copy` is accepted as user-data inner.
+fn type_implements_copy<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> bool {
+    let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
+    tcx.type_is_copy_modulo_regions(typing_env, ty)
 }
 
 fn scalar_of_field(ty: &rustc_hir::Ty<'_>) -> Option<ScalarType> {
@@ -587,23 +587,34 @@ fn scalar_of_field(ty: &rustc_hir::Ty<'_>) -> Option<ScalarType> {
     None
 }
 
-fn sync_kind_for_field(ty: &rustc_hir::Ty<'_>) -> Option<(SyncKind, Option<RegseqType>)> {
-    if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind {
-        if let Some(seg) = path.segments.last() {
-            let n = seg.ident.name.as_str();
-            let kind = match n {
-                "Mutex" => SyncKind::Mutex,
-                "SpinLock" => SyncKind::SpinLock,
-                "IrqSpinLock" => SyncKind::IrqSpinLock,
-                "Completion" => return Some((SyncKind::Completion, None)),
-                _ => return None,
-            };
-            // Payload type resolution requires a TyCtxt, which we do
-            // not thread here for simplicity. Pass 1 records a
-            // placeholder U32 payload; Pass 2 (or follow-up task 52)
-            // can refine this when it walks MIR.
-            return Some((kind, Some(RegseqType::Scalar(ScalarType::U32))));
-        }
-    }
-    None
+fn sync_kind_for_field(
+    cx: &BuildContext<'_, '_>,
+    field_def_id: DefId,
+    ty: &rustc_hir::Ty<'_>,
+) -> Option<(SyncKind, Option<RegseqType>)> {
+    let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind else {
+        return None;
+    };
+    let seg = path.segments.last()?;
+    let kind = match seg.ident.name.as_str() {
+        "Mutex" => SyncKind::Mutex,
+        "SpinLock" => SyncKind::SpinLock,
+        "IrqSpinLock" => SyncKind::IrqSpinLock,
+        "Completion" => return Some((SyncKind::Completion, None)),
+        _ => return None,
+    };
+
+    // Resolve the type parameter of `Mutex<T>` / `SpinLock<T>` /
+    // `IrqSpinLock<T>` through middle-ty so `T` surfaces as the correct
+    // [`RegseqType`] (including `Defined(TypeDefId)` for user ADTs)
+    // instead of a hardcoded `U32` placeholder.
+    let middle_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
+    let payload = if let rustc_middle::ty::TyKind::Adt(_, args) = middle_ty.kind() {
+        args.types()
+            .next()
+            .and_then(|inner| super::walk::ty_to_regseq(cx.tcx, &cx.type_def_map, inner))
+    } else {
+        None
+    };
+    Some((kind, payload.or(Some(RegseqType::Unit))))
 }

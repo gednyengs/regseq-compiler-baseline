@@ -18,8 +18,8 @@ use regseq_model::identity::{
     Symbol, SymbolInterner, TypeDefId,
 };
 use regseq_model::ir::{
-    BasicBlock, BasicBlockSourceMap, Body, BodySourceMap, LiteralValue, LocalDecl, RegseqType,
-    ScalarType, Terminator, TerminatorKind,
+    BasicBlock, BasicBlockSourceMap, Body, BodySourceMap, LiteralValue, LocalDecl, Mutability,
+    RegseqType, ScalarType, Terminator, TerminatorKind,
 };
 use regseq_model::model::{
     Attrs, Constant, FieldDef, Function, Module, ModuleKind, Param, ParamKind, RegisterDescriptor,
@@ -46,6 +46,15 @@ pub struct BuildContext<'a, 'tcx> {
     /// Crate-wide `DefId -> RegisterBlockId` map, populated when each
     /// `#[rseq::register_block]` struct is encountered.
     pub register_block_map: HashMap<DefId, RegisterBlockId>,
+    /// Crate-wide `DefId -> FunctionId` map, populated as free functions
+    /// and methods are assigned IDs. Pass 2 uses this map to resolve
+    /// call targets against the model's function surface.
+    pub function_map: HashMap<DefId, FunctionId>,
+    /// Descriptor-module [`DefId`] -> [`RegisterDescriptorId`] map.
+    /// Populated during the descriptor-synthesis pre-pass so register-block
+    /// fields can resolve `ReadWrite<T, DR_REG::Register>` descriptor
+    /// references without deferring them past Pass 1.
+    pub descriptor_map: HashMap<DefId, RegisterDescriptorId>,
 }
 
 impl<'a, 'tcx> BuildContext<'a, 'tcx> {
@@ -89,6 +98,35 @@ pub fn populate_module_items_and_submodules(
         }
     }
 
+    // --- pre-pass A: register descriptors ---
+    // Extract every `register_bitfields!`-style descriptor module so
+    // descriptor IDs are available before register blocks are built.
+    // Register-block fields then resolve their `ReadWrite<T, DR_REG::Register>`
+    // descriptor references via `cx.descriptor_map` instead of leaving
+    // them as `None`.
+    build_register_descriptors_for_module(cx, target, &items);
+
+    // --- pre-pass B: register blocks ---
+    // Build every `#[rseq::register_block]` struct so later driver-struct
+    // MMIO resolution can always find the block in the
+    // `DefId -> RegisterBlockId` map regardless of source order.
+    for item_id in &items {
+        let item = cx.tcx.hir_item(*item_id);
+        let def_id = item.owner_id.def_id.to_def_id();
+        if let ItemKind::Struct(ident, _generics, variant_data) = &item.kind {
+            if has_rseq_attr(cx.tcx, def_id, "register_block") {
+                let block = super::registers::build_register_block(
+                    cx,
+                    def_id,
+                    ident.name.as_str(),
+                    variant_data,
+                )?;
+                cx.register_block_map.insert(def_id, block.id);
+                target.register_blocks.push(block);
+            }
+        }
+    }
+
     // --- item population ---
     // Submodule population requires a second pass because modules are
     // items themselves.
@@ -108,6 +146,12 @@ pub fn populate_module_items_and_submodules(
                 let name_str = ident.name.as_str();
                 check_duplicate(cx.tcx, module_def_id, &mut seen_names, name_str)?;
 
+                if has_rseq_attr(cx.tcx, def_id, "register_block") {
+                    // Already built in the pre-pass; only duplicate-name
+                    // tracking needs to run for this item.
+                    continue;
+                }
+
                 if has_rseq_attr(cx.tcx, def_id, "driver") {
                     // Driver struct: build a DriverStruct AND a TypeDef
                     // in the same module.
@@ -120,18 +164,9 @@ pub fn populate_module_items_and_submodules(
                     )?;
                     cx.type_def_map.insert(def_id, type_def.id);
                     target.type_defs.push(type_def);
-                } else if has_rseq_attr(cx.tcx, def_id, "register_block") {
-                    let block = super::registers::build_register_block(
-                        cx,
-                        def_id,
-                        ident.name.as_str(),
-                        variant_data,
-                    )?;
-                    cx.register_block_map.insert(def_id, block.id);
-                    target.register_blocks.push(block);
                 } else {
                     let type_def =
-                        build_type_def_for_struct(cx, def_id, ident.name.as_str(), variant_data);
+                        build_type_def_for_struct(cx, def_id, ident.name.as_str(), variant_data)?;
                     cx.type_def_map.insert(def_id, type_def.id);
                     target.type_defs.push(type_def);
                 }
@@ -139,7 +174,7 @@ pub fn populate_module_items_and_submodules(
             ItemKind::Enum(ident, _generics, enum_def) => {
                 let name_str = ident.name.as_str();
                 check_duplicate(cx.tcx, module_def_id, &mut seen_names, name_str)?;
-                let type_def = build_type_def_for_enum(cx, def_id, name_str, enum_def);
+                let type_def = build_type_def_for_enum(cx, def_id, name_str, enum_def)?;
                 cx.type_def_map.insert(def_id, type_def.id);
                 target.type_defs.push(type_def);
             }
@@ -158,7 +193,7 @@ pub fn populate_module_items_and_submodules(
             ItemKind::Fn { ident, .. } => {
                 let name_str = ident.name.as_str();
                 check_duplicate(cx.tcx, module_def_id, &mut seen_names, name_str)?;
-                let func = build_function_stub(cx, def_id, name_str);
+                let func = build_function_stub(cx, def_id, name_str)?;
                 target.free_functions.push(func);
             }
             ItemKind::Impl(_impl_block) => {
@@ -179,8 +214,12 @@ pub fn populate_module_items_and_submodules(
     // submodule already processed earlier in the walk.
     for (target_def, impls) in &impls_by_type {
         for &impl_def in impls {
-            let impl_block_info =
-                super::impls::build_impl_block(cx, impl_def, *target_def, &cx.type_def_map.clone());
+            let impl_block_info = super::impls::build_impl_block(
+                cx,
+                impl_def,
+                *target_def,
+                &cx.type_def_map.clone(),
+            )?;
             match impl_block_info {
                 super::impls::ImplBlockAttachment::NonDriverInherent(block)
                 | super::impls::ImplBlockAttachment::NonDriverTrait(block) => {
@@ -208,11 +247,7 @@ pub fn populate_module_items_and_submodules(
         target.submodules.push(submodule);
     }
 
-    // --- register descriptor synthesis ---
-    // Recognize `register_bitfields!`-style descriptor modules at this
-    // scope: any submodule named like `<UPPER>_REG` containing a
-    // `Register` struct becomes a descriptor on *this* module.
-    synthesize_register_descriptors_from_submodules(cx, target);
+    // Register descriptors were built in pre-pass A above.
 
     Ok(())
 }
@@ -260,9 +295,43 @@ pub(crate) fn def_has_rseq_attr(tcx: TyCtxt<'_>, def_id: DefId, name: &str) -> b
     false
 }
 
-/// Public-to-submodules helper: render a HIR type as a Regseq type.
-pub(crate) fn render_ty_for_field(tcx: TyCtxt<'_>, ty: &rustc_hir::Ty<'_>) -> RegseqType {
-    render_ty(tcx, ty)
+/// Public-to-submodules helper: resolve a field's [`RegseqType`] using the
+/// field's middle-ty. Callers that have the field's [`DefId`] available
+/// should prefer this over HIR-level rendering so locally-defined ADTs
+/// become [`RegseqType::Defined`] rather than `Unit`.
+pub(crate) fn resolve_field_ty(cx: &BuildContext<'_, '_>, field_def_id: DefId) -> RegseqType {
+    ty_to_regseq(
+        cx.tcx,
+        &cx.type_def_map,
+        cx.tcx.type_of(field_def_id).instantiate_identity(),
+    )
+    .unwrap_or(RegseqType::Unit)
+}
+
+/// Resolve every field in a [`rustc_hir::VariantData`] to a
+/// [`FieldDef`], going through middle-ty so ADT fields point at the
+/// correct [`TypeDefId`] via the crate-wide map.
+pub(crate) fn resolve_fields(
+    cx: &mut BuildContext<'_, '_>,
+    variant_data: &rustc_hir::VariantData<'_>,
+) -> Vec<FieldDef> {
+    // Two-phase to avoid overlapping borrows: first compute the type of
+    // each field against the shared map, then intern field names.
+    let resolved: Vec<(String, RegseqType)> = variant_data
+        .fields()
+        .iter()
+        .map(|f| {
+            let ty = resolve_field_ty(cx, f.def_id.to_def_id());
+            (f.ident.name.as_str().to_owned(), ty)
+        })
+        .collect();
+    resolved
+        .into_iter()
+        .map(|(name, ty)| FieldDef {
+            name: cx.symbols.intern(&name),
+            ty,
+        })
+        .collect()
 }
 
 /// Public-to-submodules helper: render a HIR type as a human-readable
@@ -318,45 +387,86 @@ fn empty_module_for(cx: &mut BuildContext<'_, '_>, def_id: DefId) -> Module {
     }
 }
 
-fn synthesize_register_descriptors_from_submodules(
+/// Find every `register_bitfields!`-style module child of `module_def_id`
+/// and build a [`RegisterDescriptor`] for each, populating
+/// `cx.descriptor_map` so later register-block construction can resolve
+/// descriptor references to real IDs. Runs before the register-block
+/// pre-pass, so descriptors always exist by the time blocks are built.
+fn build_register_descriptors_for_module(
     cx: &mut BuildContext<'_, '_>,
     target: &mut Module,
+    items: &[rustc_hir::ItemId],
 ) {
-    // Look through submodules for `*_REG`-named modules containing a
-    // top-level `struct Register`. Emit an empty-fields descriptor and
-    // record the submodule's own source span (task 51 refines the
-    // field/named_value extraction).
-    let mut descriptors: Vec<RegisterDescriptor> = Vec::new();
-    for sub in &target.submodules {
-        let name_str = cx.symbols.resolve(sub.name).to_owned();
-        if !name_str.ends_with("_REG") {
+    use crate::extract::register_access::try_extract_register_descriptor;
+    use regseq_model::model::{BitfieldDef, NamedValue};
+
+    for item_id in items {
+        let item = cx.tcx.hir_item(*item_id);
+        let rustc_hir::ItemKind::Mod(ident, hir_mod) = &item.kind else {
             continue;
-        }
-        let has_register = sub
-            .type_defs
+        };
+        let module_name = ident.name.as_str();
+        let Some(fact) = try_extract_register_descriptor(cx.tcx, module_name, hir_mod) else {
+            continue;
+        };
+        let descriptor_def_id = item.owner_id.def_id.to_def_id();
+        let id = RegisterDescriptorId::from(cx.alloc_and_record(descriptor_def_id));
+        let name_sym = cx.symbols.intern(module_name);
+
+        // Pre-intern field names and named-value names in a batch so the
+        // borrow on `cx.symbols` doesn't conflict with the immutable
+        // borrow on `cx.tcx` during the outer iteration.
+        let fields: Vec<BitfieldDef> = fact
+            .fields
             .iter()
-            .any(|td| cx.symbols.resolve(td.name) == "Register");
-        if !has_register {
-            continue;
-        }
-        let id = RegisterDescriptorId::from(cx.allocator.alloc());
-        // Reuse the submodule's source location so Pass 1 never emits
-        // `CompilerGenerated` entries in the model (spec obligation 8).
-        let sub_origin = cx
-            .source_locations
-            .get(&sub.id.decl_id())
-            .cloned()
-            .unwrap_or(SourceOrigin::CompilerGenerated);
-        cx.source_locations.insert(id.decl_id(), sub_origin);
-        let desc_name = cx.symbols.intern(&name_str);
-        descriptors.push(RegisterDescriptor {
+            .map(|f| {
+                let field_name = cx.symbols.intern(&f.field_name);
+                let named_values = f
+                    .named_values
+                    .iter()
+                    .map(|nv| NamedValue {
+                        name: cx.symbols.intern(&nv.name),
+                        value: nv.value as u64,
+                    })
+                    .collect();
+                BitfieldDef {
+                    name: field_name,
+                    offset: f.offset,
+                    width: f.width,
+                    named_values,
+                }
+            })
+            .collect();
+
+        let access_width = access_width_from_fields(&fields);
+        target.register_descriptors.push(RegisterDescriptor {
             id,
-            name: desc_name,
-            access_width: 32,
-            fields: Vec::new(),
+            name: name_sym,
+            access_width,
+            fields,
         });
+        cx.descriptor_map.insert(descriptor_def_id, id);
     }
-    target.register_descriptors.extend(descriptors);
+}
+
+/// Derive a register's access width from the highest bit touched by any of
+/// its fields, rounded up to the nearest standard width. Descriptors
+/// without fields (empty `struct Register`) fall back to 32-bit.
+fn access_width_from_fields(fields: &[regseq_model::model::BitfieldDef]) -> u32 {
+    // Descriptors with no usable field data fall back to 32-bit, matching
+    // the default used in the `register_block` attribute.
+    let Some(highest_bit) = fields.iter().map(|f| f.offset + f.width).max() else {
+        return 32;
+    };
+    if highest_bit <= 8 {
+        8
+    } else if highest_bit <= 16 {
+        16
+    } else if highest_bit <= 32 {
+        32
+    } else {
+        64
+    }
 }
 
 fn impl_self_def_id(tcx: TyCtxt<'_>, impl_def: DefId) -> Option<DefId> {
@@ -373,28 +483,21 @@ fn build_type_def_for_struct(
     def_id: DefId,
     name: &str,
     variant_data: &rustc_hir::VariantData<'_>,
-) -> TypeDef {
+) -> Result<TypeDef, ConstructionError> {
     let id = TypeDefId::from(cx.alloc_and_record(def_id));
     let name_sym = cx.intern(name);
-    let classification = classify(cx, def_id);
-    let attrs = collect_rseq_attrs(cx.tcx, def_id);
+    let classification = classify(cx, def_id)?;
+    let attrs = collect_rseq_attrs(cx.tcx, def_id)?;
 
-    let fields = variant_data
-        .fields()
-        .iter()
-        .map(|f| FieldDef {
-            name: cx.symbols.intern(f.ident.name.as_str()),
-            ty: render_ty(cx.tcx, f.ty),
-        })
-        .collect();
+    let fields = resolve_fields(cx, variant_data);
 
-    TypeDef {
+    Ok(TypeDef {
         id,
         name: name_sym,
         kind: TypeDefKind::Struct { fields },
         classification,
         attrs,
-    }
+    })
 }
 
 fn build_type_def_for_enum(
@@ -402,26 +505,18 @@ fn build_type_def_for_enum(
     def_id: DefId,
     name: &str,
     enum_def: &rustc_hir::EnumDef<'_>,
-) -> TypeDef {
+) -> Result<TypeDef, ConstructionError> {
     let id = TypeDefId::from(cx.alloc_and_record(def_id));
     let name_sym = cx.intern(name);
-    let classification = classify(cx, def_id);
-    let attrs = collect_rseq_attrs(cx.tcx, def_id);
+    let classification = classify(cx, def_id)?;
+    let attrs = collect_rseq_attrs(cx.tcx, def_id)?;
 
     let variants = enum_def
         .variants
         .iter()
         .map(|v| {
             let vname = cx.symbols.intern(v.ident.name.as_str());
-            let fields = v
-                .data
-                .fields()
-                .iter()
-                .map(|f| FieldDef {
-                    name: cx.symbols.intern(f.ident.name.as_str()),
-                    ty: render_ty(cx.tcx, f.ty),
-                })
-                .collect();
+            let fields = resolve_fields(cx, &v.data);
             VariantDef {
                 name: vname,
                 fields,
@@ -430,48 +525,50 @@ fn build_type_def_for_enum(
         })
         .collect();
 
-    TypeDef {
+    Ok(TypeDef {
         id,
         name: name_sym,
         kind: TypeDefKind::Enum { variants },
         classification,
         attrs,
-    }
+    })
 }
 
 /// Collect every `#[rseq::<name>(...)]` attribute on `def_id` and emit
-/// a corresponding [`AttrEntry`] in the returned [`Attrs`] bag. Complex
-/// key/value payloads are rendered as a `Unit` marker for Pass 1; task
-/// 52 refines this into structured values.
-fn collect_rseq_attrs(tcx: TyCtxt<'_>, def_id: DefId) -> Attrs {
-    use regseq_model::model::{AttrEntry, AttrValue};
-    let mut entries = Vec::new();
-    for attr in tcx.get_all_attrs(def_id) {
-        if let rustc_hir::Attribute::Unparsed(item) = attr {
-            let segs = &item.path.segments;
-            if segs.len() == 2 && segs[0].as_str() == "rseq" {
-                entries.push(AttrEntry {
-                    key: format!("rseq::{}", segs[1].as_str()),
-                    value: AttrValue::Unit,
-                });
-            }
-        }
-    }
-    Attrs { entries }
+/// a corresponding [`AttrEntry`] in the returned [`Attrs`] bag. Argument
+/// payloads are preserved: positional literals surface as [`AttrValue`]
+/// scalars, keyword-arg lists as [`AttrValue::KeyValues`], and presence-only
+/// markers as [`AttrValue::Unit`]. Downstream consumers (task 52 PinCtrl
+/// metadata, task 43 MIR lowering) rely on these payloads surviving Pass 1.
+/// Fails with [`ConstructionError::UnknownRseqAttribute`] on unknown
+/// `#[rseq::<name>]` short names.
+fn collect_rseq_attrs(tcx: TyCtxt<'_>, def_id: DefId) -> Result<Attrs, ConstructionError> {
+    super::attrs::collect_rseq_attrs(tcx, def_id)
 }
 
-fn classify(cx: &BuildContext<'_, '_>, def_id: DefId) -> TypeDefClassification {
+fn classify(
+    cx: &BuildContext<'_, '_>,
+    def_id: DefId,
+) -> Result<TypeDefClassification, ConstructionError> {
     if let Some(name) = cx.registries.abstraction_types.lookup(def_id) {
         if let Some(ab) = abstraction_from_canonical(name) {
-            return TypeDefClassification::Abstraction(ab);
+            return Ok(TypeDefClassification::Abstraction(ab));
         }
+        return Err(ConstructionError::RegistryLookupMismatch {
+            provenance: ErrorProvenance::for_def_id(cx.tcx, def_id),
+            canonical: name.to_owned(),
+        });
     }
     if let Some(name) = cx.registries.framework_types.lookup(def_id) {
         if let Some(ft) = framework_from_canonical(name) {
-            return TypeDefClassification::Framework(ft);
+            return Ok(TypeDefClassification::Framework(ft));
         }
+        return Err(ConstructionError::RegistryLookupMismatch {
+            provenance: ErrorProvenance::for_def_id(cx.tcx, def_id),
+            canonical: name.to_owned(),
+        });
     }
-    TypeDefClassification::UserDefined
+    Ok(TypeDefClassification::UserDefined)
 }
 
 fn abstraction_from_canonical(s: &str) -> Option<regseq_model::ir::RegseqAbstraction> {
@@ -510,8 +607,12 @@ fn framework_from_canonical(s: &str) -> Option<regseq_model::model::FrameworkTyp
 pub(crate) fn build_constant(cx: &mut BuildContext<'_, '_>, def_id: DefId, name: &str) -> Constant {
     let id = ConstantId::from(cx.alloc_and_record(def_id));
     let name_sym = cx.intern(name);
-    let ty = ty_to_regseq(cx.tcx.type_of(def_id).instantiate_identity())
-        .unwrap_or(RegseqType::Scalar(ScalarType::U32));
+    let ty = ty_to_regseq(
+        cx.tcx,
+        &cx.type_def_map,
+        cx.tcx.type_of(def_id).instantiate_identity(),
+    )
+    .unwrap_or(RegseqType::Scalar(ScalarType::U32));
     let value = eval_const(cx.tcx, def_id).unwrap_or_else(|| fallback_literal(&ty));
     Constant {
         id,
@@ -564,19 +665,25 @@ fn fallback_literal(ty: &RegseqType) -> LiteralValue {
     }
 }
 
-fn build_function_stub(cx: &mut BuildContext<'_, '_>, def_id: DefId, name: &str) -> Function {
+fn build_function_stub(
+    cx: &mut BuildContext<'_, '_>,
+    def_id: DefId,
+    name: &str,
+) -> Result<Function, ConstructionError> {
     let id = FunctionId::from(cx.alloc_and_record(def_id));
+    cx.function_map.insert(def_id, id);
     let name_sym = cx.intern(name);
     let (params, return_type) = function_signature(cx, def_id);
     let body = empty_body(cx.tcx, cx.symbols, def_id, params.len());
-    Function {
+    let attrs = super::attrs::collect_rseq_attrs(cx.tcx, def_id)?;
+    Ok(Function {
         id,
         name: name_sym,
         params,
         return_type,
         body,
-        attrs: Attrs::default(),
-    }
+        attrs,
+    })
 }
 
 pub(crate) fn function_signature(
@@ -601,15 +708,16 @@ pub(crate) fn function_signature(
         } else {
             format!("arg{i}")
         };
+        let ty = ty_to_regseq(cx.tcx, &cx.type_def_map, *input).unwrap_or(RegseqType::Unit);
         let name_sym = cx.symbols.intern(&name);
-        let ty = ty_to_regseq(*input).unwrap_or(RegseqType::Unit);
         params.push(Param {
             kind,
             name: name_sym,
             ty,
         });
     }
-    let return_type = ty_to_regseq(sig.output()).unwrap_or(RegseqType::Unit);
+    let return_type =
+        ty_to_regseq(cx.tcx, &cx.type_def_map, sig.output()).unwrap_or(RegseqType::Unit);
     (params, return_type)
 }
 
@@ -634,9 +742,13 @@ pub(crate) fn empty_body(
             name: None,
         });
     }
-    let locals_source = (0..local_decls.len())
-        .map(|_| SourceOrigin::CompilerGenerated)
-        .collect();
+    // Pass 1 placeholder bodies reuse the function's `def_span` for every
+    // local and the synthetic `Unreachable` terminator. Pass 2 overwrites
+    // both with the real MIR-derived spans. Using the function's own span
+    // keeps Pass 1 free of `CompilerGenerated` provenance (spec
+    // obligation 8) without pretending these synthetic placeholders have
+    // distinct authored locations.
+    let locals_source = (0..local_decls.len()).map(|_| origin.clone()).collect();
     Body {
         local_decls,
         arg_count,
@@ -647,11 +759,11 @@ pub(crate) fn empty_body(
             },
         }],
         source_map: BodySourceMap {
-            body_span: origin,
+            body_span: origin.clone(),
             locals: locals_source,
             blocks: vec![BasicBlockSourceMap {
                 statements: Vec::new(),
-                terminator: SourceOrigin::CompilerGenerated,
+                terminator: origin,
             }],
         },
         ordered_regions: Vec::new(),
@@ -662,7 +774,11 @@ pub(crate) fn empty_body(
 // Type rendering helpers
 // ---------------------------------------------------------------------------
 
-pub(crate) fn ty_to_regseq(ty: rustc_middle::ty::Ty<'_>) -> Option<RegseqType> {
+pub(crate) fn ty_to_regseq<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    type_def_map: &HashMap<DefId, TypeDefId>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> Option<RegseqType> {
     use rustc_middle::ty::TyKind;
     Some(match ty.kind() {
         TyKind::Bool => RegseqType::Bool,
@@ -684,51 +800,35 @@ pub(crate) fn ty_to_regseq(ty: rustc_middle::ty::Ty<'_>) -> Option<RegseqType> {
             rustc_middle::ty::IntTy::Isize => ScalarType::Isize,
             rustc_middle::ty::IntTy::I128 => ScalarType::I64,
         }),
-        TyKind::Array(inner, _) => {
-            let inner_ty = ty_to_regseq(*inner)?;
-            RegseqType::Array(Box::new(inner_ty), 0)
+        TyKind::Array(inner, len_const) => {
+            let inner_ty = ty_to_regseq(tcx, type_def_map, *inner)?;
+            let len = len_const
+                .try_to_target_usize(tcx)
+                .map(|n| n as usize)
+                .unwrap_or(0);
+            RegseqType::Array(Box::new(inner_ty), len)
+        }
+        TyKind::Slice(inner) => {
+            let inner_ty = ty_to_regseq(tcx, type_def_map, *inner)?;
+            RegseqType::Slice(Box::new(inner_ty))
+        }
+        TyKind::Ref(_, inner, mutbl) => {
+            let inner_ty = ty_to_regseq(tcx, type_def_map, *inner)?;
+            let m = match mutbl {
+                rustc_ast::Mutability::Not => Mutability::Shared,
+                rustc_ast::Mutability::Mut => Mutability::Mutable,
+            };
+            RegseqType::Ref(Box::new(inner_ty), m)
         }
         TyKind::Adt(adt, _) => {
-            let name = adt.did().index.as_u32();
-            // Without a DefId->TypeDefId map here, fall back to U32 for
-            // unknown named types. The driver-field categorizer
-            // consults a map explicitly.
-            let _ = name;
+            let did = adt.did();
+            if let Some(&tid) = type_def_map.get(&did) {
+                return Some(RegseqType::Defined(tid));
+            }
+            // Foreign (std, facade) or not-yet-registered ADT: caller
+            // decides the fallback.
             return None;
         }
         _ => return None,
     })
-}
-
-fn render_ty(tcx: TyCtxt<'_>, ty: &rustc_hir::Ty<'_>) -> RegseqType {
-    // Very small HIR-to-RegseqType mapper used for generic struct field
-    // types. Unknown shapes become Unit so Pass 1 doesn't fail on
-    // esoteric inputs.
-    match &ty.kind {
-        rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) => {
-            if let Some(seg) = path.segments.last() {
-                match seg.ident.name.as_str() {
-                    "u8" => RegseqType::Scalar(ScalarType::U8),
-                    "u16" => RegseqType::Scalar(ScalarType::U16),
-                    "u32" => RegseqType::Scalar(ScalarType::U32),
-                    "u64" => RegseqType::Scalar(ScalarType::U64),
-                    "usize" => RegseqType::Scalar(ScalarType::Usize),
-                    "i8" => RegseqType::Scalar(ScalarType::I8),
-                    "i16" => RegseqType::Scalar(ScalarType::I16),
-                    "i32" => RegseqType::Scalar(ScalarType::I32),
-                    "i64" => RegseqType::Scalar(ScalarType::I64),
-                    "isize" => RegseqType::Scalar(ScalarType::Isize),
-                    "bool" => RegseqType::Bool,
-                    _ => RegseqType::Unit,
-                }
-            } else {
-                RegseqType::Unit
-            }
-        }
-        rustc_hir::TyKind::Tup([]) => RegseqType::Unit,
-        _ => {
-            let _ = tcx;
-            RegseqType::Unit
-        }
-    }
 }

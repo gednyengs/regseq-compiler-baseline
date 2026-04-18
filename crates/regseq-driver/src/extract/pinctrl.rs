@@ -155,7 +155,12 @@ fn parse_pin_state_attr(attr: &Attribute) -> Result<Option<String>, PinCtrlError
         }
 
         if key == "id" {
-            state_id = extract_string_literal(trees[i]);
+            if state_id.is_some() {
+                return Err(malformed("duplicate `id` key in pin_state attribute"));
+            }
+            let value = extract_string_literal(trees[i])
+                .ok_or_else(|| malformed("pin_state `id` value must be a string literal"))?;
+            state_id = Some(value);
         }
         i += 1;
     }
@@ -267,7 +272,12 @@ fn parse_pinctrl_attr(attr: &Attribute) -> Result<Option<String>, PinCtrlError> 
         }
 
         if key == "id" {
-            pinctrl_id = extract_string_literal(trees[i]);
+            if pinctrl_id.is_some() {
+                return Err(malformed("duplicate `id` key in pinctrl attribute"));
+            }
+            let value = extract_string_literal(trees[i])
+                .ok_or_else(|| malformed("pinctrl `id` value must be a string literal"))?;
+            pinctrl_id = Some(value);
         }
         i += 1;
     }

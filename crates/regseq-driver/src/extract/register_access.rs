@@ -733,7 +733,10 @@ fn is_poll_until_path(expr: &rustc_hir::Expr<'_>) -> bool {
 
 /// Check if a module matches the `register_bitfields!` expansion pattern:
 /// a module containing `struct Register` with field sub-modules.
-fn try_extract_register_descriptor<'tcx>(
+///
+/// Exposed to the construction layer (task 41c) so Pass 1 can populate
+/// real descriptor fields rather than emitting empty stubs.
+pub(crate) fn try_extract_register_descriptor<'tcx>(
     tcx: TyCtxt<'tcx>,
     module_name: &str,
     module: &rustc_hir::Mod<'tcx>,

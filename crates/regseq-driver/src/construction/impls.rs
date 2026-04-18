@@ -11,7 +11,7 @@ use rustc_hir::def_id::DefId;
 use rustc_hir::ImplItemKind;
 
 use regseq_model::identity::TypeDefId;
-use regseq_model::model::{Attrs, ImplBlock};
+use regseq_model::model::ImplBlock;
 
 use super::walk::{empty_body, function_signature, BuildContext};
 
@@ -29,10 +29,10 @@ pub fn build_impl_block(
     impl_def: DefId,
     target_def: DefId,
     local_type_ids: &HashMap<DefId, TypeDefId>,
-) -> ImplBlockAttachment {
+) -> Result<ImplBlockAttachment, super::ConstructionError> {
     let target_type = match local_type_ids.get(&target_def) {
         Some(id) => *id,
-        None => return ImplBlockAttachment::Skipped,
+        None => return Ok(ImplBlockAttachment::Skipped),
     };
 
     let is_driver = super::walk::def_has_rseq_attr(cx.tcx, target_def, "driver");
@@ -44,7 +44,7 @@ pub fn build_impl_block(
     });
     let impl_data = match &hir_item.kind {
         rustc_hir::ItemKind::Impl(block) => block,
-        _ => return ImplBlockAttachment::Skipped,
+        _ => return Ok(ImplBlockAttachment::Skipped),
     };
 
     let mut methods = Vec::new();
@@ -58,7 +58,7 @@ pub fn build_impl_block(
         let name = impl_item.ident.name.as_str().to_owned();
         match &impl_item.kind {
             ImplItemKind::Fn(..) => {
-                methods.push(build_method(cx, member_def, &name, impl_item));
+                methods.push(build_method(cx, member_def, &name, impl_item)?);
             }
             ImplItemKind::Const(..) => {
                 associated_constants.push(super::walk::build_associated_constant(
@@ -76,12 +76,12 @@ pub fn build_impl_block(
         associated_constants,
     };
 
-    match (is_driver, block.trait_name.is_some()) {
+    Ok(match (is_driver, block.trait_name.is_some()) {
         (true, true) => ImplBlockAttachment::DriverTrait(block),
         (true, false) => ImplBlockAttachment::DriverInherent(block),
         (false, true) => ImplBlockAttachment::NonDriverTrait(block),
         (false, false) => ImplBlockAttachment::NonDriverInherent(block),
-    }
+    })
 }
 
 fn trait_name_for_impl(
@@ -99,30 +99,25 @@ fn build_method(
     method_def: DefId,
     name: &str,
     impl_item: &rustc_hir::ImplItem<'_>,
-) -> regseq_model::model::Function {
+) -> Result<regseq_model::model::Function, super::ConstructionError> {
     use regseq_model::identity::FunctionId;
 
     let id = FunctionId::from(cx.alloc_and_record_public(method_def));
+    cx.function_map.insert(method_def, id);
     let name_sym = cx.intern_public(name);
     let (params, return_type) = function_signature(cx, method_def);
     let arg_count = params.len();
     let body = empty_body(cx.tcx, cx.symbols, method_def, arg_count);
 
-    let mut attrs = Attrs::default();
-    if super::walk::def_has_rseq_attr(cx.tcx, method_def, "isr") {
-        attrs.entries.push(regseq_model::model::AttrEntry {
-            key: "rseq::isr".to_string(),
-            value: regseq_model::model::AttrValue::Unit,
-        });
-    }
+    let attrs = super::attrs::collect_rseq_attrs(cx.tcx, method_def)?;
     let _ = impl_item;
 
-    regseq_model::model::Function {
+    Ok(regseq_model::model::Function {
         id,
         name: name_sym,
         params,
         return_type,
         body,
         attrs,
-    }
+    })
 }

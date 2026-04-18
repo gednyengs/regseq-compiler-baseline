@@ -10,6 +10,7 @@ use rustc_ast::token::{LitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{AttrArgs, Attribute, VariantData};
+use rustc_middle::ty::TyCtxt;
 
 use regseq_model::identity::{RegisterBlockId, Symbol};
 use regseq_model::model::{AccessKind, RegisterBlock, RegisterBlockAttributes, RegisterBlockField};
@@ -42,11 +43,12 @@ pub fn build_register_block(
 
     for f in variant_data.fields() {
         let f_name = cx.intern_public(f.ident.name.as_str());
-        let (kind, array_count, _descriptor_name) = classify_field(f.ty);
+        let (kind, array_count, descriptor_did) = classify_field(cx.tcx, f.ty);
+        let descriptor = descriptor_did.and_then(|did| cx.descriptor_map.get(&did).copied());
         let field = RegisterBlockField {
             name: f_name,
             access_kind: kind,
-            descriptor: None,
+            descriptor,
             byte_offset: offset,
             array_count,
         };
@@ -88,10 +90,13 @@ impl<'a, 'tcx> BuildContext<'a, 'tcx> {
     }
 }
 
-fn classify_field(ty: &rustc_hir::Ty<'_>) -> (AccessKind, Option<usize>, Option<String>) {
+fn classify_field(
+    tcx: TyCtxt<'_>,
+    ty: &rustc_hir::Ty<'_>,
+) -> (AccessKind, Option<usize>, Option<DefId>) {
     // `[Reserved<_>; N]` first.
     if let rustc_hir::TyKind::Array(inner, len_arg) = &ty.kind {
-        let count = array_len(len_arg);
+        let count = array_len(tcx, len_arg);
         if is_reserved_path(inner) {
             return (AccessKind::Reserved, Some(count), None);
         }
@@ -100,7 +105,7 @@ fn classify_field(ty: &rustc_hir::Ty<'_>) -> (AccessKind, Option<usize>, Option<
     if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind {
         if let Some(seg) = path.segments.last() {
             let name = seg.ident.name.as_str();
-            let descriptor = extract_descriptor_name(seg);
+            let descriptor = extract_descriptor_def_id(tcx, seg);
             return match name {
                 "ReadWrite" => (AccessKind::ReadWrite, None, descriptor),
                 "ReadOnly" => (AccessKind::ReadOnly, None, descriptor),
@@ -113,20 +118,27 @@ fn classify_field(ty: &rustc_hir::Ty<'_>) -> (AccessKind, Option<usize>, Option<
     (AccessKind::ReadWrite, None, None)
 }
 
-fn array_len(len: &rustc_hir::ConstArg<'_>) -> usize {
-    // Try to read the length as a plain integer literal.
+fn array_len(tcx: TyCtxt<'_>, len: &rustc_hir::ConstArg<'_>) -> usize {
     match &len.kind {
-        rustc_hir::ConstArgKind::Anon(ac) => anon_const_literal(ac).unwrap_or(1),
+        rustc_hir::ConstArgKind::Anon(ac) => anon_const_literal(tcx, ac).unwrap_or(1),
         _ => 1,
     }
 }
 
-fn anon_const_literal(ac: &rustc_hir::AnonConst) -> Option<usize> {
-    // rustc exposes anon consts as bodies; for Pass 1 we skip the full
-    // evaluation and just return 1 when the literal isn't trivially
-    // visible. A richer implementation would `tcx.const_eval_poly`.
-    let _ = ac;
-    None
+/// Evaluate an anonymous array-length const to `usize`. Accepts integer
+/// literal bodies (`[_; 4]`) via the owner body directly, falling back to
+/// `tcx.const_eval_poly` for constant expressions.
+fn anon_const_literal(tcx: TyCtxt<'_>, ac: &rustc_hir::AnonConst) -> Option<usize> {
+    let body = tcx.hir_body(ac.body);
+    if let rustc_hir::ExprKind::Lit(lit) = &body.value.kind {
+        if let rustc_ast::LitKind::Int(n, _) = lit.node {
+            return Some(n.get() as usize);
+        }
+    }
+    let did = ac.def_id.to_def_id();
+    let evaluated = tcx.const_eval_poly(did).ok()?;
+    let scalar = evaluated.try_to_scalar_int()?;
+    Some(scalar.to_target_usize(tcx) as usize)
 }
 
 fn is_reserved_path(ty: &rustc_hir::Ty<'_>) -> bool {
@@ -138,14 +150,20 @@ fn is_reserved_path(ty: &rustc_hir::Ty<'_>) -> bool {
     false
 }
 
-fn extract_descriptor_name(seg: &rustc_hir::PathSegment<'_>) -> Option<String> {
+/// Given a wrapper path segment like `ReadWrite<T, DR_REG::Register>`,
+/// return the [`DefId`] of the descriptor module (`DR_REG`) so
+/// `build_register_block` can resolve it through `cx.descriptor_map`.
+fn extract_descriptor_def_id(tcx: TyCtxt<'_>, seg: &rustc_hir::PathSegment<'_>) -> Option<DefId> {
     let args = seg.args?;
     for arg in args.args.iter() {
         if let rustc_hir::GenericArg::Type(inner) = arg {
             if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &inner.kind {
                 if path.segments.len() >= 2 {
-                    // e.g. `DR_REG::Register` -> take the first segment.
-                    return Some(path.segments[0].ident.name.as_str().to_owned());
+                    // `path.res` resolves to the inner struct (e.g.
+                    // `DR_REG::Register`). Its parent is the module.
+                    if let rustc_hir::def::Res::Def(_, register_did) = path.res {
+                        return Some(tcx.parent(register_did));
+                    }
                 }
             }
         }

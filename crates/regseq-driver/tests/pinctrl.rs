@@ -462,6 +462,52 @@ fn reject_malformed_pinctrl_attribute() {
     assert!(matches!(result, Err(PinCtrlError::MalformedAttribute(_))));
 }
 
+#[test]
+fn reject_pinctrl_with_duplicate_id_keys() {
+    let source = format!(
+        r#"
+        {preamble}
+
+        pub struct Dev {{
+            #[rseq::pinctrl(id = "first", id = "second")]
+            pub pins: PinCtrl,
+        }}
+    "#,
+        preamble = FIXTURE_PREAMBLE
+    );
+
+    let result = compile_and_extract(&source, "pinctrl_dup_id");
+    let err = result.expect_err("duplicate id should be rejected");
+    let PinCtrlError::MalformedAttribute(msg) = err;
+    assert!(
+        msg.contains("duplicate"),
+        "error should mention 'duplicate', got: {msg}",
+    );
+}
+
+#[test]
+fn reject_pinctrl_with_non_string_id() {
+    let source = format!(
+        r#"
+        {preamble}
+
+        pub struct Dev {{
+            #[rseq::pinctrl(id = 42)]
+            pub pins: PinCtrl,
+        }}
+    "#,
+        preamble = FIXTURE_PREAMBLE
+    );
+
+    let result = compile_and_extract(&source, "pinctrl_non_string_id");
+    let err = result.expect_err("non-string id should be rejected");
+    let PinCtrlError::MalformedAttribute(msg) = err;
+    assert!(
+        msg.contains("string literal"),
+        "error should distinguish non-string from missing id, got: {msg}",
+    );
+}
+
 // ---------------------------------------------------------------------------
 // Test 5: non-generic or unrelated apply methods not misclassified
 // ---------------------------------------------------------------------------
@@ -572,6 +618,48 @@ fn reject_pin_state_without_id() {
 
     let result = compile_and_extract(&source, "pinctrl_pin_state_no_id");
     assert!(matches!(result, Err(PinCtrlError::MalformedAttribute(_))));
+}
+
+#[test]
+fn reject_pin_state_with_duplicate_id_keys() {
+    let source = format!(
+        r#"
+        {preamble}
+
+        #[rseq::pin_state(id = "first", id = "second")]
+        pub struct DupState;
+    "#,
+        preamble = FIXTURE_PREAMBLE
+    );
+
+    let result = compile_and_extract(&source, "pinctrl_pin_state_dup_id");
+    let err = result.expect_err("duplicate id should be rejected");
+    let PinCtrlError::MalformedAttribute(msg) = err;
+    assert!(
+        msg.contains("duplicate"),
+        "error should mention 'duplicate', got: {msg}",
+    );
+}
+
+#[test]
+fn reject_pin_state_with_non_string_id() {
+    let source = format!(
+        r#"
+        {preamble}
+
+        #[rseq::pin_state(id = 42)]
+        pub struct IntIdState;
+    "#,
+        preamble = FIXTURE_PREAMBLE
+    );
+
+    let result = compile_and_extract(&source, "pinctrl_pin_state_non_string_id");
+    let err = result.expect_err("non-string id should be rejected");
+    let PinCtrlError::MalformedAttribute(msg) = err;
+    assert!(
+        msg.contains("string literal"),
+        "error should distinguish non-string from missing id, got: {msg}",
+    );
 }
 
 // ---------------------------------------------------------------------------

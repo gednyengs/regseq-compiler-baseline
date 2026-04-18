@@ -25,6 +25,7 @@ use crate::extract::abstraction_types::AbstractionTypeRegistry;
 use crate::extract::framework_types::FrameworkTypeRegistry;
 use crate::extract::intrinsic_registry::IntrinsicRegistry;
 
+pub mod attrs;
 pub mod driver;
 pub mod id_allocator;
 pub mod impls;
@@ -94,7 +95,11 @@ impl ErrorProvenance {
 #[derive(Clone, Debug)]
 pub enum ConstructionError {
     /// No `#[rseq::driver]`-annotated struct was found in the crate.
-    NoDriverStruct,
+    NoDriverStruct {
+        /// Provenance anchored at the crate root so diagnostics can
+        /// point to where the driver declaration was expected.
+        crate_root: ErrorProvenance,
+    },
     /// More than one `#[rseq::driver]` struct was found.
     MultipleDriverStructs {
         /// Provenance for each discovered driver struct.
@@ -129,6 +134,12 @@ pub enum ConstructionError {
         kind: &'static str,
     },
     /// An `#[rseq::<...>]` attribute payload could not be parsed.
+    ///
+    /// Reserved for a stricter validation pass: Pass 1 is intentionally
+    /// permissive about unknown `#[rseq::...]` attribute names so the DSL
+    /// can add new attributes without breaking existing drivers. A later
+    /// verifier may elect to raise this variant once the attribute set is
+    /// frozen.
     UnknownRseqAttribute {
         /// Provenance for the offending attribute.
         provenance: ErrorProvenance,
@@ -148,7 +159,7 @@ pub enum ConstructionError {
 impl std::fmt::Display for ConstructionError {
     fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            Self::NoDriverStruct => write!(f, "no #[rseq::driver] struct found in crate"),
+            Self::NoDriverStruct { .. } => write!(f, "no #[rseq::driver] struct found in crate"),
             Self::MultipleDriverStructs { drivers } => {
                 write!(
                     f,
@@ -202,6 +213,31 @@ impl std::error::Error for ConstructionError {}
 // Public entry point
 // ---------------------------------------------------------------------------
 
+/// Cross-reference maps produced by Pass 1. Downstream passes (task 43+
+/// MIR lowering) consume these to resolve rustc [`DefId`]s to the
+/// model's typed IDs without re-walking the HIR.
+#[derive(Clone, Default)]
+pub struct CrossRefMaps {
+    /// Local ADTs keyed by their rustc `DefId`.
+    pub type_defs: std::collections::HashMap<DefId, regseq_model::identity::TypeDefId>,
+    /// `#[rseq::register_block]` structs.
+    pub register_blocks: std::collections::HashMap<DefId, regseq_model::identity::RegisterBlockId>,
+    /// Free functions and methods, used by Pass 2 to resolve call targets
+    /// against the model's function surface.
+    pub functions: std::collections::HashMap<DefId, regseq_model::identity::FunctionId>,
+    /// `register_bitfields!`-style descriptor modules.
+    pub register_descriptors:
+        std::collections::HashMap<DefId, regseq_model::identity::RegisterDescriptorId>,
+}
+
+/// Full Pass 1 output: the declaration-level [`RegseqModel`] plus the
+/// cross-reference maps needed by Pass 2 to resolve rustc [`DefId`]s to
+/// model IDs.
+pub struct Pass1Output {
+    pub model: RegseqModel,
+    pub cross_refs: CrossRefMaps,
+}
+
 /// Run Pass 1 of Regseq-Model construction and return a
 /// [`RegseqModel`] with every declaration-level identifier assigned.
 ///
@@ -213,6 +249,13 @@ pub fn build_declaration_skeleton<'tcx>(
     tcx: TyCtxt<'tcx>,
     registries: &ExtractionRegistries<'_>,
 ) -> Result<RegseqModel, ConstructionError> {
+    build_declaration_skeleton_inner(tcx, registries).map(|out| out.model)
+}
+
+fn build_declaration_skeleton_inner<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    registries: &ExtractionRegistries<'_>,
+) -> Result<Pass1Output, ConstructionError> {
     let mut symbols = SymbolInterner::new();
     let mut source_locations: BTreeMap<DeclId, SourceOrigin> = BTreeMap::new();
     let mut allocator = DeclIdAllocator::new();
@@ -220,20 +263,16 @@ pub fn build_declaration_skeleton<'tcx>(
     let crate_name = tcx.crate_name(rustc_hir::def_id::LOCAL_CRATE);
     let root_name: Symbol = symbols.intern(crate_name.as_str());
     let root_id: ModuleId = ModuleId::from(allocator.alloc());
-    // Root crate module has no DefId-backed span; record as compiler
-    // generated fallback only if span resolution fails.
-    let root_span = tcx
-        .hir_crate_items(())
-        .free_items()
-        .next()
-        .map(|id| tcx.def_span(id.owner_id.def_id.to_def_id()))
-        .unwrap_or_default();
+    // The crate root has its own DefId (`CRATE_DEF_ID`) with a real span
+    // covering the whole crate file; use it rather than borrowing a span
+    // from the first free item (which can be synthetic or missing).
+    let root_def_id = rustc_hir::def_id::CRATE_DEF_ID.to_def_id();
     record_span(
         tcx,
         &mut symbols,
         &mut source_locations,
         root_id.decl_id(),
-        root_span,
+        tcx.def_span(root_def_id),
     );
 
     let mut cx = walk::BuildContext {
@@ -245,6 +284,8 @@ pub fn build_declaration_skeleton<'tcx>(
         driver_modules: Vec::new(),
         type_def_map: std::collections::HashMap::new(),
         register_block_map: std::collections::HashMap::new(),
+        function_map: std::collections::HashMap::new(),
+        descriptor_map: std::collections::HashMap::new(),
     };
 
     let mut root_module = Module {
@@ -272,7 +313,11 @@ pub fn build_declaration_skeleton<'tcx>(
     )?;
 
     match cx.driver_modules.len() {
-        0 => return Err(ConstructionError::NoDriverStruct),
+        0 => {
+            return Err(ConstructionError::NoDriverStruct {
+                crate_root: ErrorProvenance::for_def_id(tcx, root_def_id),
+            });
+        }
         1 => {}
         _ => {
             return Err(ConstructionError::MultipleDriverStructs {
@@ -281,12 +326,34 @@ pub fn build_declaration_skeleton<'tcx>(
         }
     }
 
-    Ok(RegseqModel {
-        symbols,
-        source_locations,
-        root_module,
-        format_version: 1,
+    let cross_refs = CrossRefMaps {
+        type_defs: cx.type_def_map,
+        register_blocks: cx.register_block_map,
+        functions: cx.function_map,
+        register_descriptors: cx.descriptor_map,
+    };
+
+    Ok(Pass1Output {
+        model: RegseqModel {
+            symbols,
+            source_locations,
+            root_module,
+            format_version: 1,
+        },
+        cross_refs,
     })
+}
+
+/// Run Pass 1 and return both the [`RegseqModel`] and the cross-reference
+/// maps downstream passes need to resolve rustc [`DefId`]s to model IDs.
+/// The plain [`build_declaration_skeleton`] discards these maps; when
+/// wiring Pass 2 (task 43+), use this entry point instead so call targets
+/// and type references can be resolved without re-walking the HIR.
+pub fn build_pass1_output<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    registries: &ExtractionRegistries<'_>,
+) -> Result<Pass1Output, ConstructionError> {
+    build_declaration_skeleton_inner(tcx, registries)
 }
 
 // ---------------------------------------------------------------------------
