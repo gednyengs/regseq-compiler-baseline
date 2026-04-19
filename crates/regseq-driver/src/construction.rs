@@ -57,6 +57,7 @@ pub use mir_mapping::{
 };
 pub use ordered_region::OrderedMarkers;
 pub use pass2::build_body;
+pub use try_folding::TryMarkers;
 
 use id_allocator::DeclIdAllocator;
 
@@ -299,6 +300,30 @@ pub enum ConstructionError {
         /// Diagnostic rendering naming the unmatched marker.
         rendered: String,
     },
+    /// Rule 2 `?`-pattern recognition fired (the originating Call's
+    /// return target contains a `Try::branch` Call) but a subsequent
+    /// structural check failed. Raised by
+    /// [`construction::try_folding`](self::try_folding) when the
+    /// Try-desugaring shape deviates from the algorithm documented
+    /// in `ir-reference.md` Section 5 (SwitchInt arity/values,
+    /// `otherwise: Unreachable` slot, Continue / Break extraction
+    /// shape, `FromResidual::from_residual` arg shape). Carries the
+    /// originating Call's MIR basic-block index and a short tag
+    /// naming the offending sub-step so diagnostics can identify
+    /// the first failing check.
+    MalformedTryPattern {
+        /// Provenance of the originating Call's call site.
+        provenance: ErrorProvenance,
+        /// MIR basic-block index of the originating `Call` whose
+        /// `?` fold failed.
+        call_mir_block: u32,
+        /// Short tag naming the failing sub-step (e.g.,
+        /// `"switch_targets_not_continue_break_unreachable"`,
+        /// `"otherwise_not_unreachable"`). See the
+        /// [`recognize`](self::try_folding) function for the full
+        /// set of tags.
+        step: &'static str,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -437,6 +462,15 @@ impl std::fmt::Display for ConstructionError {
                 f,
                 "unpaired ordered-region marker: `{}` (at `{}`)",
                 rendered, provenance.item_path,
+            ),
+            Self::MalformedTryPattern {
+                provenance,
+                call_mir_block,
+                step,
+            } => write!(
+                f,
+                "malformed `?`-pattern at bb{call_mir_block} (step: {step}) (at `{}`)",
+                provenance.item_path,
             ),
         }
     }

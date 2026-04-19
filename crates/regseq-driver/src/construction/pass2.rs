@@ -17,9 +17,10 @@
 //!   [`IntrinsicLookup`] built from Phase 4's `IntrinsicRegistry`.
 //!   Registered callee `DefId`s produce
 //!   [`TerminatorKind::IntrinsicCall`]; unregistered callees fall
-//!   through to [`TerminatorKind::Call`]. Metadata population (tasks
-//!   50-52) and `?`-pattern folding (task 46) remain out of scope, so
-//!   `metadata` and `error_target` are always `None`.
+//!   through to [`TerminatorKind::Call`]. Metadata population
+//!   (tasks 50-52) is still out of scope -- `metadata` is `None`.
+//!   `?`-pattern folding lives in task 46, described below, and
+//!   drives the `error_target` field.
 //! - Rule 4 deref collapse (task 48) consults a
 //!   [`DerefCollapseLookup`](super::deref_collapse::DerefCollapseLookup)
 //!   built from the Phase 4 `AbstractionTypeRegistry`. Transport
@@ -28,8 +29,20 @@
 //!   their destination temporaries are rewritten downstream via
 //!   [`rewrite_body_places`](super::deref_collapse::rewrite_body_places).
 //!   Non-transport `Deref::deref` Calls are untouched.
-//! - `?`-pattern folding is out of scope (task 46). `error_target` is
-//!   always `None`.
+//! - Rule 2 `?`-pattern folding (task 46) consults a
+//!   [`TryFoldAnalysis`](super::try_folding::TryFoldAnalysis) built
+//!   by scanning the MIR body up-front for the `Try::branch` +
+//!   `SwitchInt(ControlFlow)` + `FromResidual::from_residual`
+//!   pattern. Originating Call / IntrinsicCall terminators with a
+//!   recognized fold are emitted with `destination` retargeted to
+//!   the Continue extraction's place, `target` retargeted to the
+//!   `bb_continue` block (whose extraction statement is dropped
+//!   during statement translation), and `error_target` pointing at
+//!   the `bb_store` block after `FromResidual` returns (whose
+//!   `_0 = move _converted` store is also dropped). The intermediate
+//!   `bb_branch`, `bb_switch`, `bb_break`, and `bb_unreachable`
+//!   blocks become unreachable after the successor rewrite and fall
+//!   out via the reachability walk in [`build_block_map`].
 //! - Non-straight-line terminators (`TailCall`, `Yield`, `CoroutineDrop`,
 //!   `InlineAsm`, `FalseEdge`, `FalseUnwind`, `Assert`,
 //!   `UnwindResume`, `UnwindTerminate`) are rejected via
@@ -58,6 +71,7 @@ use super::mir_mapping::{
     MapOperandResult, TypeDefIndex,
 };
 use super::ordered_region::{pair_ordered_regions, OrderedMarkerSite, OrderedMarkers};
+use super::try_folding::{TryFoldAnalysis, TryMarkers};
 use super::{resolve_origin, ConstructionError, ErrorProvenance};
 
 /// Build a Regseq IR [`Body`] for the function identified by `def_id`
@@ -82,6 +96,7 @@ pub fn build_body<'tcx>(
     intrinsics: &IntrinsicLookup,
     deref_lookup: &DerefCollapseLookup<'_>,
     ordered_markers: &OrderedMarkers,
+    try_markers: &TryMarkers,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -92,10 +107,23 @@ pub fn build_body<'tcx>(
 
     let mir_body = tcx.optimized_mir(def_id);
 
-    let block_map = build_block_map(mir_body);
+    // Rule 2 `?`-pattern analysis runs first so the block-map
+    // reachability walk can route originating Call terminators to
+    // their folded successors (`continue_target`, `error_target`)
+    // instead of the intermediate `bb_branch` -- the intermediate
+    // blocks drop out naturally once unreachable.
+    let try_folds = TryFoldAnalysis::analyze(tcx, def_id, try_markers, mir_body)?;
+
+    let block_map = build_block_map(mir_body, &try_folds);
     let local_name_map = build_local_name_map(mir_body, interner);
-    let (local_decls, local_sources, local_id_map) =
-        build_local_decls(tcx, mir_body, &local_name_map, type_def_index, interner)?;
+    let (local_decls, local_sources, local_id_map) = build_local_decls(
+        tcx,
+        mir_body,
+        &local_name_map,
+        type_def_index,
+        &try_folds,
+        interner,
+    )?;
 
     let mut basic_blocks: Vec<BasicBlock> = Vec::new();
     let mut block_sources: Vec<BasicBlockSourceMap> = Vec::new();
@@ -116,7 +144,26 @@ pub fn build_body<'tcx>(
 
         let mut statements: Vec<Statement> = Vec::new();
         let mut statement_sources: Vec<SourceOrigin> = Vec::new();
-        for stmt in &data.statements {
+        for (stmt_idx, stmt) in data.statements.iter().enumerate() {
+            // Rule 2 absorbs the Continue-extraction statement into
+            // the folded terminator's `destination` (and drops the
+            // `_0 = move _converted` store on the error path). The
+            // pre-computed `TryFoldAnalysis` flags those statements
+            // by `(mir_bb, stmt_idx)`.
+            if try_folds.is_dropped_statement(mir_bb, stmt_idx) {
+                continue;
+            }
+            // `StorageLive` / `StorageDead` markers for locals that
+            // the fold eliminates have no Regseq referent -- drop
+            // them silently so later translation steps do not look
+            // up a dropped local.
+            if let mir::StatementKind::StorageLive(l) | mir::StatementKind::StorageDead(l) =
+                &stmt.kind
+            {
+                if try_folds.is_dropped_local(*l) {
+                    continue;
+                }
+            }
             let origin = resolve_origin(tcx, interner, stmt.source_info.span);
             if let Some(kind) = translate_statement(
                 tcx,
@@ -143,6 +190,7 @@ pub fn build_body<'tcx>(
             tcx,
             def_id,
             term_data,
+            mir_bb,
             &block_map,
             &local_id_map,
             type_def_index,
@@ -152,6 +200,7 @@ pub fn build_body<'tcx>(
             deref_lookup,
             &mut deref_rewrites,
             ordered_markers,
+            &try_folds,
             current_id,
             &mut ordered_sites,
             interner,
@@ -219,7 +268,10 @@ pub fn build_body<'tcx>(
 ///    references.
 /// 4. Blocks that survive are assigned contiguous `BasicBlockId`s in
 ///    MIR order.
-fn build_block_map<'tcx>(mir_body: &mir::Body<'tcx>) -> Vec<Option<BasicBlockId>> {
+fn build_block_map<'tcx>(
+    mir_body: &mir::Body<'tcx>,
+    try_folds: &TryFoldAnalysis<'tcx>,
+) -> Vec<Option<BasicBlockId>> {
     let count = mir_body.basic_blocks.len();
     let mut drop_by_rule = vec![false; count];
     for (mir_bb, data) in mir_body.basic_blocks.iter_enumerated() {
@@ -237,7 +289,11 @@ fn build_block_map<'tcx>(mir_body: &mir::Body<'tcx>) -> Vec<Option<BasicBlockId>
         }
         reachable[idx] = true;
         let data = &mir_body.basic_blocks[bb];
-        for succ in non_unwind_successors(data) {
+        let successors = try_folds
+            .get(bb)
+            .map(|info| vec![info.continue_target, info.error_target])
+            .unwrap_or_else(|| non_unwind_successors(data));
+        for succ in successors {
             if !drop_by_rule[succ.as_usize()] && !reachable[succ.as_usize()] {
                 stack.push(succ);
             }
@@ -336,13 +392,29 @@ fn build_local_decls<'a, 'tcx>(
     mir_body: &'a mir::Body<'tcx>,
     name_map: &HashMap<mir::Local, Symbol>,
     type_def_index: &TypeDefIndex<'_>,
+    try_folds: &TryFoldAnalysis<'tcx>,
     interner: &mut SymbolInterner,
 ) -> Result<(Vec<LocalDecl>, Vec<SourceOrigin>, LocalIdMap<'a, 'tcx>), ConstructionError> {
     let mut local_id_map = LocalIdMap::new(&mir_body.local_decls);
     let mut decls = Vec::with_capacity(mir_body.local_decls.len());
     let mut sources = Vec::with_capacity(mir_body.local_decls.len());
+    // Rule 2 eliminates the `_cf`, `_residual`, `_converted`, and
+    // originating-Call Try-wrapper locals from the Regseq IR
+    // entirely (ir-reference.md Section 5 "Eliminations"). Skipping
+    // them here shifts every downstream local's `LocalId` down; the
+    // `LocalIdMap` records only the surviving (MIR local ->
+    // contiguous LocalId) pairs, so every place / operand
+    // translation in `mir_mapping` resolves against the new numbering
+    // without changes. All references to the dropped locals are
+    // themselves in blocks / statements the fold also drops, so no
+    // `LocalIdMap::lookup` against a dropped local ever succeeds.
+    let mut next: u32 = 0;
     for (local, decl) in mir_body.local_decls.iter_enumerated() {
-        local_id_map.insert(local, LocalId::new(local.as_u32()));
+        if try_folds.is_dropped_local(local) {
+            continue;
+        }
+        local_id_map.insert(local, LocalId::new(next));
+        next += 1;
         let ty = map_ty(tcx, decl.ty, type_def_index)?;
         let mutable = matches!(decl.mutability, rustc_ast::Mutability::Mut);
         let name = name_map.get(&local).copied();
@@ -485,6 +557,7 @@ fn translate_terminator<'tcx>(
     tcx: TyCtxt<'tcx>,
     owner_def_id: DefId,
     term: &mir::Terminator<'tcx>,
+    mir_bb: mir::BasicBlock,
     block_map: &[Option<BasicBlockId>],
     locals: &LocalIdMap<'_, 'tcx>,
     type_def_index: &TypeDefIndex<'_>,
@@ -494,6 +567,7 @@ fn translate_terminator<'tcx>(
     deref_lookup: &DerefCollapseLookup<'_>,
     deref_rewrites: &mut DerefCollapseRewrites,
     ordered_markers: &OrderedMarkers,
+    try_folds: &TryFoldAnalysis<'tcx>,
     current_block: BasicBlockId,
     ordered_sites: &mut Vec<OrderedMarkerSite>,
     interner: &mut SymbolInterner,
@@ -593,7 +667,21 @@ fn translate_terminator<'tcx>(
                     interner,
                 )?);
             }
-            let dest = map_place(tcx, destination, locals, type_def_index, interner)?;
+
+            // Rule 2 (ir-reference.md Section 5): when `TryFoldAnalysis`
+            // recognized a `?` pattern rooted at this Call, re-aim
+            // the terminator at the Continue / Break path and absorb
+            // the extraction into `destination`. The intermediate
+            // `bb_branch`/`bb_switch`/`bb_break`/`bb_unreachable`
+            // blocks are unreachable under the fold-adjusted
+            // successor set and fall out of the block map.
+            let fold = try_folds.get(mir_bb);
+            let dest = match fold {
+                Some(info) => {
+                    map_place(tcx, &info.new_destination, locals, type_def_index, interner)?
+                }
+                None => map_place(tcx, destination, locals, type_def_index, interner)?,
+            };
 
             // Recognition rule 1 (ir-reference.md Section 8): callees
             // whose `DefId` is registered as a Regseq intrinsic become
@@ -602,20 +690,30 @@ fn translate_terminator<'tcx>(
             // lookup does not distinguish, and the translated arg
             // order matches MIR's verbatim (spec.md Section 10).
             if let Some(variant) = intrinsics.lookup(callee_def_id) {
-                let intrinsic_target = match target {
-                    Some(t) => require_block(block_map, *t, term.source_info.span)?,
-                    None => {
-                        return Err(ConstructionError::UnsupportedTerminator {
-                            provenance: ErrorProvenance {
-                                item_path: tcx.def_path_str(callee_def_id),
-                                span: term.source_info.span,
-                            },
-                            rendered: format!(
-                                "intrinsic `{}` called as a diverging `Call` (no return target)",
-                                variant.canonical_name(),
-                            ),
-                        });
-                    }
+                let (intrinsic_target, intrinsic_error_target) = match fold {
+                    Some(info) => (
+                        require_block(block_map, info.continue_target, term.source_info.span)?,
+                        Some(require_block(
+                            block_map,
+                            info.error_target,
+                            term.source_info.span,
+                        )?),
+                    ),
+                    None => match target {
+                        Some(t) => (require_block(block_map, *t, term.source_info.span)?, None),
+                        None => {
+                            return Err(ConstructionError::UnsupportedTerminator {
+                                provenance: ErrorProvenance {
+                                    item_path: tcx.def_path_str(callee_def_id),
+                                    span: term.source_info.span,
+                                },
+                                rendered: format!(
+                                    "intrinsic `{}` called as a diverging `Call` (no return target)",
+                                    variant.canonical_name(),
+                                ),
+                            });
+                        }
+                    },
                 };
                 return Ok(TerminatorKind::IntrinsicCall {
                     intrinsic: variant,
@@ -623,7 +721,7 @@ fn translate_terminator<'tcx>(
                     metadata: None,
                     destination: dest,
                     target: intrinsic_target,
-                    error_target: None,
+                    error_target: intrinsic_error_target,
                 });
             }
 
@@ -636,16 +734,33 @@ fn translate_terminator<'tcx>(
                     rendered: tcx.def_path_str(callee_def_id),
                 }
             })?;
-            let target = match target {
-                Some(t) => Some(require_block(block_map, *t, term.source_info.span)?),
-                None => None,
+            let (call_target, call_error_target) = match fold {
+                Some(info) => (
+                    Some(require_block(
+                        block_map,
+                        info.continue_target,
+                        term.source_info.span,
+                    )?),
+                    Some(require_block(
+                        block_map,
+                        info.error_target,
+                        term.source_info.span,
+                    )?),
+                ),
+                None => (
+                    match target {
+                        Some(t) => Some(require_block(block_map, *t, term.source_info.span)?),
+                        None => None,
+                    },
+                    None,
+                ),
             };
             Ok(TerminatorKind::Call {
                 callee,
                 args: mapped_args,
                 destination: dest,
-                target,
-                error_target: None,
+                target: call_target,
+                error_target: call_error_target,
             })
         }
         mir::TerminatorKind::SwitchInt { discr, targets } => {

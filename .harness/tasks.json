@@ -988,7 +988,7 @@
           "id": "regseq-model-46",
           "name": "Rule 2 - ?-pattern folding",
           "spec": ".harness/tasks/regseq-model/46-question-mark-folding.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-45"
           ],

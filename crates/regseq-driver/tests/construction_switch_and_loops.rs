@@ -49,7 +49,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, DerefCollapseLookup, ExtractionRegistries,
-    FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output, PinStateRegistry, TypeDefIndex,
+    FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output, PinStateRegistry, TryMarkers,
+    TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -354,6 +355,7 @@ fn build_method_body(source: &str, test_name: &str, self_ty: &str, method: &str)
         let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
             .expect("Deref lang item must be resolvable on the specimen crate");
         let ordered_markers = OrderedMarkers::default();
+        let try_markers = TryMarkers::default();
         let mut interner = SymbolInterner::new();
         build_body(
             tcx,
@@ -365,6 +367,7 @@ fn build_method_body(source: &str, test_name: &str, self_ty: &str, method: &str)
             &intrinsics,
             &deref_lookup,
             &ordered_markers,
+            &try_markers,
             &mut interner,
         )
         .expect("build_body must succeed on the specimen method")
@@ -388,6 +391,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
         let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
             .expect("Deref lang item must be resolvable on the specimen crate");
         let ordered_markers = OrderedMarkers::default();
+        let try_markers = TryMarkers::default();
         let mut interner = SymbolInterner::new();
         build_body(
             tcx,
@@ -399,6 +403,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
             &intrinsics,
             &deref_lookup,
             &ordered_markers,
+            &try_markers,
             &mut interner,
         )
         .expect("build_body must succeed on the free-fn specimen")
@@ -740,6 +745,7 @@ fn switch_with_cleanup_renumbers_targets_correctly() {
             let deref_lookup = DerefCollapseLookup::build(tcx, &abstraction_registry)
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let ordered_markers = OrderedMarkers::default();
+            let try_markers = TryMarkers::default();
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -751,6 +757,7 @@ fn switch_with_cleanup_renumbers_targets_correctly() {
                 &intrinsics,
                 &deref_lookup,
                 &ordered_markers,
+                &try_markers,
                 &mut interner,
             )
             .expect("build_body must succeed");
