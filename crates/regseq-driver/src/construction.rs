@@ -33,7 +33,7 @@ pub mod pin_state_registry;
 pub mod registers;
 pub mod walk;
 
-pub(crate) mod cross_crate;
+pub mod cross_crate;
 pub mod deref_collapse;
 pub mod intrinsics;
 pub(crate) mod log_metadata;
@@ -300,6 +300,36 @@ pub enum ConstructionError {
         /// Diagnostic rendering naming the unmatched marker.
         rendered: String,
     },
+    /// A `Call` terminator in an already-registered function body
+    /// references a function that belongs to a crate outside the
+    /// Rule 3 cross-crate allowlist (currently `core` and `regseq`).
+    /// Driver specs are `#![no_std]`, so `std::*` references must
+    /// be rejected; other non-allowlisted crates (e.g., `alloc`)
+    /// follow the same rule. Raised by
+    /// [`construction::cross_crate`](self::cross_crate) during the
+    /// Pass 1 call-graph walk.
+    StdFunctionNotPermitted {
+        /// Provenance of the offending cross-crate callee.
+        provenance: ErrorProvenance,
+        /// Rendered `def_path_str` of the callee (e.g.,
+        /// `"std::vec::Vec::<u8>::push"`).
+        path: String,
+        /// Rendered `def_path_str` of the authored function whose
+        /// body reached the offending callee.
+        caller: String,
+    },
+    /// Rule 3's cross-crate call-graph walk exceeded its depth
+    /// bound (16 levels). Defensive guard against unbounded
+    /// recursion through cyclic or deeply-nested `core` functions.
+    /// Raised by
+    /// [`construction::cross_crate`](self::cross_crate) when the
+    /// walk hits the depth cap.
+    CrossCrateRecursionLimit {
+        /// Provenance of the deepest reached callee.
+        provenance: ErrorProvenance,
+        /// The depth at which the limit tripped.
+        depth: u32,
+    },
     /// Rule 2 `?`-pattern recognition fired (the originating Call's
     /// return target contains a `Try::branch` Call) but a subsequent
     /// structural check failed. Raised by
@@ -463,6 +493,20 @@ impl std::fmt::Display for ConstructionError {
                 "unpaired ordered-region marker: `{}` (at `{}`)",
                 rendered, provenance.item_path,
             ),
+            Self::StdFunctionNotPermitted {
+                provenance,
+                path,
+                caller,
+            } => write!(
+                f,
+                "driver specs must not call `std` or non-allowlisted crates: `{path}` reached from `{caller}` (at `{}`)",
+                provenance.item_path,
+            ),
+            Self::CrossCrateRecursionLimit { provenance, depth } => write!(
+                f,
+                "cross-crate call-graph walk exceeded depth {depth} (at `{}`)",
+                provenance.item_path,
+            ),
             Self::MalformedTryPattern {
                 provenance,
                 call_mir_block,
@@ -522,12 +566,31 @@ pub fn build_declaration_skeleton<'tcx>(
     tcx: TyCtxt<'tcx>,
     registries: &ExtractionRegistries<'_>,
 ) -> Result<RegseqModel, ConstructionError> {
-    build_declaration_skeleton_inner(tcx, registries).map(|out| out.model)
+    build_declaration_skeleton_inner(tcx, registries, cross_crate::MAX_CROSS_CRATE_DEPTH)
+        .map(|out| out.model)
+}
+
+/// Test-only variant of [`build_pass1_output`] that lets callers
+/// override Rule 3's cross-crate depth bound. Production code
+/// always uses [`cross_crate::MAX_CROSS_CRATE_DEPTH`]. Exposed at
+/// `#[doc(hidden)]` visibility so integration tests can exercise
+/// the [`ConstructionError::CrossCrateRecursionLimit`] path
+/// without synthesizing a 17-deep call chain through real `core`
+/// MIR (infeasible in a stand-alone specimen). Not part of the
+/// stable public API.
+#[doc(hidden)]
+pub fn build_pass1_output_with_cross_crate_depth<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    registries: &ExtractionRegistries<'_>,
+    max_cross_crate_depth: u32,
+) -> Result<Pass1Output, ConstructionError> {
+    build_declaration_skeleton_inner(tcx, registries, max_cross_crate_depth)
 }
 
 fn build_declaration_skeleton_inner<'tcx>(
     tcx: TyCtxt<'tcx>,
     registries: &ExtractionRegistries<'_>,
+    max_cross_crate_depth: u32,
 ) -> Result<Pass1Output, ConstructionError> {
     let mut symbols = SymbolInterner::new();
     let mut source_locations: BTreeMap<DeclId, SourceOrigin> = BTreeMap::new();
@@ -600,6 +663,16 @@ fn build_declaration_skeleton_inner<'tcx>(
         }
     }
 
+    // Rule 3 cross-crate function extraction (task regseq-model-47).
+    // Walk every `Call` terminator reachable from an authored body
+    // and register the referenced `core` / `regseq` callees as
+    // regular `Function`s under synthetic module chains.
+    cross_crate::extract_cross_crate_functions_with_depth_bound(
+        &mut cx,
+        &mut root_module,
+        max_cross_crate_depth,
+    )?;
+
     let cross_refs = CrossRefMaps {
         type_defs: cx.type_def_map,
         register_blocks: cx.register_block_map,
@@ -628,7 +701,7 @@ pub fn build_pass1_output<'tcx>(
     tcx: TyCtxt<'tcx>,
     registries: &ExtractionRegistries<'_>,
 ) -> Result<Pass1Output, ConstructionError> {
-    build_declaration_skeleton_inner(tcx, registries)
+    build_declaration_skeleton_inner(tcx, registries, cross_crate::MAX_CROSS_CRATE_DEPTH)
 }
 
 // ---------------------------------------------------------------------------

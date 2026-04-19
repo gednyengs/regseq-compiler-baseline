@@ -753,7 +753,7 @@ fn two_consecutive_transport_derefs_collapse_independently() {
 
 #[test]
 fn collapse_is_gated_by_registry_entry_not_by_type_name() {
-    let outcome = with_specimen(
+    let (build_ok, call_terminator_count, goto_terminator_count) = with_specimen(
         TRANSPORT_SPECIMEN,
         "construction_deref_collapse_registry_gate",
         |tcx, pass1| {
@@ -795,20 +795,37 @@ fn collapse_is_gated_by_registry_entry_not_by_type_name() {
                 &mut interner,
             );
             match result {
-                Ok(_) => "ok".to_string(),
-                Err(e) => format!("{e:?}"),
+                Ok(body) => {
+                    let (calls, gotos) =
+                        body.basic_blocks
+                            .iter()
+                            .fold((0usize, 0usize), |(c, g), bb| match bb.terminator.kind {
+                                TerminatorKind::Call { .. } => (c + 1, g),
+                                TerminatorKind::Goto(_) => (c, g + 1),
+                                _ => (c, g),
+                            });
+                    (true, calls, gotos)
+                }
+                Err(_) => (false, 0, 0),
             }
         },
     );
 
     // The collapse was gated off by the empty registry; the Call
-    // survived to regular Call translation, which fails because
-    // Deref::deref is not in the FunctionIndex. The message must
-    // mention UnresolvedCallTarget OR Deref, proving the Call was
-    // never eaten.
+    // survived to regular Call translation, which succeeds because
+    // `<Mmio<T> as Deref>::deref` is registered as a cross-crate
+    // callee by Rule 3 (task regseq-model-47) and thus appears in
+    // the FunctionIndex. The test's real invariant is "no Goto
+    // replaces a Call" -- i.e., Rule 4 did NOT fire. At least one
+    // Call terminator must remain; a body reduced to Gotos would
+    // indicate the collapse fired despite the empty registry.
     assert!(
-        outcome.contains("UnresolvedCallTarget") || outcome.contains("Deref"),
-        "empty registry must leave the Deref Call intact, got outcome `{outcome}`",
+        build_ok,
+        "with Rule 3 cross-crate extraction (task 47), Pass 2 now resolves the Deref::deref Call; body must build successfully",
+    );
+    assert!(
+        call_terminator_count >= 1,
+        "empty registry must leave at least one Call terminator intact (got {call_terminator_count} Calls, {goto_terminator_count} Gotos)",
     );
 }
 

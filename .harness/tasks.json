@@ -999,7 +999,7 @@
           "id": "regseq-model-47",
           "name": "Rule 3 - cross-crate function extraction (regseq-driver + regseq-model)",
           "spec": ".harness/tasks/regseq-model/47-cross-crate-extraction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-43",
             "regseq-model-45",

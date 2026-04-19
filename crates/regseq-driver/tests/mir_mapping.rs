@@ -932,8 +932,15 @@ pub struct Drv {
     pub regs: Mmio<BlockRegs>,
 }
 
-pub fn uses_std_string(s: std::string::String) -> usize {
-    s.len()
+// The signature carries a `std::*` ADT so `map_ty` surfaces
+// `StdTypeNotPermitted` on the parameter. The body is intentionally
+// a bare literal return -- it must NOT contain any method call on
+// `s`, otherwise Pass 1's Rule 3 cross-crate walker (task
+// regseq-model-47) fails earlier with `StdFunctionNotPermitted`
+// before `map_ty` even gets a chance. The test targets the Pass 2
+// `map_ty` guard specifically; the Pass 1 guard has its own test.
+pub fn uses_std_string(_s: &std::string::String) -> usize {
+    0
 }
 "#;
 
