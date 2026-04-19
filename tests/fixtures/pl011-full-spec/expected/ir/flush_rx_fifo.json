@@ -1,0 +1,880 @@
+{
+  "local_decls": [
+    {
+      "ty": {
+        "kind": "Unit"
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Ref",
+        "data": [
+          {
+            "kind": "Defined",
+            "data": 8
+          },
+          {
+            "kind": "Mutable"
+          }
+        ]
+      },
+      "mutable": false,
+      "name": "self"
+    },
+    {
+      "ty": {
+        "kind": "Unit"
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Bool"
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Scalar",
+        "data": {
+          "kind": "U32"
+        }
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Ref",
+        "data": [
+          {
+            "kind": "Defined",
+            "data": 443
+          },
+          {
+            "kind": "Shared"
+          }
+        ]
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Scalar",
+        "data": {
+          "kind": "U32"
+        }
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Ref",
+        "data": [
+          {
+            "kind": "Defined",
+            "data": 443
+          },
+          {
+            "kind": "Shared"
+          }
+        ]
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Never"
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Unit"
+      },
+      "mutable": false
+    },
+    {
+      "ty": {
+        "kind": "Never"
+      },
+      "mutable": true
+    }
+  ],
+  "arg_count": 1,
+  "basic_blocks": [
+    {
+      "statements": [],
+      "terminator": {
+        "kind": {
+          "kind": "Goto",
+          "data": 1
+        }
+      }
+    },
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 3
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 4
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 5
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 5,
+                "projection": []
+              },
+              {
+                "kind": "Ref",
+                "data": [
+                  {
+                    "kind": "Shared"
+                  },
+                  {
+                    "local": 1,
+                    "projection": [
+                      {
+                        "kind": "Deref"
+                      },
+                      {
+                        "kind": "Field",
+                        "data": {
+                          "index": 0,
+                          "name": "regs",
+                          "ty": {
+                            "kind": "Defined",
+                            "data": 443
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "IntrinsicCall",
+          "data": {
+            "intrinsic": {
+              "kind": "RegisterReadField"
+            },
+            "args": [
+              {
+                "kind": "Move",
+                "data": {
+                  "local": 5,
+                  "projection": []
+                }
+              },
+              {
+                "kind": "Constant",
+                "data": 107
+              }
+            ],
+            "metadata": {
+              "kind": "Register",
+              "data": {
+                "register_block": 1,
+                "register_offset": 24,
+                "access_width": 32,
+                "field": {
+                  "mask": 16,
+                  "shift": 4,
+                  "name": "RXFE"
+                }
+              }
+            },
+            "destination": {
+              "local": 4,
+              "projection": []
+            },
+            "target": 2
+          }
+        }
+      }
+    },
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 5
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 3,
+                "projection": []
+              },
+              {
+                "kind": "BinaryOp",
+                "data": [
+                  {
+                    "kind": "Eq"
+                  },
+                  {
+                    "kind": "Move",
+                    "data": {
+                      "local": 4,
+                      "projection": []
+                    }
+                  },
+                  {
+                    "kind": "Literal",
+                    "data": {
+                      "kind": "U32",
+                      "data": 0
+                    }
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "SwitchInt",
+          "data": {
+            "discriminant": {
+              "kind": "Move",
+              "data": {
+                "local": 3,
+                "projection": []
+              }
+            },
+            "targets": {
+              "values": [
+                0
+              ],
+              "targets": [
+                5,
+                3
+              ]
+            }
+          }
+        }
+      }
+    },
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 4
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 6
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 7
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 7,
+                "projection": []
+              },
+              {
+                "kind": "Ref",
+                "data": [
+                  {
+                    "kind": "Shared"
+                  },
+                  {
+                    "local": 1,
+                    "projection": [
+                      {
+                        "kind": "Deref"
+                      },
+                      {
+                        "kind": "Field",
+                        "data": {
+                          "index": 0,
+                          "name": "regs",
+                          "ty": {
+                            "kind": "Defined",
+                            "data": 443
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "IntrinsicCall",
+          "data": {
+            "intrinsic": {
+              "kind": "RegisterRead"
+            },
+            "args": [
+              {
+                "kind": "Move",
+                "data": {
+                  "local": 7,
+                  "projection": []
+                }
+              },
+              {
+                "kind": "Constant",
+                "data": 85
+              }
+            ],
+            "metadata": {
+              "kind": "Register",
+              "data": {
+                "register_block": 1,
+                "register_offset": 0,
+                "access_width": 32
+              }
+            },
+            "destination": {
+              "local": 6,
+              "projection": []
+            },
+            "target": 4
+          }
+        }
+      }
+    },
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 7
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 6
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 2,
+                "projection": []
+              },
+              {
+                "kind": "Aggregate",
+                "data": [
+                  {
+                    "kind": "Tuple"
+                  },
+                  []
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 3
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "Goto",
+          "data": 1
+        }
+      }
+    },
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 4
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 9
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 0,
+                "projection": []
+              },
+              {
+                "kind": "Aggregate",
+                "data": [
+                  {
+                    "kind": "Tuple"
+                  },
+                  []
+                ]
+              }
+            ]
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 9
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 3
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "Return"
+        }
+      }
+    }
+  ],
+  "source_map": {
+    "body_span": {
+      "kind": "Source",
+      "data": {
+        "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+        "start_line": 347,
+        "start_column": 5,
+        "end_line": 351,
+        "end_column": 6
+      }
+    },
+    "locals": [
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 347,
+          "start_column": 32,
+          "end_line": 347,
+          "end_column": 32
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 347,
+          "start_column": 22,
+          "end_line": 347,
+          "end_column": 31
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 347,
+          "start_column": 5,
+          "end_line": 351,
+          "end_column": 6
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 348,
+          "start_column": 15,
+          "end_line": 348,
+          "end_column": 50
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 348,
+          "start_column": 15,
+          "end_line": 348,
+          "end_column": 45
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 348,
+          "start_column": 15,
+          "end_line": 348,
+          "end_column": 24
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 349,
+          "start_column": 21,
+          "end_line": 349,
+          "end_column": 44
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 349,
+          "start_column": 21,
+          "end_line": 349,
+          "end_column": 30
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 348,
+          "start_column": 9,
+          "end_line": 350,
+          "end_column": 10
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 348,
+          "start_column": 9,
+          "end_line": 350,
+          "end_column": 10
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 348,
+          "start_column": 9,
+          "end_line": 350,
+          "end_column": 10
+        }
+      }
+    ],
+    "blocks": [
+      {
+        "statements": [],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 348,
+            "start_column": 9,
+            "end_line": 350,
+            "end_column": 10
+          }
+        }
+      },
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 15,
+              "end_line": 348,
+              "end_column": 50
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 15,
+              "end_line": 348,
+              "end_column": 45
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 15,
+              "end_line": 348,
+              "end_column": 24
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 15,
+              "end_line": 348,
+              "end_column": 24
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 348,
+            "start_column": 15,
+            "end_line": 348,
+            "end_column": 45
+          }
+        }
+      },
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 44,
+              "end_line": 348,
+              "end_column": 45
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 15,
+              "end_line": 348,
+              "end_column": 50
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 348,
+            "start_column": 15,
+            "end_line": 348,
+            "end_column": 50
+          }
+        }
+      },
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 49,
+              "end_line": 348,
+              "end_column": 50
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 349,
+              "start_column": 21,
+              "end_line": 349,
+              "end_column": 44
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 349,
+              "start_column": 21,
+              "end_line": 349,
+              "end_column": 30
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 349,
+              "start_column": 21,
+              "end_line": 349,
+              "end_column": 30
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 349,
+            "start_column": 21,
+            "end_line": 349,
+            "end_column": 44
+          }
+        }
+      },
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 349,
+              "start_column": 43,
+              "end_line": 349,
+              "end_column": 44
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 349,
+              "start_column": 44,
+              "end_line": 349,
+              "end_column": 45
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 51,
+              "end_line": 350,
+              "end_column": 10
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 9,
+              "end_line": 350,
+              "end_column": 10
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 348,
+            "start_column": 9,
+            "end_line": 350,
+            "end_column": 10
+          }
+        }
+      },
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 49,
+              "end_line": 348,
+              "end_column": 50
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 9,
+              "end_line": 350,
+              "end_column": 10
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 9,
+              "end_line": 350,
+              "end_column": 10
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 9,
+              "end_line": 350,
+              "end_column": 10
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 348,
+              "start_column": 9,
+              "end_line": 350,
+              "end_column": 10
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 351,
+            "start_column": 6,
+            "end_line": 351,
+            "end_column": 6
+          }
+        }
+      }
+    ]
+  },
+  "ordered_regions": []
+}

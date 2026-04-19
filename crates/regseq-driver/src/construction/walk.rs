@@ -80,6 +80,50 @@ impl<'a, 'tcx> BuildContext<'a, 'tcx> {
     }
 }
 
+/// Crate-wide DFS pre-pass that pre-allocates
+/// [`RegisterBlockId`]s for every `#[rseq::register_block]`-annotated
+/// struct in the module tree rooted at `module_def_id`. Called once
+/// from [`super::build_declaration_skeleton_inner`] before the
+/// per-module `populate_module_items_and_submodules` recursion
+/// begins.
+///
+/// The pre-pass records each block's DeclId span in
+/// `cx.source_locations` and inserts `def_id -> RegisterBlockId`
+/// into `cx.register_block_map`. Per-module block construction in
+/// [`super::registers::build_register_block`] reuses these IDs via a
+/// map lookup, so no DeclId is allocated twice and no span is
+/// double-recorded.
+///
+/// Motivation: a driver struct `Mmio<T>` field in module B that
+/// references a `#[rseq::register_block]` struct in a sibling
+/// module A must resolve its block id even when module B is walked
+/// before module A. Without the pre-pass,
+/// [`super::driver::resolve_mmio_register_block`] would return
+/// `None` at the moment the driver struct is built, surfacing a
+/// spurious [`super::ConstructionError::MissingResourceId`] for
+/// `mmio-register-block`.
+pub fn prealloc_register_block_ids_crate_wide(cx: &mut BuildContext<'_, '_>, module_def_id: DefId) {
+    let items = collect_items_in_module(cx.tcx, module_def_id);
+    for item_id in &items {
+        let item = cx.tcx.hir_item(*item_id);
+        let def_id = item.owner_id.def_id.to_def_id();
+        match &item.kind {
+            ItemKind::Struct(_ident, _generics, _variant_data) => {
+                if has_rseq_attr(cx.tcx, def_id, "register_block")
+                    && !cx.register_block_map.contains_key(&def_id)
+                {
+                    let id = RegisterBlockId::from(cx.alloc_and_record_public(def_id));
+                    cx.register_block_map.insert(def_id, id);
+                }
+            }
+            ItemKind::Mod(_ident, _hir_mod) => {
+                prealloc_register_block_ids_crate_wide(cx, def_id);
+            }
+            _ => {}
+        }
+    }
+}
+
 /// Walk the module rooted at `module_def_id` and populate `target`.
 pub fn populate_module_items_and_submodules(
     cx: &mut BuildContext<'_, '_>,

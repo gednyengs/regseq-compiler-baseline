@@ -94,7 +94,16 @@ pub fn extract_cross_crate_functions_with_depth_bound(
     // Seed the worklist with all currently-registered authored
     // functions. Depth 0 is the seed row; each cross-crate jump
     // increments depth by 1.
-    let seed_ids: Vec<DefId> = cx.function_map.keys().copied().collect();
+    //
+    // Sort by `def_path_str` so the walk order is stable across
+    // runs: `cx.function_map` is a `HashMap`, and feeding its raw
+    // iteration order into the worklist lets the DeclIdAllocator
+    // assign different synthetic-module IDs to the same set of
+    // cross-crate callees on repeat runs. Phase 5's golden-file
+    // contract requires byte-identical output across runs, so the
+    // order must be deterministic here.
+    let mut seed_ids: Vec<DefId> = cx.function_map.keys().copied().collect();
+    seed_ids.sort_by_cached_key(|did| cx.tcx.def_path_str(*did));
     let mut seen: HashSet<DefId> = seed_ids.iter().copied().collect();
     let mut worklist: VecDeque<(DefId, u32)> = seed_ids.into_iter().map(|d| (d, 0)).collect();
 

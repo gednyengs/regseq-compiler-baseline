@@ -5,17 +5,110 @@
 //! or [`FileId`] (for file paths) -- both are 4-byte `Copy` handles with
 //! O(1) equality.
 
+use std::cell::Cell;
 use std::collections::HashMap;
 
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize, Serializer};
 
 /// An interned string identifier. Copy, Eq, Hash -- all O(1).
-#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash)]
 pub struct Symbol(u32);
 
 /// An interned file path. Distinct newtype over the same pool.
-#[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+#[derive(Copy, Clone, Eq, PartialEq, Hash)]
 pub struct FileId(u32);
+
+thread_local! {
+    /// Thread-local interner used by [`Symbol`] / [`FileId`] serialization
+    /// to emit resolved strings instead of raw `u32` indices.
+    ///
+    /// The raw pointer is valid only for the duration of the
+    /// [`InternerGuard`] returned by [`install_interner_for_serialization`].
+    /// Serialization helpers must never outlive the guard.
+    static SERIALIZATION_INTERNER: Cell<Option<*const SymbolInterner>> = const { Cell::new(None) };
+}
+
+/// RAII guard that clears the per-thread serialization interner on drop.
+///
+/// Created by [`install_interner_for_serialization`]. Dropping the guard
+/// restores the previously installed interner (or unsets the slot if
+/// none was installed). Non-`Send` because the raw pointer is
+/// per-thread only.
+#[must_use = "dropping the guard immediately unsets the serialization interner"]
+pub struct InternerGuard {
+    previous: Option<*const SymbolInterner>,
+    _not_send: core::marker::PhantomData<*const ()>,
+}
+
+impl Drop for InternerGuard {
+    fn drop(&mut self) {
+        SERIALIZATION_INTERNER.with(|c| c.set(self.previous));
+    }
+}
+
+/// Install `interner` as the per-thread resolver used by
+/// [`Symbol`] and [`FileId`] `Serialize` implementations. While the
+/// returned guard is alive, every `Symbol` emits its resolved string
+/// and every `FileId` emits its file-path string instead of the raw
+/// `u32` index.
+///
+/// The guard is non-`Send` because the TLS binding is per-thread; the
+/// caller must keep the guard on the same thread that performs the
+/// serialization. When no guard is active, `Symbol`/`FileId` fall back
+/// to serializing as plain `u32` -- preserving the raw round-trip used
+/// by in-tree unit tests that do not involve a `SymbolInterner`.
+pub fn install_interner_for_serialization(interner: &SymbolInterner) -> InternerGuard {
+    let previous = SERIALIZATION_INTERNER.with(|c| {
+        let prev = c.get();
+        c.set(Some(interner as *const SymbolInterner));
+        prev
+    });
+    InternerGuard {
+        previous,
+        _not_send: core::marker::PhantomData,
+    }
+}
+
+fn with_installed_interner<R>(f: impl FnOnce(Option<&SymbolInterner>) -> R) -> R {
+    let ptr = SERIALIZATION_INTERNER.with(|c| c.get());
+    // SAFETY: `install_interner_for_serialization` sets the TLS slot
+    // to a pointer derived from a live `&SymbolInterner` and the
+    // returned `InternerGuard` clears the slot before the reference
+    // goes out of scope. No other code path stores a pointer in this
+    // slot, so every non-null observation points at a live interner.
+    let borrow = ptr.map(|p| unsafe { &*p });
+    f(borrow)
+}
+
+impl Serialize for Symbol {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        with_installed_interner(|opt| match opt {
+            Some(interner) => s.serialize_str(interner.resolve(*self)),
+            None => s.serialize_u32(self.0),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for Symbol {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        u32::deserialize(d).map(Symbol)
+    }
+}
+
+impl Serialize for FileId {
+    fn serialize<S: Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        with_installed_interner(|opt| match opt {
+            Some(interner) => s.serialize_str(interner.resolve_file(*self)),
+            None => s.serialize_u32(self.0),
+        })
+    }
+}
+
+impl<'de> Deserialize<'de> for FileId {
+    fn deserialize<D: Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        u32::deserialize(d).map(FileId)
+    }
+}
 
 /// The string intern table.
 ///

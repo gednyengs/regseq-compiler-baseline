@@ -148,7 +148,8 @@ pub enum RegseqAbstraction {
 ///
 /// Provides backend-specific information beyond the call arguments
 /// themselves. Not all intrinsic calls carry metadata.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum IntrinsicMetadata {
     /// Metadata for logging intrinsics.
     Log {
@@ -166,6 +167,7 @@ pub enum IntrinsicMetadata {
         /// Access width in bits (8, 16, 32, or 64).
         access_width: u32,
         /// Field-level metadata, if this is a field access.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         field: Option<RegisterFieldMeta>,
     },
     /// Metadata for pin control intrinsics.
@@ -210,7 +212,7 @@ pub enum FormatKind {
 }
 
 /// Metadata for a register field access.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct RegisterFieldMeta {
     /// Bitmask for the field within the register.
     pub mask: u64,

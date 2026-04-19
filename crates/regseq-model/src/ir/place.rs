@@ -46,6 +46,7 @@ pub enum Projection {
         /// Zero-based field index.
         index: u32,
         /// Field name, if it has one (named struct fields).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<Symbol>,
         /// The type of this field.
         ty: RegseqType,
@@ -88,6 +89,7 @@ pub enum Projection {
     /// Must precede any `Field` projection on an enum-typed place.
     Downcast {
         /// Variant name (for diagnostics and display).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         name: Option<Symbol>,
         /// Position of the variant in the enum definition.
         variant_index: u32,

@@ -24,7 +24,21 @@ pub fn build_register_block(
     name: &str,
     variant_data: &VariantData<'_>,
 ) -> Result<RegisterBlock, ConstructionError> {
-    let id = RegisterBlockId::from(cx.alloc_and_record_public(def_id));
+    // Reuse the DeclId pre-allocated by the crate-wide
+    // register-block pre-pass (see
+    // [`prealloc_register_block_ids_crate_wide`] in walk.rs) so
+    // cross-module driver-struct references resolved during earlier
+    // sibling-module walks land on the same ID as the block's own
+    // construction here. The pre-pass is the only code path that
+    // records the block's DeclId span, so we never duplicate spans
+    // between crate-wide pre-allocation and per-module build.
+    let id = if let Some(&existing) = cx.register_block_map.get(&def_id) {
+        existing
+    } else {
+        let fresh = RegisterBlockId::from(cx.alloc_and_record_public(def_id));
+        cx.register_block_map.insert(def_id, fresh);
+        fresh
+    };
     let name_sym: Symbol = cx.intern_public(name);
 
     // Parse the block-level attribute for endian + access_width.

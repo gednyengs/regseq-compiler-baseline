@@ -34,6 +34,7 @@ pub mod registers;
 pub mod walk;
 
 pub mod cross_crate;
+pub mod cross_crate_types;
 pub mod deref_collapse;
 pub mod intrinsics;
 pub mod log_metadata;
@@ -792,6 +793,18 @@ fn build_declaration_skeleton_inner<'tcx>(
         intrinsics_used: std::collections::BTreeSet::new(),
     };
 
+    // Crate-wide pre-pass: pre-allocate `RegisterBlockId`s for every
+    // `#[rseq::register_block]` struct anywhere in the module tree so
+    // `Mmio<T>` fields on driver structs can resolve their block id
+    // regardless of the source-order relationship between the driver
+    // module and the registers module. Without this pre-pass a driver
+    // struct in a module walked before the registers submodule would
+    // fail with `MissingResourceId { kind: "mmio-register-block" }`.
+    walk::prealloc_register_block_ids_crate_wide(
+        &mut cx,
+        rustc_hir::def_id::CRATE_DEF_ID.to_def_id(),
+    );
+
     walk::populate_module_items_and_submodules(
         &mut cx,
         &mut root_module,
@@ -821,6 +834,14 @@ fn build_declaration_skeleton_inner<'tcx>(
         &mut root_module,
         max_cross_crate_depth,
     )?;
+
+    // Cross-crate type extraction: register every non-lang-item ADT
+    // referenced by a body (authored or cross-crate) so Pass 2's
+    // `map_ty` can resolve each reference to `RegseqType::Defined`
+    // instead of surfacing `UnsupportedRustType`. This integration
+    // pass is additive and does not introduce a new recognition
+    // rule: body-level IR construction rules 1-7 are unchanged.
+    cross_crate_types::extract_cross_crate_types(&mut cx, &mut root_module)?;
 
     // Extract the map + register-block list from `cx` before the
     // Rule 7 builder below (which borrows `symbols` mutably) so the

@@ -15,7 +15,7 @@ use crate::ir::terminator::{Terminator, TerminatorKind};
 use crate::ir::types::RegseqType;
 
 /// A function body: local declarations + control flow graph.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Body {
     /// Local variable declarations.
     ///
@@ -40,7 +40,7 @@ pub struct Body {
 }
 
 /// A local variable, temporary, or the return place.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct LocalDecl {
     /// The local's type.
     pub ty: RegseqType,
@@ -49,11 +49,12 @@ pub struct LocalDecl {
     /// The user's variable name, if this local corresponds to a
     /// user-declared variable or function argument. `None` for
     /// compiler-generated temporaries.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub name: Option<Symbol>,
 }
 
 /// A basic block: a sequence of statements followed by a terminator.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct BasicBlock {
     /// Ordered statements executed sequentially.
     pub statements: Vec<Statement>,

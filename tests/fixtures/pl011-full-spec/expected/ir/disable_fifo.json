@@ -1,0 +1,320 @@
+{
+  "local_decls": [
+    {
+      "ty": {
+        "kind": "Unit"
+      },
+      "mutable": true
+    },
+    {
+      "ty": {
+        "kind": "Ref",
+        "data": [
+          {
+            "kind": "Defined",
+            "data": 8
+          },
+          {
+            "kind": "Mutable"
+          }
+        ]
+      },
+      "mutable": false,
+      "name": "self"
+    },
+    {
+      "ty": {
+        "kind": "Unit"
+      },
+      "mutable": false
+    },
+    {
+      "ty": {
+        "kind": "Ref",
+        "data": [
+          {
+            "kind": "Defined",
+            "data": 443
+          },
+          {
+            "kind": "Shared"
+          }
+        ]
+      },
+      "mutable": true
+    }
+  ],
+  "arg_count": 1,
+  "basic_blocks": [
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 2
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageLive",
+            "data": 3
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 3,
+                "projection": []
+              },
+              {
+                "kind": "Ref",
+                "data": [
+                  {
+                    "kind": "Shared"
+                  },
+                  {
+                    "local": 1,
+                    "projection": [
+                      {
+                        "kind": "Deref"
+                      },
+                      {
+                        "kind": "Field",
+                        "data": {
+                          "index": 0,
+                          "name": "regs",
+                          "ty": {
+                            "kind": "Defined",
+                            "data": 443
+                          }
+                        }
+                      }
+                    ]
+                  }
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "Call",
+          "data": {
+            "callee": 383,
+            "args": [
+              {
+                "kind": "Move",
+                "data": {
+                  "local": 3,
+                  "projection": []
+                }
+              },
+              {
+                "kind": "Constant",
+                "data": 130
+              },
+              {
+                "kind": "Constant",
+                "data": 149
+              }
+            ],
+            "destination": {
+              "local": 2,
+              "projection": []
+            },
+            "target": 1
+          }
+        }
+      }
+    },
+    {
+      "statements": [
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 3
+          }
+        },
+        {
+          "kind": {
+            "kind": "StorageDead",
+            "data": 2
+          }
+        },
+        {
+          "kind": {
+            "kind": "Assign",
+            "data": [
+              {
+                "local": 0,
+                "projection": []
+              },
+              {
+                "kind": "Aggregate",
+                "data": [
+                  {
+                    "kind": "Tuple"
+                  },
+                  []
+                ]
+              }
+            ]
+          }
+        }
+      ],
+      "terminator": {
+        "kind": {
+          "kind": "Return"
+        }
+      }
+    }
+  ],
+  "source_map": {
+    "body_span": {
+      "kind": "Source",
+      "data": {
+        "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+        "start_line": 75,
+        "start_column": 5,
+        "end_line": 77,
+        "end_column": 6
+      }
+    },
+    "locals": [
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 75,
+          "start_column": 31,
+          "end_line": 75,
+          "end_column": 31
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 75,
+          "start_column": 21,
+          "end_line": 75,
+          "end_column": 30
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 76,
+          "start_column": 9,
+          "end_line": 76,
+          "end_column": 59
+        }
+      },
+      {
+        "kind": "Source",
+        "data": {
+          "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+          "start_line": 76,
+          "start_column": 9,
+          "end_line": 76,
+          "end_column": 18
+        }
+      }
+    ],
+    "blocks": [
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 76,
+              "start_column": 9,
+              "end_line": 76,
+              "end_column": 59
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 76,
+              "start_column": 9,
+              "end_line": 76,
+              "end_column": 18
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 76,
+              "start_column": 9,
+              "end_line": 76,
+              "end_column": 18
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 76,
+            "start_column": 9,
+            "end_line": 76,
+            "end_column": 59
+          }
+        }
+      },
+      {
+        "statements": [
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 76,
+              "start_column": 58,
+              "end_line": 76,
+              "end_column": 59
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 76,
+              "start_column": 59,
+              "end_line": 76,
+              "end_column": 60
+            }
+          },
+          {
+            "kind": "Source",
+            "data": {
+              "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+              "start_line": 75,
+              "start_column": 32,
+              "end_line": 77,
+              "end_column": 6
+            }
+          }
+        ],
+        "terminator": {
+          "kind": "Source",
+          "data": {
+            "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
+            "start_line": 77,
+            "start_column": 6,
+            "end_line": 77,
+            "end_column": 6
+          }
+        }
+      }
+    ]
+  },
+  "ordered_regions": []
+}

@@ -21,6 +21,7 @@ use super::{ConstructionError, ErrorProvenance};
 /// fail loudly instead of being silently dropped.
 const KNOWN_RSEQ_ATTRS: &[&str] = &[
     "driver",
+    "device_class",
     "register_block",
     "pin_state",
     "pinctrl",
@@ -32,6 +33,7 @@ const KNOWN_RSEQ_ATTRS: &[&str] = &[
     "isr",
     "framework_type",
     "abstraction",
+    "intrinsic",
 ];
 
 /// Collect every `#[rseq::<name>(...)]` attribute on `def_id` into an

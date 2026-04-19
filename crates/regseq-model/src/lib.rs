@@ -19,3 +19,4 @@ pub mod platform;
 pub mod platform_parser;
 pub mod properties;
 pub mod semantic;
+pub mod serialize;

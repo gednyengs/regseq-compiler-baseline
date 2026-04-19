@@ -15,4 +15,6 @@ pub use decl_id::{
     RegisterDescriptorId, ResourceId, TypeDefId, UserDataId,
 };
 pub use source::{SourceLocation, SourceOrigin};
-pub use symbol::{FileId, Symbol, SymbolInterner};
+pub use symbol::{
+    install_interner_for_serialization, FileId, InternerGuard, Symbol, SymbolInterner,
+};

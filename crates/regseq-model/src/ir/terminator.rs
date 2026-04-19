@@ -11,14 +11,15 @@ use crate::ir::operand::Operand;
 use crate::ir::place::Place;
 
 /// A terminator: semantic content only. Source location is in BodySourceMap.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct Terminator {
     /// The kind of terminator.
     pub kind: TerminatorKind,
 }
 
 /// The kind of a terminator that ends a basic block.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum TerminatorKind {
     /// Unconditional jump to a block.
     Goto(BasicBlockId),
@@ -40,8 +41,10 @@ pub enum TerminatorKind {
         /// Place to store the return value.
         destination: Place,
         /// Block to jump to after return (`None` if the call diverges).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         target: Option<BasicBlockId>,
         /// Block to jump to on error (`None` for infallible calls).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_target: Option<BasicBlockId>,
     },
 
@@ -52,12 +55,14 @@ pub enum TerminatorKind {
         /// Arguments to pass.
         args: Vec<Operand>,
         /// Structured metadata for backends.
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         metadata: Option<IntrinsicMetadata>,
         /// Place to store the return value.
         destination: Place,
         /// Block to jump to after return (intrinsics always return).
         target: BasicBlockId,
         /// Block to jump to on error (`None` for infallible intrinsics).
+        #[serde(default, skip_serializing_if = "Option::is_none")]
         error_target: Option<BasicBlockId>,
     },
 
