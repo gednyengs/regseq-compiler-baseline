@@ -1114,7 +1114,7 @@
           "id": "regseq-model-56",
           "name": "Post-Phase-2 verifier with driver-struct and body rules",
           "spec": ".harness/tasks/regseq-model/56-post-phase2-verifier.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-55"
           ],

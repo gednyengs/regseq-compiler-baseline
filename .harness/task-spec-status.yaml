@@ -315,7 +315,7 @@ items:
   - id: regseqmodel-phase-6
     phase: "6"
     title: RegseqModel normalization, platform join, and legality verification
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - regseqmodel-phase-5
     target_harness_groups:
@@ -330,14 +330,23 @@ items:
       and phase legality verification. Prove with full PL011 pipeline.
     spec_authoring_notes:
       - Platform parser is largely reusable; join logic changes from separate artifact to in-place mutation.
-    generated_task_ids: []
+      - Verifier framework (55) precedes Phase-2 verifier (56) which precedes mutation API (57).
+      - normalize() (58) depends only on 55 since it constructs fresh; populate_bindings() (59) mutates in place through MutationGuard.
+      - Task 60 is the Phase-6 gate; owns the end-to-end PL011 golden and re-verifies tracker state.
+    generated_task_ids:
+      - regseq-model-55
+      - regseq-model-56
+      - regseq-model-57
+      - regseq-model-58
+      - regseq-model-59
+      - regseq-model-60
 
   # ---- Phase 7: Consumer migration ----
 
   - id: regseqmodel-phase-7
     phase: "7"
     title: Consumer migration to RegseqModel
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - regseqmodel-phase-6
     target_harness_groups:

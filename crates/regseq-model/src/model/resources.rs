@@ -8,7 +8,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::identity::{PropertyId, RegisterBlockId, ResourceId, Symbol, UserDataId};
+use crate::identity::{FunctionId, PropertyId, RegisterBlockId, ResourceId, Symbol, UserDataId};
 use crate::ir::{LiteralValue, RegseqType, ScalarType};
 
 /// Shape of a resource field: `Single`, `Optional`, or `Array`.
@@ -145,6 +145,15 @@ pub struct InterruptDecl {
 }
 
 /// Binding-side Interrupt data from `[interrupt.<id>]` in the platform file.
+///
+/// `isr_target` carries the [`FunctionId`] of the ISR handler routed to
+/// this interrupt resource. The slot is `Option` because not every
+/// interrupt declaration has an `#[rseq::isr]`-annotated handler bound
+/// to it -- e.g., a polled interrupt has no handler and the slot stays
+/// `None`. Phase 2 (`populate_bindings`, task 59) is the populator;
+/// the post-Phase-2 verifier (task 56) checks that any populated
+/// `FunctionId` resolves to a declared, ISR-classified function (per
+/// spec.md Section 13 line 1432).
 #[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
 pub struct InterruptBinding {
     /// Platform-specific interrupt number (required).
@@ -155,6 +164,10 @@ pub struct InterruptBinding {
     pub trigger_polarity: Option<String>,
     /// Whether the interrupt is shared.
     pub shared: bool,
+    /// ISR handler routed to this interrupt resource, if any.
+    /// `None` for interrupts with no `#[rseq::isr]` handler bound.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub isr_target: Option<FunctionId>,
 }
 
 // --- Mmio -------------------------------------------------------------
@@ -410,6 +423,7 @@ mod tests {
             trigger_type: Some("level".into()),
             trigger_polarity: Some("high".into()),
             shared: false,
+            isr_target: None,
         };
         r.binding = Some(b.clone());
 

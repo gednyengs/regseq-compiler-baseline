@@ -11,9 +11,11 @@
 //!   ([`rules::module`], [`rules::cross_item`]),
 //! - the post-Phase-1 entry function [`verify_phase_1`].
 //!
-//! Tasks 56/57/58/59 extend this surface additively: they will flesh
-//! out [`phase_2`], [`rules::driver_struct`], [`rules::body`], and a
-//! mutation-guard layer.
+//! Task 56 fills out [`phase_2`], [`rules::driver_struct`],
+//! [`rules::body`], plus the Phase-2 boundary and Phase-2 cross-item
+//! rule modules ([`rules::phase_2_boundary`],
+//! [`rules::phase_2_cross_item`]). Tasks 57/58/59 add the mutation
+//! API + always-on verifier wiring.
 //!
 //! # Provenance
 //!
@@ -51,6 +53,7 @@ pub mod phase_2;
 pub mod rules;
 
 pub use phase_1::verify_phase_1;
+pub use phase_2::verify_phase_2;
 
 /// The level of a verifier rule, per spec.md Section 13 lines 1424-1432.
 ///
@@ -66,7 +69,8 @@ pub enum VerifierLevel {
     /// Resource-manifest invariants on the driver struct (completeness
     /// of taxonomic fields, no phase-boundary leakage).
     DriverStruct,
-    /// Function body invariants (owned by task 56).
+    /// Function body invariants (referenced-id resolution, operand
+    /// type matching, ReadOnlyRegisterWrite, ISR context legality).
     Body,
     /// Cross-reference resolution across items and source-location
     /// coverage for every assigned [`DeclId`].
@@ -173,6 +177,142 @@ pub enum VerifierErrorKind {
         /// with a placeholder body).
         field: &'static str,
     },
+
+    // ----- Driver-struct level (task 56) ------------------------------
+    /// A resource carries a declaration-side attribute that is empty or
+    /// otherwise structurally incomplete. Maps to spec.md Section 13
+    /// line 1426 ("Resource attribute completeness").
+    ResourceAttributeIncomplete {
+        /// The resource declaration with the missing attribute.
+        resource: DeclId,
+        /// Which attribute name is missing (e.g., `"clock_id"`,
+        /// `"mmio_id"`).
+        attribute: &'static str,
+    },
+    /// Two or more resources of the same kind share an identifier
+    /// string. Maps to spec.md Section 13 line 1426 ("no duplicate
+    /// IDs").
+    DuplicateResourceId {
+        /// The duplicated identifier value.
+        id: String,
+        /// Which resource kind it duplicates within (e.g., `"clock"`,
+        /// `"reset"`, `"pinctrl"`, `"interrupt"`, `"mmio"`,
+        /// `"sync"`).
+        kind: &'static str,
+    },
+    /// A user-data field's inner type is not `Copy` -- the spec
+    /// requires `Option<T>` where `T: Copy` (spec.md Section 13 line
+    /// 1426-1427, Section 4.4).
+    UserDataFieldNotOptionCopy {
+        /// The user-data field declaration in violation.
+        field: DeclId,
+        /// Best-effort textual description of the offending inner type
+        /// (e.g., `"Slice<U8>"`, `"Defined(TypeDefId(7))"`).
+        offending_ty: String,
+    },
+
+    // ----- Body level (task 56) ---------------------------------------
+    /// A body refers to a [`DeclId`] that is not declared in the model.
+    /// Maps to spec.md Section 13 line 1428 ("All referenced IDs
+    /// resolve to existing declarations").
+    UnresolvedBodyReference {
+        /// The body whose statement/terminator made the reference.
+        body: FunctionId,
+        /// The unresolved declaration id.
+        decl_id: DeclId,
+    },
+    /// The argument operand at a `Call` terminator does not match the
+    /// callee's declared parameter type. Maps to spec.md Section 13
+    /// line 1428-1429 ("Operand types match operation expectations").
+    OperandTypeMismatch {
+        /// The body containing the mismatched call.
+        body: FunctionId,
+        /// Best-effort textual location (e.g., `"bb3 arg #1"`).
+        location: String,
+        /// Expected type (the callee's declared parameter type).
+        expected: String,
+        /// Actual type (the operand's inferred type).
+        got: String,
+    },
+    /// A body running in ISR context invoked an intrinsic that is
+    /// forbidden in that context. Maps to spec.md Section 13 line
+    /// 1429 ("no `sleep()` in ISR handler context").
+    ///
+    /// At Phase 6 the forbidden-intrinsic policy set is empty so this
+    /// variant is never produced from end-user input. The plumbing
+    /// exists so downstream phases can inject a non-empty set without
+    /// reshaping the verifier surface.
+    IsrContextViolation {
+        /// The ISR body that issued the forbidden intrinsic call.
+        body: FunctionId,
+        /// Which kind of forbidden behavior was detected.
+        kind: IsrViolationKind,
+    },
+    /// A body issued an intrinsic that writes to a register whose
+    /// `access_kind` is `ReadOnly`. Maps to spec.md Section 13 line
+    /// 1430 ("no writes to read-only registers").
+    ReadOnlyRegisterWrite {
+        /// The body containing the offending write.
+        body: FunctionId,
+        /// The read-only register descriptor that was written to.
+        register: RegisterDescriptorId,
+    },
+
+    // ----- Phase-2 boundary (task 56) ---------------------------------
+    /// A required resource binding slot is `None` after Phase 2.
+    /// Maps to spec.md Section 13 line 1404-1406.
+    RequiredBindingMissing {
+        /// The resource declaration whose binding is missing.
+        resource: DeclId,
+        /// Which binding slot is missing (`"clock"`, `"reset"`,
+        /// `"pinctrl"`, `"interrupt"`, or `"mmio"`).
+        slot: &'static str,
+    },
+    /// A required property's `bound_value` is `None` after Phase 2.
+    /// Maps to spec.md Section 13 line 1407.
+    RequiredPropertyValueMissing {
+        /// The property declaration whose bound value is missing.
+        property: DeclId,
+    },
+
+    // ----- Phase-2 cross-item (task 56) -------------------------------
+    /// An interrupt resource's bound ISR target is a [`FunctionId`]
+    /// that does not appear in `model.functions`. Maps to spec.md
+    /// Section 13 line 1432 ("Interrupt ISR bindings match declared
+    /// interrupt resources").
+    UnknownIsrTarget {
+        /// The interrupt resource declaration that carries the bad
+        /// binding.
+        interrupt: DeclId,
+        /// The unresolved ISR target id.
+        target: FunctionId,
+    },
+    /// An interrupt resource's bound ISR target resolves to a function
+    /// that is not classified as an ISR (i.e., does not carry the
+    /// `#[rseq::isr]` attribute marker that Phase 5 records).
+    /// Maps to spec.md Section 13 line 1432.
+    NonIsrFunctionBoundAsIsr {
+        /// The interrupt resource declaration that carries the bad
+        /// binding.
+        interrupt: DeclId,
+        /// The function id resolved-but-not-ISR.
+        target: FunctionId,
+    },
+}
+
+/// Categorizes the specific behavior that triggered an
+/// [`VerifierErrorKind::IsrContextViolation`].
+///
+/// **Extension policy: append-only.** New kinds are added at the end
+/// of this enum. Existing kinds never change discriminant or name --
+/// downstream matchers (CLI diagnostics, integration tests) treat each
+/// variant as a stable wire-level identifier.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize)]
+#[serde(tag = "kind", content = "data")]
+pub enum IsrViolationKind {
+    /// A body in ISR context invoked a sleep-class intrinsic
+    /// (`Sleep`, `BusyWait` once policy admits it, etc.).
+    Sleep,
 }
 
 /// Origin metadata attached to every [`VerifierError`].

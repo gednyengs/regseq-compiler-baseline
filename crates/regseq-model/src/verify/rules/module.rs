@@ -51,6 +51,21 @@ pub fn run(model: &RegseqModel) -> Result<(), VerifierError> {
     Ok(())
 }
 
+/// Run the module-tree subset that still applies after Phase 2.
+///
+/// Excludes [`phase_1_leakage`] -- post-Phase-2 models are expected
+/// to carry populated bindings and property values, so re-running
+/// that check would be a false positive. The other three module-tree
+/// invariants ("exactly one Driver module", "no duplicate item
+/// names", "every Function has a real body") are still load-bearing
+/// after the join.
+pub fn run_phase_2_subset(model: &RegseqModel) -> Result<(), VerifierError> {
+    exactly_one_driver_module(model)?;
+    no_duplicate_item_names(model)?;
+    declaration_side_completeness(model)?;
+    Ok(())
+}
+
 // --- Exactly one Driver module ---------------------------------------
 
 fn exactly_one_driver_module(model: &RegseqModel) -> Result<(), VerifierError> {
