@@ -35,7 +35,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
-    Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
+    Pass1Output, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -328,6 +328,9 @@ fn method_intrinsic_preserves_self_as_first_arg() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -444,6 +447,9 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -540,6 +546,9 @@ fn free_function_intrinsic_does_not_prepend_receiver() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -618,6 +627,9 @@ fn unregistered_callee_falls_through_to_regular_call() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -701,6 +713,9 @@ fn intrinsic_lookup_build_integrates_with_extraction_registry() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed when threaded with IntrinsicLookup::build output");

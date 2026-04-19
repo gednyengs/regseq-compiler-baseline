@@ -44,7 +44,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
-    Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
+    Pass1Output, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -463,6 +463,9 @@ fn program_polling_port_records_single_ordered_region() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on program_polling_port");
@@ -878,6 +881,9 @@ fn nested_ordered_regions_produce_strict_containment() {
             &ordered_markers,
             &try_markers,
             &log_arg,
+            &RegisterIndex::default(),
+            &std::collections::HashMap::new(),
+            &AbstractionTypeRegistry::default(),
             &mut interner,
         )
         .expect("build_body must succeed on nested");
@@ -986,6 +992,9 @@ fn unpaired_begin_marker_hard_errors() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             ) {
                 Err(ConstructionError::UnpairedOrderedMarker { rendered, .. }) => Ok(rendered),
@@ -1057,6 +1066,9 @@ fn unpaired_end_marker_hard_errors() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             ) {
                 Err(ConstructionError::UnpairedOrderedMarker { rendered, .. }) => Ok(rendered),

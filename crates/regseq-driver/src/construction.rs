@@ -42,7 +42,7 @@ pub(crate) mod module_deps;
 pub(crate) mod ordered_region;
 pub(crate) mod pass2;
 pub(crate) mod pinctrl_metadata;
-pub(crate) mod register_metadata;
+pub mod register_metadata;
 pub(crate) mod switch_and_loops;
 pub(crate) mod try_folding;
 
@@ -58,6 +58,7 @@ pub use mir_mapping::{
 };
 pub use ordered_region::OrderedMarkers;
 pub use pass2::build_body;
+pub use register_metadata::{RegisterEntry, RegisterIndex};
 pub use try_folding::TryMarkers;
 
 use id_allocator::DeclIdAllocator;
@@ -385,6 +386,44 @@ pub enum ConstructionError {
         /// Number of supplied arguments after `LogArg` stripping.
         args: usize,
     },
+    /// A register intrinsic call names a register marker type that
+    /// belongs to a different register block than the call's
+    /// `&Mmio<Block>` receiver. Raised by Rule 7's metadata
+    /// resolution as a defensive guard against extraction surprises
+    /// -- well-formed source never triggers it because type-checking
+    /// already rejects cross-block field usage via the `RegisterOf<Block>`
+    /// trait bound.
+    CrossBlockFieldUsage {
+        /// Provenance of the offending intrinsic call site.
+        provenance: ErrorProvenance,
+        /// Register block identified by the receiver's `Mmio<Block>`
+        /// type.
+        receiver_block: regseq_model::identity::RegisterBlockId,
+        /// Register block recorded on the marker type's
+        /// [`RegisterEntry`](self::register_metadata::RegisterEntry).
+        register_block: regseq_model::identity::RegisterBlockId,
+        /// Rendered def-path of the offending register marker.
+        marker: String,
+    },
+    /// A register intrinsic call's access kind (read vs write) does
+    /// not match the marker type's registered
+    /// [`AccessKind`](regseq_model::model::AccessKind). Raised by
+    /// Rule 7's metadata resolution as a defensive guard --
+    /// well-formed source never triggers it because the
+    /// `R::Access: ReadAccess | WriteAccess` trait bound on each
+    /// intrinsic already rejects mismatched access kinds at
+    /// type-check time.
+    WrongRegisterAccessKind {
+        /// Provenance of the offending intrinsic call site.
+        provenance: ErrorProvenance,
+        /// Rendered def-path of the offending register marker.
+        marker: String,
+        /// Access kind recorded on the marker's
+        /// [`RegisterEntry`](self::register_metadata::RegisterEntry).
+        access_kind: regseq_model::model::AccessKind,
+        /// Intrinsic variant whose required access kind was not met.
+        intrinsic: regseq_model::ir::RegseqIntrinsic,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -566,6 +605,27 @@ impl std::fmt::Display for ConstructionError {
                 "log template `{template}` has {placeholders} placeholder(s) but {args} argument(s) (at `{}`)",
                 provenance.item_path,
             ),
+            Self::CrossBlockFieldUsage {
+                provenance,
+                receiver_block,
+                register_block,
+                marker,
+            } => write!(
+                f,
+                "register marker `{marker}` belongs to block `{register_block:?}` but the receiver targets block `{receiver_block:?}` (at `{}`)",
+                provenance.item_path,
+            ),
+            Self::WrongRegisterAccessKind {
+                provenance,
+                marker,
+                access_kind,
+                intrinsic,
+            } => write!(
+                f,
+                "register marker `{marker}` has access kind `{access_kind:?}` but intrinsic `{}` requires a different access (at `{}`)",
+                intrinsic.canonical_name(),
+                provenance.item_path,
+            ),
         }
     }
 }
@@ -595,6 +655,10 @@ pub struct CrossRefMaps {
     /// to resolve `Operand::Constant` references from unevaluated MIR
     /// constants.
     pub constants: std::collections::HashMap<DefId, regseq_model::identity::ConstantId>,
+    /// Register marker type index built by Rule 7. Pass 2 consults
+    /// this at every register-intrinsic `Call` site to attach
+    /// [`IntrinsicMetadata::Register`](regseq_model::ir::IntrinsicMetadata::Register).
+    pub register_index: register_metadata::RegisterIndex,
 }
 
 /// Full Pass 1 output: the declaration-level [`RegseqModel`] plus the
@@ -723,12 +787,43 @@ fn build_declaration_skeleton_inner<'tcx>(
         max_cross_crate_depth,
     )?;
 
+    // Extract the map + register-block list from `cx` before the
+    // Rule 7 builder below (which borrows `symbols` mutably) so the
+    // borrow checker can see `cx`'s `&mut symbols` is gone.
+    let register_block_refs = collect_register_block_refs(&root_module, &cx.register_block_map);
+    let walk::BuildContext {
+        type_def_map,
+        register_block_map,
+        function_map,
+        descriptor_map,
+        constant_map,
+        ..
+    } = cx;
+
+    // Rule 7 register marker -> metadata index (task regseq-model-51).
+    // Walk the built register blocks and collect per-register entries
+    // keyed by the marker type's `DefId`. Running here, after the HIR
+    // walk completes, keeps the register-index build independent of
+    // the in-progress Pass 1 state -- it only consumes the stable
+    // `register_block_map` plus the model's block list + the built
+    // descriptor list (which is the single source of truth for
+    // bit-field mask/shift/name metadata).
+    let descriptor_lookup = collect_descriptor_lookup(&root_module);
+    let register_index = register_metadata::RegisterIndex::build(
+        tcx,
+        &register_block_map,
+        &register_block_refs,
+        &descriptor_lookup,
+        &mut symbols,
+    );
+
     let cross_refs = CrossRefMaps {
-        type_defs: cx.type_def_map,
-        register_blocks: cx.register_block_map,
-        functions: cx.function_map,
-        register_descriptors: cx.descriptor_map,
-        constants: cx.constant_map,
+        type_defs: type_def_map,
+        register_blocks: register_block_map,
+        functions: function_map,
+        register_descriptors: descriptor_map,
+        constants: constant_map,
+        register_index,
     };
 
     Ok(Pass1Output {
@@ -740,6 +835,68 @@ fn build_declaration_skeleton_inner<'tcx>(
         },
         cross_refs,
     })
+}
+
+/// Walk the populated module tree and return every built
+/// [`RegisterBlock`] paired with its `DefId`. Used by
+/// [`build_declaration_skeleton_inner`] to seed Rule 7's
+/// [`RegisterIndex`] without re-walking the HIR.
+fn collect_register_block_refs(
+    module: &regseq_model::model::Module,
+    register_block_map: &std::collections::HashMap<DefId, regseq_model::identity::RegisterBlockId>,
+) -> Vec<(DefId, regseq_model::model::RegisterBlock)> {
+    // Reverse the `DefId -> RegisterBlockId` map so we can look up
+    // each model-side `RegisterBlockId` back to its authored `DefId`.
+    // The map is small (one entry per block) so the linear scan is
+    // acceptable.
+    let mut out: Vec<(DefId, regseq_model::model::RegisterBlock)> = Vec::new();
+    collect_register_block_refs_inner(module, register_block_map, &mut out);
+    out
+}
+
+/// Walk the populated module tree and build a
+/// [`RegisterDescriptorId`] -> [`RegisterDescriptor`] lookup used by
+/// Rule 7's register-index build to source authoritative bit-field
+/// mask/shift/name metadata.
+fn collect_descriptor_lookup(
+    module: &regseq_model::model::Module,
+) -> std::collections::HashMap<
+    regseq_model::identity::RegisterDescriptorId,
+    regseq_model::model::RegisterDescriptor,
+> {
+    let mut out = std::collections::HashMap::new();
+    collect_descriptor_lookup_inner(module, &mut out);
+    out
+}
+
+fn collect_descriptor_lookup_inner(
+    module: &regseq_model::model::Module,
+    out: &mut std::collections::HashMap<
+        regseq_model::identity::RegisterDescriptorId,
+        regseq_model::model::RegisterDescriptor,
+    >,
+) {
+    for d in &module.register_descriptors {
+        out.insert(d.id, d.clone());
+    }
+    for sub in &module.submodules {
+        collect_descriptor_lookup_inner(sub, out);
+    }
+}
+
+fn collect_register_block_refs_inner(
+    module: &regseq_model::model::Module,
+    register_block_map: &std::collections::HashMap<DefId, regseq_model::identity::RegisterBlockId>,
+    out: &mut Vec<(DefId, regseq_model::model::RegisterBlock)>,
+) {
+    for block in &module.register_blocks {
+        if let Some((&def_id, _)) = register_block_map.iter().find(|(_, id)| **id == block.id) {
+            out.push((def_id, block.clone()));
+        }
+    }
+    for sub in &module.submodules {
+        collect_register_block_refs_inner(sub, register_block_map, out);
+    }
 }
 
 /// Run Pass 1 and return both the [`RegseqModel`] and the cross-reference

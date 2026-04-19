@@ -24,7 +24,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
-    Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
+    Pass1Output, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -387,6 +387,9 @@ fn disable_uart_like_method_translates_to_straight_line_body() {
                 &ordered_markers,
                 &try_markers,
                 &log_arg,
+                &RegisterIndex::default(),
+                &std::collections::HashMap::new(),
+                &AbstractionTypeRegistry::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on straight-line MIR");
@@ -738,6 +741,9 @@ fn inline_asm_surfaces_unsupported_terminator() {
             &ordered_markers,
             &try_markers,
             &log_arg,
+            &RegisterIndex::default(),
+            &std::collections::HashMap::new(),
+            &AbstractionTypeRegistry::default(),
             &mut interner,
         )
         .map(|_| ())
@@ -789,6 +795,9 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
             &ordered_markers,
             &try_markers,
             &log_arg,
+            &RegisterIndex::default(),
+            &std::collections::HashMap::new(),
+            &AbstractionTypeRegistry::default(),
             &mut interner,
         )
         .expect("build_body must succeed on the free-fn specimen")

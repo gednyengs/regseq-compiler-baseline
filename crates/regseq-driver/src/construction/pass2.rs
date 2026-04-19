@@ -72,8 +72,10 @@ use super::mir_mapping::{
     MapOperandResult, TypeDefIndex,
 };
 use super::ordered_region::{pair_ordered_regions, OrderedMarkerSite, OrderedMarkers};
+use super::register_metadata::{is_register_intrinsic, resolve_register_metadata, RegisterIndex};
 use super::try_folding::{TryFoldAnalysis, TryMarkers};
 use super::{resolve_origin, ConstructionError, ErrorProvenance};
+use crate::extract::abstraction_types::AbstractionTypeRegistry;
 
 /// Build a Regseq IR [`Body`] for the function identified by `def_id`
 /// by translating its monomorphized MIR body.
@@ -99,6 +101,9 @@ pub fn build_body<'tcx>(
     ordered_markers: &OrderedMarkers,
     try_markers: &TryMarkers,
     log_arg: &LogArgUnwrap,
+    register_index: &RegisterIndex,
+    register_block_map: &HashMap<DefId, regseq_model::identity::RegisterBlockId>,
+    abstraction_registry: &AbstractionTypeRegistry,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -234,6 +239,9 @@ pub fn build_body<'tcx>(
             &try_folds,
             log_arg,
             &log_folds,
+            register_index,
+            register_block_map,
+            abstraction_registry,
             current_id,
             &mut ordered_sites,
             interner,
@@ -611,6 +619,9 @@ fn translate_terminator<'tcx>(
     try_folds: &TryFoldAnalysis<'tcx>,
     log_arg: &LogArgUnwrap,
     log_folds: &LogFoldAnalysis,
+    register_index: &RegisterIndex,
+    register_block_map: &HashMap<DefId, regseq_model::identity::RegisterBlockId>,
+    abstraction_registry: &AbstractionTypeRegistry,
     current_block: BasicBlockId,
     ordered_sites: &mut Vec<OrderedMarkerSite>,
     interner: &mut SymbolInterner,
@@ -810,6 +821,20 @@ fn translate_terminator<'tcx>(
                 // computed above (template + array operand) is
                 // discarded -- the rebuilt list contains only the
                 // inner per-argument operands.
+                //
+                // Recognition rule 7 (ir-reference.md Section 8): for
+                // register-access intrinsics (`RegisterRead`,
+                // `RegisterReadField`, `RegisterWrite`,
+                // `RegisterWriteField`), resolve the register-block /
+                // offset / access-width / optional field metadata
+                // from the call's receiver type + monomorphized
+                // generic args + field operand, and attach it as
+                // [`IntrinsicMetadata::Register`]. The argument list
+                // is preserved as-is (the field operand stays in
+                // `args[1]` so backends keep access to composed
+                // `FieldValue` inputs, and the register-marker
+                // `RegisterId` carrier stays in `args[1]` for
+                // `RegisterRead` / `RegisterWrite`).
                 let (final_args, metadata) = if is_log_intrinsic(variant) {
                     let extraction = extract_log_metadata(
                         tcx,
@@ -824,6 +849,35 @@ fn translate_terminator<'tcx>(
                         interner,
                     )?;
                     (extraction.args, Some(extraction.metadata))
+                } else if is_register_intrinsic(variant) {
+                    let generic_args = callee_generic_args(func).ok_or_else(|| {
+                        ConstructionError::UnresolvedCallTarget {
+                            provenance: ErrorProvenance {
+                                item_path: tcx.def_path_str(callee_def_id),
+                                span: term.source_info.span,
+                            },
+                            rendered: format!(
+                                "register intrinsic `{}` call site has no resolvable generic args",
+                                variant.canonical_name(),
+                            ),
+                        }
+                    })?;
+                    let resolution = resolve_register_metadata(
+                        tcx,
+                        variant,
+                        callee_def_id,
+                        generic_args,
+                        args,
+                        locals,
+                        register_index,
+                        register_block_map,
+                        abstraction_registry,
+                        term.source_info.span,
+                    )?;
+                    match resolution {
+                        Some(r) => (mapped_args, Some(r.metadata)),
+                        None => (mapped_args, None),
+                    }
                 } else {
                     (mapped_args, None)
                 };
@@ -1055,6 +1109,24 @@ fn resolve_callee_def_id<'tcx>(
         provenance: ErrorProvenance::for_span(span),
         rendered: format!("{func:?}"),
     })
+}
+
+/// Recover the monomorphized generic-argument list from a MIR
+/// `Call::func` operand. Returns [`None`] if `func` is not a direct
+/// `FnDef` constant -- Rule 7 requires the generic args to pull the
+/// register-marker `R` type parameter out, so indirect calls have
+/// no metadata to attach.
+fn callee_generic_args<'tcx>(func: &mir::Operand<'tcx>) -> Option<ty::GenericArgsRef<'tcx>> {
+    let mir::Operand::Constant(const_op) = func else {
+        return None;
+    };
+    let mir::Const::Val(_, ty) = const_op.const_ else {
+        return None;
+    };
+    let ty::TyKind::FnDef(_, args) = ty.kind() else {
+        return None;
+    };
+    Some(*args)
 }
 
 fn require_block(
