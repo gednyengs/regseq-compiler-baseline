@@ -1,0 +1,10 @@
+#![no_std]
+
+#[rseq::driver(name = "log-metadata-unsupported-fmt")]
+pub struct BadDriver {}
+
+impl BadDriver {
+    pub fn log_debug_fmt(value: u32) {
+        regseq::log_info!("debug formatted: {:?}", value);
+    }
+}

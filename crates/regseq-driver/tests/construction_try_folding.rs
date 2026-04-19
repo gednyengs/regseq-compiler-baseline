@@ -34,8 +34,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
-    ExtractionRegistries, FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output,
-    PinStateRegistry, TryMarkers, TypeDefIndex,
+    ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
+    Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -250,6 +250,7 @@ fn run_build_body<'tcx>(
         .expect("Deref lang item must be resolvable on the specimen crate");
     let ordered_markers = OrderedMarkers::default();
     let try_markers = TryMarkers::resolve(tcx);
+    let log_arg = LogArgUnwrap::default();
     assert!(
         try_markers.is_resolved(),
         "Try::branch / FromResidual::from_residual lang items must resolve on any `#![no_std]` specimen that depends on core",
@@ -266,6 +267,7 @@ fn run_build_body<'tcx>(
         &deref_lookup,
         &ordered_markers,
         &try_markers,
+        &log_arg,
         &mut interner,
     )
 }
@@ -709,6 +711,7 @@ fn manual_try_branch_without_switch_raises_malformed_try_pattern() {
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::resolve(tcx);
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
 
             match build_body(
@@ -722,6 +725,7 @@ fn manual_try_branch_without_switch_raises_malformed_try_pattern() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             ) {
                 Err(ConstructionError::MalformedTryPattern {
@@ -810,6 +814,7 @@ fn break_path_without_from_residual_raises_malformed_try_pattern() {
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::resolve(tcx);
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
 
             match build_body(
@@ -823,6 +828,7 @@ fn break_path_without_from_residual_raises_malformed_try_pattern() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             ) {
                 Err(ConstructionError::MalformedTryPattern { step, .. }) => Ok(step.to_string()),
@@ -1003,6 +1009,7 @@ fn intrinsic_call_question_mark_folds_with_error_target() {
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::resolve(tcx);
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -1015,6 +1022,7 @@ fn intrinsic_call_question_mark_folds_with_error_target() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             )
             .expect("build_body must succeed on intrinsic `?` fold");

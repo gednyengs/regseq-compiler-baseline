@@ -36,7 +36,7 @@ pub mod walk;
 pub mod cross_crate;
 pub mod deref_collapse;
 pub mod intrinsics;
-pub(crate) mod log_metadata;
+pub mod log_metadata;
 pub(crate) mod mir_mapping;
 pub(crate) mod module_deps;
 pub(crate) mod ordered_region;
@@ -51,6 +51,7 @@ pub(crate) mod try_folding;
 // of the public `construction::*` surface.
 pub use deref_collapse::{DerefCollapseLookup, DerefCollapseRewrites, TRANSPORT_ABSTRACTIONS};
 pub use intrinsics::IntrinsicLookup;
+pub use log_metadata::LogArgUnwrap;
 pub use mir_mapping::{
     map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex,
     LocalIdMap, MapOperandResult, TypeDefIndex,
@@ -354,6 +355,36 @@ pub enum ConstructionError {
         /// set of tags.
         step: &'static str,
     },
+    /// A logging intrinsic call carries a template-string placeholder
+    /// outside the restricted Regseq subset. Raised by
+    /// [`construction::log_metadata`](self::log_metadata) when the
+    /// template parser encounters a format specifier other than the
+    /// supported `Display`, `LowerHex`, `UpperHex`,
+    /// `LowerHexPrefixed`, `UpperHexPrefixed`, `PaddedHex`, or
+    /// `Pointer` variants (for example `{:?}` or named placeholders).
+    UnsupportedLogFormat {
+        /// Provenance of the originating logging call site.
+        provenance: ErrorProvenance,
+        /// The full template string carrying the offending placeholder.
+        template: String,
+        /// Rendered form of the offending placeholder (e.g. `{:?}`).
+        placeholder: String,
+    },
+    /// A logging intrinsic call's parsed placeholder count does not
+    /// match the number of supplied arguments after `LogArg` carrier
+    /// stripping. Raised by
+    /// [`construction::log_metadata`](self::log_metadata) when arity
+    /// validation fails (template `{} {}` with one argument, etc.).
+    LogPlaceholderArityMismatch {
+        /// Provenance of the originating logging call site.
+        provenance: ErrorProvenance,
+        /// The full template string carrying the placeholders.
+        template: String,
+        /// Number of placeholders parsed from the template.
+        placeholders: usize,
+        /// Number of supplied arguments after `LogArg` stripping.
+        args: usize,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -514,6 +545,25 @@ impl std::fmt::Display for ConstructionError {
             } => write!(
                 f,
                 "malformed `?`-pattern at bb{call_mir_block} (step: {step}) (at `{}`)",
+                provenance.item_path,
+            ),
+            Self::UnsupportedLogFormat {
+                provenance,
+                template,
+                placeholder,
+            } => write!(
+                f,
+                "unsupported log format placeholder `{placeholder}` in template `{template}` (at `{}`)",
+                provenance.item_path,
+            ),
+            Self::LogPlaceholderArityMismatch {
+                provenance,
+                template,
+                placeholders,
+                args,
+            } => write!(
+                f,
+                "log template `{template}` has {placeholders} placeholder(s) but {args} argument(s) (at `{}`)",
                 provenance.item_path,
             ),
         }

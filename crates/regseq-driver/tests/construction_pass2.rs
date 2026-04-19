@@ -23,8 +23,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
-    ExtractionRegistries, FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output,
-    PinStateRegistry, TryMarkers, TypeDefIndex,
+    ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
+    Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -373,6 +373,7 @@ fn disable_uart_like_method_translates_to_straight_line_body() {
                 .expect("Deref lang item must be resolvable on the specimen crate");
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -385,6 +386,7 @@ fn disable_uart_like_method_translates_to_straight_line_body() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             )
             .expect("build_body must succeed on straight-line MIR");
@@ -722,6 +724,7 @@ fn inline_asm_surfaces_unsupported_terminator() {
             .expect("Deref lang item must be resolvable on the specimen crate");
         let ordered_markers = OrderedMarkers::default();
         let try_markers = TryMarkers::default();
+        let log_arg = LogArgUnwrap::default();
         let mut interner = SymbolInterner::new();
         build_body(
             tcx,
@@ -734,6 +737,7 @@ fn inline_asm_surfaces_unsupported_terminator() {
             &deref_lookup,
             &ordered_markers,
             &try_markers,
+            &log_arg,
             &mut interner,
         )
         .map(|_| ())
@@ -771,6 +775,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
             .expect("Deref lang item must be resolvable on the specimen crate");
         let ordered_markers = OrderedMarkers::default();
         let try_markers = TryMarkers::default();
+        let log_arg = LogArgUnwrap::default();
         let mut interner = SymbolInterner::new();
         build_body(
             tcx,
@@ -783,6 +788,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
             &deref_lookup,
             &ordered_markers,
             &try_markers,
+            &log_arg,
             &mut interner,
         )
         .expect("build_body must succeed on the free-fn specimen")

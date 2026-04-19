@@ -43,8 +43,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
-    ExtractionRegistries, FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output,
-    PinStateRegistry, TryMarkers, TypeDefIndex,
+    ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
+    Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -395,6 +395,7 @@ fn program_polling_port_records_single_ordered_region() {
             let end = find_free_fn_def_id(tcx, "ordered_region_end");
             let ordered_markers = OrderedMarkers::from_def_ids(begin, end);
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let caller = find_method_def_id(tcx, "Drv", "program_polling_port");
             let caller_fn_id = *pass1
                 .cross_refs
@@ -461,6 +462,7 @@ fn program_polling_port_records_single_ordered_region() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             )
             .expect("build_body must succeed on program_polling_port");
@@ -849,6 +851,7 @@ fn nested_ordered_regions_produce_strict_containment() {
         let end = find_free_fn_def_id(tcx, "ordered_region_end");
         let ordered_markers = OrderedMarkers::from_def_ids(begin, end);
         let try_markers = TryMarkers::default();
+        let log_arg = LogArgUnwrap::default();
         let caller = find_method_def_id(tcx, "Drv", "nested");
         let caller_fn_id = *pass1
             .cross_refs
@@ -874,6 +877,7 @@ fn nested_ordered_regions_produce_strict_containment() {
             &deref_lookup,
             &ordered_markers,
             &try_markers,
+            &log_arg,
             &mut interner,
         )
         .expect("build_body must succeed on nested");
@@ -955,6 +959,7 @@ fn unpaired_begin_marker_hard_errors() {
             let end = find_free_fn_def_id(tcx, "ordered_region_end");
             let ordered_markers = OrderedMarkers::from_def_ids(begin, end);
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let caller = find_method_def_id(tcx, "Drv", "unpaired_begin");
             let caller_fn_id = *pass1
                 .cross_refs
@@ -980,6 +985,7 @@ fn unpaired_begin_marker_hard_errors() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             ) {
                 Err(ConstructionError::UnpairedOrderedMarker { rendered, .. }) => Ok(rendered),
@@ -1024,6 +1030,7 @@ fn unpaired_end_marker_hard_errors() {
             let end = find_free_fn_def_id(tcx, "ordered_region_end");
             let ordered_markers = OrderedMarkers::from_def_ids(begin, end);
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let caller = find_method_def_id(tcx, "Drv", "unpaired_end");
             let caller_fn_id = *pass1
                 .cross_refs
@@ -1049,6 +1056,7 @@ fn unpaired_end_marker_hard_errors() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             ) {
                 Err(ConstructionError::UnpairedOrderedMarker { rendered, .. }) => Ok(rendered),

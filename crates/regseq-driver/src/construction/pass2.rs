@@ -66,6 +66,7 @@ use super::deref_collapse::{
     receiver_mir_place, rewrite_body_places, DerefCollapseLookup, DerefCollapseRewrites,
 };
 use super::intrinsics::IntrinsicLookup;
+use super::log_metadata::{extract_log_metadata, is_log_intrinsic, LogArgUnwrap, LogFoldAnalysis};
 use super::mir_mapping::{
     map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex, LocalIdMap,
     MapOperandResult, TypeDefIndex,
@@ -97,6 +98,7 @@ pub fn build_body<'tcx>(
     deref_lookup: &DerefCollapseLookup<'_>,
     ordered_markers: &OrderedMarkers,
     try_markers: &TryMarkers,
+    log_arg: &LogArgUnwrap,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -114,6 +116,18 @@ pub fn build_body<'tcx>(
     // blocks drop out naturally once unreachable.
     let try_folds = TryFoldAnalysis::analyze(tcx, def_id, try_markers, mir_body)?;
 
+    // Rule 6 `LogArg` carrier pre-fold: identify every MIR local
+    // whose type is `LogArg<'_>` (or an array thereof) so the
+    // local-decl translation can skip them before
+    // [`super::mir_mapping::map_ty`] is asked to resolve the
+    // cross-crate `LogArg` ADT. Statement and terminator translation
+    // consult the same set to drop array-aggregate Assigns and
+    // collapse `LogArg::from(...)` Calls to `Goto`. The actual log
+    // metadata extraction still runs at the IntrinsicCall site (see
+    // [`extract_log_metadata`]) using the live MIR -- LogFoldAnalysis
+    // only handles the structural elision, not the metadata payload.
+    let log_folds = LogFoldAnalysis::analyze(mir_body, log_arg);
+
     let block_map = build_block_map(mir_body, &try_folds);
     let local_name_map = build_local_name_map(mir_body, interner);
     let (local_decls, local_sources, local_id_map) = build_local_decls(
@@ -122,6 +136,7 @@ pub fn build_body<'tcx>(
         &local_name_map,
         type_def_index,
         &try_folds,
+        &log_folds,
         interner,
     )?;
 
@@ -160,7 +175,22 @@ pub fn build_body<'tcx>(
             if let mir::StatementKind::StorageLive(l) | mir::StatementKind::StorageDead(l) =
                 &stmt.kind
             {
-                if try_folds.is_dropped_local(*l) {
+                if try_folds.is_dropped_local(*l) || log_folds.is_dropped_local(*l) {
+                    continue;
+                }
+            }
+            // Rule 6: drop any Assign whose destination is a
+            // `LogArg`-carrier local. This covers both the per-arg
+            // rename moves (e.g. `_t = move _from_call_dest`) and
+            // the `[LogArg<'_>; N]` Aggregate(Array) statement that
+            // collects the per-arg LogArg values for the log
+            // intrinsic call. The IntrinsicCall translation rebuilds
+            // the inner-arg list directly from the MIR body (see
+            // `extract_log_metadata`), so the dropped statements
+            // carry no information that survives into the Regseq IR.
+            if let mir::StatementKind::Assign(boxed) = &stmt.kind {
+                let (place, _) = boxed.as_ref();
+                if place.projection.is_empty() && log_folds.is_dropped_local(place.local) {
                     continue;
                 }
             }
@@ -189,6 +219,7 @@ pub fn build_body<'tcx>(
         let term_kind = translate_terminator(
             tcx,
             def_id,
+            mir_body,
             term_data,
             mir_bb,
             &block_map,
@@ -201,6 +232,8 @@ pub fn build_body<'tcx>(
             &mut deref_rewrites,
             ordered_markers,
             &try_folds,
+            log_arg,
+            &log_folds,
             current_id,
             &mut ordered_sites,
             interner,
@@ -387,12 +420,14 @@ fn build_local_name_map<'tcx>(
 /// Build the Regseq IR [`LocalDecl`] vector, the parallel source-origin
 /// vector, and the [`LocalIdMap`] used by statement/terminator
 /// translation.
+#[allow(clippy::too_many_arguments)]
 fn build_local_decls<'a, 'tcx>(
     tcx: TyCtxt<'tcx>,
     mir_body: &'a mir::Body<'tcx>,
     name_map: &HashMap<mir::Local, Symbol>,
     type_def_index: &TypeDefIndex<'_>,
     try_folds: &TryFoldAnalysis<'tcx>,
+    log_folds: &LogFoldAnalysis,
     interner: &mut SymbolInterner,
 ) -> Result<(Vec<LocalDecl>, Vec<SourceOrigin>, LocalIdMap<'a, 'tcx>), ConstructionError> {
     let mut local_id_map = LocalIdMap::new(&mir_body.local_decls);
@@ -408,9 +443,14 @@ fn build_local_decls<'a, 'tcx>(
     // without changes. All references to the dropped locals are
     // themselves in blocks / statements the fold also drops, so no
     // `LocalIdMap::lookup` against a dropped local ever succeeds.
+    //
+    // Rule 6 (logging) shares the same dropping discipline for the
+    // `LogArg<'_>` carrier locals + the `[LogArg<'_>; N]` array
+    // local; see [`LogFoldAnalysis`]. The cross-crate `LogArg` ADT
+    // never reaches `map_ty` thanks to this skip.
     let mut next: u32 = 0;
     for (local, decl) in mir_body.local_decls.iter_enumerated() {
-        if try_folds.is_dropped_local(local) {
+        if try_folds.is_dropped_local(local) || log_folds.is_dropped_local(local) {
             continue;
         }
         local_id_map.insert(local, LocalId::new(next));
@@ -556,6 +596,7 @@ fn lookup_local<'tcx>(
 fn translate_terminator<'tcx>(
     tcx: TyCtxt<'tcx>,
     owner_def_id: DefId,
+    mir_body: &mir::Body<'tcx>,
     term: &mir::Terminator<'tcx>,
     mir_bb: mir::BasicBlock,
     block_map: &[Option<BasicBlockId>],
@@ -568,6 +609,8 @@ fn translate_terminator<'tcx>(
     deref_rewrites: &mut DerefCollapseRewrites,
     ordered_markers: &OrderedMarkers,
     try_folds: &TryFoldAnalysis<'tcx>,
+    log_arg: &LogArgUnwrap,
+    log_folds: &LogFoldAnalysis,
     current_block: BasicBlockId,
     ordered_sites: &mut Vec<OrderedMarkerSite>,
     interner: &mut SymbolInterner,
@@ -596,6 +639,33 @@ fn translate_terminator<'tcx>(
             ..
         } => {
             let callee_def_id = resolve_callee_def_id(func, term.source_info.span)?;
+
+            // Rule 6: collapse `LogArg::from(value)` Calls (and any
+            // other Call whose destination is a dropped `LogArg`
+            // carrier local) into an unconditional `Goto` to the
+            // call's return target. The IntrinsicCall translation
+            // for the enclosing log call rebuilds the inner-arg list
+            // by walking the MIR directly (see
+            // `extract_log_metadata`), so the collapsed Call's
+            // operands carry no information that survives into the
+            // Regseq IR. Dropping them keeps the cross-crate
+            // `LogArg` ADT out of [`map_ty`].
+            if destination.projection.is_empty() && log_folds.is_dropped_local(destination.local) {
+                let return_target =
+                    target.ok_or_else(|| ConstructionError::UnsupportedTerminator {
+                        provenance: ErrorProvenance {
+                            item_path: tcx.def_path_str(callee_def_id),
+                            span: term.source_info.span,
+                        },
+                        rendered: "LogArg-producing Call has no return target -- cannot collapse"
+                            .to_string(),
+                    })?;
+                return Ok(TerminatorKind::Goto(require_block(
+                    block_map,
+                    return_target,
+                    term.source_info.span,
+                )?));
+            }
 
             // Recognition rule 5 (ir-reference.md Section 8): paired
             // `regseq::internal::ordered_region_begin()` /
@@ -656,16 +726,30 @@ fn translate_terminator<'tcx>(
                 return Ok(collapse);
             }
 
-            let mut mapped_args: Vec<regseq_model::ir::Operand> = Vec::with_capacity(args.len());
-            for arg in args.iter() {
-                mapped_args.push(require_operand(
-                    tcx,
-                    &arg.node,
-                    locals,
-                    type_def_index,
-                    constants,
-                    interner,
-                )?);
+            // For logging intrinsics, the original MIR args are
+            // `(template: &'static str, [LogArg<'_>; N])` -- both
+            // shapes that the regular per-arg mapping rejects (the
+            // `Slice` constant is not a Regseq scalar, and the
+            // `LogArg` array's element type is the cross-crate
+            // `LogArg` ADT). Skip the regular mapping when Rule 6
+            // applies and let `extract_log_metadata` rebuild the
+            // arg list from the inner per-argument operands.
+            let is_log_call = intrinsics
+                .lookup(callee_def_id)
+                .is_some_and(is_log_intrinsic);
+            let mut mapped_args: Vec<regseq_model::ir::Operand> = Vec::new();
+            if !is_log_call {
+                mapped_args.reserve(args.len());
+                for arg in args.iter() {
+                    mapped_args.push(require_operand(
+                        tcx,
+                        &arg.node,
+                        locals,
+                        type_def_index,
+                        constants,
+                        interner,
+                    )?);
+                }
             }
 
             // Rule 2 (ir-reference.md Section 5): when `TryFoldAnalysis`
@@ -690,6 +774,7 @@ fn translate_terminator<'tcx>(
             // lookup does not distinguish, and the translated arg
             // order matches MIR's verbatim (spec.md Section 10).
             if let Some(variant) = intrinsics.lookup(callee_def_id) {
+                let _ = log_folds; // silence unused-binding warning when no log calls fire
                 let (intrinsic_target, intrinsic_error_target) = match fold {
                     Some(info) => (
                         require_block(block_map, info.continue_target, term.source_info.span)?,
@@ -715,10 +800,38 @@ fn translate_terminator<'tcx>(
                         }
                     },
                 };
+
+                // Recognition rule 6 (ir-reference.md Section 8): for
+                // logging intrinsics, extract the template from the
+                // first MIR arg, parse the restricted format subset
+                // into placeholders, and unwrap the `LogArg::from(...)`
+                // carrier on every element of the second MIR arg
+                // (the `[LogArg<'_>; N]` array). The `mapped_args`
+                // computed above (template + array operand) is
+                // discarded -- the rebuilt list contains only the
+                // inner per-argument operands.
+                let (final_args, metadata) = if is_log_intrinsic(variant) {
+                    let extraction = extract_log_metadata(
+                        tcx,
+                        mir_body,
+                        owner_def_id,
+                        args,
+                        locals,
+                        type_def_index,
+                        constants,
+                        log_arg,
+                        term.source_info.span,
+                        interner,
+                    )?;
+                    (extraction.args, Some(extraction.metadata))
+                } else {
+                    (mapped_args, None)
+                };
+
                 return Ok(TerminatorKind::IntrinsicCall {
                     intrinsic: variant,
-                    args: mapped_args,
-                    metadata: None,
+                    args: final_args,
+                    metadata,
                     destination: dest,
                     target: intrinsic_target,
                     error_target: intrinsic_error_target,

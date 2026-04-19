@@ -1036,7 +1036,7 @@
           "id": "regseq-model-50",
           "name": "Rule 6 - logging metadata extraction",
           "spec": ".harness/tasks/regseq-model/50-logging-metadata.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-45"
           ],

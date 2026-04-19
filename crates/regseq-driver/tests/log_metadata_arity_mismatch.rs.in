@@ -1,0 +1,10 @@
+#![no_std]
+
+#[rseq::driver(name = "log-metadata-arity-mismatch")]
+pub struct BadDriver {}
+
+impl BadDriver {
+    pub fn log_too_few_args(value: u32) {
+        regseq::log_info!("placeholders: {} {}", value);
+    }
+}

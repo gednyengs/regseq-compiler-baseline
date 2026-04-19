@@ -35,7 +35,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, build_pass1_output_with_cross_crate_depth, ConstantIndex,
     ConstructionError, DerefCollapseLookup, ExtractionRegistries, FunctionIndex, IntrinsicLookup,
-    OrderedMarkers, Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
+    LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateRegistry, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -783,6 +783,7 @@ fn pass2_build_body_does_not_silently_pass_through_a_placeholder() {
                 .expect("Deref lang item must be resolvable");
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
 
             let mut placeholder_ok_seen = false;
             let mut real_outcome_seen = false;
@@ -803,6 +804,7 @@ fn pass2_build_body_does_not_silently_pass_through_a_placeholder() {
                     &deref_lookup,
                     &ordered_markers,
                     &try_markers,
+                    &log_arg,
                     &mut interner,
                 );
                 match body_result {

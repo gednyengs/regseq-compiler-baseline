@@ -156,6 +156,7 @@ impl Pl011FullSpec {
     fn program_polling_port(&mut self, uart_clk_hz: u32, baud_rate: u32) {
         self.disable_uart();
         self.disable_fifo();
+        regseq::log_info!("pl011 baud rate: {}", baud_rate);
         ordered! {
             self.set_baud_rate(uart_clk_hz, baud_rate);
             self.configure_line_control();

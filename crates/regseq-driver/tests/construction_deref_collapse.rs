@@ -44,8 +44,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, DerefCollapseLookup, ExtractionRegistries,
-    FunctionIndex, IntrinsicLookup, OrderedMarkers, Pass1Output, PinStateRegistry, TryMarkers,
-    TypeDefIndex,
+    FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateRegistry,
+    TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -480,6 +480,7 @@ fn transport_deref_call_is_dropped_and_place_reroots_to_receiver() {
             let intrinsics = IntrinsicLookup::default();
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
             let body = build_body(
                 tcx,
@@ -492,6 +493,7 @@ fn transport_deref_call_is_dropped_and_place_reroots_to_receiver() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller function");
@@ -592,6 +594,7 @@ fn non_transport_deref_is_preserved_as_regular_call() {
             let intrinsics = IntrinsicLookup::default();
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
             // The non-transport caller translates to a regular `Call`
             // for the `Deref::deref` invocation. Since `Deref::deref`'s
@@ -613,6 +616,7 @@ fn non_transport_deref_is_preserved_as_regular_call() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             );
             match result {
@@ -682,6 +686,7 @@ fn two_consecutive_transport_derefs_collapse_independently() {
             let intrinsics = IntrinsicLookup::default();
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
             build_body(
                 tcx,
@@ -694,6 +699,7 @@ fn two_consecutive_transport_derefs_collapse_independently() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             )
             .expect("build_body must succeed on the double-deref caller")
@@ -780,6 +786,7 @@ fn collapse_is_gated_by_registry_entry_not_by_type_name() {
             let intrinsics = IntrinsicLookup::default();
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
             let result = build_body(
                 tcx,
@@ -792,6 +799,7 @@ fn collapse_is_gated_by_registry_entry_not_by_type_name() {
                 &deref_lookup,
                 &ordered_markers,
                 &try_markers,
+                &log_arg,
                 &mut interner,
             );
             match result {
@@ -862,6 +870,7 @@ fn constructed_module_has_zero_residual_deref_calls() {
             let intrinsics = IntrinsicLookup::default();
             let ordered_markers = OrderedMarkers::default();
             let try_markers = TryMarkers::default();
+            let log_arg = LogArgUnwrap::default();
             let mut interner = SymbolInterner::new();
 
             // Enumerate every function-bearing item in the specimen's
@@ -924,6 +933,7 @@ fn constructed_module_has_zero_residual_deref_calls() {
                     &deref_lookup,
                     &ordered_markers,
                     &try_markers,
+                    &log_arg,
                     &mut interner,
                 );
                 match result {
