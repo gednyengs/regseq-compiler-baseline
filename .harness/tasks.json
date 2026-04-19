@@ -1072,7 +1072,7 @@
           "id": "regseq-model-53",
           "name": "Module abstraction and intrinsic dependency sets",
           "spec": ".harness/tasks/regseq-model/53-module-dependency-sets.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-45"
           ],

@@ -38,7 +38,7 @@ pub mod deref_collapse;
 pub mod intrinsics;
 pub mod log_metadata;
 pub(crate) mod mir_mapping;
-pub(crate) mod module_deps;
+pub mod module_deps;
 pub(crate) mod ordered_region;
 pub(crate) mod pass2;
 pub(crate) mod pinctrl_metadata;
@@ -56,6 +56,7 @@ pub use mir_mapping::{
     map_const, map_operand, map_place, map_rvalue, map_ty, ConstantIndex, FunctionIndex,
     LocalIdMap, MapOperandResult, TypeDefIndex,
 };
+pub use module_deps::derive_module_dependencies;
 pub use ordered_region::OrderedMarkers;
 pub use pass2::build_body;
 pub use pinctrl_metadata::PinStateLookup;
