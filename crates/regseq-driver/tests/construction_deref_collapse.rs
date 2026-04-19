@@ -44,8 +44,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, DerefCollapseLookup, ExtractionRegistries,
-    FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateRegistry,
-    RegisterIndex, TryMarkers, TypeDefIndex,
+    FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateLookup,
+    PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -497,6 +497,7 @@ fn transport_deref_call_is_dropped_and_place_reroots_to_receiver() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller function");
@@ -623,6 +624,7 @@ fn non_transport_deref_is_preserved_as_regular_call() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             );
             match result {
@@ -709,6 +711,7 @@ fn two_consecutive_transport_derefs_collapse_independently() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the double-deref caller")
@@ -812,6 +815,7 @@ fn collapse_is_gated_by_registry_entry_not_by_type_name() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             );
             match result {
@@ -949,6 +953,7 @@ fn constructed_module_has_zero_residual_deref_calls() {
                     &RegisterIndex::default(),
                     &std::collections::HashMap::new(),
                     &AbstractionTypeRegistry::default(),
+                    &PinStateLookup::default(),
                     &mut interner,
                 );
                 match result {

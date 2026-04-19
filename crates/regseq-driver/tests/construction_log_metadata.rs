@@ -37,7 +37,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
-    PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
+    PinStateLookup, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -389,6 +389,7 @@ fn snapshot_log_call<'tcx>(
         &RegisterIndex::default(),
         &std::collections::HashMap::new(),
         &AbstractionTypeRegistry::default(),
+        &PinStateLookup::default(),
         &mut interner,
     )?;
 

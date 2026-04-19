@@ -49,8 +49,8 @@ use rustc_middle::ty::TyCtxt;
 
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, DerefCollapseLookup, ExtractionRegistries,
-    FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateRegistry,
-    RegisterIndex, TryMarkers, TypeDefIndex,
+    FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateLookup,
+    PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -373,6 +373,7 @@ fn build_method_body(source: &str, test_name: &str, self_ty: &str, method: &str)
             &RegisterIndex::default(),
             &std::collections::HashMap::new(),
             &AbstractionTypeRegistry::default(),
+            &PinStateLookup::default(),
             &mut interner,
         )
         .expect("build_body must succeed on the specimen method")
@@ -414,6 +415,7 @@ fn build_free_fn_body(source: &str, test_name: &str, fn_name: &str) -> Body {
             &RegisterIndex::default(),
             &std::collections::HashMap::new(),
             &AbstractionTypeRegistry::default(),
+            &PinStateLookup::default(),
             &mut interner,
         )
         .expect("build_body must succeed on the free-fn specimen")
@@ -773,6 +775,7 @@ fn switch_with_cleanup_renumbers_targets_correctly() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed");

@@ -72,6 +72,9 @@ use super::mir_mapping::{
     MapOperandResult, TypeDefIndex,
 };
 use super::ordered_region::{pair_ordered_regions, OrderedMarkerSite, OrderedMarkers};
+use super::pinctrl_metadata::{
+    is_pinctrl_apply_intrinsic, resolve_pinctrl_metadata, PinStateLookup,
+};
 use super::register_metadata::{is_register_intrinsic, resolve_register_metadata, RegisterIndex};
 use super::try_folding::{TryFoldAnalysis, TryMarkers};
 use super::{resolve_origin, ConstructionError, ErrorProvenance};
@@ -104,6 +107,7 @@ pub fn build_body<'tcx>(
     register_index: &RegisterIndex,
     register_block_map: &HashMap<DefId, regseq_model::identity::RegisterBlockId>,
     abstraction_registry: &AbstractionTypeRegistry,
+    pin_state_lookup: &PinStateLookup,
     interner: &mut SymbolInterner,
 ) -> Result<Body, ConstructionError> {
     // `function_id` is currently not consumed inside `build_body` -- the
@@ -242,6 +246,7 @@ pub fn build_body<'tcx>(
             register_index,
             register_block_map,
             abstraction_registry,
+            pin_state_lookup,
             current_id,
             &mut ordered_sites,
             interner,
@@ -622,6 +627,7 @@ fn translate_terminator<'tcx>(
     register_index: &RegisterIndex,
     register_block_map: &HashMap<DefId, regseq_model::identity::RegisterBlockId>,
     abstraction_registry: &AbstractionTypeRegistry,
+    pin_state_lookup: &PinStateLookup,
     current_block: BasicBlockId,
     ordered_sites: &mut Vec<OrderedMarkerSite>,
     interner: &mut SymbolInterner,
@@ -878,6 +884,34 @@ fn translate_terminator<'tcx>(
                         Some(r) => (mapped_args, Some(r.metadata)),
                         None => (mapped_args, None),
                     }
+                } else if is_pinctrl_apply_intrinsic(variant) {
+                    // Rule 8 (task regseq-model-52): recover the
+                    // monomorphized `S` type parameter from the
+                    // callee's generic args, look it up in the
+                    // Pass 1 `PinStateLookup`, and attach
+                    // `IntrinsicMetadata::PinCtrl { state_id }`. A
+                    // missing `#[rseq::pin_state]` attribute trips
+                    // `MissingPinStateAttribute`.
+                    let generic_args = callee_generic_args(func).ok_or_else(|| {
+                        ConstructionError::UnresolvedCallTarget {
+                            provenance: ErrorProvenance {
+                                item_path: tcx.def_path_str(callee_def_id),
+                                span: term.source_info.span,
+                            },
+                            rendered: format!(
+                                "pinctrl intrinsic `{}` call site has no resolvable generic args",
+                                variant.canonical_name(),
+                            ),
+                        }
+                    })?;
+                    let resolution = resolve_pinctrl_metadata(
+                        tcx,
+                        callee_def_id,
+                        generic_args,
+                        pin_state_lookup,
+                        term.source_info.span,
+                    )?;
+                    (mapped_args, Some(resolution.metadata))
                 } else {
                     (mapped_args, None)
                 };

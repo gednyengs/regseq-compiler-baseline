@@ -32,7 +32,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
-    Pass1Output, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
+    Pass1Output, PinStateLookup, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -638,6 +638,7 @@ fn translate_body<'tcx>(
         reg_index,
         &pass1.cross_refs.register_blocks,
         &ctx.abstraction_registry,
+        &PinStateLookup::default(),
         &mut interner,
     )?;
 

@@ -35,7 +35,7 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, ConstantIndex, ConstructionError, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
-    Pass1Output, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
+    Pass1Output, PinStateLookup, PinStateRegistry, RegisterIndex, TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -246,11 +246,17 @@ impl Clock {
     pub fn get_rate(&self) -> u32 { 0 }
 }
 
+pub trait PinState {}
+
 pub struct PinCtrl;
 
 impl PinCtrl {
-    pub fn apply(&self) {}
+    pub fn apply<S: PinState>(&self) {}
 }
+
+#[rseq::pin_state(id = "default")]
+pub struct DefaultState;
+impl PinState for DefaultState {}
 
 pub fn busy_wait(_us: u64) {}
 
@@ -270,7 +276,7 @@ impl Drv {
     }
 
     pub fn call_pinctrl_apply(&self) {
-        self.pins.apply()
+        self.pins.apply::<DefaultState>()
     }
 
     pub fn call_free_intrinsic(&self) {
@@ -331,6 +337,7 @@ fn method_intrinsic_preserves_self_as_first_arg() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -450,6 +457,7 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &pass1.cross_refs.pin_state_lookup,
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -494,8 +502,8 @@ fn pinctrl_apply_method_intrinsic_preserves_self_as_first_arg() {
         "args[0] must be a Place operand carrying the receiver",
     );
     assert!(
-        !has_metadata,
-        "task 45 emits metadata: None for PinCtrlApply",
+        has_metadata,
+        "task 52 populates `IntrinsicMetadata::PinCtrl` for PinCtrlApply calls",
     );
     assert!(
         !has_error_target,
@@ -549,6 +557,7 @@ fn free_function_intrinsic_does_not_prepend_receiver() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -630,6 +639,7 @@ fn unregistered_callee_falls_through_to_regular_call() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed on the caller method");
@@ -716,6 +726,7 @@ fn intrinsic_lookup_build_integrates_with_extraction_registry() {
                 &RegisterIndex::default(),
                 &std::collections::HashMap::new(),
                 &AbstractionTypeRegistry::default(),
+                &PinStateLookup::default(),
                 &mut interner,
             )
             .expect("build_body must succeed when threaded with IntrinsicLookup::build output");

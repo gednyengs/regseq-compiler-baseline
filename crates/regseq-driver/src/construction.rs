@@ -58,6 +58,7 @@ pub use mir_mapping::{
 };
 pub use ordered_region::OrderedMarkers;
 pub use pass2::build_body;
+pub use pinctrl_metadata::PinStateLookup;
 pub use register_metadata::{RegisterEntry, RegisterIndex};
 pub use try_folding::TryMarkers;
 
@@ -424,6 +425,25 @@ pub enum ConstructionError {
         /// Intrinsic variant whose required access kind was not met.
         intrinsic: regseq_model::ir::RegseqIntrinsic,
     },
+    /// A `PinCtrlApply` intrinsic call's monomorphized `S` type
+    /// parameter resolves to a marker type whose `TypeDef.attrs` bag
+    /// carries no well-formed `#[rseq::pin_state(id = "...")]` entry.
+    /// Phase 4.2 attribute extraction already rejects malformed
+    /// pin-state attributes earlier, so this error only fires when
+    /// an otherwise-valid marker was never annotated at all -- in
+    /// that case the driver spec is using a type that does not
+    /// identify a pin-state. Raised by
+    /// [`construction::pinctrl_metadata`](self::pinctrl_metadata) as
+    /// a defensive guard during Pass 2 metadata resolution.
+    MissingPinStateAttribute {
+        /// Provenance of the offending marker type (falls back to
+        /// the call site when the marker `DefId` cannot be
+        /// resolved).
+        provenance: ErrorProvenance,
+        /// Rendered def-path of the marker type whose attrs bag
+        /// lacks a `pin_state` entry.
+        marker: String,
+    },
 }
 
 impl std::fmt::Display for ConstructionError {
@@ -626,6 +646,14 @@ impl std::fmt::Display for ConstructionError {
                 intrinsic.canonical_name(),
                 provenance.item_path,
             ),
+            Self::MissingPinStateAttribute {
+                provenance,
+                marker,
+            } => write!(
+                f,
+                "pin-state marker `{marker}` has no `#[rseq::pin_state(id = \"...\")]` attribute (at `{}`)",
+                provenance.item_path,
+            ),
         }
     }
 }
@@ -659,6 +687,12 @@ pub struct CrossRefMaps {
     /// this at every register-intrinsic `Call` site to attach
     /// [`IntrinsicMetadata::Register`](regseq_model::ir::IntrinsicMetadata::Register).
     pub register_index: register_metadata::RegisterIndex,
+    /// Pin-state marker index (task regseq-model-52). Maps each
+    /// `#[rseq::pin_state(id = "...")]`-annotated TypeDef's `DefId`
+    /// to its interned `state_id` [`Symbol`]. Pass 2 consults this
+    /// at every `PinCtrlApply` call site to attach
+    /// [`IntrinsicMetadata::PinCtrl`](regseq_model::ir::IntrinsicMetadata::PinCtrl).
+    pub pin_state_lookup: pinctrl_metadata::PinStateLookup,
 }
 
 /// Full Pass 1 output: the declaration-level [`RegseqModel`] plus the
@@ -817,6 +851,15 @@ fn build_declaration_skeleton_inner<'tcx>(
         &mut symbols,
     );
 
+    // Rule 8 pin-state marker -> state_id index (task regseq-model-52).
+    // Walk the populated module tree and intern each `#[rseq::pin_state(
+    // id = "...")]`-annotated TypeDef's id string into the Pass 1 symbol
+    // interner so Pass 2 can attach
+    // `IntrinsicMetadata::PinCtrl { state_id }` to every `PinCtrlApply`
+    // call without re-reading attrs from HIR.
+    let pin_state_lookup =
+        pinctrl_metadata::PinStateLookup::build(&root_module, &type_def_map, &mut symbols);
+
     let cross_refs = CrossRefMaps {
         type_defs: type_def_map,
         register_blocks: register_block_map,
@@ -824,6 +867,7 @@ fn build_declaration_skeleton_inner<'tcx>(
         register_descriptors: descriptor_map,
         constants: constant_map,
         register_index,
+        pin_state_lookup,
     };
 
     Ok(Pass1Output {

@@ -35,8 +35,8 @@ use rustc_middle::ty::TyCtxt;
 use regseq_driver::construction::{
     build_body, build_pass1_output, build_pass1_output_with_cross_crate_depth, ConstantIndex,
     ConstructionError, DerefCollapseLookup, ExtractionRegistries, FunctionIndex, IntrinsicLookup,
-    LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateRegistry, RegisterIndex, TryMarkers,
-    TypeDefIndex,
+    LogArgUnwrap, OrderedMarkers, Pass1Output, PinStateLookup, PinStateRegistry, RegisterIndex,
+    TryMarkers, TypeDefIndex,
 };
 use regseq_driver::extract::abstraction_types::AbstractionTypeRegistry;
 use regseq_driver::extract::framework_types::FrameworkTypeRegistry;
@@ -809,6 +809,7 @@ fn pass2_build_body_does_not_silently_pass_through_a_placeholder() {
                     &RegisterIndex::default(),
                     &std::collections::HashMap::new(),
                     &AbstractionTypeRegistry::default(),
+                    &PinStateLookup::default(),
                     &mut interner,
                 );
                 match body_result {

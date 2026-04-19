@@ -1060,7 +1060,7 @@
           "id": "regseq-model-52",
           "name": "PinCtrl metadata resolution",
           "spec": ".harness/tasks/regseq-model/52-pinctrl-metadata.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-45",
             "regseq-driver-30"
