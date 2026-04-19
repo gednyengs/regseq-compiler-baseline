@@ -1098,6 +1098,76 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-55",
+          "name": "Verifier framework and post-Phase-1 verifier",
+          "spec": ".harness/tasks/regseq-model/55-verifier-framework-and-phase1.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-model-54"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-56",
+          "name": "Post-Phase-2 verifier with driver-struct and body rules",
+          "spec": ".harness/tasks/regseq-model/56-post-phase2-verifier.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-55"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-57",
+          "name": "RegseqModel mutation API with always-on verification",
+          "spec": ".harness/tasks/regseq-model/57-mutation-api-auto-verify.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-55",
+            "regseq-model-56"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-58",
+          "name": "normalize() function with NormalizeError and provenance",
+          "spec": ".harness/tasks/regseq-model/58-normalize.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-55"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-59",
+          "name": "populate_bindings() function with JoinError and Phase-2 determinism",
+          "spec": ".harness/tasks/regseq-model/59-populate-bindings.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-56",
+            "regseq-model-57",
+            "regseq-model-58"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-60",
+          "name": "PL011 Phase-6 end-to-end pipeline with golden and tracker updates",
+          "spec": ".harness/tasks/regseq-model/60-pl011-pipeline-end-to-end.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-58",
+            "regseq-model-59"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
