@@ -17,7 +17,7 @@ use crate::identity::{RegisterBlockId, RegisterDescriptorId, Symbol};
 /// Register descriptors are standalone, reusable items -- they are not
 /// owned by any single register block and may be referenced by multiple
 /// blocks. See spec.md Section 3.5.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct RegisterDescriptor {
     /// The descriptor's declaration identifier.
     pub id: RegisterDescriptorId,
@@ -30,7 +30,7 @@ pub struct RegisterDescriptor {
 }
 
 /// A single bitfield within a register descriptor.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct BitfieldDef {
     /// Field identifier (e.g., `DATA`, `OE`).
     pub name: Symbol,
@@ -45,7 +45,7 @@ pub struct BitfieldDef {
 /// A named constant value for a bitfield (e.g., `ENABLED = 1`).
 ///
 /// `value` is `u64` to accommodate registers up to 64 bits.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct NamedValue {
     /// Value identifier (e.g., `ENABLED`, `DISABLED`).
     pub name: Symbol,
@@ -58,7 +58,7 @@ pub struct NamedValue {
 /// Register blocks reference register descriptors but do not own them;
 /// the same descriptor may be referenced by multiple blocks. See
 /// spec.md Section 3.6.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct RegisterBlock {
     /// The block's declaration identifier.
     pub id: RegisterBlockId,
@@ -71,7 +71,7 @@ pub struct RegisterBlock {
 }
 
 /// Block-level properties from `#[rseq::register_block(..)]`.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct RegisterBlockAttributes {
     /// Byte order (e.g., `little`, `big`).
     pub endian: Symbol,
@@ -85,18 +85,20 @@ pub struct RegisterBlockAttributes {
 /// derived from field ordering and access width during extraction.
 /// `array_count` is `Some` for reserved gaps expressed as arrays
 /// (e.g., `[Reserved<u32>; 4]`), and `None` for single fields.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct RegisterBlockField {
     /// Field identifier (e.g., `dr`, `cr`).
     pub name: Symbol,
     /// Access permission for this field.
     pub access_kind: AccessKind,
     /// Reference to a register descriptor, if not `Reserved`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub descriptor: Option<RegisterDescriptorId>,
     /// Byte offset within the block.
     pub byte_offset: u32,
     /// For reserved gaps expressed as arrays, the element count.
     /// `None` for single fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub array_count: Option<usize>,
 }
 

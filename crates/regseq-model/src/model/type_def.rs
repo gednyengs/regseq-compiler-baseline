@@ -6,6 +6,8 @@
 //! Regseq abstractions and framework types, and an [`Attrs`] bag for
 //! extensible semantic annotations captured from `#[rseq::attrs(..)]`.
 
+use serde::Serialize;
+
 use crate::identity::{Symbol, TypeDefId};
 use crate::ir::{LiteralValue, RegseqType};
 use crate::model::framework::TypeDefClassification;
@@ -15,7 +17,7 @@ use crate::model::framework::TypeDefClassification;
 /// Represents top-level type definitions in the Regseq Model:
 /// user-defined types, Regseq abstraction types, and Regseq framework
 /// types (see spec.md Section 3.4).
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct TypeDef {
     /// The type's declaration identifier.
     pub id: TypeDefId,
@@ -30,7 +32,8 @@ pub struct TypeDef {
 }
 
 /// Whether the type is a struct or enum.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum TypeDefKind {
     /// Struct type with named fields.
     Struct {
@@ -45,7 +48,7 @@ pub enum TypeDefKind {
 }
 
 /// A named field in a struct or enum variant.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct FieldDef {
     /// Field identifier.
     pub name: Symbol,
@@ -57,13 +60,14 @@ pub struct FieldDef {
 ///
 /// `fields` is empty for unit variants and populated for data variants.
 /// `discriminant` is `Some` only for explicit discriminant values.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct VariantDef {
     /// Variant identifier.
     pub name: Symbol,
     /// Variant fields. Empty for unit variants.
     pub fields: Vec<FieldDef>,
     /// Explicit discriminant value, if any.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub discriminant: Option<LiteralValue>,
 }
 
@@ -73,14 +77,14 @@ pub struct VariantDef {
 /// attribute keys are defined at this time -- the mechanism exists for
 /// future semantic annotations (ISR metadata, callback context,
 /// inlining hints, etc.). See spec.md Section 8 (Attrs).
-#[derive(Clone, Eq, PartialEq, Debug, Default)]
+#[derive(Clone, Eq, PartialEq, Debug, Default, Serialize)]
 pub struct Attrs {
     /// The attribute entries in the bag.
     pub entries: Vec<AttrEntry>,
 }
 
 /// A single key-value attribute entry.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct AttrEntry {
     /// Attribute key.
     pub key: String,
@@ -89,7 +93,8 @@ pub struct AttrEntry {
 }
 
 /// The value of an attribute entry.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
+#[serde(tag = "kind", content = "data")]
 pub enum AttrValue {
     /// A string value (positional or scalar).
     String(String),

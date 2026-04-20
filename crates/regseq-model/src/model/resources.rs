@@ -28,7 +28,7 @@ pub enum Shape {
 // --- Clock ------------------------------------------------------------
 
 /// Clock resource field on the driver struct.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct ClockResource {
     /// The resource's declaration identifier.
     pub id: ResourceId,
@@ -39,11 +39,12 @@ pub struct ClockResource {
     /// Declaration-side properties from `#[rseq::clock(..)]`.
     pub decl: ClockDecl,
     /// Binding-side data. `None` until platform join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<ClockBinding>,
 }
 
 /// Declaration-side Clock properties.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct ClockDecl {
     /// Clock identifier (required).
     pub clock_id: Symbol,
@@ -59,7 +60,7 @@ pub struct ClockBinding {
 // --- Reset ------------------------------------------------------------
 
 /// Reset-line resource field on the driver struct.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct ResetResource {
     /// The resource's declaration identifier.
     pub id: ResourceId,
@@ -70,11 +71,12 @@ pub struct ResetResource {
     /// Declaration-side properties from `#[rseq::reset(..)]`.
     pub decl: ResetDecl,
     /// Binding-side data. `None` until platform join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<ResetBinding>,
 }
 
 /// Declaration-side Reset properties.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct ResetDecl {
     /// Reset line identifier (required).
     pub reset_id: Symbol,
@@ -92,7 +94,7 @@ pub struct ResetBinding {
 // --- PinCtrl ---------------------------------------------------------
 
 /// PinCtrl resource field on the driver struct.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct PinCtrlResource {
     /// The resource's declaration identifier.
     pub id: ResourceId,
@@ -103,11 +105,12 @@ pub struct PinCtrlResource {
     /// Declaration-side properties from `#[rseq::pinctrl(..)]`.
     pub decl: PinCtrlDecl,
     /// Binding-side data. `None` until platform join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<PinCtrlBinding>,
 }
 
 /// Declaration-side PinCtrl properties.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct PinCtrlDecl {
     /// Pinctrl identifier (required).
     pub pinctrl_id: Symbol,
@@ -123,7 +126,7 @@ pub struct PinCtrlBinding {
 // --- Interrupt --------------------------------------------------------
 
 /// Interrupt resource field on the driver struct.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct InterruptResource {
     /// The resource's declaration identifier.
     pub id: ResourceId,
@@ -134,11 +137,12 @@ pub struct InterruptResource {
     /// Declaration-side properties from `#[rseq::interrupt(..)]`.
     pub decl: InterruptDecl,
     /// Binding-side data. `None` until platform join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<InterruptBinding>,
 }
 
 /// Declaration-side Interrupt properties.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct InterruptDecl {
     /// Interrupt identifier (required).
     pub interrupt_id: Symbol,
@@ -159,8 +163,10 @@ pub struct InterruptBinding {
     /// Platform-specific interrupt number (required).
     pub irq_number: u32,
     /// Trigger type (e.g., `level`, `edge`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_type: Option<String>,
     /// Trigger polarity (e.g., `high`, `low`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trigger_polarity: Option<String>,
     /// Whether the interrupt is shared.
     pub shared: bool,
@@ -173,7 +179,7 @@ pub struct InterruptBinding {
 // --- Mmio -------------------------------------------------------------
 
 /// Mmio resource field on the driver struct.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct MmioResource {
     /// The resource's declaration identifier.
     pub id: ResourceId,
@@ -184,11 +190,12 @@ pub struct MmioResource {
     /// Declaration-side properties from `#[rseq::mmio(..)]`.
     pub decl: MmioDecl,
     /// Binding-side data. `None` until platform join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub binding: Option<MmioBinding>,
 }
 
 /// Declaration-side Mmio properties.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct MmioDecl {
     /// MMIO identifier (required).
     pub mmio_id: Symbol,
@@ -227,7 +234,7 @@ pub enum SyncKind {
 /// Synchronization primitives are purely spec-side entities with no
 /// platform-specific configuration, so there is no binding data and no
 /// shape field (they are always `Single`).
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct SyncResource {
     /// The resource's declaration identifier.
     pub id: ResourceId,
@@ -236,6 +243,7 @@ pub struct SyncResource {
     /// The kind of synchronization primitive.
     pub sync_kind: SyncKind,
     /// The type of the protected data. `None` for `Completion`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub payload_type: Option<RegseqType>,
 }
 
@@ -247,7 +255,7 @@ pub struct SyncResource {
 /// if the field type is `Option<T>`. `bound_value` is `None` until
 /// platform join populates it from the platform file's `[properties]`
 /// section.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct PropertyField {
     /// The property's declaration identifier.
     pub id: PropertyId,
@@ -258,12 +266,15 @@ pub struct PropertyField {
     /// The firmware property key (required).
     pub property_id: Symbol,
     /// Optional default literal.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub default_value: Option<LiteralValue>,
     /// Optional vendor prefix string.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub vendor_prefix: Option<Symbol>,
     /// `true` if the field type is `T`, `false` if `Option<T>`.
     pub required: bool,
     /// Concrete value from the platform file. `None` until join.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bound_value: Option<LiteralValue>,
 }
 
@@ -273,7 +284,7 @@ pub struct PropertyField {
 ///
 /// The spec-side type is `Option<T>` where `T: Copy`. `inner_type` is
 /// the `RegseqType` of `T`.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct UserDataField {
     /// The field's declaration identifier.
     pub id: UserDataId,

@@ -23,7 +23,7 @@ use crate::model::type_def::Attrs;
 /// bag. The body is always present -- the spec does not have bodyless
 /// function declarations, and functions are only extracted if they
 /// have MIR bodies.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct Function {
     /// The function's declaration identifier.
     pub id: FunctionId,
@@ -41,7 +41,7 @@ pub struct Function {
 }
 
 /// A function parameter.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct Param {
     /// Semantic role of the parameter (receiver vs regular).
     pub kind: ParamKind,

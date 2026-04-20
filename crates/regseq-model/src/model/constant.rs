@@ -6,6 +6,8 @@
 //! ownership is attached by the containing [`Module`] or [`ImplBlock`]
 //! in later tasks.
 
+use serde::Serialize;
+
 use crate::identity::{ConstantId, Symbol};
 use crate::ir::{LiteralValue, RegseqType};
 
@@ -14,7 +16,7 @@ use crate::ir::{LiteralValue, RegseqType};
 /// Used for both top-level constants (Section 3.2) and associated
 /// constants in impl blocks (Section 6). Non-literal initializers are
 /// not supported; `value` is always a [`LiteralValue`].
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct Constant {
     /// The constant's declaration identifier.
     pub id: ConstantId,

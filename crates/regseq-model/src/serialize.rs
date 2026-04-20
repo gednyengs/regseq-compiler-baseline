@@ -19,6 +19,7 @@ use serde::Serialize;
 
 use crate::identity::{install_interner_for_serialization, SymbolInterner};
 use crate::ir::Body;
+use crate::model::RegseqModel;
 
 /// Serialize `value` to a pretty-printed JSON string, resolving every
 /// [`Symbol`](crate::identity::Symbol) and [`FileId`](crate::identity::FileId)
@@ -53,6 +54,22 @@ pub fn body_to_json_pretty(
     interner: &SymbolInterner,
 ) -> Result<String, serde_json::Error> {
     to_json_pretty(body, interner)
+}
+
+/// Pretty-print a full [`RegseqModel`] to the wire format described by
+/// `ir-reference.md` Section 7.
+///
+/// Uses the model's own [`SymbolInterner`] to resolve every
+/// [`Symbol`](crate::identity::Symbol) and
+/// [`FileId`](crate::identity::FileId) embedded in the IR to its
+/// string form. The returned string is newline-terminated so it
+/// matches committed golden files on disk.
+///
+/// The helper panics only if `serde_json` itself fails, which should
+/// not happen for the Regseq IR.
+pub fn serialize_regseq_model(model: &RegseqModel) -> String {
+    to_json_pretty(model, &model.symbols)
+        .expect("RegseqModel serialization must never fail for the Regseq IR")
 }
 
 #[cfg(test)]

@@ -25,7 +25,7 @@ use crate::platform::PlatformValue;
 /// with lifecycle), properties (firmware inputs), and user data
 /// (author-managed state). Each resource category is a separate `Vec`
 /// for type-safe access.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct DriverStruct {
     /// The [`TypeDefId`] of the driver struct itself. The driver struct
     /// is also present as a `TypeDef` in its owning module's type
@@ -36,8 +36,10 @@ pub struct DriverStruct {
     /// Driver identity from `#[rseq::driver(..)]`.
     pub identity: DriverIdentity,
     /// Device class from `#[rseq::device_class(..)]`, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub device_class: Option<DeviceClass>,
     /// Power management info from `#[rseq::pm(..)]`, if present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub pm_info: Option<PmInfo>,
     /// Platform-file metadata (`[platform]` + `[bus]`). `None` until
     /// Phase 2 platform join runs. Populated by
@@ -48,6 +50,7 @@ pub struct DriverStruct {
     /// driver metadata (Section 4.1), giving consumers a single
     /// place to find both spec-declared and platform-provided
     /// identity."
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub platform_metadata: Option<PlatformMetadata>,
     /// Clock resource fields.
     pub clocks: Vec<ClockResource>,
@@ -68,18 +71,19 @@ pub struct DriverStruct {
 }
 
 /// Driver identity metadata extracted from `#[rseq::driver(..)]`.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct DriverIdentity {
     /// Driver name string.
     pub name: Symbol,
     /// List of device compatibility strings.
     pub compatible: Vec<Symbol>,
     /// Optional bus/fabric identity (e.g., `integrated`, `amba`, `pci`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus: Option<Symbol>,
 }
 
 /// Device class metadata extracted from `#[rseq::device_class(..)]`.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct DeviceClass {
     /// The device class identifier (e.g., `serial_uart`).
     pub class: Symbol,
@@ -111,6 +115,7 @@ pub struct PlatformMetadata {
     /// Target architecture (e.g., `"aarch64"`, `"x86_64"`).
     pub arch: String,
     /// Platform-side bus-family binding, if `[bus]` is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub bus: Option<PlatformBusBinding>,
 }
 

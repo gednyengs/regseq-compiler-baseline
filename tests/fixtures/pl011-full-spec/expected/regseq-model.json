@@ -1,0 +1,1782 @@
+{
+  "source_locations": {
+    "0": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 1,
+        "start_column": 1,
+        "end_line": 1,
+        "end_column": 1
+      }
+    },
+    "1": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 2,
+        "start_column": 1,
+        "end_line": 2,
+        "end_column": 1
+      }
+    },
+    "2": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 3,
+        "start_column": 1,
+        "end_line": 3,
+        "end_column": 1
+      }
+    },
+    "3": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 4,
+        "start_column": 1,
+        "end_line": 4,
+        "end_column": 1
+      }
+    },
+    "4": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 5,
+        "start_column": 1,
+        "end_line": 5,
+        "end_column": 1
+      }
+    },
+    "5": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 6,
+        "start_column": 1,
+        "end_line": 6,
+        "end_column": 1
+      }
+    },
+    "6": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 7,
+        "start_column": 1,
+        "end_line": 7,
+        "end_column": 1
+      }
+    },
+    "7": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 8,
+        "start_column": 1,
+        "end_line": 8,
+        "end_column": 1
+      }
+    },
+    "8": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 9,
+        "start_column": 1,
+        "end_line": 9,
+        "end_column": 1
+      }
+    },
+    "9": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 10,
+        "start_column": 1,
+        "end_line": 10,
+        "end_column": 1
+      }
+    },
+    "10": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 11,
+        "start_column": 1,
+        "end_line": 11,
+        "end_column": 1
+      }
+    },
+    "11": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 12,
+        "start_column": 1,
+        "end_line": 12,
+        "end_column": 1
+      }
+    },
+    "12": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 13,
+        "start_column": 1,
+        "end_line": 13,
+        "end_column": 1
+      }
+    },
+    "13": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 14,
+        "start_column": 1,
+        "end_line": 14,
+        "end_column": 1
+      }
+    },
+    "14": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 15,
+        "start_column": 1,
+        "end_line": 15,
+        "end_column": 1
+      }
+    },
+    "15": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 16,
+        "start_column": 1,
+        "end_line": 16,
+        "end_column": 1
+      }
+    },
+    "16": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 17,
+        "start_column": 1,
+        "end_line": 17,
+        "end_column": 1
+      }
+    },
+    "17": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 18,
+        "start_column": 1,
+        "end_line": 18,
+        "end_column": 1
+      }
+    },
+    "18": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 19,
+        "start_column": 1,
+        "end_line": 19,
+        "end_column": 1
+      }
+    },
+    "19": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 20,
+        "start_column": 1,
+        "end_line": 20,
+        "end_column": 1
+      }
+    },
+    "20": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 21,
+        "start_column": 1,
+        "end_line": 21,
+        "end_column": 1
+      }
+    },
+    "21": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 22,
+        "start_column": 1,
+        "end_line": 22,
+        "end_column": 1
+      }
+    },
+    "22": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 23,
+        "start_column": 1,
+        "end_line": 23,
+        "end_column": 1
+      }
+    },
+    "23": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 24,
+        "start_column": 1,
+        "end_line": 24,
+        "end_column": 1
+      }
+    },
+    "24": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 25,
+        "start_column": 1,
+        "end_line": 25,
+        "end_column": 1
+      }
+    },
+    "25": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 26,
+        "start_column": 1,
+        "end_line": 26,
+        "end_column": 1
+      }
+    },
+    "26": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 27,
+        "start_column": 1,
+        "end_line": 27,
+        "end_column": 1
+      }
+    },
+    "27": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 28,
+        "start_column": 1,
+        "end_line": 28,
+        "end_column": 1
+      }
+    },
+    "28": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 29,
+        "start_column": 1,
+        "end_line": 29,
+        "end_column": 1
+      }
+    },
+    "29": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 30,
+        "start_column": 1,
+        "end_line": 30,
+        "end_column": 1
+      }
+    },
+    "30": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 31,
+        "start_column": 1,
+        "end_line": 31,
+        "end_column": 1
+      }
+    },
+    "31": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 32,
+        "start_column": 1,
+        "end_line": 32,
+        "end_column": 1
+      }
+    },
+    "32": {
+      "kind": "Source",
+      "data": {
+        "file": "<normalize-synthetic>",
+        "start_line": 33,
+        "start_column": 1,
+        "end_line": 33,
+        "end_column": 1
+      }
+    }
+  },
+  "root_module": {
+    "id": 0,
+    "name": "<crate-root>",
+    "kind": {
+      "kind": "Normal"
+    },
+    "submodules": [
+      {
+        "id": 1,
+        "name": "pl011-full-spec",
+        "kind": {
+          "kind": "Driver"
+        },
+        "submodules": [],
+        "constants": [],
+        "free_functions": [],
+        "type_defs": [
+          {
+            "id": 2,
+            "name": "pl011-full-specDriver",
+            "kind": {
+              "kind": "Struct",
+              "data": {
+                "fields": []
+              }
+            },
+            "classification": {
+              "kind": "UserDefined"
+            },
+            "attrs": {
+              "entries": []
+            }
+          }
+        ],
+        "register_descriptors": [],
+        "register_blocks": [],
+        "impl_blocks": [],
+        "driver": {
+          "type_id": 2,
+          "name": "pl011-full-specDriver",
+          "identity": {
+            "name": "pl011-full-spec",
+            "compatible": [
+              "arm,pl011"
+            ],
+            "bus": "amba"
+          },
+          "device_class": {
+            "class": "serial"
+          },
+          "platform_metadata": {
+            "os": "linux",
+            "board": "raspberry-pi-4",
+            "arch": "aarch64",
+            "bus": {
+              "bus_type": "amba",
+              "values": {
+                "amba_id": {
+                  "Integer": 266257
+                },
+                "revision": {
+                  "Integer": 3
+                }
+              }
+            }
+          },
+          "clocks": [
+            {
+              "id": 27,
+              "field_name": "clock",
+              "shape": {
+                "kind": "Optional"
+              },
+              "decl": {
+                "clock_id": "uart_clk"
+              },
+              "binding": {
+                "default_frequency": 48000000
+              }
+            }
+          ],
+          "resets": [
+            {
+              "id": 28,
+              "field_name": "reset",
+              "shape": {
+                "kind": "Optional"
+              },
+              "decl": {
+                "reset_id": "reset"
+              },
+              "binding": {
+                "reset_line_id": "uart_rst0",
+                "reset_shared": false
+              }
+            }
+          ],
+          "pinctrl": [
+            {
+              "id": 29,
+              "field_name": "pinctrl",
+              "shape": {
+                "kind": "Optional"
+              },
+              "decl": {
+                "pinctrl_id": "uart_pins"
+              },
+              "binding": {
+                "pin_states": [
+                  "default",
+                  "sleep"
+                ]
+              }
+            }
+          ],
+          "interrupts": [
+            {
+              "id": 30,
+              "field_name": "irq",
+              "shape": {
+                "kind": "Single"
+              },
+              "decl": {
+                "interrupt_id": "uart_irq"
+              },
+              "binding": {
+                "irq_number": 37,
+                "trigger_type": "level",
+                "trigger_polarity": "high",
+                "shared": false
+              }
+            }
+          ],
+          "mmio": [
+            {
+              "id": 26,
+              "field_name": "regs",
+              "shape": {
+                "kind": "Single"
+              },
+              "decl": {
+                "mmio_id": "uart_regs",
+                "register_block": 25
+              },
+              "binding": {
+                "base": 150994944,
+                "size": 4096
+              }
+            }
+          ],
+          "sync": [],
+          "properties": [
+            {
+              "id": 31,
+              "field_name": "current_speed",
+              "field_type": {
+                "kind": "U32"
+              },
+              "property_id": "current-speed",
+              "required": true,
+              "bound_value": {
+                "kind": "U32",
+                "data": 115200
+              }
+            },
+            {
+              "id": 32,
+              "field_name": "fifo_size",
+              "field_type": {
+                "kind": "U32"
+              },
+              "property_id": "fifo-size",
+              "required": true,
+              "bound_value": {
+                "kind": "U32",
+                "data": 32
+              }
+            }
+          ],
+          "user_data": []
+        },
+        "trait_impls": [],
+        "driver_impl_blocks": [],
+        "abstractions_used": [],
+        "intrinsics_used": []
+      }
+    ],
+    "constants": [],
+    "free_functions": [],
+    "type_defs": [],
+    "register_descriptors": [
+      {
+        "id": 3,
+        "name": "DR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "OE",
+            "offset": 11,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BE",
+            "offset": 10,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "PE",
+            "offset": 9,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "FE",
+            "offset": 8,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DATA",
+            "offset": 0,
+            "width": 8,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 4,
+        "name": "RSR_ECR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "OE",
+            "offset": 3,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BE",
+            "offset": 2,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "PE",
+            "offset": 1,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "FE",
+            "offset": 0,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 5,
+        "name": "FR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "RI",
+            "offset": 8,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "TXFE",
+            "offset": 7,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RXFF",
+            "offset": 6,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "TXFF",
+            "offset": 5,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RXFE",
+            "offset": 4,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BUSY",
+            "offset": 3,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DCD",
+            "offset": 2,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DSR",
+            "offset": 1,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "CTS",
+            "offset": 0,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 6,
+        "name": "ILPR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "ILPDVSR",
+            "offset": 0,
+            "width": 8,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 7,
+        "name": "IBRD_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "BAUD_DIVINT",
+            "offset": 0,
+            "width": 16,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 8,
+        "name": "FBRD_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "BAUD_DIVFRAC",
+            "offset": 0,
+            "width": 6,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 9,
+        "name": "LCRH_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "SPS",
+            "offset": 7,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "WLEN",
+            "offset": 5,
+            "width": 2,
+            "named_values": [
+              {
+                "name": "FIVE_BITS",
+                "value": 0
+              },
+              {
+                "name": "SIX_BITS",
+                "value": 1
+              },
+              {
+                "name": "SEVEN_BITS",
+                "value": 2
+              },
+              {
+                "name": "EIGHT_BITS",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "name": "FEN",
+            "offset": 4,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "STP2",
+            "offset": 3,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "ONE_STOP_BIT",
+                "value": 0
+              },
+              {
+                "name": "TWO_STOP_BITS",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "EPS",
+            "offset": 2,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "ODD",
+                "value": 0
+              },
+              {
+                "name": "EVEN",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "PEN",
+            "offset": 1,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "BRK",
+            "offset": 0,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 10,
+        "name": "CR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "CTSEN",
+            "offset": 15,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "RTSEN",
+            "offset": 14,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "OUT2",
+            "offset": 13,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "INACTIVE",
+                "value": 0
+              },
+              {
+                "name": "ACTIVE",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "OUT1",
+            "offset": 12,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "INACTIVE",
+                "value": 0
+              },
+              {
+                "name": "ACTIVE",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "RTS",
+            "offset": 11,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "INACTIVE",
+                "value": 0
+              },
+              {
+                "name": "ACTIVE",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "DTR",
+            "offset": 10,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "INACTIVE",
+                "value": 0
+              },
+              {
+                "name": "ACTIVE",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "RXE",
+            "offset": 9,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "TXE",
+            "offset": 8,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "LBE",
+            "offset": 7,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "SIRLP",
+            "offset": 2,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "NORMAL",
+                "value": 0
+              },
+              {
+                "name": "LOW_POWER",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "SIREN",
+            "offset": 1,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "UARTEN",
+            "offset": 0,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 11,
+        "name": "IFLS_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "RXIFLSEL",
+            "offset": 3,
+            "width": 3,
+            "named_values": [
+              {
+                "name": "ONE_EIGHTH",
+                "value": 0
+              },
+              {
+                "name": "ONE_QUARTER",
+                "value": 1
+              },
+              {
+                "name": "ONE_HALF",
+                "value": 2
+              },
+              {
+                "name": "THREE_QUARTERS",
+                "value": 3
+              },
+              {
+                "name": "SEVEN_EIGHTHS",
+                "value": 4
+              }
+            ]
+          },
+          {
+            "name": "TXIFLSEL",
+            "offset": 0,
+            "width": 3,
+            "named_values": [
+              {
+                "name": "ONE_EIGHTH",
+                "value": 0
+              },
+              {
+                "name": "ONE_QUARTER",
+                "value": 1
+              },
+              {
+                "name": "ONE_HALF",
+                "value": 2
+              },
+              {
+                "name": "THREE_QUARTERS",
+                "value": 3
+              },
+              {
+                "name": "SEVEN_EIGHTHS",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 12,
+        "name": "IMSC_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "OEIM",
+            "offset": 10,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BEIM",
+            "offset": 9,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "PEIM",
+            "offset": 8,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "FEIM",
+            "offset": 7,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RTIM",
+            "offset": 6,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "TXIM",
+            "offset": 5,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RXIM",
+            "offset": 4,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DSRMIM",
+            "offset": 3,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DCDMIM",
+            "offset": 2,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "CTSMIM",
+            "offset": 1,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RIMIM",
+            "offset": 0,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 13,
+        "name": "RIS_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "OERIS",
+            "offset": 10,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BERIS",
+            "offset": 9,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "PERIS",
+            "offset": 8,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "FERIS",
+            "offset": 7,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RTRIS",
+            "offset": 6,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "TXRIS",
+            "offset": 5,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RXRIS",
+            "offset": 4,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DSRRMIS",
+            "offset": 3,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DCDRMIS",
+            "offset": 2,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "CTSRMIS",
+            "offset": 1,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RIRMIS",
+            "offset": 0,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 14,
+        "name": "MIS_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "OEMIS",
+            "offset": 10,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BEMIS",
+            "offset": 9,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "PEMIS",
+            "offset": 8,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "FEMIS",
+            "offset": 7,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RTMIS",
+            "offset": 6,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "TXMIS",
+            "offset": 5,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RXMIS",
+            "offset": 4,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DSRMMIS",
+            "offset": 3,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DCDMMIS",
+            "offset": 2,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "CTSMMIS",
+            "offset": 1,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RIMMIS",
+            "offset": 0,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 15,
+        "name": "ICR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "OEIC",
+            "offset": 10,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "BEIC",
+            "offset": 9,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "PEIC",
+            "offset": 8,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "FEIC",
+            "offset": 7,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RTIC",
+            "offset": 6,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "TXIC",
+            "offset": 5,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RXIC",
+            "offset": 4,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DSRMIC",
+            "offset": 3,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "DCDMIC",
+            "offset": 2,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "CTSMIC",
+            "offset": 1,
+            "width": 1,
+            "named_values": []
+          },
+          {
+            "name": "RIMIC",
+            "offset": 0,
+            "width": 1,
+            "named_values": []
+          }
+        ]
+      },
+      {
+        "id": 16,
+        "name": "DMACR_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "DMAONERR",
+            "offset": 2,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "TXDMAE",
+            "offset": 1,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "RXDMAE",
+            "offset": 0,
+            "width": 1,
+            "named_values": [
+              {
+                "name": "DISABLED",
+                "value": 0
+              },
+              {
+                "name": "ENABLED",
+                "value": 1
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 17,
+        "name": "PERIPHID0_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "PARTNUMBER0",
+            "offset": 0,
+            "width": 8,
+            "named_values": [
+              {
+                "name": "PL011",
+                "value": 17
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 18,
+        "name": "PERIPHID1_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "DESIGNER0",
+            "offset": 4,
+            "width": 4,
+            "named_values": [
+              {
+                "name": "ARM_LOW",
+                "value": 1
+              }
+            ]
+          },
+          {
+            "name": "PARTNUMBER1",
+            "offset": 0,
+            "width": 4,
+            "named_values": [
+              {
+                "name": "PL011",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 19,
+        "name": "PERIPHID2_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "REVISION",
+            "offset": 4,
+            "width": 4,
+            "named_values": [
+              {
+                "name": "R1P0",
+                "value": 0
+              },
+              {
+                "name": "R1P1",
+                "value": 1
+              },
+              {
+                "name": "R1P3",
+                "value": 2
+              },
+              {
+                "name": "R1P4",
+                "value": 2
+              },
+              {
+                "name": "R1P5",
+                "value": 3
+              }
+            ]
+          },
+          {
+            "name": "DESIGNER1",
+            "offset": 0,
+            "width": 4,
+            "named_values": [
+              {
+                "name": "ARM_HIGH",
+                "value": 4
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 20,
+        "name": "PERIPHID3_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "CONFIGURATION",
+            "offset": 0,
+            "width": 8,
+            "named_values": [
+              {
+                "name": "DEFAULT",
+                "value": 0
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 21,
+        "name": "PCELLID0_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "VALUE",
+            "offset": 0,
+            "width": 8,
+            "named_values": [
+              {
+                "name": "DEFAULT",
+                "value": 13
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 22,
+        "name": "PCELLID1_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "VALUE",
+            "offset": 0,
+            "width": 8,
+            "named_values": [
+              {
+                "name": "DEFAULT",
+                "value": 240
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 23,
+        "name": "PCELLID2_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "VALUE",
+            "offset": 0,
+            "width": 8,
+            "named_values": [
+              {
+                "name": "DEFAULT",
+                "value": 5
+              }
+            ]
+          }
+        ]
+      },
+      {
+        "id": 24,
+        "name": "PCELLID3_REG",
+        "access_width": 32,
+        "fields": [
+          {
+            "name": "VALUE",
+            "offset": 0,
+            "width": 8,
+            "named_values": [
+              {
+                "name": "DEFAULT",
+                "value": 177
+              }
+            ]
+          }
+        ]
+      }
+    ],
+    "register_blocks": [
+      {
+        "id": 25,
+        "name": "Pl011Registers",
+        "block_attributes": {
+          "endian": "little",
+          "access_width": 32
+        },
+        "fields": [
+          {
+            "name": "dr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 0
+          },
+          {
+            "name": "rsr_ecr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 4
+          },
+          {
+            "name": "_reserved0",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 8
+          },
+          {
+            "name": "fr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 12
+          },
+          {
+            "name": "_reserved1",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 16
+          },
+          {
+            "name": "ilpr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 20
+          },
+          {
+            "name": "ibrd",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 24
+          },
+          {
+            "name": "fbrd",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 28
+          },
+          {
+            "name": "lcr_h",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 32
+          },
+          {
+            "name": "cr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 36
+          },
+          {
+            "name": "ifls",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 40
+          },
+          {
+            "name": "imsc",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 44
+          },
+          {
+            "name": "ris",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 48
+          },
+          {
+            "name": "mis",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 52
+          },
+          {
+            "name": "icr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 56
+          },
+          {
+            "name": "dmacr",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 60
+          },
+          {
+            "name": "_reserved2",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 64
+          },
+          {
+            "name": "periph_id0",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 68
+          },
+          {
+            "name": "periph_id1",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 72
+          },
+          {
+            "name": "periph_id2",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 76
+          },
+          {
+            "name": "periph_id3",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 80
+          },
+          {
+            "name": "pcell_id0",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 84
+          },
+          {
+            "name": "pcell_id1",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 88
+          },
+          {
+            "name": "pcell_id2",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 92
+          },
+          {
+            "name": "pcell_id3",
+            "access_kind": {
+              "kind": "ReadWrite"
+            },
+            "byte_offset": 96
+          }
+        ]
+      }
+    ],
+    "impl_blocks": [],
+    "trait_impls": [],
+    "driver_impl_blocks": [],
+    "abstractions_used": [],
+    "intrinsics_used": []
+  },
+  "format_version": 1
+}

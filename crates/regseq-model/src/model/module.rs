@@ -46,7 +46,7 @@ pub enum ModuleKind {
 /// kind (Sections 3.1 through 3.7); driver-only items (Sections 3.8,
 /// 3.9, 3.10) are `None`/empty `Vec` in [`ModuleKind::Normal`] modules.
 /// Submodules allow arbitrary nesting.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct Module {
     /// The module's declaration identifier.
     pub id: ModuleId,
@@ -73,6 +73,7 @@ pub struct Module {
 
     // --- Driver-only items (present when kind == Driver) ---
     /// The driver struct declaration (Section 4). `None` for Normal modules.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub driver: Option<DriverStruct>,
     /// Regseq trait impls for the driver (Section 5). Empty for Normal modules.
     pub trait_impls: Vec<ImplBlock>,

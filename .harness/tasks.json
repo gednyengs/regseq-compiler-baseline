@@ -1161,7 +1161,7 @@
           "id": "regseq-model-60",
           "name": "PL011 Phase-6 end-to-end pipeline with golden and tracker updates",
           "spec": ".harness/tasks/regseq-model/60-pl011-pipeline-end-to-end.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-58",
             "regseq-model-59"

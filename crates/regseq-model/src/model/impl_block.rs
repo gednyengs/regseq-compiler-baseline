@@ -9,6 +9,8 @@
 //! The distinction between these use sites comes from structural position
 //! in the containing [`Module`], not from the [`ImplBlock`] type itself.
 
+use serde::Serialize;
+
 use crate::identity::{Symbol, TypeDefId};
 use crate::model::constant::Constant;
 use crate::model::function::Function;
@@ -23,12 +25,13 @@ use crate::model::function::Function;
 ///
 /// The distinction between these use sites comes from structural
 /// position in the Module, not from this type.
-#[derive(Clone, Eq, PartialEq, Debug)]
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct ImplBlock {
     /// The [`TypeDefId`] of the type being implemented.
     pub target_type: TypeDefId,
     /// The trait being implemented, if this is a trait impl.
     /// `None` for inherent impls.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub trait_name: Option<Symbol>,
     /// Methods defined in this impl block.
     pub methods: Vec<Function>,

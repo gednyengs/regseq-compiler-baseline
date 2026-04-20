@@ -8,6 +8,8 @@
 
 use std::collections::BTreeMap;
 
+use serde::Serialize;
+
 use crate::identity::{DeclId, SourceOrigin, SymbolInterner};
 use crate::model::module::Module;
 use crate::model::mutation::{MutationGuard, MutationPhase};
@@ -23,9 +25,20 @@ use crate::model::mutation::{MutationGuard, MutationPhase};
 /// [`SymbolInterner`] is compared by identity rather than content;
 /// consumers that need structural equality should compare the
 /// projections they care about.
-#[derive(Clone, Debug)]
+///
+/// The [`SymbolInterner`] is intentionally skipped by `Serialize`: per
+/// `ir-reference.md` Section 7 the interner is an internal compiler
+/// optimization, not part of the wire format. Each [`Symbol`] /
+/// [`FileId`] in the model serializes as its resolved string through
+/// the interner guard installed by
+/// [`crate::serialize::serialize_regseq_model`].
+///
+/// [`Symbol`]: crate::identity::Symbol
+/// [`FileId`]: crate::identity::FileId
+#[derive(Clone, Debug, Serialize)]
 pub struct RegseqModel {
     /// Interned symbols for all names and identifiers.
+    #[serde(skip_serializing)]
     pub symbols: SymbolInterner,
     /// Source locations for all declarations, keyed by [`DeclId`].
     ///
