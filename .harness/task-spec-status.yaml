@@ -346,13 +346,16 @@ items:
   - id: regseqmodel-phase-7
     phase: "7"
     title: Consumer migration to RegseqModel
-    status: ready_to_elaborate
+    status: tasked
     depends_on:
       - regseqmodel-phase-6
     target_harness_groups:
+      - regseq-model
       - regseq-analysis
       - regseq-lowering
+      - regseq-linux-backend
       - regseq-driver
+      - track-a-validation
     source_refs:
       - docs/discussions/models/regseq-model/execution-plan.md
     brief: .harness/spec-batches/regseqmodel-phase-7.md
@@ -361,16 +364,24 @@ items:
       lowering planner, Linux backend, pipeline glue, E2E tests. Uses
       temporary adapter layer for incremental migration.
     spec_authoring_notes:
-      - Migrate in order: analysis -> lowering planner -> Linux backend -> pipeline glue -> tests.
-      - Old modules stay alive during migration.
-    generated_task_ids: []
+      - Migrate in order: compat scaffold -> analysis imports -> lowering planner imports -> linux planner imports -> emit_driver pipeline cutover -> E2E rewrites + tracker gate.
+      - Tasks 2-4 are import-path-only migrations; AnalysisInput::new signature is unchanged until task 5.
+      - Task 5 (regseq-driver-35) is the pipeline cutover; it adds AnalysisInput::from_regseq_model and fills compat views' new_from_regseq_model arms.
+      - Old modules stay alive during migration; Phase 9 deletes them.
+    generated_task_ids:
+      - regseq-model-61
+      - regseq-analysis-06
+      - regseq-lowering-10
+      - regseq-linux-backend-03
+      - regseq-driver-35
+      - track-a-validation-11
 
   # ---- Phase 8: Backend C emission ----
 
   - id: regseqmodel-phase-8
     phase: "8"
     title: Backend C emission from CFG-based IR
-    status: not_ready
+    status: ready_to_elaborate
     depends_on:
       - regseqmodel-phase-7
     target_harness_groups:
