@@ -1125,7 +1125,7 @@
           "id": "regseq-model-57",
           "name": "RegseqModel mutation API with always-on verification",
           "spec": ".harness/tasks/regseq-model/57-mutation-api-auto-verify.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-55",
             "regseq-model-56"

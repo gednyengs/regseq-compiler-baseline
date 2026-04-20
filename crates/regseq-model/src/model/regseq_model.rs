@@ -10,6 +10,7 @@ use std::collections::BTreeMap;
 
 use crate::identity::{DeclId, SourceOrigin, SymbolInterner};
 use crate::model::module::Module;
+use crate::model::mutation::{MutationGuard, MutationPhase};
 
 /// The unified Regseq Model: the single progressively-filled IR that
 /// the compiler owns.
@@ -42,6 +43,65 @@ pub struct RegseqModel {
     /// Format version for serialization compatibility. Incremented
     /// whenever the serialized layout changes.
     pub format_version: u32,
+}
+
+impl RegseqModel {
+    /// Open a transactional mutation scope.
+    ///
+    /// The returned [`MutationGuard`] exposes typed `modify_*`
+    /// methods and one [`MutationGuard::commit`] entry point that
+    /// runs the phase-level verifier selected by `phase`. See
+    /// [`crate::model::mutation`] for the full contract.
+    ///
+    /// Every in-place transformation of a [`RegseqModel`] MUST go
+    /// through this surface; the only alternative is
+    /// [`Self::from_verified_components_unchecked`], which is
+    /// deliberately doc-hidden and requires the caller to run the
+    /// appropriate verifier separately before handing the model to
+    /// any non-test consumer.
+    pub fn begin_mutation(&mut self, phase: MutationPhase) -> MutationGuard<'_> {
+        MutationGuard::new(self, phase)
+    }
+
+    /// Construct a [`RegseqModel`] **without** running the verifier.
+    ///
+    /// This is an unsafe-at-contract-level escape hatch reserved for
+    /// internal infrastructure that reconstructs models from
+    /// external sources (e.g., deserializing a golden JSON in
+    /// tests). The caller MUST invoke
+    /// [`crate::verify::verify_phase_1`] or
+    /// [`crate::verify::verify_phase_2`] on the returned value
+    /// before passing it to any non-test consumer. Public API for
+    /// the compiler pipeline flows through
+    /// [`Self::begin_mutation`] instead.
+    ///
+    /// Visibility is `pub(crate)` so the escape hatch is not part of
+    /// the public API surface (spec acceptance criterion "narrowly
+    /// scoped"). `#[doc(hidden)]` is retained so that if it is ever
+    /// widened to `pub` for serde integration, `cargo doc` still
+    /// keeps it off the published rustdoc front page.
+    ///
+    /// The `#[allow(dead_code)]` is intentional: the escape hatch is
+    /// part of the API contract of this task (spec Implementation
+    /// Notes "Unsafe escape hatch (justified)") even before any
+    /// in-crate consumer exists. Later tasks (e.g., serde
+    /// `Deserialize`) will call it; removing it now would force
+    /// those tasks to reintroduce the same function.
+    #[doc(hidden)]
+    #[allow(dead_code)]
+    pub(crate) fn from_verified_components_unchecked(
+        symbols: SymbolInterner,
+        source_locations: BTreeMap<DeclId, SourceOrigin>,
+        root_module: Module,
+        format_version: u32,
+    ) -> Self {
+        Self {
+            symbols,
+            source_locations,
+            root_module,
+            format_version,
+        }
+    }
 }
 
 #[cfg(test)]
@@ -199,5 +259,39 @@ mod tests {
         let cloned = model.clone();
         assert_eq!(cloned.format_version, model.format_version);
         assert_eq!(cloned.root_module.id, model.root_module.id);
+    }
+
+    #[test]
+    fn from_verified_components_unchecked_constructs_without_verifying() {
+        // The escape hatch is deliberately narrow (`pub(crate)` +
+        // `#[doc(hidden)]`) but must remain functional for internal
+        // infrastructure like deserialization. This test exercises it
+        // directly and proves two properties:
+        //   1. it produces a model with the provided components,
+        //   2. it does NOT run the verifier (the input model here is
+        //      intentionally malformed -- it has no Driver submodule,
+        //      which `verify_phase_1` rejects).
+        let mut symbols = SymbolInterner::new();
+        let root_module = empty_module(&mut symbols, "crate_root", 1, ModuleKind::Normal);
+        let mut source_locations = BTreeMap::new();
+        source_locations.insert(DeclId::new(1), SourceOrigin::CompilerGenerated);
+
+        let model = RegseqModel::from_verified_components_unchecked(
+            symbols,
+            source_locations,
+            root_module,
+            42,
+        );
+
+        assert_eq!(model.format_version, 42);
+        assert_eq!(model.root_module.kind, ModuleKind::Normal);
+        assert!(
+            model.root_module.submodules.is_empty(),
+            "escape hatch must not mutate the input"
+        );
+        assert!(
+            crate::verify::verify_phase_1(&model).is_err(),
+            "escape hatch must not run the verifier -- a malformed model passes through"
+        );
     }
 }

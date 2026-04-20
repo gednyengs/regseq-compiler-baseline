@@ -11,6 +11,7 @@ pub mod framework;
 pub mod function;
 pub mod impl_block;
 pub mod module;
+pub mod mutation;
 pub mod register;
 pub mod regseq_model;
 pub mod resources;
@@ -22,6 +23,7 @@ pub use framework::{FrameworkTypeKind, TypeDefClassification};
 pub use function::{Function, Param, ParamKind};
 pub use impl_block::ImplBlock;
 pub use module::{Module, ModuleKind};
+pub use mutation::{MutationGuard, MutationPhase, ResourceBinding};
 pub use register::{
     AccessKind, BitfieldDef, NamedValue, RegisterBlock, RegisterBlockAttributes,
     RegisterBlockField, RegisterDescriptor,
