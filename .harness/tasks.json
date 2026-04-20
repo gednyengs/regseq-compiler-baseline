@@ -494,6 +494,17 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-driver-35",
+          "name": "emit_driver.rs pipeline cutover to normalize + populate_bindings",
+          "spec": ".harness/tasks/regseq-driver/35-emit-driver-pipeline-cutover.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-validation-12"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1168,6 +1179,39 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-61",
+          "name": "regseq-model::query CFG traversal helpers",
+          "spec": ".harness/tasks/regseq-model/61-query-module.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-60"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-62",
+          "name": "LintFinding API + fold property lints into verify_phase_1",
+          "spec": ".harness/tasks/regseq-model/62-lint-finding-api.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-60"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-model-63",
+          "name": "Delete old model modules + Phase-7 tracker gate",
+          "spec": ".harness/tasks/regseq-model/63-delete-old-model-modules-and-tracker-gate.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-11"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1287,6 +1331,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-analysis-06",
+          "name": "Rewrite readiness over RegseqModel; delete body_readiness + input",
+          "spec": ".harness/tasks/regseq-analysis/06-readiness-rewrite-against-regseq-model.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-61",
+            "regseq-model-62"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1303,6 +1359,28 @@
             "regseq-config-02",
             "regseq-diagnostics-01",
             "regseq-model-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-backends-02",
+          "name": "Linux emission contract + PL011 construct exemplars",
+          "spec": ".harness/tasks/regseq-backends/02-emission-contract-and-exemplars.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-60"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-backends-03",
+          "name": "C-AST move to backends::c + Phase-7C subset expansion",
+          "spec": ".harness/tasks/regseq-backends/03-c-ast-move-and-expand.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-60"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -1683,6 +1761,28 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-10",
+          "name": "New build_driver_lowering_plan_from_model + trim DriverLoweringPlan",
+          "spec": ".harness/tasks/regseq-lowering/10-new-lowering-entry-from-regseq-model.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-61"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-11",
+          "name": "Delete dead lowering submodules + legacy lowering entry",
+          "spec": ".harness/tasks/regseq-lowering/11-delete-dead-lowering-submodules.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-validation-13"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1710,6 +1810,43 @@
             "regseq-linux-backend-01",
             "regseq-lowering-09",
             "track-a-validation-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-03",
+          "name": "LinuxBackendPlan self-sufficiency",
+          "spec": ".harness/tasks/regseq-linux-backend/03-linux-plan-self-sufficiency.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-04",
+          "name": "Retarget emit_semantic to CFG via new C AST",
+          "spec": ".harness/tasks/regseq-linux-backend/04-emit-semantic-cfg-rewrite.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-02",
+            "regseq-backends-03",
+            "regseq-linux-backend-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-05",
+          "name": "Retarget emit_module to CFG; delete emit_behavior",
+          "spec": ".harness/tasks/regseq-linux-backend/05-emit-module-cfg-rewrite-and-emit-behavior-delete.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-02",
+            "regseq-linux-backend-03",
+            "regseq-linux-backend-04"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -1945,6 +2082,40 @@
           "depends_on": [
             "regseq-linux-backend-02",
             "regseq-driver-23"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-11",
+          "name": "QEMU boot + probe harness (productized eval baseline)",
+          "spec": ".harness/tasks/track-a-validation/11-qemu-boot-probe-harness.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-60"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-12",
+          "name": "PL011 normalized-reference blessing gate",
+          "spec": ".harness/tasks/track-a-validation/12-pl011-reference-blessing-gate.md",
+          "status": "pending",
+          "depends_on": [
+            "track-a-validation-11",
+            "regseq-linux-backend-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-13",
+          "name": "E2E rewrites + CFG structural invariants (Test B)",
+          "spec": ".harness/tasks/track-a-validation/13-e2e-rewrites-and-cfg-invariants.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-35"
           ],
           "artifacts": [],
           "fail_reason": null

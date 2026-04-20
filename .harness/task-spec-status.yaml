@@ -345,8 +345,8 @@ items:
 
   - id: regseqmodel-phase-7
     phase: "7"
-    title: Consumer migration to RegseqModel
-    status: ready_to_elaborate
+    title: Consumer migration to RegseqModel + CFG emission (absorbs 8.1, 9.1)
+    status: tasked
     depends_on:
       - regseqmodel-phase-6
     target_harness_groups:
@@ -355,28 +355,54 @@ items:
       - regseq-lowering
       - regseq-linux-backend
       - regseq-driver
+      - regseq-backends
       - track-a-validation
     source_refs:
       - docs/discussions/models/regseq-model/migration.md
       - docs/discussions/models/regseq-model/execution-plan.md
     brief: docs/discussions/models/regseq-model/migration.md
     summary: >
-      Consumer migration to RegseqModel, redesigned. The original framing
-      (compat.rs adapter projecting RegseqModel back to legacy shape) was
-      retired after implementer blocker on regseq-driver-35. New plan:
-      forward migration against RegseqModel directly, with consumers
-      reclassified (some DELETED, some SHRINK, some REWRITE). Plan lives
-      in migration.md Q6-Q8 and supersedes regseqmodel-phase-7.md.
+      Consumer migration to RegseqModel, redesigned against the D' layered
+      validation strategy (migration.md Q5). 15 tasks across Phases 7.0
+      (oracle + infra), 7A (analysis), 7B (lowering), 7C (CFG emission --
+      absorbs execution-plan 8.1), 7C-validation (reference blessing via
+      QEMU smoke), 7D (pipeline cutover), 7E (E2E + Test B), 7F (cleanup
+      + old-model deletion -- absorbs execution-plan 9.1). No compat.rs
+      adapter. emit_driver cuts over LAST, not first.
     spec_authoring_notes:
-      - Read migration.md Q3/Q6/Q7/Q8 before decomposition.
-      - Migration order: analysis rewrite -> new lowering entry -> Linux CFG emission + legacy deletions -> emit_driver cutover -> E2E retarget.
-      - emit_driver is the LAST cut, not the first (original specs had this backwards).
-      - Phase 7C absorbs part of execution-plan Phase 8.1 (CFG-based C emission); boundary with Phase 8 needs redrawing alongside this batch.
-      - DriverLoweringPlan trims vestigial fields (behavior, legacy_behavior, callback_actions).
-      - LinuxBackendPlan must own a complete emission contract (no dual-plan emitter signatures).
-      - c_ast.rs moves to crates/regseq-backends/src/c/ and gains statement / expression / declarator / initializer / label+goto ASTs.
-      - Old modules (declaration/, binding/, joined/, semantic/, item/) stay alive only through the C-output byte-parity test then delete in Phase 7E.
-    generated_task_ids: []
+      - Read migration.md Q5-Q8 before implementing.
+      - Phase 7.0 runs in parallel (3 tasks).
+      - Phase 7C absorbs execution-plan Phase 8.1 (CFG-based C emission);
+        Phase 7F absorbs execution-plan Phase 9.1 (old-module deletion).
+      - DriverLoweringPlan trims vestigial fields (behavior,
+        legacy_behavior, callback_actions); body access via
+        FunctionBodyIndex<'_> (task 8), not a plan field.
+      - LinuxBackendPlan must own a complete emission contract (no
+        dual-plan emitter signatures).
+      - c_ast.rs moves to crates/regseq-backends/src/c/ and gains
+        statement / expression / declarator / initializer / labels+goto
+        ASTs.
+      - Emission contract (task 1) is the oracle -- subject to
+        adversarial Codex review before tasks 9/10 start.
+      - PL011 reference is blessed emitter output (not hand-authored),
+        gated on QEMU functional smoke that exercises probe + tty open
+        + byte write + close + module unload.
+    generated_task_ids:
+      - regseq-backends-02
+      - regseq-backends-03
+      - track-a-validation-11
+      - regseq-model-61
+      - regseq-model-62
+      - regseq-analysis-06
+      - regseq-lowering-10
+      - regseq-linux-backend-03
+      - regseq-linux-backend-04
+      - regseq-linux-backend-05
+      - track-a-validation-12
+      - regseq-driver-35
+      - track-a-validation-13
+      - regseq-lowering-11
+      - regseq-model-63
 
   # ---- Phase 8: Backend C emission ----
 
@@ -394,11 +420,17 @@ items:
       - docs/discussions/models/regseq-model/compiler-knowledge.md
     brief: .harness/spec-batches/regseqmodel-phase-8.md
     summary: >
-      Implement goto-based C emitter from CFG-based IR. Implement
-      dominator-based resource cleanup for lifecycle callback error paths.
-      Remove deprecated mir_interpreter/ and semantic_lowering/ code.
+      Shrunk: Phase 8.1 (goto-based C emitter) was absorbed by Phase-7C
+      (tasks regseq-linux-backend-04/05), and Phase 8.3
+      (deprecated-code removal) was handled by Phase-7F (task
+      regseq-lowering-11). Phase 8 now starts at 8.2: dominator-based
+      resource cleanup for lifecycle callback error paths. See
+      execution-plan.md's revised Phase-8 section.
     spec_authoring_notes:
-      - Goto-based emission first, structured recovery later.
+      - Phase 8.1 + 8.3 already landed in Phase 7; this batch is 8.2
+        only plus any residual Phase-8 work that surfaces post-7.
+      - Dominator-based cleanup handles cases 1/4/8/10/11/12 per
+        compiler-knowledge.md "Resource Cleanup on Error Paths".
       - PL011 init() has acknowledged rollback limitations (Cases 2, 7).
     generated_task_ids: []
 
