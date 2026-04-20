@@ -494,17 +494,6 @@
           ],
           "artifacts": [],
           "fail_reason": null
-        },
-        {
-          "id": "regseq-driver-35",
-          "name": "emit_driver.rs pipeline cutover to normalize() + populate_bindings()",
-          "spec": ".harness/tasks/regseq-driver/35-emit-driver-pipeline-cutover.md",
-          "status": "pending",
-          "depends_on": [
-            "regseq-linux-backend-03"
-          ],
-          "artifacts": [],
-          "fail_reason": null
         }
       ]
     },
@@ -1179,17 +1168,6 @@
           ],
           "artifacts": [],
           "fail_reason": null
-        },
-        {
-          "id": "regseq-model-61",
-          "name": "Phase-7 compat scaffold (regseq_model::compat)",
-          "spec": ".harness/tasks/regseq-model/61-compat-scaffold.md",
-          "status": "done",
-          "depends_on": [
-            "regseq-model-60"
-          ],
-          "artifacts": [],
-          "fail_reason": null
         }
       ]
     },
@@ -1306,17 +1284,6 @@
           "depends_on": [
             "regseq-analysis-03",
             "regseq-model-13"
-          ],
-          "artifacts": [],
-          "fail_reason": null
-        },
-        {
-          "id": "regseq-analysis-06",
-          "name": "Migrate regseq-analysis imports to regseq_model::compat",
-          "spec": ".harness/tasks/regseq-analysis/06-migrate-to-regseq-model-compat.md",
-          "status": "done",
-          "depends_on": [
-            "regseq-model-61"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -1716,17 +1683,6 @@
           ],
           "artifacts": [],
           "fail_reason": null
-        },
-        {
-          "id": "regseq-lowering-10",
-          "name": "Migrate lowering/planner.rs imports to regseq_model::compat",
-          "spec": ".harness/tasks/regseq-lowering/10-migrate-planner-imports-to-compat.md",
-          "status": "done",
-          "depends_on": [
-            "regseq-analysis-06"
-          ],
-          "artifacts": [],
-          "fail_reason": null
         }
       ]
     },
@@ -1754,17 +1710,6 @@
             "regseq-linux-backend-01",
             "regseq-lowering-09",
             "track-a-validation-10"
-          ],
-          "artifacts": [],
-          "fail_reason": null
-        },
-        {
-          "id": "regseq-linux-backend-03",
-          "name": "Migrate linux planner + plan imports to regseq_model::compat",
-          "spec": ".harness/tasks/regseq-linux-backend/03-migrate-planner-imports-to-compat.md",
-          "status": "done",
-          "depends_on": [
-            "regseq-lowering-10"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -2000,17 +1945,6 @@
           "depends_on": [
             "regseq-linux-backend-02",
             "regseq-driver-23"
-          ],
-          "artifacts": [],
-          "fail_reason": null
-        },
-        {
-          "id": "track-a-validation-11",
-          "name": "PL011 E2E rewrites + Phase-7 tracker gate",
-          "spec": ".harness/tasks/track-a-validation/11-pl011-e2e-regseq-model-rewrites.md",
-          "status": "pending",
-          "depends_on": [
-            "regseq-driver-35"
           ],
           "artifacts": [],
           "fail_reason": null
