@@ -9,6 +9,7 @@
 //! the driver's join logic.
 
 pub mod binding;
+pub mod compat;
 pub mod declaration;
 pub mod identity;
 pub mod ir;
