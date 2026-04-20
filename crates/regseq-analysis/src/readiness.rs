@@ -13,9 +13,7 @@
 use std::collections::BTreeSet;
 
 use crate::input::{AnalysisInput, ResourceJoinSummary};
-use regseq_model::declaration::callbacks::CallbackFamily;
-use regseq_model::declaration::driver::{BusType, DeviceClass};
-use regseq_model::declaration::properties::PropertyLintDecl;
+use regseq_model::compat::{BusType, CallbackFamily, DeviceClass, PropertyLintDecl};
 
 /// Expected callback families per device class.
 ///

@@ -16,10 +16,9 @@ use std::collections::{BTreeMap, BTreeSet};
 use crate::input::AnalysisInput;
 use crate::readiness::FindingSeverity;
 
-use regseq_model::declaration::callbacks::CallbackFamily;
-use regseq_model::declaration::mir_body::{
-    FnKind, MirBody, MirOperand, MirProjectionElem, MirQueryFlavor, MirRvalue, MirStatementKind,
-    MirTerminatorKind,
+use regseq_model::compat::{
+    CallbackFamily, FnKind, MirBody, MirOperand, MirProjectionElem, MirQueryFlavor, MirRvalue,
+    MirStatementKind, MirTerminatorKind,
 };
 
 /// A single body readiness finding.
@@ -339,7 +338,7 @@ fn collect_unsupported_in_operand(operand: &MirOperand, out: &mut Vec<(&'static 
 }
 
 fn collect_unsupported_in_place_projections(
-    place: &regseq_model::declaration::mir_body::MirPlace,
+    place: &regseq_model::compat::MirPlace,
     out: &mut Vec<(&'static str, String)>,
 ) {
     for proj in &place.projection {

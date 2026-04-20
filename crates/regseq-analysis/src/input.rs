@@ -13,29 +13,15 @@
 
 use std::collections::BTreeSet;
 
-use regseq_model::binding::BusBinding;
-use regseq_model::declaration::bodies::{collect_call_targets, BodyDeclSet, FnBodyDecl};
-use regseq_model::declaration::callbacks::{CallbackDeclSet, CallbackFamily, CallbackImplDecl};
-use regseq_model::declaration::driver::BusType;
-use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirFnBodyDecl, MirQueryFlavor};
-use regseq_model::declaration::operations::{
-    DurationCtorSiteDecl, LogCallSiteDecl, LoggingDeclSet, PmGateDecl, PmGateDeclSet,
-    TimedDelayCallSiteDecl, TimedDelayDeclSet,
-};
-use regseq_model::declaration::properties::{PropertyDeclSet, PropertyLintDecl};
-use regseq_model::declaration::registers::{
-    PollCallSiteDecl, RegisterBlockDecl, RegisterDeclSet, RegisterDescriptorDecl,
-    WrapperCallSiteDecl,
-};
-use regseq_model::declaration::resources::ResourceDeclSet;
-use regseq_model::declaration::synchronization::{
-    CompletionOperationDecl, GuardScopeDecl, LockOperationDecl, SyncFieldDecl,
-    SynchronizationDeclSet,
-};
-use regseq_model::declaration::DeclarationModel;
-use regseq_model::joined::{
-    ClockJoinEntry, InterruptJoinEntry, JoinOutcome, JoinedArtifact, MmioJoinEntry,
-    PinCtrlJoinEntry, PropertyJoinEntry, ResetJoinEntry,
+use regseq_model::compat::{
+    collect_call_targets, BodyDeclSet, BusBinding, BusType, CallbackDeclSet, CallbackFamily,
+    CallbackImplDecl, ClockJoinEntry, CompletionOperationDecl, DeclarationModel,
+    DurationCtorSiteDecl, FnBodyDecl, GuardScopeDecl, InterruptJoinEntry, JoinOutcome,
+    JoinedArtifact, LockOperationDecl, LogCallSiteDecl, LoggingDeclSet, MirBodyDeclSet,
+    MirFnBodyDecl, MirQueryFlavor, MmioJoinEntry, PinCtrlJoinEntry, PmGateDecl, PmGateDeclSet,
+    PollCallSiteDecl, PropertyDeclSet, PropertyJoinEntry, PropertyLintDecl, RegisterBlockDecl,
+    RegisterDeclSet, RegisterDescriptorDecl, ResetJoinEntry, ResourceDeclSet, SyncFieldDecl,
+    SynchronizationDeclSet, TimedDelayCallSiteDecl, TimedDelayDeclSet, WrapperCallSiteDecl,
 };
 
 /// Read-only analysis input pairing a declaration model with its joined artifact.
