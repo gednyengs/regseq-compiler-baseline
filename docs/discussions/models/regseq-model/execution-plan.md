@@ -354,51 +354,112 @@ Post-Phase-1 and Post-Phase-2 checks. Module tree invariants, ID resolution, typ
 
 ---
 
-## Phase 7: Consumer Migration
+## Phase 7: Consumer Migration + CFG Emission
 
-**Goal:** Migrate consumers BEFORE deleting old modules.
+> **Redesigned.** The original Phase-7 framing ("migrate consumers via a
+> `compat.rs` adapter that projects `RegseqModel` back to the legacy
+> shape") was retired after an implementer blocker. The authoritative
+> design now lives in `docs/discussions/models/regseq-model/migration.md`
+> (sections Q0-Q8). In particular: (a) no `compat.rs` adapter; consumers
+> migrate forward against `RegseqModel` directly or are deleted
+> outright; (b) Phase-7 absorbs what was formerly Phase-8.1 (goto-based
+> CFG C emission) because `linux/emit_semantic.rs` was pre-written in
+> the tree and would otherwise straddle the boundary; (c) validation is
+> a layered D' stack, not old-vs-new byte-parity. See migration.md Q5
+> for the validation stack and Q6 for the ordered migration plan.
 
-### 7.1: Adapter layer (temporary)
+**Goal:** Migrate consumers forward to `RegseqModel`, rewrite the
+Linux backend's body emission over CFG IR, delete the superseded
+lowering/emission submodules and old model modules, and prove the
+new pipeline end-to-end (contract + construct tests + blessed
+reference + host-build + determinism + QEMU functional smoke +
+CFG structural invariants).
 
-`crates/regseq-model/src/compat.rs` -- bridge old consumer APIs to new model.
+### Sub-phases (per migration.md Q6)
 
-### 7.2: Migrate `regseq-analysis`
-### 7.3: Migrate `regseq-backends/lowering/planner.rs`
-### 7.4: Migrate `regseq-backends/linux/`
-### 7.5: Migrate `regseq-driver/emit_driver.rs`
-### 7.6: Migrate E2E tests
+- **7.0 Oracle + infra foundation** (parallel): emission contract +
+  construct exemplars; new `backends::c` AST; QEMU boot/probe harness
+  productized from the frozen PL011 eval-env baseline
+  (`experiments/pl011-eval-env/`).
+- **7A Analysis foundation**: `regseq-model::query` helpers;
+  `LintFinding` API on `verify_phase_1`; rewrite `regseq-analysis`;
+  delete `AnalysisInput` and `body_readiness`.
+- **7B Lowering**: new `RegseqModel`-based lowering entry alongside
+  old; trim `DriverLoweringPlan` (delete `behavior`,
+  `legacy_behavior`, `callback_actions`; relocate
+  reporting-only sequencing/metadata); fix `LinuxBackendPlan`'s leaky
+  emission boundary.
+- **7C CFG emission (absorbs former 8.1)**: retarget
+  `linux::emit_semantic` and `linux::emit_module` to walk CFG `Body`
+  via the new `backends::c` AST with goto-based control flow; delete
+  `linux::emit_behavior`.
+- **7C-validation**: bless the PL011 normalized reference -- pass
+  required through QEMU functional smoke that exercises probe +
+  backend-generated tty open + one-byte write.
+- **7D Pipeline cutover**: `emit_driver.rs` swaps to
+  `normalize() + populate_bindings() + new lowering entry + new
+  emission`.
+- **7E E2E retarget**: rewrite legacy-bootstrap E2Es against
+  `RegseqModel`; add Test B (CFG structural invariants).
+- **7F Cleanup**: delete dead lowering submodules
+  (`behavior_planner`, `body_interpreter`, `mir_interpreter`,
+  `hierarchy`, `projection`, `semantic_lowering`) and old model
+  modules (`declaration/`, `binding/`, `joined/`, `semantic/`,
+  `item/`). No `compat.rs` to delete -- it was never created.
 
-**Verification:** All tests pass with new model throughout.
+**Verification:** The D' validation stack (migration.md Q5) all holds:
+emission contract + exemplars + construct tests + blessed reference
++ host-build + determinism + QEMU functional smoke + CFG
+invariants.
 
 ---
 
-## Phase 8: Backend C Emission
+## Phase 8: Backend C Emission (shrunk; 8.1 absorbed by 7C)
 
-**Goal:** Emit C from CFG-based IR.
+**Goal:** Dominator-based resource cleanup on lifecycle callbacks,
+plus deprecated-code removal not already handled in Phase 7F.
 
-### 8.1: Goto-based C emitter
+### 8.1: [Absorbed by Phase 7C] Goto-based C emitter
 
-Emit each `BasicBlock` as a labeled C block. Correct first, readable later (structured recovery is a follow-up).
+*Moved into Phase 7C.* The CFG-based goto emitter landed as part of
+the consumer-migration cut because `linux/emit_semantic.rs` was
+already in the tree as a partial replacement for `emit_behavior.rs`;
+separating the two would have straddled the Phase-7/8 boundary.
+Phase 8 entry point is 8.2.
 
 ### 8.2: Dominator-based resource cleanup
 
-For lifecycle callbacks, find reversible intrinsics dominating error exits. Generate reverse operations.
+For lifecycle callbacks, find reversible intrinsics dominating error
+exits. Generate reverse operations.
 
-**Handled cases:** Sequential `?` chain, match on result, early return in branch, infallible ops in chain, inside ordered region, non-reversible failure.
+**Handled cases:** Sequential `?` chain, match on result, early
+return in branch, infallible ops in chain, inside ordered region,
+non-reversible failure.
 
-**PL011 limitations:** `init()` uses helper-contained optional acquisitions (Case 7 + Case 2). Compiler emits diagnostic warning. Each helper handles its own failure internally, so the direct `?` chain in `init()` is safe for dominator analysis.
+**PL011 limitations:** `init()` uses helper-contained optional
+acquisitions (Case 7 + Case 2). Compiler emits diagnostic warning.
+Each helper handles its own failure internally, so the direct `?`
+chain in `init()` is safe for dominator analysis.
 
-### 8.3: Remove deprecated backend code
+### 8.3: Residual deprecated-code removal
 
-Remove `lowering/mir_interpreter/`, `lowering/semantic_lowering/`, `lowering/behavior.rs`, `behavior_planner.rs`, `body_interpreter.rs`.
+Any deprecated backend code not already removed in Phase 7F. Phase
+7F removes `lowering::{behavior_planner, body_interpreter,
+mir_interpreter, hierarchy, projection, semantic_lowering}` plus
+the legacy lowering entry; Phase 8.3 handles anything that surfaces
+after 8.2's cleanup work lands.
 
 ---
 
-## Phase 9: Cleanup
+## Phase 9: Cleanup (shrunk; 9.1 absorbed by 7F)
 
-### 9.1: Remove old model modules
+### 9.1: [Absorbed by Phase 7F] Remove old model modules
 
-Delete `declaration/`, `binding/`, `joined/`, `semantic/`, `item/`, `compat.rs`.
+*Moved into Phase 7F.* Old model modules
+(`declaration/`, `binding/`, `joined/`, `semantic/`, `item/`)
+delete as part of the Phase-7 cleanup sub-phase, because no
+`compat.rs` adapter was built; nothing reads these modules after
+Phase 7D cutover. Phase 9 entry point is 9.2.
 
 ### 9.2: Final golden file regeneration
 ### 9.3: Final test cleanup

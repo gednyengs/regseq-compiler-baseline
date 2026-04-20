@@ -318,58 +318,176 @@ Codex's call is right on every divergence. The Explore agent's classifications l
 
 ## Q5 -- Validation strategy
 
-Two tests are load-bearing for this migration. If both pass, the
-refactor is correct in the senses that matter.
+> **Rewritten.** The original formulation named "PL011 C byte-parity
+> old vs new" as the strongest validation. That is wrong: the old
+> compiler pipeline's C output is neither complete nor correct, so
+> byte-parity against it would lock in bugs. Mature compilers
+> (LLVM/MLIR/Cranelift/rustc) do not validate new backends by
+> blessing legacy text; they specify lowering, assert structural
+> legality, and run programs. The revised strategy (**D'**) follows
+> that pattern.
 
-### Test A: PL011 Linux-C byte parity (old vs new pipeline)
+The migration is correct if a **layered stack of signals** all hold
+on the PL011 fixture. No single oracle; each layer catches a
+different class of defect.
 
-A regression test that runs the PL011 fixture through both the
-existing pipeline (old models + `emit_behavior`/`emit_semantic` current
-path) and the redesigned pipeline (`RegseqModel` + new lowering entry +
-CFG emitter), and asserts the emitted `.c` files are byte-identical
-(or differ only in acknowledged, enumerated ways such as comment
-banner timestamps).
+### Layer 1 -- Emission contract (the specification)
 
-This is the strongest proof that no information was lost in the
-migration. `ir-reference.md:1737-1764` makes PL011 the primary golden
-fixture; `execution-plan.md:444-446` names this exact comparison as
-the end-to-end verification milestone.
+A normative markdown document `linux-emission-contract.md` plus a
+small Rust data-table module (`emission_tables.rs`) that together
+form an executable specification of "for each RegseqModel construct,
+what C pattern should emit."
 
-Practical note: both pipelines must coexist in-tree for the duration
-of this test. That is acceptable during Phase 7; Phase 8.3 + 9
-ultimately remove the old path.
+Markdown surface:
+- The C normal form (one C function per `RegseqModel::Function`, one
+  C label per `BasicBlock`, canonical goto graph, canonical cleanup
+  labels, no inlining, canonical locals). Phase-8.1 goto-based
+  emission is the design target
+  (`execution-plan.md:375-389`); the normal form codifies it.
+- Naming policy (symbol prefixes, label shapes, variable conventions).
+- Normalization algorithm used to produce the blessed reference file
+  (whitespace, ordering, comment policy). Downstream byte-equal
+  regression is only well-defined after the normalization algorithm
+  is specified here.
 
-### Test B: RegseqModel-native CFG invariants on PL011
+Rust data tables (naturally tabular material):
+- Intrinsic -> Linux API mapping (`clock_enable` ->
+  `clk_prepare_enable`, etc.; a small amount of this already exists
+  in prose in `compiler-knowledge.md:470-811`).
+- Reversible-intrinsic cleanup pairs.
+- Callback-family return-value adaptation.
+- Ordered-region barrier placement.
 
-A positive test that asserts facts the old models *could not
-express*. Minimum set:
+### Layer 2 -- Construct exemplars
+
+~15 hand-authored C fragments under
+`tests/goldens/pl011/linux/constructs/*.c`, each tied to exactly one
+CFG construct or emission rule: straight-line sequence, branch
+(`SwitchInt`), loop (back-edge Goto), `IntrinsicCall` with
+`error_target`, `OrderedRegion`, cleanup ladder, etc. These are not
+human-stylistic Linux C; they are the mechanical output the contract
+requires.
+
+(Callback wrapper / parameter binding / return adaptation fragments
+are Linux module-integration policy, not CFG-level, and belong to
+the `emit_module` task's exemplar set, not the contract-level
+exemplars.)
+
+### Layer 3 -- Construct-level tests
+
+For each exemplar, a unit test that constructs a minimal CFG body
+(directly, via the IR builder) and asserts the emitter produces the
+matching exemplar bytes. This forces the emitter's lowering rules to
+match the contract at a construct granularity rather than only at
+whole-driver granularity. These tests are authored by the task that
+writes the emitter (`emit_semantic` / `emit_module`), not by the
+contract-authoring task.
+
+### Layer 4 -- Blessed PL011 normalized reference
+
+After the emitter is stable and passes all construct tests, run the
+new pipeline on the PL011 fixture, review the emitter's output by
+hand against the contract, and commit the result as
+`tests/goldens/pl011/linux/normalized_reference.c`. This reference
+is NOT a human-written Linux driver; it is blessed emitter output
+whose contract conformance has been verified. Byte-equal regression
+against this file on every subsequent run catches emission
+regressions.
+
+### Layer 5 -- Host-kernel build proof
+
+The existing `pl011_linux_module_host_build_proof.rs` infrastructure
+builds the generated `.ko` against a real pinned kernel tree and
+verifies `modinfo`. This validates C well-formedness + ABI
+compatibility, not semantic correctness. Retained as a secondary
+signal.
+
+### Layer 6 -- Determinism golden
+
+Two consecutive runs of the new pipeline on the PL011 fixture
+produce byte-identical output. Guards against nondeterminism
+introduced during the emitter rewrite. Task 60's existing Phase-6
+determinism golden covers the model layer; this layer extends it
+through emission.
+
+### Layer 7 -- QEMU functional smoke (the critical falsification)
+
+An ARM64 QEMU `virt` boot harness built on the already-frozen
+PL011 eval-env baseline (pinned `v6.18.21` kernel, Buildroot
+`2026.02` + BusyBox + `kmod` rootfs, second AMBA PL011 reserved via
+DT / periphid override; see `experiments/pl011-eval-env/notes/`).
+
+The smoke does **not** validate against `/dev/ttyAMA0` (the stock
+console, owned by Linux's built-in PL011 driver); it targets the
+backend-generated `dev_name` from `LinuxSerialCoreRealization`
+(`crates/regseq-backends/src/linux/planner.rs:101-104,126-137`).
+
+Pass criterion:
+1. Boot the pinned QEMU image with the generated `.ko` available.
+2. `insmod` the module.
+3. Probe succeeds; no kernel oops/warnings in dmesg.
+4. Open the backend-defined tty device.
+5. Write at least one byte through the generated driver's
+   `tx_byte` / `startup` / `port_open` path.
+6. Close; `rmmod`; no leaks / warnings.
+
+This is the first point in the pipeline where register offsets,
+callback signatures, ordered-region barriers, and Linux API usage
+get *executed*, not merely *emitted*. It is the only layer that can
+falsify a self-consistent-but-wrong contract.
+
+### Layer 8 -- CFG structural invariants (Test B)
+
+Positive assertions that facts the old models *could not express*
+are present in the new model:
 
 - `OrderedRegion { entry, exit }` metadata exists on every function
   body that contains an `ordered!` region
   (`ir-reference.md:1737-1764`, `spec.md:915-929`).
 - Every fallible `IntrinsicCall` carries an `error_target` pointing
-  to the `?`-propagation block, not a reconstructed SwitchInt pattern
-  (`ir-reference.md:1032-1065`).
+  to the `?`-propagation block (not a reconstructed SwitchInt
+  pattern) (`ir-reference.md:1032-1065`).
 - `verify_phase_2(&model)` rejects platform files missing any
-  required binding slot (covered by Phase-6 task `regseq-model-56`,
-  but re-asserted here as integration-level evidence).
-- The `properties_joined` / `clocks_joined` / etc. data a redesigned
-  `lowering::planner` computes from the model matches the data the
-  old pipeline produced, for at least the PL011 fixture.
+  required binding slot.
+- The derived obligations a redesigned `lowering::planner` computes
+  from the model (acquisition order, resource policies, callback
+  inventory) are shape-stable across two runs on the same input.
 
-Existing tests stay alive but get retargeted:
-- `pl011_driver_emission.rs`: unchanged (asserts on-disk artifacts).
-- `pl011_linux_module_host_build_proof.rs`: unchanged (host-build
-  kernel module).
+### How the layers compose
+
+| Defect class | Caught by |
+|--------------|-----------|
+| Contract is wrong | Layer 7 (QEMU smoke executes the wrong C) |
+| Emitter deviates from contract | Layer 3 (construct tests) |
+| PL011-specific emitter bug | Layer 4 (manual review before blessing) + Layer 7 |
+| Subsequent emission regression | Layer 4 (byte-equal) + Layer 5 (build) + Layer 7 (ongoing smoke) |
+| Nondeterminism | Layer 6 |
+| Structural IR invariant violation | Layer 8 |
+| Semantic Linux-API misuse shared by contract + reference | Layer 7 (falsification) |
+
+A defect class that no layer catches is a known gap -- notably,
+concurrency/interrupt-ordering bugs and hardware-functional
+mistakes the QEMU smoke does not exercise. These are deferred to a
+follow-on eval track (QEMU behavioral suite + hardware-in-the-loop
+where applicable).
+
+### Existing-test disposition
+
+- `pl011_driver_emission.rs` (on-disk artifacts): unchanged.
+- `pl011_linux_module_host_build_proof.rs` (host build): continues
+  at Layer 5. Its target shifts from old-emitter output to the
+  blessed reference after Phase-7C-validation.
 - `pl011_frontend_qc.rs`, `pl011_layer_boundary.rs`,
   `platform_file_boundary.rs`: unchanged (pre-normalize).
 - `pl011_bus_identity_proof.rs`: rewritten to assert bus identity
-  survives into `RegseqModel.root_module.driver_module().driver.identity.bus`.
-- `pl011_lowering_input_stability.rs`: rewritten or retired -- its
-  stability assertions over `AnalysisInput` accessors target a
-  shape that is being deleted.
+  on `RegseqModel.root_module.driver_module().driver.identity.bus`.
+- `pl011_lowering_input_stability.rs`: retired -- its stability
+  assertions over `AnalysisInput` accessors target a shape that is
+  being deleted.
 - `driver_e2e.rs`, `pl011_spec_slice.rs`: unchanged (RUSTC_WRAPPER
   smoke).
+- **New**: blessing harness + ongoing QEMU regression + construct
+  tests + byte-equal regression.
 
 ---
 
