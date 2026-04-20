@@ -160,6 +160,7 @@ fn build_minimal_phase_2_ok() -> RegseqModel {
         },
         device_class: None,
         pm_info: None,
+        platform_metadata: None,
         clocks: vec![ClockResource {
             id: ResourceId::from(DeclId::new(CLOCK_RESOURCE_ID)),
             field_name: clk_field_sym,

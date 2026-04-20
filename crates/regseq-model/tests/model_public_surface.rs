@@ -42,6 +42,7 @@ fn regseq_model_is_reachable_via_public_re_export_path() {
             },
             device_class: None,
             pm_info: None,
+            platform_metadata: None,
             clocks: vec![],
             resets: vec![],
             pinctrl: vec![],

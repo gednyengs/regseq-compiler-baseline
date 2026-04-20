@@ -141,6 +141,7 @@ impl<'a> Builder<'a> {
             identity,
             device_class,
             pm_info: None,
+            platform_metadata: None,
             clocks: Vec::new(),
             resets: Vec::new(),
             pinctrl: Vec::new(),

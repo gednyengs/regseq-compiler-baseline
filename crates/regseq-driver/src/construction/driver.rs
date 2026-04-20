@@ -40,6 +40,7 @@ pub fn build_driver_struct(
         identity,
         device_class: None,
         pm_info: None,
+        platform_metadata: None,
         clocks: Vec::new(),
         resets: Vec::new(),
         pinctrl: Vec::new(),

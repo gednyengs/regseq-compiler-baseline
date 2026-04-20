@@ -235,6 +235,7 @@ mod tests {
             },
             device_class: None,
             pm_info: None,
+            platform_metadata: None,
             clocks: vec![],
             resets: vec![],
             pinctrl: vec![],

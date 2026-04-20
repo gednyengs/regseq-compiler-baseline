@@ -13,6 +13,7 @@ pub mod declaration;
 pub mod identity;
 pub mod ir;
 pub mod item;
+pub mod join;
 pub mod joined;
 pub mod model;
 pub mod normalize;
@@ -23,4 +24,5 @@ pub mod semantic;
 pub mod serialize;
 pub mod verify;
 
+pub use join::{populate_bindings, JoinError, JoinErrorKind, JoinProvenance};
 pub use normalize::{normalize, NormalizeError, NormalizeErrorKind, NormalizeProvenance};

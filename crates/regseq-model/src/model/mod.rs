@@ -18,7 +18,9 @@ pub mod resources;
 pub mod type_def;
 
 pub use constant::Constant;
-pub use driver::{DeviceClass, DriverIdentity, DriverStruct, PmInfo};
+pub use driver::{
+    DeviceClass, DriverIdentity, DriverStruct, PlatformBusBinding, PlatformMetadata, PmInfo,
+};
 pub use framework::{FrameworkTypeKind, TypeDefClassification};
 pub use function::{Function, Param, ParamKind};
 pub use impl_block::ImplBlock;

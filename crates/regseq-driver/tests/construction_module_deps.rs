@@ -341,6 +341,7 @@ fn build_pl011_like_model() -> Pl011Build {
         identity: drv_identity,
         device_class: None,
         pm_info: None,
+        platform_metadata: None,
         clocks: vec![ClockResource {
             id: ResourceId::from(DeclId::new(30)),
             field_name: clk_field,
@@ -569,6 +570,7 @@ fn normal_sibling_module_has_its_own_restricted_empty_set() {
         },
         device_class: None,
         pm_info: None,
+        platform_metadata: None,
         clocks: vec![],
         resets: vec![],
         pinctrl: vec![],

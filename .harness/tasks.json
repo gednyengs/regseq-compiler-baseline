@@ -1148,7 +1148,7 @@
           "id": "regseq-model-59",
           "name": "populate_bindings() function with JoinError and Phase-2 determinism",
           "spec": ".harness/tasks/regseq-model/59-populate-bindings.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-56",
             "regseq-model-57",

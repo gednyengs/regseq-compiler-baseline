@@ -7,6 +7,8 @@
 //! into the top-level driver struct along with the three metadata
 //! groups: identity, device class, and PM info.
 
+use std::collections::BTreeMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::identity::{Symbol, TypeDefId};
@@ -14,6 +16,7 @@ use crate::model::resources::{
     ClockResource, InterruptResource, MmioResource, PinCtrlResource, PropertyField, ResetResource,
     SyncResource, UserDataField,
 };
+use crate::platform::PlatformValue;
 
 /// The driver struct: the resource manifest with driver-level metadata.
 ///
@@ -36,6 +39,16 @@ pub struct DriverStruct {
     pub device_class: Option<DeviceClass>,
     /// Power management info from `#[rseq::pm(..)]`, if present.
     pub pm_info: Option<PmInfo>,
+    /// Platform-file metadata (`[platform]` + `[bus]`). `None` until
+    /// Phase 2 platform join runs. Populated by
+    /// [`crate::join::populate_bindings`] (`join_platform_bus`).
+    ///
+    /// Kept alongside the other driver-metadata fields per
+    /// spec.md Section 11: "Platform metadata is stored alongside
+    /// driver metadata (Section 4.1), giving consumers a single
+    /// place to find both spec-declared and platform-provided
+    /// identity."
+    pub platform_metadata: Option<PlatformMetadata>,
     /// Clock resource fields.
     pub clocks: Vec<ClockResource>,
     /// Reset resource fields.
@@ -81,6 +94,39 @@ pub struct PmInfo {
     pub wakeup_capable: bool,
 }
 
+/// Platform-file metadata recorded on the driver at Phase 2 join
+/// time (spec.md Section 11 "Platform Metadata").
+///
+/// Populated from the `[platform]` header and optional `[bus]`
+/// section by [`crate::join::populate_bindings`]. The
+/// [`PlatformBusBinding::values`] map is a [`BTreeMap`] so
+/// family-specific keys (e.g., `amba_id`, `revision`) iterate in
+/// lexicographic order for Phase-2 determinism.
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct PlatformMetadata {
+    /// Target operating system (e.g., `"linux"`, `"zephyr"`).
+    pub os: String,
+    /// Board identifier (e.g., `"raspberry-pi-4"`).
+    pub board: String,
+    /// Target architecture (e.g., `"aarch64"`, `"x86_64"`).
+    pub arch: String,
+    /// Platform-side bus-family binding, if `[bus]` is present.
+    pub bus: Option<PlatformBusBinding>,
+}
+
+/// Platform-side bus-family binding captured from the `[bus]`
+/// section.
+#[derive(Clone, Eq, PartialEq, Debug, Serialize, Deserialize)]
+pub struct PlatformBusBinding {
+    /// Bus family identifier (e.g., `"amba"`, `"pci"`,
+    /// `"integrated"`).
+    pub bus_type: String,
+    /// Family-specific key-value pairs (e.g., `amba_id`,
+    /// `revision`). [`BTreeMap`] ordering gives byte-identical
+    /// serialization across runs.
+    pub values: BTreeMap<String, PlatformValue>,
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -101,6 +147,7 @@ mod tests {
             identity,
             device_class: None,
             pm_info: None,
+            platform_metadata: None,
             clocks: Vec::new(),
             resets: Vec::new(),
             pinctrl: Vec::new(),
@@ -135,6 +182,7 @@ mod tests {
                 idle: true,
                 wakeup_capable: false,
             }),
+            platform_metadata: None,
             clocks: Vec::new(),
             resets: Vec::new(),
             pinctrl: Vec::new(),
