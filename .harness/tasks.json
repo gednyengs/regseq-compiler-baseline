@@ -1762,7 +1762,7 @@
           "id": "regseq-linux-backend-03",
           "name": "Migrate linux planner + plan imports to regseq_model::compat",
           "spec": ".harness/tasks/regseq-linux-backend/03-migrate-planner-imports-to-compat.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-10"
           ],

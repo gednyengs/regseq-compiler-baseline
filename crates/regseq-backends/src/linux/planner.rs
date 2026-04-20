@@ -4,8 +4,7 @@
 //! This planner makes Linux-specific realization decisions without
 //! re-deriving driver semantics from the raw models.
 
-use regseq_model::declaration::driver::DeviceClass;
-use regseq_model::item::function::{DeviceCallbackRole, DeviceClassKind, FunctionRole};
+use regseq_model::compat::{DeviceCallbackRole, DeviceClass, DeviceClassKind, FunctionRole};
 
 use crate::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 

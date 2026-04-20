@@ -8,6 +8,8 @@
 //! No portable lowering types are redefined here; they are consumed
 //! from the `lowering::plan` module.
 
+use regseq_model::compat::FunctionRole;
+
 // ---------------------------------------------------------------------------
 // Top-level Linux plan
 // ---------------------------------------------------------------------------
@@ -425,12 +427,10 @@ pub struct LinuxPinCtrlEntry {
 #[derive(Debug, Clone)]
 pub enum LinuxUartOpsBody {
     /// Emit the semantic body directly (self-only params, direct return).
-    DirectBody {
-        role: regseq_model::item::function::FunctionRole,
-    },
+    DirectBody { role: FunctionRole },
     /// Emit the semantic body with parameter bindings and/or return adaptation.
     WrappedBody {
-        role: regseq_model::item::function::FunctionRole,
+        role: FunctionRole,
         param_bindings: Vec<ParamBinding>,
         return_adaptation: Option<ReturnAdaptation>,
     },
