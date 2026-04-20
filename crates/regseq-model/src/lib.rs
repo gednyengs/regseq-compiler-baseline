@@ -15,9 +15,12 @@ pub mod ir;
 pub mod item;
 pub mod joined;
 pub mod model;
+pub mod normalize;
 pub mod platform;
 pub mod platform_parser;
 pub mod properties;
 pub mod semantic;
 pub mod serialize;
 pub mod verify;
+
+pub use normalize::{normalize, NormalizeError, NormalizeErrorKind, NormalizeProvenance};

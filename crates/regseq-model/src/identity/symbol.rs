@@ -183,6 +183,19 @@ impl SymbolInterner {
         &self.strings[sym.0 as usize]
     }
 
+    /// Borrow the interned-string pool in insertion order.
+    ///
+    /// Iteration order is deterministic: strings are appended in the
+    /// order they were first interned, so two [`SymbolInterner`]s
+    /// that interned the same strings in the same order are
+    /// byte-identical at this slice. The backing [`std::collections::HashMap`]
+    /// is deliberately excluded so callers performing determinism
+    /// comparisons do not pick up its non-deterministic iteration
+    /// order.
+    pub fn strings(&self) -> &[String] {
+        &self.strings
+    }
+
     /// Resolve a [`FileId`] to its file path string.
     pub fn resolve_file(&self, file: FileId) -> &str {
         &self.strings[file.0 as usize]

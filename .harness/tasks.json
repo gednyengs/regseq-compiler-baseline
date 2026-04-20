@@ -1137,7 +1137,7 @@
           "id": "regseq-model-58",
           "name": "normalize() function with NormalizeError and provenance",
           "spec": ".harness/tasks/regseq-model/58-normalize.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-55"
           ],
