@@ -187,7 +187,11 @@ After this task:
 - **Module integration tests**: every wrapper/probe/remove
   exemplar has a passing test.
 - **PL011 end-to-end smoke**: full pipeline on PL011 produces a
-  complete translation unit that parses via `cc -fsyntax-only`.
+  complete translation unit that, after normalization, byte-equals
+  `tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+  (the hand-authored reference from task 1). Any diff localizes
+  to an emit_module construct this task owns (since task 9's
+  emit_semantic output was already verified in its scope).
 - **Host-build proof**: `pl011_linux_module_host_build_proof.rs`
   continues to pass.
 - **emit_behavior deletion**: grep confirms the module is gone.

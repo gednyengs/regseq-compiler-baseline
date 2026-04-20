@@ -1,36 +1,53 @@
-# regseq-backends-02: Linux Emission Contract + PL011 Construct Exemplars
+# regseq-backends-02: Linux Emission Contract + PL011 Exemplars + Hand-Authored PL011 Reference Driver
 
 **Depends on**: `regseq-model-60`.
+**Soft-depends on**: `track-a-validation-11` (QEMU harness) --
+required for the hand-authored reference's final validation
+step; task 1 can start and produce the contract / exemplars /
+draft reference before the harness is ready, but cannot close
+until QEMU smoke on the hand-authored reference passes.
 **Parallel with**: `regseq-backends-03`, `regseq-model-61`,
-`regseq-model-62`, `track-a-validation-11`.
+`regseq-model-62`.
+**Authoring model**: **co-authored by user + Claude** (NOT an
+LLM implementer agent). The hand-authored PL011 reference + the
+contract it codifies are foundational design artifacts that
+require joint human + compiler-designer review. Downstream tasks
+remain implementer-delegatable.
 
 ## Description
 
 Phase-7.0 oracle foundation. This task produces the **specification**
 the Linux CFG emitter (tasks `regseq-linux-backend-04` and
 `regseq-linux-backend-05`) must obey: an emission contract document,
-a small Rust data-table module, and ~15 hand-authored C exemplar
-fragments covering every CFG / intrinsic construct PL011 exercises.
+a small Rust data-table module, ~15 hand-authored C exemplar
+fragments covering every CFG / intrinsic construct PL011 exercises,
+**and a full hand-authored PL011 Linux reference driver** that the
+emitter must produce byte-for-byte equivalent output for.
 
-The contract is the replacement oracle for the retired
+The contract + reference are the replacement oracle for the retired
 "byte-parity vs the old pipeline" strategy (migration.md Q5). After
-this task lands, the emitter implementer has a concrete target:
-"produce C that matches the exemplar for each construct; use the
-data-table entries for intrinsic lowering; follow the normal form
-for naming and structure." Subsequent tasks write the tests that
-enforce the contract on real CFG bodies.
+this task lands, the implementer has a concrete integration-level
+target: "produce the exact hand-authored PL011 driver, construct
+by construct, when the emitter walks the PL011 RegseqModel."
+Construct-level exemplars catch unit mistakes; the full driver
+reference catches composition mistakes that no set of fragments
+can cover.
+
+**This task is co-authored work (user + Claude), not implementer-
+delegatable.** The hand-authored PL011 reference is a foundational
+design artifact: it codifies, in C, every decision the emission
+contract encodes in prose + data tables. Drift between the
+reference and the contract is the #1 source of downstream defect;
+joint authoring keeps them aligned.
 
 **Critically**, this task does NOT write runnable emitter tests.
 The emitter seam does not exist yet -- emit_semantic + emit_module
-still walk the old `SemanticModel` / `Stmt`/`Expr` trees. Tests that
-exercise the new CFG emitter against this task's exemplar corpus are
-authored by tasks `regseq-linux-backend-04` (CFG body construct
-tests) and `regseq-linux-backend-05` (wrapper / probe / remove
-integration tests).
-
-This task also does NOT author the PL011 full-driver reference. The
-reference is blessed emitter output produced by task
-`track-a-validation-12` after the emitter is stable.
+still walk the old `SemanticModel` / `Stmt`/`Expr` trees. Tests
+that exercise the new CFG emitter against this task's exemplar
+corpus + reference are authored by tasks `regseq-linux-backend-04`
+(CFG body construct tests) and `regseq-linux-backend-05` (wrapper /
+probe / remove integration tests; byte-equal-to-reference
+end-to-end test).
 
 ## Input Context
 
@@ -79,11 +96,16 @@ reference is blessed emitter output produced by task
 2. `crates/regseq-backends/src/linux/emission_tables.rs` -- small
    Rust data-table module with public, typed tables.
 3. `tests/goldens/pl011/linux/constructs/*.c` -- ~15 hand-authored
-   exemplar fragments. Each file is small (~20-60 lines) and exercises
-   exactly one construct.
+   exemplar fragments. Each file is small (~20-60 lines) and
+   exercises exactly one CFG / intrinsic construct.
 4. `tests/goldens/pl011/linux/constructs/README.md` -- one-paragraph
    index mapping each exemplar file to its construct name + a
    pointer to the contract section that specifies it.
+5. **`tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`**
+   -- the full hand-authored PL011 Linux driver reference.
+   Authored in the contract's normal form. This file IS the
+   oracle every downstream emitter test (tasks 9, 10, 11, 12)
+   compares against.
 
 ### Contract document structure
 
@@ -342,7 +364,74 @@ confirm each maps to an exemplar or data-table entry. This is the
 "contract is complete for PL011" check. Omissions are logged as
 known gaps with proposed exemplars to add.
 
-### Callback-wrapper exemplars are NOT in this task
+### Hand-authored PL011 reference driver
+
+The file `tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+is the integration-level oracle. It is authored jointly (user +
+Claude) by walking the PL011 RegseqModel construct-by-construct
+and applying the contract's normal form + intrinsic mappings +
+callback adaptations at every site.
+
+**Normalization form (authoring rules; also in the contract
+section on normal form):**
+
+- One C function per `RegseqModel::Function`; the file contains
+  no ad-hoc helpers that don't correspond to an authored function.
+- One `bbN:` label per `BasicBlock`; unreachable blocks omitted
+  (they're Phase-5-construction artifacts and should not appear).
+- Canonical goto graph: every `Terminator` lowers to exactly the
+  C shape its exemplar specifies; no stylistic flattening.
+- Locals declared at function top, grouped by C type, in
+  `LocalId` order.
+- Cleanup ladders use `err_<resource>:` labels in reverse
+  acquisition order, per `REVERSIBLE_CLEANUP_PAIRS` +
+  `compiler-knowledge.md` "Resource Cleanup on Error Paths".
+- Callback wrappers follow the inner-helper + outer-wrapper
+  convention from `regseq-linux-backend-05`'s callback-return
+  adaptation rule.
+- Module integration (match table, probe, remove, module_init,
+  module_exit, MODULE_LICENSE, etc.) follows `LinuxBackendPlan`'s
+  declarative decisions -- the reference shows the resolved
+  string form for PL011's specific plan values.
+- No inlining. No partial specialization. If a construct looks
+  "long" or "mechanical," that is the point: the emitter will
+  produce equally mechanical output.
+
+**Validation steps (acceptance gates on the reference):**
+
+1. `cc -fsyntax-only` passes on the file.
+2. The file compiles as an out-of-tree kernel module against the
+   pinned kernel (`experiments/pl011-eval-env/notes/phase-04-kernel-build.md`)
+   -- reuse the existing host-build-proof scaffolding, retargeted
+   at this file.
+3. When `track-a-validation-11` (QEMU harness) is available, the
+   reference passes the full QEMU smoke: boot + load + probe +
+   open backend-defined tty + write bytes + close + unload,
+   with no kernel warnings / oops / leaks. This is the Layer-7
+   functional validation per migration.md Q5.
+
+If steps 1-3 all pass, the reference is **blessed** and becomes
+the downstream oracle. If step 3 fails, this task goes back to
+contract + reference authoring until it does. The reference is
+NOT committed until all three steps pass.
+
+**Authoring procedure:**
+
+1. Generate or load the PL011 RegseqModel via the existing
+   Phase-6 pipeline (`cargo test -p regseq-model --test
+   pl011_pipeline_phase6`).
+2. Walk the model constructs in source order. For each
+   construct, consult the contract and apply the matching rule.
+3. Emit the resulting C line(s) into the reference file.
+4. At each module-integration site (probe / remove /
+   module_init), apply the `LinuxBackendPlan` template with
+   PL011's concrete values.
+5. Cross-check: every construct in the reference has a
+   corresponding exemplar in `tests/goldens/pl011/linux/constructs/`.
+   No exemplar in the corpus is missing from the reference for
+   reasons other than "PL011 doesn't exercise it."
+
+**Callback-wrapper exemplars are NOT in this task**
 
 Per Codex review round 3: "callback wrapper" (parameter binding,
 return adaptation on the Linux-facing wrapper) is not a CFG
@@ -480,8 +569,15 @@ cargo clippy -p regseq-backends -- -D warnings
   typed entries; no `&str`-anywhere shortcuts.
 - `tests/goldens/pl011/linux/constructs/` directory with ~15
   exemplar `.c` files + README index.
+- **`tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`**
+  committed with an explicit provenance comment: "Hand-authored
+  reference, normal form per linux-emission-contract.md. The
+  emitter (tasks 9/10) MUST produce byte-equal output to this
+  file." File is validated per the three steps in "Hand-authored
+  PL011 reference driver" -- including a passing QEMU smoke.
 - `crates/regseq-backends/tests/construct_exemplars_syntax.rs`
-  passes (each exemplar syntactically parses).
+  passes (each exemplar syntactically parses; includes the
+  reference file).
 - `crates/regseq-backends/tests/construct_exemplars_coverage.rs`
   passes (every PL011 CFG construct has a mapped exemplar or is
   documented out-of-scope).

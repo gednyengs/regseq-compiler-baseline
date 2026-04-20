@@ -1,7 +1,8 @@
 # regseq-driver-35: `emit_driver.rs` Pipeline Cutover
 
-**Depends on**: `track-a-validation-12` (blessed reference must
-exist before cutover proof test can assert against it).
+**Depends on**: `track-a-validation-12` (emitter-vs-reference
+verification must have passed before cutover proof test can
+assert the same byte-equality from the `emit_driver` call path).
 
 ## Description
 
@@ -134,8 +135,10 @@ Add `crates/regseq-driver/tests/pipeline_cutover_proof.rs`:
 #[test]
 fn emit_driver_runs_new_pipeline_on_pl011() {
     // Run emit_driver on the PL011 fixture.
-    // Assert output matches the blessed normalized_reference.c.
-    // Asserts the cutover is complete and equivalent.
+    // Assert output matches the hand-authored reference at
+    // tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c.
+    // Asserts the cutover is complete and equivalent to the
+    // direct-emitter path validated in task 12.
 }
 ```
 
@@ -158,7 +161,7 @@ reference.
 ## Test Plan
 
 - **Cutover proof**: `emit_driver` output byte-equals the blessed
-  `normalized_reference.c`.
+  `pl011-reference-linux-driver.c`.
 - **Error paths**: malformed `RawFrontendArtifact` produces
   `EmitDriverError::Normalize(_)`; malformed platform file
   produces `EmitDriverError::Join(_)`.
@@ -183,7 +186,7 @@ Focus on:
   perform_join / AnalysisInput::new / build_driver_lowering_plan
   (without _from_model suffix) in emit_driver.rs.
 - emit_driver produces byte-equal output to the blessed
-  normalized_reference.c (the cutover proof test).
+  pl011-reference-linux-driver.c (the cutover proof test).
 - Error diagnostics preserved (NormalizeError + JoinError flow
   through cleanly).
 - Phase-6 verifiers not re-invoked explicitly in emit_driver.
@@ -215,7 +218,7 @@ rg -n 'normalize_from_json|binding::normalize|perform_join|AnalysisInput::new|bu
 - `emit_driver.rs` swapped per the Implementation Notes.
 - Zero references to the five legacy call names in
   `emit_driver.rs`.
-- Cutover proof test passes (byte-equal to blessed reference).
+- Cutover proof test passes (byte-equal to hand-authored PL011 reference).
 - User-facing error diagnostics preserved.
 - `cargo test --workspace` green.
 - Codex review APPROVED.

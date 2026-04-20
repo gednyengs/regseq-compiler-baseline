@@ -213,10 +213,15 @@ was in task 1).
 - **Normalization-algorithm stability**: two runs of
   `emit_function_body` on the same input produce byte-identical
   output.
-- **PL011 end-to-end (smoke, not blessing)**: run full pipeline on
-  PL011, check that `emit_semantic` produces non-empty output
-  that parses via `cc -fsyntax-only` (wrapped in a minimal
-  harness). Not a full blessing -- that's task 11.
+- **PL011 end-to-end smoke**: run full pipeline on PL011; after
+  normalization, assert `emit_semantic`'s contribution to the
+  output matches the corresponding section of
+  `tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+  (the hand-authored reference authored by task 1). If the
+  reference doesn't yet isolate `emit_semantic`'s output
+  boundaries, fall back to a weaker check: `cc -fsyntax-only`
+  passes on the emitter output; full byte-equality is asserted
+  at task 11. Track drift explicitly.
 - **Regression**: existing `pl011_linux_module_host_build_proof.rs`
   continues to pass (may be via the temporary adapter; document
   if so).

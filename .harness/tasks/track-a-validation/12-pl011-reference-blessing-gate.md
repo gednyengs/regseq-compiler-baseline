@@ -1,30 +1,31 @@
-# track-a-validation-12: PL011 Normalized-Reference Blessing Gate
+# track-a-validation-12: PL011 Emitter-vs-Hand-Authored-Reference Verification Gate
 
 **Depends on**: `track-a-validation-11` (QEMU harness),
-`regseq-linux-backend-05` (emit_module rewrite complete).
+`regseq-linux-backend-05` (emit_module rewrite complete),
+`regseq-backends-02` (hand-authored reference exists).
 
 ## Description
 
-Phase-7C validation. This is the **critical quality gate** for the
-Phase-7 refactor. Runs the new pipeline on the PL011 fixture, puts
-the output through the QEMU functional smoke harness (task 3), and
--- only if the smoke passes -- commits the output as the PL011
-normalized reference (`tests/goldens/pl011/linux/normalized_reference.c`).
+Phase-7C validation. The **critical quality gate** for the
+Phase-7 refactor. Runs the new pipeline end-to-end on the PL011
+fixture, asserts the emitter's output byte-equals the
+**pre-authored reference** from task 1
+(`tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`),
+then re-runs the QEMU functional smoke on the emitter's output
+as a redundant-but-cheap belt-and-suspenders check.
 
-If the smoke fails, this task does NOT bless the output; the author
-is required to revisit the emission contract (task 1), the CFG
-emitter (tasks 9/10), or both, fix the defect, and re-run the gate.
+Crucially, this task does NOT "bless" unknown emitter output.
+The oracle (hand-authored reference) was blessed back in task 1
+via QEMU smoke. Task 12's job is to prove the emitter converges
+on that oracle. If emitter output drifts from the reference, the
+emitter is wrong (go back to tasks 9/10); if QEMU smoke fails on
+the emitter output but not on the reference, the emitter
+introduced a Linux-side defect the construct tests missed
+(go back to tasks 9/10 + add the missing assertion).
 
-Blessing establishes:
-
-- A byte-equal regression test against `normalized_reference.c`.
-- Ongoing CI regression via the QEMU smoke (`#[ignore]`'d but
-  runnable; per task 3's convention).
-- The host-kernel build proof target shifts from whatever it was
-  previously testing to the blessed reference.
-
-Per migration.md Q5 Layers 4-7: this task delivers Layers 4-7
-concretely.
+Per migration.md Q5 Layers 4-7: this task delivers Layers 4-7 by
+confirming emitter == pre-authored reference (Layer 4) that was
+already validated by the existing tests.
 
 ## Input Context
 
@@ -66,10 +67,21 @@ concretely.
      - Banner rewrite (no timestamps, no absolute paths).
      - Tab/space normalization.
 
-3. Compile to .ko against the pinned kernel per the existing
-   host-build-proof procedure.
+3. **Byte-equal to pre-authored reference** (PRIMARY GATE):
+     Assert that the normalized main-driver translation unit
+     emitted by step 2 is byte-identical to the file
+     `tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+     committed by task `regseq-backends-02`. Any byte-level diff
+     is a task-9 or task-10 defect.
 
-4. Invoke qemu_boot_probe_module (from task 3) with:
+4. Compile to .ko against the pinned kernel per the existing
+   host-build-proof procedure (redundant with task 1's validation,
+   but catches the case where someone modifies the reference out
+   of band).
+
+5. Invoke qemu_boot_probe_module (from task 3) with the emitter's
+   .ko (equivalent to the reference's .ko by step 3, but run
+   explicitly):
      - ko_path: the compiled .ko
      - target: TargetTty {
            dev_name: plan.serial_core.dev_name
@@ -82,7 +94,7 @@ concretely.
            unload_module: true,
        }
 
-5. Assert (migration.md Q5 Layer 7 full blessing criterion):
+6. Assert (migration.md Q5 Layer 7 full criterion):
      - result.probe_succeeded == true
      - result.tty_opened == true
      - result.bytes_written == true
@@ -94,86 +106,91 @@ concretely.
      - result.unload_dmesg contains no "WARNING", "leak"
      - result.elapsed <= 60 seconds
 
-6. If ALL assertions pass:
-     - Copy the normalized .c (the main driver translation unit)
-       to tests/goldens/pl011/linux/normalized_reference.c.
-     - Commit the golden alongside the test that asserts
-       byte-equality on subsequent runs.
-     - Commit the host-build regression test (pointed at the
-       blessed reference).
-     - Commit the ongoing QEMU smoke test (pointed at the blessed
-       reference or at live emitter output; see below).
+7. If ALL assertions (step 3 AND step 6) pass:
+     - Commit regression tests (see below).
+     - Task closes.
 
-   If ANY assertion fails:
-     - Do NOT commit the golden.
-     - Record the failure in the task's fail_reason (dmesg
-       excerpt, observed vs expected bytes, which assertion
-       failed).
-     - Halt; escalate to task 1 (contract) or tasks 9/10
-       (emitter) as appropriate.
+   If step 3 fails (diff from pre-authored reference):
+     - Task fails; escalate to tasks 9/10 to fix emitter.
+     - Reference is not modified (it was blessed by task 1).
+
+   If step 3 passes but step 6 fails (QEMU smoke fails on
+   emitter output when task 1 said it passed on the reference):
+     - Investigate environmental drift (QEMU version, kernel
+       version, rootfs). If truly the same bytes produce different
+       smoke outcomes, infrastructure has drifted; this is an
+       infrastructure ops issue, not an emitter issue. Escalate
+       appropriately.
 ```
 
-### Post-blessing regression tests (committed by this task)
+### Regression tests (committed by this task)
 
 Three regression tests under `tests/e2e/tests/` or
 `crates/regseq-backends/tests/` (pick the location consistent with
 existing patterns):
 
-1. **Byte-equal regression** (runs on every `cargo test`):
+1. **Byte-equal-to-pre-authored-reference regression** (runs on
+   every `cargo test`):
    ```rust
    #[test]
-   fn pl011_normalized_reference_byte_equal() {
+   fn pl011_emitter_output_matches_hand_authored_reference() {
        let emitted = run_pipeline_on_pl011();
        let normalized = apply_normalization(&emitted);
        let expected = std::fs::read_to_string(
-           "tests/goldens/pl011/linux/normalized_reference.c"
+           "tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c"
        ).unwrap();
-       assert_eq!(normalized, expected);
+       assert_eq!(normalized, expected,
+           "emitter output must exactly match the hand-authored reference");
    }
    ```
 
-2. **Host-build regression** (`#[ignore]`'d to match existing
-   pattern; requires cross-toolchain + pinned kernel tree):
+2. **Host-build regression against pre-authored reference**
+   (`#[ignore]`'d to match existing pattern; requires
+   cross-toolchain + pinned kernel tree):
    ```rust
    #[test]
    #[ignore = "requires cross-toolchain + kernel tree; opt in with cargo test -- --ignored"]
-   fn pl011_normalized_reference_builds_against_kernel() {
+   fn pl011_reference_builds_against_kernel() {
        // Existing pl011_linux_module_host_build_proof.rs is
-       // retargeted: its input shifts from whatever it was
-       // testing pre-task to the blessed reference produced by
-       // this task. The #[ignore] pattern matches
-       // tests/e2e/tests/pl011_linux_module_host_build_proof.rs:18-28.
+       // retargeted: its input becomes
+       // tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c
+       // (the hand-authored reference, NOT live emitter output --
+       // test 1 above already asserts they match). The #[ignore]
+       // pattern matches tests/e2e/tests/pl011_linux_module_host_build_proof.rs:18-28.
    }
    ```
 
-3. **QEMU smoke regression** (`#[ignore]`'d; runs with explicit
-   opt-in):
+3. **QEMU smoke regression against pre-authored reference**
+   (`#[ignore]`'d; runs with explicit opt-in):
    ```rust
    #[test]
    #[ignore = "requires QEMU; opt in with cargo test -- --ignored"]
-   fn pl011_normalized_reference_qemu_smoke() {
-       let emitted = run_pipeline_on_pl011();
-       let ko = compile_to_ko(&emitted);
+   fn pl011_reference_qemu_smoke() {
+       // Builds the hand-authored reference (redundant with
+       // task 1, but guards against environmental drift in the
+       // kernel / QEMU / rootfs baseline).
+       let ko = compile_reference_to_ko();
        let result = qemu_boot_probe_module(&ko, pl011_target(),
            pl011_ops()).expect("boot");
-       assert_blessed_pass(&result);
+       assert_full_smoke_pass(&result);
    }
    ```
 
-### Decision: ongoing smoke targets emitter output or blessed reference?
+### Ongoing regression target
 
-Two options:
+- **Test 1 (byte-equal)**: always re-runs the emitter pipeline
+  and diffs against the hand-authored reference. Catches every
+  emitter drift, by definition.
+- **Test 2 (host-build)**: builds the hand-authored reference
+  against the kernel. The emitter is not involved -- test 1
+  already asserts emitter == reference. This test guards against
+  the reference drifting out of kernel compatibility (e.g., if a
+  kernel upgrade breaks the reference; signals infra drift).
+- **Test 3 (QEMU smoke)**: same, against the hand-authored
+  reference. Guards against environmental drift.
 
-- **Option A**: every regression run re-emits from the model +
-  normalizes + runs QEMU. Catches emitter drift even if someone
-  later changes the emitter to produce different (but still
-  normalized-equal) output.
-- **Option B**: every regression run loads the blessed reference
-  + runs QEMU. Cheaper but does not catch emitter drift.
-
-Recommendation: **Option A for the byte-equal + host-build
-regressions, Option B for QEMU smoke** (QEMU is expensive;
-byte-equal + host-build catch 99% of drift).
+All three tests use the hand-authored reference as the ground
+truth; the emitter is validated transitively through test 1.
 
 ### PL011 hardware-exercising callback coverage
 
@@ -284,9 +301,12 @@ cargo test -p regseq-e2e --test pl011_normalized_reference_builds_against_kernel
 
 ## Acceptance Criteria
 
-- `tests/goldens/pl011/linux/normalized_reference.c` committed;
-  provenance comment explains it is blessed emitter output.
-- Byte-equal regression test passes (runs on every `cargo test`).
+- `tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+  already exists (authored by task 1); this task verifies the
+  emitter converges on it. No new reference file is committed by
+  this task.
+- Byte-equal-to-pre-authored-reference regression test passes
+  (runs on every `cargo test`).
 - Host-build regression test `#[ignore]`'d; passes with explicit
   opt-in (matches existing
   `pl011_linux_module_host_build_proof.rs` pattern).

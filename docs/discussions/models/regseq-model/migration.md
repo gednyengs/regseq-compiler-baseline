@@ -383,16 +383,28 @@ whole-driver granularity. These tests are authored by the task that
 writes the emitter (`emit_semantic` / `emit_module`), not by the
 contract-authoring task.
 
-### Layer 4 -- Blessed PL011 normalized reference
+### Layer 4 -- Hand-authored PL011 normalized reference (authoring-first)
 
-After the emitter is stable and passes all construct tests, run the
-new pipeline on the PL011 fixture, review the emitter's output by
-hand against the contract, and commit the result as
-`tests/goldens/pl011/linux/normalized_reference.c`. This reference
-is NOT a human-written Linux driver; it is blessed emitter output
-whose contract conformance has been verified. Byte-equal regression
-against this file on every subsequent run catches emission
-regressions.
+Commit
+`tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+as a **hand-authored** PL011 Linux driver written in the emission
+contract's normal form (one C function per `RegseqModel::Function`,
+one label per `BasicBlock`, canonical gotos, canonical cleanup
+ladders, no inlining). Authored jointly (user + Claude) as part of
+task `regseq-backends-02`, and validated via host-kernel build
+proof + QEMU functional smoke BEFORE any implementer begins work
+on the emitter.
+
+This reference is the ground-truth oracle the emitter must
+reproduce. Byte-equal regression against this file on every
+subsequent pipeline run catches composition-level emission
+regressions that the fragment-level construct tests can't see.
+
+The authoring-first ordering (reference before emitter, not emitter
+before reference) is the compiler-design practice followed by
+LLVM's handwritten CodeGen tests, MLIR lit tests, and rustc's
+codegen-test corpus: specify + validate the target output first,
+then build the producer.
 
 ### Layer 5 -- Host-kernel build proof
 
