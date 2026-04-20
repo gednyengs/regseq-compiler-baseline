@@ -1721,7 +1721,7 @@
           "id": "regseq-lowering-10",
           "name": "Migrate lowering/planner.rs imports to regseq_model::compat",
           "spec": ".harness/tasks/regseq-lowering/10-migrate-planner-imports-to-compat.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-analysis-06"
           ],

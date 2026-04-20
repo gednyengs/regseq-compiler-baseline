@@ -12,9 +12,9 @@
 use std::collections::BTreeSet;
 
 use regseq_analysis::AnalysisInput;
-use regseq_model::declaration::callbacks::CallbackFamily;
-use regseq_model::item::identity::ItemId;
-use regseq_model::semantic::SemanticModel;
+use regseq_model::compat::CallbackFamily;
+use regseq_model::compat::ItemId;
+use regseq_model::compat::SemanticModel;
 
 use super::behavior_planner::build_behavior_plan_with_constants;
 use super::hierarchy::ItemHierarchy;
@@ -236,7 +236,7 @@ fn build_identity(input: &AnalysisInput) -> DriverIdentity {
 fn build_callback_inventory(input: &AnalysisInput) -> CallbackInventory {
     let cb = input.callbacks();
 
-    let map_entries = |impls: &[regseq_model::declaration::callbacks::CallbackImplDecl]| {
+    let map_entries = |impls: &[regseq_model::compat::CallbackImplDecl]| {
         impls
             .iter()
             .map(|i| CallbackEntry {
@@ -434,9 +434,9 @@ fn build_bus_identity(input: &AnalysisInput) -> Result<BusIdentity, LoweringPlan
             .ok_or_else(|| LoweringPlanError::MissingBusIdentity {
                 driver_name: input.declaration().driver.driver_name.clone(),
             })? {
-            regseq_model::declaration::driver::BusType::Integrated => BusType::Platform,
-            regseq_model::declaration::driver::BusType::Amba => BusType::Amba,
-            regseq_model::declaration::driver::BusType::Pci => BusType::Pci,
+            regseq_model::compat::BusType::Integrated => BusType::Platform,
+            regseq_model::compat::BusType::Amba => BusType::Amba,
+            regseq_model::compat::BusType::Pci => BusType::Pci,
         };
 
     let amba_id = input
