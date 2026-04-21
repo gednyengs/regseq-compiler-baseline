@@ -1,5 +1,37 @@
 # PL011 Full Spec Status
 
+## REFRAMING (2026-04-20)
+
+Status tracking has been realigned against the requirements defined
+in `pl011-spec-requirements.md`. The roadmap items 1-10 below remain
+correct as a fixture-growth history, but the current authoritative
+question is: which `REQ-*` entries in
+`pl011-spec-requirements.md` are `captured` vs `pending` vs
+`deferred`?
+
+Status-to-requirements mapping summary (see requirements doc for
+IDs):
+
+- **captured** (Stage 1 / F+I internal): REQ-TX-*, REQ-RX-*,
+  REQ-CFG-*, REQ-FIFO-01/02/03, REQ-LIFE-*, REQ-IRQ-01/02/03/04,
+  REQ-BRK-01, REQ-RES-CLK-01/02, REQ-RES-RST-01, REQ-RES-PIN-01,
+  REQ-RES-IRQ-01, REQ-RES-MMIO-01, REQ-ID-01/02, REQ-CORR-*,
+  REQ-BC-*.
+- **pending** (Stage 2 / P internal): REQ-PERF-BATCH-01,
+  REQ-PERF-IFLS-01, REQ-PERF-DMA-01, REQ-PERF-DMA-02,
+  REQ-PERF-LATENCY-01, REQ-FLOW-01, REQ-FLOW-02, REQ-INT-LIN-01
+  (hot-path batching), REQ-INT-ZEP-01 (interrupt-driven API).
+- **deferred** (not in current claim): REQ-DEF-*, REQ-INT-CONSOLE-*,
+  REQ-INT-PM, REQ-INT-SYSFS-ADMIN.
+
+Internal staging is a tactical choice for the compiler dev team
+(F+I first to pipe-clean the compiler, then P including DMA). The
+paper claim is the full F+I+P result.
+
+---
+
+# Historical content (below)
+
 This note tracks the build-out of the concrete full-PL011
 fixture at:
 

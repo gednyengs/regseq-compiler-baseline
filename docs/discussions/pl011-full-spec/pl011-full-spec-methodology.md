@@ -1,5 +1,36 @@
 # PL011 Full Spec Methodology
 
+## REFRAMING (2026-04-20)
+
+This note has been reframed by the round-4 Codex-reviewed strategy
+synthesis. The working methodology has shifted from
+"feature-inventory decides what we implement; real drivers help
+confirm how that feature behaves" (Section 4 below, preserved for
+history) to:
+
+- **comparison axes**, derived from concrete PL011 system-use cases,
+  decide what goes in the spec;
+- **corpus drivers** are baselines for comparison and policy
+  sources for convergent best-practice (e.g., ISR pass bounds, DMA
+  thresholds, spurious-RX drain), **not** inclusion gates;
+- the spec is evidence-driven along three requirement-sourcing
+  classes (axis / correctness / backend-contract) per
+  `pl011-spec-requirements.md`.
+
+Authoritative artifacts:
+
+- `pl011-comparison-axes.md`
+- `pl011-workloads.md`
+- `pl011-spec-requirements.md`
+
+Fixture growth discipline below (Section "Workflow", etc.) remains
+valid for the engineering process, but feature selection now traces
+through the axes, not a standalone feature-matrix.
+
+---
+
+# Historical content (below)
+
 This note records the methodology that was used to define the fuller PL011
 Regseq spec target.
 

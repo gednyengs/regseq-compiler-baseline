@@ -1,5 +1,42 @@
 # PL011 Unified Spec Boundary
 
+## REFRAMING (2026-04-20)
+
+This note has been reframed by the round-4 Codex-reviewed strategy
+synthesis. The inclusion rule has moved from
+"real hardware or integration capabilities evidenced in at least
+one corpus driver" to an outcome-oriented, axis-derived inclusion
+rule. The new authoritative artifacts are:
+
+- `pl011-comparison-axes.md` -- the load-bearing document defining
+  WHAT is compared (system-use cases + derived comparison axes).
+- `pl011-workloads.md` -- HOW each axis is exercised (stimulus,
+  observable, environment, verdict rule, statistical contract).
+- `pl011-spec-requirements.md` -- the definitive requirements list,
+  each requirement traced to `axis`, `correctness`, or
+  `backend-contract` evidence.
+
+The sections below are preserved as historical context. Where they
+conflict with the new artifacts, the new artifacts win. The
+current corpus is four OSes (Linux, FreeBSD, Zephyr, Windows 10 IoT
+Core) as collected in `reference-drivers/pl011/`; Windows has been
+added since the original version of this note.
+
+The current Regseq paper claim, per the round-4 synthesis:
+
+> Regseq's semantic driver model expresses a single ARM PrimeCell
+> PL011 specification, and its compiler generates Linux and Zephyr
+> drivers that match native-driver behavior within predefined
+> tolerance rules on QEMU-relative functional and performance
+> workloads derived from concrete PL011 system use cases.
+
+Internal staging (F+I first, then P including DMA) is purely an
+implementation tactic; the paper presents the full F+I+P result.
+
+---
+
+# Historical content (below)
+
 This note proposes a candidate boundary for the unified Regseq PL011
 spec based on the current cross-OS corpus evidence from:
 
@@ -8,6 +45,8 @@ spec based on the current cross-OS corpus evidence from:
 - Zephyr PL011
 
 There is no Windows PL011 driver in the current corpus.
+(Historical statement; a Windows PL011 driver has since been added
+to `reference-drivers/pl011/windows/`.)
 
 The aim is to separate:
 
