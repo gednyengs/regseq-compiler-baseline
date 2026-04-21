@@ -4,10 +4,10 @@
 //! containing AMBA/platform registration, probe/remove, uart_ops,
 //! uart_driver, and ISR handler.
 //!
-//! All callback bodies are emitted by walking the semantic model from
-//! `DriverLoweringPlan.behavior`. No device-specific register offsets,
-//! interrupt masks, callback templates, or naming policy appears in this
-//! module.
+//! All callback bodies are emitted by walking the transitional
+//! semantic model carried on `LinuxBackendPlan.behavior`. No field on
+//! the portable `DriverLoweringPlan` is read here; Linux realization
+//! facts live on the Linux plan itself.
 
 use std::collections::HashSet;
 
@@ -17,8 +17,6 @@ use regseq_model::semantic::expr::Expr;
 use regseq_model::semantic::local::LocalId;
 use regseq_model::semantic::model::SemanticModel;
 use regseq_model::semantic::stmt::Stmt;
-
-use crate::lowering::plan::DriverLoweringPlan;
 
 use super::c_ast::{CTopLevelItem, CTranslationUnit};
 use super::conventions::generated_file_banner;
@@ -32,13 +30,10 @@ use super::plan::{
 };
 
 /// Emit the module integration file with real C code.
-pub(super) fn emit_module_integration(
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-) -> String {
+pub(super) fn emit_module_integration(plan: &LinuxBackendPlan) -> String {
     let reg = &plan.registration;
     let snake = &reg.module_name;
-    let driver_name = &portable.identity.driver_name;
+    let driver_name = &plan.driver_name;
 
     let mut tu = CTranslationUnit::new();
 
@@ -55,27 +50,27 @@ pub(super) fn emit_module_integration(
     emit_includes(&mut tu, plan);
     tu.push(CTopLevelItem::BlankLine);
 
-    emit_constants(&mut tu, plan, portable, snake);
+    emit_constants(&mut tu, plan, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     emit_register_accessors(&mut tu, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     // Emit helper functions from behavior plan.
-    emit_helper_functions(&mut tu, plan, portable, snake);
+    emit_helper_functions(&mut tu, plan, snake);
 
     // Emit ISR handler from behavior plan.
-    emit_isr_handler(&mut tu, plan, portable, snake);
+    emit_isr_handler(&mut tu, plan, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     if plan.serial_core.is_some() {
-        emit_uart_ops(&mut tu, plan, portable, snake);
+        emit_uart_ops(&mut tu, plan, snake);
         tu.push(CTopLevelItem::BlankLine);
         emit_uart_driver_def(&mut tu, plan, snake);
         tu.push(CTopLevelItem::BlankLine);
     }
 
-    emit_probe(&mut tu, plan, portable, snake);
+    emit_probe(&mut tu, plan, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     emit_remove(&mut tu, plan, snake);
@@ -204,12 +199,7 @@ fn emit_includes(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan) {
 /// Authored constants come from `plan.behavior.constants`.
 /// Property defaults come from `plan.property_realization[].default_literal`.
 /// Port type comes from `plan.serial_core.port_type`.
-fn emit_constants(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    _portable: &DriverLoweringPlan,
-    snake: &str,
-) {
+fn emit_constants(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     let upper = snake.to_uppercase();
 
     tu.push(CTopLevelItem::LineComment(
@@ -299,7 +289,6 @@ fn emit_register_accessors(tu: &mut CTranslationUnit, snake: &str) {
 /// Build a SemanticEmitContext from plans and a function's locals.
 fn make_semantic_context<'a>(
     plan: &'a LinuxBackendPlan,
-    _portable: &'a DriverLoweringPlan,
     snake: &'a str,
     body: &'a SemanticBody,
 ) -> SemanticEmitContext<'a> {
@@ -332,22 +321,12 @@ fn find_function_by_role<'a>(
 ///
 /// Emits forward declarations first (from the same source as definitions)
 /// to ensure helpers can be called before their definition.
-fn emit_helper_functions(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-) {
-    emit_helper_functions_semantic(tu, plan, portable, snake);
+fn emit_helper_functions(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
+    emit_helper_functions_semantic(tu, plan, snake);
 }
 
 /// Emit helper functions from the semantic model (canonical path).
-fn emit_helper_functions_semantic(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-) {
+fn emit_helper_functions_semantic(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     // Collect helper function defs from the semantic model via the behavior mapping.
     let helper_names: Vec<&str> = plan
         .behavior_mapping
@@ -383,7 +362,7 @@ fn emit_helper_functions_semantic(
     // Emit function bodies.
     for func in &helpers {
         let body = &func.body;
-        let ctx = make_semantic_context(plan, portable, snake, body);
+        let ctx = make_semantic_context(plan, snake, body);
         let all_param_ids: HashSet<LocalId> = body.params.iter().copied().collect();
         let body_lines = emit_body_stmts(body, &ctx, &all_param_ids, &ReturnMode::Direct);
         let ret_ty = semantic_type_to_c(&body.return_type, snake);
@@ -422,22 +401,12 @@ fn build_semantic_param_list(snake: &str, body: &SemanticBody) -> String {
 }
 
 /// Emit ISR handler from the semantic model.
-fn emit_isr_handler(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-) {
-    emit_isr_handler_semantic(tu, plan, portable, snake);
+fn emit_isr_handler(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
+    emit_isr_handler_semantic(tu, plan, snake);
 }
 
 /// Emit ISR handler from the semantic model (canonical path).
-fn emit_isr_handler_semantic(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-) {
+fn emit_isr_handler_semantic(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     // Find ISR function via FunctionRole::Isr { .. }.
     let isr_func = plan
         .behavior
@@ -447,7 +416,7 @@ fn emit_isr_handler_semantic(
 
     let body = if let Some(func) = isr_func {
         let semantic_body = &func.body;
-        let ctx = make_semantic_context(plan, portable, snake, semantic_body);
+        let ctx = make_semantic_context(plan, snake, semantic_body);
 
         let mut lines = vec![format!("struct {snake}_data *d = dev_id;")];
 
@@ -489,19 +458,14 @@ fn emit_isr_handler_semantic(
 }
 
 /// Emit uart_ops callback functions from realization plan data.
-fn emit_uart_ops(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-) {
+fn emit_uart_ops(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     for entry in &plan.uart_ops_realization {
         let body = match &entry.body_source {
             LinuxUartOpsBody::DirectBody { role } => {
                 let func = find_function_by_role(&plan.behavior, role);
                 if let Some(func) = func {
                     let semantic_body = &func.body;
-                    let ctx = make_semantic_context(plan, portable, snake, semantic_body);
+                    let ctx = make_semantic_context(plan, snake, semantic_body);
                     let mut lines = Vec::new();
                     if entry.needs_container_of {
                         lines.push(format!(
@@ -530,7 +494,7 @@ fn emit_uart_ops(
                 let func = find_function_by_role(&plan.behavior, role);
                 if let Some(func) = func {
                     let semantic_body = &func.body;
-                    let ctx = make_semantic_context(plan, portable, snake, semantic_body);
+                    let ctx = make_semantic_context(plan, snake, semantic_body);
                     let mut lines = Vec::new();
                     if entry.needs_container_of {
                         lines.push(format!(
@@ -664,12 +628,7 @@ fn emit_uart_driver_def(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snak
     });
 }
 
-fn emit_probe(
-    tu: &mut CTranslationUnit,
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-    snake: &str,
-) {
+fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     let upper = snake.to_uppercase();
     let mut body = Vec::new();
 
@@ -783,8 +742,7 @@ fn emit_probe(
                 body.push("d->port.irq = d->irq;".into());
 
                 // Clock rate: use plan deployment metadata.
-                let has_opt_clock = portable.resources.clocks.iter().any(|c| !c.required);
-                if has_opt_clock {
+                if plan.has_optional_clock {
                     // Find the property default for current-speed.
                     let default_speed_define = plan
                         .property_realization
@@ -801,9 +759,8 @@ fn emit_probe(
                 }
 
                 // FIFO size from property field if available.
-                if portable
-                    .resources
-                    .properties
+                if plan
+                    .property_realization
                     .iter()
                     .any(|p| p.field_name == "fifo_size")
                 {

@@ -1,14 +1,18 @@
 //! Linux backend emitter.
 //!
-//! Consumes a `LinuxBackendPlan` (and a `DriverLoweringPlan` for
-//! supplementary details) to produce the generated Linux artifact set.
-//! Returns a typed `EmittedArtifactSet` describing every file written.
+//! Consumes a `LinuxBackendPlan` together with a borrowed
+//! [`FunctionBodyIndex`] of CFG bodies keyed by `FunctionId`. The Linux
+//! plan is self-sufficient for emission -- no field on the portable
+//! `DriverLoweringPlan` is read here; all Linux realization decisions
+//! are carried on the plan itself.
+//!
+//! Returns a typed [`EmittedArtifactSet`] describing every file
+//! written.
 
 use std::fs;
 use std::path::{Path, PathBuf};
 
-use crate::lowering::plan::DriverLoweringPlan;
-
+use super::body_index::FunctionBodyIndex;
 use super::c_ast::{include_guard_name, CStructField, CTopLevelItem, CTranslationUnit};
 use super::conventions::generated_file_banner;
 use super::emit_module;
@@ -65,23 +69,26 @@ pub enum LinuxEmitError {
 /// files declared in `plan.artifact_layout` and returns a typed manifest
 /// of what was emitted.
 ///
-/// The `portable` plan provides supplementary details (register blocks,
-/// resource obligations) that the Linux plan references but does not
-/// duplicate.
+/// `bodies` is a borrowed function-body index keyed by `FunctionId`.
+/// Phase-7B threads the index through the emission signature so tasks
+/// 9/10 can retarget emitters to walk `ir::Body` directly without
+/// another signature churn; the current emitters still string-format
+/// the transitional `SemanticModel` handle carried on `plan.behavior`.
 pub fn emit_linux_artifacts(
     plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
+    bodies: &FunctionBodyIndex<'_>,
     output_root: &Path,
 ) -> Result<EmittedArtifactSet, LinuxEmitError> {
+    let _ = bodies;
     fs::create_dir_all(output_root)?;
 
     let mut artifacts = Vec::new();
 
     for file in &plan.artifact_layout.emitted_files {
         let content = match file.role {
-            LinuxFileRole::DriverMain => emit_module::emit_module_integration(plan, portable),
-            LinuxFileRole::SharedHeader => emit_shared_header(plan, portable),
-            LinuxFileRole::RegisterHelpers => emit_regs::emit_register_helpers(plan, portable),
+            LinuxFileRole::DriverMain => emit_module::emit_module_integration(plan),
+            LinuxFileRole::SharedHeader => emit_shared_header(plan),
+            LinuxFileRole::RegisterHelpers => emit_regs::emit_register_helpers(plan),
             LinuxFileRole::Makefile => emit_makefile(plan),
             LinuxFileRole::KbuildFragment => emit_kbuild(plan),
         };
@@ -98,7 +105,7 @@ pub fn emit_linux_artifacts(
 
     Ok(EmittedArtifactSet {
         output_root: output_root.to_path_buf(),
-        driver_id: portable.identity.driver_name.clone(),
+        driver_id: plan.driver_name.clone(),
         artifacts,
     })
 }
@@ -108,10 +115,10 @@ pub fn emit_linux_artifacts(
 // ---------------------------------------------------------------------------
 
 /// Emit the shared header with driver state struct and forward declarations.
-pub(super) fn emit_shared_header(plan: &LinuxBackendPlan, portable: &DriverLoweringPlan) -> String {
+pub(super) fn emit_shared_header(plan: &LinuxBackendPlan) -> String {
     let reg = &plan.registration;
     let snake = &reg.module_name;
-    let driver_name = &portable.identity.driver_name;
+    let driver_name = &plan.driver_name;
 
     let mut tu = CTranslationUnit::new();
 
@@ -142,50 +149,16 @@ pub(super) fn emit_shared_header(plan: &LinuxBackendPlan, portable: &DriverLower
     }
     tu.push(CTopLevelItem::BlankLine);
 
-    // Driver private data struct
-    let mut fields = Vec::new();
-    for mmio in &portable.resources.mmio {
-        fields.push(CStructField {
-            type_name: "void __iomem *".into(),
-            field_name: mmio.field_name.clone(),
-            doc: Some(format!("MMIO base for {}", mmio.mmio_id)),
-        });
-    }
-    for irq in &portable.resources.interrupts {
-        fields.push(CStructField {
-            type_name: "int".into(),
-            field_name: irq.field_name.clone(),
-            doc: Some(format!("IRQ number for {}", irq.interrupt_id)),
-        });
-    }
-    for clk in &portable.resources.clocks {
-        fields.push(CStructField {
-            type_name: "struct clk *".into(),
-            field_name: clk.field_name.clone(),
-            doc: Some(format!("Clock {}", clk.clock_id)),
-        });
-    }
-    for prop in &portable.resources.properties {
-        let ctype = match prop.field_type.as_str() {
-            "u32" => "u32",
-            "u16" => "u16",
-            "u8" => "u8",
-            "bool" => "bool",
-            _ => "u32",
-        };
-        fields.push(CStructField {
-            type_name: ctype.into(),
-            field_name: prop.field_name.clone(),
-            doc: Some(format!("Property: {}", prop.property_id)),
-        });
-    }
-    if plan.serial_core.is_some() {
-        fields.push(CStructField {
-            type_name: "struct uart_port".into(),
-            field_name: "port".into(),
-            doc: Some("Serial core port".into()),
-        });
-    }
+    // Driver private data struct (pre-computed by the Linux planner).
+    let fields = plan
+        .shared_struct_fields
+        .iter()
+        .map(|f| CStructField {
+            type_name: f.c_type.clone(),
+            field_name: f.field_name.clone(),
+            doc: Some(f.doc.clone()),
+        })
+        .collect();
 
     tu.push(CTopLevelItem::StructDef {
         name: format!("{snake}_data"),

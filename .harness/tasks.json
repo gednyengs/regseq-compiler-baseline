@@ -1818,7 +1818,7 @@
           "id": "regseq-linux-backend-03",
           "name": "LinuxBackendPlan self-sufficiency",
           "spec": ".harness/tasks/regseq-linux-backend/03-linux-plan-self-sufficiency.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-10"
           ],

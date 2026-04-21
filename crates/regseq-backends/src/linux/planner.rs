@@ -16,7 +16,7 @@ use super::plan::{
     LinuxPortType, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
     LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
     LinuxRegistrationShape, LinuxRemoveOrchestration, LinuxRemoveStep, LinuxSerialCoreRealization,
-    LinuxUartOpsBody, LinuxUartOpsEntry, ParamBinding, ReturnAdaptation,
+    LinuxSharedStructField, LinuxUartOpsBody, LinuxUartOpsEntry, ParamBinding, ReturnAdaptation,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -53,6 +53,8 @@ pub fn build_linux_backend_plan(
     let property_realization = build_property_realization(plan);
     let behavior_mapping = build_behavior_mapping(plan, &behavior);
     let uart_ops_realization = build_uart_ops_realization(plan);
+    let shared_struct_fields = build_shared_struct_fields(plan, serial_core.is_some());
+    let has_optional_clock = plan.resources.clocks.iter().any(|c| !c.required);
 
     Ok(LinuxBackendPlan {
         registration,
@@ -65,7 +67,68 @@ pub fn build_linux_backend_plan(
         behavior_mapping,
         uart_ops_realization,
         behavior,
+        driver_name: plan.identity.driver_name.clone(),
+        shared_struct_fields,
+        has_optional_clock,
     })
+}
+
+/// Build the driver-state struct field layout from portable resource
+/// obligations.
+///
+/// Mirrors the Linux C types previously assembled inline in
+/// `emitter::emit_shared_header`. Pre-computing here lets the emitter
+/// take only `&LinuxBackendPlan`.
+fn build_shared_struct_fields(
+    plan: &DriverLoweringPlan,
+    has_serial_core: bool,
+) -> Vec<LinuxSharedStructField> {
+    let mut fields = Vec::new();
+
+    for mmio in &plan.resources.mmio {
+        fields.push(LinuxSharedStructField {
+            c_type: "void __iomem *".into(),
+            field_name: mmio.field_name.clone(),
+            doc: format!("MMIO base for {}", mmio.mmio_id),
+        });
+    }
+    for irq in &plan.resources.interrupts {
+        fields.push(LinuxSharedStructField {
+            c_type: "int".into(),
+            field_name: irq.field_name.clone(),
+            doc: format!("IRQ number for {}", irq.interrupt_id),
+        });
+    }
+    for clk in &plan.resources.clocks {
+        fields.push(LinuxSharedStructField {
+            c_type: "struct clk *".into(),
+            field_name: clk.field_name.clone(),
+            doc: format!("Clock {}", clk.clock_id),
+        });
+    }
+    for prop in &plan.resources.properties {
+        let c_type = match prop.field_type.as_str() {
+            "u32" => "u32",
+            "u16" => "u16",
+            "u8" => "u8",
+            "bool" => "bool",
+            _ => "u32",
+        };
+        fields.push(LinuxSharedStructField {
+            c_type: c_type.into(),
+            field_name: prop.field_name.clone(),
+            doc: format!("Property: {}", prop.property_id),
+        });
+    }
+    if has_serial_core {
+        fields.push(LinuxSharedStructField {
+            c_type: "struct uart_port".into(),
+            field_name: "port".into(),
+            doc: "Serial core port".into(),
+        });
+    }
+
+    fields
 }
 
 fn build_registration(plan: &DriverLoweringPlan) -> LinuxRegistrationShape {

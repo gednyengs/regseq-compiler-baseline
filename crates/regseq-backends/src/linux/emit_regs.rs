@@ -4,8 +4,6 @@
 //! value defines entirely from plan data. No device-specific literals
 //! appear in this module.
 
-use crate::lowering::plan::DriverLoweringPlan;
-
 use super::c_ast::{include_guard_name, CTopLevelItem, CTranslationUnit};
 use super::conventions::generated_file_banner;
 use super::emit_semantic::{
@@ -16,15 +14,12 @@ use super::plan::LinuxBackendPlan;
 
 /// Emit the register helpers header with offset defines and field masks.
 ///
-/// All defines are generated from `plan.register_layout` and
-/// `portable.register_obligations.descriptors`. No hardcoded register
-/// offsets, named values, or device-specific convenience defines.
-pub(super) fn emit_register_helpers(
-    plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
-) -> String {
-    let snake = to_snake_case(&portable.identity.driver_name);
-    let driver_name = &portable.identity.driver_name;
+/// All defines are generated from `plan.register_layout`. No hardcoded
+/// register offsets, named values, or device-specific convenience
+/// defines.
+pub(super) fn emit_register_helpers(plan: &LinuxBackendPlan) -> String {
+    let driver_name = &plan.driver_name;
+    let snake = to_snake_case(driver_name);
 
     let mut tu = CTranslationUnit::new();
 

@@ -11,6 +11,7 @@
 use std::collections::BTreeMap;
 
 use regseq_analysis::legacy_input::AnalysisInput;
+use regseq_backends::linux::body_index::FunctionBodyIndex;
 use regseq_backends::linux::emitter::{emit_linux_artifacts, EmittedArtifactSet};
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole};
 use regseq_backends::linux::planner::build_linux_backend_plan;
@@ -860,9 +861,10 @@ fn make_plans() -> (DriverLoweringPlan, LinuxBackendPlan) {
 }
 
 fn emit_to_tempdir() -> (TempDir, EmittedArtifactSet) {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let dir = TempDir::new().expect("tempdir");
-    let set = emit_linux_artifacts(&linux, &portable, dir.path()).expect("emit");
+    let bodies = FunctionBodyIndex::default();
+    let set = emit_linux_artifacts(&linux, &bodies, dir.path()).expect("emit");
     (dir, set)
 }
 
@@ -870,9 +872,10 @@ fn emit_to_tempdir() -> (TempDir, EmittedArtifactSet) {
 
 #[test]
 fn plan_reaches_emission_entry_point() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let dir = TempDir::new().expect("tempdir");
-    let result = emit_linux_artifacts(&linux, &portable, dir.path());
+    let bodies = FunctionBodyIndex::default();
+    let result = emit_linux_artifacts(&linux, &bodies, dir.path());
     assert!(result.is_ok(), "emission should succeed");
 }
 
@@ -925,10 +928,11 @@ fn output_root_matches_artifact_set() {
 
 #[test]
 fn repo_local_output_path_works() {
-    let (portable, linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let dir = TempDir::new().expect("tempdir");
     let output_root = dir.path().join("output/linux/pl011-full-spec");
-    let set = emit_linux_artifacts(&linux, &portable, &output_root).expect("emit");
+    let bodies = FunctionBodyIndex::default();
+    let set = emit_linux_artifacts(&linux, &bodies, &output_root).expect("emit");
     assert!(output_root.exists());
     assert_eq!(set.output_root, output_root);
     for artifact in &set.artifacts {

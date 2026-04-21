@@ -19,6 +19,7 @@
 #![allow(deprecated)]
 
 use regseq_analysis::legacy_input::AnalysisInput;
+use regseq_backends::linux::body_index::FunctionBodyIndex;
 use regseq_backends::linux::emitter::{emit_linux_artifacts, EmittedArtifactSet};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::planner::{build_driver_lowering_plan, build_legacy_behavior_for};
@@ -116,8 +117,12 @@ pub fn emit_driver(
                 "regseq-driver: emitting Linux artifacts to {}...",
                 options.output_dir.display()
             );
-            let artifact_set =
-                emit_linux_artifacts(&linux_plan, &lowering_plan, &options.output_dir)?;
+            // Phase-7B: the legacy pipeline has no RegseqModel yet;
+            // pass the empty index. `regseq-driver-35` cuts the
+            // orchestrator over to the RegseqModel path and supplies
+            // a populated index via `FunctionBodyIndex::from_regseq_model`.
+            let bodies = FunctionBodyIndex::default();
+            let artifact_set = emit_linux_artifacts(&linux_plan, &bodies, &options.output_dir)?;
 
             Ok(EmitDriverResult { artifact_set })
         }

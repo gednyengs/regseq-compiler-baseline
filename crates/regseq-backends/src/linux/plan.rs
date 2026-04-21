@@ -45,9 +45,46 @@ pub struct LinuxBackendPlan {
     /// still string-formats from. After `regseq-lowering-10` trimmed
     /// the `behavior` field off [`crate::lowering::plan::DriverLoweringPlan`],
     /// the Linux plan temporarily owns this behavioral IR until
-    /// `regseq-linux-backend-03` (task 8) replaces it with a
-    /// `FunctionBodyIndex`.
+    /// `regseq-linux-backend-04` / `-05` retarget the emitters to the
+    /// CFG `ir::Body` handles carried by
+    /// [`crate::linux::body_index::FunctionBodyIndex`].
     pub behavior: SemanticModel,
+    /// Raw driver-identity name from the declaration.
+    ///
+    /// Distinct from `registration.module_name` (which is the
+    /// snake-cased C identifier). Used for generated-file banners and
+    /// `MODULE_DESCRIPTION`.
+    pub driver_name: String,
+    /// Driver-state struct field layout for the shared header.
+    ///
+    /// Pre-computed by the Linux planner so the emitter does not
+    /// re-derive Linux C types from portable resource obligations.
+    pub shared_struct_fields: Vec<LinuxSharedStructField>,
+    /// Whether the driver declares at least one optional clock.
+    ///
+    /// Controls whether the probe's `uartclk` initializer emits a
+    /// ternary fallback (`d->clock ? clk_get_rate(...) : ...`) or
+    /// calls `clk_get_rate` unconditionally. Pre-computed by the
+    /// planner from the portable clock obligations.
+    pub has_optional_clock: bool,
+}
+
+/// A single field in the generated driver-state struct.
+///
+/// The emitter renders one `type_name field_name;` declaration per
+/// entry, with the documentation string attached as a field-level
+/// comment. Ordering is significant: the planner emits MMIO, IRQ,
+/// clock, and property fields in declaration order, followed by
+/// `struct uart_port` when serial-core is realized.
+#[derive(Debug, Clone)]
+pub struct LinuxSharedStructField {
+    /// Full C type spelling (e.g. `"void __iomem *"`, `"int"`,
+    /// `"u32"`, `"struct uart_port"`).
+    pub c_type: String,
+    /// C identifier for the field.
+    pub field_name: String,
+    /// Documentation string for a field-level comment.
+    pub doc: String,
 }
 
 // ---------------------------------------------------------------------------
