@@ -1766,7 +1766,7 @@
           "id": "regseq-lowering-10",
           "name": "New build_driver_lowering_plan_from_model + trim DriverLoweringPlan",
           "spec": ".harness/tasks/regseq-lowering/10-new-lowering-entry-from-regseq-model.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-61"
           ],

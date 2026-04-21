@@ -1,13 +1,13 @@
-//! Portable lowering planner.
+//! Portable lowering planner (legacy `AnalysisInput`-based path).
 //!
-//! Converts an `AnalysisInput` into a `DriverLoweringPlan`. The canonical
-//! entry point is `build_driver_lowering_plan_from_hierarchy`, which
-//! projects a real `SemanticModel` from a populated item hierarchy.
-//!
-//! The older `build_driver_lowering_plan` / `build_driver_lowering_plan_with_constants`
-//! signatures are retained for workspace compilation with `regseq-driver`
-//! (out of scope for the Phase 2C migration). They are not part of the
-//! semantic-model migration and should not be used for new work.
+//! Converts an `AnalysisInput` into a `DriverLoweringPlan`. This is the
+//! transitional entry retained for the old pipeline call chain until
+//! `regseq-driver-35` cuts `emit_driver` over to the new
+//! [`crate::lowering::from_model::build_driver_lowering_plan_from_model`]
+//! entry. The `_from_hierarchy` variant additionally projects a
+//! `SemanticModel` for callers that need behavioral IR; the
+//! `DriverLoweringPlan` itself is non-lifetime-parameterized and no
+//! longer carries the SemanticModel.
 //!
 //! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
 //! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
@@ -21,16 +21,21 @@ use regseq_model::compat::CallbackFamily;
 use regseq_model::compat::ItemId;
 use regseq_model::compat::SemanticModel;
 
+use super::behavior::BehaviorPlan;
 use super::behavior_planner::build_behavior_plan_with_constants;
+use super::diagnostics::{
+    DriverLoweringDiagnostics, LinuxAcquisitionEntry, LinuxClockEntry, LinuxDeploymentMetadata,
+    LinuxPinCtrlEntry, LinuxReleaseEntry, LinuxResetEntry, LinuxResourceSequencing,
+};
 use super::hierarchy::ItemHierarchy;
 use super::plan::{
-    AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackBodyPlan, CallbackEntry,
-    CallbackInventory, ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity,
-    DriverLoweringPlan, InterruptObligation, LockScopeObligation, LoweringAction, MmioObligation,
-    NamedValueInfo, PinCtrlObligation, PollObligation, PropertyObligation,
-    RegisterAccessObligation, RegisterBlockObligation, RegisterDescriptorInfo, RegisterFieldInfo,
-    RegisterObligations, ResetObligation, ResourceKind, ResourceObligations, ResourcePolicy,
-    SyncFieldObligation, SynchronizationObligations, TeardownStep,
+    AcquisitionStep, BitFieldInfo, BusIdentity, BusType, CallbackEntry, CallbackInventory,
+    ClockObligation, CompletionObligation, DeviceClassRoles, DriverIdentity, DriverLoweringPlan,
+    InterruptObligation, LockScopeObligation, MmioObligation, NamedValueInfo, PinCtrlObligation,
+    PollObligation, PropertyObligation, RegisterAccessObligation, RegisterBlockObligation,
+    RegisterDescriptorInfo, RegisterFieldInfo, RegisterObligations, ResetObligation, ResourceKind,
+    ResourceObligations, ResourcePolicy, SyncFieldObligation, SynchronizationObligations,
+    TeardownStep,
 };
 use super::projection::project_semantic_model;
 
@@ -74,19 +79,40 @@ pub enum LoweringPlanError {
 // Canonical entry point (Phase 2C semantic-model path)
 // ---------------------------------------------------------------------------
 
-/// Build a `DriverLoweringPlan` from analysis input and a populated item
-/// hierarchy.
+/// Output of [`build_driver_lowering_plan_from_hierarchy`].
 ///
-/// This is the canonical plan builder. `SemanticModel` is projected from
-/// the hierarchy and becomes `plan.behavior`. The legacy `BehaviorPlan`
-/// is built alongside into `plan.legacy_behavior` for transitional Linux
-/// emitter compatibility.
+/// Carries the portable plan alongside the projected
+/// [`SemanticModel`] and [`BehaviorPlan`] that were previously
+/// embedded on [`DriverLoweringPlan`]. After `regseq-lowering-10`
+/// trimmed those fields, callers that still depend on behavioral IR
+/// (the Linux planner on the transitional path, the
+/// semantic-model-projection tests) read them from this container.
+#[derive(Debug, Clone)]
+pub struct HierarchyLoweringOutput {
+    /// Portable driver lowering plan (no behavioral IR).
+    pub plan: DriverLoweringPlan,
+    /// Projected semantic model (backends that still string-format
+    /// bodies consume this transitional artifact).
+    pub semantic_model: SemanticModel,
+    /// Legacy BehaviorPlan for the transitional Linux emitter.
+    pub legacy_behavior: BehaviorPlan,
+}
+
+/// Build a [`DriverLoweringPlan`] + projected [`SemanticModel`] from
+/// analysis input and a populated item hierarchy.
+///
+/// This is the canonical plan builder on the `AnalysisInput` path.
+/// `SemanticModel` and legacy `BehaviorPlan` are returned alongside
+/// the plan rather than embedded on it; `regseq-lowering-10` trimmed
+/// those fields off [`DriverLoweringPlan`] so that the portable plan
+/// is non-lifetime-parameterized and free of duplicated behavioral
+/// authority.
 pub fn build_driver_lowering_plan_from_hierarchy(
     input: &AnalysisInput,
     hierarchy: &ItemHierarchy,
     lowered_functions: &BTreeSet<ItemId>,
     constant_values: &[(String, u32)],
-) -> Result<DriverLoweringPlan, LoweringPlanError> {
+) -> Result<HierarchyLoweringOutput, LoweringPlanError> {
     let semantic_model = project_semantic_model(hierarchy, lowered_functions);
 
     // Verify all interrupt classes have resolved mask values.
@@ -104,18 +130,21 @@ pub fn build_driver_lowering_plan_from_hierarchy(
 
     let legacy_behavior = build_behavior_plan_with_constants(input, constant_values);
     let base = build_plan_base(input)?;
+    let diagnostics = build_diagnostics(&base);
 
-    Ok(DriverLoweringPlan {
-        identity: base.identity,
-        callbacks: base.callbacks,
-        resources: base.resources,
-        acquisition_order: base.acquisition_order,
-        teardown_order: base.teardown_order,
-        device_class_roles: base.device_class_roles,
-        register_obligations: base.register_obligations,
-        synchronization: base.synchronization,
-        callback_actions: base.callback_actions,
-        behavior: semantic_model,
+    Ok(HierarchyLoweringOutput {
+        plan: DriverLoweringPlan {
+            identity: base.identity,
+            callbacks: base.callbacks,
+            resources: base.resources,
+            acquisition_order: base.acquisition_order,
+            teardown_order: base.teardown_order,
+            device_class_roles: base.device_class_roles,
+            register_obligations: base.register_obligations,
+            synchronization: base.synchronization,
+            diagnostics,
+        },
+        semantic_model,
         legacy_behavior,
     })
 }
@@ -134,8 +163,8 @@ pub fn build_driver_lowering_plan(
     let plan = build_driver_lowering_plan_with_constants(input, &[])?;
 
     // Verify all interrupt classes have resolved mask values.
-    let unresolved: Vec<String> = plan
-        .legacy_behavior
+    let legacy_behavior = build_behavior_plan_with_constants(input, &[]);
+    let unresolved: Vec<String> = legacy_behavior
         .interrupt_classes
         .iter()
         .filter(|c| c.mask_value == 0 && c.name != "all")
@@ -156,10 +185,10 @@ pub fn build_driver_lowering_plan(
 /// `build_driver_lowering_plan_from_hierarchy` for the canonical path.
 pub fn build_driver_lowering_plan_with_constants(
     input: &AnalysisInput,
-    constant_values: &[(String, u32)],
+    _constant_values: &[(String, u32)],
 ) -> Result<DriverLoweringPlan, LoweringPlanError> {
-    let legacy_behavior = build_behavior_plan_with_constants(input, constant_values);
     let base = build_plan_base(input)?;
+    let diagnostics = build_diagnostics(&base);
 
     Ok(DriverLoweringPlan {
         identity: base.identity,
@@ -170,31 +199,51 @@ pub fn build_driver_lowering_plan_with_constants(
         device_class_roles: base.device_class_roles,
         register_obligations: base.register_obligations,
         synchronization: base.synchronization,
-        callback_actions: base.callback_actions,
-        behavior: SemanticModel {
+        diagnostics,
+    })
+}
+
+/// Build the transitional [`SemanticModel`] + [`BehaviorPlan`]
+/// that the Linux backend planner still consumes.
+///
+/// `regseq-lowering-10` trimmed the `behavior` and `legacy_behavior`
+/// fields off [`DriverLoweringPlan`]; callers that still need those
+/// artifacts on the non-hierarchy path (namely
+/// `regseq-driver::emit_driver`) read them from this helper.
+///
+/// The returned [`SemanticModel`] is the empty placeholder the old
+/// planner used to populate on this path -- callers that need a
+/// populated model should go through
+/// [`build_driver_lowering_plan_from_hierarchy`] instead.
+pub fn build_legacy_behavior_for(
+    input: &AnalysisInput,
+    constant_values: &[(String, u32)],
+) -> (SemanticModel, BehaviorPlan) {
+    let legacy_behavior = build_behavior_plan_with_constants(input, constant_values);
+    (
+        SemanticModel {
             functions: Vec::new(),
             constants: Vec::new(),
             interrupt_classes: Vec::new(),
         },
         legacy_behavior,
-    })
+    )
 }
 
 // ---------------------------------------------------------------------------
 // Shared plan-construction helper
 // ---------------------------------------------------------------------------
 
-/// Non-behavior fields of a `DriverLoweringPlan`, built from `AnalysisInput`.
-struct PlanBase {
-    identity: DriverIdentity,
-    callbacks: CallbackInventory,
-    resources: ResourceObligations,
-    acquisition_order: Vec<AcquisitionStep>,
-    teardown_order: Vec<TeardownStep>,
-    device_class_roles: DeviceClassRoles,
-    register_obligations: RegisterObligations,
-    synchronization: SynchronizationObligations,
-    callback_actions: Vec<CallbackBodyPlan>,
+/// Fields of a [`DriverLoweringPlan`] derived from `AnalysisInput`.
+pub(crate) struct PlanBase {
+    pub(crate) identity: DriverIdentity,
+    pub(crate) callbacks: CallbackInventory,
+    pub(crate) resources: ResourceObligations,
+    pub(crate) acquisition_order: Vec<AcquisitionStep>,
+    pub(crate) teardown_order: Vec<TeardownStep>,
+    pub(crate) device_class_roles: DeviceClassRoles,
+    pub(crate) register_obligations: RegisterObligations,
+    pub(crate) synchronization: SynchronizationObligations,
 }
 
 fn build_plan_base(input: &AnalysisInput) -> Result<PlanBase, LoweringPlanError> {
@@ -206,7 +255,6 @@ fn build_plan_base(input: &AnalysisInput) -> Result<PlanBase, LoweringPlanError>
     let device_class_roles = build_device_class_roles(input);
     let register_obligations = build_register_obligations(input);
     let synchronization = build_sync_obligations(input);
-    let callback_actions = build_callback_actions(input);
 
     Ok(PlanBase {
         identity,
@@ -217,7 +265,6 @@ fn build_plan_base(input: &AnalysisInput) -> Result<PlanBase, LoweringPlanError>
         device_class_roles,
         register_obligations,
         synchronization,
-        callback_actions,
     })
 }
 
@@ -677,77 +724,102 @@ fn build_sync_obligations(input: &AnalysisInput) -> SynchronizationObligations {
     }
 }
 
-fn build_callback_actions(input: &AnalysisInput) -> Vec<CallbackBodyPlan> {
-    let mut plans = Vec::new();
+// ---------------------------------------------------------------------------
+// Diagnostics (reviewer-facing, reporting-only)
+// ---------------------------------------------------------------------------
 
-    for imp in input.all_callback_impls() {
-        let mut actions = Vec::new();
-
-        // Collect operation evidence scoped to this callback family.
-        match imp.family {
-            CallbackFamily::Lifecycle => {
-                // Lifecycle callbacks drive resource acquisition/release,
-                // property reads, delays, and logging.
-                for prop in &input.declaration().properties.fields {
-                    actions.push(LoweringAction::PropertyRead {
-                        property_id: prop.property_id.clone(),
-                        has_default: prop.default_literal.is_some(),
-                    });
-                }
-                for delay in input.timed_delay_call_sites() {
-                    actions.push(LoweringAction::TimedDelay {
-                        intrinsic: delay.intrinsic,
-                        path_kind: delay.path_kind,
-                    });
-                }
-                for log in input.log_call_sites() {
-                    actions.push(LoweringAction::LogEmit {
-                        level: log.level,
-                        template: log.template.clone(),
-                    });
-                }
-                for irq in &input.declaration().resources.interrupts.resources {
-                    actions.push(LoweringAction::InterruptRegister {
-                        interrupt_id: irq.interrupt_id.clone(),
-                    });
-                }
-            }
-            CallbackFamily::Serial => {
-                // Serial callbacks contain register access and lock scopes.
-                for w in input.wrapper_call_sites() {
-                    actions.push(LoweringAction::RegisterAccess {
-                        method: w.method,
-                        containing_fn: w.containing_fn.clone(),
-                    });
-                }
-                for g in input.guard_scopes() {
-                    actions.push(LoweringAction::LockAcquire {
-                        kind: g.lock_kind,
-                        containing_fn: g.containing_fn.clone(),
-                    });
-                    actions.push(LoweringAction::LockRelease {
-                        kind: g.lock_kind,
-                        containing_fn: g.containing_fn.clone(),
-                    });
-                }
-                for p in input.poll_call_sites() {
-                    actions.push(LoweringAction::PollRegister {
-                        containing_fn: p.containing_fn.clone(),
-                    });
-                }
-            }
-            CallbackFamily::SerialConsole | CallbackFamily::PowerManagement => {
-                // Placeholder for future expansion.
-            }
-        }
-
-        plans.push(CallbackBodyPlan {
-            family: imp.family,
-            driver_type: imp.driver_type.clone(),
-            context: imp.context,
-            actions,
-        });
+pub(crate) fn build_diagnostics(base: &PlanBase) -> DriverLoweringDiagnostics {
+    DriverLoweringDiagnostics {
+        linux_resource_sequencing: build_linux_resource_sequencing(base),
+        linux_deployment_metadata: build_linux_deployment_metadata(base),
     }
+}
 
-    plans
+fn build_linux_resource_sequencing(base: &PlanBase) -> LinuxResourceSequencing {
+    let acquisition_order: Vec<LinuxAcquisitionEntry> = base
+        .acquisition_order
+        .iter()
+        .map(|step| {
+            let api_family = match step.resource_kind {
+                ResourceKind::Mmio => "devm_ioremap_resource",
+                ResourceKind::Interrupt => "devm_request_irq",
+                ResourceKind::Clock => "devm_clk_get",
+                ResourceKind::Reset => "devm_reset_control_get",
+                ResourceKind::PinCtrl => "devm_pinctrl_get",
+                ResourceKind::Property => "device_property_read",
+            };
+            LinuxAcquisitionEntry {
+                order: step.order,
+                api_family: api_family.into(),
+                resource_id: step.resource_id.clone(),
+                required: step.policy == ResourcePolicy::Required,
+            }
+        })
+        .collect();
+
+    let release_order: Vec<LinuxReleaseEntry> = base
+        .teardown_order
+        .iter()
+        .filter_map(|step| {
+            let api_family = match step.resource_kind {
+                ResourceKind::Clock => Some("clk_disable_unprepare"),
+                ResourceKind::Reset => Some("reset_control_assert"),
+                ResourceKind::Interrupt => Some("free_irq"),
+                ResourceKind::Mmio => Some("iounmap"),
+                ResourceKind::PinCtrl | ResourceKind::Property => None,
+            };
+            api_family.map(|api| LinuxReleaseEntry {
+                order: step.order,
+                api_family: api.into(),
+                resource_id: step.resource_id.clone(),
+            })
+        })
+        .collect();
+
+    LinuxResourceSequencing {
+        acquisition_order,
+        release_order,
+    }
+}
+
+fn build_linux_deployment_metadata(base: &PlanBase) -> LinuxDeploymentMetadata {
+    let clocks = base
+        .resources
+        .clocks
+        .iter()
+        .map(|c| LinuxClockEntry {
+            clock_id: c.clock_id.clone(),
+            required: c.required,
+            default_frequency_hz: c.default_frequency,
+        })
+        .collect();
+
+    let resets = base
+        .resources
+        .resets
+        .iter()
+        .map(|r| LinuxResetEntry {
+            field_name: r.field_name.clone(),
+            required: r.required,
+            reset_line_id: r.reset_line_id.clone(),
+            shared: r.reset_shared,
+        })
+        .collect();
+
+    let pinctrl = base
+        .resources
+        .pinctrl
+        .iter()
+        .map(|p| LinuxPinCtrlEntry {
+            field_name: p.field_name.clone(),
+            required: p.required,
+            states: p.pin_states.clone(),
+        })
+        .collect();
+
+    LinuxDeploymentMetadata {
+        clocks,
+        resets,
+        pinctrl,
+    }
 }

@@ -21,7 +21,7 @@
 use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::linux::emitter::{emit_linux_artifacts, EmittedArtifactSet};
 use regseq_backends::linux::planner::build_linux_backend_plan;
-use regseq_backends::lowering::planner::build_driver_lowering_plan;
+use regseq_backends::lowering::planner::{build_driver_lowering_plan, build_legacy_behavior_for};
 use regseq_config::{CompilerOptions, TargetOs};
 use regseq_model::binding;
 use regseq_model::declaration;
@@ -104,12 +104,13 @@ pub fn emit_driver(
     // 7. Portable lowering (default path — no speculative fallback).
     eprintln!("regseq-driver: building portable lowering plan...");
     let lowering_plan = build_driver_lowering_plan(&input)?;
+    let (behavior, _legacy_behavior) = build_legacy_behavior_for(&input, &[]);
 
     // 8. Route to target-OS backend.
     match options.target_os {
         TargetOs::Linux => {
             eprintln!("regseq-driver: building Linux backend plan...");
-            let linux_plan = build_linux_backend_plan(&lowering_plan)?;
+            let linux_plan = build_linux_backend_plan(&lowering_plan, behavior)?;
 
             eprintln!(
                 "regseq-driver: emitting Linux artifacts to {}...",

@@ -344,7 +344,9 @@ fn make_portable_plan() -> DriverLoweringPlan {
 
 fn make_linux_plan() -> LinuxBackendPlan {
     let plan = make_portable_plan();
-    build_linux_backend_plan(&plan).expect("linux plan should succeed")
+    let (behavior, _legacy) =
+        regseq_backends::lowering::planner::build_legacy_behavior_for(&make_analysis_input(), &[]);
+    build_linux_backend_plan(&plan, behavior).expect("linux plan should succeed")
 }
 
 // ---- Test 1: module compiles and is importable ----
@@ -514,12 +516,13 @@ fn portable_plan_contains_no_linux_types() {
         DeviceClass::SerialUart
     );
 
-    // Callback actions use CallbackFamily, not Linux-specific types.
-    assert!(!plan.callback_actions.is_empty());
+    // Callback inventory (replaces the removed `callback_actions` field) uses
+    // CallbackFamily, not Linux-specific types.
     assert!(plan
-        .callback_actions
+        .callbacks
+        .lifecycle
         .iter()
-        .any(|a| a.family == CallbackFamily::Lifecycle));
+        .any(|e| e.family == CallbackFamily::Lifecycle));
 }
 
 // ---- Additional boundary tests ----
@@ -574,26 +577,32 @@ fn portable_plan_synchronization_obligations() {
 }
 
 #[test]
-fn portable_plan_callback_body_actions() {
+fn portable_plan_captures_per_family_evidence_via_query_helpers() {
+    // The legacy `callback_actions` field has been removed
+    // (regseq-lowering-10). The equivalent evidence is now surfaced
+    // through typed obligations: register accesses through
+    // register_obligations, lock scopes through synchronization,
+    // property reads through resources.properties, and callbacks
+    // through the callbacks inventory.
     let plan = make_portable_plan();
 
-    let lifecycle = plan
-        .callback_actions
+    // Lifecycle evidence: at least one callback entry + a timed
+    // obligation derivable from the property/interrupt obligations.
+    assert!(plan
+        .callbacks
+        .lifecycle
         .iter()
-        .find(|a| a.family == CallbackFamily::Lifecycle)
-        .expect("should have lifecycle callback actions");
+        .any(|e| e.family == CallbackFamily::Lifecycle));
+    assert!(!plan.resources.properties.is_empty());
 
-    // Lifecycle should have property reads, delays, logs, and interrupt registration.
-    assert!(!lifecycle.actions.is_empty());
-
-    let serial = plan
-        .callback_actions
+    // Serial evidence: at least one register access and one lock scope.
+    assert!(plan
+        .callbacks
+        .serial
         .iter()
-        .find(|a| a.family == CallbackFamily::Serial)
-        .expect("should have serial callback actions");
-
-    // Serial should have register accesses and lock scopes.
-    assert!(!serial.actions.is_empty());
+        .any(|e| e.family == CallbackFamily::Serial));
+    assert!(!plan.register_obligations.access_sites.is_empty());
+    assert!(!plan.synchronization.lock_scopes.is_empty());
 }
 
 #[test]
@@ -660,15 +669,17 @@ fn linux_plan_artifact_layout() {
 }
 
 #[test]
-fn linux_plan_resource_sequencing() {
-    let linux = make_linux_plan();
+fn portable_diagnostics_report_linux_resource_sequencing() {
+    // `regseq-lowering-10` relocated `LinuxResourceSequencing` from
+    // `LinuxBackendPlan` to `DriverLoweringPlan.diagnostics`.
+    let plan = make_portable_plan();
+    let sequencing = &plan.diagnostics.linux_resource_sequencing;
 
-    assert!(!linux.resource_acquisition.acquisition_order.is_empty());
-    assert!(!linux.resource_acquisition.release_order.is_empty());
+    assert!(!sequencing.acquisition_order.is_empty());
+    assert!(!sequencing.release_order.is_empty());
 
     // Verify API families are Linux-specific strings.
-    let apis: Vec<&str> = linux
-        .resource_acquisition
+    let apis: Vec<&str> = sequencing
         .acquisition_order
         .iter()
         .map(|e| e.api_family.as_str())

@@ -26,10 +26,10 @@ use std::collections::BTreeSet;
 
 use regseq_analysis::legacy_input::{check_body_readiness, AnalysisInput};
 use regseq_backends::linux::planner::build_linux_backend_plan;
-use regseq_backends::lowering::behavior::{BehaviorNode, FunctionRole};
+use regseq_backends::lowering::behavior::{BehaviorNode, BehaviorPlan, FunctionRole};
 use regseq_backends::lowering::mir_interpreter::resolve_interrupt_class_masks;
 use regseq_backends::lowering::plan::BusType;
-use regseq_backends::lowering::planner::build_driver_lowering_plan;
+use regseq_backends::lowering::planner::{build_driver_lowering_plan, build_legacy_behavior_for};
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, BusBinding, ClockBinding, InterruptBinding,
     JoinKey, MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
@@ -1682,9 +1682,15 @@ fn make_full_spec_input() -> AnalysisInput {
 /// Build a portable plan with resolved interrupt class masks.
 fn make_portable_plan_with_constants() -> regseq_backends::lowering::plan::DriverLoweringPlan {
     let input = make_full_spec_input();
-    let mut plan = build_driver_lowering_plan(&input).expect("lowering should succeed");
-    resolve_interrupt_class_masks(&mut plan.legacy_behavior, &authored_interrupt_constants());
-    plan
+    build_driver_lowering_plan(&input).expect("lowering should succeed")
+}
+
+/// Build a legacy behavior plan with resolved interrupt class masks.
+fn make_legacy_behavior_with_constants() -> BehaviorPlan {
+    let input = make_full_spec_input();
+    let (_sm, mut legacy) = build_legacy_behavior_for(&input, &authored_interrupt_constants());
+    resolve_interrupt_class_masks(&mut legacy, &authored_interrupt_constants());
+    legacy
 }
 
 // ===========================================================================
@@ -1821,9 +1827,9 @@ fn proof_optional_resource_metadata_completeness() {
 /// Comprehensive proof that behavioral lowering captures the authored functions.
 #[test]
 fn proof_behavioral_completeness() {
-    let plan = make_portable_plan_with_constants();
+    let legacy = make_legacy_behavior_with_constants();
 
-    let b = &plan.legacy_behavior;
+    let b = &legacy;
 
     // Required function roles for the supported slice.
     let required_roles = [
@@ -2117,7 +2123,8 @@ fn expected_full_spec_reachable_helpers() -> BTreeSet<String> {
 fn proof_linux_plan_register_layout_from_plan() {
     let input = make_full_spec_input();
     let portable = build_driver_lowering_plan(&input).unwrap();
-    let linux = build_linux_backend_plan(&portable).unwrap();
+    let (sm, _legacy) = build_legacy_behavior_for(&input, &authored_interrupt_constants());
+    let linux = build_linux_backend_plan(&portable, sm).unwrap();
 
     // Linux register layout mirrors portable plan.
     assert_eq!(
@@ -2146,7 +2153,8 @@ fn proof_linux_plan_register_layout_from_plan() {
 fn proof_linux_plan_properties_from_plan() {
     let input = make_full_spec_input();
     let portable = build_driver_lowering_plan(&input).unwrap();
-    let linux = build_linux_backend_plan(&portable).unwrap();
+    let (sm, _legacy) = build_legacy_behavior_for(&input, &authored_interrupt_constants());
+    let linux = build_linux_backend_plan(&portable, sm).unwrap();
 
     assert_eq!(
         linux.property_realization.len(),
@@ -2170,24 +2178,17 @@ fn proof_linux_plan_properties_from_plan() {
 fn proof_linux_plan_deployment_from_plan() {
     let input = make_full_spec_input();
     let portable = build_driver_lowering_plan(&input).unwrap();
-    let linux = build_linux_backend_plan(&portable).unwrap();
+    let (sm, _legacy) = build_legacy_behavior_for(&input, &authored_interrupt_constants());
+    let _linux = build_linux_backend_plan(&portable, sm).unwrap();
 
-    assert_eq!(
-        linux.deployment_metadata.clocks.len(),
-        portable.resources.clocks.len()
-    );
-    assert_eq!(
-        linux.deployment_metadata.resets.len(),
-        portable.resources.resets.len()
-    );
-    assert_eq!(
-        linux.deployment_metadata.pinctrl.len(),
-        portable.resources.pinctrl.len()
-    );
+    let metadata = &portable.diagnostics.linux_deployment_metadata;
+    assert_eq!(metadata.clocks.len(), portable.resources.clocks.len());
+    assert_eq!(metadata.resets.len(), portable.resources.resets.len());
+    assert_eq!(metadata.pinctrl.len(), portable.resources.pinctrl.len());
 
     // Values match.
     assert_eq!(
-        linux.deployment_metadata.clocks[0].default_frequency_hz,
+        metadata.clocks[0].default_frequency_hz,
         portable.resources.clocks[0].default_frequency
     );
 }
@@ -2197,7 +2198,8 @@ fn proof_linux_plan_deployment_from_plan() {
 fn proof_linux_plan_behavior_from_plan() {
     let input = make_full_spec_input();
     let portable = build_driver_lowering_plan(&input).unwrap();
-    let linux = build_linux_backend_plan(&portable).unwrap();
+    let (sm, _legacy) = build_legacy_behavior_for(&input, &authored_interrupt_constants());
+    let linux = build_linux_backend_plan(&portable, sm).unwrap();
 
     // The behavior mapping now reads from SemanticModel. When built via
     // the legacy compat path (empty SemanticModel), the mapping is empty.
@@ -2205,16 +2207,16 @@ fn proof_linux_plan_behavior_from_plan() {
     // linux_emission_scaffold.rs which uses the hierarchy-based builder.
     assert_eq!(
         linux.behavior_mapping.portable_function_count,
-        portable.behavior.functions.len(),
+        linux.behavior.functions.len(),
         "mapping count must match SemanticModel function count"
     );
     assert_eq!(
         linux.behavior_mapping.interrupt_class_count,
-        portable.behavior.interrupt_classes.len(),
+        linux.behavior.interrupt_classes.len(),
         "mapping interrupt count must match SemanticModel"
     );
 
-    for func in &portable.behavior.functions {
+    for func in &linux.behavior.functions {
         let mapping = linux
             .behavior_mapping
             .callback_mappings
@@ -2331,11 +2333,13 @@ fn regression_portable_planner_has_no_hardcoded_pl011_offsets() {
 fn proof_deterministic_across_runs() {
     let input1 = make_full_spec_input();
     let plan1 = build_driver_lowering_plan(&input1).unwrap();
-    let linux1 = build_linux_backend_plan(&plan1).unwrap();
+    let (sm1, legacy1) = build_legacy_behavior_for(&input1, &authored_interrupt_constants());
+    let linux1 = build_linux_backend_plan(&plan1, sm1).unwrap();
 
     let input2 = make_full_spec_input();
     let plan2 = build_driver_lowering_plan(&input2).unwrap();
-    let linux2 = build_linux_backend_plan(&plan2).unwrap();
+    let (sm2, legacy2) = build_legacy_behavior_for(&input2, &authored_interrupt_constants());
+    let linux2 = build_linux_backend_plan(&plan2, sm2).unwrap();
 
     // Portable plan determinism.
     assert_eq!(
@@ -2346,13 +2350,10 @@ fn proof_deterministic_across_runs() {
         plan1.resources.properties.len(),
         plan2.resources.properties.len()
     );
+    assert_eq!(legacy1.functions.len(), legacy2.functions.len());
     assert_eq!(
-        plan1.legacy_behavior.functions.len(),
-        plan2.legacy_behavior.functions.len()
-    );
-    assert_eq!(
-        plan1.legacy_behavior.interrupt_classes.len(),
-        plan2.legacy_behavior.interrupt_classes.len()
+        legacy1.interrupt_classes.len(),
+        legacy2.interrupt_classes.len()
     );
 
     // Linux plan determinism.
@@ -2370,12 +2371,7 @@ fn proof_deterministic_across_runs() {
     );
 
     // Function order is deterministic.
-    for (f1, f2) in plan1
-        .legacy_behavior
-        .functions
-        .iter()
-        .zip(plan2.legacy_behavior.functions.iter())
-    {
+    for (f1, f2) in legacy1.functions.iter().zip(legacy2.functions.iter()) {
         assert_eq!(f1.name, f2.name);
         assert_eq!(f1.role, f2.role);
     }
@@ -2391,7 +2387,7 @@ fn proof_deterministic_across_runs() {
 /// the specific name-role pairing for every authored callback.
 #[test]
 fn proof_per_callback_behavior_coverage() {
-    let plan = make_portable_plan_with_constants();
+    let legacy = make_legacy_behavior_with_constants();
 
     let expected: &[(&str, FunctionRole)] = &[
         ("init", FunctionRole::LifecycleInit),
@@ -2410,8 +2406,7 @@ fn proof_per_callback_behavior_coverage() {
     ];
 
     for (name, role) in expected {
-        let matched = plan
-            .legacy_behavior
+        let matched = legacy
             .functions
             .iter()
             .find(|f| f.name == *name && f.role == *role);
@@ -2431,7 +2426,7 @@ fn proof_per_callback_behavior_coverage() {
 #[test]
 fn proof_per_helper_behavior_coverage() {
     let input = make_full_spec_input();
-    let plan = make_portable_plan_with_constants();
+    let legacy = make_legacy_behavior_with_constants();
 
     let reachable = input.mir_reachable_helper_names();
     let expected = expected_full_spec_reachable_helpers();
@@ -2445,8 +2440,7 @@ fn proof_per_helper_behavior_coverage() {
     );
 
     for name in &reachable {
-        let matched = plan
-            .legacy_behavior
+        let matched = legacy
             .functions
             .iter()
             .find(|f| f.name == *name && f.role == FunctionRole::Helper);
@@ -2474,13 +2468,12 @@ fn proof_per_helper_behavior_coverage() {
 /// cleanup where none was authored.
 #[test]
 fn proof_cleanup_behavior_visible_in_plans() {
-    let plan = make_portable_plan_with_constants();
+    let legacy = make_legacy_behavior_with_constants();
 
     // Functions known to use the `?` operator in the authored spec.
     let fallible_fns = ["init", "deinit", "port_open", "configure"];
     for name in &fallible_fns {
-        let func = plan
-            .legacy_behavior
+        let func = legacy
             .functions
             .iter()
             .find(|f| f.name == *name)
@@ -2505,8 +2498,7 @@ fn proof_cleanup_behavior_visible_in_plans() {
     // Functions that do NOT use `?` -- should have zero FallibleOp nodes.
     let non_fallible_fns = ["tx_ready", "tx_empty"];
     for name in &non_fallible_fns {
-        let func = plan
-            .legacy_behavior
+        let func = legacy
             .functions
             .iter()
             .find(|f| f.name == *name)
@@ -2574,10 +2566,10 @@ fn proof_mir_provenance_is_drops_elaborated() {
 #[test]
 fn proof_behavior_traceable_to_mir_bodies() {
     let input = make_full_spec_input();
-    let plan = make_portable_plan_with_constants();
+    let legacy = make_legacy_behavior_with_constants();
 
     // Every FunctionBehavior must have a corresponding MIR body.
-    for fb in &plan.legacy_behavior.functions {
+    for fb in &legacy.functions {
         assert!(
             input.mir_body_by_name(&fb.name).is_some(),
             "behavior function '{}' has no corresponding MIR body",
@@ -2591,7 +2583,7 @@ fn proof_behavior_traceable_to_mir_bodies() {
     let isr_count = input.mir_isr_bodies().len();
     let expected_total = callback_count + isr_count + reachable_helpers.len();
     assert_eq!(
-        plan.legacy_behavior.functions.len(),
+        legacy.functions.len(),
         expected_total,
         "behavior function count must equal callbacks ({}) + ISRs ({}) + helpers ({})",
         callback_count,
@@ -2608,8 +2600,7 @@ fn proof_behavior_traceable_to_mir_bodies() {
         "handle_irq",
     ];
     for name in &orchestrating {
-        let fb = plan
-            .legacy_behavior
+        let fb = legacy
             .functions
             .iter()
             .find(|f| f.name == *name)

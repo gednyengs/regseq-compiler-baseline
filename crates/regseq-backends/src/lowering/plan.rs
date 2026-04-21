@@ -9,14 +9,11 @@
 
 use regseq_model::declaration::callbacks::{CallbackContext, CallbackFamily};
 use regseq_model::declaration::driver::DeviceClass;
-use regseq_model::declaration::operations::{DelayIntrinsic, DelayPathKind, LogLevel};
 use regseq_model::declaration::provenance::Provenance;
 use regseq_model::declaration::registers::WrapperMethod;
 use regseq_model::declaration::synchronization::SyncFieldKind;
 
-use regseq_model::semantic::SemanticModel;
-
-use super::behavior::BehaviorPlan;
+use super::diagnostics::DriverLoweringDiagnostics;
 
 // ---------------------------------------------------------------------------
 // Top-level plan
@@ -46,30 +43,12 @@ pub struct DriverLoweringPlan {
     pub register_obligations: RegisterObligations,
     /// Synchronization obligations.
     pub synchronization: SynchronizationObligations,
-    /// Supplementary callback-body evidence scoped by callback family.
+    /// Reviewer-facing diagnostics.
     ///
-    /// These coarser action summaries carry resource-acquisition and
-    /// operation-level evidence grouped by callback family. They are
-    /// **not** the backend-consumed source of truth for behavior emission.
-    /// Backend planners should consume `behavior` instead.
-    pub callback_actions: Vec<CallbackBodyPlan>,
-    /// Backend-facing semantic model for behavioral emission.
-    ///
-    /// The **canonical** portable behavioral representation. Carries
-    /// typed `FunctionDef` items with `SemanticBody` IR (`Stmt`/`Expr`
-    /// trees), referenced constants, and interrupt class definitions.
-    /// Projected from the populated item hierarchy via
-    /// `project_semantic_model`.
-    ///
-    /// Backend planners on the canonical path consume this field for
-    /// behavioral emission decisions.
-    pub behavior: SemanticModel,
-    /// **Transitional**: legacy behavior plan for current Linux emitter.
-    ///
-    /// Retained only because the Linux emitter has not yet been rewritten
-    /// to consume `SemanticModel` (Phase 3). Will be removed after that
-    /// migration. **Do not add new consumers.**
-    pub legacy_behavior: BehaviorPlan,
+    /// Carries reporting-only information relocated from
+    /// `LinuxBackendPlan` per `regseq-lowering-10`. Nothing here is
+    /// consumed by any emitter pass.
+    pub diagnostics: DriverLoweringDiagnostics,
 }
 
 // ---------------------------------------------------------------------------
@@ -478,105 +457,4 @@ pub struct CompletionObligation {
     pub containing_fn: String,
     /// Provenance.
     pub provenance: Provenance,
-}
-
-// ---------------------------------------------------------------------------
-// Callback-body lowering actions
-// ---------------------------------------------------------------------------
-
-/// Structured plan for a single callback body.
-#[derive(Debug, Clone)]
-pub struct CallbackBodyPlan {
-    /// Callback family this body belongs to.
-    pub family: CallbackFamily,
-    /// Driver type implementing this callback.
-    pub driver_type: String,
-    /// Execution context.
-    pub context: CallbackContext,
-    /// Ordered lowering actions for this callback body.
-    pub actions: Vec<LoweringAction>,
-}
-
-/// A single lowering action within a callback body.
-///
-/// These are backend-neutral semantic actions that the portable plan
-/// captures so that OS-specific backend planners can translate them
-/// into concrete API calls without re-deriving the action sequence.
-#[derive(Debug, Clone)]
-pub enum LoweringAction {
-    /// Acquire a resource (MMIO mapping, IRQ request, clock enable, etc.).
-    AcquireResource {
-        /// Resource family.
-        kind: ResourceKind,
-        /// Resource identifier.
-        resource_id: String,
-        /// Acquisition policy.
-        policy: ResourcePolicy,
-    },
-    /// Release a resource.
-    ReleaseResource {
-        /// Resource family.
-        kind: ResourceKind,
-        /// Resource identifier.
-        resource_id: String,
-    },
-    /// Perform a register access.
-    RegisterAccess {
-        /// Access method.
-        method: WrapperMethod,
-        /// Containing function for provenance.
-        containing_fn: String,
-    },
-    /// Acquire a lock.
-    LockAcquire {
-        /// Lock primitive kind.
-        kind: SyncFieldKind,
-        /// Containing function.
-        containing_fn: String,
-    },
-    /// Release a lock.
-    LockRelease {
-        /// Lock primitive kind.
-        kind: SyncFieldKind,
-        /// Containing function.
-        containing_fn: String,
-    },
-    /// Perform a completion operation.
-    CompletionOp {
-        /// Method name (wait, signal, reset).
-        method: String,
-        /// Containing function.
-        containing_fn: String,
-    },
-    /// Read a firmware property.
-    PropertyRead {
-        /// Property identifier.
-        property_id: String,
-        /// Whether a default fallback exists.
-        has_default: bool,
-    },
-    /// Emit a log message.
-    LogEmit {
-        /// Log level.
-        level: LogLevel,
-        /// Message template.
-        template: String,
-    },
-    /// Execute a timed delay.
-    TimedDelay {
-        /// Delay intrinsic type.
-        intrinsic: DelayIntrinsic,
-        /// Path kind (canonical or compatibility).
-        path_kind: DelayPathKind,
-    },
-    /// Register an interrupt handler.
-    InterruptRegister {
-        /// Interrupt identifier.
-        interrupt_id: String,
-    },
-    /// Poll a register condition.
-    PollRegister {
-        /// Containing function.
-        containing_fn: String,
-    },
 }

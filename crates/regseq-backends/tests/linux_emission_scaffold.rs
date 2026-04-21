@@ -847,14 +847,15 @@ fn make_plans() -> (DriverLoweringPlan, LinuxBackendPlan) {
     .expect("hierarchy build should succeed");
     let (populated, lowered_ids) =
         lower_and_populate_hierarchy(&hierarchy, &input).expect("semantic lowering");
-    let portable = build_driver_lowering_plan_from_hierarchy(
+    let output = build_driver_lowering_plan_from_hierarchy(
         &input,
         &populated,
         &lowered_ids,
         &authored_interrupt_constants(),
     )
     .expect("portable plan");
-    let linux = build_linux_backend_plan(&portable).expect("linux plan");
+    let portable = output.plan;
+    let linux = build_linux_backend_plan(&portable, output.semantic_model).expect("linux plan");
     (portable, linux)
 }
 
@@ -1360,7 +1361,7 @@ fn probe_has_real_api_calls() {
 
 #[test]
 fn interrupt_masks_come_from_plan_data() {
-    let (portable, _linux) = make_plans();
+    let (_portable, linux) = make_plans();
     let (_dir, set) = emit_to_tempdir();
     let main = set
         .artifacts
@@ -1370,7 +1371,7 @@ fn interrupt_masks_come_from_plan_data() {
     let content = std::fs::read_to_string(&main.path).expect("read");
 
     // Each interrupt class from the plan should have a define in the output.
-    for class in &portable.legacy_behavior.interrupt_classes {
+    for class in &linux.behavior.interrupt_classes {
         let define = format!("PL011_FULL_SPEC_{}_IRQ_MASK", class.name.to_uppercase());
         assert!(
             content.contains(&define),
@@ -1492,8 +1493,11 @@ fn helper_functions_have_authored_signatures() {
     // The full-spec has helpers like set_baud_rate(uart_clk_hz, baud_rate)
     // and clear_explicit_interrupts(status). If the MIR carries these
     // parameters, the emitted C must include them.
-    let (portable, _linux) = make_plans();
-    for func in &portable.legacy_behavior.functions {
+    let (_, legacy_behavior) = regseq_backends::lowering::planner::build_legacy_behavior_for(
+        &make_input(),
+        &authored_interrupt_constants(),
+    );
+    for func in &legacy_behavior.functions {
         if func.role != regseq_backends::lowering::behavior::FunctionRole::Helper {
             continue;
         }
@@ -1525,9 +1529,11 @@ fn helper_calls_pass_arguments() {
     // Helpers with parameters should be called with arguments, not just (d).
     // Specifically, if a helper has N params, its call sites should contain
     // at least N+1 comma-separated arguments (d + authored params).
-    let (portable, _linux) = make_plans();
-    let helpers_with_params: Vec<&str> = portable
-        .legacy_behavior
+    let (_, legacy_behavior) = regseq_backends::lowering::planner::build_legacy_behavior_for(
+        &make_input(),
+        &authored_interrupt_constants(),
+    );
+    let helpers_with_params: Vec<&str> = legacy_behavior
         .functions
         .iter()
         .filter(|f| {
@@ -1643,7 +1649,9 @@ fn start_tx_stop_tx_stop_rx_are_honest_stubs() {
 
 #[test]
 fn default_path_rejects_unresolved_interrupt_masks() {
-    use regseq_backends::lowering::planner::build_driver_lowering_plan;
+    use regseq_backends::lowering::planner::{
+        build_driver_lowering_plan, build_legacy_behavior_for,
+    };
 
     let input = make_input();
     let result = build_driver_lowering_plan(&input);
@@ -1652,9 +1660,10 @@ fn default_path_rejects_unresolved_interrupt_masks() {
     // (a) succeed with all masks nonzero if MIR carries resolved values, or
     // (b) fail with UnresolvedInterruptMasks if MIR has symbolic references.
     match result {
-        Ok(plan) => {
+        Ok(_plan) => {
             // If it succeeded, all non-"all" classes must have nonzero masks.
-            for class in &plan.legacy_behavior.interrupt_classes {
+            let (_sm, legacy) = build_legacy_behavior_for(&input, &[]);
+            for class in &legacy.interrupt_classes {
                 if class.name != "all" {
                     assert!(
                         class.mask_value != 0,
@@ -1676,10 +1685,10 @@ fn default_path_rejects_unresolved_interrupt_masks() {
 
 #[test]
 fn with_constants_path_resolves_all_masks() {
-    let (portable, _linux) = make_plans();
+    let (_portable, linux) = make_plans();
 
     // The _with_constants path must resolve all interrupt classes.
-    for class in &portable.legacy_behavior.interrupt_classes {
+    for class in &linux.behavior.interrupt_classes {
         assert!(
             class.mask_value != 0,
             "class '{}' should have nonzero mask with explicit constants",

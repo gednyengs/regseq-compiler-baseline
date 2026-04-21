@@ -13,10 +13,10 @@
 use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole, LinuxProbeStep};
 use regseq_backends::linux::planner::build_linux_backend_plan;
-use regseq_backends::lowering::behavior::{FunctionRole, ReturnSemantic};
+use regseq_backends::lowering::behavior::{BehaviorPlan, FunctionRole, ReturnSemantic};
 use regseq_backends::lowering::mir_interpreter::resolve_interrupt_class_masks;
 use regseq_backends::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
-use regseq_backends::lowering::planner::build_driver_lowering_plan;
+use regseq_backends::lowering::planner::{build_driver_lowering_plan, build_legacy_behavior_for};
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, BusBinding, ClockBinding, InterruptBinding,
     JoinKey, MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
@@ -560,11 +560,15 @@ fn make_full_spec_input() -> AnalysisInput {
 }
 
 fn make_portable_plan() -> DriverLoweringPlan {
+    build_driver_lowering_plan(&make_full_spec_input()).expect("portable plan should succeed")
+}
+
+fn make_legacy_behavior() -> BehaviorPlan {
     let input = make_full_spec_input();
-    let mut plan = build_driver_lowering_plan(&input).expect("portable plan should succeed");
+    let (_sm, mut legacy) = build_legacy_behavior_for(&input, &authored_interrupt_constants());
     // Resolve interrupt class mask values from authored constants.
-    resolve_interrupt_class_masks(&mut plan.legacy_behavior, &authored_interrupt_constants());
-    plan
+    resolve_interrupt_class_masks(&mut legacy, &authored_interrupt_constants());
+    legacy
 }
 
 fn authored_interrupt_constants() -> Vec<(String, u32)> {
@@ -585,7 +589,9 @@ fn authored_interrupt_constants() -> Vec<(String, u32)> {
 
 fn make_linux_plan() -> LinuxBackendPlan {
     let plan = make_portable_plan();
-    build_linux_backend_plan(&plan).expect("linux plan should succeed")
+    let (sm, _legacy) =
+        build_legacy_behavior_for(&make_full_spec_input(), &authored_interrupt_constants());
+    build_linux_backend_plan(&plan, sm).expect("linux plan should succeed")
 }
 
 // ---- Body expression helpers ----
@@ -2301,10 +2307,11 @@ fn linux_plan_property_realization_carries_api_and_defaults() {
 
 #[test]
 fn linux_plan_deployment_metadata_carries_clock_frequency() {
-    let linux = make_linux_plan();
-    assert_eq!(linux.deployment_metadata.clocks.len(), 1);
+    let plan = make_portable_plan();
+    let _linux = make_linux_plan();
+    assert_eq!(plan.diagnostics.linux_deployment_metadata.clocks.len(), 1);
 
-    let clock = &linux.deployment_metadata.clocks[0];
+    let clock = &plan.diagnostics.linux_deployment_metadata.clocks[0];
     assert_eq!(clock.clock_id, "uart_clk");
     assert!(!clock.required);
     assert_eq!(clock.default_frequency_hz, Some(48_000_000));
@@ -2312,10 +2319,11 @@ fn linux_plan_deployment_metadata_carries_clock_frequency() {
 
 #[test]
 fn linux_plan_deployment_metadata_carries_reset_info() {
-    let linux = make_linux_plan();
-    assert_eq!(linux.deployment_metadata.resets.len(), 1);
+    let plan = make_portable_plan();
+    let _linux = make_linux_plan();
+    assert_eq!(plan.diagnostics.linux_deployment_metadata.resets.len(), 1);
 
-    let reset = &linux.deployment_metadata.resets[0];
+    let reset = &plan.diagnostics.linux_deployment_metadata.resets[0];
     assert_eq!(reset.field_name, "reset");
     assert!(!reset.required);
     assert_eq!(reset.reset_line_id.as_deref(), Some("uart_rst0"));
@@ -2324,10 +2332,11 @@ fn linux_plan_deployment_metadata_carries_reset_info() {
 
 #[test]
 fn linux_plan_deployment_metadata_carries_pinctrl_states() {
-    let linux = make_linux_plan();
-    assert_eq!(linux.deployment_metadata.pinctrl.len(), 1);
+    let plan = make_portable_plan();
+    let _linux = make_linux_plan();
+    assert_eq!(plan.diagnostics.linux_deployment_metadata.pinctrl.len(), 1);
 
-    let pin = &linux.deployment_metadata.pinctrl[0];
+    let pin = &plan.diagnostics.linux_deployment_metadata.pinctrl[0];
     assert_eq!(pin.field_name, "pinctrl");
     assert!(!pin.required);
     assert_eq!(
@@ -2376,8 +2385,8 @@ fn realization_data_is_deterministic() {
 fn behavior_plan_has_per_function_entries() {
     use regseq_backends::lowering::behavior::FunctionRole;
 
-    let plan = make_portable_plan();
-    let b = &plan.legacy_behavior;
+    let legacy = make_legacy_behavior();
+    let b = &legacy;
 
     // Should have lifecycle, serial, ISR, and helper functions.
     assert!(
@@ -2428,8 +2437,8 @@ fn behavior_plan_has_per_function_entries() {
 
 #[test]
 fn behavior_functions_are_named() {
-    let plan = make_portable_plan();
-    let b = &plan.legacy_behavior;
+    let legacy = make_legacy_behavior();
+    let b = &legacy;
 
     let init = b.functions.iter().find(|f| f.name == "init").expect("init");
     assert_eq!(init.role, FunctionRole::LifecycleInit);
@@ -2455,13 +2464,8 @@ fn behavior_functions_are_named() {
 fn init_behavior_has_ordered_resource_then_programming() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let init = plan
-        .legacy_behavior
-        .functions
-        .iter()
-        .find(|f| f.name == "init")
-        .unwrap();
+    let legacy = make_legacy_behavior();
+    let init = legacy.functions.iter().find(|f| f.name == "init").unwrap();
 
     // init body: resource ops then CallHelper("program_polling_port") then Return.
     assert!(
@@ -2488,9 +2492,8 @@ fn init_behavior_has_ordered_resource_then_programming() {
 fn program_polling_port_has_ordered_sequence() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let helper = plan
-        .legacy_behavior
+    let legacy = make_legacy_behavior();
+    let helper = legacy
         .functions
         .iter()
         .find(|f| f.name == "program_polling_port")
@@ -2524,9 +2527,8 @@ fn program_polling_port_has_ordered_sequence() {
 fn tx_byte_has_conditional_fast_path() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let tx = plan
-        .legacy_behavior
+    let legacy = make_legacy_behavior();
+    let tx = legacy
         .functions
         .iter()
         .find(|f| f.name == "tx_byte")
@@ -2543,9 +2545,8 @@ fn tx_byte_has_conditional_fast_path() {
 fn rx_char_has_empty_check_and_error_accumulation() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let rx = plan
-        .legacy_behavior
+    let legacy = make_legacy_behavior();
+    let rx = legacy
         .functions
         .iter()
         .find(|f| f.name == "rx_char")
@@ -2572,9 +2573,8 @@ fn rx_char_has_empty_check_and_error_accumulation() {
 fn flush_rx_fifo_has_while_loop() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let flush = plan
-        .legacy_behavior
+    let legacy = make_legacy_behavior();
+    let flush = legacy
         .functions
         .iter()
         .find(|f| f.name == "flush_rx_fifo")
@@ -2593,9 +2593,8 @@ fn flush_rx_fifo_has_while_loop() {
 fn send_break_has_conditional_on_bool_param() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let brk = plan
-        .legacy_behavior
+    let legacy = make_legacy_behavior();
+    let brk = legacy
         .functions
         .iter()
         .find(|f| f.name == "send_break")
@@ -2616,9 +2615,8 @@ fn send_break_has_conditional_on_bool_param() {
 fn isr_behavior_uses_interrupt_class_discrimination() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let isr = plan
-        .legacy_behavior
+    let legacy = make_legacy_behavior();
+    let isr = legacy
         .functions
         .iter()
         .find(|f| f.name == "handle_irq")
@@ -2648,8 +2646,8 @@ fn isr_behavior_uses_interrupt_class_discrimination() {
 
 #[test]
 fn interrupt_classes_carry_authored_mask_values() {
-    let plan = make_portable_plan();
-    let classes = &plan.legacy_behavior.interrupt_classes;
+    let legacy = make_legacy_behavior();
+    let classes = &legacy.interrupt_classes;
 
     // When interrupt classes are derived from MIR, class names are
     // based on the mask values (e.g., "class_0x0050" for RX mask 0x50).
@@ -2731,14 +2729,13 @@ fn linux_behavior_mapping_covers_all_portable_functions() {
 #[test]
 fn linux_behavior_mapping_carries_interrupt_class_count() {
     let linux = make_linux_plan();
-    let portable = make_portable_plan();
     // The interrupt class count comes from the SemanticModel when
     // populated, or is 0 when the SemanticModel is empty (legacy path).
     // When populated, it must match the semantic model's count.
-    if !portable.behavior.interrupt_classes.is_empty() {
+    if !linux.behavior.interrupt_classes.is_empty() {
         assert_eq!(
             linux.behavior_mapping.interrupt_class_count,
-            portable.behavior.interrupt_classes.len(),
+            linux.behavior.interrupt_classes.len(),
             "Linux plan interrupt class count must match semantic model"
         );
     }
@@ -2748,26 +2745,18 @@ fn linux_behavior_mapping_carries_interrupt_class_count() {
 
 #[test]
 fn behavior_plan_is_deterministic() {
-    let plan1 = make_portable_plan();
-    let plan2 = make_portable_plan();
+    let legacy1 = make_legacy_behavior();
+    let legacy2 = make_legacy_behavior();
 
-    assert_eq!(
-        plan1.legacy_behavior.functions.len(),
-        plan2.legacy_behavior.functions.len()
-    );
-    for (f1, f2) in plan1
-        .legacy_behavior
-        .functions
-        .iter()
-        .zip(plan2.legacy_behavior.functions.iter())
-    {
+    assert_eq!(legacy1.functions.len(), legacy2.functions.len());
+    for (f1, f2) in legacy1.functions.iter().zip(legacy2.functions.iter()) {
         assert_eq!(f1.name, f2.name);
         assert_eq!(f1.role, f2.role);
         assert_eq!(f1.body.len(), f2.body.len());
     }
     assert_eq!(
-        plan1.legacy_behavior.interrupt_classes.len(),
-        plan2.legacy_behavior.interrupt_classes.len()
+        legacy1.interrupt_classes.len(),
+        legacy2.interrupt_classes.len()
     );
 }
 
@@ -2776,11 +2765,10 @@ fn behavior_plan_is_deterministic() {
 #[test]
 fn all_reachable_helpers_have_behavior_entries() {
     let input = make_full_spec_input();
-    let plan = make_portable_plan();
+    let legacy = make_legacy_behavior();
 
     let reachable = input.mir_reachable_helper_names();
-    let behavior_names: std::collections::BTreeSet<String> = plan
-        .legacy_behavior
+    let behavior_names: std::collections::BTreeSet<String> = legacy
         .functions
         .iter()
         .filter(|f| f.role == FunctionRole::Helper)
@@ -2800,16 +2788,16 @@ fn all_reachable_helpers_have_behavior_entries() {
 
 #[test]
 fn behavior_plan_is_canonical_not_callback_actions() {
-    let plan = make_portable_plan();
+    let legacy = make_legacy_behavior();
 
     // The canonical behavior representation must have per-function entries.
     assert!(
-        !plan.legacy_behavior.functions.is_empty(),
+        !legacy.functions.is_empty(),
         "canonical BehaviorPlan must have function entries"
     );
 
     // Every behavioral function with a non-Helper role must have a non-empty body.
-    for func in &plan.legacy_behavior.functions {
+    for func in &legacy.functions {
         if func.role != FunctionRole::Helper {
             assert!(
                 !func.body.is_empty(),
@@ -2822,12 +2810,7 @@ fn behavior_plan_is_canonical_not_callback_actions() {
     // callback_actions is supplementary: its presence does not replace
     // the canonical behavior. This test ensures that if callback_actions
     // were removed, the behavior plan would still carry full function data.
-    let has_role = |role: FunctionRole| {
-        plan.legacy_behavior
-            .functions
-            .iter()
-            .any(|f| f.role == role)
-    };
+    let has_role = |role: FunctionRole| legacy.functions.iter().any(|f| f.role == role);
     assert!(has_role(FunctionRole::LifecycleInit));
     assert!(has_role(FunctionRole::SerialTxByte));
     assert!(has_role(FunctionRole::Isr));
@@ -2839,13 +2822,8 @@ fn behavior_plan_is_canonical_not_callback_actions() {
 fn fallible_ops_in_init_preserve_cleanup_path() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
-    let init = plan
-        .legacy_behavior
-        .functions
-        .iter()
-        .find(|f| f.name == "init")
-        .unwrap();
+    let legacy = make_legacy_behavior();
+    let init = legacy.functions.iter().find(|f| f.name == "init").unwrap();
 
     // init calls fallible resource helpers (toggle_reset_if_present?, etc.)
     // which should be represented as FallibleOp nodes, not silently elided.
@@ -2974,11 +2952,10 @@ fn count_branches_recursive(nodes: &[regseq_backends::lowering::behavior::Behavi
 fn ordered_sequence_not_present_without_barrier_pattern() {
     use regseq_backends::lowering::behavior::BehaviorNode;
 
-    let plan = make_portable_plan();
+    let legacy = make_legacy_behavior();
 
     // shutdown_port does NOT use ordered!, so it must NOT have an OrderedSequence.
-    let shutdown = plan
-        .legacy_behavior
+    let shutdown = legacy
         .functions
         .iter()
         .find(|f| f.name == "shutdown_port")

@@ -4,19 +4,19 @@
 //! This planner makes Linux-specific realization decisions without
 //! re-deriving driver semantics from the raw models.
 
-use regseq_model::compat::{DeviceCallbackRole, DeviceClass, DeviceClassKind, FunctionRole};
+use regseq_model::compat::{
+    DeviceCallbackRole, DeviceClass, DeviceClassKind, FunctionRole, SemanticModel,
+};
 
 use crate::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};
 
 use super::plan::{
-    LinuxAcquisitionEntry, LinuxArtifactLayout, LinuxBackendPlan, LinuxBehaviorMapping,
-    LinuxBitFieldEntry, LinuxCallbackGroup, LinuxCallbackMapping, LinuxClockEntry,
-    LinuxDeploymentMetadata, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue, LinuxPinCtrlEntry,
+    LinuxArtifactLayout, LinuxBackendPlan, LinuxBehaviorMapping, LinuxBitFieldEntry,
+    LinuxCallbackGroup, LinuxCallbackMapping, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue,
     LinuxPortType, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
     LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
-    LinuxRegistrationShape, LinuxReleaseEntry, LinuxRemoveOrchestration, LinuxRemoveStep,
-    LinuxResetEntry, LinuxResourceSequencing, LinuxSerialCoreRealization, LinuxUartOpsBody,
-    LinuxUartOpsEntry, ParamBinding, ReturnAdaptation,
+    LinuxRegistrationShape, LinuxRemoveOrchestration, LinuxRemoveStep, LinuxSerialCoreRealization,
+    LinuxUartOpsBody, LinuxUartOpsEntry, ParamBinding, ReturnAdaptation,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -33,20 +33,25 @@ pub enum LinuxPlanError {
 /// Build a `LinuxBackendPlan` from a portable `DriverLoweringPlan`.
 ///
 /// This is the Linux backend planner entry point. It translates portable
-/// driver obligations into Linux-specific realization decisions.
+/// driver obligations into Linux-specific realization decisions. The
+/// caller also supplies the projected [`SemanticModel`] that the
+/// transitional Linux emitter still string-formats from;
+/// `regseq-lowering-10` trimmed that handle off the portable plan, so
+/// the Linux plan owns it directly until
+/// `regseq-linux-backend-03` (task 8) replaces it with a
+/// `FunctionBodyIndex`.
 pub fn build_linux_backend_plan(
     plan: &DriverLoweringPlan,
+    behavior: SemanticModel,
 ) -> Result<LinuxBackendPlan, LinuxPlanError> {
     let registration = build_registration(plan);
     let serial_core = build_serial_core(plan);
     let probe = build_probe(plan);
     let remove = build_remove(plan);
-    let resource_acquisition = build_resource_sequencing(plan);
     let artifact_layout = build_artifact_layout(plan);
     let register_layout = build_register_layout(plan);
     let property_realization = build_property_realization(plan);
-    let deployment_metadata = build_deployment_metadata(plan);
-    let behavior_mapping = build_behavior_mapping(plan);
+    let behavior_mapping = build_behavior_mapping(plan, &behavior);
     let uart_ops_realization = build_uart_ops_realization(plan);
 
     Ok(LinuxBackendPlan {
@@ -54,13 +59,12 @@ pub fn build_linux_backend_plan(
         serial_core,
         probe,
         remove,
-        resource_acquisition,
         artifact_layout,
         register_layout,
         property_realization,
-        deployment_metadata,
         behavior_mapping,
         uart_ops_realization,
+        behavior,
     })
 }
 
@@ -229,53 +233,6 @@ fn build_remove(plan: &DriverLoweringPlan) -> LinuxRemoveOrchestration {
     LinuxRemoveOrchestration { steps }
 }
 
-fn build_resource_sequencing(plan: &DriverLoweringPlan) -> LinuxResourceSequencing {
-    let acquisition_order: Vec<LinuxAcquisitionEntry> = plan
-        .acquisition_order
-        .iter()
-        .map(|step| {
-            let api_family = match step.resource_kind {
-                ResourceKind::Mmio => "devm_ioremap_resource",
-                ResourceKind::Interrupt => "devm_request_irq",
-                ResourceKind::Clock => "devm_clk_get",
-                ResourceKind::Reset => "devm_reset_control_get",
-                ResourceKind::PinCtrl => "devm_pinctrl_get",
-                ResourceKind::Property => "device_property_read",
-            };
-            LinuxAcquisitionEntry {
-                order: step.order,
-                api_family: api_family.into(),
-                resource_id: step.resource_id.clone(),
-                required: step.policy == ResourcePolicy::Required,
-            }
-        })
-        .collect();
-
-    let release_order: Vec<LinuxReleaseEntry> = plan
-        .teardown_order
-        .iter()
-        .filter_map(|step| {
-            let api_family = match step.resource_kind {
-                ResourceKind::Clock => Some("clk_disable_unprepare"),
-                ResourceKind::Reset => Some("reset_control_assert"),
-                ResourceKind::Interrupt => Some("free_irq"),
-                ResourceKind::Mmio => Some("iounmap"),
-                ResourceKind::PinCtrl | ResourceKind::Property => None,
-            };
-            api_family.map(|api| LinuxReleaseEntry {
-                order: step.order,
-                api_family: api.into(),
-                resource_id: step.resource_id.clone(),
-            })
-        })
-        .collect();
-
-    LinuxResourceSequencing {
-        acquisition_order,
-        release_order,
-    }
-}
-
 fn build_artifact_layout(plan: &DriverLoweringPlan) -> LinuxArtifactLayout {
     let snake_name = to_snake_case(&plan.identity.driver_name);
 
@@ -320,11 +277,13 @@ const UART_OPS_REALIZED: &[DeviceCallbackRole] = &[
     DeviceCallbackRole::SendBreak,
 ];
 
-fn build_behavior_mapping(plan: &DriverLoweringPlan) -> LinuxBehaviorMapping {
+fn build_behavior_mapping(
+    plan: &DriverLoweringPlan,
+    behavior: &SemanticModel,
+) -> LinuxBehaviorMapping {
     let snake_name = to_snake_case(&plan.identity.driver_name);
 
-    let callback_mappings = plan
-        .behavior
+    let callback_mappings = behavior
         .functions
         .iter()
         .map(|f| {
@@ -352,8 +311,8 @@ fn build_behavior_mapping(plan: &DriverLoweringPlan) -> LinuxBehaviorMapping {
 
     LinuxBehaviorMapping {
         callback_mappings,
-        portable_function_count: plan.behavior.functions.len(),
-        interrupt_class_count: plan.behavior.interrupt_classes.len(),
+        portable_function_count: behavior.functions.len(),
+        interrupt_class_count: behavior.interrupt_classes.len(),
     }
 }
 
@@ -432,48 +391,6 @@ fn build_property_realization(plan: &DriverLoweringPlan) -> Vec<LinuxPropertyRea
             }
         })
         .collect()
-}
-
-fn build_deployment_metadata(plan: &DriverLoweringPlan) -> LinuxDeploymentMetadata {
-    let clocks = plan
-        .resources
-        .clocks
-        .iter()
-        .map(|c| LinuxClockEntry {
-            clock_id: c.clock_id.clone(),
-            required: c.required,
-            default_frequency_hz: c.default_frequency,
-        })
-        .collect();
-
-    let resets = plan
-        .resources
-        .resets
-        .iter()
-        .map(|r| LinuxResetEntry {
-            field_name: r.field_name.clone(),
-            required: r.required,
-            reset_line_id: r.reset_line_id.clone(),
-            shared: r.reset_shared,
-        })
-        .collect();
-
-    let pinctrl = plan
-        .resources
-        .pinctrl
-        .iter()
-        .map(|p| LinuxPinCtrlEntry {
-            field_name: p.field_name.clone(),
-            required: p.required,
-            states: p.pin_states.clone(),
-        })
-        .collect();
-
-    LinuxDeploymentMetadata {
-        clocks,
-        resets,
-        pinctrl,
-    }
 }
 
 fn build_uart_ops_realization(plan: &DriverLoweringPlan) -> Vec<LinuxUartOpsEntry> {

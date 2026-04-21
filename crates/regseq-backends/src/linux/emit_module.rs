@@ -200,14 +200,14 @@ fn emit_includes(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan) {
 
 /// Emit constants derived from plan data and the semantic model.
 ///
-/// Interrupt class masks come from `portable.behavior.interrupt_classes`.
-/// Authored constants come from `portable.behavior.constants`.
+/// Interrupt class masks come from `plan.behavior.interrupt_classes`.
+/// Authored constants come from `plan.behavior.constants`.
 /// Property defaults come from `plan.property_realization[].default_literal`.
 /// Port type comes from `plan.serial_core.port_type`.
 fn emit_constants(
     tu: &mut CTranslationUnit,
     plan: &LinuxBackendPlan,
-    portable: &DriverLoweringPlan,
+    _portable: &DriverLoweringPlan,
     snake: &str,
 ) {
     let upper = snake.to_uppercase();
@@ -217,7 +217,7 @@ fn emit_constants(
     ));
 
     // Interrupt class masks from semantic model.
-    for class in &portable.behavior.interrupt_classes {
+    for class in &plan.behavior.interrupt_classes {
         tu.push(CTopLevelItem::Define {
             name: interrupt_class_define(&upper, &class.name),
             value: Some(format!("{:#06x}U", class.mask_value)),
@@ -225,7 +225,7 @@ fn emit_constants(
     }
 
     // Authored constants from semantic model (only when populated).
-    for cdef in &portable.behavior.constants {
+    for cdef in &plan.behavior.constants {
         if let Some(ref val) = cdef.value {
             let val_str = match val {
                 regseq_model::item::constant::ConstValue::Integer(i) => format!("{i}"),
@@ -299,7 +299,7 @@ fn emit_register_accessors(tu: &mut CTranslationUnit, snake: &str) {
 /// Build a SemanticEmitContext from plans and a function's locals.
 fn make_semantic_context<'a>(
     plan: &'a LinuxBackendPlan,
-    portable: &'a DriverLoweringPlan,
+    _portable: &'a DriverLoweringPlan,
     snake: &'a str,
     body: &'a SemanticBody,
 ) -> SemanticEmitContext<'a> {
@@ -315,7 +315,7 @@ fn make_semantic_context<'a>(
         upper: snake.to_uppercase(),
         reg_prefix,
         register_layout: &plan.register_layout,
-        model: &portable.behavior,
+        model: &plan.behavior,
         locals: &body.locals,
     }
 }
@@ -357,7 +357,7 @@ fn emit_helper_functions_semantic(
         .map(|m| m.portable_function.as_str())
         .collect();
 
-    let helpers: Vec<&regseq_model::item::function::FunctionDef> = portable
+    let helpers: Vec<&regseq_model::item::function::FunctionDef> = plan
         .behavior
         .functions
         .iter()
@@ -439,7 +439,7 @@ fn emit_isr_handler_semantic(
     snake: &str,
 ) {
     // Find ISR function via FunctionRole::Isr { .. }.
-    let isr_func = portable
+    let isr_func = plan
         .behavior
         .functions
         .iter()
@@ -498,7 +498,7 @@ fn emit_uart_ops(
     for entry in &plan.uart_ops_realization {
         let body = match &entry.body_source {
             LinuxUartOpsBody::DirectBody { role } => {
-                let func = find_function_by_role(&portable.behavior, role);
+                let func = find_function_by_role(&plan.behavior, role);
                 if let Some(func) = func {
                     let semantic_body = &func.body;
                     let ctx = make_semantic_context(plan, portable, snake, semantic_body);
@@ -527,7 +527,7 @@ fn emit_uart_ops(
                 param_bindings,
                 return_adaptation,
             } => {
-                let func = find_function_by_role(&portable.behavior, role);
+                let func = find_function_by_role(&plan.behavior, role);
                 if let Some(func) = func {
                     let semantic_body = &func.body;
                     let ctx = make_semantic_context(plan, portable, snake, semantic_body);

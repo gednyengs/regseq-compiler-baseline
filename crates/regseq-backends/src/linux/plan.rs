@@ -8,7 +8,7 @@
 //! No portable lowering types are redefined here; they are consumed
 //! from the `lowering::plan` module.
 
-use regseq_model::compat::FunctionRole;
+use regseq_model::compat::{FunctionRole, SemanticModel};
 
 // ---------------------------------------------------------------------------
 // Top-level Linux plan
@@ -29,20 +29,25 @@ pub struct LinuxBackendPlan {
     pub probe: LinuxProbeOrchestration,
     /// Remove function orchestration.
     pub remove: LinuxRemoveOrchestration,
-    /// Linux-specific resource acquisition sequencing.
-    pub resource_acquisition: LinuxResourceSequencing,
     /// Emitted-file layout decisions.
     pub artifact_layout: LinuxArtifactLayout,
     /// Register layout for register-helper emission.
     pub register_layout: LinuxRegisterLayout,
     /// Per-property realization details for emission.
     pub property_realization: Vec<LinuxPropertyRealization>,
-    /// Deployment metadata for optional resource families.
-    pub deployment_metadata: LinuxDeploymentMetadata,
     /// Mapping from portable function behaviors to Linux callbacks.
     pub behavior_mapping: LinuxBehaviorMapping,
     /// uart_ops realization entries for each Linux callback.
     pub uart_ops_realization: Vec<LinuxUartOpsEntry>,
+    /// Transitional semantic-model handle.
+    ///
+    /// Carries the projected [`SemanticModel`] that the Linux emitter
+    /// still string-formats from. After `regseq-lowering-10` trimmed
+    /// the `behavior` field off [`crate::lowering::plan::DriverLoweringPlan`],
+    /// the Linux plan temporarily owns this behavioral IR until
+    /// `regseq-linux-backend-03` (task 8) replaces it with a
+    /// `FunctionBodyIndex`.
+    pub behavior: SemanticModel,
 }
 
 // ---------------------------------------------------------------------------
@@ -197,43 +202,6 @@ pub enum LinuxRemoveStep {
 }
 
 // ---------------------------------------------------------------------------
-// Resource acquisition sequencing
-// ---------------------------------------------------------------------------
-
-/// Linux-specific resource acquisition sequencing.
-#[derive(Debug, Clone)]
-pub struct LinuxResourceSequencing {
-    /// Ordered acquisition entries.
-    pub acquisition_order: Vec<LinuxAcquisitionEntry>,
-    /// Ordered release entries (reverse of acquisition).
-    pub release_order: Vec<LinuxReleaseEntry>,
-}
-
-/// A single Linux resource acquisition entry.
-#[derive(Debug, Clone)]
-pub struct LinuxAcquisitionEntry {
-    /// Position in the sequence.
-    pub order: usize,
-    /// Linux API family (e.g. "devm_ioremap", "devm_clk_get").
-    pub api_family: String,
-    /// Resource identifier.
-    pub resource_id: String,
-    /// Whether failure is fatal.
-    pub required: bool,
-}
-
-/// A single Linux resource release entry.
-#[derive(Debug, Clone)]
-pub struct LinuxReleaseEntry {
-    /// Position in the sequence.
-    pub order: usize,
-    /// Linux API family for release (e.g. "clk_disable_unprepare").
-    pub api_family: String,
-    /// Resource identifier.
-    pub resource_id: String,
-}
-
-// ---------------------------------------------------------------------------
 // Artifact layout
 // ---------------------------------------------------------------------------
 
@@ -364,59 +332,6 @@ pub struct LinuxPropertyRealization {
     pub default_literal: Option<String>,
     /// Linux API for reading this property (e.g. "device_property_read_u32").
     pub linux_read_api: String,
-}
-
-// ---------------------------------------------------------------------------
-// Deployment metadata
-// ---------------------------------------------------------------------------
-
-/// Deployment metadata for optional resource families.
-///
-/// Carries clock, reset, and pinctrl facts from the joined/binding
-/// layer so that emission does not need to re-read raw frontend models.
-#[derive(Debug, Clone)]
-pub struct LinuxDeploymentMetadata {
-    /// Clock deployment entries.
-    pub clocks: Vec<LinuxClockEntry>,
-    /// Reset deployment entries.
-    pub resets: Vec<LinuxResetEntry>,
-    /// Pin controller deployment entries.
-    pub pinctrl: Vec<LinuxPinCtrlEntry>,
-}
-
-/// Clock deployment metadata for Linux emission.
-#[derive(Debug, Clone)]
-pub struct LinuxClockEntry {
-    /// Clock identifier.
-    pub clock_id: String,
-    /// Whether the clock is required.
-    pub required: bool,
-    /// Default frequency in Hz from the deployment binding, if supplied.
-    pub default_frequency_hz: Option<i64>,
-}
-
-/// Reset deployment metadata for Linux emission.
-#[derive(Debug, Clone)]
-pub struct LinuxResetEntry {
-    /// Field name on the driver struct.
-    pub field_name: String,
-    /// Whether the reset is required.
-    pub required: bool,
-    /// Reset line identifier from the deployment binding.
-    pub reset_line_id: Option<String>,
-    /// Whether the reset line is shared.
-    pub shared: Option<bool>,
-}
-
-/// Pin controller deployment metadata for Linux emission.
-#[derive(Debug, Clone)]
-pub struct LinuxPinCtrlEntry {
-    /// Field name on the driver struct.
-    pub field_name: String,
-    /// Whether the pinctrl is required.
-    pub required: bool,
-    /// Available pin states from the deployment binding.
-    pub states: Option<Vec<String>>,
 }
 
 // ---------------------------------------------------------------------------

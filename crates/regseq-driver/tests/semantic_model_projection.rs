@@ -843,7 +843,7 @@ fn canonical_builder_populates_real_semantic_model() {
     let hierarchy = build_pl011_hierarchy();
     let (populated, lowered_ids) = lower_and_populate_hierarchy(&hierarchy, &input).unwrap();
 
-    let plan = build_driver_lowering_plan_from_hierarchy(
+    let output = build_driver_lowering_plan_from_hierarchy(
         &input,
         &populated,
         &lowered_ids,
@@ -851,22 +851,22 @@ fn canonical_builder_populates_real_semantic_model() {
     )
     .expect("canonical builder should succeed");
 
-    // behavior (SemanticModel) must be populated.
+    // semantic_model (SemanticModel) must be populated.
     assert!(
-        !plan.behavior.functions.is_empty(),
+        !output.semantic_model.functions.is_empty(),
         "canonical builder must produce non-empty SemanticModel.functions"
     );
-    assert_eq!(plan.behavior.functions.len(), lowered_ids.len());
+    assert_eq!(output.semantic_model.functions.len(), lowered_ids.len());
 
     // Interrupt classes must be present.
     assert_eq!(
-        plan.behavior.interrupt_classes.len(),
+        output.semantic_model.interrupt_classes.len(),
         populated.interrupt_classes.len()
     );
 
     // legacy_behavior must also be populated for transitional Linux support.
     assert!(
-        !plan.legacy_behavior.functions.is_empty(),
+        !output.legacy_behavior.functions.is_empty(),
         "legacy_behavior must be populated for transitional compatibility"
     );
 }
