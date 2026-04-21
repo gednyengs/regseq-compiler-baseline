@@ -7,6 +7,7 @@
 //! The `lowering` module provides the portable `DriverLoweringPlan` and
 //! planner entry point that all OS-specific backends consume.
 
+pub mod c;
 pub mod linux;
 pub mod lowering;
 pub mod zephyr;

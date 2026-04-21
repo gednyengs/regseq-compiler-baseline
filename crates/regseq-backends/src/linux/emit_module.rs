@@ -20,7 +20,8 @@ use regseq_model::semantic::stmt::Stmt;
 
 use crate::lowering::plan::DriverLoweringPlan;
 
-use super::c_ast::{generated_file_banner, CTopLevelItem, CTranslationUnit};
+use super::c_ast::{CTopLevelItem, CTranslationUnit};
+use super::conventions::generated_file_banner;
 use super::emit_semantic::{
     emit_body_stmts, interrupt_class_define, register_offset_define, semantic_type_to_c,
     ReturnMode, SemanticEmitContext,

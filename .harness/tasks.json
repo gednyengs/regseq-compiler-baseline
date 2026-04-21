@@ -1378,7 +1378,7 @@
           "id": "regseq-backends-03",
           "name": "C-AST move to backends::c + Phase-7C subset expansion",
           "spec": ".harness/tasks/regseq-backends/03-c-ast-move-and-expand.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-60"
           ],

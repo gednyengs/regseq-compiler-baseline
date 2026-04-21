@@ -9,9 +9,8 @@ use std::path::{Path, PathBuf};
 
 use crate::lowering::plan::DriverLoweringPlan;
 
-use super::c_ast::{
-    generated_file_banner, include_guard_name, CStructField, CTopLevelItem, CTranslationUnit,
-};
+use super::c_ast::{include_guard_name, CStructField, CTopLevelItem, CTranslationUnit};
+use super::conventions::generated_file_banner;
 use super::emit_module;
 use super::emit_regs;
 use super::plan::{LinuxBackendPlan, LinuxFileRole};

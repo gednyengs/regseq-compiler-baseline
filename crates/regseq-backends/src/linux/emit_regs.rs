@@ -6,7 +6,8 @@
 
 use crate::lowering::plan::DriverLoweringPlan;
 
-use super::c_ast::{generated_file_banner, include_guard_name, CTopLevelItem, CTranslationUnit};
+use super::c_ast::{include_guard_name, CTopLevelItem, CTranslationUnit};
+use super::conventions::generated_file_banner;
 use super::emit_semantic::{
     bitfield_mask_define, named_value_define, normalize_desc_prefix, register_offset_define,
 };
