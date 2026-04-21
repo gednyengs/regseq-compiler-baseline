@@ -175,6 +175,52 @@ After this task:
 - Does not cut over `emit_driver` (task 12).
 - **`crates/regseq-driver/src/construction*`** strict non-goal.
 
+### Device-generality constraints (amendment)
+
+Per the post-Phase-7B audit captured in
+`.harness/spec-batches/device-generality-cleanup.md`, the CFG
+rewrite of `emit_module.rs` must **not** re-introduce the
+PL011-shape assumptions flagged as Findings 2, 3, 4, 5, 6, 7,
+8, and 13. Specifically:
+
+- **Findings 2, 3 (MMIO)**: register-accessor helpers
+  (`{snake}_reg_read/write/modify`) must render
+  `d->{owning_mmio_field}` from
+  `LinuxRegisterBlock.owning_mmio_field` (added by task 06),
+  not a hardcoded `d->regs`. The `MapMmio` probe step consumes
+  the per-step `field_name` and `index` the plan carries.
+- **Findings 4, 5 (clock, IRQ)**: `GetClock` and `RequestIrq`
+  probe emission render the authored `field_name` from each
+  `LinuxProbeStep` variant (added by task 06). No hardcoded
+  `d->clock` or `d->irq` literals.
+- **Finding 6 (per-clock optionality)**: the probe's uartclk
+  initializer iterates `plan.probe.steps` and emits one
+  ternary per optional clock; there is no plan-wide
+  `has_optional_clock` bool (deleted by task 06).
+- **Finding 7 (`uart_driver.nr`)**: the current `.nr = 1`
+  literal in `emit_uart_driver_def` becomes a plan-driven
+  value. This task adds `LinuxSerialCoreRealization.port_count:
+  u32` (default 1 for single-port drivers; PL011 preserves byte
+  parity).
+- **Finding 8 (register prefix)**: the current
+  `plan.register_layout.blocks.first().map(...)` idiom at
+  `emit_module.rs:295-300` and `emit_regs.rs:51-57` becomes
+  per-descriptor resolution -- each emitted bitfield-mask
+  define uses the prefix of the block that declares its
+  parent register, not the first block.
+- **Finding 13 (property realization)**: `ReadProperty` probe
+  emission consumes `LinuxPropertyRealization.field_name` and
+  `scalar.read_api()` / `scalar.call_shape()` (added by task
+  07). If task 07 has already landed when this task runs, the
+  emitter uses the typed-enum shape and makes no further
+  changes to `ReadProperty`; if this task lands first in some
+  alternative landing order, the same code must be authored
+  here and task 07 picks it up unchanged.
+
+PL011 byte parity stays mandatory. The brief's guarantee is
+that PL011's single-MMIO single-IRQ single-clock shape resolves
+to the same emitted strings through the new plan-driven paths.
+
 ## Non-Goals
 
 - No Phase-8 dominator-cleanup work.

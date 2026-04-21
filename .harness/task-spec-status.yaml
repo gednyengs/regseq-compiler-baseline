@@ -404,6 +404,44 @@ items:
       - regseq-lowering-11
       - regseq-model-63
 
+  # ---- Post-Phase-7 residual: device-class generality cleanup ----
+
+  - id: device-generality-cleanup
+    phase: "post-7"
+    title: Device-class generality cleanup (post-phase-7 residual)
+    status: tasked
+    depends_on:
+      - regseqmodel-phase-7
+    target_harness_groups:
+      - regseq-linux-backend
+      - regseq-lowering
+      - track-a-validation
+    source_refs:
+      - .harness/spec-batches/device-generality-cleanup.md
+    brief: .harness/spec-batches/device-generality-cleanup.md
+    summary: >
+      PL011-shape leakage discovered post regseq-linux-backend-03: per-resource
+      probe schema (multi-MMIO/IRQ/clock with authored field names), property
+      realization consumption + linux_read_api honoring (latent bool/u64
+      correctness bug), AMBA mask binding override, and a multi-resource
+      fixture gate. Amendments land on regseq-linux-backend-04/05 so the
+      CFG emitter rewrite does not re-introduce the shape assumptions.
+    spec_authoring_notes:
+      - All four tasks run against surfaces already established by
+        regseq-linux-backend-03 + regseq-lowering-10 + regseq-model-60.
+      - Tasks 06 and 07 add depends_on edges to regseq-linux-backend-05.
+      - Task 14 depends on regseq-lowering-11 because its ripgrep gate
+        asserts the post-deletion state of the legacy lowering fallback
+        paths.
+      - PL011 byte parity is a mandatory invariant in tasks 06, 07, 12;
+        regressions are caught via the capture/compare smoke test landed
+        by task 03.
+    generated_task_ids:
+      - regseq-linux-backend-06
+      - regseq-linux-backend-07
+      - regseq-lowering-12
+      - track-a-validation-14
+
   # ---- Phase 8: Backend C emission ----
 
   - id: regseqmodel-phase-8

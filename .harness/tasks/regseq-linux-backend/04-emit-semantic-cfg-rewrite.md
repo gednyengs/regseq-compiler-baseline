@@ -195,6 +195,26 @@ test matches the corresponding contract rule + exemplar. This is
 the second adversarial-review checkpoint for the contract (first
 was in task 1).
 
+### Device-generality constraints (amendment)
+
+Per the post-Phase-7B audit captured in
+`.harness/spec-batches/device-generality-cleanup.md` Finding 9,
+the current `emit_semantic.rs::is_option_pointer_context` at
+lines 499-506 decides pointer vs integer Option-sentinel
+semantics by string-matching the driver-field name against
+`"clock" || "reset" || "pinctrl" || "regs"`. This assumes the
+author spelled resource fields with PL011-style names; any
+driver using `bus_clk`, `memory_region`, etc. silently emits
+integer-zero sentinel where NULL is needed.
+
+The new CFG emitter **must not** carry this string-match
+forward. Determine pointer-ness from the resource-handle type
+recorded in `RegseqModel`'s type system (resource handles are
+pointer-typed in the IR), not from the field-name string. No
+emitted C should change for PL011 drivers that follow the
+conventional naming; drivers with custom resource-field names
+must now produce correct NULL-sentinel code.
+
 ## Non-Goals
 
 - No `emit_module.rs` rewrite (task 10).

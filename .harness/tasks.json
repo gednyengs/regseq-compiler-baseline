@@ -1783,6 +1783,18 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-lowering-12",
+          "name": "AMBA mask binding + planner override",
+          "spec": ".harness/tasks/regseq-lowering/12-amba-mask-binding-override.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-lowering-10",
+            "regseq-model-60"
+          ],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1846,7 +1858,32 @@
           "depends_on": [
             "regseq-backends-02",
             "regseq-linux-backend-03",
-            "regseq-linux-backend-04"
+            "regseq-linux-backend-04",
+            "regseq-linux-backend-06",
+            "regseq-linux-backend-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-06",
+          "name": "Per-resource Linux probe/emission schema",
+          "spec": ".harness/tasks/regseq-linux-backend/06-per-resource-probe-schema.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-linux-backend-03",
+            "regseq-lowering-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-07",
+          "name": "Property realization consumption + linux_read_api honoring",
+          "spec": ".harness/tasks/regseq-linux-backend/07-property-realization-honoring.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-linux-backend-03"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -2116,6 +2153,20 @@
           "status": "pending",
           "depends_on": [
             "regseq-driver-35"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "track-a-validation-14",
+          "name": "Multi-resource fixture gate",
+          "spec": ".harness/tasks/track-a-validation/14-multi-resource-fixture-gate.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-linux-backend-06",
+            "regseq-linux-backend-07",
+            "regseq-lowering-12",
+            "regseq-lowering-11"
           ],
           "artifacts": [],
           "fail_reason": null
