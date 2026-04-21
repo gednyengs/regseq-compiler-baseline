@@ -310,6 +310,7 @@ fn pl011_binding() -> BindingModel {
             bus_type: ModelBusType::Amba,
             amba_id: Some(0x00041011),
             revision: Some(3),
+            amba_mask: None,
             provenance: BindingProvenance::new("bus"),
         }),
     }

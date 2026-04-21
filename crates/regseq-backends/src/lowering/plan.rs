@@ -236,6 +236,10 @@ pub struct BusIdentity {
     pub amba_id: Option<u32>,
     /// AMBA revision, if this is an AMBA bus device.
     pub amba_revision: Option<u32>,
+    /// Mask value for the AMBA peripheral-ID match-table entry.
+    /// `None` when the binding did not supply one; the Linux planner
+    /// then applies the PrimeCell default (`0x000f_ffff`).
+    pub amba_mask: Option<u32>,
 }
 
 /// Inferred bus type for the device.

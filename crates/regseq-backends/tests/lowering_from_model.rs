@@ -453,3 +453,98 @@ fn pl011_from_model_matches_legacy_entry_on_shared_fields() {
         legacy_plan.register_obligations.blocks.len()
     );
 }
+
+// ---------------------------------------------------------------------------
+// regseq-lowering-12: amba_mask binding override (model-era path)
+// ---------------------------------------------------------------------------
+
+fn pl011_model_with_amba_mask(mask: Option<i64>) -> RegseqModel {
+    use regseq_model::platform::PlatformValue;
+
+    let mut model = load_pl011_model();
+    // Walk submodules to find the driver struct and edit its
+    // platform_metadata.bus.values map.
+    fn edit_driver(module: &mut regseq_model::model::module::Module, mask: Option<i64>) -> bool {
+        if module.kind == regseq_model::model::module::ModuleKind::Driver {
+            if let Some(driver) = module.driver.as_mut() {
+                if let Some(meta) = driver.platform_metadata.as_mut() {
+                    if let Some(bus) = meta.bus.as_mut() {
+                        match mask {
+                            Some(v) => {
+                                bus.values
+                                    .insert("amba_mask".into(), PlatformValue::Integer(v));
+                            }
+                            None => {
+                                bus.values.remove("amba_mask");
+                            }
+                        }
+                        return true;
+                    }
+                }
+            }
+        }
+        for sub in &mut module.submodules {
+            if edit_driver(sub, mask) {
+                return true;
+            }
+        }
+        false
+    }
+    assert!(
+        edit_driver(&mut model.root_module, mask),
+        "driver not found"
+    );
+    model
+}
+
+#[test]
+fn from_model_threads_amba_mask_override_into_bus_identity() {
+    let model = pl011_model_with_amba_mask(Some(0x00ff_ffff));
+    let plan =
+        build_driver_lowering_plan_from_model(&model, &LoweringConfig::default()).expect("plan");
+    assert_eq!(plan.resources.bus_identity.amba_mask, Some(0x00ff_ffff_u32));
+    assert!(!plan.diagnostics.amba_mask_default_applied);
+}
+
+#[test]
+fn from_model_leaves_amba_mask_none_when_absent() {
+    // PL011 fixture has no amba_mask key; amba_id is present.
+    let model = pl011_model_with_amba_mask(None);
+    let plan =
+        build_driver_lowering_plan_from_model(&model, &LoweringConfig::default()).expect("plan");
+    assert_eq!(plan.resources.bus_identity.amba_mask, None);
+    assert!(plan.resources.bus_identity.amba_id.is_some());
+    assert!(plan.diagnostics.amba_mask_default_applied);
+}
+
+#[test]
+fn from_model_amba_mask_non_integer_value_falls_back_to_none() {
+    use regseq_model::platform::PlatformValue;
+
+    let mut model = load_pl011_model();
+    fn edit_driver(module: &mut regseq_model::model::module::Module) -> bool {
+        if module.kind == regseq_model::model::module::ModuleKind::Driver {
+            if let Some(driver) = module.driver.as_mut() {
+                if let Some(meta) = driver.platform_metadata.as_mut() {
+                    if let Some(bus) = meta.bus.as_mut() {
+                        bus.values
+                            .insert("amba_mask".into(), PlatformValue::String("oops".into()));
+                        return true;
+                    }
+                }
+            }
+        }
+        for sub in &mut module.submodules {
+            if edit_driver(sub) {
+                return true;
+            }
+        }
+        false
+    }
+    assert!(edit_driver(&mut model.root_module));
+
+    let plan =
+        build_driver_lowering_plan_from_model(&model, &LoweringConfig::default()).expect("plan");
+    assert_eq!(plan.resources.bus_identity.amba_mask, None);
+    assert!(plan.diagnostics.amba_mask_default_applied);
+}

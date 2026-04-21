@@ -23,6 +23,11 @@ pub struct BusBinding {
     pub amba_id: Option<i64>,
     /// AMBA peripheral revision (only valid for AMBA bus family).
     pub revision: Option<i64>,
+    /// AMBA peripheral-ID match-table mask (only valid for AMBA bus
+    /// family). When `None`, the Linux planner applies the PrimeCell
+    /// default (`0x000f_ffff`) and the portable plan records an
+    /// `amba_mask_default_applied` diagnostic.
+    pub amba_mask: Option<i64>,
     /// Provenance tracing back to the Layer 2 source.
     pub provenance: BindingProvenance,
 }

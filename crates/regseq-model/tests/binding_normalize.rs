@@ -722,6 +722,86 @@ fn absent_bus_section_normalizes_to_none() {
     assert!(model.bus.is_none());
 }
 
+// ---- amba_mask binding override (regseq-lowering-12) ----
+
+#[test]
+fn amba_mask_key_parses_as_u32_value() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+amba_mask = 0x00ff_ffff
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let model = normalize(&pf, None, None).expect("normalization should succeed");
+
+    let bus = model.bus.expect("bus binding should be present");
+    assert_eq!(bus.amba_id, Some(0x00041011));
+    assert_eq!(bus.amba_mask, Some(0x00ff_ffff));
+}
+
+#[test]
+fn amba_bus_without_mask_key_produces_none() {
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+revision = 3
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let model = normalize(&pf, None, None).expect("normalization should succeed");
+
+    let bus = model.bus.expect("bus binding should be present");
+    assert_eq!(bus.amba_mask, None);
+}
+
+#[test]
+fn amba_mask_with_non_integer_value_silently_falls_through_to_none() {
+    // Matches the existing treatment of `amba_id` / `revision`: a
+    // malformed value on an Amba key degrades to `None` at the binding
+    // layer, not a `BindingNormalizeError`. Downstream, the Linux
+    // planner applies the PrimeCell default and the portable plan
+    // reports `amba_mask_default_applied`.
+    let toml_input = r#"
+version = "1"
+
+[platform]
+os = "linux"
+board = "raspberry-pi-4"
+arch = "aarch64"
+
+[bus]
+type = "amba"
+amba_id = 0x00041011
+amba_mask = "not-an-integer"
+"#;
+
+    let pf = regseq_model::platform_parser::parse_platform_file_str(toml_input)
+        .expect("parse should succeed");
+    let model = normalize(&pf, None, None).expect("normalization should succeed");
+
+    let bus = model.bus.expect("bus binding should be present");
+    assert_eq!(bus.amba_mask, None);
+}
+
 #[test]
 #[ignore = "Phase 9 cleanup: validates legacy pre-RegseqModel schema"]
 fn bus_normalization_without_declaration_skips_consistency_check() {

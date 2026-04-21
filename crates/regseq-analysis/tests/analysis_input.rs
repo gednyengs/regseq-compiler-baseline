@@ -688,6 +688,7 @@ fn bus_binding_exposed_when_provided() {
         bus_type: BusType::Amba,
         amba_id: Some(0x00041011),
         revision: Some(3),
+        amba_mask: None,
         provenance: BindingProvenance::new("bus"),
     };
     let joined = perform_join(&decl, &binding).unwrap();

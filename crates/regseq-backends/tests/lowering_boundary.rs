@@ -689,3 +689,97 @@ fn portable_diagnostics_report_linux_resource_sequencing() {
     assert!(apis.contains(&"devm_ioremap_resource"));
     assert!(apis.contains(&"devm_request_irq"));
 }
+
+// ---- regseq-lowering-12: amba_mask binding override (legacy path) ----
+
+fn pl011_binding_with_amba(bus: BusBindingForPl011) -> BindingModel {
+    let mut binding = pl011_binding();
+    binding.bus = Some(regseq_model::binding::BusBinding {
+        bus_type: ModelBusType::Amba,
+        amba_id: Some(0x00041011),
+        revision: Some(3),
+        amba_mask: bus.amba_mask,
+        provenance: BindingProvenance::new("bus"),
+    });
+    binding
+}
+
+struct BusBindingForPl011 {
+    amba_mask: Option<i64>,
+}
+
+fn analysis_input_with_amba(mask: Option<i64>) -> AnalysisInput {
+    let decl = pl011_decl();
+    let binding = pl011_binding_with_amba(BusBindingForPl011 { amba_mask: mask });
+    let bus_binding = binding.bus.clone();
+    let joined = perform_join(&decl, &binding).expect("join should succeed");
+    AnalysisInput::new(decl, joined, bus_binding)
+}
+
+#[test]
+fn legacy_planner_threads_amba_mask_override_into_bus_identity() {
+    let input = analysis_input_with_amba(Some(0x00ff_ffff));
+    let plan = build_driver_lowering_plan(&input).expect("plan");
+    assert_eq!(plan.resources.bus_identity.amba_mask, Some(0x00ff_ffff_u32));
+    assert!(!plan.diagnostics.amba_mask_default_applied);
+}
+
+#[test]
+fn legacy_planner_reports_default_applied_when_amba_mask_absent() {
+    let input = analysis_input_with_amba(None);
+    let plan = build_driver_lowering_plan(&input).expect("plan");
+    assert_eq!(plan.resources.bus_identity.amba_mask, None);
+    assert_eq!(plan.resources.bus_identity.amba_id, Some(0x00041011));
+    assert!(plan.diagnostics.amba_mask_default_applied);
+}
+
+#[test]
+fn linux_registration_uses_binding_amba_mask_override() {
+    let input = analysis_input_with_amba(Some(0x00ff_ffff));
+    let plan = build_driver_lowering_plan(&input).expect("plan");
+    let (behavior, _legacy) =
+        regseq_backends::lowering::planner::build_legacy_behavior_for(&input, &[]);
+    let linux = build_linux_backend_plan(&plan, behavior).expect("linux plan");
+
+    assert!(linux.registration.is_amba);
+    assert_eq!(linux.registration.amba_id, Some(0x00041011));
+    assert_eq!(linux.registration.amba_mask, Some(0x00ff_ffff_u32));
+}
+
+#[test]
+fn linux_registration_applies_primecell_default_mask_when_binding_absent() {
+    let input = analysis_input_with_amba(None);
+    let plan = build_driver_lowering_plan(&input).expect("plan");
+    assert!(plan.diagnostics.amba_mask_default_applied);
+
+    let (behavior, _legacy) =
+        regseq_backends::lowering::planner::build_legacy_behavior_for(&input, &[]);
+    let linux = build_linux_backend_plan(&plan, behavior).expect("linux plan");
+
+    assert!(linux.registration.is_amba);
+    assert_eq!(linux.registration.amba_id, Some(0x00041011));
+    assert_eq!(linux.registration.amba_mask, Some(0x000f_ffff_u32));
+}
+
+#[test]
+fn legacy_planner_diagnostic_is_false_when_amba_id_absent() {
+    // Sanity: if the binding provides no amba_id at all, no PrimeCell
+    // default is synthesized and the diagnostic stays false.
+    let decl = pl011_decl();
+    let mut binding = pl011_binding();
+    binding.bus = Some(regseq_model::binding::BusBinding {
+        bus_type: ModelBusType::Amba,
+        amba_id: None,
+        revision: None,
+        amba_mask: None,
+        provenance: BindingProvenance::new("bus"),
+    });
+    let bus_binding = binding.bus.clone();
+    let joined = perform_join(&decl, &binding).expect("join");
+    let input = AnalysisInput::new(decl, joined, bus_binding);
+
+    let plan = build_driver_lowering_plan(&input).expect("plan");
+    assert_eq!(plan.resources.bus_identity.amba_mask, None);
+    assert_eq!(plan.resources.bus_identity.amba_id, None);
+    assert!(!plan.diagnostics.amba_mask_default_applied);
+}

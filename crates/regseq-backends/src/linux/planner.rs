@@ -136,7 +136,14 @@ fn build_registration(plan: &DriverLoweringPlan) -> LinuxRegistrationShape {
     let is_amba = plan.resources.bus_identity.bus_type == BusType::Amba;
 
     let amba_id = plan.resources.bus_identity.amba_id;
-    let amba_mask = amba_id.map(|_| 0x000f_ffff_u32);
+    let amba_mask = if is_amba {
+        plan.resources
+            .bus_identity
+            .amba_mask
+            .or_else(|| amba_id.map(|_| 0x000f_ffff_u32))
+    } else {
+        None
+    };
 
     LinuxRegistrationShape {
         driver_struct_name: format!("{snake_name}_driver"),

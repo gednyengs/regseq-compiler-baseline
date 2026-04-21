@@ -363,21 +363,22 @@ fn build_bus_identity(
     };
 
     let platform_bus = query::bus_binding(model);
-    let (amba_id, amba_revision) = amba_values_from_platform_bus(platform_bus);
+    let (amba_id, amba_revision, amba_mask) = amba_values_from_platform_bus(platform_bus);
 
     Ok(BusIdentity {
         bus_type,
         compatible,
         amba_id,
         amba_revision,
+        amba_mask,
     })
 }
 
 fn amba_values_from_platform_bus(
     binding: Option<&PlatformBusBinding>,
-) -> (Option<u32>, Option<u32>) {
+) -> (Option<u32>, Option<u32>, Option<u32>) {
     let Some(binding) = binding else {
-        return (None, None);
+        return (None, None, None);
     };
     let amba_id = binding
         .values
@@ -387,7 +388,11 @@ fn amba_values_from_platform_bus(
         .values
         .get("revision")
         .and_then(platform_value_as_u32);
-    (amba_id, amba_revision)
+    let amba_mask = binding
+        .values
+        .get("amba_mask")
+        .and_then(platform_value_as_u32);
+    (amba_id, amba_revision, amba_mask)
 }
 
 fn platform_value_as_u32(value: &PlatformValue) -> Option<u32> {

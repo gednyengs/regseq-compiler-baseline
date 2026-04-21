@@ -634,6 +634,7 @@ fn pl011_binding() -> BindingModel {
             bus_type: regseq_model::declaration::driver::BusType::Amba,
             amba_id: None,
             revision: None,
+            amba_mask: None,
             provenance: BindingProvenance::new("test"),
         }),
     }

@@ -1791,7 +1791,7 @@
           "id": "regseq-lowering-12",
           "name": "AMBA mask binding + planner override",
           "spec": ".harness/tasks/regseq-lowering/12-amba-mask-binding-override.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-lowering-10",
             "regseq-model-60"

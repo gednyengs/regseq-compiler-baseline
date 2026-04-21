@@ -305,7 +305,7 @@ fn normalize_pinctrl(
 /// Return the set of accepted family-specific keys for a given bus type.
 fn accepted_bus_keys(bus_type: &BusType) -> &'static [&'static str] {
     match bus_type {
-        BusType::Amba => &["amba_id", "revision"],
+        BusType::Amba => &["amba_id", "revision", "amba_mask"],
         BusType::Pci => &["vendor_id", "device_id"],
         BusType::Integrated => &["firmware"],
     }
@@ -361,6 +361,7 @@ fn normalize_bus(
         bus_type,
         amba_id: extract_integer(&bus_section.values, "amba_id"),
         revision: extract_integer(&bus_section.values, "revision"),
+        amba_mask: extract_integer(&bus_section.values, "amba_mask"),
         provenance: prov,
     })
 }

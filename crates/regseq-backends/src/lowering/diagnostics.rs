@@ -34,6 +34,13 @@ pub struct DriverLoweringDiagnostics {
     /// Linux deployment metadata for optional resource families,
     /// reporting-only.
     pub linux_deployment_metadata: LinuxDeploymentMetadata,
+    /// True when
+    /// `DriverLoweringPlan.resources.bus_identity.bus_type` is
+    /// `BusType::Amba` and `amba_id.is_some()` but the binding did
+    /// not supply `amba_mask`. Signals that the Linux planner will
+    /// apply the PrimeCell default (`0x000f_ffff`) downstream.
+    /// Reporting-only; not consumed by any emitter.
+    pub amba_mask_default_applied: bool,
 }
 
 // ---------------------------------------------------------------------------

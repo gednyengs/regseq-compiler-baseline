@@ -501,11 +501,17 @@ fn build_bus_identity(input: &AnalysisInput) -> Result<BusIdentity, LoweringPlan
         .and_then(|b| b.revision)
         .map(|r| r as u32);
 
+    let amba_mask = input
+        .bus_binding()
+        .and_then(|b| b.amba_mask)
+        .map(|m| m as u32);
+
     Ok(BusIdentity {
         bus_type,
         compatible: compatible.to_vec(),
         amba_id,
         amba_revision,
+        amba_mask,
     })
 }
 
@@ -729,9 +735,15 @@ fn build_sync_obligations(input: &AnalysisInput) -> SynchronizationObligations {
 // ---------------------------------------------------------------------------
 
 pub(crate) fn build_diagnostics(base: &PlanBase) -> DriverLoweringDiagnostics {
+    let bus_identity = &base.resources.bus_identity;
+    let amba_mask_default_applied = bus_identity.bus_type == BusType::Amba
+        && bus_identity.amba_id.is_some()
+        && bus_identity.amba_mask.is_none();
+
     DriverLoweringDiagnostics {
         linux_resource_sequencing: build_linux_resource_sequencing(base),
         linux_deployment_metadata: build_linux_deployment_metadata(base),
+        amba_mask_default_applied,
     }
 }
 
