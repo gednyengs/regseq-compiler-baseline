@@ -192,21 +192,32 @@ fn build_resource_obligations(
     driver: &DriverStruct,
 ) -> Result<ResourceObligations, LoweringError> {
     let interner = &model.symbols;
+    let all_blocks = collect_register_blocks(&model.root_module);
 
     let mmio = driver
         .mmio
         .iter()
         .map(|m| {
             let field_name = sym_string(interner, m.field_name);
-            MmioObligation {
+            let block = all_blocks
+                .iter()
+                .find(|b| b.id == m.decl.register_block)
+                .ok_or_else(|| {
+                    LoweringError::InvariantViolated(format!(
+                        "mmio field '{field_name}' references undeclared register block id {:?}",
+                        m.decl.register_block
+                    ))
+                })?;
+            let register_block_type = Some(sym_string(interner, block.name));
+            Ok::<MmioObligation, LoweringError>(MmioObligation {
                 field_name: field_name.clone(),
                 mmio_id: sym_string(interner, m.decl.mmio_id),
-                register_block_type: None,
+                register_block_type,
                 policy: ResourcePolicy::Required,
                 provenance: provenance_for(&field_name, "mmio"),
-            }
+            })
         })
-        .collect();
+        .collect::<Result<Vec<_>, _>>()?;
 
     let interrupts = driver
         .interrupts

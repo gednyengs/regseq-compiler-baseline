@@ -53,7 +53,7 @@ pub(super) fn emit_module_integration(plan: &LinuxBackendPlan) -> String {
     emit_constants(&mut tu, plan, snake);
     tu.push(CTopLevelItem::BlankLine);
 
-    emit_register_accessors(&mut tu, snake);
+    emit_register_accessors(&mut tu, plan, snake);
     tu.push(CTopLevelItem::BlankLine);
 
     // Emit helper functions from behavior plan.
@@ -255,13 +255,24 @@ fn emit_constants(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &st
     }
 }
 
-fn emit_register_accessors(tu: &mut CTranslationUnit, snake: &str) {
+fn emit_register_accessors(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     tu.push(CTopLevelItem::LineComment("Register access helpers".into()));
+    // Single-block helper set. Multi-block drivers will get one set
+    // per block with `{snake}_{block_prefix}_reg_*` naming once
+    // `regseq-linux-backend-05` lands; that task owns the naming
+    // amendment. For now, we emit one set using the first block's
+    // owning MMIO field, which preserves single-block byte parity
+    // (PL011 resolves to `"regs"`) without generating duplicate helper
+    // definitions when multiple blocks are present.
+    let Some(block) = plan.register_layout.blocks.first() else {
+        return;
+    };
+    let mmio_field = &block.owning_mmio_field;
     tu.push(CTopLevelItem::FuncDef {
         signature: format!(
             "static inline u32 {snake}_reg_read(struct {snake}_data *d, unsigned int off)"
         ),
-        body: vec!["return readl(d->regs + off);".into()],
+        body: vec![format!("return readl(d->{mmio_field} + off);")],
         comment: None,
     });
     tu.push(CTopLevelItem::BlankLine);
@@ -269,7 +280,7 @@ fn emit_register_accessors(tu: &mut CTranslationUnit, snake: &str) {
         signature: format!(
             "static inline void {snake}_reg_write(struct {snake}_data *d, unsigned int off, u32 val)"
         ),
-        body: vec!["writel(val, d->regs + off);".into()],
+        body: vec![format!("writel(val, d->{mmio_field} + off);")],
         comment: None,
     });
     tu.push(CTopLevelItem::BlankLine);
@@ -628,6 +639,59 @@ fn emit_uart_driver_def(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snak
     });
 }
 
+/// Driver-struct field name for the first MMIO region in probe order.
+///
+/// Returned as an option so drivers with no MMIO (theoretical) do not
+/// emit a stray `port.membase = d->;` line.
+fn primary_mmio_field(plan: &LinuxBackendPlan) -> Option<&str> {
+    plan.probe.steps.iter().find_map(|step| match step {
+        LinuxProbeStep::MapMmio { field_name, .. } => Some(field_name.as_str()),
+        _ => None,
+    })
+}
+
+/// Driver-struct field name for the first IRQ in probe order.
+fn primary_irq_field(plan: &LinuxBackendPlan) -> Option<&str> {
+    plan.probe.steps.iter().find_map(|step| match step {
+        LinuxProbeStep::RequestIrq { field_name, .. } => Some(field_name.as_str()),
+        _ => None,
+    })
+}
+
+/// Emit one `port.uartclk = ...` initializer line per GetClock step.
+///
+/// Optional clocks emit a ternary fallback
+/// (`d->{field} ? clk_get_rate(d->{field}) : <default>`); required
+/// clocks call `clk_get_rate` unconditionally. Drivers with multiple
+/// clocks produce multiple initializer lines; the last one wins at
+/// runtime, but the planner carries distinct clock field names so the
+/// emitted C is well-formed.
+fn emit_uartclk_initializers(body: &mut Vec<String>, plan: &LinuxBackendPlan, upper: &str) {
+    for step in &plan.probe.steps {
+        if let LinuxProbeStep::GetClock {
+            field_name,
+            optional,
+            ..
+        } = step
+        {
+            if *optional {
+                let default_speed_define = plan
+                    .property_realization
+                    .iter()
+                    .find(|p| p.property_id == "current-speed")
+                    .and_then(|p| p.default_literal.as_ref())
+                    .map(|_| format!("{upper}_DEFAULT_CURRENT_SPEED"))
+                    .unwrap_or_else(|| "115200".into());
+                body.push(format!(
+                    "d->port.uartclk = d->{field_name} ? clk_get_rate(d->{field_name}) : {default_speed_define};"
+                ));
+            } else {
+                body.push(format!("d->port.uartclk = clk_get_rate(d->{field_name});"));
+            }
+        }
+    }
+}
+
 fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
     let upper = snake.to_uppercase();
     let mut body = Vec::new();
@@ -656,19 +720,22 @@ fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
         match step {
             LinuxProbeStep::GetClock {
                 clock_id: _,
+                field_name,
                 optional,
+                name_hint,
             } => {
-                if *optional {
-                    body.push(format!(
-                        "d->clock = devm_clk_get_optional({dev_expr}, NULL);"
-                    ));
-                    body.push("if (IS_ERR(d->clock))".into());
-                    body.push("\treturn PTR_ERR(d->clock);".into());
+                let hint_arg = match name_hint {
+                    Some(hint) => format!("\"{hint}\""),
+                    None => "NULL".into(),
+                };
+                let api = if *optional {
+                    "devm_clk_get_optional"
                 } else {
-                    body.push(format!("d->clock = devm_clk_get({dev_expr}, NULL);"));
-                    body.push("if (IS_ERR(d->clock))".into());
-                    body.push("\treturn PTR_ERR(d->clock);".into());
-                }
+                    "devm_clk_get"
+                };
+                body.push(format!("d->{field_name} = {api}({dev_expr}, {hint_arg});"));
+                body.push(format!("if (IS_ERR(d->{field_name}))"));
+                body.push(format!("\treturn PTR_ERR(d->{field_name});"));
                 body.push(String::new());
             }
             LinuxProbeStep::DeassertReset { optional, .. } => {
@@ -683,18 +750,22 @@ fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
                 body.push(format!("/* TODO: devm_pinctrl_get + select{opt} */"));
                 body.push(String::new());
             }
-            LinuxProbeStep::MapMmio { .. } => {
+            LinuxProbeStep::MapMmio {
+                mmio_id: _,
+                field_name,
+                index,
+            } => {
                 if plan.registration.is_amba {
                     body.push(format!(
-                        "d->regs = devm_ioremap_resource({dev_expr}, &adev->res);"
+                        "d->{field_name} = devm_ioremap_resource({dev_expr}, &adev->res);"
                     ));
                 } else {
                     body.push(format!(
-                        "d->regs = devm_ioremap_resource({dev_expr}, platform_get_resource(pdev, IORESOURCE_MEM, 0));"
+                        "d->{field_name} = devm_ioremap_resource({dev_expr}, platform_get_resource(pdev, IORESOURCE_MEM, {index}));"
                     ));
                 }
-                body.push("if (IS_ERR(d->regs))".into());
-                body.push("\treturn PTR_ERR(d->regs);".into());
+                body.push(format!("if (IS_ERR(d->{field_name}))"));
+                body.push(format!("\treturn PTR_ERR(d->{field_name});"));
                 body.push(String::new());
             }
             LinuxProbeStep::ReadProperty {
@@ -716,16 +787,22 @@ fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
                 }
                 body.push(String::new());
             }
-            LinuxProbeStep::RequestIrq { .. } => {
+            LinuxProbeStep::RequestIrq {
+                interrupt_id: _,
+                field_name,
+                index,
+            } => {
                 if plan.registration.is_amba {
-                    body.push("d->irq = adev->irq[0];".into());
+                    body.push(format!("d->{field_name} = adev->irq[{index}];"));
                 } else {
-                    body.push("d->irq = platform_get_irq(pdev, 0);".into());
-                    body.push("if (d->irq < 0)".into());
-                    body.push("\treturn d->irq;".into());
+                    body.push(format!(
+                        "d->{field_name} = platform_get_irq(pdev, {index});"
+                    ));
+                    body.push(format!("if (d->{field_name} < 0)"));
+                    body.push(format!("\treturn d->{field_name};"));
                 }
                 body.push(format!(
-                    "ret = devm_request_irq({dev_expr}, d->irq, {snake}_irq_handler, IRQF_SHARED, dev_name({dev_expr}), d);"
+                    "ret = devm_request_irq({dev_expr}, d->{field_name}, {snake}_irq_handler, IRQF_SHARED, dev_name({dev_expr}), d);"
                 ));
                 body.push("if (ret)".into());
                 body.push("\treturn ret;".into());
@@ -738,25 +815,17 @@ fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
                 if plan.registration.is_amba {
                     body.push("d->port.mapbase = adev->res.start;".into());
                 }
-                body.push("d->port.membase = d->regs;".into());
-                body.push("d->port.irq = d->irq;".into());
-
-                // Clock rate: use plan deployment metadata.
-                if plan.has_optional_clock {
-                    // Find the property default for current-speed.
-                    let default_speed_define = plan
-                        .property_realization
-                        .iter()
-                        .find(|p| p.property_id == "current-speed")
-                        .and_then(|p| p.default_literal.as_ref())
-                        .map(|_| format!("{upper}_DEFAULT_CURRENT_SPEED"))
-                        .unwrap_or_else(|| "115200".into());
-                    body.push(format!(
-                        "d->port.uartclk = d->clock ? clk_get_rate(d->clock) : {default_speed_define};"
-                    ));
-                } else {
-                    body.push("d->port.uartclk = clk_get_rate(d->clock);".into());
+                if let Some(mmio_field) = primary_mmio_field(plan) {
+                    body.push(format!("d->port.membase = d->{mmio_field};"));
                 }
+                if let Some(irq_field) = primary_irq_field(plan) {
+                    body.push(format!("d->port.irq = d->{irq_field};"));
+                }
+
+                // Clock rate: emit one initializer line per GetClock step.
+                // Optional clocks get a ternary fallback; required clocks
+                // call clk_get_rate unconditionally.
+                emit_uartclk_initializers(&mut body, plan, &upper);
 
                 // FIFO size from property field if available.
                 if plan

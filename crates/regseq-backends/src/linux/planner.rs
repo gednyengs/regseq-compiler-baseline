@@ -28,6 +28,20 @@ pub enum LinuxPlanError {
         /// Description of the failure.
         reason: String,
     },
+    /// Zero or multiple MMIO obligations claim ownership of the same
+    /// register block, so the Linux planner cannot resolve which MMIO
+    /// pointer the register-accessor helpers should dereference.
+    #[error(
+        "ambiguous register-block ownership: block '{block_name}' matches MMIO fields {candidates:?}"
+    )]
+    AmbiguousRegisterBlockOwnership {
+        /// Authored register-block type name.
+        block_name: String,
+        /// Driver-struct MMIO field names whose
+        /// `register_block_type` matched the block (zero for no match,
+        /// two-or-more for conflict).
+        candidates: Vec<String>,
+    },
 }
 
 /// Build a `LinuxBackendPlan` from a portable `DriverLoweringPlan`.
@@ -49,12 +63,11 @@ pub fn build_linux_backend_plan(
     let probe = build_probe(plan);
     let remove = build_remove(plan);
     let artifact_layout = build_artifact_layout(plan);
-    let register_layout = build_register_layout(plan);
+    let register_layout = build_register_layout(plan)?;
     let property_realization = build_property_realization(plan);
     let behavior_mapping = build_behavior_mapping(plan, &behavior);
     let uart_ops_realization = build_uart_ops_realization(plan);
     let shared_struct_fields = build_shared_struct_fields(plan, serial_core.is_some());
-    let has_optional_clock = plan.resources.clocks.iter().any(|c| !c.required);
 
     Ok(LinuxBackendPlan {
         registration,
@@ -69,7 +82,6 @@ pub fn build_linux_backend_plan(
         behavior,
         driver_name: plan.identity.driver_name.clone(),
         shared_struct_fields,
-        has_optional_clock,
     })
 }
 
@@ -217,9 +229,26 @@ fn build_probe(plan: &DriverLoweringPlan) -> LinuxProbeOrchestration {
     for step in &plan.acquisition_order {
         match step.resource_kind {
             ResourceKind::Clock => {
+                // Today's portable plan does not yet carry an authored
+                // consumer-name separate from `clock_id`, so `name_hint`
+                // is always `None` on this path. The emitter then
+                // renders `NULL` as the devm_clk_get{,_optional}
+                // consumer-id argument, preserving PL011 byte parity.
+                // A follow-up authoring-surface task will introduce an
+                // explicit `consumer_name` field on the clock
+                // obligation for multi-clock drivers.
+                let field_name = plan
+                    .resources
+                    .clocks
+                    .iter()
+                    .find(|c| c.clock_id == step.resource_id)
+                    .map(|c| c.field_name.clone())
+                    .unwrap_or_else(|| step.resource_id.clone());
                 steps.push(LinuxProbeStep::GetClock {
                     clock_id: step.resource_id.clone(),
+                    field_name,
                     optional: step.policy != ResourcePolicy::Required,
+                    name_hint: None,
                 });
             }
             ResourceKind::Reset => {
@@ -235,8 +264,18 @@ fn build_probe(plan: &DriverLoweringPlan) -> LinuxProbeOrchestration {
                 });
             }
             ResourceKind::Mmio => {
+                let (field_name, index) = plan
+                    .resources
+                    .mmio
+                    .iter()
+                    .enumerate()
+                    .find(|(_, m)| m.mmio_id == step.resource_id)
+                    .map(|(i, m)| (m.field_name.clone(), i as u32))
+                    .unwrap_or_else(|| (step.resource_id.clone(), 0));
                 steps.push(LinuxProbeStep::MapMmio {
                     mmio_id: step.resource_id.clone(),
+                    field_name,
+                    index,
                 });
             }
             ResourceKind::Property => {
@@ -251,8 +290,18 @@ fn build_probe(plan: &DriverLoweringPlan) -> LinuxProbeOrchestration {
                 });
             }
             ResourceKind::Interrupt => {
+                let (field_name, index) = plan
+                    .resources
+                    .interrupts
+                    .iter()
+                    .enumerate()
+                    .find(|(_, i)| i.interrupt_id == step.resource_id)
+                    .map(|(i, irq)| (irq.field_name.clone(), i as u32))
+                    .unwrap_or_else(|| (step.resource_id.clone(), 0));
                 steps.push(LinuxProbeStep::RequestIrq {
                     interrupt_id: step.resource_id.clone(),
+                    field_name,
+                    index,
                 });
             }
         }
@@ -386,14 +435,14 @@ fn build_behavior_mapping(
     }
 }
 
-fn build_register_layout(plan: &DriverLoweringPlan) -> LinuxRegisterLayout {
-    let blocks = plan
-        .register_obligations
-        .blocks
-        .iter()
-        .map(|b| LinuxRegisterBlock {
+fn build_register_layout(plan: &DriverLoweringPlan) -> Result<LinuxRegisterLayout, LinuxPlanError> {
+    let mut blocks = Vec::with_capacity(plan.register_obligations.blocks.len());
+    for b in &plan.register_obligations.blocks {
+        let owning_mmio_field = resolve_owning_mmio_field(&plan.resources.mmio, &b.name)?;
+        blocks.push(LinuxRegisterBlock {
             block_name: b.name.clone(),
             reg_prefix: derive_reg_prefix(&b.name),
+            owning_mmio_field,
             fields: b
                 .register_fields
                 .iter()
@@ -403,8 +452,8 @@ fn build_register_layout(plan: &DriverLoweringPlan) -> LinuxRegisterLayout {
                     access_width_bytes: f.access_width.unwrap_or(32) / 8,
                 })
                 .collect(),
-        })
-        .collect();
+        });
+    }
 
     let descriptors = plan
         .register_obligations
@@ -432,9 +481,31 @@ fn build_register_layout(plan: &DriverLoweringPlan) -> LinuxRegisterLayout {
         })
         .collect();
 
-    LinuxRegisterLayout {
+    Ok(LinuxRegisterLayout {
         blocks,
         descriptors,
+    })
+}
+
+/// Resolve which MMIO obligation owns the given register block.
+///
+/// Matches `MmioObligation.register_block_type` against the block's
+/// authored type name. Returns `AmbiguousRegisterBlockOwnership` when
+/// zero or multiple MMIOs carry a matching `register_block_type`.
+fn resolve_owning_mmio_field(
+    mmios: &[crate::lowering::plan::MmioObligation],
+    block_name: &str,
+) -> Result<String, LinuxPlanError> {
+    let matches: Vec<&crate::lowering::plan::MmioObligation> = mmios
+        .iter()
+        .filter(|m| m.register_block_type.as_deref() == Some(block_name))
+        .collect();
+    match matches.as_slice() {
+        [single] => Ok(single.field_name.clone()),
+        _ => Err(LinuxPlanError::AmbiguousRegisterBlockOwnership {
+            block_name: block_name.to_string(),
+            candidates: matches.iter().map(|m| m.field_name.clone()).collect(),
+        }),
     }
 }
 

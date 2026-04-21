@@ -1837,6 +1837,77 @@ fn isr_uses_plan_derived_status_register() {
     );
 }
 
+// ---- regseq-linux-backend-06: per-resource schema smoke on PL011 ----
+
+/// PL011 probe renders the authored field names (`regs`, `irq`,
+/// `clock`) through the per-resource schema introduced by
+/// `regseq-linux-backend-06`. Together with the
+/// `emitted_content_is_deterministic` test above, this documents that
+/// the migration preserved PL011 byte parity.
+#[test]
+fn pl011_probe_renders_authored_field_names_through_schema() {
+    use regseq_backends::linux::plan::LinuxProbeStep;
+
+    let (_portable, linux) = make_plans();
+
+    let mut saw_mmio = false;
+    let mut saw_irq = false;
+    let mut saw_clock = false;
+    for step in &linux.probe.steps {
+        match step {
+            LinuxProbeStep::MapMmio {
+                field_name, index, ..
+            } => {
+                assert_eq!(field_name, "regs");
+                assert_eq!(*index, 0);
+                saw_mmio = true;
+            }
+            LinuxProbeStep::RequestIrq {
+                field_name, index, ..
+            } => {
+                assert_eq!(field_name, "irq");
+                assert_eq!(*index, 0);
+                saw_irq = true;
+            }
+            LinuxProbeStep::GetClock {
+                field_name,
+                optional,
+                name_hint,
+                ..
+            } => {
+                assert_eq!(field_name, "clock");
+                // PL011 declares the clock as optional and does not
+                // author a consumer-name, so the emitter must render
+                // NULL (name_hint stays None on this path).
+                assert!(*optional);
+                assert_eq!(name_hint.as_deref(), None);
+                saw_clock = true;
+            }
+            _ => {}
+        }
+    }
+    assert!(saw_mmio && saw_irq && saw_clock);
+
+    // Register-block ownership resolves to the authored MMIO field.
+    assert_eq!(linux.register_layout.blocks.len(), 1);
+    assert_eq!(linux.register_layout.blocks[0].owning_mmio_field, "regs");
+
+    // Emitted probe body still reads d->regs = devm_ioremap_resource(...)
+    // and d->clock = devm_clk_get_optional(..., NULL) -- confirming
+    // byte parity for the single-resource case.
+    let (_dir, set) = emit_to_tempdir();
+    let main = set
+        .artifacts
+        .iter()
+        .find(|a| a.role == LinuxFileRole::DriverMain)
+        .expect("driver main");
+    let content = std::fs::read_to_string(&main.path).expect("read");
+    assert!(content.contains("d->regs = devm_ioremap_resource"));
+    assert!(content.contains("d->clock = devm_clk_get_optional"));
+    assert!(content.contains("NULL"));
+    assert!(content.contains("d->irq = adev->irq[0];"));
+}
+
 #[test]
 fn helper_prototypes_match_definitions() {
     let content = read_emitted_module_c();

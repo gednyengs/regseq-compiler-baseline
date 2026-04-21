@@ -60,13 +60,6 @@ pub struct LinuxBackendPlan {
     /// Pre-computed by the Linux planner so the emitter does not
     /// re-derive Linux C types from portable resource obligations.
     pub shared_struct_fields: Vec<LinuxSharedStructField>,
-    /// Whether the driver declares at least one optional clock.
-    ///
-    /// Controls whether the probe's `uartclk` initializer emits a
-    /// ternary fallback (`d->clock ? clk_get_rate(...) : ...`) or
-    /// calls `clk_get_rate` unconditionally. Pre-computed by the
-    /// planner from the portable clock obligations.
-    pub has_optional_clock: bool,
 }
 
 /// A single field in the generated driver-state struct.
@@ -166,18 +159,33 @@ pub enum LinuxProbeStep {
     MapMmio {
         /// MMIO identifier.
         mmio_id: String,
+        /// Driver-struct field name for the MMIO pointer (e.g. "regs").
+        field_name: String,
+        /// Resource index passed to `platform_get_resource`. Always
+        /// `0` today; explicit on the plan for multi-MMIO drivers.
+        index: u32,
     },
     /// Request an IRQ via devm_request_irq.
     RequestIrq {
         /// Interrupt identifier.
         interrupt_id: String,
+        /// Driver-struct field name for the IRQ number.
+        field_name: String,
+        /// Resource index passed to `platform_get_irq`.
+        index: u32,
     },
     /// Get and enable a clock via devm_clk_get / clk_prepare_enable.
     GetClock {
         /// Clock identifier.
         clock_id: String,
+        /// Driver-struct field name for the `struct clk *`.
+        field_name: String,
         /// Whether this clock is optional.
         optional: bool,
+        /// Consumer-name hint for `devm_clk_get{,_optional}`. `None`
+        /// when the driver does not declare one; the emitter renders
+        /// `NULL` in that case.
+        name_hint: Option<String>,
     },
     /// Deassert a reset line via devm_reset_control_get / reset_control_deassert.
     DeassertReset {
@@ -301,6 +309,10 @@ pub struct LinuxRegisterBlock {
     /// semantic fact. Derived from the authored block name by the planner
     /// (e.g., `"FooRegisters"` → `"FOO"`).
     pub reg_prefix: String,
+    /// Driver-struct field name for the MMIO pointer that owns this
+    /// register block (e.g. "regs"). The emitter renders
+    /// `d->{owning_mmio_field}` in register-accessor helper bodies.
+    pub owning_mmio_field: String,
     /// Register fields with computed byte offsets.
     pub fields: Vec<LinuxRegisterFieldEntry>,
 }

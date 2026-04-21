@@ -28,6 +28,7 @@ use regseq_model::model::driver::{DeviceClass as ModelDeviceClass, DriverIdentit
 use regseq_model::model::function::Function;
 use regseq_model::model::impl_block::ImplBlock;
 use regseq_model::model::module::{Module, ModuleKind};
+use regseq_model::model::register::{RegisterBlock, RegisterBlockAttributes};
 use regseq_model::model::regseq_model::RegseqModel;
 use regseq_model::model::resources::{
     ClockDecl, ClockResource, MmioDecl, MmioResource, ResourceKind, Shape,
@@ -137,6 +138,18 @@ fn build_minimal_model() -> RegseqModel {
         associated_constants: Vec::new(),
     };
 
+    let block_name = symbols.intern("TestRegisters");
+    let endian = symbols.intern("little");
+    let register_block = RegisterBlock {
+        id: regseq_model::identity::RegisterBlockId::from(DeclId::new(200)),
+        name: block_name,
+        block_attributes: RegisterBlockAttributes {
+            endian,
+            access_width: 32,
+        },
+        fields: Vec::new(),
+    };
+
     let driver_mod = Module {
         id: ModuleId::from(DeclId::new(2)),
         name: symbols.intern("drv"),
@@ -146,7 +159,7 @@ fn build_minimal_model() -> RegseqModel {
         free_functions: Vec::new(),
         type_defs: Vec::new(),
         register_descriptors: Vec::new(),
-        register_blocks: Vec::new(),
+        register_blocks: vec![register_block],
         impl_blocks: Vec::new(),
         driver: Some(driver),
         trait_impls: vec![lifecycle_impl],

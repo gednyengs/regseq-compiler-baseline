@@ -1872,7 +1872,7 @@
           "id": "regseq-linux-backend-06",
           "name": "Per-resource Linux probe/emission schema",
           "spec": ".harness/tasks/regseq-linux-backend/06-per-resource-probe-schema.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-linux-backend-03",
             "regseq-lowering-10"
