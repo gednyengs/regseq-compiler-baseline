@@ -1369,7 +1369,10 @@
           "spec": ".harness/tasks/regseq-backends/02-emission-contract-and-exemplars.md",
           "status": "pending",
           "depends_on": [
-            "regseq-model-60"
+            "regseq-model-60",
+            "regseq-linux-backend-06",
+            "regseq-linux-backend-07",
+            "regseq-lowering-12"
           ],
           "artifacts": [],
           "fail_reason": null
