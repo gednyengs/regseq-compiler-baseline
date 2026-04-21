@@ -13,10 +13,15 @@
 //! - ordered regions (barrier-bracketed sequences from `ordered!` expansion)
 //! - local variable bindings and intermediate computations
 //! - field assignments on the driver struct
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
 use std::collections::BTreeSet;
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::declaration::bodies::{BodyExpr, BodyStmt, FnBodyDecl, FnKind};
 
 use super::behavior::{

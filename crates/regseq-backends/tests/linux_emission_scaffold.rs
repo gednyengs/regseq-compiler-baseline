@@ -3,10 +3,14 @@
 //! Verifies that `LinuxBackendPlan` reaches the backend-emission entry
 //! point, produces deterministic artifacts, and emits readable scaffold
 //! C output.
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
+#![allow(deprecated)]
 
 use std::collections::BTreeMap;
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::linux::emitter::{emit_linux_artifacts, EmittedArtifactSet};
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole};
 use regseq_backends::linux::planner::build_linux_backend_plan;

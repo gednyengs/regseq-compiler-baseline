@@ -1336,7 +1336,7 @@
           "id": "regseq-analysis-06",
           "name": "Rewrite readiness over RegseqModel; delete body_readiness + input",
           "spec": ".harness/tasks/regseq-analysis/06-readiness-rewrite-against-regseq-model.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-61",
             "regseq-model-62"

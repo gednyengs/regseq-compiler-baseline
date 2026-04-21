@@ -7,6 +7,11 @@
 //! The lowering reuses existing MIR infrastructure (`call_classifier`,
 //! `place_resolver`, `cfg_helpers`) but targets the semantic IR types
 //! (`Stmt`, `Expr`, `SemanticLocal`) rather than `BehaviorNode`.
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
 pub mod call_lowering;
 pub mod context;
@@ -21,7 +26,7 @@ pub mod validation;
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::item::identity::{ItemId, ItemStore};
 use regseq_model::item::types::Item;
 use regseq_model::semantic::body::{Block, SemanticBody};

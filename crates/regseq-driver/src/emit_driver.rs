@@ -12,8 +12,13 @@
 //! canonical public entry point for constructing a `DeclarationModel` from
 //! extraction output, serving as the production-path bridge between the
 //! extraction and model layers.
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::linux::emitter::{emit_linux_artifacts, EmittedArtifactSet};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::planner::build_driver_lowering_plan;

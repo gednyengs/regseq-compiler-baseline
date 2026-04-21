@@ -3,10 +3,14 @@
 //! Verifies that the accepted PL011 full-spec slice lowers successfully into
 //! a portable `DriverLoweringPlan` and a Linux-specific `LinuxBackendPlan`
 //! that carry real compiler-owned semantics.
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
 
 #![allow(dead_code)]
+#![allow(deprecated)]
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole, LinuxProbeStep};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::behavior::{FunctionRole, ReturnSemantic};

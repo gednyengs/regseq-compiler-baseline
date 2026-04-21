@@ -1,421 +1,128 @@
-//! Lowering-input readiness and consistency checks.
+//! Reviewer-facing driver-readiness diagnostics computed directly
+//! from [`RegseqModel`] + the [`VerifyReport`] emitted by
+//! [`regseq_model::verify::verify_phase_1`] (or
+//! [`regseq_model::verify::verify_phase_2`]).
 //!
-//! Assesses whether the current declaration-plus-joined artifact is
-//! complete, consistent, and reviewable enough to act as the
-//! lowering-input contract for Phase D.
+//! Phase-legality checks (did every required binding populate? did
+//! every Phase-1 field fill in? is the bus identity consistent?) live
+//! in the Phase-6 verifiers. This module does **not** re-implement
+//! those; it only surfaces reviewer-oriented observations: callback
+//! inventories, resource-field summaries, and the property-lint
+//! findings already produced by the verifier.
 //!
-//! Design rules:
-//! - analysis-facing only: no backend lowering logic
-//! - deterministic output
-//! - partial joins and unmatched facts remain explicit (not collapsed)
-//! - caution points remain visible
+//! The caller is responsible for invoking the verifier; a Phase-6
+//! pipeline running under [`regseq_model::model::MutationGuard`] does
+//! this automatically on `commit`, so typical consumers simply pass
+//! the resulting [`VerifyReport`] to [`check_readiness`].
 
 use std::collections::BTreeSet;
 
-use crate::input::{AnalysisInput, ResourceJoinSummary};
-use regseq_model::compat::{BusType, CallbackFamily, DeviceClass, PropertyLintDecl};
+use regseq_model::compat::CallbackFamily;
+use regseq_model::identity::{FunctionId, TypeDefId};
+use regseq_model::model::RegseqModel;
+use regseq_model::query;
+use regseq_model::verify::{LintFinding, LintKind, VerifyReport};
 
-/// Expected callback families per device class.
+pub use regseq_model::query::ResourceKind;
+
+/// Lightweight, owned projection of a [`query::CallbackImpl`].
 ///
-/// Returns the set of families that a device class is expected to
-/// have for the accepted PL011/E1000 surfaces. This is the current
-/// accepted baseline, not a backend policy decision.
-fn expected_callback_families(device_class: &DeviceClass) -> BTreeSet<CallbackFamily> {
-    let mut expected = BTreeSet::new();
-    expected.insert(CallbackFamily::Lifecycle);
-    match device_class {
-        DeviceClass::SerialUart => {
-            expected.insert(CallbackFamily::Serial);
-            // SerialConsole and PowerManagement are optional.
-        }
-        DeviceClass::Network => {
-            // Network has no serial, but lifecycle is required.
-        }
-        DeviceClass::Other(_) => {}
-    }
-    expected
+/// The query helper returns a borrowed view tied to the
+/// [`RegseqModel`]; the readiness report is a standalone value that
+/// reviewers may retain after dropping the model, so we copy out the
+/// ids. No symbol names are carried -- reviewers looking for method
+/// names should resolve `function_id` against the model's function
+/// table.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct CallbackImplSummary {
+    /// Callback family the impl's trait belongs to.
+    pub family: CallbackFamily,
+    /// The method's function id within the model.
+    pub function_id: FunctionId,
+    /// The driver type the impl targets.
+    pub driver_type: TypeDefId,
 }
 
-/// A single readiness finding.
+/// Reviewer-facing readiness report for a driver model.
 ///
-/// Findings are deterministic, sorted, and carry enough context for
-/// review. Each finding has a severity level and a structured message.
-#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
-pub struct ReadinessFinding {
-    /// Severity of this finding.
-    pub severity: FindingSeverity,
-    /// Category label for grouping.
-    pub category: &'static str,
-    /// Human-readable finding message.
-    pub message: String,
-}
-
-/// Severity levels for readiness findings.
+/// Carries the inventory-style observations a human reviewer wants
+/// when inspecting a compiled driver: which callback families are
+/// implemented, which resource fields exist, and which property lints
+/// the verifier flagged. The caller is expected to have already
+/// invoked the phase verifier; the [`property_lints`] field is a
+/// filtered copy of that verifier's [`VerifyReport::lints`].
 ///
-/// These do NOT map to backend pass/fail. They are reviewer-facing
-/// indicators of analysis-layer concern.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord)]
-pub enum FindingSeverity {
-    /// An expected-complete requirement is missing. Phase D may not proceed.
-    Error,
-    /// A caution point is visible. Phase D can proceed with awareness.
-    Caution,
-    /// An informational observation.
-    Info,
-}
-
-/// Deterministic readiness report for the lowering-input contract.
-#[derive(Debug, Clone, PartialEq, Eq)]
+/// Every field is deterministic: order derives from the
+/// [`regseq_model::query`] helpers (sorted by canonical key) or from
+/// [`LintFinding`] sort order emitted by the verifier.
+///
+/// [`property_lints`]: Self::property_lints
+#[derive(Debug, Clone)]
 pub struct ReadinessReport {
-    /// All findings, sorted by severity then category then message.
-    pub findings: Vec<ReadinessFinding>,
-    /// Per-family join summaries (carried through for review).
-    pub join_summaries: Vec<ResourceJoinSummary>,
+    /// Callback families actually implemented by the driver.
+    pub callback_families_present: BTreeSet<CallbackFamily>,
+    /// Every callback method impl on the driver, one entry per
+    /// method.
+    pub callback_impls: Vec<CallbackImplSummary>,
+    /// Every resource field on the driver struct, paired with its
+    /// family tag.
+    pub resource_field_names: Vec<(ResourceKind, String)>,
+    /// Property-lint findings surfaced by the verifier.
+    ///
+    /// Today this carries only [`LintKind::PropertyRequiredWithDefault`]
+    /// entries (the only lint kind the Phase-1 verifier emits). As
+    /// additional property-level [`LintKind`] variants land, they
+    /// appear here automatically.
+    pub property_lints: Vec<LintFinding>,
 }
 
-impl ReadinessReport {
-    /// Whether any error-severity findings are present.
-    pub fn has_errors(&self) -> bool {
-        self.findings
-            .iter()
-            .any(|f| f.severity == FindingSeverity::Error)
-    }
-
-    /// Whether any caution-severity findings are present.
-    pub fn has_cautions(&self) -> bool {
-        self.findings
-            .iter()
-            .any(|f| f.severity == FindingSeverity::Caution)
-    }
-
-    /// Return only error findings.
-    pub fn errors(&self) -> Vec<&ReadinessFinding> {
-        self.findings
-            .iter()
-            .filter(|f| f.severity == FindingSeverity::Error)
-            .collect()
-    }
-
-    /// Return only caution findings.
-    pub fn cautions(&self) -> Vec<&ReadinessFinding> {
-        self.findings
-            .iter()
-            .filter(|f| f.severity == FindingSeverity::Caution)
-            .collect()
-    }
-
-    /// Return only info findings.
-    pub fn infos(&self) -> Vec<&ReadinessFinding> {
-        self.findings
-            .iter()
-            .filter(|f| f.severity == FindingSeverity::Info)
-            .collect()
-    }
-}
-
-/// Run all readiness checks against the given analysis input.
+/// Build a [`ReadinessReport`] for `model`, incorporating the
+/// verifier's lint findings from `verify_report`.
 ///
-/// Returns a deterministic report of findings. The report preserves
-/// partial join outcomes and caution points rather than collapsing
-/// them into pass/fail.
-pub fn check_readiness(input: &AnalysisInput) -> ReadinessReport {
-    let mut findings = Vec::new();
+/// Pure: no mutation, no global state, no file I/O. Executes in time
+/// proportional to the model's module-tree size plus the verify
+/// report's lint count.
+pub fn check_readiness(model: &RegseqModel, verify_report: &VerifyReport) -> ReadinessReport {
+    let callback_families_present = query::callback_families_present(model);
 
-    check_callback_family_integrity(input, &mut findings);
-    check_property_lints(input, &mut findings);
-    check_resource_join_completeness(input, &mut findings);
-    check_interrupt_authority(input, &mut findings);
-    check_resource_optionality(input, &mut findings);
-    check_bus_consistency(input, &mut findings);
+    let callback_impls = query::callback_impls(model)
+        .into_iter()
+        .map(|ci| CallbackImplSummary {
+            family: ci.family,
+            function_id: ci.function_id,
+            driver_type: ci.driver_type,
+        })
+        .collect();
 
-    findings.sort();
+    let resource_field_names = query::resource_field_names(model)
+        .into_iter()
+        .map(|(kind, name)| (kind, name.to_string()))
+        .collect();
 
-    let join_summaries = input.all_join_summaries();
+    let property_lints = verify_report
+        .lints
+        .iter()
+        .filter(|l| is_property_lint(&l.kind))
+        .cloned()
+        .collect();
 
     ReadinessReport {
-        findings,
-        join_summaries,
+        callback_families_present,
+        callback_impls,
+        resource_field_names,
+        property_lints,
     }
 }
 
-/// Check callback-family integrity for the current device class.
-fn check_callback_family_integrity(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
-    let device_class = &input.declaration().driver.device_class;
-    let expected = expected_callback_families(device_class);
-    let present = input.callback_families_present();
-
-    for family in &expected {
-        if !present.contains(family) {
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Error,
-                category: "callback_integrity",
-                message: format!(
-                    "expected callback family '{}' for device class '{}' is missing",
-                    family.as_str(),
-                    device_class.as_str(),
-                ),
-            });
-        }
-    }
-
-    // Report optional families that are present (informational).
-    for family in &present {
-        if !expected.contains(family) {
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Info,
-                category: "callback_integrity",
-                message: format!(
-                    "optional callback family '{}' is present for device class '{}'",
-                    family.as_str(),
-                    device_class.as_str(),
-                ),
-            });
-        }
-    }
-}
-
-/// Check property-lint carry-through.
-fn check_property_lints(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
-    for lint in input.property_lints() {
-        match lint {
-            PropertyLintDecl::RequiredWithDefault {
-                property_id,
-                field_name,
-                ..
-            } => {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Caution,
-                    category: "property_lint",
-                    message: format!(
-                        "property '{}' (field '{}') is required but has a default value",
-                        property_id, field_name,
-                    ),
-                });
-            }
-        }
-    }
-}
-
-/// Check resource join completeness across all families.
-fn check_resource_join_completeness(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
-    for summary in input.all_join_summaries() {
-        if summary.joined_incomplete > 0 {
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Caution,
-                category: "join_completeness",
-                message: format!(
-                    "{}: {} join(s) matched but incomplete",
-                    summary.family, summary.joined_incomplete,
-                ),
-            });
-        }
-        if summary.decl_only > 0 {
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Caution,
-                category: "join_completeness",
-                message: format!(
-                    "{}: {} declaration-only entry/entries (no matching binding)",
-                    summary.family, summary.decl_only,
-                ),
-            });
-        }
-        if summary.binding_only > 0 {
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Caution,
-                category: "join_completeness",
-                message: format!(
-                    "{}: {} binding-only entry/entries (no matching declaration)",
-                    summary.family, summary.binding_only,
-                ),
-            });
-        }
-    }
-}
-
-/// Check interrupt binding-side authority.
-fn check_interrupt_authority(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
-    for entry in input.interrupts_joined() {
-        let has_decl_hints = entry.decl_binding_hints.trigger_type.is_some()
-            || entry.decl_binding_hints.trigger_polarity.is_some()
-            || entry.decl_binding_hints.priority.is_some()
-            || entry.decl_binding_hints.shared.is_some();
-
-        if has_decl_hints {
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Info,
-                category: "interrupt_authority",
-                message: format!(
-                    "interrupt '{}': declaration-side binding hints present (diagnostic-only, \
-                     not authoritative)",
-                    entry.interrupt_id,
-                ),
-            });
-        }
-    }
-}
-
-/// Check optional-resource presence versus required-resource absence.
-fn check_resource_optionality(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
-    // Check clock fields.
-    for field in input.declaration().clock_fields() {
-        if field.required {
-            let is_joined = input
-                .clocks_joined()
-                .iter()
-                .any(|e| e.clock_id == field.clock_id);
-            if !is_joined {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Error,
-                    category: "resource_optionality",
-                    message: format!(
-                        "required clock '{}' has no matching binding",
-                        field.clock_id,
-                    ),
-                });
-            }
-        }
-    }
-
-    // Check reset fields.
-    for field in input.declaration().reset_fields() {
-        if field.required {
-            let is_joined = input
-                .resets_joined()
-                .iter()
-                .any(|e| e.field_name == field.field_name);
-            if !is_joined {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Error,
-                    category: "resource_optionality",
-                    message: format!(
-                        "required reset '{}' has no matching binding",
-                        field.field_name,
-                    ),
-                });
-            }
-        }
-    }
-
-    // Check pinctrl fields.
-    for field in input.declaration().pinctrl_fields() {
-        if field.required {
-            let is_joined = input
-                .pinctrl_joined()
-                .iter()
-                .any(|e| e.field_name == field.field_name);
-            if !is_joined {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Error,
-                    category: "resource_optionality",
-                    message: format!(
-                        "required pinctrl '{}' has no matching binding",
-                        field.field_name,
-                    ),
-                });
-            }
-        }
-    }
-
-    // Check required properties.
-    for field in &input.declaration().properties.fields {
-        if field.required {
-            let is_joined = input
-                .properties_joined()
-                .iter()
-                .any(|e| e.property_id == field.property_id);
-            if !is_joined {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Error,
-                    category: "resource_optionality",
-                    message: format!(
-                        "required property '{}' has no matching binding",
-                        field.property_id,
-                    ),
-                });
-            }
-        }
-    }
-}
-
-/// Check bus identity and metadata consistency.
-fn check_bus_consistency(input: &AnalysisInput, findings: &mut Vec<ReadinessFinding>) {
-    let decl_bus = input.bus_identity();
-    let binding_bus = input.bus_binding();
-
-    match (decl_bus, binding_bus) {
-        (Some(l1), Some(l2)) => {
-            // Both layers present: check consistency.
-            if *l1 != l2.bus_type {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Error,
-                    category: "bus_consistency",
-                    message: format!(
-                        "Layer 1 declares bus '{}' but Layer 2 specifies '{}'",
-                        l1.as_str(),
-                        l2.bus_type.as_str(),
-                    ),
-                });
-            } else {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Info,
-                    category: "bus_consistency",
-                    message: format!(
-                        "bus '{}' consistent across Layer 1 and Layer 2",
-                        l1.as_str(),
-                    ),
-                });
-            }
-
-            // Check required metadata for the bus family.
-            check_bus_required_metadata(&l2.bus_type, l2.amba_id, findings);
-        }
-        (Some(l1), None) => {
-            // Layer 1 declares bus but no Layer 2 bus section.
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Caution,
-                category: "bus_consistency",
-                message: format!(
-                    "Layer 1 declares bus '{}' but no [bus] section in Layer 2",
-                    l1.as_str(),
-                ),
-            });
-        }
-        (None, Some(l2)) => {
-            // Layer 2 has bus section but no Layer 1 declaration.
-            findings.push(ReadinessFinding {
-                severity: FindingSeverity::Caution,
-                category: "bus_consistency",
-                message: format!(
-                    "Layer 2 specifies bus '{}' but no bus declared in Layer 1",
-                    l2.bus_type.as_str(),
-                ),
-            });
-        }
-        (None, None) => {
-            // No bus info on either side -- not an error, just info.
-        }
-    }
-}
-
-/// Check that required family-specific bus metadata is present.
-fn check_bus_required_metadata(
-    bus_type: &BusType,
-    amba_id: Option<i64>,
-    findings: &mut Vec<ReadinessFinding>,
-) {
-    match bus_type {
-        BusType::Amba => {
-            if amba_id.is_none() {
-                findings.push(ReadinessFinding {
-                    severity: FindingSeverity::Caution,
-                    category: "bus_consistency",
-                    message: "AMBA bus family present but amba_id is missing in Layer 2".into(),
-                });
-            }
-        }
-        BusType::Pci | BusType::Integrated => {
-            // PCI and integrated families do not have required metadata
-            // in the current accepted baseline.
-        }
+/// Classify a [`LintKind`] as property-scoped or not.
+///
+/// Every current `LintKind` variant is property-scoped; the matcher
+/// is spelled out rather than defaulted so that any future non-
+/// property lint kind (e.g., callback- or body-level) has to be
+/// explicitly triaged here before it silently flows into
+/// [`ReadinessReport::property_lints`].
+fn is_property_lint(kind: &LintKind) -> bool {
+    match kind {
+        LintKind::PropertyRequiredWithDefault { .. } => true,
     }
 }

@@ -7,10 +7,14 @@
 //! This is the last Phase C gate. It covers the analysis/readiness output
 //! over real PL011-shaped inputs, not just the join correctness already
 //! proved by track-a-validation-05.
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
+#![allow(deprecated)]
 
 use std::path::{Path, PathBuf};
 
-use regseq_analysis::{check_readiness, AnalysisInput};
+use regseq_analysis::legacy_input::{check_readiness, AnalysisInput};
 use regseq_model::declaration::callbacks::CallbackFamily;
 use regseq_model::joined::perform_join;
 use regseq_model::{binding, declaration, platform_parser};

@@ -4,8 +4,14 @@
 //! computes helper reachability from MIR call edges, and that body
 //! readiness validation catches missing, unsupported, and
 //! provenance-deficient MIR features.
+//!
+//! This test file exercises the deprecated `regseq_analysis::legacy_input`
+//! shim; `#![allow(deprecated)]` is applied crate-wide so the shim's
+//! deprecation notices don't trip `-D warnings` while the shim is still
+//! in place (retirement target: `regseq-lowering-10`).
+#![allow(deprecated)]
 
-use regseq_analysis::{check_body_readiness, AnalysisInput};
+use regseq_analysis::legacy_input::{check_body_readiness, AnalysisInput};
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, InterruptBinding, JoinKey, MmioBinding,
     PropertyBinding,

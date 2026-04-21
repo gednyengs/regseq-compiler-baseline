@@ -7,3 +7,6 @@ edition = "2021"
 regseq-config = { path = "../regseq-config" }
 regseq-diagnostics = { path = "../regseq-diagnostics" }
 regseq-model = { path = "../regseq-model" }
+
+[dev-dependencies]
+serde_json = "1"

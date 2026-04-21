@@ -1,13 +1,11 @@
 //! Static analysis pass infrastructure for the Regseq compiler.
 //!
-//! Provides an analysis-facing bootstrap input layer over rustc-independent
-//! models from `regseq-model`, and will host validation passes over those
-//! models before lowering begins.
+//! Hosts reviewer-facing readiness diagnostics computed directly
+//! against [`regseq_model::RegseqModel`] plus a
+//! [`regseq_model::verify::VerifyReport`], and preserves a
+//! transitional [`legacy_input`] shim for callers that have not yet
+//! migrated. See the module-level docs on [`legacy_input`] for the
+//! shim's retirement target (regseq-lowering-10).
 
-pub mod body_readiness;
-pub mod input;
+pub mod legacy_input;
 pub mod readiness;
-
-pub use body_readiness::{check_body_readiness, BodyFinding, BodyReadinessReport, MirFormSummary};
-pub use input::{AnalysisInput, ResourceJoinSummary};
-pub use readiness::{check_readiness, FindingSeverity, ReadinessFinding, ReadinessReport};

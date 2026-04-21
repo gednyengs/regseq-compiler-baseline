@@ -10,6 +10,11 @@
 //!    control-flow semantics, preserve cleanup-bearing paths
 //! 2. Portable semantic lowering — transform recognized semantics into
 //!    the portable behavior plan for backend consumption
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
 pub mod call_classifier;
 pub mod cfg_helpers;
@@ -20,7 +25,7 @@ pub mod value_lowering;
 
 use std::collections::BTreeSet;
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::declaration::mir_body::{FnKind, MirFnBodyDecl};
 
 use super::behavior::{

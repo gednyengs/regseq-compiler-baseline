@@ -3,8 +3,12 @@
 //! Verifies that the lowering module scaffold establishes a real typed
 //! boundary between the portable `DriverLoweringPlan`, the Linux-specific
 //! `LinuxBackendPlan`, and the `AnalysisInput` entry point.
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
+#![allow(deprecated)]
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::linux::plan::{LinuxBackendPlan, LinuxFileRole};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::plan::{BusType, DriverLoweringPlan, ResourceKind, ResourcePolicy};

@@ -1,592 +1,532 @@
-//! Tests for lowering-input readiness and consistency checks.
+//! Integration tests for [`regseq_analysis::readiness::check_readiness`].
 //!
-//! Verifies that the readiness report correctly identifies callback-family
-//! integrity, property lint carry-through, join completeness, interrupt
-//! authority, and resource optionality for PL011-shaped inputs.
+//! Each test constructs a minimal hand-built [`RegseqModel`], runs
+//! [`verify_phase_1`] (to produce a real [`VerifyReport`]), passes both
+//! to `check_readiness`, and asserts the resulting [`ReadinessReport`]
+//! surfaces the expected reviewer-facing observations. A final smoke
+//! test runs the same pipeline against the PL011 full-spec Phase-6
+//! fixture.
 
-use regseq_analysis::{check_readiness, AnalysisInput};
-use regseq_model::binding::{
-    BindingHeader, BindingModel, BindingProvenance, ClockBinding, InterruptBinding, JoinKey,
-    MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,
-};
-use regseq_model::declaration::callbacks::{
-    CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl,
-};
-use regseq_model::declaration::mir_body::{MirBodyDeclSet, MirQueryFlavor};
-use regseq_model::declaration::operations::{LoggingDeclSet, PmGateDeclSet, TimedDelayDeclSet};
-use regseq_model::declaration::properties::{PropertyDeclSet, PropertyFieldDecl, PropertyLintDecl};
-use regseq_model::declaration::provenance::Provenance;
-use regseq_model::declaration::registers::RegisterDeclSet;
-use regseq_model::declaration::resources::{
-    ClockDeclSet, ClockFieldDecl, InterruptBindingHints, InterruptDeclSet, InterruptFieldShape,
-    InterruptResourceDecl, MmioFieldDecl, PinCtrlDeclSet, PinCtrlFieldDecl, ResetDeclSet,
-    ResetFieldDecl, ResourceDeclSet,
-};
-use regseq_model::declaration::synchronization::SynchronizationDeclSet;
-use regseq_model::declaration::{
-    BodyDeclSet, BusType, DeclarationBuildContext, DeclarationModel, DeviceClass, DriverDecl,
-};
-use regseq_model::joined::perform_join;
-use regseq_model::platform::PlatformValue;
+use std::collections::{BTreeMap, BTreeSet};
+use std::path::PathBuf;
 
-// ---- Fixture builders ----
+use regseq_analysis::readiness::{check_readiness, ReadinessReport, ResourceKind};
+use regseq_model::declaration::callbacks::CallbackFamily;
+use regseq_model::identity::{
+    DeclId, FileId, FunctionId, ModuleId, PropertyId, RegisterBlockId, ResourceId, SourceLocation,
+    SourceOrigin, SymbolInterner, TypeDefId,
+};
+use regseq_model::ir::{
+    BasicBlock, BasicBlockSourceMap, Body, BodySourceMap, LiteralValue, LocalDecl, RegseqType,
+    ScalarType, Terminator, TerminatorKind,
+};
+use regseq_model::model::driver::{DriverIdentity, DriverStruct};
+use regseq_model::model::framework::TypeDefClassification;
+use regseq_model::model::function::Function;
+use regseq_model::model::impl_block::ImplBlock;
+use regseq_model::model::module::{Module, ModuleKind};
+use regseq_model::model::register::{RegisterBlock, RegisterBlockAttributes};
+use regseq_model::model::regseq_model::RegseqModel;
+use regseq_model::model::resources::{
+    ClockDecl, ClockResource, MmioDecl, MmioResource, PropertyField, Shape,
+};
+use regseq_model::model::type_def::{Attrs, TypeDef, TypeDefKind};
+use regseq_model::normalize::raw_artifact::RawFrontendArtifact;
+use regseq_model::platform_parser::parse_platform_file_path;
+use regseq_model::verify::{verify_phase_1, verify_phase_2, LintKind, LintLevel};
+use regseq_model::{normalize, populate_bindings};
 
-fn pl011_decl() -> DeclarationModel {
-    DeclarationModel {
-        driver: DriverDecl {
-            driver_name: "Pl011Driver".into(),
-            compatible: vec!["arm,pl011".into()],
-            device_class: DeviceClass::SerialUart,
-            bus: Some(BusType::Amba),
-            provenance: Provenance::new("identity"),
-        },
-        resources: ResourceDeclSet {
-            mmio: vec![MmioFieldDecl {
-                field_name: "regs".into(),
-                mmio_id: Some("uart_regs".into()),
-                register_block_type: Some("Pl011Regs".into()),
-                provenance: Provenance::new("register_access"),
-            }],
-            interrupts: InterruptDeclSet {
-                resources: vec![InterruptResourceDecl {
-                    field_name: "irq".into(),
-                    interrupt_id: "uart_irq".into(),
-                    shape: InterruptFieldShape::Single,
-                    binding_hints: InterruptBindingHints {
-                        trigger_type: Some("level".into()),
-                        trigger_polarity: Some("high".into()),
-                        priority: None,
-                        shared: Some(false),
-                    },
-                    provenance: Provenance::new("interrupt"),
-                }],
-                isr_bindings: vec![],
+// -------------------------------------------------------------------
+// Minimal model builders
+// -------------------------------------------------------------------
+
+const ROOT_MODULE_ID: u32 = 1;
+const DRIVER_MODULE_ID: u32 = 2;
+const DRIVER_TYPE_ID: u32 = 3;
+const FREE_FN_ID: u32 = 4;
+const CLOCK_RESOURCE_ID: u32 = 5;
+const MMIO_RESOURCE_ID: u32 = 6;
+const PROPERTY_A_ID: u32 = 7;
+const LIFECYCLE_INIT_ID: u32 = 8;
+const LIFECYCLE_DEINIT_ID: u32 = 9;
+const SERIAL_TX_ID: u32 = 10;
+const MMIO_REG_BLOCK_ID: u32 = 11;
+
+fn origin(file: FileId, line: u32) -> SourceOrigin {
+    SourceOrigin::Source(SourceLocation {
+        file,
+        start_line: line,
+        start_column: 1,
+        end_line: line,
+        end_column: 2,
+    })
+}
+
+fn non_placeholder_body(source: SourceOrigin) -> Body {
+    Body {
+        local_decls: vec![LocalDecl {
+            ty: RegseqType::Unit,
+            mutable: false,
+            name: None,
+        }],
+        arg_count: 0,
+        basic_blocks: vec![BasicBlock {
+            statements: vec![],
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
             },
-            clock: ClockDeclSet {
-                fields: vec![ClockFieldDecl {
-                    field_name: "clk".into(),
-                    clock_id: "uart_clk".into(),
-                    required: true,
-                    provenance: Provenance::new("clock"),
-                }],
-                call_sites: vec![],
-            },
-            reset: ResetDeclSet {
-                fields: vec![ResetFieldDecl {
-                    field_name: "uart_reset".into(),
-                    required: false,
-                    provenance: Provenance::new("reset"),
-                }],
-                call_sites: vec![],
-            },
-            pinctrl: PinCtrlDeclSet {
-                fields: vec![PinCtrlFieldDecl {
-                    field_name: "pins".into(),
-                    required: false,
-                    pinctrl_id: Some("uart_pins".into()),
-                    provenance: Provenance::new("pinctrl"),
-                }],
-                call_sites: vec![],
-            },
-        },
-        synchronization: SynchronizationDeclSet {
-            sync_fields: vec![],
-            lock_operations: vec![],
-            completion_operations: vec![],
-            guard_scopes: vec![],
-        },
-        callbacks: CallbackDeclSet {
-            lifecycle_impls: vec![CallbackImplDecl {
-                driver_type: "Pl011Driver".into(),
-                context: CallbackContext::Framework,
-                family: CallbackFamily::Lifecycle,
-                provenance: Provenance::new("callback"),
-            }],
-            serial_impls: vec![CallbackImplDecl {
-                driver_type: "Pl011Driver".into(),
-                context: CallbackContext::SubsystemSerialized,
-                family: CallbackFamily::Serial,
-                provenance: Provenance::new("callback"),
-            }],
-            serial_console_impls: vec![],
-            power_management_impls: vec![],
-        },
-        registers: RegisterDeclSet {
-            blocks: vec![],
-            descriptors: vec![],
-            wrapper_call_sites: vec![],
-            poll_call_sites: vec![],
-        },
-        properties: PropertyDeclSet {
-            fields: vec![
-                PropertyFieldDecl {
-                    driver_type: "Pl011Driver".into(),
-                    field_name: "baud_rate".into(),
-                    field_type: "u32".into(),
-                    property_id: "baud_rate".into(),
-                    default_literal: Some("115200".into()),
-                    vendor_prefix: None,
-                    required: true,
-                    provenance: Provenance::new("firmware_properties"),
-                },
-                PropertyFieldDecl {
-                    driver_type: "Pl011Driver".into(),
-                    field_name: "hw_flow_control".into(),
-                    field_type: "bool".into(),
-                    property_id: "hw_flow_control".into(),
-                    default_literal: None,
-                    vendor_prefix: None,
-                    required: false,
-                    provenance: Provenance::new("firmware_properties"),
-                },
-            ],
-            lints: vec![PropertyLintDecl::RequiredWithDefault {
-                driver_type: "Pl011Driver".into(),
-                field_name: "baud_rate".into(),
-                property_id: "baud_rate".into(),
-                provenance: Provenance::new("firmware_properties"),
+        }],
+        source_map: BodySourceMap {
+            body_span: source,
+            locals: vec![SourceOrigin::CompilerGenerated],
+            blocks: vec![BasicBlockSourceMap {
+                statements: vec![],
+                terminator: SourceOrigin::CompilerGenerated,
             }],
         },
-        timed_delay: TimedDelayDeclSet {
-            call_sites: vec![],
-            duration_ctors: vec![],
-        },
-        logging: LoggingDeclSet { call_sites: vec![] },
-        pm_gate: PmGateDeclSet { gates: vec![] },
-        bodies: BodyDeclSet { functions: vec![] },
-        mir_bodies: MirBodyDeclSet {
-            functions: vec![],
-            query_flavor: MirQueryFlavor::DropsElaborated,
-        },
-        build_context: DeclarationBuildContext {
-            target_os: "linux".into(),
-        },
+        ordered_regions: vec![],
     }
 }
 
-fn pl011_binding() -> BindingModel {
-    BindingModel {
-        header: BindingHeader {
-            version: "1".into(),
-            os: "linux".into(),
-            arch: "aarch64".into(),
-            board: "raspberry-pi-4".into(),
-            provenance: BindingProvenance::new("platform").with_source_file("pl011.platform.toml"),
+/// Configuration knobs for building a minimal model that still passes
+/// Phase-1 verification.
+#[derive(Default)]
+struct MinimalModelConfig {
+    /// Include one [`ClockResource`] named `apb_clk`.
+    with_clock: bool,
+    /// Include one [`MmioResource`] named `regs`.
+    with_mmio: bool,
+    /// Include a [`PropertyField`] that triggers
+    /// [`LintKind::PropertyRequiredWithDefault`].
+    with_property_required_with_default: bool,
+    /// Populate `trait_impls` with a `Lifecycle` (init+deinit) impl.
+    with_lifecycle_impl: bool,
+    /// Populate `trait_impls` with a `Serial` (tx_byte) impl.
+    with_serial_impl: bool,
+}
+
+fn build_model(config: MinimalModelConfig) -> RegseqModel {
+    let mut symbols = SymbolInterner::new();
+    let file = symbols.intern_file("drv/lib.rs");
+
+    let drv_type_sym = symbols.intern("MyDriver");
+    let drv_identity_sym = symbols.intern("my-driver");
+
+    let init_fn = Function {
+        id: FunctionId::from(DeclId::new(FREE_FN_ID)),
+        name: symbols.intern("bootstrap"),
+        params: vec![],
+        return_type: RegseqType::Unit,
+        body: non_placeholder_body(origin(file, 20)),
+        attrs: Attrs::default(),
+    };
+
+    let driver_type_def = TypeDef {
+        id: TypeDefId::from(DeclId::new(DRIVER_TYPE_ID)),
+        name: drv_type_sym,
+        kind: TypeDefKind::Struct { fields: vec![] },
+        classification: TypeDefClassification::UserDefined,
+        attrs: Attrs::default(),
+    };
+
+    let mut clocks = Vec::new();
+    if config.with_clock {
+        let clk_field_sym = symbols.intern("apb_clk");
+        let clk_id_sym = symbols.intern("apb");
+        clocks.push(ClockResource {
+            id: ResourceId::from(DeclId::new(CLOCK_RESOURCE_ID)),
+            field_name: clk_field_sym,
+            shape: Shape::Single,
+            decl: ClockDecl {
+                clock_id: clk_id_sym,
+            },
+            binding: None,
+        });
+    }
+
+    let mut mmio = Vec::new();
+    let mut register_blocks: Vec<RegisterBlock> = Vec::new();
+    if config.with_mmio {
+        let mmio_field_sym = symbols.intern("regs");
+        let mmio_id_sym = symbols.intern("uart_regs");
+        let reg_block_sym = symbols.intern("UartRegs");
+        let endian_sym = symbols.intern("little");
+        mmio.push(MmioResource {
+            id: ResourceId::from(DeclId::new(MMIO_RESOURCE_ID)),
+            field_name: mmio_field_sym,
+            shape: Shape::Single,
+            decl: MmioDecl {
+                mmio_id: mmio_id_sym,
+                register_block: RegisterBlockId::from(DeclId::new(MMIO_REG_BLOCK_ID)),
+            },
+            binding: None,
+        });
+        register_blocks.push(RegisterBlock {
+            id: RegisterBlockId::from(DeclId::new(MMIO_REG_BLOCK_ID)),
+            name: reg_block_sym,
+            block_attributes: RegisterBlockAttributes {
+                endian: endian_sym,
+                access_width: 32,
+            },
+            fields: vec![],
+        });
+    }
+
+    let mut properties = Vec::new();
+    if config.with_property_required_with_default {
+        let prop_field_sym = symbols.intern("clock_frequency");
+        let prop_id_sym = symbols.intern("clock-frequency");
+        properties.push(PropertyField {
+            id: PropertyId::from(DeclId::new(PROPERTY_A_ID)),
+            field_name: prop_field_sym,
+            field_type: ScalarType::U32,
+            property_id: prop_id_sym,
+            default_value: Some(LiteralValue::U32(24_000_000)),
+            vendor_prefix: None,
+            required: true,
+            bound_value: None,
+        });
+    }
+
+    let driver = DriverStruct {
+        type_id: TypeDefId::from(DeclId::new(DRIVER_TYPE_ID)),
+        name: drv_type_sym,
+        identity: DriverIdentity {
+            name: drv_identity_sym,
+            compatible: vec![],
+            bus: None,
         },
-        properties: vec![
-            PropertyBinding {
-                key: "baud_rate".into(),
-                value: PlatformValue::Integer(115200),
-                provenance: BindingProvenance::new("properties").with_section_key("baud_rate"),
-            },
-            PropertyBinding {
-                key: "fifo_depth".into(),
-                value: PlatformValue::Integer(16),
-                provenance: BindingProvenance::new("properties").with_section_key("fifo_depth"),
-            },
-        ],
-        mmio: vec![MmioBinding {
-            join_key: JoinKey::ExplicitId("uart_regs".into()),
-            base: Some(0x0900_0000),
-            size: Some(0x1000),
-            provenance: BindingProvenance::new("mmio").with_section_key("uart_regs"),
-        }],
-        interrupts: vec![InterruptBinding {
-            join_key: JoinKey::ExplicitId("uart_irq".into()),
-            trigger_type: Some("level".into()),
-            trigger_polarity: Some("high".into()),
-            priority: None,
-            shared: Some(false),
-            provenance: BindingProvenance::new("interrupt").with_section_key("uart_irq"),
-        }],
-        clocks: vec![ClockBinding {
-            join_key: JoinKey::ExplicitId("uart_clk".into()),
-            default_frequency: Some(48_000_000),
-            provenance: BindingProvenance::new("clock").with_section_key("uart_clk"),
-        }],
-        resets: vec![ResetBinding {
-            join_key: JoinKey::FieldName("uart_reset".into()),
-            reset_line_id: Some("rst0".into()),
-            reset_shared: Some(false),
-            provenance: BindingProvenance::new("reset").with_section_key("uart_reset"),
-        }],
-        pinctrl: vec![PinCtrlBinding {
-            join_key: JoinKey::ExplicitId("uart_pins".into()),
-            pin_states: Some(vec!["default".into(), "sleep".into()]),
-            provenance: BindingProvenance::new("pinctrl").with_section_key("uart_pins"),
-        }],
-        bus: None,
+        device_class: None,
+        pm_info: None,
+        platform_metadata: None,
+        clocks,
+        resets: vec![],
+        pinctrl: vec![],
+        interrupts: vec![],
+        mmio,
+        sync: vec![],
+        properties,
+        user_data: vec![],
+    };
+
+    let drv_type_id = TypeDefId::from(DeclId::new(DRIVER_TYPE_ID));
+    let mut trait_impls: Vec<ImplBlock> = Vec::new();
+    if config.with_lifecycle_impl {
+        let lifecycle_trait = symbols.intern("Lifecycle");
+        let init = Function {
+            id: FunctionId::from(DeclId::new(LIFECYCLE_INIT_ID)),
+            name: symbols.intern("init"),
+            params: vec![],
+            return_type: RegseqType::Unit,
+            body: non_placeholder_body(origin(file, 80)),
+            attrs: Attrs::default(),
+        };
+        let deinit = Function {
+            id: FunctionId::from(DeclId::new(LIFECYCLE_DEINIT_ID)),
+            name: symbols.intern("deinit"),
+            params: vec![],
+            return_type: RegseqType::Unit,
+            body: non_placeholder_body(origin(file, 90)),
+            attrs: Attrs::default(),
+        };
+        trait_impls.push(ImplBlock {
+            target_type: drv_type_id,
+            trait_name: Some(lifecycle_trait),
+            methods: vec![init, deinit],
+            associated_constants: vec![],
+        });
+    }
+    if config.with_serial_impl {
+        let serial_trait = symbols.intern("Serial");
+        let tx = Function {
+            id: FunctionId::from(DeclId::new(SERIAL_TX_ID)),
+            name: symbols.intern("tx_byte"),
+            params: vec![],
+            return_type: RegseqType::Unit,
+            body: non_placeholder_body(origin(file, 110)),
+            attrs: Attrs::default(),
+        };
+        trait_impls.push(ImplBlock {
+            target_type: drv_type_id,
+            trait_name: Some(serial_trait),
+            methods: vec![tx],
+            associated_constants: vec![],
+        });
+    }
+
+    let driver_module = Module {
+        id: ModuleId::from(DeclId::new(DRIVER_MODULE_ID)),
+        name: symbols.intern("drv"),
+        kind: ModuleKind::Driver,
+        submodules: vec![],
+        constants: vec![],
+        free_functions: vec![],
+        type_defs: vec![driver_type_def],
+        register_descriptors: vec![],
+        register_blocks,
+        impl_blocks: vec![],
+        driver: Some(driver),
+        trait_impls,
+        driver_impl_blocks: vec![],
+        abstractions_used: BTreeSet::new(),
+        intrinsics_used: BTreeSet::new(),
+    };
+
+    let root_module = Module {
+        id: ModuleId::from(DeclId::new(ROOT_MODULE_ID)),
+        name: symbols.intern("crate_root"),
+        kind: ModuleKind::Normal,
+        submodules: vec![driver_module],
+        constants: vec![],
+        free_functions: vec![init_fn],
+        type_defs: vec![],
+        register_descriptors: vec![],
+        register_blocks: vec![],
+        impl_blocks: vec![],
+        driver: None,
+        trait_impls: vec![],
+        driver_impl_blocks: vec![],
+        abstractions_used: BTreeSet::new(),
+        intrinsics_used: BTreeSet::new(),
+    };
+
+    let mut source_locations = BTreeMap::new();
+    source_locations.insert(DeclId::new(ROOT_MODULE_ID), origin(file, 1));
+    source_locations.insert(DeclId::new(DRIVER_MODULE_ID), origin(file, 2));
+    source_locations.insert(DeclId::new(DRIVER_TYPE_ID), origin(file, 10));
+    source_locations.insert(DeclId::new(FREE_FN_ID), origin(file, 20));
+    if config.with_clock {
+        source_locations.insert(DeclId::new(CLOCK_RESOURCE_ID), origin(file, 40));
+    }
+    if config.with_mmio {
+        source_locations.insert(DeclId::new(MMIO_RESOURCE_ID), origin(file, 50));
+        source_locations.insert(DeclId::new(MMIO_REG_BLOCK_ID), origin(file, 55));
+    }
+    if config.with_property_required_with_default {
+        source_locations.insert(DeclId::new(PROPERTY_A_ID), origin(file, 60));
+    }
+    if config.with_lifecycle_impl {
+        source_locations.insert(DeclId::new(LIFECYCLE_INIT_ID), origin(file, 80));
+        source_locations.insert(DeclId::new(LIFECYCLE_DEINIT_ID), origin(file, 90));
+    }
+    if config.with_serial_impl {
+        source_locations.insert(DeclId::new(SERIAL_TX_ID), origin(file, 110));
+    }
+
+    RegseqModel {
+        symbols,
+        source_locations,
+        root_module,
+        format_version: 1,
     }
 }
 
-fn make_input(decl: DeclarationModel, binding: BindingModel) -> AnalysisInput {
-    let bus_binding = binding.bus.clone();
-    let joined = perform_join(&decl, &binding).expect("join should succeed");
-    AnalysisInput::new(decl, joined, bus_binding)
-}
-
-// ---- Test 1: baseline PL011 readiness succeeds ----
+// -------------------------------------------------------------------
+// Resource field inventory
+// -------------------------------------------------------------------
 
 #[test]
-fn pl011_baseline_readiness_no_errors() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
-
-    assert!(
-        !report.has_errors(),
-        "PL011 baseline should have no errors, got: {:?}",
-        report.errors()
-    );
-}
-
-// ---- Test 2: callback-family integrity is reported deterministically ----
-
-#[test]
-fn callback_family_integrity_deterministic() {
-    let input = make_input(pl011_decl(), pl011_binding());
-
-    let report1 = check_readiness(&input);
-    let report2 = check_readiness(&input);
-
-    assert_eq!(report1.findings, report2.findings);
-}
-
-#[test]
-fn missing_lifecycle_callback_reported_as_error() {
-    let mut decl = pl011_decl();
-    decl.callbacks.lifecycle_impls.clear();
-
-    let input = make_input(decl, pl011_binding());
-    let report = check_readiness(&input);
-
-    assert!(report.has_errors());
-    let errors = report.errors();
-    assert!(errors.iter().any(|f| f.category == "callback_integrity"
-        && f.message.contains("lifecycle")
-        && f.message.contains("missing")));
-}
-
-#[test]
-fn missing_serial_callback_for_serial_uart_reported_as_error() {
-    let mut decl = pl011_decl();
-    decl.callbacks.serial_impls.clear();
-
-    let input = make_input(decl, pl011_binding());
-    let report = check_readiness(&input);
-
-    assert!(report.has_errors());
-    let errors = report.errors();
-    assert!(errors.iter().any(|f| f.category == "callback_integrity"
-        && f.message.contains("serial")
-        && f.message.contains("missing")));
-}
-
-#[test]
-fn optional_serial_console_reported_as_info() {
-    let mut decl = pl011_decl();
-    decl.callbacks.serial_console_impls.push(CallbackImplDecl {
-        driver_type: "Pl011Driver".into(),
-        context: CallbackContext::Framework,
-        family: CallbackFamily::SerialConsole,
-        provenance: Provenance::new("callback"),
+fn resource_field_names_surface_clock_and_mmio_entries() {
+    let model = build_model(MinimalModelConfig {
+        with_clock: true,
+        with_mmio: true,
+        ..MinimalModelConfig::default()
     });
+    let report = verify_phase_1(&model).expect("minimal model must verify");
+    let readiness = check_readiness(&model, &report);
 
-    let input = make_input(decl, pl011_binding());
-    let report = check_readiness(&input);
-
-    let infos = report.infos();
-    assert!(infos.iter().any(|f| f.category == "callback_integrity"
-        && f.message.contains("serial_console")
-        && f.message.contains("optional")));
-}
-
-// ---- Test 3: property lint state visible ----
-
-#[test]
-fn required_with_default_lint_visible() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
-
-    let cautions = report.cautions();
-    assert!(cautions
+    let families: BTreeSet<ResourceKind> = readiness
+        .resource_field_names
         .iter()
-        .any(|f| f.category == "property_lint" && f.message.contains("baud_rate")));
-}
+        .map(|(kind, _)| *kind)
+        .collect();
+    assert!(families.contains(&ResourceKind::Clock));
+    assert!(families.contains(&ResourceKind::Mmio));
 
-#[test]
-fn no_property_lint_when_none_present() {
-    let mut decl = pl011_decl();
-    decl.properties.lints.clear();
-
-    let input = make_input(decl, pl011_binding());
-    let report = check_readiness(&input);
-
-    assert!(!report
-        .findings
+    let names: BTreeSet<String> = readiness
+        .resource_field_names
         .iter()
-        .any(|f| f.category == "property_lint"));
-}
-
-// ---- Test 4: partial and unmatched join outcomes explicit ----
-
-#[test]
-fn decl_only_properties_reported_as_caution() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
-
-    // hw_flow_control is declaration-only.
-    let cautions = report.cautions();
-    assert!(cautions.iter().any(|f| f.category == "join_completeness"
-        && f.message.contains("properties")
-        && f.message.contains("declaration-only")));
+        .map(|(_, name)| name.clone())
+        .collect();
+    assert!(names.contains("apb_clk"));
+    assert!(names.contains("regs"));
 }
 
 #[test]
-fn binding_only_entries_reported_as_caution() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
+fn resource_field_names_empty_when_driver_has_no_fields() {
+    let model = build_model(MinimalModelConfig::default());
+    let report = verify_phase_1(&model).expect("minimal model must verify");
+    let readiness = check_readiness(&model, &report);
+    assert!(readiness.resource_field_names.is_empty());
+}
 
-    // fifo_depth is binding-only.
-    let cautions = report.cautions();
-    assert!(cautions.iter().any(|f| f.category == "join_completeness"
-        && f.message.contains("properties")
-        && f.message.contains("binding-only")));
+// -------------------------------------------------------------------
+// Callback inventory
+// -------------------------------------------------------------------
+
+#[test]
+fn callback_families_and_impls_cover_declared_traits() {
+    let model = build_model(MinimalModelConfig {
+        with_lifecycle_impl: true,
+        with_serial_impl: true,
+        ..MinimalModelConfig::default()
+    });
+    let report = verify_phase_1(&model).expect("minimal model must verify");
+    let readiness = check_readiness(&model, &report);
+
+    let expected: BTreeSet<CallbackFamily> = [CallbackFamily::Lifecycle, CallbackFamily::Serial]
+        .into_iter()
+        .collect();
+    assert_eq!(readiness.callback_families_present, expected);
+
+    // Lifecycle has two methods (init, deinit), Serial has one (tx_byte).
+    assert_eq!(readiness.callback_impls.len(), 3);
+    let lifecycle_count = readiness
+        .callback_impls
+        .iter()
+        .filter(|ci| ci.family == CallbackFamily::Lifecycle)
+        .count();
+    assert_eq!(lifecycle_count, 2);
+    let serial_count = readiness
+        .callback_impls
+        .iter()
+        .filter(|ci| ci.family == CallbackFamily::Serial)
+        .count();
+    assert_eq!(serial_count, 1);
 }
 
 #[test]
-fn incomplete_join_reported_as_caution() {
-    let decl = pl011_decl();
-    let mut binding = pl011_binding();
-    // Make interrupt binding incomplete.
-    binding.interrupts[0].shared = None;
-
-    let input = make_input(decl, binding);
-    let report = check_readiness(&input);
-
-    let cautions = report.cautions();
-    assert!(cautions.iter().any(|f| f.category == "join_completeness"
-        && f.message.contains("interrupts")
-        && f.message.contains("incomplete")));
+fn callback_inventory_empty_when_no_trait_impls_declared() {
+    let model = build_model(MinimalModelConfig::default());
+    let report = verify_phase_1(&model).expect("minimal model must verify");
+    let readiness = check_readiness(&model, &report);
+    assert!(readiness.callback_families_present.is_empty());
+    assert!(readiness.callback_impls.is_empty());
 }
 
-#[test]
-fn join_summaries_carried_through() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
+// -------------------------------------------------------------------
+// Property lints sourced from the VerifyReport
+// -------------------------------------------------------------------
 
-    assert_eq!(report.join_summaries.len(), 6);
-    let families: Vec<&str> = report.join_summaries.iter().map(|s| s.family).collect();
+#[test]
+fn property_required_with_default_surfaces_as_a_lint() {
+    let model = build_model(MinimalModelConfig {
+        with_property_required_with_default: true,
+        ..MinimalModelConfig::default()
+    });
+    let report = verify_phase_1(&model).expect("minimal model must verify");
     assert_eq!(
-        families,
-        &[
-            "properties",
-            "mmio",
-            "interrupts",
-            "clocks",
-            "resets",
-            "pinctrl"
-        ]
-    );
-}
-
-// ---- Test 5: interrupt binding-side authority preserved ----
-
-#[test]
-fn interrupt_decl_hints_reported_as_info() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
-
-    let infos = report.infos();
-    assert!(infos.iter().any(|f| f.category == "interrupt_authority"
-        && f.message.contains("uart_irq")
-        && f.message.contains("diagnostic-only")));
-}
-
-// ---- Test 6: negative cases ----
-
-#[test]
-fn required_clock_without_binding_is_error() {
-    let decl = pl011_decl();
-    let mut binding = pl011_binding();
-    binding.clocks.clear();
-
-    let input = make_input(decl, binding);
-    let report = check_readiness(&input);
-
-    assert!(report.has_errors());
-    let errors = report.errors();
-    assert!(errors.iter().any(|f| f.category == "resource_optionality"
-        && f.message.contains("uart_clk")
-        && f.message.contains("no matching binding")));
-}
-
-#[test]
-fn required_property_without_binding_is_error() {
-    let decl = pl011_decl();
-    let mut binding = pl011_binding();
-    // Remove baud_rate binding so required property has no match.
-    binding.properties.retain(|p| p.key != "baud_rate");
-
-    let input = make_input(decl, binding);
-    let report = check_readiness(&input);
-
-    assert!(report.has_errors());
-    let errors = report.errors();
-    assert!(errors
-        .iter()
-        .any(|f| f.category == "resource_optionality" && f.message.contains("baud_rate")));
-}
-
-#[test]
-fn optional_reset_without_binding_is_not_error() {
-    let decl = pl011_decl();
-    let mut binding = pl011_binding();
-    binding.resets.clear();
-
-    let input = make_input(decl, binding);
-    let report = check_readiness(&input);
-
-    // Optional reset missing binding is a caution (join_completeness),
-    // but not an error (resource_optionality).
-    assert!(!report
-        .errors()
-        .iter()
-        .any(|f| f.category == "resource_optionality" && f.message.contains("uart_reset")));
-}
-
-#[test]
-fn all_findings_are_sorted() {
-    let input = make_input(pl011_decl(), pl011_binding());
-    let report = check_readiness(&input);
-
-    // Verify findings are sorted.
-    let mut sorted = report.findings.clone();
-    sorted.sort();
-    assert_eq!(report.findings, sorted);
-}
-
-#[test]
-fn network_device_class_does_not_require_serial() {
-    let mut decl = pl011_decl();
-    decl.driver.device_class = DeviceClass::Network;
-    // Remove serial callbacks to match network device.
-    decl.callbacks.serial_impls.clear();
-
-    let input = make_input(decl, pl011_binding());
-    let report = check_readiness(&input);
-
-    // Should not report missing serial for network device.
-    assert!(!report
-        .errors()
-        .iter()
-        .any(|f| f.category == "callback_integrity" && f.message.contains("serial")));
-}
-
-// ---- Bus consistency checks ----
-
-#[test]
-fn bus_mismatch_reported_as_error() {
-    use regseq_model::binding::BusBinding;
-    use regseq_model::declaration::driver::BusType;
-
-    let decl = pl011_decl(); // bus = Some(Amba)
-    let binding = pl011_binding();
-    let bus = BusBinding {
-        bus_type: BusType::Pci,
-        amba_id: None,
-        revision: None,
-        provenance: BindingProvenance::new("bus"),
-    };
-    let joined = perform_join(&decl, &binding).expect("join should succeed");
-    let input = AnalysisInput::new(decl, joined, Some(bus));
-    let report = check_readiness(&input);
-
-    let bus_errors: Vec<_> = report
-        .errors()
-        .into_iter()
-        .filter(|f| f.category == "bus_consistency")
-        .collect();
-    assert_eq!(bus_errors.len(), 1);
-    assert!(bus_errors[0].message.contains("amba"));
-    assert!(bus_errors[0].message.contains("pci"));
-}
-
-#[test]
-fn bus_consistent_reported_as_info() {
-    use regseq_model::binding::BusBinding;
-    use regseq_model::declaration::driver::BusType;
-
-    let decl = pl011_decl(); // bus = Some(Amba)
-    let binding = pl011_binding();
-    let bus = BusBinding {
-        bus_type: BusType::Amba,
-        amba_id: Some(0x00041011),
-        revision: Some(3),
-        provenance: BindingProvenance::new("bus"),
-    };
-    let joined = perform_join(&decl, &binding).expect("join should succeed");
-    let input = AnalysisInput::new(decl, joined, Some(bus));
-    let report = check_readiness(&input);
-
-    let bus_infos: Vec<_> = report
-        .infos()
-        .into_iter()
-        .filter(|f| f.category == "bus_consistency")
-        .collect();
-    assert!(
-        bus_infos
-            .iter()
-            .any(|f| f.message.contains("amba") && f.message.contains("consistent")),
-        "expected info about bus consistency, got: {bus_infos:?}"
-    );
-}
-
-#[test]
-fn missing_layer2_bus_with_layer1_bus_reported_as_caution() {
-    let decl = pl011_decl(); // bus = Some(Amba)
-    let binding = pl011_binding(); // bus = None
-    let joined = perform_join(&decl, &binding).expect("join should succeed");
-    let input = AnalysisInput::new(decl, joined, None);
-    let report = check_readiness(&input);
-
-    let bus_cautions: Vec<_> = report
-        .cautions()
-        .into_iter()
-        .filter(|f| f.category == "bus_consistency")
-        .collect();
-    assert!(
-        bus_cautions
-            .iter()
-            .any(|f| f.message.contains("no [bus] section")),
-        "expected caution about missing Layer 2 bus, got: {bus_cautions:?}"
-    );
-}
-
-#[test]
-fn amba_without_amba_id_reported_as_caution() {
-    use regseq_model::binding::BusBinding;
-    use regseq_model::declaration::driver::BusType;
-
-    let decl = pl011_decl(); // bus = Some(Amba)
-    let binding = pl011_binding();
-    let bus = BusBinding {
-        bus_type: BusType::Amba,
-        amba_id: None,
-        revision: None,
-        provenance: BindingProvenance::new("bus"),
-    };
-    let joined = perform_join(&decl, &binding).expect("join should succeed");
-    let input = AnalysisInput::new(decl, joined, Some(bus));
-    let report = check_readiness(&input);
-
-    let amba_cautions: Vec<_> = report
-        .cautions()
-        .into_iter()
-        .filter(|f| f.category == "bus_consistency" && f.message.contains("amba_id"))
-        .collect();
-    assert_eq!(
-        amba_cautions.len(),
+        report.lints.len(),
         1,
-        "expected caution about missing amba_id"
+        "verify_phase_1 must emit exactly one property lint"
+    );
+
+    let readiness = check_readiness(&model, &report);
+    assert_eq!(readiness.property_lints.len(), 1);
+    let lint = &readiness.property_lints[0];
+    assert_eq!(lint.level, LintLevel::Advisory);
+    match &lint.kind {
+        LintKind::PropertyRequiredWithDefault { property } => {
+            assert_eq!(*property, DeclId::new(PROPERTY_A_ID));
+        }
+    }
+}
+
+#[test]
+fn property_lints_empty_when_verify_report_has_no_lints() {
+    let model = build_model(MinimalModelConfig {
+        with_clock: true,
+        ..MinimalModelConfig::default()
+    });
+    let report = verify_phase_1(&model).expect("minimal model must verify");
+    assert!(report.lints.is_empty());
+    let readiness = check_readiness(&model, &report);
+    assert!(readiness.property_lints.is_empty());
+}
+
+// -------------------------------------------------------------------
+// Determinism
+// -------------------------------------------------------------------
+
+#[test]
+fn check_readiness_is_deterministic_across_repeated_calls() {
+    let model = build_model(MinimalModelConfig {
+        with_clock: true,
+        with_mmio: true,
+        with_lifecycle_impl: true,
+        with_serial_impl: true,
+        with_property_required_with_default: true,
+    });
+    let report = verify_phase_1(&model).expect("minimal model must verify");
+
+    let a = check_readiness(&model, &report);
+    let b = check_readiness(&model, &report);
+
+    assert_eq!(a.callback_families_present, b.callback_families_present);
+    project_impls(&a)
+        .iter()
+        .zip(project_impls(&b).iter())
+        .for_each(|(x, y)| assert_eq!(x, y));
+    assert_eq!(a.resource_field_names, b.resource_field_names);
+    assert_eq!(a.property_lints, b.property_lints);
+}
+
+fn project_impls(report: &ReadinessReport) -> Vec<(CallbackFamily, u32, u32)> {
+    report
+        .callback_impls
+        .iter()
+        .map(|ci| {
+            (
+                ci.family,
+                ci.function_id.0.index(),
+                ci.driver_type.0.index(),
+            )
+        })
+        .collect()
+}
+
+// -------------------------------------------------------------------
+// PL011 smoke: load the Phase-6 golden and exercise the full pipeline.
+// -------------------------------------------------------------------
+
+fn pl011_fixture_root() -> PathBuf {
+    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+    p.push("../../tests/fixtures/pl011-full-spec");
+    p
+}
+
+#[test]
+fn pl011_smoke_readiness_report_populates_expected_fields() {
+    let raw_path = pl011_fixture_root().join("expected/raw-frontend.json");
+    let raw_json = std::fs::read_to_string(&raw_path).expect("read PL011 raw-frontend.json");
+    let raw: RawFrontendArtifact =
+        serde_json::from_str(&raw_json).expect("deserialize PL011 RawFrontendArtifact");
+    let mut model = normalize(&raw).expect("PL011 normalize must succeed");
+
+    let platform = parse_platform_file_path(&pl011_fixture_root().join("platform.toml"))
+        .expect("parse PL011 platform.toml");
+    populate_bindings(&mut model, &platform).expect("PL011 populate_bindings must succeed");
+
+    // After `populate_bindings`, the model is at Phase-2. `verify_phase_1`
+    // would reject it because resource bindings are populated -- use
+    // `verify_phase_2` to produce the `VerifyReport` that
+    // `check_readiness` consumes.
+    let report = verify_phase_2(&model).expect("PL011 Phase-2 verify must pass");
+    let readiness = check_readiness(&model, &report);
+
+    // PL011 declares clocks + reset + pinctrl + interrupts + mmio +
+    // properties in its driver struct, so resource_field_names must be
+    // non-empty.
+    assert!(
+        !readiness.resource_field_names.is_empty(),
+        "PL011 readiness must surface at least one resource field name",
+    );
+
+    // PL011's Phase-1 lint baseline is empty at this fixture shape;
+    // mirror the documented baseline in the `lint_findings` suite.
+    assert!(
+        readiness.property_lints.is_empty(),
+        "PL011 Phase-2 readiness lint baseline drift: {:?}",
+        readiness.property_lints,
     );
 }

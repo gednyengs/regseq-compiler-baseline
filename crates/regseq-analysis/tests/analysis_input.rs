@@ -3,8 +3,14 @@
 //! Verifies that the AnalysisInput contract wraps the declaration model
 //! and joined artifact correctly, preserves family ownership, and exposes
 //! all required query surfaces without introducing backend policy.
+//!
+//! This test file exercises the deprecated `regseq_analysis::legacy_input`
+//! shim; `#![allow(deprecated)]` is applied crate-wide so the shim's
+//! deprecation notices don't trip `-D warnings` while the shim is still
+//! in place (retirement target: `regseq-lowering-10`).
+#![allow(deprecated)]
 
-use regseq_analysis::{AnalysisInput, ResourceJoinSummary};
+use regseq_analysis::legacy_input::{AnalysisInput, ResourceJoinSummary};
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, ClockBinding, InterruptBinding, JoinKey,
     MmioBinding, PinCtrlBinding, PropertyBinding, ResetBinding,

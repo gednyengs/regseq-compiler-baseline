@@ -5,8 +5,13 @@
 //!
 //! This module uses `AnalysisInput.mir_bodies()` exclusively. The legacy
 //! HIR-based `body_interpreter` module is not used by this path.
+//!
+//! The transitional `regseq_analysis::legacy_input::AnalysisInput` shim
+//! is deprecated at its source; `#![allow(deprecated)]` applies here
+//! until `regseq-lowering-10` rewrites this path against `&RegseqModel`.
+#![allow(deprecated)]
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::declaration::callbacks::CallbackFamily;
 
 use super::behavior::BehaviorPlan;

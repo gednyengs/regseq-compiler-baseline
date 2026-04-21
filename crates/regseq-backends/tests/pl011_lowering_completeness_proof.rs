@@ -15,12 +15,16 @@
 //! code. This proof guards against both accidental reintroduction and
 //! overly coarse lowering that forces the backend to reconstruct
 //! authored behavior.
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
 
 #![allow(dead_code)]
+#![allow(deprecated)]
 
 use std::collections::BTreeSet;
 
-use regseq_analysis::{check_body_readiness, AnalysisInput};
+use regseq_analysis::legacy_input::{check_body_readiness, AnalysisInput};
 use regseq_backends::linux::planner::build_linux_backend_plan;
 use regseq_backends::lowering::behavior::{BehaviorNode, FunctionRole};
 use regseq_backends::lowering::mir_interpreter::resolve_interrupt_class_masks;

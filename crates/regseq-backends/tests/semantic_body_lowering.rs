@@ -5,6 +5,10 @@
 //! - the reference resolver resolves all representative-set refs
 //! - `lower_and_populate_hierarchy` produces non-empty bodies
 //! - the narrow and full representative function sets lower successfully
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
+#![allow(deprecated)]
 
 use std::collections::BTreeMap;
 
@@ -748,7 +752,7 @@ fn no_linux_or_zephyr_names_in_hierarchy_items() {
 // These tests call lower_and_populate_hierarchy() with a real AnalysisInput
 // built from the pl011-full-spec fixture's raw-frontend.json MIR bodies.
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::lowering::semantic_lowering::lower_and_populate_hierarchy;
 use regseq_model::binding::{
     BindingHeader, BindingModel, BindingProvenance, BusBinding, ClockBinding, InterruptBinding,

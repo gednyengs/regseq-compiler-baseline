@@ -1,27 +1,22 @@
-//! MIR body capture readiness and supported-subset validation.
+//! Legacy MIR-body readiness reporter targeted at [`AnalysisInput`].
 //!
-//! Validates that the analysis input contains adequate MIR-derived body
-//! capture for later lowering, and surfaces any unsupported constructs
-//! or coverage gaps explicitly.
-//!
-//! Design rules:
-//! - device-neutral and OS-neutral: no PL011- or Linux-specific logic
-//! - no manual body construction: all body data comes from the model
-//! - unsupported constructs are surfaced, never silently skipped
-//! - deterministic output
-//! - uses MIR bodies (mir_bodies) exclusively, not the legacy HIR path
+//! Preserves the pre-RegseqModel `check_body_readiness` entry point
+//! and its associated finding / report vocabulary for callers that
+//! have not yet migrated. See [`crate::legacy_input`] for the
+//! retirement plan (target: `regseq-lowering-10`).
 
 use std::collections::{BTreeMap, BTreeSet};
-
-use crate::input::AnalysisInput;
-use crate::readiness::FindingSeverity;
 
 use regseq_model::compat::{
     CallbackFamily, FnKind, MirBody, MirOperand, MirProjectionElem, MirQueryFlavor, MirRvalue,
     MirStatementKind, MirTerminatorKind,
 };
 
-/// A single body readiness finding.
+use super::input_shim::AnalysisInput;
+use super::readiness_shim::FindingSeverity;
+
+/// A single body-capture finding.
+#[deprecated(note = "Shim type; verifier-level checks now live in regseq_model::verify")]
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub struct BodyFinding {
     /// Severity of this finding.
@@ -33,10 +28,7 @@ pub struct BodyFinding {
 }
 
 /// Aggregate counts of MIR forms encountered across all bodies.
-///
-/// Makes the supported-subset explicit rather than implicit: each
-/// form kind is counted so reviewers can see exactly which MIR
-/// constructs appear in the current slice.
+#[deprecated(note = "Shim type; verifier-level checks now live in regseq_model::verify")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct MirFormSummary {
     /// Whether the query flavor is the required `DropsElaborated`.
@@ -45,8 +37,7 @@ pub struct MirFormSummary {
     pub cleanup_block_count: usize,
     /// Number of `Drop` terminators across all bodies.
     pub drop_terminator_count: usize,
-    /// Number of detected fallible control-flow patterns (`?`-style
-    /// SwitchInt result discrimination).
+    /// Number of detected fallible control-flow patterns.
     pub fallible_pattern_count: usize,
     /// Per-kind count of statements encountered.
     pub statement_kinds: BTreeMap<String, usize>,
@@ -56,10 +47,8 @@ pub struct MirFormSummary {
     pub rvalue_kinds: BTreeMap<String, usize>,
 }
 
-/// Result of MIR body capture readiness validation.
-///
-/// Contains deterministic findings about body coverage, supported-subset
-/// compliance, cleanup visibility, and provenance completeness.
+/// Deterministic report of MIR body capture readiness findings.
+#[deprecated(note = "Shim type; verifier-level checks now live in regseq_model::verify")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct BodyReadinessReport {
     /// All findings, sorted by severity then category then message.
@@ -110,11 +99,11 @@ impl BodyReadinessReport {
     }
 }
 
-/// Validate MIR body capture and supported-subset for the analysis input.
-///
-/// Returns a deterministic report of findings about body coverage,
-/// unsupported constructs, cleanup visibility, and provenance completeness.
-/// Uses the canonical `mir_bodies` path, not the legacy HIR body set.
+/// Legacy body-capture validator preserved for backends still using
+/// [`AnalysisInput`].
+#[deprecated(
+    note = "Shim entry point; body-level invariants now live in regseq_model::verify (Phase-1 / Phase-2)"
+)]
 pub fn check_body_readiness(input: &AnalysisInput) -> BodyReadinessReport {
     let mut findings = Vec::new();
 
@@ -146,10 +135,6 @@ pub fn check_body_readiness(input: &AnalysisInput) -> BodyReadinessReport {
     }
 }
 
-// ----------------------------------------------------------------
-// Query flavor validation
-// ----------------------------------------------------------------
-
 fn check_query_flavor(input: &AnalysisInput, findings: &mut Vec<BodyFinding>) {
     match input.mir_query_flavor() {
         MirQueryFlavor::DropsElaborated => {
@@ -162,11 +147,6 @@ fn check_query_flavor(input: &AnalysisInput, findings: &mut Vec<BodyFinding>) {
     }
 }
 
-// ----------------------------------------------------------------
-// Callback body coverage
-// ----------------------------------------------------------------
-
-/// Map a callback family to its expected trait name in body declarations.
 fn family_trait_name(family: &CallbackFamily) -> &'static str {
     match family {
         CallbackFamily::Lifecycle => "Lifecycle",
@@ -211,10 +191,6 @@ fn check_callback_body_coverage(input: &AnalysisInput, findings: &mut Vec<BodyFi
     }
 }
 
-// ----------------------------------------------------------------
-// Reachable helper coverage
-// ----------------------------------------------------------------
-
 fn check_reachable_helper_coverage(
     input: &AnalysisInput,
     reachable: &BTreeSet<String>,
@@ -230,10 +206,6 @@ fn check_reachable_helper_coverage(
         }
     }
 }
-
-// ----------------------------------------------------------------
-// Unsupported MIR construct detection
-// ----------------------------------------------------------------
 
 fn check_unsupported_nodes(input: &AnalysisInput, findings: &mut Vec<BodyFinding>) -> usize {
     let mut total = 0;
@@ -258,10 +230,6 @@ fn check_unsupported_nodes(input: &AnalysisInput, findings: &mut Vec<BodyFinding
     total
 }
 
-/// Collect all unsupported MIR constructs in a body.
-///
-/// Returns `(form_kind, description)` pairs where `form_kind` is one of
-/// "statement", "terminator", "rvalue", "projection".
 fn collect_unsupported_in_mir(body: &MirBody) -> Vec<(&'static str, String)> {
     let mut out = Vec::new();
 
@@ -270,7 +238,6 @@ fn collect_unsupported_in_mir(body: &MirBody) -> Vec<(&'static str, String)> {
             if let MirStatementKind::Unsupported { description } = &stmt.kind {
                 out.push(("statement", description.clone()));
             }
-            // Check rvalues inside Assign statements.
             if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
                 collect_unsupported_in_rvalue(rvalue, &mut out);
             }
@@ -280,7 +247,6 @@ fn collect_unsupported_in_mir(body: &MirBody) -> Vec<(&'static str, String)> {
                 MirTerminatorKind::Unsupported { description } => {
                     out.push(("terminator", description.clone()));
                 }
-                // Check operands inside Call/SwitchInt/Assert for unsupported constants.
                 MirTerminatorKind::Call { func, args, .. } => {
                     collect_unsupported_in_operand(func, &mut out);
                     for arg in args {
@@ -348,10 +314,6 @@ fn collect_unsupported_in_place_projections(
     }
 }
 
-// ----------------------------------------------------------------
-// Cleanup / drop visibility
-// ----------------------------------------------------------------
-
 fn check_cleanup_visibility(input: &AnalysisInput, findings: &mut Vec<BodyFinding>) {
     let mut total_cleanup_blocks = 0usize;
     let mut total_drop_terminators = 0usize;
@@ -391,18 +353,6 @@ fn check_cleanup_visibility(input: &AnalysisInput, findings: &mut Vec<BodyFindin
     }
 }
 
-// ----------------------------------------------------------------
-// Fallible control-flow pattern detection
-// ----------------------------------------------------------------
-
-/// Detect `?`-style fallible control-flow patterns in MIR.
-///
-/// In post-drop-elaboration MIR, the `?` operator desugars to a
-/// `SwitchInt` on the discriminant of a `Result` value, with one
-/// branch continuing on the success path and another running cleanup
-/// and returning the error. We detect this pattern by looking for
-/// `SwitchInt` terminators that follow a `Discriminant` rvalue
-/// assignment in the same basic block.
 fn check_fallible_patterns(input: &AnalysisInput, findings: &mut Vec<BodyFinding>) {
     for func in &input.mir_bodies().functions {
         let count = count_fallible_patterns(&func.body);
@@ -422,8 +372,6 @@ fn check_fallible_patterns(input: &AnalysisInput, findings: &mut Vec<BodyFinding
 fn count_fallible_patterns(body: &MirBody) -> usize {
     let mut count = 0;
     for bb in &body.basic_blocks {
-        // Pattern: block has a Discriminant rvalue assignment followed
-        // by a SwitchInt terminator on the same local.
         let has_discriminant_assign = bb.statements.iter().any(|stmt| {
             matches!(
                 &stmt.kind,
@@ -443,10 +391,6 @@ fn count_fallible_patterns(body: &MirBody) -> usize {
     count
 }
 
-// ----------------------------------------------------------------
-// Provenance validation
-// ----------------------------------------------------------------
-
 fn check_body_provenance(input: &AnalysisInput, findings: &mut Vec<BodyFinding>) {
     for func in &input.mir_bodies().functions {
         if func.provenance.raw_family.is_empty() {
@@ -465,10 +409,6 @@ fn check_body_provenance(input: &AnalysisInput, findings: &mut Vec<BodyFinding>)
         }
     }
 }
-
-// ----------------------------------------------------------------
-// MIR form summary builder
-// ----------------------------------------------------------------
 
 fn build_mir_form_summary(input: &AnalysisInput) -> MirFormSummary {
     let query_flavor_valid = matches!(input.mir_query_flavor(), MirQueryFlavor::DropsElaborated);
@@ -490,7 +430,6 @@ fn build_mir_form_summary(input: &AnalysisInput) -> MirFormSummary {
                 let kind_name = stmt_kind_name(&stmt.kind);
                 *statement_kinds.entry(kind_name.into()).or_insert(0) += 1;
 
-                // Count rvalue kinds inside Assign.
                 if let MirStatementKind::Assign { rvalue, .. } = &stmt.kind {
                     let rv_name = rvalue_kind_name(rvalue);
                     *rvalue_kinds.entry(rv_name.into()).or_insert(0) += 1;

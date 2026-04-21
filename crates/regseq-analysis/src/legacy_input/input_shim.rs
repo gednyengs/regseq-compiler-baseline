@@ -1,15 +1,9 @@
-//! Analysis-facing bootstrap input layer.
+//! Legacy [`AnalysisInput`] storage and accessor surface.
 //!
-//! Pairs a normalized `DeclarationModel` with its corresponding
-//! `JoinedArtifact` and provides read-only query helpers that span
-//! both inputs. Later lowering work consumes this layer rather than
-//! managing the two models independently.
-//!
-//! Design rules:
-//! - read-only: no mutation of the underlying models
-//! - rustc-independent: no compiler types
-//! - family ownership preserved: no flattening into one untyped bag
-//! - no backend-specific policy
+//! Preserves the pre-RegseqModel bootstrap layer that wraps a
+//! [`DeclarationModel`] + [`JoinedArtifact`] + optional Layer-2
+//! [`BusBinding`]. See [`crate::legacy_input`] for the retirement
+//! plan (target: `regseq-lowering-10`).
 
 use std::collections::BTreeSet;
 
@@ -24,11 +18,19 @@ use regseq_model::compat::{
     SynchronizationDeclSet, TimedDelayCallSiteDecl, TimedDelayDeclSet, WrapperCallSiteDecl,
 };
 
-/// Read-only analysis input pairing a declaration model with its joined artifact.
+/// Read-only analysis input pairing a declaration model with its joined
+/// artifact.
 ///
-/// This is the stable entry point for Phase D lowering consumers. It
-/// delegates to existing model traversal where adequate and adds
-/// cross-model summary helpers where needed.
+/// Deprecated: new code should consume [`regseq_model::RegseqModel`]
+/// directly via [`regseq_model::query`] helpers and the
+/// [`regseq_model::verify::VerifyReport`] produced by
+/// [`regseq_model::verify::verify_phase_1`] /
+/// [`regseq_model::verify::verify_phase_2`]. See
+/// [`crate::readiness::check_readiness`] for the replacement
+/// reviewer-facing reporter.
+#[deprecated(
+    note = "Migrate to `&regseq_model::RegseqModel` + `regseq_model::query::*` via regseq-lowering-10"
+)]
 #[derive(Debug, Clone)]
 pub struct AnalysisInput {
     decl: DeclarationModel,
@@ -37,8 +39,9 @@ pub struct AnalysisInput {
 }
 
 impl AnalysisInput {
-    /// Create a new analysis input from a declaration model, its joined artifact,
-    /// and an optional Layer 2 bus binding.
+    /// Create a new analysis input from a declaration model, its joined
+    /// artifact, and an optional Layer 2 bus binding.
+    #[deprecated(note = "Transitional shim; migrate to &RegseqModel via regseq-lowering-10")]
     pub fn new(
         decl: DeclarationModel,
         joined: JoinedArtifact,
@@ -299,7 +302,6 @@ impl AnalysisInput {
 
     // ----------------------------------------------------------------
     // Declaration-only operation-evidence families
-    // (no binding-side join path -- consumed directly by Phase D)
     // ----------------------------------------------------------------
 
     /// Borrow the full resource declaration set.
@@ -467,9 +469,6 @@ impl AnalysisInput {
 
     /// Compute the set of helper and free-function names transitively
     /// reachable from callbacks and ISRs through MIR call edges.
-    ///
-    /// Uses the `helper_calls` field on each `MirFnBodyDecl`, which was
-    /// extracted from MIR `Call` terminators by the frontend.
     pub fn mir_reachable_helper_names(&self) -> BTreeSet<String> {
         let non_callback_names: BTreeSet<String> = self
             .decl
@@ -483,7 +482,6 @@ impl AnalysisInput {
         let mut reachable = BTreeSet::new();
         let mut worklist: Vec<String> = Vec::new();
 
-        // Seed from callbacks and ISRs.
         for f in &self.decl.mir_bodies.functions {
             if f.is_callback() || f.is_isr() {
                 for t in &f.helper_calls {
@@ -494,7 +492,6 @@ impl AnalysisInput {
             }
         }
 
-        // Transitive closure through helpers and free functions.
         while let Some(name) = worklist.pop() {
             if let Some(func) = self.decl.mir_bodies.by_name(&name) {
                 for t in &func.helper_calls {
@@ -523,7 +520,6 @@ impl AnalysisInput {
         let mut reachable = BTreeSet::new();
         let mut worklist: Vec<String> = Vec::new();
 
-        // Seed from callbacks and ISRs.
         for f in &self.decl.bodies.functions {
             if f.is_callback() || f.is_isr() {
                 for t in collect_call_targets(&f.body) {
@@ -534,7 +530,6 @@ impl AnalysisInput {
             }
         }
 
-        // Transitive closure through helpers and free functions.
         while let Some(name) = worklist.pop() {
             if let Some(func) = self.decl.bodies.by_name(&name) {
                 for t in collect_call_targets(&func.body) {
@@ -550,9 +545,7 @@ impl AnalysisInput {
 }
 
 /// Per-family summary of join outcomes.
-///
-/// Counts how many entries are fully joined, partially joined (incomplete),
-/// declaration-only, or binding-only for a single resource/property family.
+#[deprecated(note = "Shim type; migrate to &RegseqModel + query::* via regseq-lowering-10")]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ResourceJoinSummary {
     /// Family label (e.g. `"properties"`, `"mmio"`).

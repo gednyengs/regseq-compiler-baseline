@@ -3,10 +3,15 @@
 //! Provides metadata from the declaration model needed to classify MIR
 //! operations: register block field names, MMIO identities, resource
 //! fields, and helper function names.
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::declaration::mir_body::{
     FnParamDecl, MirBody, MirLocalDecl, MirOperand, MirRvalue, MirStatementKind,
 };

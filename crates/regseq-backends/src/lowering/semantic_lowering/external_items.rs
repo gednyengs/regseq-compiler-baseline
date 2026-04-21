@@ -10,10 +10,15 @@
 //!
 //! Discovery is code-driven (scans MIR types actually referenced),
 //! not a hardcoded inventory.
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::declaration::mir_body::{
     MirConstValue, MirFnBodyDecl, MirOperand, MirRvalue, MirStatementKind, MirTerminatorKind, MirTy,
 };

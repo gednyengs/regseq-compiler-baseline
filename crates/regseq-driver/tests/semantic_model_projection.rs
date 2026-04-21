@@ -7,10 +7,14 @@
 //! - the canonical `build_driver_lowering_plan_from_hierarchy` produces a
 //!   real populated `SemanticModel`
 //! - projection is deterministic and OS-neutral
+//!
+//! Exercises the deprecated `regseq_analysis::legacy_input` shim during
+//! the transitional window that ends with `regseq-lowering-10`.
+#![allow(deprecated)]
 
 use std::collections::{BTreeMap, BTreeSet};
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_backends::lowering::hierarchy::{
     build_item_hierarchy, CallbackTraitPaths, ItemHierarchy,
 };

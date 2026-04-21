@@ -8,10 +8,15 @@
 //! signatures are retained for workspace compilation with `regseq-driver`
 //! (out of scope for the Phase 2C migration). They are not part of the
 //! semantic-model migration and should not be used for new work.
+//!
+//! `regseq_analysis::legacy_input::AnalysisInput` is a transitional shim
+//! retired by `regseq-lowering-10`; `#![allow(deprecated)]` is applied
+//! here until then.
+#![allow(deprecated)]
 
 use std::collections::BTreeSet;
 
-use regseq_analysis::AnalysisInput;
+use regseq_analysis::legacy_input::AnalysisInput;
 use regseq_model::compat::CallbackFamily;
 use regseq_model::compat::ItemId;
 use regseq_model::compat::SemanticModel;
