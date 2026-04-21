@@ -21,6 +21,7 @@ pub mod normalize;
 pub mod platform;
 pub mod platform_parser;
 pub mod properties;
+pub mod query;
 pub mod semantic;
 pub mod serialize;
 pub mod verify;

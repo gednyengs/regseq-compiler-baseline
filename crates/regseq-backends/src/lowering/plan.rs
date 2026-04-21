@@ -311,9 +311,9 @@ pub struct TeardownStep {
     pub resource_id: String,
 }
 
-// ResourceKind is now defined in regseq-model::semantic::types and re-exported
+// ResourceKind is defined in regseq-model::model::resources and re-exported
 // here for backward compatibility with existing import sites.
-pub use regseq_model::semantic::ResourceKind;
+pub use regseq_model::model::ResourceKind;
 
 // ---------------------------------------------------------------------------
 // Device-class roles

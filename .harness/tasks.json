@@ -1184,7 +1184,7 @@
           "id": "regseq-model-61",
           "name": "regseq-model::query CFG traversal helpers",
           "spec": ".harness/tasks/regseq-model/61-query-module.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-60"
           ],

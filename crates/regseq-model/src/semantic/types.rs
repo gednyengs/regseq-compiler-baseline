@@ -101,20 +101,7 @@ pub enum SemanticType {
 
 /// Resource family discriminant.
 ///
-/// Shared between the semantic IR and the portable lowering plan for
-/// resource-family classification.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum ResourceKind {
-    /// MMIO mapping.
-    Mmio,
-    /// Interrupt line.
-    Interrupt,
-    /// Clock.
-    Clock,
-    /// Reset line.
-    Reset,
-    /// Pin controller state.
-    PinCtrl,
-    /// Firmware property read.
-    Property,
-}
+/// Re-exported from [`crate::model::resources::ResourceKind`], its
+/// canonical home. Kept here for transitional compatibility while
+/// `semantic/` is in the process of being deleted.
+pub use crate::model::resources::ResourceKind;

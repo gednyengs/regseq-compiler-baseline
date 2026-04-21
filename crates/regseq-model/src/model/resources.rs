@@ -25,6 +25,29 @@ pub enum Shape {
     Array(usize),
 }
 
+/// Resource family discriminant.
+///
+/// The canonical home for the resource-family tag shared across the
+/// model, query helpers, and backends. Consumers that previously
+/// imported `regseq_model::semantic::ResourceKind` should migrate to
+/// this path; the `semantic` module re-exports this type for
+/// transitional compatibility until `semantic/` is deleted.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
+pub enum ResourceKind {
+    /// MMIO mapping.
+    Mmio,
+    /// Interrupt line.
+    Interrupt,
+    /// Clock.
+    Clock,
+    /// Reset line.
+    Reset,
+    /// Pin controller state.
+    PinCtrl,
+    /// Firmware property read.
+    Property,
+}
+
 // --- Clock ------------------------------------------------------------
 
 /// Clock resource field on the driver struct.

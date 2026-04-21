@@ -38,7 +38,7 @@ macro_rules! decl_id_wrapper {
         $name:ident
     ) => {
         $(#[$meta])*
-        #[derive(Copy, Clone, Eq, PartialEq, Hash, Serialize, Deserialize)]
+        #[derive(Copy, Clone, Eq, PartialEq, Ord, PartialOrd, Hash, Serialize, Deserialize)]
         pub struct $name(pub DeclId);
 
         impl $name {

@@ -259,6 +259,17 @@ Codex's call is right on every divergence. The Explore agent's classifications l
   model adds storage without information. Add a small `query/` helper
   module under `regseq-model/src/` so the traversals are reusable and
   deterministic.
+- **Deferrals**: task `regseq-model-61` lands the `query` helper
+  module with placeholder implementations for three legacy families
+  that have no corresponding `RegseqIntrinsic` variant in the
+  current CFG IR: `duration_ctor_call_sites`, `pm_gate_call_sites`,
+  `lock_call_sites`, and `completion_call_sites`. Each helper
+  exists as a public API surface for completeness-audit symmetry
+  but returns an empty vector today. They will begin returning
+  non-empty output once (a) a `DurationCtor*` / `PmGate*` / `Lock*`
+  / `Completion*` variant is added to
+  `RegseqIntrinsic` or (b) the construct is re-expressed as a
+  different IR node -- neither is in scope for task 61.
 - **Output**: `DriverLoweringPlan` -- same shape minus
   `legacy_behavior` and the `SemanticModel` reference.
 - **Delta**: entry point becomes

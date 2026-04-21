@@ -34,7 +34,7 @@ pub use regseq_model::RegseqModel;
 pub use resources::{
     ClockBinding, ClockDecl, ClockResource, InterruptBinding, InterruptDecl, InterruptResource,
     MmioBinding, MmioDecl, MmioResource, PinCtrlBinding, PinCtrlDecl, PinCtrlResource,
-    PropertyField, ResetBinding, ResetDecl, ResetResource, Shape, SyncKind, SyncResource,
-    UserDataField,
+    PropertyField, ResetBinding, ResetDecl, ResetResource, ResourceKind, Shape, SyncKind,
+    SyncResource, UserDataField,
 };
 pub use type_def::{AttrEntry, AttrValue, Attrs, FieldDef, TypeDef, TypeDefKind, VariantDef};
