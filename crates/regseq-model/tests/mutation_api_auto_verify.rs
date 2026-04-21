@@ -993,3 +993,53 @@ fn insert_property_value_commits_on_phase_2_when_valid() {
         .expect("bound value committed");
     assert_eq!(post_value, LiteralValue::U32(12_000_000));
 }
+
+// ---------------------------------------------------------------------
+// (8) Task 62: lint channel pass-through through MutationGuard::commit.
+// A mutation that introduces a model triggering a lint (property
+// marked required AND carrying a default_value) must commit
+// successfully, the lint must surface in the returned VerifyReport,
+// and the model must NOT roll back.
+// ---------------------------------------------------------------------
+
+#[test]
+fn commit_surfaces_lint_findings_without_rollback() {
+    use regseq_model::verify::{LintKind, LintLevel};
+
+    let mut model = build_minimal_phase_2_ok();
+
+    // Flip the property into the "required with default" shape, which
+    // triggers the `PropertyRequiredWithDefault` lint without violating
+    // any Phase-2 structural invariant (bound_value stays populated, so
+    // `required` remains satisfied).
+    {
+        let mut guard = model.begin_mutation(MutationPhase::Phase2);
+        guard.modify_driver_struct(|d: &mut DriverStruct| {
+            d.properties[0].required = true;
+            d.properties[0].default_value = Some(LiteralValue::U32(0));
+        });
+        let report = guard
+            .commit()
+            .expect("lint-only model must not trigger rollback");
+        assert_eq!(report.lints.len(), 1, "exactly one lint must fire");
+        assert_eq!(report.lints[0].level, LintLevel::Advisory);
+        match &report.lints[0].kind {
+            LintKind::PropertyRequiredWithDefault { property } => {
+                assert_eq!(*property, DeclId::new(PROPERTY_ID));
+            }
+        }
+    }
+
+    // Mutation stuck: the default_value we inserted is still present.
+    let post_default = model
+        .root_module
+        .submodules
+        .iter()
+        .find(|m| m.kind == ModuleKind::Driver)
+        .and_then(|m| m.driver.as_ref())
+        .expect("driver present")
+        .properties[0]
+        .default_value
+        .clone();
+    assert_eq!(post_default, Some(LiteralValue::U32(0)));
+}

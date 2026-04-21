@@ -27,21 +27,30 @@
 //! [`DeclId`]: crate::identity::DeclId
 //! [`RegseqModel::source_locations`]: crate::model::RegseqModel::source_locations
 
+use super::lints;
 use super::rules;
-use super::VerifierError;
+use super::{VerifierError, VerifyReport};
 use crate::model::RegseqModel;
 
 /// Verify that `model` satisfies the post-Phase-1 invariants.
 ///
-/// Fail-fast: returns the first violation in deterministic order
-/// (module-level rules before cross-item rules; within a rule,
-/// declarations are iterated in their canonical container order).
+/// Fail-fast on structural violations: returns the first violation
+/// in deterministic order (module-level rules before cross-item
+/// rules; within a rule, declarations are iterated in their canonical
+/// container order). When every structural rule passes, the non-fatal
+/// lint rules under [`lints::rules`] also run and their findings are
+/// packaged into the returned [`VerifyReport`].
 ///
-/// A batching `verify_phase_1_collect` variant can be added later if
-/// downstream consumers need it; no speculation now.
-pub fn verify_phase_1(model: &RegseqModel) -> Result<(), VerifierError> {
+/// **Channel separation:** lint rules never produce a `VerifierError`.
+/// A [`LintFinding`] only ever flows out via the `Ok(VerifyReport)`
+/// arm, so downstream consumers (notably
+/// [`MutationGuard::commit`](crate::model::MutationGuard::commit))
+/// continue to gate rollback on the `Err` arm alone.
+///
+/// [`LintFinding`]: super::LintFinding
+pub fn verify_phase_1(model: &RegseqModel) -> Result<VerifyReport, VerifierError> {
     rules::module::run(model)?;
     rules::cross_item::run(model)?;
     // Task 57 may route additional transformation-level checks here.
-    Ok(())
+    Ok(lints::rules::run(model))
 }

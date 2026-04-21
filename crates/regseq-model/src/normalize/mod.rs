@@ -123,7 +123,12 @@ fn build_model(
 
     post_hook(&mut model);
 
-    verify_phase_1(&model).map_err(|inner| NormalizeError {
+    // `verify_phase_1` now returns `Ok(VerifyReport)` on success.
+    // Normalize has no diagnostic surface of its own for lints;
+    // reviewer-facing findings are consumed by `regseq-analysis`
+    // from a direct `verify_phase_1` call (task 6), so the report is
+    // dropped here.
+    let _report = verify_phase_1(&model).map_err(|inner| NormalizeError {
         kind: NormalizeErrorKind::Phase1VerificationFailed { inner },
         provenance: NormalizeProvenance {
             surface_path: "<post-normalize verify>".into(),

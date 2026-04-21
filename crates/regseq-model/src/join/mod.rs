@@ -183,7 +183,12 @@ pub fn populate_bindings(model: &mut RegseqModel, platform: &PlatformFile) -> Jo
     sections::join_construct_sections(&mut guard, &platform.construct_sections, &index)?;
     sections::join_properties(&mut guard, &platform.properties, &index)?;
 
-    guard.commit().map_err(|inner| JoinError {
+    // `commit` now returns `Ok(VerifyReport)` on success, with any
+    // Phase-2 lint findings attached. Platform join has no
+    // diagnostic surface of its own, so the report is dropped here;
+    // `regseq-analysis` consumes the verifier's lint channel directly
+    // in task 6.
+    guard.commit().map(|_report| ()).map_err(|inner| JoinError {
         kind: JoinErrorKind::Phase2VerificationFailed { inner },
         provenance: JoinProvenance {
             platform_section: String::from("<post-join verify>"),

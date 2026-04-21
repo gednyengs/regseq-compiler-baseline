@@ -20,8 +20,9 @@
 //! slot is `None`") deliberately do NOT re-run -- the whole point of
 //! Phase 2 is to populate those slots.
 
+use super::lints;
 use super::rules;
-use super::VerifierError;
+use super::{VerifierError, VerifyReport};
 use crate::model::RegseqModel;
 
 /// Verify that `model` satisfies the post-Phase-2 invariants.
@@ -55,12 +56,12 @@ use crate::model::RegseqModel;
 /// skip it intentionally since populated bindings are now expected.
 /// We achieve the skip by running only the module-tree subset --
 /// see [`rules::module::run_phase_2_subset`].
-pub fn verify_phase_2(model: &RegseqModel) -> Result<(), VerifierError> {
+pub fn verify_phase_2(model: &RegseqModel) -> Result<VerifyReport, VerifierError> {
     rules::module::run_phase_2_subset(model)?;
     rules::cross_item::run(model)?;
     rules::driver_struct::run(model)?;
     rules::body::run(model)?;
     rules::phase_2_boundary::run(model)?;
     rules::phase_2_cross_item::run(model)?;
-    Ok(())
+    Ok(lints::rules::run(model))
 }

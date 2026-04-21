@@ -1195,7 +1195,7 @@
           "id": "regseq-model-62",
           "name": "LintFinding API + fold property lints into verify_phase_1",
           "spec": ".harness/tasks/regseq-model/62-lint-finding-api.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-60"
           ],

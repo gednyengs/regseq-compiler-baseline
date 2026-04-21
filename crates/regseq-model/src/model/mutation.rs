@@ -39,11 +39,13 @@
 //! [`verify_phase_1`]: crate::verify::verify_phase_1
 //! [`verify_phase_2`]: crate::verify::verify_phase_2
 
-// The task spec prescribes the exact `Result<(), VerifierError>`
-// return from `MutationGuard::commit`. `VerifierError` is a first-class
-// value to match the rest of the verifier surface -- callers match on
-// `.kind` and `.level`. Boxing here would force every commit site to
-// dereference first. See the matching allow in `crate::verify`.
+// Task 62 changes `MutationGuard::commit` to return
+// `Result<VerifyReport, VerifierError>` so non-fatal lint findings flow
+// through alongside structural rollback. `VerifierError` remains a
+// first-class value to match the rest of the verifier surface --
+// callers match on `.kind` and `.level`. Boxing here would force every
+// commit site to dereference first. See the matching allow in
+// `crate::verify`.
 #![allow(clippy::result_large_err)]
 
 use crate::identity::{DeclId, FunctionId, ModuleId};
@@ -55,7 +57,7 @@ use crate::model::regseq_model::RegseqModel;
 use crate::model::resources::{
     ClockBinding, InterruptBinding, MmioBinding, PinCtrlBinding, ResetBinding,
 };
-use crate::verify::{verify_phase_1, verify_phase_2, VerifierError};
+use crate::verify::{verify_phase_1, verify_phase_2, VerifierError, VerifyReport};
 
 /// Which phase-level verifier runs on [`MutationGuard::commit`].
 ///
@@ -260,9 +262,18 @@ impl<'m> MutationGuard<'m> {
     ///
     /// Runs [`verify_phase_1`] or [`verify_phase_2`] (per the phase
     /// set at [`RegseqModel::begin_mutation`]) against the mutated
-    /// model. On success, the mutation sticks and the snapshot is
-    /// dropped. On failure, the model is rolled back to the
-    /// pre-mutation snapshot and the verifier error is returned.
+    /// model. On structural success, the mutation sticks, the
+    /// snapshot is dropped, and any non-fatal [`LintFinding`]s flow
+    /// out on the `Ok` arm inside a [`VerifyReport`]. On structural
+    /// failure, the model is rolled back to the pre-mutation
+    /// snapshot and the verifier error is returned.
+    ///
+    /// Rollback is gated on the `Err(VerifierError)` arm alone: a
+    /// committed mutation whose resulting model triggers a lint rule
+    /// is still committed, and the returned report's `lints` vector
+    /// is the caller's opt-in visibility into those findings. Every
+    /// existing caller that previously treated `commit` as pass/fail
+    /// simply ignores the returned `VerifyReport`.
     ///
     /// `commit` consumes the guard, so the caller cannot continue
     /// mutating after a commit attempt: either the mutation is
@@ -270,7 +281,8 @@ impl<'m> MutationGuard<'m> {
     ///
     /// [`verify_phase_1`]: crate::verify::verify_phase_1
     /// [`verify_phase_2`]: crate::verify::verify_phase_2
-    pub fn commit(mut self) -> Result<(), VerifierError> {
+    /// [`LintFinding`]: crate::verify::LintFinding
+    pub fn commit(mut self) -> Result<VerifyReport, VerifierError> {
         // Take the snapshot out so the Drop impl does not roll back
         // after a successful commit.
         let snapshot = self
@@ -282,7 +294,7 @@ impl<'m> MutationGuard<'m> {
             MutationPhase::Phase2 => verify_phase_2(self.model),
         };
         match result {
-            Ok(()) => Ok(()),
+            Ok(report) => Ok(report),
             Err(e) => {
                 *self.model = snapshot;
                 Err(e)

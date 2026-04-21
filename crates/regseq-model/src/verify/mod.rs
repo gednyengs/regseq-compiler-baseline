@@ -48,10 +48,12 @@ use crate::identity::{
     DeclId, FunctionId, RegisterBlockId, RegisterDescriptorId, SourceOrigin, TypeDefId,
 };
 
+pub mod lints;
 pub mod phase_1;
 pub mod phase_2;
 pub mod rules;
 
+pub use lints::{LintFinding, LintKind, LintLevel, VerifyReport};
 pub use phase_1::verify_phase_1;
 pub use phase_2::verify_phase_2;
 
