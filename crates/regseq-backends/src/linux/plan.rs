@@ -125,6 +125,34 @@ pub struct LinuxSerialCoreRealization {
     /// This is an explicit Linux backend naming policy decision,
     /// not derived from device-specific identifiers.
     pub dev_name: String,
+    /// Driver-struct field name for the MMIO region the serial
+    /// port uses for `uart_port.membase`. The emitter renders
+    /// `d->port.membase = d->{primary_mmio_field};`.
+    ///
+    /// Populated by the Linux planner as the `field_name` of the
+    /// first `LinuxProbeStep::MapMmio` in probe order. An
+    /// authoring-surface override (e.g.,
+    /// `#[rseq::serial_primary]` on a specific `Mmio<T>` field)
+    /// is a future task; until it lands, a multi-MMIO UART wires
+    /// the first region.
+    pub primary_mmio_field: String,
+    /// Driver-struct field name for the IRQ the serial port uses
+    /// for `uart_port.irq`. Same future-override caveat as
+    /// `primary_mmio_field`.
+    pub primary_irq_field: String,
+    /// Driver-struct field name for the clock backing
+    /// `uart_port.uartclk`. The emitter renders EXACTLY ONE
+    /// `d->port.uartclk = ...` line using this field; multi-clock
+    /// drivers no longer collide on this slot.
+    ///
+    /// Populated as the `field_name` of the first
+    /// `LinuxProbeStep::GetClock` in probe order. Same
+    /// future-override caveat as `primary_mmio_field`.
+    pub uartclk_field: String,
+    /// Whether the clock at `uartclk_field` was declared optional.
+    /// Carried on the serial-core realization so the emitter does
+    /// not re-walk `plan.probe.steps` to answer the same question.
+    pub uartclk_optional: bool,
 }
 
 /// Typed Linux port-type representation.
@@ -440,6 +468,38 @@ pub enum LinuxPropertyReadShape {
     AssignReturn,
 }
 
+/// Serial-port wiring role for a Linux firmware property.
+///
+/// Identifies properties that the serial-core integration
+/// consumes beyond their generic `ReadProperty` probe-step
+/// emission. Allows the `RegisterUartPort` emission step to
+/// decide what to wire based on typed role metadata rather than
+/// string-matching authored ids or field names.
+///
+/// Non-serial drivers always carry `serial_role = None`; the
+/// planner gates role assignment on whether
+/// `LinuxSerialCoreRealization` is also being populated.
+///
+/// Additional roles MAY be added as other serial-core fields
+/// surface (e.g., `RxFifoTriggerLevel`, `AutoFlowEnabled`).
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum SerialPortRole {
+    /// Property provides the FIFO depth. The emitter renders
+    /// `d->port.fifosize = d->{field_name};` inside the
+    /// `RegisterUartPort` step.
+    FifoSize,
+    /// Property provides the clock-rate default used when the
+    /// serial-core clock is optional and missing at runtime.
+    /// The emitter substitutes `{DRIVER_UPPER}_DEFAULT_{PROP_UPPER}`
+    /// (the define already emitted for properties with a
+    /// `default_literal`) into the ternary fallback in
+    /// `emit_uartclk_initializer`. When the property has no
+    /// `default_literal`, the emitter keeps the framework
+    /// fallback `"115200"` (Linux UART subsystem default baud
+    /// rate, not a device-specific hardcode).
+    ClockRateDefault,
+}
+
 /// Linux-specific property realization details.
 ///
 /// Carries enough information for the emitter to generate
@@ -458,6 +518,11 @@ pub struct LinuxPropertyRealization {
     pub required: bool,
     /// Default literal from the declaration, if any.
     pub default_literal: Option<String>,
+    /// Serial-port wiring role, if any. `None` for properties
+    /// that only participate in generic `ReadProperty` emission.
+    /// Set to `Some(_)` ONLY when the driver has serial-core
+    /// realization (`plan.serial_core.is_some()`).
+    pub serial_role: Option<SerialPortRole>,
 }
 
 // ---------------------------------------------------------------------------

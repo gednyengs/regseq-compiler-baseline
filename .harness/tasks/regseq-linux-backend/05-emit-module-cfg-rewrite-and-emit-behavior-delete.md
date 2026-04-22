@@ -1,7 +1,7 @@
 # regseq-linux-backend-05: Retarget `emit_module` to CFG; Delete `emit_behavior`
 
 **Depends on**: `regseq-backends-02`, `regseq-linux-backend-03`,
-`regseq-linux-backend-04`.
+`regseq-linux-backend-04`, `regseq-linux-backend-08`.
 
 ## Description
 
@@ -220,6 +220,32 @@ PL011-shape assumptions flagged as Findings 2, 3, 4, 5, 6, 7,
 PL011 byte parity stays mandatory. The brief's guarantee is
 that PL011's single-MMIO single-IRQ single-clock shape resolves
 to the same emitted strings through the new plan-driven paths.
+
+#### Findings from regseq-linux-backend-08 (RegisterUartPort generality)
+
+Surfaced by a two-source post-cleanup audit (Claude + Codex)
+after tasks 06/07/12 landed; addressed by task 08. The CFG
+rewrite MUST preserve these four invariants:
+
+- `d->port.membase` is rendered from
+  `LinuxSerialCoreRealization.primary_mmio_field`, not a
+  first-in-probe-order helper (`primary_mmio_field` / `primary_irq_field`
+  functions are deleted by task 08 and must not be re-introduced).
+- `d->port.irq` is rendered from
+  `LinuxSerialCoreRealization.primary_irq_field`.
+- Exactly ONE `d->port.uartclk` assignment line is emitted,
+  using `LinuxSerialCoreRealization.uartclk_field` and
+  `uartclk_optional`. No iteration over all `GetClock` probe
+  steps for uartclk emission.
+- `d->port.fifosize` is wired iff a `LinuxPropertyRealization`
+  carries `serial_role == Some(SerialPortRole::FifoSize)`; the
+  clock-rate default lookup in `emit_uartclk_initializer` uses
+  `serial_role == Some(SerialPortRole::ClockRateDefault)`. No
+  `property_id` / `field_name` string literals (`"current-speed"`,
+  `"fifo-size"`, `"fifo_size"`) in `emit_module.rs`.
+
+See `.harness/tasks/regseq-linux-backend/08-register-uart-port-resource-generality.md`
+for the full scope, error variants, and grep-gate spec.
 
 ## Non-Goals
 

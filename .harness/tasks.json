@@ -1372,6 +1372,7 @@
             "regseq-model-60",
             "regseq-linux-backend-06",
             "regseq-linux-backend-07",
+            "regseq-linux-backend-08",
             "regseq-lowering-12"
           ],
           "artifacts": [],
@@ -1863,7 +1864,8 @@
             "regseq-linux-backend-03",
             "regseq-linux-backend-04",
             "regseq-linux-backend-06",
-            "regseq-linux-backend-07"
+            "regseq-linux-backend-07",
+            "regseq-linux-backend-08"
           ],
           "artifacts": [],
           "fail_reason": null
@@ -1887,6 +1889,19 @@
           "status": "done",
           "depends_on": [
             "regseq-linux-backend-03"
+          ],
+          "artifacts": [],
+          "fail_reason": null
+        },
+        {
+          "id": "regseq-linux-backend-08",
+          "name": "RegisterUartPort serial-resource generality",
+          "spec": ".harness/tasks/regseq-linux-backend/08-register-uart-port-resource-generality.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-linux-backend-03",
+            "regseq-linux-backend-06",
+            "regseq-linux-backend-07"
           ],
           "artifacts": [],
           "fail_reason": null

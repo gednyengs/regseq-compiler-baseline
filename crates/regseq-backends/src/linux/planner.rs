@@ -17,7 +17,7 @@ use super::plan::{
     LinuxPropertyScalar, LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry,
     LinuxRegisterLayout, LinuxRegistrationShape, LinuxRemoveOrchestration, LinuxRemoveStep,
     LinuxSerialCoreRealization, LinuxSharedStructField, LinuxUartOpsBody, LinuxUartOpsEntry,
-    ParamBinding, ReturnAdaptation,
+    ParamBinding, ReturnAdaptation, SerialPortRole,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -54,6 +54,36 @@ pub enum LinuxPlanError {
         /// Authored scalar spelling that failed the lookup.
         spelling: String,
     },
+    /// The driver is a serial-core driver but its probe sequence
+    /// contains no `MapMmio` step, so the Linux planner cannot
+    /// populate `LinuxSerialCoreRealization.primary_mmio_field`.
+    #[error(
+        "serial driver '{driver_name}' has no MapMmio probe step; cannot populate LinuxSerialCoreRealization.primary_mmio_field"
+    )]
+    MissingSerialPortPrimaryMmio {
+        /// Driver identity name.
+        driver_name: String,
+    },
+    /// The driver is a serial-core driver but its probe sequence
+    /// contains no `RequestIrq` step, so the Linux planner cannot
+    /// populate `LinuxSerialCoreRealization.primary_irq_field`.
+    #[error(
+        "serial driver '{driver_name}' has no RequestIrq probe step; cannot populate LinuxSerialCoreRealization.primary_irq_field"
+    )]
+    MissingSerialPortPrimaryIrq {
+        /// Driver identity name.
+        driver_name: String,
+    },
+    /// The driver is a serial-core driver but its probe sequence
+    /// contains no `GetClock` step, so the Linux planner cannot
+    /// populate `LinuxSerialCoreRealization.uartclk_field`.
+    #[error(
+        "serial driver '{driver_name}' has no GetClock probe step; cannot populate LinuxSerialCoreRealization.uartclk_field"
+    )]
+    MissingSerialPortUartClk {
+        /// Driver identity name.
+        driver_name: String,
+    },
 }
 
 /// Build a `LinuxBackendPlan` from a portable `DriverLoweringPlan`.
@@ -71,12 +101,16 @@ pub fn build_linux_backend_plan(
     behavior: SemanticModel,
 ) -> Result<LinuxBackendPlan, LinuxPlanError> {
     let registration = build_registration(plan);
-    let serial_core = build_serial_core(plan);
+    // Probe must be built before serial_core so the serial-core
+    // realization can read the first-in-probe-order MMIO / IRQ /
+    // clock field names for its primary-resource fields.
     let probe = build_probe(plan);
+    let is_serial_driver = plan.identity.device_class == DeviceClass::SerialUart;
+    let serial_core = build_serial_core(plan, &probe)?;
     let remove = build_remove(plan);
     let artifact_layout = build_artifact_layout(plan);
     let register_layout = build_register_layout(plan)?;
-    let property_realization = build_property_realization(plan)?;
+    let property_realization = build_property_realization(plan, is_serial_driver)?;
     let behavior_mapping = build_behavior_mapping(plan, &behavior);
     let uart_ops_realization = build_uart_ops_realization(plan);
     let shared_struct_fields = build_shared_struct_fields(plan, serial_core.is_some())?;
@@ -180,9 +214,12 @@ fn build_registration(plan: &DriverLoweringPlan) -> LinuxRegistrationShape {
     }
 }
 
-fn build_serial_core(plan: &DriverLoweringPlan) -> Option<LinuxSerialCoreRealization> {
+fn build_serial_core(
+    plan: &DriverLoweringPlan,
+    probe: &LinuxProbeOrchestration,
+) -> Result<Option<LinuxSerialCoreRealization>, LinuxPlanError> {
     if plan.identity.device_class != DeviceClass::SerialUart {
-        return None;
+        return Ok(None);
     }
 
     let snake_name = to_snake_case(&plan.identity.driver_name);
@@ -200,13 +237,57 @@ fn build_serial_core(plan: &DriverLoweringPlan) -> Option<LinuxSerialCoreRealiza
     // decision, not derived from device-specific identifiers.
     let dev_name = serial_dev_name_policy(&snake_name);
 
-    Some(LinuxSerialCoreRealization {
+    // TODO(regseq-authoring-surface-follow-up): replace
+    // first-in-probe-order selection with an authored-override
+    // lookup once `#[rseq::serial_primary]` / `#[rseq::uartclk_source]`
+    // (or equivalent) lands. Until then, multi-resource UARTs
+    // wire the first MMIO / IRQ / clock in acquisition order.
+    let primary_mmio_field = probe
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            LinuxProbeStep::MapMmio { field_name, .. } => Some(field_name.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| LinuxPlanError::MissingSerialPortPrimaryMmio {
+            driver_name: plan.identity.driver_name.clone(),
+        })?;
+    let primary_irq_field = probe
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            LinuxProbeStep::RequestIrq { field_name, .. } => Some(field_name.clone()),
+            _ => None,
+        })
+        .ok_or_else(|| LinuxPlanError::MissingSerialPortPrimaryIrq {
+            driver_name: plan.identity.driver_name.clone(),
+        })?;
+    let (uartclk_field, uartclk_optional) = probe
+        .steps
+        .iter()
+        .find_map(|s| match s {
+            LinuxProbeStep::GetClock {
+                field_name,
+                optional,
+                ..
+            } => Some((field_name.clone(), *optional)),
+            _ => None,
+        })
+        .ok_or_else(|| LinuxPlanError::MissingSerialPortUartClk {
+            driver_name: plan.identity.driver_name.clone(),
+        })?;
+
+    Ok(Some(LinuxSerialCoreRealization {
         uart_driver_name: format!("{snake_name}_uart_driver"),
         uart_ops_name: format!("{snake_name}_uart_ops"),
         realized_ops: plan.device_class_roles.serial_ops_realized.clone(),
         port_type,
         dev_name,
-    })
+        primary_mmio_field,
+        primary_irq_field,
+        uartclk_field,
+        uartclk_optional,
+    }))
 }
 
 /// Compute a deterministic port-type numeric value for out-of-tree modules.
@@ -522,6 +603,7 @@ fn resolve_owning_mmio_field(
 
 fn build_property_realization(
     plan: &DriverLoweringPlan,
+    is_serial_driver: bool,
 ) -> Result<Vec<LinuxPropertyRealization>, LinuxPlanError> {
     plan.resources
         .properties
@@ -533,12 +615,31 @@ fn build_property_realization(
                     spelling: p.field_type.clone(),
                 }
             })?;
+            // TODO(regseq-authoring-surface-follow-up): replace the
+            // id-match convention with a typed lookup keyed on an
+            // authored `#[rseq::serial_role(...)]` attribute on the
+            // property declaration. Until that lands, these two
+            // authoring conventions ("fifo-size", "current-speed")
+            // are the SOLE device-level string constants in the Linux
+            // backend planner; they live here only and gate on the
+            // driver being a serial-core driver so non-serial
+            // drivers with id-colliding properties are unaffected.
+            let serial_role = if is_serial_driver {
+                match p.property_id.as_str() {
+                    "fifo-size" => Some(SerialPortRole::FifoSize),
+                    "current-speed" => Some(SerialPortRole::ClockRateDefault),
+                    _ => None,
+                }
+            } else {
+                None
+            };
             Ok(LinuxPropertyRealization {
                 property_id: p.property_id.clone(),
                 field_name: p.field_name.clone(),
                 scalar,
                 required: p.required,
                 default_literal: p.default_literal.clone(),
+                serial_role,
             })
         })
         .collect()

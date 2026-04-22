@@ -426,19 +426,29 @@ items:
       correctness bug), AMBA mask binding override, and a multi-resource
       fixture gate. Amendments land on regseq-linux-backend-04/05 so the
       CFG emitter rewrite does not re-introduce the shape assumptions.
+      Post-cleanup two-source device-independence audit (Claude + Codex)
+      surfaced four additional leaks in the RegisterUartPort emission
+      region (primary MMIO/IRQ positional pickers, order-dependent
+      uartclk selection, current-speed / fifo-size string matches);
+      regseq-linux-backend-08 closes them with the same typed-plan-field
+      pattern and extends task 05's amendment list.
     spec_authoring_notes:
-      - All four tasks run against surfaces already established by
-        regseq-linux-backend-03 + regseq-lowering-10 + regseq-model-60.
-      - Tasks 06 and 07 add depends_on edges to regseq-linux-backend-05.
+      - All four original tasks (06, 07, 12, 14) run against surfaces
+        already established by regseq-linux-backend-03 + regseq-lowering-10
+        + regseq-model-60.
+      - Tasks 06, 07, and 08 add depends_on edges to regseq-linux-backend-05.
       - Task 14 depends on regseq-lowering-11 because its ripgrep gate
         asserts the post-deletion state of the legacy lowering fallback
         paths.
-      - PL011 byte parity is a mandatory invariant in tasks 06, 07, 12;
+      - PL011 byte parity is a mandatory invariant in tasks 06, 07, 08, 12;
         regressions are caught via the capture/compare smoke test landed
         by task 03.
+      - Task 08 is a post-audit addition (added 2026-04-21); it also
+        gates regseq-backends-02 (added to that task's depends_on).
     generated_task_ids:
       - regseq-linux-backend-06
       - regseq-linux-backend-07
+      - regseq-linux-backend-08
       - regseq-lowering-12
       - track-a-validation-14
 

@@ -26,7 +26,7 @@ use super::emit_semantic::{
 };
 use super::plan::{
     LinuxBackendPlan, LinuxCallbackGroup, LinuxFileRole, LinuxProbeStep, LinuxPropertyReadShape,
-    LinuxRemoveStep, LinuxUartOpsBody, ReturnAdaptation,
+    LinuxRemoveStep, LinuxUartOpsBody, ReturnAdaptation, SerialPortRole,
 };
 
 /// Emit the module integration file with real C code.
@@ -645,57 +645,50 @@ fn emit_uart_driver_def(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snak
     });
 }
 
-/// Driver-struct field name for the first MMIO region in probe order.
+/// Emit exactly one uartclk initializer line.
 ///
-/// Returned as an option so drivers with no MMIO (theoretical) do not
-/// emit a stray `port.membase = d->;` line.
-fn primary_mmio_field(plan: &LinuxBackendPlan) -> Option<&str> {
-    plan.probe.steps.iter().find_map(|step| match step {
-        LinuxProbeStep::MapMmio { field_name, .. } => Some(field_name.as_str()),
-        _ => None,
-    })
-}
-
-/// Driver-struct field name for the first IRQ in probe order.
-fn primary_irq_field(plan: &LinuxBackendPlan) -> Option<&str> {
-    plan.probe.steps.iter().find_map(|step| match step {
-        LinuxProbeStep::RequestIrq { field_name, .. } => Some(field_name.as_str()),
-        _ => None,
-    })
-}
-
-/// Emit one `port.uartclk = ...` initializer line per GetClock step.
+/// The clock backing the serial port reference rate is selected by
+/// the planner (today: first `GetClock` step in probe order;
+/// future: authored-override via `#[rseq::uartclk_source]`) and
+/// carried on
+/// [`super::plan::LinuxSerialCoreRealization::uartclk_field`]. The
+/// clock's optional flag is mirrored onto `uartclk_optional`.
 ///
-/// Optional clocks emit a ternary fallback
-/// (`d->{field} ? clk_get_rate(d->{field}) : <default>`); required
-/// clocks call `clk_get_rate` unconditionally. Drivers with multiple
-/// clocks produce multiple initializer lines; the last one wins at
-/// runtime, but the planner carries distinct clock field names so the
-/// emitted C is well-formed.
-fn emit_uartclk_initializers(body: &mut Vec<String>, plan: &LinuxBackendPlan, upper: &str) {
-    for step in &plan.probe.steps {
-        if let LinuxProbeStep::GetClock {
-            field_name,
-            optional,
-            ..
-        } = step
-        {
-            if *optional {
-                let default_speed_define = plan
-                    .property_realization
-                    .iter()
-                    .find(|p| p.property_id == "current-speed")
-                    .and_then(|p| p.default_literal.as_ref())
-                    .map(|_| format!("{upper}_DEFAULT_CURRENT_SPEED"))
-                    .unwrap_or_else(|| "115200".into());
-                body.push(format!(
-                    "d->port.uartclk = d->{field_name} ? clk_get_rate(d->{field_name}) : {default_speed_define};"
-                ));
-            } else {
-                body.push(format!("d->port.uartclk = clk_get_rate(d->{field_name});"));
-            }
-        }
-    }
+/// When the clock is optional, the emitter renders a ternary
+/// fallback; the fallback default expression is the
+/// `{UPPER}_DEFAULT_{PROP_UPPER}` define emitted for a property
+/// tagged with [`SerialPortRole::ClockRateDefault`] that carries
+/// a `default_literal`. Otherwise the fallback is the Linux UART
+/// subsystem default baud rate `"115200"` (framework constant, not
+/// a device-specific hardcode).
+fn emit_uartclk_initializer(body: &mut Vec<String>, plan: &LinuxBackendPlan, upper: &str) {
+    let serial = plan
+        .serial_core
+        .as_ref()
+        .expect("emit_uartclk_initializer called without serial_core");
+
+    // Linux UART subsystem default baud rate. Not a
+    // device-specific hardcode.
+    let default_speed_fallback = "115200";
+    let default_speed_expr = plan
+        .property_realization
+        .iter()
+        .find(|p| p.serial_role == Some(SerialPortRole::ClockRateDefault))
+        .and_then(|p| {
+            p.default_literal.as_ref().map(|_| {
+                let prop_upper = p.property_id.replace('-', "_").to_uppercase();
+                format!("{upper}_DEFAULT_{prop_upper}")
+            })
+        })
+        .unwrap_or_else(|| default_speed_fallback.to_string());
+
+    let field = &serial.uartclk_field;
+    let rhs = if serial.uartclk_optional {
+        format!("d->{field} ? clk_get_rate(d->{field}) : {default_speed_expr}")
+    } else {
+        format!("clk_get_rate(d->{field})")
+    };
+    body.push(format!("d->port.uartclk = {rhs};"));
 }
 
 fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
@@ -838,25 +831,24 @@ fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
                 if plan.registration.is_amba {
                     body.push("d->port.mapbase = adev->res.start;".into());
                 }
-                if let Some(mmio_field) = primary_mmio_field(plan) {
-                    body.push(format!("d->port.membase = d->{mmio_field};"));
-                }
-                if let Some(irq_field) = primary_irq_field(plan) {
-                    body.push(format!("d->port.irq = d->{irq_field};"));
-                }
+                body.push(format!(
+                    "d->port.membase = d->{};",
+                    serial.primary_mmio_field
+                ));
+                body.push(format!("d->port.irq = d->{};", serial.primary_irq_field));
 
-                // Clock rate: emit one initializer line per GetClock step.
-                // Optional clocks get a ternary fallback; required clocks
-                // call clk_get_rate unconditionally.
-                emit_uartclk_initializers(&mut body, plan, &upper);
+                // Clock rate: exactly one uartclk initializer line,
+                // using the clock selected by the planner
+                // (serial.uartclk_field) and its recorded optional flag.
+                emit_uartclk_initializer(&mut body, plan, &upper);
 
-                // FIFO size from property field if available.
-                if plan
-                    .property_realization
-                    .iter()
-                    .any(|p| p.field_name == "fifo_size")
-                {
-                    body.push("d->port.fifosize = d->fifo_size;".into());
+                // FIFO size wiring: iterate property realizations and
+                // consume any tagged with SerialPortRole::FifoSize. No
+                // field-name / property-id string match.
+                for realization in &plan.property_realization {
+                    if realization.serial_role == Some(SerialPortRole::FifoSize) {
+                        body.push(format!("d->port.fifosize = d->{};", realization.field_name));
+                    }
                 }
                 body.push(format!("d->port.ops = &{};", serial.uart_ops_name));
                 body.push("d->port.flags = UPF_BOOT_AUTOCONF;".into());
