@@ -2301,8 +2301,8 @@ fn linux_plan_property_realization_carries_api_and_defaults() {
         .find(|p| p.property_id == "current-speed")
         .expect("current-speed");
     assert_eq!(speed.field_name, "current_speed");
-    assert_eq!(speed.c_type, "u32");
-    assert_eq!(speed.linux_read_api, "device_property_read_u32");
+    assert_eq!(speed.scalar.c_type(), "u32");
+    assert_eq!(speed.scalar.read_api(), "device_property_read_u32");
     assert_eq!(speed.default_literal.as_deref(), Some("115200"));
 }
 

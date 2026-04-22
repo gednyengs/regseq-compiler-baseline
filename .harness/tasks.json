@@ -1884,7 +1884,7 @@
           "id": "regseq-linux-backend-07",
           "name": "Property realization consumption + linux_read_api honoring",
           "spec": ".harness/tasks/regseq-linux-backend/07-property-realization-honoring.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-linux-backend-03"
           ],

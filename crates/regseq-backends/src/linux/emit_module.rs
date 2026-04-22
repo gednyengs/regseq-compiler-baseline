@@ -25,8 +25,8 @@ use super::emit_semantic::{
     ReturnMode, SemanticEmitContext,
 };
 use super::plan::{
-    LinuxBackendPlan, LinuxCallbackGroup, LinuxFileRole, LinuxProbeStep, LinuxRemoveStep,
-    LinuxUartOpsBody, ReturnAdaptation,
+    LinuxBackendPlan, LinuxCallbackGroup, LinuxFileRole, LinuxProbeStep, LinuxPropertyReadShape,
+    LinuxRemoveStep, LinuxUartOpsBody, ReturnAdaptation,
 };
 
 /// Emit the module integration file with real C code.
@@ -236,7 +236,13 @@ fn emit_constants(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &st
     }
 
     // Property default values from authored default literals.
+    // Bool properties never take a `_DEFAULT_` fallback: the return
+    // value of `device_property_read_bool` IS the presence answer,
+    // so a default is semantically meaningless and silently ignored.
     for prop in &plan.property_realization {
+        if prop.scalar.call_shape() == LinuxPropertyReadShape::AssignReturn {
+            continue;
+        }
         if let Some(ref default_lit) = prop.default_literal {
             let prop_upper = prop.property_id.replace('-', "_").to_uppercase();
             tu.push(CTopLevelItem::Define {
@@ -772,18 +778,35 @@ fn emit_probe(tu: &mut CTranslationUnit, plan: &LinuxBackendPlan, snake: &str) {
                 property_id,
                 has_default,
             } => {
-                let field_name = property_id.replace('-', "_");
+                let Some(realization) = plan
+                    .property_realization
+                    .iter()
+                    .find(|p| p.property_id == *property_id)
+                else {
+                    continue;
+                };
+                let field_name = &realization.field_name;
+                let read_api = realization.scalar.read_api();
                 let prop_upper = property_id.replace('-', "_").to_uppercase();
 
-                body.push(format!(
-                    "ret = device_property_read_u32({dev_expr}, \"{property_id}\", &d->{field_name});"
-                ));
-                if *has_default {
-                    body.push("if (ret)".into());
-                    body.push(format!("\td->{field_name} = {upper}_DEFAULT_{prop_upper};"));
-                } else {
-                    body.push("if (ret)".into());
-                    body.push("\treturn ret;".into());
+                match realization.scalar.call_shape() {
+                    LinuxPropertyReadShape::OutPointer => {
+                        body.push(format!(
+                            "ret = {read_api}({dev_expr}, \"{property_id}\", &d->{field_name});"
+                        ));
+                        if *has_default {
+                            body.push("if (ret)".into());
+                            body.push(format!("\td->{field_name} = {upper}_DEFAULT_{prop_upper};"));
+                        } else {
+                            body.push("if (ret)".into());
+                            body.push("\treturn ret;".into());
+                        }
+                    }
+                    LinuxPropertyReadShape::AssignReturn => {
+                        body.push(format!(
+                            "d->{field_name} = {read_api}({dev_expr}, \"{property_id}\");"
+                        ));
+                    }
                 }
                 body.push(String::new());
             }

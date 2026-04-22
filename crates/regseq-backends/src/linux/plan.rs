@@ -363,6 +363,83 @@ pub struct LinuxNamedValue {
 // Property realization
 // ---------------------------------------------------------------------------
 
+/// Authored scalar type for a Linux firmware property.
+///
+/// Exhaustively enumerates every scalar type the Linux property
+/// realization supports. Unknown spellings fail plan construction;
+/// they are NOT silently promoted to `U32`.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LinuxPropertyScalar {
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+}
+
+impl LinuxPropertyScalar {
+    /// Map an authored scalar spelling (`"u8"`, `"u16"`, `"u32"`,
+    /// `"u64"`, `"bool"`) to the typed variant. Returns `None` on
+    /// unknown spellings; callers surface that as a
+    /// `LinuxPlanError::UnsupportedPropertyScalar`.
+    pub fn parse(spelling: &str) -> Option<Self> {
+        match spelling {
+            "u8" => Some(Self::U8),
+            "u16" => Some(Self::U16),
+            "u32" => Some(Self::U32),
+            "u64" => Some(Self::U64),
+            "bool" => Some(Self::Bool),
+            _ => None,
+        }
+    }
+
+    /// Linux kernel C type name (e.g. `"u32"`, `"bool"`).
+    pub fn c_type(self) -> &'static str {
+        match self {
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Bool => "bool",
+        }
+    }
+
+    /// Linux firmware property-read function name
+    /// (e.g. `"device_property_read_u32"`).
+    pub fn read_api(self) -> &'static str {
+        match self {
+            Self::U8 => "device_property_read_u8",
+            Self::U16 => "device_property_read_u16",
+            Self::U32 => "device_property_read_u32",
+            Self::U64 => "device_property_read_u64",
+            Self::Bool => "device_property_read_bool",
+        }
+    }
+
+    /// Call shape for this scalar's Linux property-read API.
+    pub fn call_shape(self) -> LinuxPropertyReadShape {
+        match self {
+            Self::Bool => LinuxPropertyReadShape::AssignReturn,
+            _ => LinuxPropertyReadShape::OutPointer,
+        }
+    }
+}
+
+/// Call shape for a Linux property-read API.
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LinuxPropertyReadShape {
+    /// Integer API shape: `int device_property_read_u32(dev, name,
+    /// u32 *dest)`. The emitter renders `ret = api(dev, "{id}",
+    /// &d->{field});` and branches on `ret` for default / required
+    /// handling.
+    OutPointer,
+    /// Bool API shape: `bool device_property_read_bool(dev, name)`.
+    /// The emitter renders `d->{field} = device_property_read_bool(
+    /// dev, "{id}");` with no `ret` variable and no error branch (the
+    /// return value IS the presence answer).
+    AssignReturn,
+}
+
 /// Linux-specific property realization details.
 ///
 /// Carries enough information for the emitter to generate
@@ -373,14 +450,14 @@ pub struct LinuxPropertyRealization {
     pub property_id: String,
     /// Destination field name on the driver struct.
     pub field_name: String,
-    /// C type string for the emitted read call (e.g. "u32").
-    pub c_type: String,
+    /// Typed scalar. Single source of truth for the shared-struct
+    /// field C type (`scalar.c_type()`) and the read API
+    /// (`scalar.read_api()`).
+    pub scalar: LinuxPropertyScalar,
     /// Whether the property is required.
     pub required: bool,
     /// Default literal from the declaration, if any.
     pub default_literal: Option<String>,
-    /// Linux API for reading this property (e.g. "device_property_read_u32").
-    pub linux_read_api: String,
 }
 
 // ---------------------------------------------------------------------------

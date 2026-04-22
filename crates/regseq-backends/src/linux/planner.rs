@@ -14,9 +14,10 @@ use super::plan::{
     LinuxArtifactLayout, LinuxBackendPlan, LinuxBehaviorMapping, LinuxBitFieldEntry,
     LinuxCallbackGroup, LinuxCallbackMapping, LinuxEmittedFile, LinuxFileRole, LinuxNamedValue,
     LinuxPortType, LinuxProbeOrchestration, LinuxProbeStep, LinuxPropertyRealization,
-    LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry, LinuxRegisterLayout,
-    LinuxRegistrationShape, LinuxRemoveOrchestration, LinuxRemoveStep, LinuxSerialCoreRealization,
-    LinuxSharedStructField, LinuxUartOpsBody, LinuxUartOpsEntry, ParamBinding, ReturnAdaptation,
+    LinuxPropertyScalar, LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry,
+    LinuxRegisterLayout, LinuxRegistrationShape, LinuxRemoveOrchestration, LinuxRemoveStep,
+    LinuxSerialCoreRealization, LinuxSharedStructField, LinuxUartOpsBody, LinuxUartOpsEntry,
+    ParamBinding, ReturnAdaptation,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -42,6 +43,17 @@ pub enum LinuxPlanError {
         /// two-or-more for conflict).
         candidates: Vec<String>,
     },
+    /// The authored property type spelling is outside the Linux
+    /// backend's supported scalar vocabulary
+    /// (`u8`/`u16`/`u32`/`u64`/`bool`). Non-scalar types such as
+    /// arrays, strings, or enums are not yet realizable on Linux.
+    #[error("unsupported property scalar type '{spelling}' on property '{property_id}'")]
+    UnsupportedPropertyScalar {
+        /// Property identifier from the authored declaration.
+        property_id: String,
+        /// Authored scalar spelling that failed the lookup.
+        spelling: String,
+    },
 }
 
 /// Build a `LinuxBackendPlan` from a portable `DriverLoweringPlan`.
@@ -64,10 +76,10 @@ pub fn build_linux_backend_plan(
     let remove = build_remove(plan);
     let artifact_layout = build_artifact_layout(plan);
     let register_layout = build_register_layout(plan)?;
-    let property_realization = build_property_realization(plan);
+    let property_realization = build_property_realization(plan)?;
     let behavior_mapping = build_behavior_mapping(plan, &behavior);
     let uart_ops_realization = build_uart_ops_realization(plan);
-    let shared_struct_fields = build_shared_struct_fields(plan, serial_core.is_some());
+    let shared_struct_fields = build_shared_struct_fields(plan, serial_core.is_some())?;
 
     Ok(LinuxBackendPlan {
         registration,
@@ -94,7 +106,7 @@ pub fn build_linux_backend_plan(
 fn build_shared_struct_fields(
     plan: &DriverLoweringPlan,
     has_serial_core: bool,
-) -> Vec<LinuxSharedStructField> {
+) -> Result<Vec<LinuxSharedStructField>, LinuxPlanError> {
     let mut fields = Vec::new();
 
     for mmio in &plan.resources.mmio {
@@ -119,15 +131,14 @@ fn build_shared_struct_fields(
         });
     }
     for prop in &plan.resources.properties {
-        let c_type = match prop.field_type.as_str() {
-            "u32" => "u32",
-            "u16" => "u16",
-            "u8" => "u8",
-            "bool" => "bool",
-            _ => "u32",
-        };
+        let scalar = LinuxPropertyScalar::parse(&prop.field_type).ok_or_else(|| {
+            LinuxPlanError::UnsupportedPropertyScalar {
+                property_id: prop.property_id.clone(),
+                spelling: prop.field_type.clone(),
+            }
+        })?;
         fields.push(LinuxSharedStructField {
-            c_type: c_type.into(),
+            c_type: scalar.c_type().into(),
             field_name: prop.field_name.clone(),
             doc: format!("Property: {}", prop.property_id),
         });
@@ -140,7 +151,7 @@ fn build_shared_struct_fields(
         });
     }
 
-    fields
+    Ok(fields)
 }
 
 fn build_registration(plan: &DriverLoweringPlan) -> LinuxRegistrationShape {
@@ -509,27 +520,26 @@ fn resolve_owning_mmio_field(
     }
 }
 
-fn build_property_realization(plan: &DriverLoweringPlan) -> Vec<LinuxPropertyRealization> {
+fn build_property_realization(
+    plan: &DriverLoweringPlan,
+) -> Result<Vec<LinuxPropertyRealization>, LinuxPlanError> {
     plan.resources
         .properties
         .iter()
         .map(|p| {
-            let linux_read_api = match p.field_type.as_str() {
-                "u8" => "device_property_read_u8",
-                "u16" => "device_property_read_u16",
-                "u32" => "device_property_read_u32",
-                "u64" => "device_property_read_u64",
-                "bool" => "device_property_read_bool",
-                _ => "device_property_read_u32",
-            };
-            LinuxPropertyRealization {
+            let scalar = LinuxPropertyScalar::parse(&p.field_type).ok_or_else(|| {
+                LinuxPlanError::UnsupportedPropertyScalar {
+                    property_id: p.property_id.clone(),
+                    spelling: p.field_type.clone(),
+                }
+            })?;
+            Ok(LinuxPropertyRealization {
                 property_id: p.property_id.clone(),
                 field_name: p.field_name.clone(),
-                c_type: p.field_type.clone(),
+                scalar,
                 required: p.required,
                 default_literal: p.default_literal.clone(),
-                linux_read_api: linux_read_api.into(),
-            }
+            })
         })
         .collect()
 }
