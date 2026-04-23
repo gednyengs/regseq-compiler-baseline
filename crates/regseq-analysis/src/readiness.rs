@@ -17,7 +17,7 @@
 
 use std::collections::BTreeSet;
 
-use regseq_model::compat::CallbackFamily;
+use regseq_model::declaration::callbacks::CallbackFamily;
 use regseq_model::identity::{FunctionId, TypeDefId};
 use regseq_model::model::RegseqModel;
 use regseq_model::query;

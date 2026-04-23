@@ -363,6 +363,8 @@ are current as of this document.
 5. **Wave B (atomic)**: remove `binding/`, `joined/`, `compat.rs`,
    `item/`, `semantic/`, `declaration/bodies.rs`, legacy
    `declaration/mod.rs` bits. Rewrite `readiness.rs` `compat` import.
+   **Completed**; further MIXED→DISCARD upgrades in
+   `regseq-backends-audit.md` ("Wave B" section).
 6. **Add `EmitSpec::Model`** and wire it through the CLI. Default
    switch flips to `Model`. Library side (`serialize.rs:70`) already
    implements the emission.

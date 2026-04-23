@@ -1,19 +1,21 @@
 //! Declaration IR: normalized Layer 1 declaration types.
 //!
-//! This module defines the first normalized declaration-model types for the
-//! Regseq compiler. It coexists with later binding, join, and lowering-oriented
-//! IR families and preserves construct ownership, typed distinctions, and
-//! per-entity provenance.
+//! The submodules here host the per-construct extraction-surface types
+//! (clocks, resets, register blocks, properties, etc.) that Phase 1
+//! construction consumes. They are an intermediate layer between
+//! `regseq-driver`'s rustc-linked extractors and the target
+//! [`crate::model::RegseqModel`]; scheduled for removal (alongside the
+//! `RawArtifact` JSON schema) in Wave C of the legacy-removal plan.
 //!
-//! The declaration model starts from the current `RawFrontendArtifact` shape
-//! as-is and does not assume Layer 2 binding data, join results, or backend
-//! lowering strategies.
+//! The legacy `DeclarationModel` struct, the HIR-style `bodies` IR,
+//! the `normalize` / `traversal` helpers, and the `compat` / `binding`
+//! / `joined` / `item` / `semantic` sibling layers were removed in
+//! Wave B. See
+//! `docs/discussions/models/regseq-model/legacy-removal-plan.md`.
 
-pub mod bodies;
 pub mod build_context;
 pub mod callbacks;
 pub mod mir_body;
-pub mod normalize;
 pub mod operations;
 pub mod properties;
 pub mod provenance;
@@ -21,12 +23,7 @@ pub mod raw_input;
 pub mod registers;
 pub mod resources;
 pub mod synchronization;
-pub mod traversal;
 
-// Re-export top-level types for convenience.
-pub use bodies::{
-    BodyDeclSet, BodyExpr, BodyStmt, FnBodyDecl, FnKind, FnParamDecl, MatchArm, StructFieldExpr,
-};
 pub use build_context::DeclarationBuildContext;
 pub use callbacks::{CallbackContext, CallbackDeclSet, CallbackFamily, CallbackImplDecl};
 pub use driver::{BusType, DeviceClass, DriverDecl};
@@ -37,6 +34,7 @@ pub use operations::{
 };
 pub use properties::{PropertyDeclSet, PropertyFieldDecl, PropertyLintDecl};
 pub use provenance::Provenance;
+pub use raw_input::RawArtifactInput;
 pub use registers::{
     PollCallSiteDecl, RegisterBlockDecl, RegisterDeclSet, RegisterDescriptorDecl,
     RegisterDescriptorFieldDecl, RegisterFieldDecl, RegisterNamedValueDecl, WrapperCallSiteDecl,
@@ -54,43 +52,3 @@ pub use synchronization::{
 };
 
 pub mod driver;
-
-pub use normalize::{normalize, normalize_from_json, NormalizeError, NormalizeFromJsonError};
-pub use raw_input::RawArtifactInput;
-pub use traversal::FamilyCallSite;
-
-/// Top-level normalized declaration model.
-///
-/// Contains all declaration-side facts for a single driver spec, organized
-/// by construct family. Build-context metadata is kept separate from
-/// declaration identity. An optional operation evidence index provides
-/// supplementary cross-referencing for traversal convenience.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct DeclarationModel {
-    /// Driver identity declaration.
-    pub driver: DriverDecl,
-    /// Resource declarations (mmio, interrupts, clock, reset, pinctrl).
-    pub resources: ResourceDeclSet,
-    /// Synchronization declarations (kept structurally distinct from resources).
-    pub synchronization: SynchronizationDeclSet,
-    /// Callback-family impl declarations.
-    pub callbacks: CallbackDeclSet,
-    /// Register block declarations and operation evidence.
-    pub registers: RegisterDeclSet,
-    /// Firmware-property declarations and lints.
-    pub properties: PropertyDeclSet,
-    /// Timed-delay declaration-side evidence.
-    pub timed_delay: TimedDelayDeclSet,
-    /// Logging declaration-side evidence.
-    pub logging: LoggingDeclSet,
-    /// PM gate declaration-side evidence.
-    pub pm_gate: PmGateDeclSet,
-    /// Authored function body declarations (transitional HIR-style, use `mir_bodies` instead).
-    pub bodies: BodyDeclSet,
-    /// MIR-derived function body declarations (canonical executable-body path).
-    pub mir_bodies: mir_body::MirBodyDeclSet,
-    /// Build-context metadata (target_os etc.), separate from declaration identity.
-    pub build_context: DeclarationBuildContext,
-}
-
-use serde::{Deserialize, Serialize};

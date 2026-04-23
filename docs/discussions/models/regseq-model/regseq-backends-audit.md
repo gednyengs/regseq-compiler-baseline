@@ -206,6 +206,8 @@ Divergences between the two audits and how they were resolved:
 
 ## Wave A execution deviations
 
+### Wave A
+
 The following files were **upgraded from MIXED to DISCARD** during
 Wave A execution because they carried transitive dependencies on
 other DISCARD modules that could not be preserved:
@@ -224,10 +226,32 @@ other DISCARD modules that could not be preserved:
   dependencies; the domain knowledge is better preserved in the git
   tag than in half-wired in-tree code.
 
-These deviations are consistent with the stated policy in the
-reconciliation notes: MIXED classification meant "kept as reference
-if it costs nothing"; when keeping a MIXED file required active
-rework, the git tag became the preferred reference mechanism.
+### Wave B
+
+Further **MIXED to DISCARD** upgrades driven by Wave B's deletion
+of `regseq_model::{binding, joined, compat, item, semantic}`:
+
+- `src/linux/{emit_module, emit_semantic, emit_behavior, emit_regs,
+  emitter, plan, planner}.rs` — every file in this set imported
+  `SemanticModel`, `SemanticBody`, `Expr`, `Stmt`, `SemanticType`,
+  `item::function::FunctionRole`, or `compat::*`. The entire Linux
+  emission chain collapsed atomically with the semantic/item/compat
+  substrate. The Linux kernel domain knowledge
+  (`platform_driver` template, `uart_ops` wiring, probe/remove
+  sequencing, register helper emission, kernel API mapping) is
+  preserved at the `pre-legacy-removal` tag for re-port.
+- `src/lowering/behavior.rs` — carried `pub use regseq_model::
+  semantic::BinOp`, and its only consumer was the deleted
+  `linux/emit_behavior.rs`. Removed.
+
+Survivors under `src/linux/` after Wave B: **`body_index.rs`** and
+**`conventions.rs`** — the only two files already aligned with the
+target `RegseqModel` IR.
+
+These deviations are consistent with the reconciliation policy:
+MIXED classification meant "kept as reference if it costs nothing";
+when keeping a MIXED file required active rework, the git tag
+became the preferred reference mechanism.
 
 ## DL-4 resolution
 
