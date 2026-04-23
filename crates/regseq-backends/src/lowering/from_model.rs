@@ -32,6 +32,7 @@ use regseq_model::model::resources::{ResourceKind, SyncKind};
 use regseq_model::platform::PlatformValue;
 use regseq_model::query;
 
+use super::diagnostics::DriverLoweringDiagnostics;
 use super::plan::{
     AcquisitionStep, BitFieldInfo, BusIdentity, BusType as PlanBusType, CallbackEntry,
     CallbackInventory, ClockObligation, DeviceClassRoles, DriverIdentity, DriverLoweringPlan,
@@ -40,7 +41,13 @@ use super::plan::{
     RegisterFieldInfo, RegisterObligations, ResetObligation, ResourceObligations, ResourcePolicy,
     SyncFieldObligation, SynchronizationObligations, TeardownStep,
 };
-use super::planner::{build_diagnostics as build_diagnostics_legacy, PlanBase};
+// NOTE: Linux resource-sequencing and deployment-metadata diagnostics used
+// to be populated here via `super::planner::build_diagnostics`. That helper
+// lived in the legacy `planner.rs` (DISCARD in Wave A of the legacy-removal
+// plan). These diagnostics are reporting-only -- no emitter consumes them --
+// so during the rebuild period we leave `DriverLoweringDiagnostics` at its
+// default. When backends return and need the reporting, port the helpers
+// from the `pre-legacy-removal` git tag into this file (or `diagnostics.rs`).
 
 /// Backend-neutral configuration knobs for portable lowering.
 ///
@@ -92,17 +99,7 @@ pub fn build_driver_lowering_plan_from_model(
     let register_obligations = build_register_obligations(model);
     let synchronization = build_sync_obligations(model, driver);
 
-    let base = PlanBase {
-        identity: identity.clone(),
-        callbacks: callbacks.clone(),
-        resources: resources.clone(),
-        acquisition_order: acquisition_order.clone(),
-        teardown_order: teardown_order.clone(),
-        device_class_roles: device_class_roles.clone(),
-        register_obligations: register_obligations.clone(),
-        synchronization: synchronization.clone(),
-    };
-    let diagnostics = build_diagnostics_legacy(&base);
+    let diagnostics = DriverLoweringDiagnostics::default();
 
     Ok(DriverLoweringPlan {
         identity,

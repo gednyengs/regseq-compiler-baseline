@@ -18,7 +18,7 @@ use regseq_model::semantic::local::LocalId;
 use regseq_model::semantic::model::SemanticModel;
 use regseq_model::semantic::stmt::Stmt;
 
-use super::c_ast::{CTopLevelItem, CTranslationUnit};
+use crate::c::{CTopLevelItem, CTranslationUnit};
 use super::conventions::generated_file_banner;
 use super::emit_semantic::{
     emit_body_stmts, interrupt_class_define, register_offset_define, semantic_type_to_c,

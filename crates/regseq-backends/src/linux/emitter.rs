@@ -13,7 +13,7 @@ use std::fs;
 use std::path::{Path, PathBuf};
 
 use super::body_index::FunctionBodyIndex;
-use super::c_ast::{include_guard_name, CStructField, CTopLevelItem, CTranslationUnit};
+use crate::c::{include_guard_name, CStructField, CTopLevelItem, CTranslationUnit};
 use super::conventions::generated_file_banner;
 use super::emit_module;
 use super::emit_regs;

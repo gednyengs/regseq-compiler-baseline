@@ -4,7 +4,7 @@
 //! value defines entirely from plan data. No device-specific literals
 //! appear in this module.
 
-use super::c_ast::{include_guard_name, CTopLevelItem, CTranslationUnit};
+use crate::c::{include_guard_name, CTopLevelItem, CTranslationUnit};
 use super::conventions::generated_file_banner;
 use super::emit_semantic::{
     bitfield_mask_define, named_value_define, normalize_desc_prefix, register_offset_define,

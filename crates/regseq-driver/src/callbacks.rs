@@ -32,6 +32,13 @@ impl RegseqCallbacks {
             .iter()
             .any(|e| matches!(e, regseq_config::EmitSpec::Driver { .. }))
     }
+
+    fn wants_analysis(&self) -> bool {
+        self.options
+            .emit
+            .iter()
+            .any(|e| matches!(e, regseq_config::EmitSpec::Analysis { .. }))
+    }
 }
 
 impl rustc_driver::Callbacks for RegseqCallbacks {
@@ -176,8 +183,10 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let pm_surface = crate::extract::pm::extract_pm_surface(tcx, &pm_impl_types);
         eprintln!("regseq-driver: pm extraction: {pm_surface:?}");
 
-        // --- build raw artifact (shared by raw-artifact and driver emission) ---
-        let needs_artifact = self.wants_raw_artifact() || self.wants_driver();
+        // --- build raw artifact (raw-artifact emission only during rebuild) ---
+        // Driver emission is stubbed in this build, so it no longer triggers
+        // artifact construction; see the emit_driver.rs removal in Wave A.
+        let needs_artifact = self.wants_raw_artifact();
         if needs_artifact {
             if let Ok(ref ids) = identities {
                 if let Some(primary) = ids.first() {
@@ -223,32 +232,29 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
                             }
                         }
 
-                        // --- driver emission ---
-                        if self.wants_driver() {
-                            match crate::emit_driver::emit_driver(&artifact, &self.options) {
-                                Ok(result) => {
-                                    eprintln!(
-                                        "regseq-driver: driver emission complete: {} artifacts under {}",
-                                        result.artifact_set.artifacts.len(),
-                                        result.artifact_set.output_root.display(),
-                                    );
-                                    for a in &result.artifact_set.artifacts {
-                                        eprintln!(
-                                            "regseq-driver:   {} ({:?}, {} bytes)",
-                                            a.path.display(),
-                                            a.role,
-                                            a.size_bytes,
-                                        );
-                                    }
-                                }
-                                Err(e) => {
-                                    eprintln!("regseq-driver: driver emission failed: {e}");
-                                }
-                            }
-                        }
                     }
                 }
             }
+        }
+
+        // --- driver emission (stubbed during RegseqModel-only rebuild) ---
+        if self.wants_driver() {
+            eprintln!(
+                "regseq-driver: EmitSpec::Driver is not yet exercised in the \
+                 RegseqModel-only rebuild. See \
+                 docs/discussions/models/regseq-model/legacy-removal-plan.md \
+                 (DL-3). Skipping driver emission.",
+            );
+        }
+
+        // --- analysis emission (stubbed during RegseqModel-only rebuild) ---
+        if self.wants_analysis() {
+            eprintln!(
+                "regseq-driver: EmitSpec::Analysis is not yet exercised in the \
+                 RegseqModel-only rebuild. See \
+                 docs/discussions/models/regseq-model/legacy-removal-plan.md \
+                 (DL-3). Skipping analysis emission.",
+            );
         }
 
         rustc_driver::Compilation::Stop

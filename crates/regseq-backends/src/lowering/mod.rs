@@ -1,18 +1,18 @@
 //! Portable driver lowering layer.
 //!
-//! This module provides the backend-neutral `DriverLoweringPlan` and the
-//! planner entry point that converts an `AnalysisInput` into a portable
-//! plan. OS-specific backend planners consume the portable plan rather
-//! than re-reading `AnalysisInput` ad hoc.
+//! Provides the backend-neutral `DriverLoweringPlan` (in `plan`),
+//! the RegseqModel-native entry `build_driver_lowering_plan_from_model`
+//! (in `from_model`), portable behavior types (`behavior`), and
+//! reporting-only diagnostics (`diagnostics`).
+//!
+//! The legacy planner (`planner.rs`), body interpreter, behavior
+//! planner, hierarchy, projection, MIR interpreter, and semantic
+//! lowering modules were removed in Wave A of the legacy-removal
+//! refactor. See
+//! `docs/discussions/models/regseq-model/legacy-removal-plan.md` and
+//! the audit at `regseq-backends-audit.md`.
 
 pub mod behavior;
-pub mod behavior_planner;
-pub mod body_interpreter;
 pub mod diagnostics;
 pub mod from_model;
-pub mod hierarchy;
-pub mod mir_interpreter;
 pub mod plan;
-pub mod planner;
-pub mod projection;
-pub mod semantic_lowering;

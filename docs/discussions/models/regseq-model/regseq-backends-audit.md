@@ -204,6 +204,31 @@ Divergences between the two audits and how they were resolved:
   by the legacy entry point; the salvageable content is the ordering
   heuristics, which stay for the re-port.
 
+## Wave A execution deviations
+
+The following files were **upgraded from MIXED to DISCARD** during
+Wave A execution because they carried transitive dependencies on
+other DISCARD modules that could not be preserved:
+
+- `src/lowering/planner.rs` — its `PlanBase` / `build_diagnostics`
+  helpers were used by the ADAPT `from_model.rs`. Rather than port
+  the helpers, `from_model.rs` was updated to set
+  `DriverLoweringDiagnostics::default()`. The reporting-only
+  diagnostics are lost during the rebuild period; port the helpers
+  from the `pre-legacy-removal` tag when backends return and the
+  reporting is needed.
+- `src/lowering/mir_interpreter/{call_classifier, cfg_walker,
+  cfg_helpers, place_resolver, value_lowering}.rs` — the whole
+  directory was deleted. Keeping these files standalone would have
+  required writing a new `mod.rs` and stubbing their `context::*`
+  dependencies; the domain knowledge is better preserved in the git
+  tag than in half-wired in-tree code.
+
+These deviations are consistent with the stated policy in the
+reconciliation notes: MIXED classification meant "kept as reference
+if it costs nothing"; when keeping a MIXED file required active
+rework, the git tag became the preferred reference mechanism.
+
 ## DL-4 resolution
 
 The `regseq-backends` crate is **preserved** through Wave A, with
