@@ -378,6 +378,9 @@ are current as of this document.
    `normalize/raw_artifact.rs`, most of `normalize/surface.rs`;
    migrate surface logic into `construction/`. Replace
    `source_to_extraction_*` tests with `source_to_regseq_model_*`.
+   Detailed playbook in
+   `docs/discussions/models/regseq-model/wave-c-execution-plan.md`
+   (settles DL-9, DL-10; aggressive-cut strategy; commits C1-C5).
 8. **Wave D**: relocate `declaration/mir_body.rs` to
    `regseq-driver/`. Update `mir_repr.rs` re-export chain.
 9. **Follow-up efforts** (separate task specs):
@@ -432,6 +435,13 @@ When a backend is ready to re-port (Linux is the first target):
 - **DL-7** `RawArtifact` fate: **remove entirely**. Not retained as a
   separate emit.
 - **DL-8** Default emit during rebuild: **`model`**.
+- **DL-9** Register-block keying in Wave C: **`DefId ->
+  RegisterBlockId`** everywhere. The name-based scheme from normalize
+  disappears. See `wave-c-execution-plan.md`.
+- **DL-10** User-data validation in Wave C: **ported into construction
+  using rustc `TyCtxt` queries** for `Copy` resolution. The
+  `identity_enrichment` surface's validation role drops. See
+  `wave-c-execution-plan.md`.
 
 ### Open
 
