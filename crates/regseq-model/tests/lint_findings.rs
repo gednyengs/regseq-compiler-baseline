@@ -10,15 +10,11 @@
 //! - Determinism: two runs on a multi-lint model produce byte-equal
 //!   serialized output (covering sort order across levels and
 //!   subject DeclIds).
-//! - PL011 smoke: the Phase-6 fixture passes `verify_phase_1` and
-//!   produces the expected lint baseline.
 //!
 //! Lint pass-through through [`MutationGuard::commit`] (no rollback
 //! on lint-only model) is covered in `mutation_api_auto_verify.rs`.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-
 use regseq_model::identity::{
     DeclId, FileId, FunctionId, ModuleId, PropertyId, ResourceId, SourceLocation, SourceOrigin,
     SymbolInterner, TypeDefId,
@@ -34,10 +30,7 @@ use regseq_model::model::module::{Module, ModuleKind};
 use regseq_model::model::regseq_model::RegseqModel;
 use regseq_model::model::resources::{ClockDecl, ClockResource, PropertyField, Shape};
 use regseq_model::model::type_def::{Attrs, TypeDef, TypeDefKind};
-use regseq_model::normalize::raw_artifact::RawFrontendArtifact;
-use regseq_model::platform_parser::parse_platform_file_path;
 use regseq_model::verify::{verify_phase_1, LintKind, LintLevel};
-use regseq_model::{normalize, populate_bindings};
 
 // --- DeclId allocation for the minimal fixture ----------------------
 
@@ -389,56 +382,5 @@ fn verify_report_serialization_is_byte_equal_across_runs() {
         ids,
         vec![DeclId::new(PROPERTY_A_ID), DeclId::new(PROPERTY_B_ID)],
         "findings must sort by DeclId, not by source Vec order",
-    );
-}
-
-// ---------------------------------------------------------------------
-// PL011 smoke: run verify_phase_1 (and verify_phase_2) on the Phase-6
-// golden pipeline and assert Ok with an expected lint baseline.
-// ---------------------------------------------------------------------
-
-fn pl011_fixture_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../tests/fixtures/pl011-full-spec");
-    p
-}
-
-#[test]
-fn pl011_phase_1_verify_report_matches_expected_baseline() {
-    let raw_path = pl011_fixture_root().join("expected/raw-frontend.json");
-    let raw_json = std::fs::read_to_string(&raw_path).expect("read PL011 raw-frontend.json");
-    let raw: RawFrontendArtifact =
-        serde_json::from_str(&raw_json).expect("deserialize PL011 RawFrontendArtifact");
-    let model = normalize(&raw).expect("PL011 normalize must succeed");
-
-    let report = verify_phase_1(&model).expect("PL011 Phase-1 must verify");
-    // The PL011 fixture does not declare any properties whose
-    // `required` flag is paired with a `default_value`, so the
-    // baseline is empty. If a future fixture edit triggers a lint,
-    // update this assertion deliberately rather than relaxing it.
-    assert!(
-        report.lints.is_empty(),
-        "PL011 Phase-1 lint baseline drift: {:?}",
-        report.lints,
-    );
-}
-
-#[test]
-fn pl011_phase_2_verify_report_matches_expected_baseline() {
-    let raw_path = pl011_fixture_root().join("expected/raw-frontend.json");
-    let raw_json = std::fs::read_to_string(&raw_path).expect("read PL011 raw-frontend.json");
-    let raw: RawFrontendArtifact =
-        serde_json::from_str(&raw_json).expect("deserialize PL011 RawFrontendArtifact");
-    let mut model = normalize(&raw).expect("PL011 normalize must succeed");
-
-    let platform = parse_platform_file_path(&pl011_fixture_root().join("platform.toml"))
-        .expect("parse PL011 platform.toml");
-    populate_bindings(&mut model, &platform).expect("PL011 populate_bindings must succeed");
-
-    let report = regseq_model::verify::verify_phase_2(&model).expect("PL011 Phase-2 must verify");
-    assert!(
-        report.lints.is_empty(),
-        "PL011 Phase-2 lint baseline drift: {:?}",
-        report.lints,
     );
 }

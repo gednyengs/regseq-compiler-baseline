@@ -10,14 +10,14 @@
 //! (see `docs/discussions/models/regseq-model/legacy-removal-plan.md`).
 //! The `declaration` module still hosts extraction-surface support
 //! types consumed by `regseq-driver` and `construction/`; that module
-//! is scoped for removal in Wave C as the final RawArtifact collapse.
+//! is scoped for later removal once construction-side declarations are
+//! fully retired.
 
 pub mod declaration;
 pub mod identity;
 pub mod ir;
 pub mod join;
 pub mod model;
-pub mod normalize;
 pub mod platform;
 pub mod platform_parser;
 pub mod properties;
@@ -26,4 +26,3 @@ pub mod serialize;
 pub mod verify;
 
 pub use join::{populate_bindings, JoinError, JoinErrorKind, JoinProvenance};
-pub use normalize::{normalize, NormalizeError, NormalizeErrorKind, NormalizeProvenance};

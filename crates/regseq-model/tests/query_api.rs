@@ -1,14 +1,10 @@
-//! Unit + PL011-integration tests for the `regseq_model::query` module.
+//! Unit tests for the `regseq_model::query` module.
 //!
 //! Each public query function gets a minimal hand-built model that
 //! exercises the function's core path plus a determinism test that
-//! asserts two calls return identical output. A final integration
-//! test loads the Phase-6 PL011 golden and asserts non-empty output
-//! for the families the PL011 spec actually uses.
+//! asserts two calls return identical output.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-
 use regseq_model::declaration::callbacks::CallbackFamily;
 use regseq_model::identity::{
     BasicBlockId, DeclId, FunctionId, LocalId, ModuleId, SourceOrigin, Symbol, SymbolInterner,
@@ -21,16 +17,12 @@ use regseq_model::ir::{
 use regseq_model::model::{
     DriverIdentity, DriverStruct, Function, ImplBlock, Module, ModuleKind, RegseqModel,
 };
-use regseq_model::normalize::raw_artifact::RawFrontendArtifact;
-use regseq_model::platform::PlatformFile;
-use regseq_model::platform_parser::parse_platform_file_path;
 use regseq_model::query::{
     bus_binding, bus_identity, callback_families_present, callback_impls, completion_call_sites,
     duration_ctor_call_sites, lock_call_sites, log_call_sites, pm_gate_call_sites, poll_call_sites,
     reachable_helper_names, register_access_sites, resource_field_names, timed_delay_call_sites,
     transitively_reachable_from, wrapper_call_sites, ResourceKind,
 };
-use regseq_model::{normalize, populate_bindings};
 
 // ---------------------------------------------------------------------
 // Minimal hand-built-model helpers
@@ -628,102 +620,4 @@ fn topology_queries_are_deterministic() {
     let res_a = resource_field_names(&res_model);
     let res_b = resource_field_names(&res_model);
     assert_eq!(res_a, res_b);
-}
-
-// ---------------------------------------------------------------------
-// PL011 integration smoke: run queries on the Phase-6 golden pipeline
-// ---------------------------------------------------------------------
-
-fn fixture_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../tests/fixtures/pl011-full-spec");
-    p
-}
-
-fn load_pl011_model() -> RegseqModel {
-    let raw_path = fixture_root().join("expected/raw-frontend.json");
-    let raw_json = std::fs::read_to_string(&raw_path).expect("read PL011 raw-frontend.json");
-    let raw: RawFrontendArtifact = serde_json::from_str(&raw_json).expect("parse raw-frontend");
-
-    let mut model = normalize(&raw).expect("PL011 normalize must succeed");
-
-    let platform_path = fixture_root().join("platform.toml");
-    let platform: PlatformFile =
-        parse_platform_file_path(&platform_path).expect("parse platform.toml");
-    populate_bindings(&mut model, &platform).expect("PL011 populate_bindings must succeed");
-    model
-}
-
-#[test]
-fn pl011_queries_compile_and_run_against_real_data() {
-    let model = load_pl011_model();
-
-    // Every query function should return something (possibly empty for
-    // families PL011 does not use today, but the call itself must not
-    // panic and must be deterministic).
-    let _ = wrapper_call_sites(&model);
-    let _ = poll_call_sites(&model);
-    let _ = log_call_sites(&model);
-    let _ = timed_delay_call_sites(&model);
-    let _ = completion_call_sites(&model);
-    let _ = lock_call_sites(&model);
-    let _ = duration_ctor_call_sites(&model);
-    let _ = pm_gate_call_sites(&model);
-    let _ = register_access_sites(&model);
-    let _ = reachable_helper_names(&model);
-    let _ = resource_field_names(&model);
-    let _ = callback_families_present(&model);
-    let _ = callback_impls(&model);
-    let _ = bus_binding(&model);
-    let _ = bus_identity(&model);
-
-    // Non-empty assertions for the families PL011 actually populates at
-    // the current pipeline maturity. The Phase-6 golden carries the
-    // driver struct (resources + bus) but not function bodies or
-    // trait-impls; call-site / reachability / callback helpers are
-    // exercised for pure traversal correctness above and will become
-    // non-empty once the extraction pipeline fills the CFG bodies.
-    assert!(
-        !resource_field_names(&model).is_empty(),
-        "PL011 declares clocks + mmio + interrupts + properties; resource_field_names must be non-empty",
-    );
-    assert!(
-        bus_binding(&model).is_some(),
-        "PL011 platform file carries a [bus] section so bus_binding must be Some after Phase 2",
-    );
-    let bus_identity_sym = bus_identity(&model).expect("PL011 declares bus = \"amba\" at Layer 1");
-    assert_eq!(model.symbols.resolve(bus_identity_sym), "amba");
-}
-
-#[test]
-fn pl011_query_outputs_are_deterministic() {
-    let model = load_pl011_model();
-
-    // Run each non-trivial query twice and assert equality of the
-    // projection that matters (CallSite does not derive Eq -- compare
-    // the tuple (function_id, block_id, intrinsic)).
-    fn project(sites: Vec<regseq_model::query::CallSite<'_>>) -> Vec<(u32, u32, RegseqIntrinsic)> {
-        sites
-            .into_iter()
-            .map(|s| (s.function_id.0.index(), s.block_id.0, s.intrinsic))
-            .collect()
-    }
-
-    assert_eq!(
-        project(wrapper_call_sites(&model)),
-        project(wrapper_call_sites(&model)),
-    );
-    assert_eq!(
-        project(log_call_sites(&model)),
-        project(log_call_sites(&model)),
-    );
-    assert_eq!(
-        reachable_helper_names(&model),
-        reachable_helper_names(&model),
-    );
-    assert_eq!(resource_field_names(&model), resource_field_names(&model));
-    assert_eq!(
-        callback_families_present(&model),
-        callback_families_present(&model),
-    );
 }

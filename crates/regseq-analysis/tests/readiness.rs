@@ -3,13 +3,9 @@
 //! Each test constructs a minimal hand-built [`RegseqModel`], runs
 //! [`verify_phase_1`] (to produce a real [`VerifyReport`]), passes both
 //! to `check_readiness`, and asserts the resulting [`ReadinessReport`]
-//! surfaces the expected reviewer-facing observations. A final smoke
-//! test runs the same pipeline against the PL011 full-spec Phase-6
-//! fixture.
+//! surfaces the expected reviewer-facing observations.
 
 use std::collections::{BTreeMap, BTreeSet};
-use std::path::PathBuf;
-
 use regseq_analysis::readiness::{check_readiness, ReadinessReport, ResourceKind};
 use regseq_model::declaration::callbacks::CallbackFamily;
 use regseq_model::identity::{
@@ -31,10 +27,7 @@ use regseq_model::model::resources::{
     ClockDecl, ClockResource, MmioDecl, MmioResource, PropertyField, Shape,
 };
 use regseq_model::model::type_def::{Attrs, TypeDef, TypeDefKind};
-use regseq_model::normalize::raw_artifact::RawFrontendArtifact;
-use regseq_model::platform_parser::parse_platform_file_path;
-use regseq_model::verify::{verify_phase_1, verify_phase_2, LintKind, LintLevel};
-use regseq_model::{normalize, populate_bindings};
+use regseq_model::verify::{verify_phase_1, LintKind, LintLevel};
 
 // -------------------------------------------------------------------
 // Minimal model builders
@@ -483,50 +476,4 @@ fn project_impls(report: &ReadinessReport) -> Vec<(CallbackFamily, u32, u32)> {
             )
         })
         .collect()
-}
-
-// -------------------------------------------------------------------
-// PL011 smoke: load the Phase-6 golden and exercise the full pipeline.
-// -------------------------------------------------------------------
-
-fn pl011_fixture_root() -> PathBuf {
-    let mut p = PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-    p.push("../../tests/fixtures/pl011-full-spec");
-    p
-}
-
-#[test]
-fn pl011_smoke_readiness_report_populates_expected_fields() {
-    let raw_path = pl011_fixture_root().join("expected/raw-frontend.json");
-    let raw_json = std::fs::read_to_string(&raw_path).expect("read PL011 raw-frontend.json");
-    let raw: RawFrontendArtifact =
-        serde_json::from_str(&raw_json).expect("deserialize PL011 RawFrontendArtifact");
-    let mut model = normalize(&raw).expect("PL011 normalize must succeed");
-
-    let platform = parse_platform_file_path(&pl011_fixture_root().join("platform.toml"))
-        .expect("parse PL011 platform.toml");
-    populate_bindings(&mut model, &platform).expect("PL011 populate_bindings must succeed");
-
-    // After `populate_bindings`, the model is at Phase-2. `verify_phase_1`
-    // would reject it because resource bindings are populated -- use
-    // `verify_phase_2` to produce the `VerifyReport` that
-    // `check_readiness` consumes.
-    let report = verify_phase_2(&model).expect("PL011 Phase-2 verify must pass");
-    let readiness = check_readiness(&model, &report);
-
-    // PL011 declares clocks + reset + pinctrl + interrupts + mmio +
-    // properties in its driver struct, so resource_field_names must be
-    // non-empty.
-    assert!(
-        !readiness.resource_field_names.is_empty(),
-        "PL011 readiness must surface at least one resource field name",
-    );
-
-    // PL011's Phase-1 lint baseline is empty at this fixture shape;
-    // mirror the documented baseline in the `lint_findings` suite.
-    assert!(
-        readiness.property_lints.is_empty(),
-        "PL011 Phase-2 readiness lint baseline drift: {:?}",
-        readiness.property_lints,
-    );
 }

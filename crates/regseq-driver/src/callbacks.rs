@@ -19,13 +19,6 @@ impl RegseqCallbacks {
         &self.options
     }
 
-    fn wants_raw_artifact(&self) -> bool {
-        self.options
-            .emit
-            .iter()
-            .any(|e| matches!(e, regseq_config::EmitSpec::RawArtifact))
-    }
-
     fn wants_driver(&self) -> bool {
         self.options
             .emit
@@ -205,54 +198,6 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let pm_surface = crate::extract::pm::extract_pm_surface(tcx, &pm_impl_types);
         eprintln!("regseq-driver: pm extraction: {pm_surface:?}");
 
-        if let Ok(ref ids) = identities {
-            if let Some(primary) = ids.first() {
-                // --- raw artifact emission ---
-                // Legacy path kept building until C4 removes RawArtifact
-                // entirely from the production driver.
-                if self.wants_raw_artifact() {
-                    // Phase 0 contract: identity enrichment is required.
-                    // Do not build or emit raw artifacts when enrichment failed.
-                    if let Err(ref e) = enrichment_surface {
-                        eprintln!(
-                            "regseq-driver: FATAL: identity enrichment extraction failed: {e:?} \
-                             — raw artifact emission skipped",
-                        );
-                    } else {
-                        let ex = ExtractionResults {
-                            register: &register_surface,
-                            traits: &trait_surface,
-                            property: &property_surface,
-                            clock: &clock_surface,
-                            reset: &reset_surface,
-                            pinctrl: &pinctrl_surface,
-                            interrupt: &interrupt_surface,
-                            sync: &sync_surface,
-                            timed_delay: &timed_delay_surface,
-                            logging: &logging_surface,
-                            pm: &pm_surface,
-                            body: &body_surface,
-                            enrichment: &enrichment_surface,
-                            intrinsic_registry: &intrinsic_registry,
-                            framework_type_registry: &framework_type_registry,
-                            abstraction_type_registry: &abstraction_type_registry,
-                            source_locations: &source_location_surface,
-                        };
-                        let artifact = build_raw_artifact(tcx, primary, &self.options, &ex);
-                        if let Err(e) = emit_raw_artifact(&artifact, &self.options.output_dir) {
-                            eprintln!("regseq-driver: raw artifact emission failed: {e}");
-                        } else {
-                            eprintln!(
-                                "regseq-driver: raw artifact emitted to {}/drivers/{}.raw.json",
-                                self.options.output_dir.display(),
-                                primary.driver_name,
-                            );
-                        }
-                    }
-                }
-            }
-        }
-
         // --- RegseqModel JSON emission ---
         if self.wants_model() {
             let registries = crate::construction::ExtractionRegistries {
@@ -301,128 +246,6 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
 
         rustc_driver::Compilation::Stop
     }
-}
-
-/// Collected extraction results passed to raw artifact construction.
-struct ExtractionResults<'a> {
-    register: &'a Result<
-        crate::extract::register_access::RegisterAccessSurface,
-        crate::extract::register_access::RegisterAccessError,
-    >,
-    traits: &'a Result<crate::extract::traits::TraitSurface, crate::extract::traits::TraitError>,
-    property: &'a Result<
-        crate::extract::property::PropertySurface,
-        crate::extract::property::PropertyError,
-    >,
-    clock: &'a Result<crate::extract::clock::ClockSurface, crate::extract::clock::ClockError>,
-    reset: &'a Result<crate::extract::reset::ResetSurface, crate::extract::reset::ResetError>,
-    pinctrl:
-        &'a Result<crate::extract::pinctrl::PinCtrlSurface, crate::extract::pinctrl::PinCtrlError>,
-    interrupt: &'a Result<
-        crate::extract::interrupts::InterruptSurface,
-        crate::extract::interrupts::InterruptError,
-    >,
-    sync: &'a Result<
-        crate::extract::synchronization::SynchronizationSurface,
-        crate::extract::synchronization::SynchronizationError,
-    >,
-    timed_delay: &'a Result<
-        crate::extract::timed_delay::TimedDelaySurface,
-        crate::extract::timed_delay::TimedDelayError,
-    >,
-    logging:
-        &'a Result<crate::extract::logging::LoggingSurface, crate::extract::logging::LoggingError>,
-    pm: &'a Result<crate::extract::pm::PmGateSurface, crate::extract::pm::PmError>,
-    body: &'a Result<crate::mir_repr::MirBodySurface, crate::extract::body::BodyError>,
-    enrichment: &'a Result<
-        crate::extract::identity_enrichment::IdentityEnrichmentSurface,
-        crate::extract::identity_enrichment::IdentityEnrichmentError,
-    >,
-    intrinsic_registry: &'a crate::extract::intrinsic_registry::IntrinsicRegistry,
-    framework_type_registry: &'a crate::extract::framework_types::FrameworkTypeRegistry,
-    abstraction_type_registry: &'a crate::extract::abstraction_types::AbstractionTypeRegistry,
-    source_locations: &'a crate::extract::source_locations::RawSourceLocationSurface,
-}
-
-fn build_raw_artifact<'tcx>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    primary_id: &crate::extract::driver_identity::DriverIdentity,
-    options: &regseq_config::CompilerOptions,
-    ex: &ExtractionResults<'_>,
-) -> crate::raw_artifact::RawFrontendArtifact {
-    use crate::raw_artifact::*;
-
-    let intrinsic_registry = if ex.intrinsic_registry.is_empty() {
-        None
-    } else {
-        Some(RawIntrinsicRegistrySurface::from_registry(
-            ex.intrinsic_registry,
-            tcx,
-        ))
-    };
-    let framework_types = if ex.framework_type_registry.is_empty() {
-        None
-    } else {
-        Some(RawFrameworkTypeSurface::from_registry(
-            ex.framework_type_registry,
-            tcx,
-        ))
-    };
-    let abstraction_types = if ex.abstraction_type_registry.is_empty() {
-        None
-    } else {
-        Some(RawAbstractionTypeSurface::from_registry(
-            ex.abstraction_type_registry,
-            tcx,
-        ))
-    };
-    let source_locations = if ex.source_locations.is_empty() {
-        None
-    } else {
-        Some(ex.source_locations.clone())
-    };
-
-    RawFrontendArtifact {
-        driver_name: primary_id.driver_name.clone(),
-        target_os: format!("{:?}", options.target_os).to_lowercase(),
-        identity: Some(RawDriverIdentity::from(primary_id)),
-        register_access: ex
-            .register
-            .as_ref()
-            .ok()
-            .map(RawRegisterAccessSurface::from),
-        trait_callbacks: ex.traits.as_ref().ok().map(RawTraitSurface::from),
-        firmware_properties: ex.property.as_ref().ok().map(RawPropertySurface::from),
-        clock: ex.clock.as_ref().ok().map(RawClockSurface::from),
-        reset: ex.reset.as_ref().ok().map(RawResetSurface::from),
-        pinctrl: ex.pinctrl.as_ref().ok().map(RawPinCtrlSurface::from),
-        interrupts: ex.interrupt.as_ref().ok().map(RawInterruptSurface::from),
-        synchronization: ex.sync.as_ref().ok().map(RawSynchronizationSurface::from),
-        timed_delay: ex.timed_delay.as_ref().ok().map(RawTimedDelaySurface::from),
-        logging: ex.logging.as_ref().ok().map(RawLoggingSurface::from),
-        pm_gate: ex.pm.as_ref().ok().map(RawPmGateSurface::from),
-        bodies: ex.body.as_ref().ok().cloned(),
-        identity_enrichment: ex.enrichment.as_ref().ok().cloned(),
-        intrinsic_registry,
-        framework_types,
-        abstraction_types,
-        source_locations,
-    }
-}
-
-fn emit_raw_artifact(
-    artifact: &crate::raw_artifact::RawFrontendArtifact,
-    output_dir: &std::path::Path,
-) -> Result<(), String> {
-    let drivers_dir = output_dir.join("drivers");
-    std::fs::create_dir_all(&drivers_dir)
-        .map_err(|e| format!("failed to create drivers dir: {e}"))?;
-
-    let path = drivers_dir.join(format!("{}.raw.json", artifact.driver_name));
-    let json = serde_json::to_string_pretty(artifact)
-        .map_err(|e| format!("failed to serialize raw artifact: {e}"))?;
-
-    std::fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
 /// Serialize `model` to the JSON form documented in `ir-reference.md`

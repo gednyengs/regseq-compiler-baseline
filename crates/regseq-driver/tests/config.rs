@@ -82,23 +82,3 @@ fn compiler_options_round_trip_through_json() {
     let decoded: CompilerOptions = serde_json::from_str(&json).expect("deserialize options");
     assert_eq!(decoded, options);
 }
-
-#[test]
-fn raw_artifact_emit_spec_round_trips_through_json() {
-    let mut options = sample_options();
-    options.emit.push(EmitSpec::RawArtifact);
-    let json = serde_json::to_string(&options).expect("serialize");
-    let decoded: CompilerOptions = serde_json::from_str(&json).expect("deserialize");
-    assert_eq!(decoded, options);
-    assert!(decoded
-        .emit
-        .iter()
-        .any(|e| matches!(e, EmitSpec::RawArtifact)));
-}
-
-#[test]
-fn deserialize_raw_artifact_emit_spec_from_json() {
-    let json = r#"{"type":"raw-artifact"}"#;
-    let spec: EmitSpec = serde_json::from_str(json).expect("deserialize");
-    assert_eq!(spec, EmitSpec::RawArtifact);
-}

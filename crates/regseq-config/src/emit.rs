@@ -9,7 +9,7 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum EmitParseError {
     /// Unsupported emit type prefix.
-    #[error("unknown emit type '{0}'; expected 'driver', 'analysis', 'model', or 'raw-artifact'")]
+    #[error("unknown emit type '{0}'; expected 'driver', 'analysis', or 'model'")]
     UnknownType(String),
 }
 
@@ -29,8 +29,6 @@ pub enum EmitSpec {
         /// Output path, or None for default location.
         path: Option<PathBuf>,
     },
-    /// Emit the raw frontend artifact (pre-normalized extraction snapshot).
-    RawArtifact,
     /// Emit the normalized `RegseqModel` as JSON.
     ///
     /// This is the handoff artifact during the RegseqModel-only rebuild
@@ -66,7 +64,6 @@ impl FromStr for EmitSpec {
                 analysis_name: subtype.map(ToString::to_string),
                 path: value.map(PathBuf::from),
             }),
-            "raw-artifact" => Ok(Self::RawArtifact),
             "model" => Ok(Self::Model {
                 path: value.map(PathBuf::from),
             }),
@@ -98,7 +95,6 @@ impl fmt::Display for EmitSpec {
                 analysis_name: Some(name),
                 path: Some(path),
             } => write!(f, "analysis.{name}={}", path.to_string_lossy()),
-            Self::RawArtifact => f.write_str("raw-artifact"),
             Self::Model { path: None } => f.write_str("model"),
             Self::Model { path: Some(path) } => write!(f, "model={}", path.to_string_lossy()),
         }

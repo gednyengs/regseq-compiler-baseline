@@ -4,13 +4,11 @@
 //! (clocks, resets, register blocks, properties, etc.) that Phase 1
 //! construction consumes. They are an intermediate layer between
 //! `regseq-driver`'s rustc-linked extractors and the target
-//! [`crate::model::RegseqModel`]; scheduled for removal (alongside the
-//! `RawArtifact` JSON schema) in Wave C of the legacy-removal plan.
+//! [`crate::model::RegseqModel`].
 //!
 //! The legacy `DeclarationModel` struct, the HIR-style `bodies` IR,
-//! the `normalize` / `traversal` helpers, and the `compat` / `binding`
-//! / `joined` / `item` / `semantic` sibling layers were removed in
-//! Wave B. See
+//! the `traversal` helpers, and the `compat` / `binding` / `joined` /
+//! `item` / `semantic` sibling layers were removed in Wave B. See
 //! `docs/discussions/models/regseq-model/legacy-removal-plan.md`.
 
 pub mod build_context;
@@ -19,7 +17,6 @@ pub mod mir_body;
 pub mod operations;
 pub mod properties;
 pub mod provenance;
-pub mod raw_input;
 pub mod registers;
 pub mod resources;
 pub mod synchronization;
@@ -34,7 +31,6 @@ pub use operations::{
 };
 pub use properties::{PropertyDeclSet, PropertyFieldDecl, PropertyLintDecl};
 pub use provenance::Provenance;
-pub use raw_input::RawArtifactInput;
 pub use registers::{
     PollCallSiteDecl, RegisterBlockDecl, RegisterDeclSet, RegisterDescriptorDecl,
     RegisterDescriptorFieldDecl, RegisterFieldDecl, RegisterNamedValueDecl, WrapperCallSiteDecl,

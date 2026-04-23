@@ -66,14 +66,6 @@ fn emit_parses_analysis_with_path_only() {
 }
 
 #[test]
-fn emit_parses_raw_artifact() {
-    assert_eq!(
-        EmitSpec::from_str("raw-artifact").unwrap(),
-        EmitSpec::RawArtifact,
-    );
-}
-
-#[test]
 fn emit_parses_model_without_path() {
     assert_eq!(
         EmitSpec::from_str("model").unwrap(),
@@ -116,7 +108,6 @@ fn emit_display_round_trip_for_supported_forms() {
         "analysis.resources",
         "analysis.resources=report.json",
         "analysis=report.json",
-        "raw-artifact",
         "model",
         "model=out/pl011.model.json",
     ];

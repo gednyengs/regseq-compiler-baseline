@@ -54,7 +54,7 @@
 // return shape so downstream consumers can match on `.kind` and
 // `.provenance` directly. Boxing the `Err` payload would force every
 // caller to dereference before matching. Mirrors the matching allow
-// on the `verify` and `normalize` modules.
+// on the `verify` module.
 #![allow(clippy::result_large_err)]
 
 pub mod determinism;
