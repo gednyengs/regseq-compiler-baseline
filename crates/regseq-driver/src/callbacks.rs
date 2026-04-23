@@ -39,6 +39,23 @@ impl RegseqCallbacks {
             .iter()
             .any(|e| matches!(e, regseq_config::EmitSpec::Analysis { .. }))
     }
+
+    fn wants_model(&self) -> bool {
+        self.options
+            .emit
+            .iter()
+            .any(|e| matches!(e, regseq_config::EmitSpec::Model { .. }))
+    }
+
+    /// Return the explicit `path` from an `EmitSpec::Model { path }`, if one
+    /// was supplied. `None` means "use the default location under
+    /// `<output_dir>/drivers/<driver_name>.model.json`."
+    fn model_path_override(&self) -> Option<&std::path::Path> {
+        self.options.emit.iter().find_map(|e| match e {
+            regseq_config::EmitSpec::Model { path } => path.as_deref(),
+            _ => None,
+        })
+    }
 }
 
 impl rustc_driver::Callbacks for RegseqCallbacks {
@@ -183,10 +200,11 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let pm_surface = crate::extract::pm::extract_pm_surface(tcx, &pm_impl_types);
         eprintln!("regseq-driver: pm extraction: {pm_surface:?}");
 
-        // --- build raw artifact (raw-artifact emission only during rebuild) ---
-        // Driver emission is stubbed in this build, so it no longer triggers
-        // artifact construction; see the emit_driver.rs removal in Wave A.
-        let needs_artifact = self.wants_raw_artifact();
+        // --- build raw artifact (shared by raw-artifact and model emission) ---
+        // Driver and Analysis emission are stubbed in this build; they no
+        // longer trigger artifact construction. See emit_driver.rs removal
+        // in Wave A (docs/.../legacy-removal-plan.md).
+        let needs_artifact = self.wants_raw_artifact() || self.wants_model();
         if needs_artifact {
             if let Ok(ref ids) = identities {
                 if let Some(primary) = ids.first() {
@@ -232,6 +250,22 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
                             }
                         }
 
+                        // --- RegseqModel JSON emission ---
+                        if self.wants_model() {
+                            match emit_regseq_model_json(
+                                &artifact,
+                                &self.options.output_dir,
+                                self.model_path_override(),
+                            ) {
+                                Ok(output_path) => eprintln!(
+                                    "regseq-driver: RegseqModel JSON emitted to {}",
+                                    output_path.display(),
+                                ),
+                                Err(e) => eprintln!(
+                                    "regseq-driver: RegseqModel JSON emission failed: {e}",
+                                ),
+                            }
+                        }
                     }
                 }
             }
@@ -381,4 +415,50 @@ fn emit_raw_artifact(
         .map_err(|e| format!("failed to serialize raw artifact: {e}"))?;
 
     std::fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
+}
+
+/// Normalize `artifact` to a [`regseq_model::model::RegseqModel`] and
+/// write the JSON form documented in `ir-reference.md` Section 7 to
+/// disk. When `path_override` is `Some`, the JSON is written there
+/// verbatim; when `None`, it lands under
+/// `<output_dir>/drivers/<driver_name>.model.json`.
+///
+/// Returns the path the JSON was written to so the caller can log it.
+fn emit_regseq_model_json(
+    artifact: &crate::raw_artifact::RawFrontendArtifact,
+    output_dir: &std::path::Path,
+    path_override: Option<&std::path::Path>,
+) -> Result<std::path::PathBuf, String> {
+    // The driver-side `RawFrontendArtifact` (populated from TyCtxt) and the
+    // model-side `regseq_model::normalize::raw_artifact::RawFrontendArtifact`
+    // are wire-compatible mirrors; bridge via JSON roundtrip. Wave C of the
+    // legacy-removal plan replaces this path with direct rustc-to-RegseqModel
+    // construction in `regseq-driver`, eliminating both mirrors.
+    let json_in = serde_json::to_string(artifact)
+        .map_err(|e| format!("failed to serialize raw artifact: {e}"))?;
+    let model_side: regseq_model::normalize::raw_artifact::RawFrontendArtifact =
+        serde_json::from_str(&json_in)
+            .map_err(|e| format!("failed to re-deserialize raw artifact: {e}"))?;
+    let model = regseq_model::normalize(&model_side)
+        .map_err(|e| format!("RegseqModel normalization failed: {e}"))?;
+    let json = regseq_model::serialize::serialize_regseq_model(&model);
+
+    let path: std::path::PathBuf = match path_override {
+        Some(p) => p.to_path_buf(),
+        None => {
+            let drivers_dir = output_dir.join("drivers");
+            std::fs::create_dir_all(&drivers_dir)
+                .map_err(|e| format!("failed to create drivers dir: {e}"))?;
+            drivers_dir.join(format!("{}.model.json", artifact.driver_name))
+        }
+    };
+
+    if let Some(parent) = path.parent() {
+        std::fs::create_dir_all(parent)
+            .map_err(|e| format!("failed to create parent dir for {}: {e}", path.display()))?;
+    }
+
+    std::fs::write(&path, json)
+        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    Ok(path)
 }

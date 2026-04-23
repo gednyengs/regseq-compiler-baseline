@@ -9,7 +9,7 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum EmitParseError {
     /// Unsupported emit type prefix.
-    #[error("unknown emit type '{0}'; expected 'driver' or 'analysis'")]
+    #[error("unknown emit type '{0}'; expected 'driver', 'analysis', 'model', or 'raw-artifact'")]
     UnknownType(String),
 }
 
@@ -31,6 +31,17 @@ pub enum EmitSpec {
     },
     /// Emit the raw frontend artifact (pre-normalized extraction snapshot).
     RawArtifact,
+    /// Emit the normalized `RegseqModel` as JSON.
+    ///
+    /// This is the handoff artifact during the RegseqModel-only rebuild
+    /// (see `docs/discussions/models/regseq-model/legacy-removal-plan.md`):
+    /// the compiler builds a `RegseqModel` from rustc HIR/MIR and writes
+    /// its JSON form to the output tree for hand-authored golden C files,
+    /// test fixtures, and future backend-development agents to consume.
+    Model {
+        /// Output path, or None for default location under `drivers/`.
+        path: Option<PathBuf>,
+    },
 }
 
 impl FromStr for EmitSpec {
@@ -56,6 +67,9 @@ impl FromStr for EmitSpec {
                 path: value.map(PathBuf::from),
             }),
             "raw-artifact" => Ok(Self::RawArtifact),
+            "model" => Ok(Self::Model {
+                path: value.map(PathBuf::from),
+            }),
             _ => Err(EmitParseError::UnknownType(base_type.to_string())),
         }
     }
@@ -85,6 +99,8 @@ impl fmt::Display for EmitSpec {
                 path: Some(path),
             } => write!(f, "analysis.{name}={}", path.to_string_lossy()),
             Self::RawArtifact => f.write_str("raw-artifact"),
+            Self::Model { path: None } => f.write_str("model"),
+            Self::Model { path: Some(path) } => write!(f, "model={}", path.to_string_lossy()),
         }
     }
 }

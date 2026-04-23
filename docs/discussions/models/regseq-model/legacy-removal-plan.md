@@ -367,7 +367,13 @@ are current as of this document.
    `regseq-backends-audit.md` ("Wave B" section).
 6. **Add `EmitSpec::Model`** and wire it through the CLI. Default
    switch flips to `Model`. Library side (`serialize.rs:70`) already
-   implements the emission.
+   implements the emission. **Completed**; the JSON is written under
+   `<output_dir>/drivers/<driver_name>.model.json` by default, or at
+   the explicit `model=<path>` override. The driver-side raw-artifact
+   to model-side roundtrip goes through JSON because the two
+   `RawFrontendArtifact` mirrors are wire-compatible but distinct
+   types; Wave C collapses both mirrors into direct
+   rustc-to-RegseqModel construction.
 7. **Wave C**: remove `raw_artifact.rs`,
    `normalize/raw_artifact.rs`, most of `normalize/surface.rs`;
    migrate surface logic into `construction/`. Replace

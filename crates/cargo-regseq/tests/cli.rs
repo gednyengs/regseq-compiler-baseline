@@ -100,10 +100,10 @@ fn parse_cargo_args_after_double_dash() {
 }
 
 #[test]
-fn emit_defaults_to_driver_in_compiler_options() {
+fn emit_defaults_to_model_in_compiler_options() {
     let (_platform, args) = base_args();
     let options = parse_ok(args).into_compiler_options();
-    assert_eq!(options.emit, vec![EmitSpec::Driver { match_id: None }]);
+    assert_eq!(options.emit, vec![EmitSpec::Model { path: None }]);
 }
 
 #[test]
@@ -394,7 +394,7 @@ fn validate_deny_requires_dotted_ident() {
 fn into_compiler_options_base_defaults() {
     let (_platform, args) = base_args();
     let options = parse_ok(args).into_compiler_options();
-    assert_eq!(options.emit, vec![EmitSpec::Driver { match_id: None }]);
+    assert_eq!(options.emit, vec![EmitSpec::Model { path: None }]);
     assert_eq!(options.log_level, LogLevel::Warn);
 }
 

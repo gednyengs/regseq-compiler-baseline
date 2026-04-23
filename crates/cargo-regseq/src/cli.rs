@@ -178,7 +178,11 @@ impl Cli {
         } = self;
 
         if emit.is_empty() {
-            emit.push(EmitSpec::Driver { match_id: None });
+            // Default emit during the RegseqModel-only rebuild: produce the
+            // normalized RegseqModel JSON. Driver and Analysis emit are
+            // stubbed in regseq-driver until backends and analyses come
+            // back; see docs/discussions/models/regseq-model/legacy-removal-plan.md.
+            emit.push(EmitSpec::Model { path: None });
         }
         emit.dedup();
 

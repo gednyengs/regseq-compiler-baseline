@@ -74,6 +74,24 @@ fn emit_parses_raw_artifact() {
 }
 
 #[test]
+fn emit_parses_model_without_path() {
+    assert_eq!(
+        EmitSpec::from_str("model").unwrap(),
+        EmitSpec::Model { path: None }
+    );
+}
+
+#[test]
+fn emit_parses_model_with_path() {
+    assert_eq!(
+        EmitSpec::from_str("model=out/pl011.model.json").unwrap(),
+        EmitSpec::Model {
+            path: Some(PathBuf::from("out/pl011.model.json"))
+        }
+    );
+}
+
+#[test]
 fn emit_parse_unknown_type_fails() {
     assert!(matches!(
         EmitSpec::from_str("unknown"),
@@ -99,6 +117,8 @@ fn emit_display_round_trip_for_supported_forms() {
         "analysis.resources=report.json",
         "analysis=report.json",
         "raw-artifact",
+        "model",
+        "model=out/pl011.model.json",
     ];
 
     for input in cases {
