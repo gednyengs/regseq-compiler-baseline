@@ -25,7 +25,7 @@ Set the Bash tool's own `timeout` parameter to at least the runner's
 
 | Flag                | Values                                                        | Default       | Purpose                                                                                                     |
 | ------------------- | ------------------------------------------------------------- | ------------- | ----------------------------------------------------------------------------------------------------------- |
-| `--model MODEL`     | string                                                        | `gpt-5.4`     | Model passed to `codex exec -m`                                                                             |
+| `--model MODEL`     | string                                                        | `gpt-5.5`     | Model passed to `codex exec -m`                                                                             |
 | `--effort LEVEL`    | `none` \| `minimal` \| `low` \| `medium` \| `high` \| `xhigh` | `high`        | Sets `model_reasoning_effort`                                                                               |
 | `--cwd PATH`        | path                                                          | process cwd   | Working directory for Codex (`-C`)                                                                          |
 | `--timeout SECONDS` | int                                                           | `900`         | Wall-clock timeout; exceeding it raises an error                                                            |
@@ -91,7 +91,7 @@ from codex_runner import run_codex, CodexResult, CodexError
 
 result = run_codex(
     prompt,
-    model="gpt-5.4",
+    model="gpt-5.5",
     effort="high",
     yolo=True,
     cwd=None,

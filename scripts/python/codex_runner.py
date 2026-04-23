@@ -15,13 +15,13 @@ Library usage::
 CLI usage::
 
     cat prompt.txt | uv run python scripts/python/codex_runner.py \\
-        --model gpt-5.4 --effort high --timeout 900 > result.json
+        --model gpt-5.5 --effort high --timeout 900 > result.json
 
 The script reads the prompt from stdin. All flags are optional; defaults
-match the review pattern used by the Regseq harness (gpt-5.4, high
+match the review pattern used by the Regseq harness (gpt-5.5, high
 effort, yolo mode, 15 minute timeout).
 
-Prompt convention (GPT-5.4 prompting style -- agents craft prompts
+Prompt convention (GPT-5.5 prompting style -- agents craft prompts
 themselves; this runner is task-agnostic)::
 
     <task>
@@ -78,7 +78,7 @@ class CodexError(Exception):
 def run_codex(
     prompt: str,
     *,
-    model: str = "gpt-5.4",
+    model: str = "gpt-5.5",
     effort: str = "high",
     yolo: bool = True,
     cwd: Path | None = None,
@@ -88,7 +88,7 @@ def run_codex(
 
     Parameters:
         prompt: Natural-language prompt passed to Codex on stdin.
-        model: Model name for ``-m``. Defaults to ``gpt-5.4``.
+        model: Model name for ``-m``. Defaults to ``gpt-5.5``.
         effort: Reasoning effort (``low`` | ``medium`` | ``high`` | ``xhigh``).
             Applied via ``-c model_reasoning_effort=<effort>``.
         yolo: When True, adds ``--dangerously-bypass-approvals-and-sandbox``
@@ -191,7 +191,7 @@ def _build_cli() -> argparse.ArgumentParser:
             "Result is printed as a JSON object on stdout."
         ),
     )
-    parser.add_argument("--model", default="gpt-5.4", help="Codex model (default: gpt-5.4)")
+    parser.add_argument("--model", default="gpt-5.5", help="Codex model (default: gpt-5.5)")
     parser.add_argument(
         "--effort",
         default="high",
