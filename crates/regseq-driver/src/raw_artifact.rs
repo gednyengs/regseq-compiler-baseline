@@ -451,6 +451,7 @@ pub struct RawClockField {
     pub field_name: String,
     pub clock_id: String,
     pub required: bool,
+    pub array_len: Option<usize>,
     pub field_type: String,
 }
 
@@ -460,6 +461,7 @@ impl From<&ClockField> for RawClockField {
             field_name: f.field_name.clone(),
             clock_id: f.clock_id.clone(),
             required: f.required,
+            array_len: f.array_len,
             field_type: f.field_type.clone(),
         }
     }
@@ -508,6 +510,7 @@ impl From<&ResetSurface> for RawResetSurface {
 pub struct RawResetField {
     pub field_name: String,
     pub required: bool,
+    pub array_len: Option<usize>,
     pub field_type: String,
 }
 
@@ -516,6 +519,7 @@ impl From<&ResetField> for RawResetField {
         Self {
             field_name: f.field_name.clone(),
             required: f.required,
+            array_len: f.array_len,
             field_type: f.field_type.clone(),
         }
     }
@@ -564,6 +568,7 @@ impl From<&PinCtrlSurface> for RawPinCtrlSurface {
 pub struct RawPinCtrlField {
     pub field_name: String,
     pub required: bool,
+    pub array_len: Option<usize>,
     pub pinctrl_id: Option<String>,
     pub field_type: String,
 }
@@ -573,6 +578,7 @@ impl From<&PinCtrlField> for RawPinCtrlField {
         Self {
             field_name: f.field_name.clone(),
             required: f.required,
+            array_len: f.array_len,
             pinctrl_id: f.pinctrl_id.clone(),
             field_type: f.field_type.clone(),
         }

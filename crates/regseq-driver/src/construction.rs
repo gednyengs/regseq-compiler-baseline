@@ -31,6 +31,7 @@ pub mod id_allocator;
 pub mod impls;
 pub mod pin_state_registry;
 pub mod registers;
+pub mod resources;
 pub mod walk;
 
 pub mod cross_crate;
@@ -184,6 +185,17 @@ pub enum ConstructionError {
         field: ErrorProvenance,
         /// Resource attribute kind (`"clock"`, `"reset"`, etc.).
         kind: &'static str,
+    },
+    /// Pass 1's direct extraction-side resource population asked an
+    /// extraction surface to validate the crate and the surface
+    /// rejected it.
+    SurfaceExtractionFailed {
+        /// Provenance anchored at the crate root.
+        provenance: ErrorProvenance,
+        /// Surface name (`"clock"`, `"interrupts"`, etc.).
+        surface: &'static str,
+        /// Human-readable extractor error.
+        detail: String,
     },
     /// An `#[rseq::<...>]` attribute payload could not be parsed.
     ///
@@ -510,6 +522,15 @@ impl std::fmt::Display for ConstructionError {
                 f,
                 "resource field `{}` is missing required id on #[rseq::{kind}]",
                 field.item_path,
+            ),
+            Self::SurfaceExtractionFailed {
+                provenance,
+                surface,
+                detail,
+            } => write!(
+                f,
+                "extraction surface `{surface}` failed while building Pass 1 (at `{}`): {detail}",
+                provenance.item_path,
             ),
             Self::UnknownRseqAttribute { provenance, attr } => write!(
                 f,
@@ -872,6 +893,45 @@ fn build_declaration_skeleton_inner<'tcx>(
     // rule: body-level IR construction rules 1-7 are unchanged.
     cross_crate_types::extract_cross_crate_types(&mut cx, &mut root_module)?;
 
+    let interrupt_surface = crate::extract::interrupts::extract_interrupt_surface(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "interrupts", err))?;
+    let isr_handler_names: std::collections::HashSet<String> = interrupt_surface
+        .isr_bindings
+        .iter()
+        .map(|binding| binding.handler_name.clone())
+        .collect();
+    let sync_surface =
+        crate::extract::synchronization::extract_synchronization_surface(tcx, &isr_handler_names)
+            .map_err(|err| extraction_surface_failed(tcx, root_def_id, "synchronization", err))?;
+    let trait_surface = crate::extract::traits::extract_trait_surface(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "traits", err))?;
+    let property_surface = crate::extract::property::extract_property_surface(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "property", err))?;
+    let clock_surface = crate::extract::clock::extract_clock_surface(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "clock", err))?;
+    let reset_surface = crate::extract::reset::extract_reset_surface(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "reset", err))?;
+    let pinctrl_surface = crate::extract::pinctrl::extract_pinctrl_surface(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "pinctrl", err))?;
+    let identity_surface = crate::extract::identity_enrichment::extract_identity_enrichment(tcx)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "identity_enrichment", err))?;
+    let pm_impl_types: std::collections::HashSet<String> = trait_surface
+        .power_management_impls
+        .iter()
+        .map(|pm| pm.driver_type.clone())
+        .collect();
+    let pm_surface = crate::extract::pm::extract_pm_surface(tcx, &pm_impl_types)
+        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "pm", err))?;
+
+    resources::populate_clocks(&mut cx, &mut root_module, &clock_surface)?;
+    resources::populate_resets(&mut cx, &mut root_module, &reset_surface)?;
+    resources::populate_pinctrl(&mut cx, &mut root_module, &pinctrl_surface)?;
+    resources::populate_interrupts(&mut cx, &mut root_module, &interrupt_surface)?;
+    resources::populate_sync(&mut cx, &mut root_module, &sync_surface)?;
+    resources::populate_properties(&mut cx, &mut root_module, &property_surface)?;
+    resources::populate_user_data(&mut cx, &mut root_module, &identity_surface)?;
+    resources::populate_pm_info(&mut root_module, &pm_surface)?;
+
     // Extract the map + register-block list from `cx` before the
     // Rule 7 builder below (which borrows `symbols` mutably) so the
     // borrow checker can see `cx`'s `&mut symbols` is gone.
@@ -930,6 +990,19 @@ fn build_declaration_skeleton_inner<'tcx>(
         },
         cross_refs,
     })
+}
+
+fn extraction_surface_failed(
+    tcx: TyCtxt<'_>,
+    root_def_id: DefId,
+    surface: &'static str,
+    err: impl std::fmt::Debug,
+) -> ConstructionError {
+    ConstructionError::SurfaceExtractionFailed {
+        provenance: ErrorProvenance::for_def_id(tcx, root_def_id),
+        surface,
+        detail: format!("{err:?}"),
+    }
 }
 
 /// Walk the populated module tree and return every built

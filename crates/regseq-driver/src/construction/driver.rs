@@ -1,24 +1,24 @@
 //! Driver struct construction for Pass 1.
 //!
-//! Produces a `TypeDef` for the driver struct AND populates the
-//! containing module's `driver: Option<DriverStruct>` slot with a fully
-//! categorized [`DriverStruct`]. Resource binding slots and property
-//! bound_value slots are all left `None`.
-
-use std::collections::HashSet;
+//! Produces a `TypeDef` for the driver struct and seeds the
+//! containing module's `driver: Option<DriverStruct>` slot.
+//!
+//! C2 moves resource population out of this HIR walker and into
+//! `construction/resources.rs`, which consumes the extraction surfaces
+//! directly after the walk completes. The only resource family that
+//! still needs HIR-walk-time handling here is MMIO because the
+//! `Mmio<T> -> RegisterBlockId` lookup depends on the crate-wide
+//! preallocated register-block map.
 
 use rustc_ast::token::{LitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
 use rustc_hir::def_id::DefId;
 use rustc_hir::{AttrArgs, Attribute, VariantData};
 
-use regseq_model::identity::{PropertyId, ResourceId, Symbol, TypeDefId, UserDataId};
-use regseq_model::ir::{LiteralValue, RegseqType, ScalarType};
+use regseq_model::identity::{ResourceId, Symbol, TypeDefId};
 use regseq_model::model::{
-    Attrs, ClockDecl, ClockResource, DriverIdentity, DriverStruct, FieldDef, InterruptDecl,
-    InterruptResource, MmioDecl, MmioResource, Module, PinCtrlDecl, PinCtrlResource, PropertyField,
-    ResetDecl, ResetResource, Shape, SyncKind, SyncResource, TypeDef, TypeDefClassification,
-    TypeDefKind, UserDataField, UserDataKind,
+    Attrs, DriverIdentity, DriverStruct, FieldDef, MmioDecl, MmioResource, Module, Shape, TypeDef,
+    TypeDefClassification, TypeDefKind,
 };
 
 use super::walk::BuildContext;
@@ -71,83 +71,6 @@ pub fn build_driver_struct(
             ty: super::walk::resolve_field_ty(cx, field_def_id),
         });
 
-        // Resource attributes.
-        if let Some(attr) = find_rseq_attr(hir_attrs, "clock") {
-            let id_str = parse_resource_id(attr).ok_or(ConstructionError::MissingResourceId {
-                field: field_prov.clone(),
-                kind: "clock",
-            })?;
-            let shape = shape_of_field(cx, field_def_id, f.ty);
-            let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
-            let clock_id_sym = cx.intern_public(&id_str);
-            driver.clocks.push(ClockResource {
-                id: res_id,
-                field_name: field_name_sym,
-                shape,
-                decl: ClockDecl {
-                    clock_id: clock_id_sym,
-                },
-                binding: None,
-            });
-            continue;
-        }
-        if let Some(attr) = find_rseq_attr(hir_attrs, "reset") {
-            let id_str = parse_resource_id(attr).ok_or(ConstructionError::MissingResourceId {
-                field: field_prov.clone(),
-                kind: "reset",
-            })?;
-            let shape = shape_of_field(cx, field_def_id, f.ty);
-            let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
-            let reset_id_sym = cx.intern_public(&id_str);
-            driver.resets.push(ResetResource {
-                id: res_id,
-                field_name: field_name_sym,
-                shape,
-                decl: ResetDecl {
-                    reset_id: reset_id_sym,
-                },
-                binding: None,
-            });
-            continue;
-        }
-        if let Some(attr) = find_rseq_attr(hir_attrs, "pinctrl") {
-            let id_str = parse_resource_id(attr).ok_or(ConstructionError::MissingResourceId {
-                field: field_prov.clone(),
-                kind: "pinctrl",
-            })?;
-            let shape = shape_of_field(cx, field_def_id, f.ty);
-            let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
-            let pin_id_sym = cx.intern_public(&id_str);
-            driver.pinctrl.push(PinCtrlResource {
-                id: res_id,
-                field_name: field_name_sym,
-                shape,
-                decl: PinCtrlDecl {
-                    pinctrl_id: pin_id_sym,
-                },
-                binding: None,
-            });
-            continue;
-        }
-        if let Some(attr) = find_rseq_attr(hir_attrs, "interrupt") {
-            let id_str = parse_resource_id(attr).ok_or(ConstructionError::MissingResourceId {
-                field: field_prov.clone(),
-                kind: "interrupt",
-            })?;
-            let shape = shape_of_field(cx, field_def_id, f.ty);
-            let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
-            let irq_id_sym = cx.intern_public(&id_str);
-            driver.interrupts.push(InterruptResource {
-                id: res_id,
-                field_name: field_name_sym,
-                shape,
-                decl: InterruptDecl {
-                    interrupt_id: irq_id_sym,
-                },
-                binding: None,
-            });
-            continue;
-        }
         if let Some(attr) = find_rseq_attr(hir_attrs, "mmio") {
             let id_str = parse_resource_id(attr).ok_or(ConstructionError::MissingResourceId {
                 field: field_prov.clone(),
@@ -178,123 +101,6 @@ pub fn build_driver_struct(
                 },
                 binding: None,
             });
-            continue;
-        }
-        if let Some(attr) = find_rseq_attr(hir_attrs, "property") {
-            let (id_str, default, vendor_prefix) = parse_property_attr(attr);
-            let id_str = id_str.ok_or(ConstructionError::MissingResourceId {
-                field: field_prov.clone(),
-                kind: "property",
-            })?;
-            let scalar = scalar_of_field(f.ty).unwrap_or(ScalarType::U32);
-            let id_sym = cx.intern_public(&id_str);
-            let vendor_prefix_sym = vendor_prefix.as_deref().map(|vp| cx.intern_public(vp));
-            let prop_id = PropertyId::from(cx.alloc_and_record_public(field_def_id));
-            driver.properties.push(PropertyField {
-                id: prop_id,
-                field_name: field_name_sym,
-                field_type: scalar,
-                property_id: id_sym,
-                default_value: default,
-                vendor_prefix: vendor_prefix_sym,
-                required: !is_option(f.ty),
-                bound_value: None,
-            });
-            continue;
-        }
-
-        // Sync primitive (by type name).
-        if let Some((sync_kind, payload)) = sync_kind_for_field(cx, field_def_id, f.ty) {
-            let res_id = ResourceId::from(cx.alloc_and_record_public(field_def_id));
-            driver.sync.push(SyncResource {
-                id: res_id,
-                field_name: field_name_sym,
-                sync_kind,
-                payload_type: payload,
-            });
-            continue;
-        }
-
-        // User-data field: two acceptance rules per Path A.
-        //
-        // Rule 2: `Option<T>` where `T: Copy`. Admits any user type
-        // that genuinely implements `Copy`.
-        // Rule 1: zero-init-whitelisted types. The outer field type
-        // must be `Copy` AND belong to a compiler-controlled
-        // whitelist of `u8`, `u16`, `u32`, `u64`, `bool`, arrays of
-        // accepted types, and `Copy` structs recursively composed
-        // of accepted fields.
-        let rendered = super::walk::rendered_ty_string(f.ty);
-        let middle_field_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
-        if is_option(f.ty) {
-            let inner_middle = option_inner_middle_ty(middle_field_ty);
-            let inner_hir = extract_option_inner(f.ty);
-            let inner_is_copy = inner_middle
-                .map(|inner| type_implements_copy(cx.tcx, inner))
-                .unwrap_or(false);
-            if !inner_is_copy {
-                let inner_str = inner_hir
-                    .map(super::walk::rendered_ty_string)
-                    .unwrap_or_default();
-                return Err(ConstructionError::UserDataNotCopy {
-                    field: field_prov,
-                    inner_type: inner_str,
-                });
-            }
-            let inner_type = inner_middle
-                .and_then(|inner| super::walk::ty_to_regseq(cx.tcx, &cx.type_def_map, inner))
-                .unwrap_or(RegseqType::Scalar(ScalarType::U32));
-            let ud_id = UserDataId::from(cx.alloc_and_record_public(field_def_id));
-            driver.user_data.push(UserDataField {
-                id: ud_id,
-                field_name: field_name_sym,
-                kind: UserDataKind::Option { inner_type },
-            });
-        } else {
-            // Rule 1 path. Reject unresolved generics / projections
-            // FIRST so the Rule-1 whitelist variant surfaces with
-            // the expected diagnostic shape. The Copy trait query
-            // under `fully_monomorphized` would otherwise fail on
-            // `TyKind::Param` and `TyKind::Alias` with a generic
-            // not-Copy verdict even when the field's trait bound
-            // (e.g. `T: Copy`) would structurally admit it.
-            if is_unresolved_generic_or_projection(middle_field_ty) {
-                return Err(ConstructionError::UserDataNotZeroInitWhitelisted {
-                    field: field_prov,
-                    rejected_type: rendered,
-                });
-            }
-            // The outer field type must be `Copy` (reuses the same
-            // helper that Rule 2 uses for the inner type); otherwise
-            // surface `UserDataNotCopy` with the bare rendered type
-            // so non-`Copy` shapes like `Box<u32>`, `Rc<u32>`,
-            // `Arc<u32>`, `Cell<u32>`, `RefCell<u32>`,
-            // `UnsafeCell<u32>`, `AtomicU32` fail with the
-            // familiar variant rather than the Rule-1 whitelist
-            // variant.
-            if !type_implements_copy(cx.tcx, middle_field_ty) {
-                return Err(ConstructionError::UserDataNotCopy {
-                    field: field_prov,
-                    inner_type: rendered,
-                });
-            }
-            let mut visited: HashSet<rustc_middle::ty::Ty<'_>> = HashSet::new();
-            match rule1_whitelist_ty(cx.tcx, &cx.type_def_map, middle_field_ty, &mut visited) {
-                Rule1Outcome::Accepted(inner_type) => {
-                    let ud_id = UserDataId::from(cx.alloc_and_record_public(field_def_id));
-                    driver.user_data.push(UserDataField {
-                        id: ud_id,
-                        field_name: field_name_sym,
-                        kind: UserDataKind::ZeroInit { inner_type },
-                    });
-                }
-                Rule1Outcome::Rejected => {
-                    return Err(ConstructionError::UserDataNotZeroInitWhitelisted {
-                        field: field_prov,
-                        rejected_type: rendered,
-                    });
-                }
-            }
         }
     }
 
@@ -427,60 +233,6 @@ fn parse_resource_id(attr: &Attribute) -> Option<String> {
     None
 }
 
-fn parse_property_attr(attr: &Attribute) -> (Option<String>, Option<LiteralValue>, Option<String>) {
-    let mut id: Option<String> = None;
-    let mut default: Option<LiteralValue> = None;
-    let mut vendor_prefix: Option<String> = None;
-    let Attribute::Unparsed(item) = attr else {
-        return (id, default, vendor_prefix);
-    };
-    let tokens = match &item.args {
-        AttrArgs::Delimited(d) => &d.tokens,
-        _ => return (id, default, vendor_prefix),
-    };
-    let trees: Vec<&TokenTree> = tokens.iter().collect();
-    let mut i = 0;
-    while i < trees.len() {
-        if is_comma(trees[i]) {
-            i += 1;
-            continue;
-        }
-        let key = match &trees[i] {
-            TokenTree::Token(tok, _) => match tok.kind {
-                TokenKind::Ident(sym, _) => sym.as_str().to_owned(),
-                _ => return (id, default, vendor_prefix),
-            },
-            _ => return (id, default, vendor_prefix),
-        };
-        i += 2;
-        if i >= trees.len() {
-            return (id, default, vendor_prefix);
-        }
-        match key.as_str() {
-            "id" => {
-                id = extract_string(trees[i]);
-            }
-            "vendor_prefix" => {
-                vendor_prefix = extract_string(trees[i]);
-            }
-            "default" => {
-                if let TokenTree::Token(tok, _) = trees[i] {
-                    if let TokenKind::Literal(lit) = tok.kind {
-                        if lit.kind == LitKind::Integer {
-                            if let Ok(v) = lit.symbol.as_str().parse::<u32>() {
-                                default = Some(LiteralValue::U32(v));
-                            }
-                        }
-                    }
-                }
-            }
-            _ => {}
-        }
-        i += 1;
-    }
-    (id, default, vendor_prefix)
-}
-
 fn extract_string(tree: &TokenTree) -> Option<String> {
     match tree {
         TokenTree::Token(tok, _) => match tok.kind {
@@ -552,7 +304,15 @@ fn mmio_inner_ty<'hir>(ty: &'hir rustc_hir::Ty<'hir>) -> Option<&'hir rustc_hir:
 }
 
 fn shape_of_field(cx: &BuildContext<'_, '_>, field_def_id: DefId, ty: &rustc_hir::Ty<'_>) -> Shape {
-    if is_option(ty) {
+    if matches!(
+        &ty.kind,
+        rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path))
+            if path
+                .segments
+                .last()
+                .map(|seg| seg.ident.name.as_str() == "Option")
+                .unwrap_or(false)
+    ) {
         return Shape::Optional;
     }
     let middle_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
@@ -564,259 +324,4 @@ fn shape_of_field(cx: &BuildContext<'_, '_>, field_def_id: DefId, ty: &rustc_hir
         return Shape::Array(n);
     }
     Shape::Single
-}
-
-fn is_option(ty: &rustc_hir::Ty<'_>) -> bool {
-    if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind {
-        if let Some(seg) = path.segments.last() {
-            return seg.ident.name.as_str() == "Option";
-        }
-    }
-    false
-}
-
-fn extract_option_inner<'hir>(ty: &'hir rustc_hir::Ty<'hir>) -> Option<&'hir rustc_hir::Ty<'hir>> {
-    if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind {
-        if let Some(seg) = path.segments.last() {
-            if seg.ident.name.as_str() == "Option" {
-                let args = seg.args?;
-                for arg in args.args.iter() {
-                    if let rustc_hir::GenericArg::Type(inner) = arg {
-                        return Some(inner.as_unambig_ty());
-                    }
-                }
-            }
-        }
-    }
-    None
-}
-
-/// Return the middle-ty of the inner `T` in a `Option<T>` type.
-fn option_inner_middle_ty<'tcx>(
-    ty: rustc_middle::ty::Ty<'tcx>,
-) -> Option<rustc_middle::ty::Ty<'tcx>> {
-    if let rustc_middle::ty::TyKind::Adt(_, args) = ty.kind() {
-        return args.types().next();
-    }
-    None
-}
-
-/// Query the trait system to decide whether `ty` implements `Copy`. This
-/// replaces the earlier hardcoded primitive-name whitelist so any
-/// user-defined type that derives `Copy` is accepted as user-data inner.
-fn type_implements_copy<'tcx>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-) -> bool {
-    let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
-    tcx.type_is_copy_modulo_regions(typing_env, ty)
-}
-
-fn scalar_of_field(ty: &rustc_hir::Ty<'_>) -> Option<ScalarType> {
-    if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind {
-        if let Some(seg) = path.segments.last() {
-            return match seg.ident.name.as_str() {
-                "u8" => Some(ScalarType::U8),
-                "u16" => Some(ScalarType::U16),
-                "u32" => Some(ScalarType::U32),
-                "u64" => Some(ScalarType::U64),
-                "usize" => Some(ScalarType::Usize),
-                "i8" => Some(ScalarType::I8),
-                "i16" => Some(ScalarType::I16),
-                "i32" => Some(ScalarType::I32),
-                "i64" => Some(ScalarType::I64),
-                "isize" => Some(ScalarType::Isize),
-                _ => None,
-            };
-        }
-    }
-    None
-}
-
-fn sync_kind_for_field(
-    cx: &BuildContext<'_, '_>,
-    field_def_id: DefId,
-    ty: &rustc_hir::Ty<'_>,
-) -> Option<(SyncKind, Option<RegseqType>)> {
-    let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind else {
-        return None;
-    };
-    let seg = path.segments.last()?;
-    let kind = match seg.ident.name.as_str() {
-        "Mutex" => SyncKind::Mutex,
-        "SpinLock" => SyncKind::SpinLock,
-        "IrqSpinLock" => SyncKind::IrqSpinLock,
-        "Completion" => return Some((SyncKind::Completion, None)),
-        _ => return None,
-    };
-
-    // Resolve the type parameter of `Mutex<T>` / `SpinLock<T>` /
-    // `IrqSpinLock<T>` through middle-ty so `T` surfaces as the correct
-    // [`RegseqType`] (including `Defined(TypeDefId)` for user ADTs)
-    // instead of a hardcoded `U32` placeholder.
-    let middle_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
-    let payload = if let rustc_middle::ty::TyKind::Adt(_, args) = middle_ty.kind() {
-        args.types()
-            .next()
-            .and_then(|inner| super::walk::ty_to_regseq(cx.tcx, &cx.type_def_map, inner))
-    } else {
-        None
-    };
-    Some((kind, payload.or(Some(RegseqType::Unit))))
-}
-
-/// Decide whether `ty` is an unresolved generic parameter or
-/// associated-type projection that Rule 1 must reject up-front.
-/// Covers every `TyKind` variant for which the whitelist walker
-/// cannot make a safe decision without a concrete monomorphized
-/// type.
-fn is_unresolved_generic_or_projection(ty: rustc_middle::ty::Ty<'_>) -> bool {
-    use rustc_middle::ty::TyKind;
-    matches!(
-        ty.kind(),
-        TyKind::Param(_) | TyKind::Alias(..) | TyKind::Bound(..) | TyKind::Placeholder(_)
-    )
-}
-
-// --- Rule-1 zero-init whitelist predicate ---------------------------
-
-/// Classification outcome for the Rule-1 whitelist walker. `Accepted`
-/// carries the faithful [`RegseqType`] representation of the accepted
-/// type; `Rejected` signals the caller should raise
-/// [`ConstructionError::UserDataNotZeroInitWhitelisted`].
-enum Rule1Outcome {
-    Accepted(RegseqType),
-    Rejected,
-}
-
-/// Rule-1 zero-init whitelist walker.
-///
-/// Admits exactly:
-/// - Primitive scalars `u8`, `u16`, `u32`, `u64`, `bool`.
-/// - Arrays `[T; N]` whose element `T` is itself accepted.
-/// - Structs whose fields are all accepted (recursively) and that
-///   the type system treats as `Copy`.
-///
-/// Every other Rust type (signed integers, `usize`/`isize`, floats,
-/// `char`, `u128`/`i128`, tuples, enums, unions, `NonZeroU*`,
-/// `NonNull`, references, function pointers, raw pointers,
-/// unresolved generic parameters / associated-type projections,
-/// slices, trait objects, etc.) is rejected.
-///
-/// The visited set uses monomorphized [`rustc_middle::ty::Ty`] keys
-/// so `Boxed<u32>` and `Boxed<NonZeroU32>` (sharing a `DefId`) are
-/// walked independently. A type already on the stack is treated as
-/// accepted so a hypothetical self-referential struct does not
-/// spin; the outer `Copy` check the caller applies before this
-/// walker still blocks genuinely unsound shapes.
-fn rule1_whitelist_ty<'tcx>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    type_def_map: &std::collections::HashMap<DefId, regseq_model::identity::TypeDefId>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-    visited: &mut HashSet<rustc_middle::ty::Ty<'tcx>>,
-) -> Rule1Outcome {
-    use rustc_middle::ty::TyKind;
-
-    // Reject generic parameters and unresolved projections BEFORE
-    // applying the whitelist -- Rule 1 requires fully monomorphized
-    // types, and accepting these would be unsound.
-    match ty.kind() {
-        TyKind::Param(_) | TyKind::Alias(..) | TyKind::Bound(..) | TyKind::Placeholder(_) => {
-            return Rule1Outcome::Rejected;
-        }
-        _ => {}
-    }
-
-    if !visited.insert(ty) {
-        // Cycle -- accept at the recursion re-entry site. The outer
-        // Copy check the caller applies before invoking this walker
-        // guarantees we only reach cycle nodes via a Copy-bearing
-        // field, so accepting here cannot admit a non-Copy shape.
-        return Rule1Outcome::Accepted(RegseqType::Unit);
-    }
-    let outcome = rule1_whitelist_ty_inner(tcx, type_def_map, ty, visited);
-    visited.remove(&ty);
-    outcome
-}
-
-fn rule1_whitelist_ty_inner<'tcx>(
-    tcx: rustc_middle::ty::TyCtxt<'tcx>,
-    type_def_map: &std::collections::HashMap<DefId, regseq_model::identity::TypeDefId>,
-    ty: rustc_middle::ty::Ty<'tcx>,
-    visited: &mut HashSet<rustc_middle::ty::Ty<'tcx>>,
-) -> Rule1Outcome {
-    use rustc_middle::ty::TyKind;
-    match ty.kind() {
-        TyKind::Bool => Rule1Outcome::Accepted(RegseqType::Bool),
-        TyKind::Uint(u) => match u {
-            rustc_middle::ty::UintTy::U8 => {
-                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U8))
-            }
-            rustc_middle::ty::UintTy::U16 => {
-                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U16))
-            }
-            rustc_middle::ty::UintTy::U32 => {
-                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U32))
-            }
-            rustc_middle::ty::UintTy::U64 => {
-                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U64))
-            }
-            // u128, usize: rejected by Stage-1 whitelist narrowing.
-            _ => Rule1Outcome::Rejected,
-        },
-        TyKind::Array(inner, len_const) => {
-            let len = match len_const.try_to_target_usize(tcx) {
-                Some(n) => n as usize,
-                None => return Rule1Outcome::Rejected,
-            };
-            match rule1_whitelist_ty(tcx, type_def_map, *inner, visited) {
-                Rule1Outcome::Accepted(elem_ty) => {
-                    Rule1Outcome::Accepted(RegseqType::Array(Box::new(elem_ty), len))
-                }
-                Rule1Outcome::Rejected => Rule1Outcome::Rejected,
-            }
-        }
-        TyKind::Adt(adt, args) => {
-            // Only structs qualify. Enums and unions are explicitly
-            // rejected (Stage-1 whitelist narrowing).
-            if !adt.is_struct() {
-                return Rule1Outcome::Rejected;
-            }
-            // Reject non-local ADTs (NonZeroU*, NonNull, Box, Rc,
-            // Arc, Cell, RefCell, UnsafeCell, AtomicU*, etc.). The
-            // Rule-1 whitelist admits only user-defined Copy
-            // structs whose fields are themselves accepted; the
-            // `TypeDef` map only carries local ADTs, so non-local
-            // ones surface here as missing.
-            let did = adt.did();
-            if !did.is_local() {
-                return Rule1Outcome::Rejected;
-            }
-            let tid = match type_def_map.get(&did) {
-                Some(tid) => *tid,
-                None => return Rule1Outcome::Rejected,
-            };
-            // Walk every field under the substituted args so nested
-            // generics monomorphize correctly. Structs only have one
-            // variant.
-            let variant = adt.non_enum_variant();
-            for field in &variant.fields {
-                let field_ty = field.ty(tcx, args);
-                match rule1_whitelist_ty(tcx, type_def_map, field_ty, visited) {
-                    Rule1Outcome::Accepted(_) => {}
-                    Rule1Outcome::Rejected => return Rule1Outcome::Rejected,
-                }
-            }
-            Rule1Outcome::Accepted(RegseqType::Defined(tid))
-        }
-        // Every other TyKind is rejected. This covers:
-        // - Int (i8..i64, i128), Float (f32, f64), Char
-        // - Tuple (including the unit tuple)
-        // - Enum, Union (handled above via !adt.is_struct())
-        // - Ref, RawPtr, FnPtr, FnDef, Closure, Coroutine
-        // - Dynamic (trait objects), Slice, Str
-        // - Foreign, Error, and the generic-param kinds already
-        //   filtered upstream.
-        _ => Rule1Outcome::Rejected,
-    }
 }

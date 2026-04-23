@@ -32,6 +32,7 @@ pub struct PinStateInfo {
 pub struct PinCtrlField {
     pub field_name: String,
     pub required: bool,
+    pub array_len: Option<usize>,
     pub pinctrl_id: Option<String>,
     /// Exact rendered Rust type of this field (e.g. `"PinCtrl"`, `"Option<PinCtrl>"`).
     pub field_type: String,
@@ -179,8 +180,8 @@ fn extract_pinctrl_fields<'tcx>(
     let mut fields = Vec::new();
 
     for field in variant_data.fields() {
-        let required = match pinctrl_field_shape(field.ty) {
-            Some(r) => r,
+        let shape = match pinctrl_field_shape(tcx, field.ty) {
+            Some(shape) => shape,
             None => continue,
         };
 
@@ -194,7 +195,8 @@ fn extract_pinctrl_fields<'tcx>(
 
         fields.push(PinCtrlField {
             field_name: field.ident.name.as_str().to_string(),
-            required,
+            required: shape.required,
+            array_len: shape.array_len,
             pinctrl_id,
             field_type: hir_ty_to_string(field.ty),
         });
@@ -203,35 +205,89 @@ fn extract_pinctrl_fields<'tcx>(
     Ok(fields)
 }
 
-/// Returns `Some(required)` if this is a `PinCtrl` or `Option<PinCtrl>` type.
-fn pinctrl_field_shape(ty: &rustc_hir::Ty<'_>) -> Option<bool> {
-    let rustc_hir::TyKind::Path(qpath) = &ty.kind else {
-        return None;
-    };
-    let path = match qpath {
-        rustc_hir::QPath::Resolved(_, path) => path,
-        _ => return None,
-    };
-    let last_seg = path.segments.last()?;
-    let name = last_seg.ident.name.as_str();
+struct PinCtrlFieldShape {
+    required: bool,
+    array_len: Option<usize>,
+}
 
-    if name == "PinCtrl" {
-        return Some(true);
-    }
+/// Returns `Some(shape)` if this is a `PinCtrl`, `Option<PinCtrl>`, or `[PinCtrl; N]` type.
+fn pinctrl_field_shape<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    ty: &rustc_hir::Ty<'tcx>,
+) -> Option<PinCtrlFieldShape> {
+    match &ty.kind {
+        rustc_hir::TyKind::Path(qpath) => {
+            let path = match qpath {
+                rustc_hir::QPath::Resolved(_, path) => path,
+                _ => return None,
+            };
+            let last_seg = path.segments.last()?;
+            let name = last_seg.ident.name.as_str();
 
-    if name == "Option" {
-        let args = last_seg.args?;
-        for arg in args.args.iter() {
-            if let rustc_hir::GenericArg::Type(inner_ty) = arg {
-                if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, p)) = &inner_ty.kind {
-                    if p.segments.last().map(|s| s.ident.name.as_str()) == Some("PinCtrl") {
-                        return Some(false);
+            if name == "PinCtrl" {
+                return Some(PinCtrlFieldShape {
+                    required: true,
+                    array_len: None,
+                });
+            }
+
+            if name == "Option" {
+                let args = last_seg.args?;
+                for arg in args.args.iter() {
+                    if let rustc_hir::GenericArg::Type(inner_ty) = arg {
+                        if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, p)) =
+                            &inner_ty.kind
+                        {
+                            if p.segments.last().map(|s| s.ident.name.as_str()) == Some("PinCtrl") {
+                                return Some(PinCtrlFieldShape {
+                                    required: false,
+                                    array_len: None,
+                                });
+                            }
+                        }
                     }
                 }
+                None
+            } else {
+                None
+            }
+        }
+        rustc_hir::TyKind::Array(inner_ty, array_len) => {
+            if !path_ends_with_pinctrl(inner_ty) {
+                return None;
+            }
+            Some(PinCtrlFieldShape {
+                required: true,
+                array_len: extract_array_len(tcx, array_len),
+            })
+        }
+        _ => None,
+    }
+}
+
+fn path_ends_with_pinctrl(ty: &rustc_hir::Ty<'_>) -> bool {
+    if let rustc_hir::TyKind::Path(rustc_hir::QPath::Resolved(_, path)) = &ty.kind {
+        path.segments
+            .last()
+            .map(|seg| seg.ident.name.as_str() == "PinCtrl")
+            .unwrap_or(false)
+    } else {
+        false
+    }
+}
+
+fn extract_array_len<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    array_len: &rustc_hir::ConstArg<'tcx>,
+) -> Option<usize> {
+    if let rustc_hir::ConstArgKind::Anon(anon_const) = &array_len.kind {
+        let body = tcx.hir_body(anon_const.body);
+        if let rustc_hir::ExprKind::Lit(lit) = &body.value.kind {
+            if let rustc_ast::LitKind::Int(value, _) = lit.node {
+                return usize::try_from(value.get()).ok();
             }
         }
     }
-
     None
 }
 

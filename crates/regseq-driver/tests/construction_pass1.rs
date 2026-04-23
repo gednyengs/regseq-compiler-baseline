@@ -165,6 +165,7 @@ pub struct Interrupt;
 pub struct Mmio<T> { _marker: core::marker::PhantomData<T> }
 pub struct Mutex<T> { _v: T }
 pub struct Completion;
+pub enum IrqResult { Handled, NotHandled }
 
 pub struct ReadWrite<T, R> { _v: T, _r: core::marker::PhantomData<R> }
 pub struct Reserved<T> { _v: T }
@@ -233,7 +234,7 @@ impl MyDriver {
     pub fn helper(&self) {}
 
     #[rseq::isr]
-    pub fn on_irq(&mut self) {}
+    pub fn on_irq(&mut self) -> IrqResult { IrqResult::Handled }
 }
 "#;
 
@@ -508,6 +509,80 @@ fn positive_specimen_constructs_declaration_skeleton() {
         }
         other => panic!("helper receiver must be Ref(_, Shared), got {other:?}"),
     }
+}
+
+#[test]
+fn resource_surfaces_populate_driver_vectors() {
+    const SOURCE: &str = r#"
+#![no_std]
+
+pub struct Clock;
+pub struct ResetLine;
+pub struct PinCtrl;
+pub struct Interrupt;
+pub struct Mmio<T> { _marker: core::marker::PhantomData<T> }
+pub struct ReadWrite<T, R> { _v: T, _r: core::marker::PhantomData<R> }
+pub enum IrqResult { Handled, NotHandled }
+
+#[allow(non_snake_case)]
+pub mod DR_REG {
+    pub struct Register;
+}
+
+#[repr(C)]
+#[rseq::register_block(endian = "little", access_width = 32)]
+pub struct MyBlock {
+    pub dr: ReadWrite<u32, DR_REG::Register>,
+}
+
+#[rseq::driver(name = "resource-drv", compatible = ["acme,fixture"])]
+pub struct ResourceDriver {
+    #[rseq::clock(id = "core_clk")]
+    pub clk: Clock,
+    #[rseq::reset(id = "core_rst")]
+    pub rst: Option<ResetLine>,
+    #[rseq::property(id = "sample-rate", vendor_prefix = "acme")]
+    pub sample_rate: u32,
+    #[rseq::interrupt(id = "core_irq")]
+    pub irq: Interrupt,
+    #[rseq::mmio(id = "regs")]
+    pub regs: Mmio<MyBlock>,
+}
+
+impl ResourceDriver {
+    #[rseq::isr]
+    pub fn on_irq(&mut self) -> IrqResult { IrqResult::Handled }
+}
+"#;
+
+    let model = compile_and_build(SOURCE, "construction_pass1_resources")
+        .expect("resource specimen must succeed");
+    let driver = find_driver_module(&model)
+        .and_then(|module| module.driver.as_ref())
+        .expect("driver struct present");
+
+    assert_eq!(driver.clocks.len(), 1, "clock surface must populate clocks");
+    assert_eq!(driver.resets.len(), 1, "reset surface must populate resets");
+    assert_eq!(
+        driver.properties.len(),
+        1,
+        "property surface must populate properties"
+    );
+    assert_eq!(
+        model.symbols.resolve(driver.clocks[0].field_name),
+        "clk",
+        "clock field name must come from the extraction surface"
+    );
+    assert_eq!(
+        model.symbols.resolve(driver.resets[0].field_name),
+        "rst",
+        "reset field name must come from the extraction surface"
+    );
+    assert_eq!(
+        model.symbols.resolve(driver.properties[0].field_name),
+        "sample_rate",
+        "property field name must come from the extraction surface"
+    );
 }
 
 // ---------------------------------------------------------------------------
