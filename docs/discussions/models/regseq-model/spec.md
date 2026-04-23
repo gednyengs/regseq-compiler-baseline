@@ -93,8 +93,9 @@ both internal analyses and backend code generators operate on.
 ### Role in the pipeline
 
 ```
-Extraction Surfaces (13 surfaces, JSON)
-    |  normalization (Phase 1: declarations populated, bindings empty)
+rustc HIR/MIR
+    |  construction (Phase 1: declarations populated, bindings empty)
+    |  performed by regseq-driver's rustc integration
     v
 Regseq Model
     |  platform file parsing + join (Phase 2: bindings populated)
@@ -111,6 +112,9 @@ Backend code generators (Linux, Zephyr, ...)
 The Regseq Model replaces what were previously three separate representations
 (Declaration Model, Binding Model, Joined Artifact), merging them into the
 Regseq Model as a single structure that progressively fills in.
+Construction runs in a single rustc-linked pass inside `regseq-driver`;
+there is no intermediate serialized artifact between rustc and the
+Regseq Model.
 
 ### Design principles
 
@@ -1336,11 +1340,13 @@ properties by `property_id` and stored in the `bound_value` field (Section 4.3).
 
 ## 12. Normalization Contract
 
-### Phase 1: Extraction normalization
+### Phase 1: Construction
 
 #### Input
 
-The 13 Extraction Surfaces serialized as `RawFrontendArtifact` JSON.
+rustc HIR/MIR, accessed through `regseq-driver`'s rustc integration.
+Construction walks the driver spec crate directly -- there is no
+intermediate serialized artifact.
 
 #### Output
 
@@ -1350,15 +1356,16 @@ slots set to `None`.
 #### Properties
 
 - **Deterministic**: Same input always produces the same output.
-- **Locally scoped**: Each module and item is normalized independently.
-- **Validated**: Unrecognized tags, missing required attributes, and structural
-  violations produce explicit errors, never silent defaults.
-- **Provenance**: Each normalized entity can be traced back to its originating
-  extraction surface and containing item.
+- **Locally scoped**: Each module and item is constructed independently.
+- **Validated**: Unrecognized constructs, missing required attributes, and
+  structural violations produce explicit errors, never silent defaults.
+- **Provenance**: Each constructed entity can be traced back to its source
+  location and containing item.
 
 #### Error conditions
 
-- Unrecognized enum tag in raw input.
+- Unrecognized construct in the input (e.g., an unsupported type shape or
+  an unknown `#[rseq::]` attribute form).
 - Missing required attribute (e.g., `clock` without `id`).
 - Structural violation (e.g., driver struct in multiple modules).
 - Type constraint violation (e.g., user data field not `Option<T: Copy>`).
