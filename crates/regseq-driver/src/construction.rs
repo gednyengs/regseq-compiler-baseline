@@ -907,14 +907,22 @@ fn build_declaration_skeleton_inner<'tcx>(
         .map_err(|err| extraction_surface_failed(tcx, root_def_id, "traits", err))?;
     let property_surface = crate::extract::property::extract_property_surface(tcx)
         .map_err(|err| extraction_surface_failed(tcx, root_def_id, "property", err))?;
-    let clock_surface = crate::extract::clock::extract_clock_surface(tcx)
-        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "clock", err))?;
+    let clock_surface = match crate::extract::clock::extract_clock_surface(tcx) {
+        Ok(surface) => surface,
+        Err(crate::extract::clock::ClockError::MissingClockId(field_name)) => {
+            return Err(missing_resource_id_for_driver_field(
+                tcx,
+                root_def_id,
+                &field_name,
+                "clock",
+            ));
+        }
+        Err(err) => return Err(extraction_surface_failed(tcx, root_def_id, "clock", err)),
+    };
     let reset_surface = crate::extract::reset::extract_reset_surface(tcx)
         .map_err(|err| extraction_surface_failed(tcx, root_def_id, "reset", err))?;
     let pinctrl_surface = crate::extract::pinctrl::extract_pinctrl_surface(tcx)
         .map_err(|err| extraction_surface_failed(tcx, root_def_id, "pinctrl", err))?;
-    let identity_surface = crate::extract::identity_enrichment::extract_identity_enrichment(tcx)
-        .map_err(|err| extraction_surface_failed(tcx, root_def_id, "identity_enrichment", err))?;
     let pm_impl_types: std::collections::HashSet<String> = trait_surface
         .power_management_impls
         .iter()
@@ -929,7 +937,7 @@ fn build_declaration_skeleton_inner<'tcx>(
     resources::populate_interrupts(&mut cx, &mut root_module, &interrupt_surface)?;
     resources::populate_sync(&mut cx, &mut root_module, &sync_surface)?;
     resources::populate_properties(&mut cx, &mut root_module, &property_surface)?;
-    resources::populate_user_data(&mut cx, &mut root_module, &identity_surface)?;
+    resources::populate_user_data(&mut cx, &mut root_module)?;
     resources::populate_pm_info(&mut root_module, &pm_surface)?;
 
     // Extract the map + register-block list from `cx` before the
@@ -1002,6 +1010,56 @@ fn extraction_surface_failed(
         provenance: ErrorProvenance::for_def_id(tcx, root_def_id),
         surface,
         detail: format!("{err:?}"),
+    }
+}
+
+fn missing_resource_id_for_driver_field(
+    tcx: TyCtxt<'_>,
+    root_def_id: DefId,
+    field_name: &str,
+    kind: &'static str,
+) -> ConstructionError {
+    fn find_field(tcx: TyCtxt<'_>, module_def_id: DefId, field_name: &str) -> Option<DefId> {
+        let local = module_def_id.as_local().unwrap_or(rustc_hir::def_id::CRATE_DEF_ID);
+        let mod_id = rustc_hir::def_id::LocalModDefId::new_unchecked(local);
+        for item_id in tcx.hir_module_items(mod_id).free_items() {
+            let item = tcx.hir_item(item_id);
+            let def_id = item.owner_id.def_id.to_def_id();
+            match &item.kind {
+                rustc_hir::ItemKind::Struct(_, _, variant_data) => {
+                    let is_driver = tcx.get_all_attrs(def_id).iter().any(|attr| {
+                        let rustc_hir::Attribute::Unparsed(item) = attr else {
+                            return false;
+                        };
+                        let segs = &item.path.segments;
+                        segs.len() == 2 && segs[0].as_str() == "rseq" && segs[1].as_str() == "driver"
+                    });
+                    if !is_driver {
+                        continue;
+                    }
+                    for field in variant_data.fields() {
+                        if field.ident.name.as_str() == field_name {
+                            return Some(field.def_id.to_def_id());
+                        }
+                    }
+                }
+                rustc_hir::ItemKind::Mod(..) => {
+                    if let Some(def_id) = find_field(tcx, def_id, field_name) {
+                        return Some(def_id);
+                    }
+                }
+                _ => {}
+            }
+        }
+        None
+    }
+
+    let field_def_id = find_field(tcx, rustc_hir::def_id::CRATE_DEF_ID.to_def_id(), field_name)
+        .unwrap_or(root_def_id);
+
+    ConstructionError::MissingResourceId {
+        field: ErrorProvenance::for_def_id(tcx, field_def_id),
+        kind,
     }
 }
 

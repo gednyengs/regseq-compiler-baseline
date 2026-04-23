@@ -112,6 +112,11 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             "regseq-driver: abstraction type registry: {} entry(ies)",
             abstraction_type_registry.len(),
         );
+        let pin_state_registry = crate::construction::PinStateRegistry::build(tcx);
+        eprintln!(
+            "regseq-driver: pin-state registry: {} entry(ies)",
+            pin_state_registry.len(),
+        );
 
         // --- source locations (runs after all items are known) ---
         let source_location_surface =
@@ -200,20 +205,18 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let pm_surface = crate::extract::pm::extract_pm_surface(tcx, &pm_impl_types);
         eprintln!("regseq-driver: pm extraction: {pm_surface:?}");
 
-        // --- build raw artifact (shared by raw-artifact and model emission) ---
-        // Driver and Analysis emission are stubbed in this build; they no
-        // longer trigger artifact construction. See emit_driver.rs removal
-        // in Wave A (docs/.../legacy-removal-plan.md).
-        let needs_artifact = self.wants_raw_artifact() || self.wants_model();
-        if needs_artifact {
-            if let Ok(ref ids) = identities {
-                if let Some(primary) = ids.first() {
+        if let Ok(ref ids) = identities {
+            if let Some(primary) = ids.first() {
+                // --- raw artifact emission ---
+                // Legacy path kept building until C4 removes RawArtifact
+                // entirely from the production driver.
+                if self.wants_raw_artifact() {
                     // Phase 0 contract: identity enrichment is required.
-                    // Do not build or emit artifacts when enrichment failed.
+                    // Do not build or emit raw artifacts when enrichment failed.
                     if let Err(ref e) = enrichment_surface {
                         eprintln!(
                             "regseq-driver: FATAL: identity enrichment extraction failed: {e:?} \
-                             — artifact and driver emission skipped",
+                             — raw artifact emission skipped",
                         );
                     } else {
                         let ex = ExtractionResults {
@@ -236,37 +239,42 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
                             source_locations: &source_location_surface,
                         };
                         let artifact = build_raw_artifact(tcx, primary, &self.options, &ex);
-
-                        // --- raw artifact emission ---
-                        if self.wants_raw_artifact() {
-                            if let Err(e) = emit_raw_artifact(&artifact, &self.options.output_dir) {
-                                eprintln!("regseq-driver: raw artifact emission failed: {e}");
-                            } else {
-                                eprintln!(
-                                    "regseq-driver: raw artifact emitted to {}/drivers/{}.raw.json",
-                                    self.options.output_dir.display(),
-                                    primary.driver_name,
-                                );
-                            }
-                        }
-
-                        // --- RegseqModel JSON emission ---
-                        if self.wants_model() {
-                            match emit_regseq_model_json(
-                                &artifact,
-                                &self.options.output_dir,
-                                self.model_path_override(),
-                            ) {
-                                Ok(output_path) => eprintln!(
-                                    "regseq-driver: RegseqModel JSON emitted to {}",
-                                    output_path.display(),
-                                ),
-                                Err(e) => eprintln!(
-                                    "regseq-driver: RegseqModel JSON emission failed: {e}",
-                                ),
-                            }
+                        if let Err(e) = emit_raw_artifact(&artifact, &self.options.output_dir) {
+                            eprintln!("regseq-driver: raw artifact emission failed: {e}");
+                        } else {
+                            eprintln!(
+                                "regseq-driver: raw artifact emitted to {}/drivers/{}.raw.json",
+                                self.options.output_dir.display(),
+                                primary.driver_name,
+                            );
                         }
                     }
+                }
+            }
+        }
+
+        // --- RegseqModel JSON emission ---
+        if self.wants_model() {
+            let registries = crate::construction::ExtractionRegistries {
+                intrinsic: &intrinsic_registry,
+                framework_types: &framework_type_registry,
+                abstraction_types: &abstraction_type_registry,
+                pin_states: &pin_state_registry,
+            };
+            match crate::construction::build_declaration_skeleton(tcx, &registries) {
+                Ok(model) => match emit_regseq_model_json(
+                    &model,
+                    &self.options.output_dir,
+                    self.model_path_override(),
+                ) {
+                    Ok(output_path) => eprintln!(
+                        "regseq-driver: RegseqModel JSON emitted to {}",
+                        output_path.display(),
+                    ),
+                    Err(e) => eprintln!("regseq-driver: RegseqModel JSON emission failed: {e}"),
+                },
+                Err(e) => {
+                    eprintln!("regseq-driver: RegseqModel construction failed: {e}")
                 }
             }
         }
@@ -417,31 +425,18 @@ fn emit_raw_artifact(
     std::fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))
 }
 
-/// Normalize `artifact` to a [`regseq_model::model::RegseqModel`] and
-/// write the JSON form documented in `ir-reference.md` Section 7 to
-/// disk. When `path_override` is `Some`, the JSON is written there
-/// verbatim; when `None`, it lands under
+/// Serialize `model` to the JSON form documented in `ir-reference.md`
+/// Section 7 and write it to disk. When `path_override` is `Some`, the
+/// JSON is written there verbatim; when `None`, it lands under
 /// `<output_dir>/drivers/<driver_name>.model.json`.
 ///
 /// Returns the path the JSON was written to so the caller can log it.
 fn emit_regseq_model_json(
-    artifact: &crate::raw_artifact::RawFrontendArtifact,
+    model: &regseq_model::model::RegseqModel,
     output_dir: &std::path::Path,
     path_override: Option<&std::path::Path>,
 ) -> Result<std::path::PathBuf, String> {
-    // The driver-side `RawFrontendArtifact` (populated from TyCtxt) and the
-    // model-side `regseq_model::normalize::raw_artifact::RawFrontendArtifact`
-    // are wire-compatible mirrors; bridge via JSON roundtrip. Wave C of the
-    // legacy-removal plan replaces this path with direct rustc-to-RegseqModel
-    // construction in `regseq-driver`, eliminating both mirrors.
-    let json_in = serde_json::to_string(artifact)
-        .map_err(|e| format!("failed to serialize raw artifact: {e}"))?;
-    let model_side: regseq_model::normalize::raw_artifact::RawFrontendArtifact =
-        serde_json::from_str(&json_in)
-            .map_err(|e| format!("failed to re-deserialize raw artifact: {e}"))?;
-    let model = regseq_model::normalize(&model_side)
-        .map_err(|e| format!("RegseqModel normalization failed: {e}"))?;
-    let json = regseq_model::serialize::serialize_regseq_model(&model);
+    let json = regseq_model::serialize::serialize_regseq_model(model);
 
     let path: std::path::PathBuf = match path_override {
         Some(p) => p.to_path_buf(),
@@ -449,7 +444,9 @@ fn emit_regseq_model_json(
             let drivers_dir = output_dir.join("drivers");
             std::fs::create_dir_all(&drivers_dir)
                 .map_err(|e| format!("failed to create drivers dir: {e}"))?;
-            drivers_dir.join(format!("{}.model.json", artifact.driver_name))
+            let driver_name = model_driver_name(model)
+                .ok_or_else(|| "constructed RegseqModel has no driver name".to_string())?;
+            drivers_dir.join(format!("{driver_name}.model.json"))
         }
     };
 
@@ -461,4 +458,22 @@ fn emit_regseq_model_json(
     std::fs::write(&path, json)
         .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     Ok(path)
+}
+
+fn model_driver_name(model: &regseq_model::model::RegseqModel) -> Option<&str> {
+    fn find_driver<'a>(
+        module: &'a regseq_model::model::Module,
+    ) -> Option<&'a regseq_model::model::DriverStruct> {
+        if module.kind == regseq_model::model::ModuleKind::Driver {
+            return module.driver.as_ref();
+        }
+        for submodule in &module.submodules {
+            if let Some(driver) = find_driver(submodule) {
+                return Some(driver);
+            }
+        }
+        None
+    }
+
+    find_driver(&model.root_module).map(|driver| model.symbols.resolve(driver.identity.name))
 }

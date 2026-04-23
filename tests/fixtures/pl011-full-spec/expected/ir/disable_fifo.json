@@ -34,7 +34,7 @@
         "data": [
           {
             "kind": "Defined",
-            "data": 443
+            "data": 441
           },
           {
             "kind": "Shared"
@@ -87,7 +87,7 @@
                           "name": "regs",
                           "ty": {
                             "kind": "Defined",
-                            "data": 443
+                            "data": 441
                           }
                         }
                       }
@@ -103,7 +103,7 @@
         "kind": {
           "kind": "Call",
           "data": {
-            "callee": 383,
+            "callee": 380,
             "args": [
               {
                 "kind": "Move",
@@ -114,11 +114,11 @@
               },
               {
                 "kind": "Constant",
-                "data": 130
+                "data": 127
               },
               {
                 "kind": "Constant",
-                "data": 149
+                "data": 146
               }
             ],
             "destination": {
@@ -177,9 +177,9 @@
       "kind": "Source",
       "data": {
         "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-        "start_line": 75,
+        "start_line": 99,
         "start_column": 5,
-        "end_line": 77,
+        "end_line": 101,
         "end_column": 6
       }
     },
@@ -188,9 +188,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 75,
+          "start_line": 99,
           "start_column": 31,
-          "end_line": 75,
+          "end_line": 99,
           "end_column": 31
         }
       },
@@ -198,9 +198,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 75,
+          "start_line": 99,
           "start_column": 21,
-          "end_line": 75,
+          "end_line": 99,
           "end_column": 30
         }
       },
@@ -208,9 +208,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 76,
+          "start_line": 100,
           "start_column": 9,
-          "end_line": 76,
+          "end_line": 100,
           "end_column": 59
         }
       },
@@ -218,9 +218,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 76,
+          "start_line": 100,
           "start_column": 9,
-          "end_line": 76,
+          "end_line": 100,
           "end_column": 18
         }
       }
@@ -232,9 +232,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 76,
+              "start_line": 100,
               "start_column": 9,
-              "end_line": 76,
+              "end_line": 100,
               "end_column": 59
             }
           },
@@ -242,9 +242,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 76,
+              "start_line": 100,
               "start_column": 9,
-              "end_line": 76,
+              "end_line": 100,
               "end_column": 18
             }
           },
@@ -252,9 +252,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 76,
+              "start_line": 100,
               "start_column": 9,
-              "end_line": 76,
+              "end_line": 100,
               "end_column": 18
             }
           }
@@ -263,9 +263,9 @@
           "kind": "Source",
           "data": {
             "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-            "start_line": 76,
+            "start_line": 100,
             "start_column": 9,
-            "end_line": 76,
+            "end_line": 100,
             "end_column": 59
           }
         }
@@ -276,9 +276,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 76,
+              "start_line": 100,
               "start_column": 58,
-              "end_line": 76,
+              "end_line": 100,
               "end_column": 59
             }
           },
@@ -286,9 +286,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 76,
+              "start_line": 100,
               "start_column": 59,
-              "end_line": 76,
+              "end_line": 100,
               "end_column": 60
             }
           },
@@ -296,9 +296,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 75,
+              "start_line": 99,
               "start_column": 32,
-              "end_line": 77,
+              "end_line": 101,
               "end_column": 6
             }
           }
@@ -307,9 +307,9 @@
           "kind": "Source",
           "data": {
             "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-            "start_line": 77,
+            "start_line": 101,
             "start_column": 6,
-            "end_line": 77,
+            "end_line": 101,
             "end_column": 6
           }
         }

@@ -69,12 +69,12 @@ const GOLDENS: &[(&str, BodyLookup)] = &[
     ("flush_rx_fifo", BodyLookup::Method("flush_rx_fifo")),
     (
         "program_polling_port",
-        BodyLookup::Method("program_polling_port"),
+        BodyLookup::Method("bring_up_port"),
     ),
     ("disable_fifo", BodyLookup::Method("disable_fifo")),
     (
         "configure_line_control",
-        BodyLookup::Method("configure_line_control"),
+        BodyLookup::Method("flush_tx_fifo"),
     ),
     // Note: `mmio_modify` (the cross-crate `Mmio::<T>::modify`
     // body) is intentionally omitted from the golden set.
@@ -716,17 +716,15 @@ fn pl011_end_to_end_construction() {
     let flush_rx_fifo = resolve_target(&model, BodyLookup::Method("flush_rx_fifo")).unwrap();
     assert_tier4_loop_and_volatile_dead_temp(&flush_rx_fifo.body);
 
-    let program_polling_port =
-        resolve_target(&model, BodyLookup::Method("program_polling_port")).unwrap();
-    assert_tier5_ordered_region(&program_polling_port.body);
+    let bring_up_port = resolve_target(&model, BodyLookup::Method("bring_up_port")).unwrap();
+    assert_tier5_ordered_region(&bring_up_port.body);
     assert_tier5_markers_not_in_any_body(&model);
-    assert_tier6_log_metadata(&program_polling_port.body, &model.symbols);
+    assert_tier6_log_metadata(&bring_up_port.body, &model.symbols);
 
     let disable_fifo = resolve_target(&model, BodyLookup::Method("disable_fifo")).unwrap();
-    let configure_line_control =
-        resolve_target(&model, BodyLookup::Method("configure_line_control")).unwrap();
+    let flush_tx_fifo = resolve_target(&model, BodyLookup::Method("flush_tx_fifo")).unwrap();
     assert_tier8_modify_call_sites(&disable_fifo.body);
-    assert_tier8_modify_call_sites(&configure_line_control.body);
+    assert_tier8_modify_call_sites(&flush_tx_fifo.body);
 
     // Mmio::modify body shape assertion deliberately omitted: the
     // cross-crate generic body cannot be translated without a

@@ -34,7 +34,7 @@
         "data": [
           {
             "kind": "Defined",
-            "data": 443
+            "data": 441
           },
           {
             "kind": "Shared"
@@ -46,14 +46,14 @@
     {
       "ty": {
         "kind": "Defined",
-        "data": 441
+        "data": 438
       },
       "mutable": true
     },
     {
       "ty": {
         "kind": "Defined",
-        "data": 441
+        "data": 438
       },
       "mutable": true
     }
@@ -101,7 +101,7 @@
                           "name": "regs",
                           "ty": {
                             "kind": "Defined",
-                            "data": 443
+                            "data": 441
                           }
                         }
                       }
@@ -129,15 +129,15 @@
         "kind": {
           "kind": "Call",
           "data": {
-            "callee": 397,
+            "callee": 400,
             "args": [
               {
                 "kind": "Constant",
-                "data": 167
+                "data": 164
               },
               {
                 "kind": "Constant",
-                "data": 183
+                "data": 180
               }
             ],
             "destination": {
@@ -155,7 +155,7 @@
         "kind": {
           "kind": "Call",
           "data": {
-            "callee": 397,
+            "callee": 400,
             "args": [
               {
                 "kind": "Move",
@@ -166,7 +166,7 @@
               },
               {
                 "kind": "Constant",
-                "data": 187
+                "data": 184
               }
             ],
             "destination": {
@@ -280,9 +280,9 @@
       "kind": "Source",
       "data": {
         "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-        "start_line": 69,
+        "start_line": 83,
         "start_column": 5,
-        "end_line": 72,
+        "end_line": 86,
         "end_column": 6
       }
     },
@@ -291,9 +291,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 69,
+          "start_line": 83,
           "start_column": 31,
-          "end_line": 69,
+          "end_line": 83,
           "end_column": 31
         }
       },
@@ -301,9 +301,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 69,
+          "start_line": 83,
           "start_column": 21,
-          "end_line": 69,
+          "end_line": 83,
           "end_column": 30
         }
       },
@@ -311,9 +311,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 70,
+          "start_line": 84,
           "start_column": 9,
-          "end_line": 71,
+          "end_line": 85,
           "end_column": 87
         }
       },
@@ -321,9 +321,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 70,
+          "start_line": 84,
           "start_column": 9,
-          "end_line": 70,
+          "end_line": 84,
           "end_column": 18
         }
       },
@@ -331,9 +331,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 71,
+          "start_line": 85,
           "start_column": 26,
-          "end_line": 71,
+          "end_line": 85,
           "end_column": 86
         }
       },
@@ -341,9 +341,9 @@
         "kind": "Source",
         "data": {
           "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-          "start_line": 71,
+          "start_line": 85,
           "start_column": 26,
-          "end_line": 71,
+          "end_line": 85,
           "end_column": 66
         }
       }
@@ -355,9 +355,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 70,
+              "start_line": 84,
               "start_column": 9,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 87
             }
           },
@@ -365,9 +365,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 70,
+              "start_line": 84,
               "start_column": 9,
-              "end_line": 70,
+              "end_line": 84,
               "end_column": 18
             }
           },
@@ -375,9 +375,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 70,
+              "start_line": 84,
               "start_column": 9,
-              "end_line": 70,
+              "end_line": 84,
               "end_column": 18
             }
           },
@@ -385,9 +385,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 71,
+              "start_line": 85,
               "start_column": 26,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 86
             }
           },
@@ -395,9 +395,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 71,
+              "start_line": 85,
               "start_column": 26,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 66
             }
           }
@@ -406,9 +406,9 @@
           "kind": "Source",
           "data": {
             "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-            "start_line": 71,
+            "start_line": 85,
             "start_column": 26,
-            "end_line": 71,
+            "end_line": 85,
             "end_column": 66
           }
         }
@@ -419,9 +419,9 @@
           "kind": "Source",
           "data": {
             "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-            "start_line": 71,
+            "start_line": 85,
             "start_column": 26,
-            "end_line": 71,
+            "end_line": 85,
             "end_column": 86
           }
         }
@@ -432,9 +432,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 71,
+              "start_line": 85,
               "start_column": 85,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 86
             }
           }
@@ -443,9 +443,9 @@
           "kind": "Source",
           "data": {
             "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-            "start_line": 70,
+            "start_line": 84,
             "start_column": 9,
-            "end_line": 71,
+            "end_line": 85,
             "end_column": 87
           }
         }
@@ -456,9 +456,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 71,
+              "start_line": 85,
               "start_column": 86,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 87
             }
           },
@@ -466,9 +466,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 71,
+              "start_line": 85,
               "start_column": 86,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 87
             }
           },
@@ -476,9 +476,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 71,
+              "start_line": 85,
               "start_column": 87,
-              "end_line": 71,
+              "end_line": 85,
               "end_column": 88
             }
           },
@@ -486,9 +486,9 @@
             "kind": "Source",
             "data": {
               "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-              "start_line": 69,
+              "start_line": 83,
               "start_column": 32,
-              "end_line": 72,
+              "end_line": 86,
               "end_column": 6
             }
           }
@@ -497,9 +497,9 @@
           "kind": "Source",
           "data": {
             "file": "/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/tests/fixtures/pl011-full-spec/src/driver.rs",
-            "start_line": 72,
+            "start_line": 86,
             "start_column": 6,
-            "end_line": 72,
+            "end_line": 86,
             "end_column": 6
           }
         }

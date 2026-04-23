@@ -13,7 +13,6 @@ use regseq_model::model::{
 };
 
 use crate::extract::clock::ClockSurface;
-use crate::extract::identity_enrichment::IdentityEnrichmentSurface;
 use crate::extract::interrupts::{InterruptFieldShape, InterruptSurface};
 use crate::extract::pinctrl::PinCtrlSurface;
 use crate::extract::pm::PmGateSurface;
@@ -230,24 +229,16 @@ pub fn populate_properties<'tcx>(
 pub fn populate_user_data<'tcx>(
     cx: &mut BuildContext<'_, 'tcx>,
     root_module: &mut Module,
-    identity_surface: &IdentityEnrichmentSurface,
 ) -> Result<(), ConstructionError> {
     let driver_hir = find_driver_hir(cx.tcx)?;
     let consumed = consumed_driver_fields(cx, root_module);
-    let driver_fact = identity_surface
-        .structs
-        .iter()
-        .find(|fact| fact.is_driver)
-        .ok_or_else(|| ConstructionError::NoDriverStruct {
-            crate_root: ErrorProvenance::for_def_id(cx.tcx, CRATE_DEF_ID.to_def_id()),
-        })?;
     let driver = driver_struct_mut(root_module).expect("driver module was already validated");
 
-    for field in &driver_fact.fields {
-        if consumed.contains(field.name.as_str()) {
+    for field_name in &driver_hir.field_order {
+        if consumed.contains(field_name.as_str()) {
             continue;
         }
-        let Some(field_info) = driver_hir.fields.get(field.name.as_str()) else {
+        let Some(field_info) = driver_hir.fields.get(field_name.as_str()) else {
             continue;
         };
         let field_prov = ErrorProvenance::for_def_id(cx.tcx, field_info.def_id);
@@ -274,7 +265,7 @@ pub fn populate_user_data<'tcx>(
                 .unwrap_or(RegseqType::Scalar(ScalarType::U32));
             driver.user_data.push(UserDataField {
                 id: UserDataId::from(cx.alloc_and_record_public(field_info.def_id)),
-                field_name: cx.intern_public(&field.name),
+                field_name: cx.intern_public(field_name),
                 kind: UserDataKind::Option { inner_type },
             });
             continue;
@@ -297,7 +288,7 @@ pub fn populate_user_data<'tcx>(
             Rule1Outcome::Accepted(inner_type) => {
                 driver.user_data.push(UserDataField {
                     id: UserDataId::from(cx.alloc_and_record_public(field_info.def_id)),
-                    field_name: cx.intern_public(&field.name),
+                    field_name: cx.intern_public(field_name),
                     kind: UserDataKind::ZeroInit { inner_type },
                 });
             }
@@ -337,6 +328,7 @@ struct DriverFieldInfo<'tcx> {
 
 struct DriverHir<'tcx> {
     type_name: String,
+    field_order: Vec<String>,
     fields: HashMap<String, DriverFieldInfo<'tcx>>,
 }
 
@@ -350,10 +342,13 @@ fn find_driver_hir<'tcx>(tcx: TyCtxt<'tcx>) -> Result<DriverHir<'tcx>, Construct
     let ItemKind::Struct(ident, _generics, variant_data) = &driver_item.kind else {
         unreachable!("driver item must be a struct");
     };
+    let mut field_order = Vec::new();
     let mut fields = HashMap::new();
     for field in variant_data.fields() {
+        let name = field.ident.name.as_str().to_owned();
+        field_order.push(name.clone());
         fields.insert(
-            field.ident.name.as_str().to_owned(),
+            name,
             DriverFieldInfo {
                 def_id: field.def_id.to_def_id(),
                 ty: field.ty,
@@ -362,6 +357,7 @@ fn find_driver_hir<'tcx>(tcx: TyCtxt<'tcx>) -> Result<DriverHir<'tcx>, Construct
     }
     Ok(DriverHir {
         type_name: ident.name.as_str().to_owned(),
+        field_order,
         fields,
     })
 }
