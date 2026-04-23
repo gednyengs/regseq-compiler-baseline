@@ -123,11 +123,15 @@ legacy layers are free-standing for deletion.
 - `EmitSpec::Driver` default at `cargo-regseq/src/cli.rs:180-182` is
   flipped to `EmitSpec::Model`.
 - Tests gated on the legacy chain.
-- **`crates/regseq-backends/` — fate is TBD pending the audit in
-  DL-4.** Before deletion, audit the crate for reusable OS-agnostic
-  infrastructure and Linux-specific scaffolding that may be adapted
-  to the new `RegseqModel` rather than rewritten. See the audit step
-  in "Order of operations."
+- **`crates/regseq-backends/`** — preserved through Wave A with a
+  reduced surface. Audit output is
+  `docs/discussions/models/regseq-model/regseq-backends-audit.md`;
+  the DISCARD list there (11 files in `lowering/semantic_lowering/`,
+  plus `lowering/{behavior_planner, body_interpreter, hierarchy,
+  projection}.rs`, plus `lowering/mir_interpreter/{mod, context}.rs`,
+  plus `linux/c_ast.rs`, plus `zephyr.rs`) is deleted in Wave A. The
+  ADAPT and MIXED files stay; they are the donor content for the
+  eventual backend re-port.
 
 ### Wave B — Legacy model layers
 
@@ -347,13 +351,9 @@ are current as of this document.
 1. **Tag** `pre-legacy-removal` at current HEAD.
 2. **Spec update** for Section 1 diagram and Section 12 Phase 1 input.
 3. **regseq-backends audit** (DL-4). Inventory the crate's content and
-   classify each module as:
-   - **Adapt** — reusable OS-agnostic or Linux-specific scaffolding
-     that will be re-ported to consume `RegseqModel` directly when the
-     Linux backend is re-introduced.
-   - **Discard** — tightly coupled to `SemanticModel`/`AnalysisInput`
-     or `ItemStore` with no reusable shape.
-   The audit output drives the Wave A deletion scope.
+   classify each module as `ADAPT`, `DISCARD`, or `MIXED`. The audit
+   output drives the Wave A deletion scope. **Completed**; results in
+   `docs/discussions/models/regseq-model/regseq-backends-audit.md`.
 4. **Wave A**: remove `emit_driver.rs`, its callers, `legacy_input/`,
    and the regseq-backends modules marked "discard" by step 3. Keep
    the `regseq-backends` crate itself (possibly reduced to an empty
@@ -427,10 +427,16 @@ When a backend is ready to re-port (Linux is the first target):
 
 ### Open
 
-- **DL-4** `regseq-backends` crate fate: pending the audit step in
-  "Order of operations." Some OS-agnostic or Linux-specific
-  infrastructure may be adaptable to consume `RegseqModel` directly
-  when backends are re-introduced, rather than requiring a from-scratch
-  rewrite. The audit classifies each module as "adapt" or "discard";
-  the crate itself is retained at least until that classification is
-  complete.
+_(no open decisions)_
+
+### Closed by audit
+
+- **DL-4** `regseq-backends` crate fate: **preserved** through Wave A
+  with a reduced surface. The full per-file classification is in
+  `regseq-backends-audit.md`. Outcome: 15 files DISCARD (deleted in
+  Wave A), 12 ADAPT (kept as-is), 13 MIXED (kept as re-port
+  reference), 3 follows-exports (updated to reflect survivors). The
+  `c/` AST and Linux kernel domain knowledge (platform_driver
+  templates, probe/remove, uart_ops wiring) are worth more than the
+  maintenance cost of keeping the crate alive through the rebuild
+  period.
