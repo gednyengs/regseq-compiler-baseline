@@ -12,13 +12,13 @@ use std::path::Path;
 
 use regseq_backends::linux::body_index::FunctionBodyIndex;
 use regseq_backends::linux::emitter::emit_linux_artifacts;
-use regseq_backends::linux::plan::{LinuxFileRole, LinuxPropertyScalar};
+use regseq_backends::linux::plan::{LinuxFileRole, LinuxPropertyScalar, LinuxUserDataScalar};
 use regseq_backends::linux::planner::{build_linux_backend_plan, LinuxPlanError};
 use regseq_backends::lowering::diagnostics::DriverLoweringDiagnostics;
 use regseq_backends::lowering::plan::{
     AcquisitionStep, BusIdentity, BusType, CallbackInventory, DeviceClassRoles, DriverIdentity,
     DriverLoweringPlan, PropertyObligation, RegisterObligations, ResourceKind, ResourceObligations,
-    ResourcePolicy, SynchronizationObligations,
+    ResourcePolicy, SynchronizationObligations, UserDataObligation, UserDataShape,
 };
 use regseq_model::declaration::driver::DeviceClass;
 use regseq_model::declaration::provenance::Provenance;
@@ -77,6 +77,7 @@ fn plan_with_properties(properties: Vec<PropertyObligation>) -> DriverLoweringPl
             clocks: vec![],
             resets: vec![],
             pinctrl: vec![],
+            user_data: vec![],
             bus_identity: BusIdentity {
                 bus_type: BusType::Platform,
                 compatible: vec!["vendor,propspec".into()],
@@ -367,5 +368,314 @@ fn custom_field_name_is_honored_in_emission() {
     assert!(
         !content.contains("&d->tx_threshold_level"),
         "emitter must NOT derive the field name from property_id via replace('-', \"_\")"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Path A (regseq-model-64): user-data Linux-plan acceptance + rejection
+// ---------------------------------------------------------------------------
+
+fn plan_with_user_data(user_data: Vec<UserDataObligation>) -> DriverLoweringPlan {
+    DriverLoweringPlan {
+        identity: DriverIdentity {
+            driver_name: "UDSpec".into(),
+            compatible: vec!["vendor,udspec".into()],
+            device_class: DeviceClass::Other(String::new()),
+            source_modules: vec![],
+            provenance: provenance("identity"),
+        },
+        callbacks: CallbackInventory {
+            lifecycle: vec![],
+            serial: vec![],
+            serial_console: vec![],
+            power_management: vec![],
+        },
+        resources: ResourceObligations {
+            mmio: vec![],
+            interrupts: vec![],
+            properties: vec![],
+            clocks: vec![],
+            resets: vec![],
+            pinctrl: vec![],
+            user_data,
+            bus_identity: BusIdentity {
+                bus_type: BusType::Platform,
+                compatible: vec!["vendor,udspec".into()],
+                amba_id: None,
+                amba_revision: None,
+                amba_mask: None,
+            },
+        },
+        acquisition_order: vec![],
+        teardown_order: vec![],
+        device_class_roles: DeviceClassRoles {
+            device_class: DeviceClass::Other(String::new()),
+            serial_ops_realized: vec![],
+            has_lifecycle: false,
+            has_power_management: false,
+        },
+        register_obligations: RegisterObligations {
+            blocks: vec![],
+            access_sites: vec![],
+            poll_sites: vec![],
+            descriptors: vec![],
+        },
+        synchronization: SynchronizationObligations {
+            fields: vec![],
+            lock_scopes: vec![],
+            completion_uses: vec![],
+        },
+        diagnostics: DriverLoweringDiagnostics::default(),
+    }
+}
+
+fn ud_zero_init(field_name: &str, inner: regseq_model::ir::RegseqType) -> UserDataObligation {
+    UserDataObligation {
+        field_name: field_name.into(),
+        shape: UserDataShape::ZeroInit { inner_type: inner },
+    }
+}
+
+fn ud_option(field_name: &str, inner: regseq_model::ir::RegseqType) -> UserDataObligation {
+    UserDataObligation {
+        field_name: field_name.into(),
+        shape: UserDataShape::Option { inner_type: inner },
+    }
+}
+
+#[test]
+fn user_data_scalar_parse_covers_five_variants() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Scalar(ScalarType::U8)),
+        Some(LinuxUserDataScalar::U8)
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Scalar(ScalarType::U16)),
+        Some(LinuxUserDataScalar::U16)
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Scalar(ScalarType::U32)),
+        Some(LinuxUserDataScalar::U32)
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Scalar(ScalarType::U64)),
+        Some(LinuxUserDataScalar::U64)
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Bool),
+        Some(LinuxUserDataScalar::Bool)
+    );
+    // Rejected variants.
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Scalar(ScalarType::I32)),
+        None
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Array(
+            Box::new(RegseqType::Scalar(ScalarType::U32)),
+            4
+        )),
+        None
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Defined(
+            regseq_model::identity::TypeDefId::from(regseq_model::identity::DeclId::new(0))
+        )),
+        None
+    );
+    assert_eq!(
+        LinuxUserDataScalar::parse_from_regseq_type(&RegseqType::Option(Box::new(
+            RegseqType::Bool
+        ))),
+        None
+    );
+}
+
+#[test]
+fn user_data_scalar_c_type_covers_five_variants() {
+    assert_eq!(LinuxUserDataScalar::U8.c_type(), "u8");
+    assert_eq!(LinuxUserDataScalar::U16.c_type(), "u16");
+    assert_eq!(LinuxUserDataScalar::U32.c_type(), "u32");
+    assert_eq!(LinuxUserDataScalar::U64.c_type(), "u64");
+    assert_eq!(LinuxUserDataScalar::Bool.c_type(), "bool");
+}
+
+#[test]
+fn user_data_zero_init_scalar_appears_in_shared_struct_fields() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let portable = plan_with_user_data(vec![ud_zero_init(
+        "imsc_shadow",
+        RegseqType::Scalar(ScalarType::U32),
+    )]);
+    let linux = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect("scalar user-data must be accepted");
+    let field = linux
+        .shared_struct_fields
+        .iter()
+        .find(|f| f.field_name == "imsc_shadow")
+        .expect("imsc_shadow must appear in shared_struct_fields");
+    assert_eq!(field.c_type, "u32");
+}
+
+#[test]
+fn user_data_zero_init_bool_appears_in_shared_struct_fields() {
+    use regseq_model::ir::RegseqType;
+    let portable = plan_with_user_data(vec![ud_zero_init("flag", RegseqType::Bool)]);
+    let linux = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect("bool user-data must be accepted");
+    let field = linux
+        .shared_struct_fields
+        .iter()
+        .find(|f| f.field_name == "flag")
+        .expect("flag must appear in shared_struct_fields");
+    assert_eq!(field.c_type, "bool");
+}
+
+#[test]
+fn user_data_array_rejected_with_unsupported_shape() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let portable = plan_with_user_data(vec![ud_zero_init(
+        "history",
+        RegseqType::Array(Box::new(RegseqType::Scalar(ScalarType::U32)), 4),
+    )]);
+    let err = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect_err("array user-data must be rejected");
+    match err {
+        LinuxPlanError::UnsupportedUserDataShape { field_name, .. } => {
+            assert_eq!(field_name, "history");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn user_data_copy_struct_rejected_with_unsupported_shape() {
+    use regseq_model::ir::RegseqType;
+    let portable = plan_with_user_data(vec![ud_zero_init(
+        "counters",
+        RegseqType::Defined(regseq_model::identity::TypeDefId::from(
+            regseq_model::identity::DeclId::new(0),
+        )),
+    )]);
+    let err = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect_err("Copy-struct user-data must be rejected");
+    assert!(matches!(
+        err,
+        LinuxPlanError::UnsupportedUserDataShape { .. }
+    ));
+}
+
+#[test]
+fn user_data_option_scalar_rejected_with_unsupported_shape() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let portable =
+        plan_with_user_data(vec![ud_option("slot", RegseqType::Scalar(ScalarType::U32))]);
+    let err = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect_err("Option<scalar> user-data must be rejected by Stage-1 Linux plan");
+    match err {
+        LinuxPlanError::UnsupportedUserDataShape { field_name, .. } => {
+            assert_eq!(field_name, "slot");
+        }
+        other => panic!("unexpected error: {other:?}"),
+    }
+}
+
+#[test]
+fn user_data_option_copy_struct_rejected_with_unsupported_shape() {
+    use regseq_model::ir::RegseqType;
+    let portable = plan_with_user_data(vec![ud_option(
+        "stats",
+        RegseqType::Defined(regseq_model::identity::TypeDefId::from(
+            regseq_model::identity::DeclId::new(0),
+        )),
+    )]);
+    let err = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect_err("Option<CopyStruct> user-data must be rejected");
+    assert!(matches!(
+        err,
+        LinuxPlanError::UnsupportedUserDataShape { .. }
+    ));
+}
+
+#[test]
+fn user_data_field_position_is_after_serial_port() {
+    // This test exercises a serial-core driver: mmio, irq, clock, plus
+    // a user-data scalar. The user-data field must come AFTER the
+    // "port" serial field and among the last entries.
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let mut portable = plan_with_user_data(vec![ud_zero_init(
+        "imsc_shadow",
+        RegseqType::Scalar(ScalarType::U32),
+    )]);
+    portable.identity.device_class = DeviceClass::SerialUart;
+    portable.device_class_roles.device_class = DeviceClass::SerialUart;
+    portable
+        .resources
+        .mmio
+        .push(regseq_backends::lowering::plan::MmioObligation {
+            field_name: "regs".into(),
+            mmio_id: "uart_regs".into(),
+            register_block_type: None,
+            policy: ResourcePolicy::Required,
+            provenance: provenance("mmio"),
+        });
+    portable
+        .resources
+        .interrupts
+        .push(regseq_backends::lowering::plan::InterruptObligation {
+            field_name: "irq".into(),
+            interrupt_id: "uart_irq".into(),
+            trigger_type: None,
+            shared: None,
+            policy: ResourcePolicy::Required,
+            provenance: provenance("interrupt"),
+        });
+    portable
+        .resources
+        .clocks
+        .push(regseq_backends::lowering::plan::ClockObligation {
+            field_name: "uart_clk".into(),
+            clock_id: "apb".into(),
+            required: true,
+            default_frequency: None,
+            policy: ResourcePolicy::Required,
+            provenance: provenance("clock"),
+        });
+    portable.acquisition_order.push(AcquisitionStep {
+        order: 0,
+        resource_kind: ResourceKind::Mmio,
+        resource_id: "uart_regs".into(),
+        policy: ResourcePolicy::Required,
+    });
+    portable.acquisition_order.push(AcquisitionStep {
+        order: 1,
+        resource_kind: ResourceKind::Interrupt,
+        resource_id: "uart_irq".into(),
+        policy: ResourcePolicy::Required,
+    });
+    portable.acquisition_order.push(AcquisitionStep {
+        order: 2,
+        resource_kind: ResourceKind::Clock,
+        resource_id: "apb".into(),
+        policy: ResourcePolicy::Required,
+    });
+
+    let linux = build_linux_backend_plan(&portable, empty_semantic_model())
+        .expect("serial driver with scalar user-data must build");
+
+    let port_pos = linux
+        .shared_struct_fields
+        .iter()
+        .position(|f| f.field_name == "port")
+        .expect("port field must be present");
+    let ud_pos = linux
+        .shared_struct_fields
+        .iter()
+        .position(|f| f.field_name == "imsc_shadow")
+        .expect("imsc_shadow user-data field must be present");
+    assert!(
+        ud_pos > port_pos,
+        "user-data must appear after the serial port; port at {port_pos}, user-data at {ud_pos}",
     );
 }

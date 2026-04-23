@@ -137,6 +137,7 @@ fn serial_plan(
             clocks,
             resets: vec![],
             pinctrl: vec![],
+            user_data: vec![],
             bus_identity: BusIdentity {
                 bus_type: BusType::Platform,
                 compatible: vec!["vendor,serialspec".into()],
@@ -434,6 +435,7 @@ fn serial_role_is_none_for_non_serial_driver_even_with_matching_ids() {
             clocks: vec![],
             resets: vec![],
             pinctrl: vec![],
+            user_data: vec![],
             bus_identity: BusIdentity {
                 bus_type: BusType::Platform,
                 compatible: vec!["vendor,nonser".into()],

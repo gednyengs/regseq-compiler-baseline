@@ -330,6 +330,27 @@ fn build_resource_obligations(
         })
         .collect();
 
+    let user_data = driver
+        .user_data
+        .iter()
+        .map(|u| {
+            let field_name = sym_string(interner, u.field_name);
+            let shape = match &u.kind {
+                regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+                    crate::lowering::plan::UserDataShape::ZeroInit {
+                        inner_type: inner_type.clone(),
+                    }
+                }
+                regseq_model::model::UserDataKind::Option { inner_type } => {
+                    crate::lowering::plan::UserDataShape::Option {
+                        inner_type: inner_type.clone(),
+                    }
+                }
+            };
+            crate::lowering::plan::UserDataObligation { field_name, shape }
+        })
+        .collect();
+
     let bus_identity = build_bus_identity(model, driver)?;
 
     Ok(ResourceObligations {
@@ -339,6 +360,7 @@ fn build_resource_obligations(
         clocks,
         resets,
         pinctrl,
+        user_data,
         bus_identity,
     })
 }

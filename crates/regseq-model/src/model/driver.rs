@@ -139,7 +139,9 @@ mod tests {
         DeclId, PropertyId, RegisterBlockId, ResourceId, SymbolInterner, UserDataId,
     };
     use crate::ir::{RegseqType, ScalarType};
-    use crate::model::resources::{ClockDecl, MmioDecl, PropertyField, Shape, UserDataField};
+    use crate::model::resources::{
+        ClockDecl, MmioDecl, PropertyField, Shape, UserDataField, UserDataKind,
+    };
 
     fn sym(interner: &mut SymbolInterner, s: &str) -> Symbol {
         interner.intern(s)
@@ -294,7 +296,9 @@ mod tests {
         d.user_data.push(UserDataField {
             id: UserDataId::from(DeclId::new(30)),
             field_name: ud_field,
-            inner_type: RegseqType::Scalar(ScalarType::U32),
+            kind: UserDataKind::ZeroInit {
+                inner_type: RegseqType::Scalar(ScalarType::U32),
+            },
         });
 
         assert_eq!(d.clocks.len(), 2);

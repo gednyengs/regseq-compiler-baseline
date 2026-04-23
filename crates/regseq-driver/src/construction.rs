@@ -143,19 +143,40 @@ pub enum ConstructionError {
         /// The clashing name.
         name: String,
     },
-    /// A user-data field must have type `Option<T>`.
+    /// A user-data field's shape is not accepted by either rule:
+    /// Rule 1 (zero-init whitelist) or Rule 2 (`Option<T>` where
+    /// `T: Copy`). Raised when the outer `Option<_>` wrapper is
+    /// absent AND the bare field type fails the Rule-1 outer `Copy`
+    /// check (so Rule 2 does not apply and Rule 1 cannot proceed).
     InvalidUserDataShape {
         /// Provenance of the offending struct field.
         field: ErrorProvenance,
-        /// Rendered type that failed the `Option<T>` check.
+        /// Rendered type that failed both rules.
         rendered_type: String,
     },
-    /// A user-data field's `T` in `Option<T>` is not `Copy`.
+    /// A user-data field's `T` in `Option<T>` is not `Copy`, or a
+    /// Rule-1 candidate field type is not `Copy` (the outer `Copy`
+    /// check that both rules require).
     UserDataNotCopy {
         /// Provenance of the offending struct field.
         field: ErrorProvenance,
-        /// Rendered inner type `T`.
+        /// Rendered inner (or outer, for Rule-1) type.
         inner_type: String,
+    },
+    /// A Rule-1 candidate user-data field is `Copy` but its type
+    /// falls outside the Stage-1 zero-init whitelist. Admitted by
+    /// Rule 1: `u8`, `u16`, `u32`, `u64`, `bool`, arrays of those,
+    /// and `Copy` structs recursively composed of accepted fields.
+    /// Every other `Copy` type (including `i8`..`i64`, `usize`,
+    /// `f32`, `char`, `u128`, tuples, enums, unions, `NonZeroU*`,
+    /// references, function pointers, raw pointers, and
+    /// unresolved generic parameters / projections) is rejected
+    /// through this variant.
+    UserDataNotZeroInitWhitelisted {
+        /// Provenance of the offending struct field.
+        field: ErrorProvenance,
+        /// Rendered type that failed the whitelist predicate.
+        rejected_type: String,
     },
     /// A resource field lacks its required `id = "..."` attribute.
     MissingResourceId {
@@ -469,13 +490,21 @@ impl std::fmt::Display for ConstructionError {
                 rendered_type,
             } => write!(
                 f,
-                "user-data field `{}` must be Option<T>, got `{}`",
+                "user-data field `{}` has type `{}`; must be either a zero-init-whitelisted type (Rule 1) or `Option<T: Copy>` (Rule 2)",
                 field.item_path, rendered_type,
             ),
             Self::UserDataNotCopy { field, inner_type } => write!(
                 f,
-                "user-data field `{}`: inner type `{}` is not Copy",
+                "user-data field `{}`: type `{}` is not Copy",
                 field.item_path, inner_type,
+            ),
+            Self::UserDataNotZeroInitWhitelisted {
+                field,
+                rejected_type,
+            } => write!(
+                f,
+                "user-data field `{}`: type `{}` is not accepted by the Rule-1 zero-init whitelist (admitted: u8, u16, u32, u64, bool; arrays of those; Copy structs recursively composed of accepted fields)",
+                field.item_path, rejected_type,
             ),
             Self::MissingResourceId { field, kind } => write!(
                 f,

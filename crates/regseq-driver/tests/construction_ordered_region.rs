@@ -758,17 +758,18 @@ fn pl011_fixture_fidelity() {
     ))
     .expect("PL011 fixture source must be readable");
 
-    // Locate `program_polling_port` in the fixture and extract its
-    // body verbatim (up to the matching closing `}`), then assert
-    // that body uses `ordered! { ... }`. This ties the ordered
-    // block to `program_polling_port` specifically -- a
-    // whole-file `contains(...)` would silently accept the case
-    // where `ordered!` is used elsewhere in the fixture but
-    // `program_polling_port` is rewritten to drop it.
-    let fn_signature = "fn program_polling_port(&mut self, uart_clk_hz: u32, baud_rate: u32) {";
+    // Locate `bring_up_port` in the fixture and extract its body
+    // verbatim (up to the matching closing `}`), then assert that
+    // body uses `ordered! { ... }`. This ties the ordered block to
+    // `bring_up_port` specifically -- a whole-file `contains(...)`
+    // would silently accept the case where `ordered!` is used
+    // elsewhere in the fixture but `bring_up_port` is rewritten to
+    // drop it.
+    let fn_signature =
+        "fn bring_up_port(&mut self, config: &SerialConfig) -> Result<(), RegseqError> {";
     let fn_idx = fixture
         .find(fn_signature)
-        .expect("PL011 fixture must define `fn program_polling_port(&mut self, uart_clk_hz: u32, baud_rate: u32)`");
+        .expect("PL011 fixture must define `fn bring_up_port(&mut self, config: &SerialConfig) -> Result<(), RegseqError>`");
     let after_sig = &fixture[fn_idx + fn_signature.len()..];
     // Walk the byte stream tracking `{`/`}` balance so we can carve
     // out exactly `program_polling_port`'s body and inspect it.

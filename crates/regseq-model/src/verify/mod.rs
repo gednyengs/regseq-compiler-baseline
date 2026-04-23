@@ -202,10 +202,11 @@ pub enum VerifierErrorKind {
         /// `"sync"`).
         kind: &'static str,
     },
-    /// A user-data field's inner type is not `Copy` -- the spec
-    /// requires `Option<T>` where `T: Copy` (spec.md Section 13 line
-    /// 1426-1427, Section 4.4).
-    UserDataFieldNotOptionCopy {
+    /// A user-data field's inner type does not satisfy either of the
+    /// two acceptance rules: Rule 1 (a zero-init-friendly whitelist
+    /// type) or Rule 2 (`Option<T>` where `T: Copy`). Raised whenever
+    /// the verifier detects an inner type that neither rule admits.
+    UserDataFieldNotZeroInitOrOptionCopy {
         /// The user-data field declaration in violation.
         field: DeclId,
         /// Best-effort textual description of the offending inner type

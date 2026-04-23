@@ -6,9 +6,6 @@ concrete workloads. Each workload has a fixed shape (stimulus,
 observable, environment, verdict rule) and the statistical contract
 under which results are reported.
 
-This document is the input to `pl011-comparison-matrix.md`. Every
-matrix row is an instance of a workload defined here.
-
 ## 1. Workload shape discipline
 
 Every workload in this document follows the same shape:
@@ -405,17 +402,28 @@ native driver under identical QEMU setup. Results are reported as
 - **Statistical contract**: 10 runs; `not-applicable` on Zephyr
   absent a CPU accounting primitive.
 
-### W-P6-01: Small-write latency
+### W-P6-01: Small-write latency (host round-trip)
 
 - **Axis**: P6.
-- **Stimulus**: driver writes a single byte every 50 ms for 60 s,
-  with no other workload running.
-- **Observable**: wall-time from write call to host observation of
-  byte; p50 / p95 / p99.
+- **Stimulus**: host writes a single byte to the chardev endpoint
+  every 50 ms for 60 s. A guest-side echo agent reads each byte
+  from the PL011 under test and writes it back through the same
+  PL011. No other workload runs.
+- **Observable**: host round-trip wall-time delta from host
+  write-timestamp (t0) to host read-timestamp of the echoed byte
+  (t1); p50 / p95 / p99. Both timestamps are on the host clock, so
+  no cross-clock synchronization is performed. The round-trip time
+  includes guest RX processing plus guest TX processing; it
+  measures a strictly larger quantity than "write-to-wire"
+  latency, but the quantity is identical in shape for Regseq and
+  native runs, preserving relative comparability.
 - **Verdict rule**: Regseq p95 within 1.5x native p95; p50 within
   1.3x native p50.
 - **Statistical contract**: one run; 1200 samples; p95/p99 with
   bootstrap CI.
+- **Protocol reference**: `pl011-experiment-methodology.md` Section
+  4.2 defines the single-clock host-only protocol and the rationale
+  for the round-trip redefinition.
 
 ### W-P7-01: FIFO threshold responsiveness
 

@@ -30,8 +30,13 @@ The current Regseq paper claim, per the round-4 synthesis:
 > tolerance rules on QEMU-relative functional and performance
 > workloads derived from concrete PL011 system use cases.
 
-Internal staging (F+I first, then P including DMA) is purely an
-implementation tactic; the paper presents the full F+I+P result.
+Internal staging is the 3-stage progressive plan (Stage 1
+paper-min core with no QEMU patches; Stage 2 flow control +
+error injection + independent register observation; Stage 3
+performance extensions including DMA). Stage membership for
+every REQ-* is authoritatively defined in
+`pl011-spec-requirements.md` Section 1.2. The paper presents
+the cumulative F+I+P result at Stage-3 closure.
 
 ---
 

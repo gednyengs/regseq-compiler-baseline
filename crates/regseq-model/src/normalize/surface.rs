@@ -23,7 +23,7 @@ use crate::model::register::{
 use crate::model::resources::{
     ClockDecl, ClockResource, InterruptDecl, InterruptResource, MmioDecl, MmioResource,
     PinCtrlDecl, PinCtrlResource, PropertyField, ResetDecl, ResetResource, Shape, SyncKind,
-    SyncResource, UserDataField,
+    SyncResource, UserDataField, UserDataKind,
 };
 use crate::model::type_def::{Attrs, TypeDef, TypeDefKind};
 
@@ -1041,48 +1041,109 @@ fn validate_struct_field(
         if !eq_ci(&field.rseq_field_kind, "UserData") {
             return Ok(());
         }
-        // The spec (Section 4.4) requires user-data fields to be
-        // `Option<T>` where `T: Copy`. Both the outer `Option<_>`
-        // wrapper AND the `Copy`-bounded inner type are enforced
-        // here; an outer non-`Option<_>` or an inner non-`Copy` type
-        // both fire `TypeConstraintViolation`.
-        let inner = match option_inner(&field.field_type) {
-            Some(inner) => inner,
-            None => {
+        // Two-rule contract (Path A):
+        // - Rule 2: `Option<T>` where `T: Copy` (primitive-string only
+        //   in this normalization path; user-defined structs are
+        //   rejected with a scope-narrowing message).
+        // - Rule 1: zero-init whitelist (`u8`, `u16`, `u32`, `u64`,
+        //   `bool`) and arrays of those scalars. User-defined Copy
+        //   structs are rejected here with a scope-narrowing
+        //   message (the construction path accepts them via rustc
+        //   introspection).
+        if let Some(inner) = option_inner(&field.field_type) {
+            if rule1_primitive(inner).is_some() || rule1_array(inner).is_some() {
+                // Primitive-string inner types satisfy Rule-2 Copy
+                // at normalization.
+                return Ok(());
+            }
+            if is_copy_type(inner) {
+                return Ok(());
+            }
+            // Inner is not a recognized Copy primitive spelling. Either
+            // a non-Copy type or a user-defined struct name.
+            if looks_like_user_defined(inner) {
                 return Err(b.err(NormalizeErrorKind::TypeConstraintViolation {
                     description: format!(
-                        "user-data field '{name}' has type '{ty}'; the spec requires Option<T: Copy>",
+                        "user-data field '{name}' has type '{ty}'; Rule-2 `Option<T>` with a user-defined inner type `{inner}` is not supported in Stage-1 normalization (use the construction path or extend normalization in a follow-up task)",
                         name = field.name,
                         ty = field.field_type,
+                        inner = inner,
                     ),
                 }));
             }
-        };
-        if !is_copy_type(inner) {
             return Err(b.err(NormalizeErrorKind::TypeConstraintViolation {
                 description: format!(
-                    "user-data field '{name}' has type '{ty}' whose inner '{inner}' is not Copy; the spec requires Option<T: Copy>",
+                    "user-data field '{name}' has type '{ty}' whose inner '{inner}' is not Copy; the spec requires either a zero-init-whitelisted type (Rule 1) or Option<T: Copy> (Rule 2)",
                     name = field.name,
                     ty = field.field_type,
                     inner = inner,
                 ),
             }));
         }
-        Ok(())
+        // Non-Option shape: require Rule-1 zero-init acceptance.
+        let trimmed = field.field_type.trim();
+        if rule1_primitive(trimmed).is_some() || rule1_array(trimmed).is_some() {
+            return Ok(());
+        }
+        if looks_like_user_defined(trimmed) {
+            return Err(b.err(NormalizeErrorKind::TypeConstraintViolation {
+                description: format!(
+                    "user-data field '{name}' has type '{ty}'; Rule-1 zero-init Copy-struct user-data is not supported in Stage-1 normalization (use the construction path or extend normalization in a follow-up task)",
+                    name = field.name,
+                    ty = field.field_type,
+                ),
+            }));
+        }
+        Err(b.err(NormalizeErrorKind::TypeConstraintViolation {
+            description: format!(
+                "user-data field '{name}' has type '{ty}'; the spec requires either a zero-init-whitelisted type (Rule 1: u8/u16/u32/u64/bool or arrays of those) or Option<T: Copy> (Rule 2)",
+                name = field.name,
+                ty = field.field_type,
+            ),
+        }))
     })
 }
 
 fn attach_user_data(builder: &mut Builder<'_>, field: &RawFieldFact) {
     let id = UserDataId::from(builder.alloc_decl());
     let name_sym = builder.intern_sym(&field.name);
+    let kind = classify_user_data(&field.field_type);
     builder.driver_struct.user_data.push(UserDataField {
         id,
         field_name: name_sym,
-        // Minimal Phase-1 state: every user-data field is modelled as
-        // scalar U32 -- only the outer `Option<T>` shape constraint
-        // is enforced; richer inner-type mapping is deferred.
-        inner_type: RegseqType::Scalar(ScalarType::U32),
+        kind,
     });
+}
+
+/// Classify a raw user-data field-type spelling into a
+/// [`UserDataKind`]. The caller has already validated the spelling
+/// via [`validate_struct_field`]; this function trusts that the
+/// input is one of the two accepted shapes.
+///
+/// For Rule-2 inner types that are Copy primitives NOT representable
+/// in `RegseqType` (`f32`, `f64`, `char`, `u128`, `i128`), the legacy
+/// lossy `Scalar(U32)` fallback is preserved (the Rule-2 inner-type
+/// mapping is intentionally unchanged by Path A).
+fn classify_user_data(field_type: &str) -> UserDataKind {
+    if let Some(inner) = option_inner(field_type) {
+        let inner_ty = primitive_to_regseq(inner).unwrap_or(RegseqType::Scalar(ScalarType::U32));
+        return UserDataKind::Option {
+            inner_type: inner_ty,
+        };
+    }
+    let trimmed = field_type.trim();
+    if let Some(ty) = rule1_primitive(trimmed) {
+        return UserDataKind::ZeroInit { inner_type: ty };
+    }
+    if let Some(ty) = rule1_array(trimmed) {
+        return UserDataKind::ZeroInit { inner_type: ty };
+    }
+    // Unreachable if validate_struct_field passed; fall back to a
+    // faithful U32 marker rather than panicking so diagnostic flows
+    // surface the upstream validator error.
+    UserDataKind::ZeroInit {
+        inner_type: RegseqType::Scalar(ScalarType::U32),
+    }
 }
 
 /// Extract the inner type `T` of an `Option<T>` field-type string,
@@ -1099,12 +1160,83 @@ fn option_inner(s: &str) -> Option<&str> {
     None
 }
 
+/// Map a Rule-1 primitive spelling to its `RegseqType`. Stage-1
+/// admits exactly `u8`, `u16`, `u32`, `u64`, `bool`.
+fn rule1_primitive(s: &str) -> Option<RegseqType> {
+    Some(match s.trim() {
+        "u8" => RegseqType::Scalar(ScalarType::U8),
+        "u16" => RegseqType::Scalar(ScalarType::U16),
+        "u32" => RegseqType::Scalar(ScalarType::U32),
+        "u64" => RegseqType::Scalar(ScalarType::U64),
+        "bool" => RegseqType::Bool,
+        _ => return None,
+    })
+}
+
+/// Recognize `[T; N]` where `T` is a Rule-1 primitive or a nested
+/// Rule-1 array. Returns the corresponding `RegseqType::Array` on
+/// success.
+fn rule1_array(s: &str) -> Option<RegseqType> {
+    let trimmed = s.trim();
+    let inner = trimmed.strip_prefix('[')?.strip_suffix(']')?.trim();
+    let semi = inner.rfind(';')?;
+    let (elem_str, len_str) = inner.split_at(semi);
+    let len_str = len_str.trim_start_matches(';').trim();
+    let len: usize = len_str.parse().ok()?;
+    let elem_trim = elem_str.trim();
+    let elem_ty = rule1_primitive(elem_trim).or_else(|| rule1_array(elem_trim))?;
+    Some(RegseqType::Array(Box::new(elem_ty), len))
+}
+
+/// Best-effort Rule-2 inner-type -> `RegseqType` mapping for the
+/// primitive spellings the Rule-2 Copy table accepts. Returns `None`
+/// for unrepresentable primitives (`f32`, `f64`, `char`, `u128`,
+/// `i128`); the caller falls back to the legacy lossy `Scalar(U32)`
+/// placeholder for those, preserving Rule-2 semantics unchanged by
+/// Path A.
+fn primitive_to_regseq(s: &str) -> Option<RegseqType> {
+    Some(match s.trim() {
+        "u8" => RegseqType::Scalar(ScalarType::U8),
+        "u16" => RegseqType::Scalar(ScalarType::U16),
+        "u32" => RegseqType::Scalar(ScalarType::U32),
+        "u64" => RegseqType::Scalar(ScalarType::U64),
+        "usize" => RegseqType::Scalar(ScalarType::Usize),
+        "i8" => RegseqType::Scalar(ScalarType::I8),
+        "i16" => RegseqType::Scalar(ScalarType::I16),
+        "i32" => RegseqType::Scalar(ScalarType::I32),
+        "i64" => RegseqType::Scalar(ScalarType::I64),
+        "isize" => RegseqType::Scalar(ScalarType::Isize),
+        "bool" => RegseqType::Bool,
+        "()" => RegseqType::Unit,
+        _ => return None,
+    })
+}
+
+/// Heuristic: does `s` look like a user-defined type name (an
+/// identifier starting with an uppercase letter or a path segment
+/// that looks like one)? Used to emit a scope-narrowing error in
+/// Stage-1 normalization when the construction path would otherwise
+/// be required.
+fn looks_like_user_defined(s: &str) -> bool {
+    let trimmed = s.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+    // Follow the final path segment for things like `foo::Bar`.
+    let last = trimmed.rsplit("::").next().unwrap_or(trimmed);
+    let first = match last.chars().next() {
+        Some(c) => c,
+        None => return false,
+    };
+    first.is_ascii_uppercase()
+}
+
 /// Conservative `Copy` check.
 ///
 /// Recognises every Rust primitive scalar type and `bool` as `Copy`;
 /// treats compound identifiers (`String`, `Vec<..>`, any user-defined
-/// struct name) as non-`Copy`. This is intentionally strict -- the
-/// spec (Section 4.4) only admits primitive-scalar user-data today.
+/// struct name) as non-`Copy`. This is the Rule-2 primitive Copy
+/// table; Rule 1 uses a narrower whitelist via [`rule1_primitive`].
 /// If a later task widens the admissible inner types (e.g., to
 /// `#[derive(Copy)]` user structs the extractor can reason about),
 /// this table is where it plugs in.

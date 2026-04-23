@@ -11,9 +11,20 @@
 
 ---
 
-## 0. CURRENT STATE banner (2026-04-20, session 2)
+## 0. CURRENT STATE banner (2026-04-20 session 2, layered through 2026-04-23 session 4)
 
 **If you read only one section, read this one.**
+
+**Session-4 deltas (2026-04-22 + 2026-04-23)** layered on top
+of the session-2 banner below: user-data initialization Path A
+done (`regseq-model-64`); shadow-register design complete but
+deferred; four PL011 fixture issues discovered that block
+golden regeneration; a bundled `pl011-fixture-cleanup`
+tracker item authored at
+`.harness/task-spec-status.yaml`. Full session-4 context in
+§10; active-next-step adjusted in §0.3. The session-2 framing
+below (strategy artifacts, 3-stage plan, QEMU-relative
+comparison) remains authoritative.
 
 ### 0.1 What's current
 
@@ -33,8 +44,11 @@ Key shifts from the Section 5 framing:
    driver-quality oracle. Driver quality comes from benchmarks vs
    native drivers in QEMU.
 2. **Paper claim is full F+I+P** (functional + integration +
-   performance including DMA). Internal F+I-then-P staging is a
-   compiler-dev tactic, invisible to the paper.
+   performance including DMA). Internal staging is the 3-stage
+   progressive plan (Stage 1 paper-min core, Stage 2 flow
+   control + error injection, Stage 3 performance extensions);
+   see §0.3. Each stage is paper-capable at its closure; the
+   final paper reports the cumulative F+I+P result.
 3. **Comparisons are QEMU-relative only**. Absolute-physical
    claims are deferred and recorded as future-work requirements.
 4. **Comparison axes are derived from concrete PL011 system-use
@@ -49,9 +63,11 @@ Key shifts from the Section 5 framing:
 ### 0.2 New strategy artifact package (under
 `docs/discussions/pl011-full-spec/`)
 
-All UNCOMMITTED in the working tree. Accepted by Codex across
-two adversarial debates (strategy: 4 rounds converged;
-methodology: 4 rounds converged).
+All COMMITTED (three thematic commits on main, 2026-04-20).
+Accepted by Codex across two adversarial debates (strategy:
+4 rounds converged; methodology: 4 rounds converged). Further
+doc-level edits have landed since (3-stage tagging, cheap-fix
+audit) directly in these artifacts.
 
 **What we compare** (comparison axes + workloads + requirements):
 
@@ -85,6 +101,15 @@ methodology: 4 rounds converged).
   - Full reproducibility contract
   - Non-DMA core + DMA addendum parallelizable campaigns
 
+**Stage 1 audit provenance** (NEW 2026-04-21):
+
+- `audit-history/` -- Codex transcripts for the three-round
+  Stage 1 fixture audit loop. Each round's output preserved in
+  the repo rather than in ephemeral `/tmp/`. Future audit loops
+  (Stage 2, Stage 3, re-audits) should follow the same
+  preserve-in-repo pattern. See `audit-history/README.md` for
+  round summaries.
+
 **Amended** (reframing headers added; historical content
 preserved):
 
@@ -98,38 +123,215 @@ preserved):
 
 ### 0.3 Immediate next activity (when resuming)
 
-**DO NOT** go straight to co-authoring the PL011 Linux reference
-driver. The next steps are different from Section 7 below.
+**3-stage progressive implementation plan** (agreed 2026-04-21).
 
-1. **Review + commit the strategy artifact package** (8 files,
-   all uncommitted). The current handoff doc + the strategy
-   artifacts should land together.
-2. **Parallelizable prep tracks**:
-   (a) Implement the four QEMU patches per
-       `pl011-experiment-methodology.md` Section 3.1-3.4. Each
-       ~30-150 LoC. Ship with qtest coverage.
-   (b) Build the topology-fairness DTB pair (`pl011-regseq.dtb`
-       + `pl011-native.dtb`) per Section 5.5 of the same doc.
-   (c) Prove the Zephyr auxiliary control channel per
-       Section 5.1 of the same doc (semihosting, aux serial,
-       or modified DT). If none works, Zephyr falls to F+I
-       only for the paper.
-   (d) Complete DMA in `driver.rs` (the pending item in
-       `pl011-full-spec-status.md`).
-3. **Pilot run** (native drivers only, full suite) per
-   `pl011-experiment-methodology.md` Section 6. Finalizes the
-   PROVISIONAL tolerance constants.
-4. **Pre-campaign gate**: tolerance constants promoted from
-   PROVISIONAL to pilot-derived.
-5. **Real campaign** (Regseq-vs-native, interleaved batches,
-   per-batch sentinel rerun, variance / host-drift stop-gates).
-6. **Co-author `pl011-reference-linux-driver.c`** per the
-   original Phase-7 plan; this is still needed as the compiler-
-   determinism oracle, but not as driver-quality evidence.
-7. **Report** and write the paper.
+The single-stage and two-thread framings from earlier drafts of
+this document are superseded. Work progresses in three stages;
+each stage produces a paper-capable deliverable.
 
-Tracks 2(a), 2(b), 2(c), and 2(d) can proceed in parallel. Pilot
-gates the real campaign.
+Stage membership for every REQ-* is authoritatively defined in
+`docs/discussions/pl011-full-spec/pl011-spec-requirements.md`
+Section 1.2 (stage-membership summary). Implementation state
+(which REQs are currently captured in the live fixture) is
+tracked in `pl011-full-spec-status.md`.
+
+**Stage 1 -- Paper-min core** (ACTIVE; no QEMU patches required)
+
+Deliverable: compiler pipe-cleaned end-to-end; hand-authored
+Linux golden reference driver byte-equal to emitter output;
+Zephyr `uart_driver_api` backend emission; paper-min workload
+campaign results for F1/F2, F6-01/02, F7, F8, F10 (non-CRTSCTS
+portion), F3/F4 via driver-shadow readback, P1/P2/P3/P4/P5/P6,
+IL1-5, IZ1-4 (gated on control-channel proof).
+
+Scheduled work (parallelizable where dependencies allow):
+
+1. **Fixture extensions** (Rust-only; no QEMU) -- **[DONE
+   2026-04-21]** per the three-round Codex audit loop
+   (`pl011-full-spec/audit-history/stage-1-round-*`). Final
+   verdict `stage-1-complete`. All items landed:
+   - REQ-CFG-01 divisor now uses round-to-nearest per datasheet
+     §3.3.6 Example 3-1 (earlier integer truncation was
+     off-by-one in the fractional divisor).
+   - REQ-CFG-03/04 real `SerialConfig`-driven line format with
+     WLEN/parity/stop encoding; validation split into pure
+     `line_control_value` + `write_line_control` so rejected
+     configs cannot leave the port disabled mid-sequence.
+   - REQ-IRQ-03 / REQ-CORR-MASK-SHADOW IMSC software shadow with
+     full-mask write-through.
+   - REQ-IRQ-04 named-source helpers including
+     `enable_error_interrupts` / `disable_error_interrupts`.
+   - REQ-LIFE-01/02 `wait_for_tx_complete` helper inserted
+     before every LCR_H/IBRD/FBRD reprogram; disable-then-wait
+     ordering in every lifecycle transition.
+   - REQ-RES-CLK-01 const fallback replaced by
+     `uart-clock-hz` `#[rseq::property]`.
+   - REQ-RES-PIN-01 default pins in `port_open`, sleep pins in
+     `port_close` (previously only init/deinit).
+   - REQ-PERF-BATCH-01 `pending_tx` removed; `tx_byte` is now an
+     unchecked primitive matching Linux `pl011_tx_char`.
+   - REQ-BRK-01 `send_break` doc comment establishing the
+     pure-toggle caller-owned-duration contract per Linux
+     `pl011_break_ctl` / Windows `PL011HwSetBreak`.
+   - REQ-BC-LIFECYCLE module-level doc block above
+     `impl Lifecycle` stating compiler-acquired vs body-operated
+     resources, lifecycle-ordering guarantees, panic contract.
+   - REQ-CORR-RESERVED-01 captured by framework
+     (`write_field`/`modify` distinction in
+     `call_lowering.rs:47-65`).
+
+   Lifecycle decomposition adopted (Linux-shaped): init does
+   reset + IRQ mask/clear only; port_open does pinctrl + clock +
+   UART bring-up; port_close does teardown + clock off + sleep
+   pins; configure preserves the IMSC shadow. This shape lets
+   the Linux backend emit 1:1 to `probe`/`startup`/`shutdown`/
+   `remove`/`set_termios`, while the Zephyr backend concatenates
+   init+port_open at `device_init` for its single-lifecycle
+   model.
+
+2. **Harness work** (parallel to fixture; no QEMU) -- [PENDING]:
+   - Zephyr control-channel proof per
+     `pl011-experiment-methodology.md` Section 5.1 (semihosting /
+     aux serial / modified DT). Binary gate for Zephyr rows.
+   - Host control-channel for RX completion bracket per Section
+     4.2 (needed for W-P2-01, W-P3-01, W-P6-01).
+   - Topology-fairness DTB pair (`pl011-regseq.dtb` +
+     `pl011-native.dtb`) per Section 5.5.
+3. **User-data initialization Path A** (compiler rule
+   extension; `regseq-model-64`) -- **[DONE 2026-04-22]**.
+   Extended the compiler's user-data acceptance rule to admit
+   either `Option<T: Copy>` OR a compiler-controlled zero-init
+   whitelist of primitive scalars + arrays + `Copy` structs of
+   these. Unblocked the fixture's `imsc_shadow: u32` bare-u32
+   user-data. Design doc at
+   `docs/discussions/models/regseq-model/user-data-initialization.md`;
+   task marked done with **Option A disposition** (see
+   §10 Session 4 for the full disposition context).
+
+4. **PL011 fixture cleanup** (drift + 4 issues + goldens) --
+   **[ACTIVE NEXT STEP]**. Bundled cleanup covering:
+   - Stage-1 Codex-audit rename drift in ~9 test files'
+     hardcoded method-name lists (`program_polling_port` ->
+     `bring_up_port`/`reprogram_line_format`;
+     `configure_line_control` -> `line_control_value` +
+     `write_line_control`; `pending_tx: Option<u8>` removal).
+   - Four compiler-pass-skip fixture issues at
+     `tests/fixtures/pl011-full-spec/src/driver.rs` lines
+     148, 190, 334, 529; enumerated authoritatively in
+     `docs/discussions/pl011-full-spec/pl011-full-spec-status.md`
+     "Known fixture issues (discovered 2026-04-23)".
+   - Golden regeneration (`raw-frontend.json`,
+     `regseq-model.json`, `ir/*.json`) after the fixes land.
+
+   Tracker item `pl011-fixture-cleanup` is at
+   `.harness/task-spec-status.yaml`, status
+   `ready_to_elaborate`; brief stub at
+   `.harness/spec-batches/pl011-fixture-cleanup.md`. Task
+   spec not yet authored. This task blocks items 5-8 below.
+
+5. **Co-author the Linux golden reference** -- [PENDING]:
+   `tests/fixtures/pl011-full-spec/expected/pl011-reference-linux-driver.c`
+   in the emission contract's "normal form". Co-authored by
+   user + Claude; not implementer-delegatable. Blocked on
+   item 4 (needs a fixture that compiles through the pipeline
+   cleanly to produce meaningful reference output).
+6. **Co-author the emission contract** -- [PENDING]:
+   `docs/discussions/models/regseq-model/linux-emission-contract.md`
+   crystallized alongside the reference. Blocked on item 5.
+7. **Emission data tables + exemplar fragments** -- [PENDING]:
+   `crates/regseq-backends/src/linux/emission_tables.rs`,
+   `tests/goldens/pl011/linux/constructs/*.c`. Blocked on
+   item 6.
+8. **Phase 7A-F emitter retarget** -- [PENDING]: per Section 4
+   task grid. Deliverable: byte-equal emitter output to the
+   reference. The harness task `regseq-backends-02` (at
+   `.harness/tasks/regseq-backends/02-emission-contract-and-exemplars.md`)
+   depends on `regseq-model-64` (done) plus other blockers;
+   add `pl011-fixture-cleanup`'s task id to this list when
+   that task is authored.
+9. **Pilot run** -- [PENDING]: native drivers only, full
+   Stage-1 suite. Finalizes PROVISIONAL tolerance constants
+   for Stage-1 rows. Blocked on item 8 + item 2.
+10. **Stage-1 real campaign** -- [PENDING]: Regseq-vs-native,
+    interleaved batches, per-batch sentinel rerun. Closes
+    Stage 1. Blocked on item 9.
+
+**When resuming (session 5)**: item 4 (PL011 fixture cleanup)
+is the active next step. Item 2 (harness work) can proceed in
+parallel since it does not touch the fixture or the emitter.
+Item 4 unblocks items 5-10. Item 3 (Path A) is done; do not
+re-open it.
+
+**Important discrepancy -- harness vs. session-documented
+sequencing**: `uv run python scripts/python/task.py next-step`
+currently returns `regseq-backends-02` (Linux emission
+contract) as the next executable task, because the harness
+only sees the explicit `depends_on` graph and every declared
+dependency of `regseq-backends-02` is done. **Do not pick up
+`regseq-backends-02` first.** The fixture drift + four fixture
+issues block its verification; the worker will hit the same
+cargo-test-workspace failures the Path A implementer did. The
+correct session-5 sequence is:
+
+1. Author the `pl011-fixture-cleanup` task spec per its brief
+   at `.harness/spec-batches/pl011-fixture-cleanup.md`.
+2. Add the newly-authored cleanup task's id to
+   `regseq-backends-02`'s `depends_on` array in `tasks.json`
+   (per the cleanup brief's Update Instructions).
+3. Execute `pl011-fixture-cleanup` (fix the 4 fixture issues,
+   update ~9 test files, regenerate goldens).
+4. Then `regseq-backends-02` becomes executable with a clean
+   workspace.
+
+The task-spec-authoring workflow at
+`.harness/task-spec-workflow.md` handles step 1; the normal
+executable-task workflow handles step 3 and 4.
+
+**Parallel design work delivered in session 4 but not
+implemented**: the shadow-register DSL extension is fully
+designed and Codex-reviewed at
+`docs/discussions/models/regseq-model/shadow-registers.md`.
+Status is **deferred**; revisit post-pipe-clean when a working
+Rust-to-C driver baseline is generated. No tracker item yet
+(intentional).
+
+**Stage 2 -- Flow control + error injection + independent register
+observation** (queued; requires QEMU patches)
+
+Deliverable: paper rows F5, F6-03, F9, F10 (CRTSCTS portion);
+F3/F4 rows strengthened from driver-readback to QMP-based
+independent observation.
+
+Scheduled work:
+
+1. **QEMU patches** per `pl011-experiment-methodology.md`
+   Sections 3.1, 3.2, 3.4 (~30-300 LoC combined; ship with qtest).
+2. **Fixture extensions**: REQ-FLOW-01, REQ-FLOW-02, REQ-LIFE-03
+   exercise path.
+3. **Linux reference driver extensions**: `set_termios` CRTSCTS
+   branch, `throttle` / `unthrottle`, auto-RTS-disable-before-drop
+   ordering. Apply as diff on top of Stage-1 reference.
+4. **Stage-2 pilot** (incremental, only new rows) and campaign.
+
+**Stage 3 -- Performance extensions** (queued; requires QEMU
+patch 3.3 + DMA fixture work)
+
+Deliverable: paper rows P7, P1/P2/P5-DMA-01.
+
+Scheduled work:
+
+1. **QEMU patch 3.3** (IFLS threshold semantics; ~40-60 LoC).
+2. **Fixture additions**: REQ-PERF-IFLS-01 (runtime IFLS
+   selection), REQ-PERF-DMA-01/02 (DMACR + PIO-DMA threshold
+   policy).
+3. **Reference-driver DMA lowering** (Linux quantitative; Zephyr
+   as feature-delta observation only).
+4. **Stage-3 pilot** (incremental) and campaign.
+
+**Stage membership authority**: stage assignments for every
+REQ-* live in `pl011-spec-requirements.md` Sections 1 and 1.2.
+This handoff does not duplicate those assignments; if any
+conflict arises, defer to the requirements doc.
 
 ### 0.4 Codex adversarial debate pattern (used throughout)
 
@@ -156,7 +358,9 @@ persistent across sessions).
 in session 2)
 
 - Thesis wording (section 0.1 above).
-- F+I-then-P is implementation-only, NOT paper staging.
+- The 3-stage progressive plan (Stage 1 / Stage 2 / Stage 3
+  per §0.3) is implementation staging only. The paper reports
+  the cumulative F+I+P result.
 - Comparisons are QEMU-relative only.
 - Hand-authored reference is compiler-oracle only.
 - FreeBSD and Windows are corpus-only, not backends.
@@ -372,14 +576,24 @@ Things earlier plans considered and rejected; do not re-propose:
 
 ## 7. The immediate next activity (where to pick up)
 
-**SUPERSEDED by Section 0.3.** The co-authoring of the PL011
-reference driver is NO LONGER the next step; prep tracks for the
-QEMU experiment campaign come first. The reference driver is
-still needed, but its role has narrowed to compiler-determinism
-oracle only.
+**ACTIVE (Stage 1 per §0.3 / 3-stage plan).** The Stage 1 scope
+(fixture extensions, harness work, co-authored Linux golden
+reference, Phase 7A-F emitter retarget, pilot run, Stage-1
+campaign) is the current critical path. See §0.3 for the
+ordered work list; this section preserves the historical
+co-authoring notes that shaped the emission contract approach.
 
-Historical content (describing the previously-planned
-co-authoring activity) preserved below for context:
+Note on the reference driver's role: it serves two purposes
+from Stage 1 onwards -- (a) the compiler-determinism oracle
+("the emitter's output byte-equals this reference"), and
+(b) the paper's native-comparison baseline shape (native Linux
+`amba-pl011` is the actual behavioral baseline; the hand-
+authored reference is the *Regseq-generated* driver's authored
+twin). Both uses need the same artifact.
+
+Stages 2 and 3 extend the reference driver by diff (CRTSCTS
+branches and DMA lowering respectively); Stage-1 authoring
+should leave clean extension points.
 
 We were about to **start co-authoring the PL011 reference driver**.
 The file does NOT exist yet; the user deleted their earlier draft
@@ -432,7 +646,7 @@ Regardless of the order, the immediate collaborative activity is:
 
 ## 8. Key file paths (cheat sheet)
 
-### PL011 strategy artifact package (session 2; UNCOMMITTED)
+### PL011 strategy artifact package (session 2; COMMITTED 2026-04-20)
 
 Primary docs (new):
 
@@ -564,10 +778,193 @@ Corpus (four-OS, fresh this session):
 
 ## 10. Recent commit history
 
+### Session 4 (2026-04-22 + 2026-04-23) -- UNCOMMITTED
+
+Two multi-day design workstreams closed plus one implementation
+task marked done. Everything is in the working tree; nothing
+pushed.
+
+**User-data initialization Path A** (2026-04-22):
+
+The PL011 fixture's Stage-1 `imsc_shadow: u32` user-data field
+was blocking the compiler's construction pass (which required
+`Option<T: Copy>` for user-data fields). A three-round Codex
+adversarial debate explored six alternatives -- safe trait,
+unsafe trait, attribute opt-in, compile-time `Default`
+evaluation, definite-assignment analysis, author-written
+`Default` impl -- and converged on a two-rule compiler-
+controlled whitelist with no author-facing trait or attribute:
+
+- **Rule 1** (new): compiler-controlled zero-init whitelist
+  admits `u8, u16, u32, u64, bool` + arrays and `Copy` structs
+  of these. Tuples excluded (the model's `RegseqType` has no
+  Tuple variant; adding one cascades).
+- **Rule 2** (unchanged): `Option<T: Copy>`.
+
+Deliverables:
+- `docs/discussions/models/regseq-model/user-data-initialization.md`
+  (design doc, ~400 lines; includes "Stage-1 backend-tested
+  scope (explicit narrowing)" and "Stage-1 Rule-1 whitelist
+  narrowing (tuples excluded)" subsections).
+- `docs/discussions/models/regseq-model/user-data-initialization-codex-review/`
+  (5 transcripts: rounds 1-3 design debate; rounds 4-5
+  brief-review + task-spec-review approvals).
+- `.harness/spec-batches/user-data-init-path-a.md` (Codex-
+  approved brief after 11 review rounds).
+- `.harness/tasks/regseq-model/64-user-data-init-path-a.md`
+  (Codex-approved task spec after 14 review rounds).
+- `.harness/tasks.json` (new `regseq-model-64` entry under
+  `regseq-model` group, status `done`; `regseq-backends-02`
+  now depends on `regseq-model-64`).
+- `.harness/task-spec-status.yaml` (new `user-data-init-path-a`
+  tracker item, status `tasked`).
+
+**Implementation status**: `regseq-model-64` was implemented by
+a worker agent, Codex-approved (VERDICT: APPROVED), and marked
+`done` per **Option A disposition**: the 13 downstream tests
+in the acceptance criteria pass, but a broader
+`cargo test --workspace` does not pass cleanly due to
+pre-existing PL011 fixture drift the Path A work did not
+itself introduce. Original fail-reason (since cleared from
+`tasks.json` on the transition to `done`): the implementer
+fixed `construction_log_metadata.rs` and
+`construction_ordered_region.rs`; `pl011_construction.rs` and
+9 other test files (`pl011_full_spec_lowering`,
+`linux_emission_scaffold`, `semantic_body_lowering`,
+`pl011_lowering_completeness_proof`, `semantic_model_projection`,
+`source_to_extraction_07/09/10`) remained broken due to drift
+in hardcoded method-name lists and specimen-fidelity
+assertions (the Stage-1 Codex audit renamed
+`program_polling_port` to `bring_up_port`/`reprogram_line_format`,
+`configure_line_control` to `line_control_value` +
+`write_line_control`, and removed `pending_tx: Option<u8>`).
+
+**Shadow-register design + implementation plan** (2026-04-22):
+
+Parallel to Path A, the shadow-register DSL extension was
+designed end-to-end and reviewed by Codex, but NOT implemented
+(per-user-direction: deferred until post-pipe-clean). DSL
+surface: `#[rseq::register_entry(shadow = true, reset_value =
+<lit>)]` on register-block entries. Five semantic-IR variants
+(`ShadowRead`, `ShadowReadField`, `ShadowWrite`,
+`ShadowWriteField`, `ShadowForceRead`; modify composes via
+read+write). 13-20 engineering days estimated.
+
+Deliverables:
+- `docs/discussions/models/regseq-model/shadow-registers.md`
+  (combined design + 7-phase implementation plan).
+- `docs/discussions/models/regseq-model/shadow-registers-codex-review/`
+  (2 transcripts: round-1-design-review,
+  round-2-plan-review; both with folded amendments).
+- Status: **deferred**; no tracker item or task spec authored
+  (intentional -- revisit post-pipe-clean when a working
+  Rust-to-C driver baseline is generated).
+
+**Four fixture issues discovered** (2026-04-23):
+
+After `regseq-model-64` landed, an attempt to audit whether
+the fixture was ready for golden regeneration surfaced four
+compiler-pass-skip issues on the fixture that neither the
+Stage-1 Codex audit nor the Path A work caught. Details in
+`docs/discussions/pl011-full-spec/pl011-full-spec-status.md`
+"Known fixture issues (discovered 2026-04-23)":
+
+1. `line_control_value` -- tuple destructuring at `driver.rs:190`
+2. `uart_clock_hz` -- method-reference ZST at `driver.rs:334`
+3. `rx_char` -- bitflags constant missing from `ConstantIndex`
+   at `driver.rs:529`
+4. `set_baud_rate` -- rustc `Assert` terminator for division
+   at `driver.rs:148`
+
+Issues 1-3 are fixture-only edits (~30-45 min total); issue 4
+needs investigation to classify (release-profile MIR settings
+vs compiler change).
+
+**PL011 fixture cleanup tracker item** (2026-04-23):
+
+The fixture drift + four fixture issues + golden regeneration
+are bundled into one follow-up batch:
+
+- `.harness/spec-batches/pl011-fixture-cleanup.md` (brief-stub
+  authored; Codex review pending).
+- `.harness/task-spec-status.yaml` -- new tracker item
+  `pl011-fixture-cleanup`, status `ready_to_elaborate`,
+  depends on `user-data-init-path-a`.
+- Task spec NOT yet authored; the tracker is ready for a
+  future session to elaborate it.
+
+**When resuming session 5**:
+- `regseq-model-64` is done; do not re-open it.
+- The next major activity is **pl011-fixture-cleanup** (author
+  its task spec + implement + regenerate goldens). This
+  unblocks `regseq-backends-02` (Linux emission contract) and
+  the hand-authored Linux reference C driver authoring.
+- Run `uv run python scripts/python/task.py next-step` to
+  confirm the current harness-visible next task. It may
+  suggest another pending task first; the task-spec-status
+  workflow triggers when no executable task is ready.
+
+### Session 3 (2026-04-21) -- UNCOMMITTED
+
+All session-3 work is in the working tree; nothing pushed. The
+user will decide whether to commit as one cluster or split. The
+uncommitted changes break down as follows:
+
+**3-stage plan adoption** (frontend of the session):
+- `docs/discussions/pl011-full-spec/pl011-spec-requirements.md`
+  -- added `[stage-1]` / `[stage-2]` / `[stage-3]` tags to every
+  claim-path REQ; added §1.2 stage-membership summary; authority
+  for stage assignments.
+- `docs/discussions/pl011-full-spec/pl011-full-spec-status.md`
+  -- reframed around 3-stage plan; separated stage membership
+  (deferred to spec-requirements §1.2) from implementation
+  state; added Stage 1 captured/scheduled snapshot.
+- `docs/discussions/pl011-full-spec/pl011-unified-spec-boundary.md`,
+  `pl011-experiment-methodology.md`, `pl011-feature-matrix.md`,
+  `pl011-feature-to-construct-mapping.md`,
+  `pl011-full-spec-methodology.md`, `pl011-workloads.md` -- stage
+  references updated; cheap-fix-audit items landed in-place
+  (4-OS corpus note; W-P6-01 host-round-trip rewrite; repo path
+  fixes; REQ-FLOW-* stage membership; tolerance-provenance
+  note).
+- This document (`contex-handoff.md`) -- §0.1/§0.3/§0.5/§7/§10/§15
+  updated to reflect 3-stage plan; Stage 1 item 1 marked DONE.
+
+**Stage 1 fixture fixes** (bulk of the session):
+- `tests/fixtures/pl011-full-spec/src/driver.rs` -- grown from
+  394 to ~630 lines. Fixes listed inline in §0.3 Stage 1 item 1
+  above. Validated through three rounds of Codex adversarial
+  review; final verdict `stage-1-complete`.
+- `docs/discussions/pl011-full-spec/audit-history/` (NEW) --
+  Codex transcripts for the three-round audit loop, plus a
+  README.
+
+**Related uncommitted files not produced this session** (present
+in the working tree at session start or added by the user):
+- `CLAUDE.md` (global user instructions file, not repo-scope)
+- `docs/discussions/pl011-full-spec/pl011-minimized-datasheet.md`
+  (user-provided datasheet excerpt used during this session's
+  audit; load-bearing for the fixture review)
+- `docs/discussions/pl011-full-spec/{freebsd,zephyr,windows}-driver-analysis*`
+  (OS-specific analysis docs and task briefs; pre-session 3)
+- `docs/discussions/pl011-full-spec/linux-driver-analysis.md`
+  and related deletion of `linux-driver-analysis-primecell.md`
+  (pre-session 3)
+
+**When resuming**: run `git status --short` to see current
+uncommitted set. The fixture changes plus the audit-history
+transcripts are the primary session-3 outputs; the
+spec-requirements + status + handoff edits are the supporting
+doc trail.
+
 ### Session 2 (2026-04-20 continued)
 
-**All session-2 strategy work is UNCOMMITTED.** The working tree
-contains:
+**All session-2 strategy work was committed 2026-04-20** in
+three thematic commits (four-OS corpus; Linux feature inventory
++ PrimeCell derivative; PL011 evaluation strategy package +
+handoff update). Follow-up doc edits landed 2026-04-21
+(cheap-fix audit and 3-stage tagging) as in-place updates. The
+working tree at the start of session 2 also contained:
 
 - 5 new docs under `docs/discussions/pl011-full-spec/`
 - 3 amendments to existing docs in the same directory
@@ -650,14 +1047,33 @@ bracket, topology-fairness DTB pair, pilot-plus-sentinel
 discipline, and full reproducibility contract. Convergence at
 round 4.
 
-All response transcripts saved under `/tmp/pl011-analysis/`
-during session 2 but those files don't persist across sessions.
-Regenerate with the same prompt pattern if needed.
+All session-2 transcripts saved under `/tmp/pl011-analysis/`
+are ephemeral and do not persist across sessions. Regenerate
+with the same prompt pattern if needed.
+
+### Session 3: PL011 Stage 1 fixture audit (3 rounds to converged)
+
+Stream 5: **Stage 1 fixture audit** (3 rounds to
+`stage-1-complete`). Round 1 found 10 gaps (3 requiring user
+decisions: TX batching / send_break semantics /
+lifecycle-decomposition; 7 mechanical + 1 framework question).
+Round 2 found 2 residuals (REQ-LIFE-02 regression + stale
+status doc). Round 3 converged. All 39 Stage-1 claim-path REQs
+are captured (37 fixture-level, 2 backend-emission-deferred).
+
+Transcripts preserved in-repo at
+`docs/discussions/pl011-full-spec/audit-history/` with
+`README.md` summarizing round outcomes. This is the first time
+Codex transcripts have been committed to the repo rather than
+left in `/tmp`; future audit loops should follow the same
+preserve-in-repo pattern.
 
 ### Codex-runner pattern
 
 ```bash
-cat <<'EOF' | uv run python scripts/python/codex_runner.py --timeout 540 --message-only
+cat <<'EOF' | uv run --project /path/to/repo python \
+    /path/to/repo/scripts/python/codex_runner.py \
+    --timeout 540 --message-only
 <task>
 ...prompt...
 </task>
@@ -666,6 +1082,8 @@ cat <<'EOF' | uv run python scripts/python/codex_runner.py --timeout 540 --messa
 EOF
 ```
 
+Use absolute paths to avoid cwd-drift issues if the Bash tool's
+working directory has been changed by an earlier command.
 Background via Bash tool's `run_in_background: true`; monitor
 completion via task notification. Do NOT use `codex:codex-rescue`
 agent or `/codex:rescue` skill (documented to hang).
@@ -761,17 +1179,54 @@ If the next session has 5 minutes to orient:
   **benchmark-based comparison against native drivers** thesis.
   The hand-authored reference driver is NOT the paper's main
   oracle; benchmarks in QEMU are.
-- Eight strategy docs + the handoff exist in the working tree
-  UNCOMMITTED. Review + commit is probably step 1.
-- The immediate next step is NOT reference-driver authoring.
-  It's the four parallel prep tracks in Section 0.3:
-  (a) four QEMU patches, (b) topology-fairness DTBs,
-  (c) Zephyr control-channel proof, (d) DMA in `driver.rs`.
-- Then pilot run (native-only) -> tolerance finalization ->
-  real campaign (Regseq vs native).
-- Hand-authored reference driver activity resumes AFTER the
-  campaign is in motion; it serves as compiler-determinism
-  oracle, not driver-quality oracle.
+- Strategy artifact package (8 docs) is COMMITTED; it is the
+  authoritative source for paper-evaluation claims.
+- **The current critical path is Stage 1 of the 3-stage
+  progressive plan** (§0.3). Stage 1 is Rust-only + harness
+  work + reference-driver co-authoring + Phase 7A-F emitter
+  retarget + native-only pilot + Stage-1 campaign. No QEMU
+  patches are required in Stage 1.
+- **Stage 1 fixture extensions are DONE (2026-04-21)**. Three-
+  round Codex audit loop converged at `stage-1-complete`.
+  Transcripts in `docs/discussions/pl011-full-spec/audit-history/`.
+  Fixture changes in `tests/fixtures/pl011-full-spec/src/driver.rs`
+  are UNCOMMITTED; see §10 session-3 entry.
+- **User-data initialization Path A is DONE (2026-04-22)**.
+  Task `regseq-model-64` implemented, Codex-approved, marked
+  `done` per Option A disposition. Unblocks the fixture's
+  `imsc_shadow: u32` bare-u32 user-data. Design at
+  `docs/discussions/models/regseq-model/user-data-initialization.md`;
+  full session-4 context in §10.
+- **Shadow-register DSL design is COMPLETE but implementation
+  is DEFERRED**. Combined design + 7-phase implementation
+  plan at
+  `docs/discussions/models/regseq-model/shadow-registers.md`
+  (Codex-reviewed across two rounds). No tracker item yet;
+  revisit post-pipe-clean.
+- **Four fixture issues discovered 2026-04-23** block golden
+  regeneration. Enumerated authoritatively in
+  `docs/discussions/pl011-full-spec/pl011-full-spec-status.md`
+  "Known fixture issues (discovered 2026-04-23)":
+  `line_control_value` tuple destructuring (`driver.rs:190`),
+  `uart_clock_hz` method-ref ZST (`driver.rs:334`),
+  `rx_char` bitflags const missing from ConstantIndex
+  (`driver.rs:529`), `set_baud_rate` Assert terminator for
+  division (`driver.rs:148`).
+- **Active next step: Stage 1 item 4 -- PL011 fixture cleanup**
+  (tracker item `pl011-fixture-cleanup`, status
+  `ready_to_elaborate`; brief stub at
+  `.harness/spec-batches/pl011-fixture-cleanup.md`). This
+  task bundles the four fixture fixes, the ~9-test-file
+  rename-drift cleanup, and golden regeneration. It unblocks
+  item 5 (Linux reference C authoring) and item 8
+  (`regseq-backends-02` emission contract).
+- Harness work (§0.3 item 2) can still proceed in parallel
+  since it does not touch the fixture.
+- Stage 2 (flow control; QEMU patches 3.1/3.2/3.4) and Stage 3
+  (IFLS + DMA; QEMU patch 3.3) are queued behind Stage 1.
+- Stage membership authority: `pl011-spec-requirements.md` §1.2.
+  Implementation state: `pl011-full-spec-status.md`. The
+  handoff does not duplicate the REQ-to-stage mapping.
 - Do NOT: resurrect `compat.rs`; use the reference as
   driver-quality oracle; claim byte-parity to anything as
   evidence of driver quality; use `codex:codex-rescue` agent.

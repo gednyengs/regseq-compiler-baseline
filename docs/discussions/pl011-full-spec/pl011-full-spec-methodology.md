@@ -145,14 +145,14 @@ When implementing a chosen feature family, use the following driver sources as
 localized evidence:
 
 - Linux
-  - `/Users/nyengele/driverbase/os/linux/drivers/tty/serial/amba-pl011.c`
+  - `reference-drivers/pl011/linux/serial_pl011.h`
+  - `reference-drivers/pl011/linux/amba-pl011.c`
 - FreeBSD
-  - `/Users/nyengele/driverbase/os/freebsd/sys/dev/uart/uart_dev_pl011.c`
+  - `reference-drivers/pl011/freebsd/uart_dev_pl011.c`
 - Zephyr
-  - `/Users/nyengele/driverbase/os/zephyr/drivers/serial/uart_pl011.c`
-  - `/Users/nyengele/driverbase/os/zephyr/drivers/serial/uart_pl011_registers.h`
-  - `/Users/nyengele/driverbase/os/zephyr/drivers/serial/uart_pl011_ambiq.h`
-  - `/Users/nyengele/driverbase/os/zephyr/drivers/serial/uart_pl011_raspberrypi_pico.h`
+  - `reference-drivers/pl011/zephyr/arm_pl011.yaml`
+  - `reference-drivers/pl011/zephyr/uart_pl011_registers.h`
+  - `reference-drivers/pl011/zephyr/uart_pl011.c`
 
 ## Proposed feature-addition order
 

@@ -30,7 +30,7 @@ use regseq_model::model::register::{
 use regseq_model::model::regseq_model::RegseqModel;
 use regseq_model::model::resources::{
     ClockBinding, ClockDecl, ClockResource, InterruptBinding, InterruptDecl, InterruptResource,
-    MmioBinding, MmioDecl, MmioResource, PropertyField, Shape, UserDataField,
+    MmioBinding, MmioDecl, MmioResource, PropertyField, Shape, UserDataField, UserDataKind,
 };
 use regseq_model::model::type_def::{AttrEntry, AttrValue, Attrs, TypeDef, TypeDefKind};
 use regseq_model::verify::{verify_phase_2, IsrViolationKind, VerifierErrorKind, VerifierLevel};
@@ -353,17 +353,256 @@ fn rejects_user_data_field_with_non_copy_inner_type() {
     driver_mut(&mut model).user_data.push(UserDataField {
         id: UserDataId::from(ud_decl_id),
         field_name: ud_field,
-        inner_type: RegseqType::Slice(Box::new(RegseqType::Scalar(ScalarType::U8))),
+        kind: UserDataKind::Option {
+            inner_type: RegseqType::Slice(Box::new(RegseqType::Scalar(ScalarType::U8))),
+        },
     });
     model.source_locations.insert(ud_decl_id, origin(file, 210));
 
     let err = verify_phase_2(&model).unwrap_err();
     assert_eq!(err.level, VerifierLevel::DriverStruct);
     match err.kind {
-        VerifierErrorKind::UserDataFieldNotOptionCopy { field, .. } => {
+        VerifierErrorKind::UserDataFieldNotZeroInitOrOptionCopy { field, .. } => {
             assert_eq!(field, ud_decl_id);
         }
-        other => panic!("expected UserDataFieldNotOptionCopy, got {other:?}"),
+        other => panic!("expected UserDataFieldNotZeroInitOrOptionCopy, got {other:?}"),
+    }
+}
+
+#[test]
+fn accepts_user_data_zero_init_scalar_field() {
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let ud_field = model.symbols.intern("counter");
+    let ud_decl_id = DeclId::new(211);
+
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::ZeroInit {
+            inner_type: RegseqType::Scalar(ScalarType::U32),
+        },
+    });
+    model.source_locations.insert(ud_decl_id, origin(file, 211));
+
+    verify_phase_2(&model)
+        .expect("ZeroInit { u32 } user-data field must pass Phase-2 verification");
+}
+
+#[test]
+fn accepts_user_data_zero_init_u8_scalar() {
+    accept_zero_init(RegseqType::Scalar(ScalarType::U8), 221);
+}
+
+#[test]
+fn accepts_user_data_zero_init_u16_scalar() {
+    accept_zero_init(RegseqType::Scalar(ScalarType::U16), 222);
+}
+
+#[test]
+fn accepts_user_data_zero_init_u64_scalar() {
+    accept_zero_init(RegseqType::Scalar(ScalarType::U64), 223);
+}
+
+#[test]
+fn accepts_user_data_zero_init_bool() {
+    accept_zero_init(RegseqType::Bool, 224);
+}
+
+#[test]
+fn accepts_user_data_zero_init_array_of_u32() {
+    accept_zero_init(
+        RegseqType::Array(Box::new(RegseqType::Scalar(ScalarType::U32)), 4),
+        225,
+    );
+}
+
+#[test]
+fn accepts_user_data_zero_init_nested_array() {
+    accept_zero_init(
+        RegseqType::Array(
+            Box::new(RegseqType::Array(
+                Box::new(RegseqType::Scalar(ScalarType::U16)),
+                2,
+            )),
+            8,
+        ),
+        226,
+    );
+}
+
+#[test]
+fn accepts_user_data_zero_init_user_defined_copy_struct() {
+    // Register a user-defined struct TypeDef whose fields are all
+    // Rule-1 accepted primitives (u32/u32), then plug it into the
+    // driver as a `ZeroInit { Defined(TypeDefId) }`. The verifier's
+    // Rule-1 walker must accept it because every field is
+    // whitelisted.
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let struct_decl_id = DeclId::new(230);
+    let struct_type_id = TypeDefId::from(struct_decl_id);
+    let struct_name_sym = model.symbols.intern("Counters");
+    let rx_sym = model.symbols.intern("rx");
+    let tx_sym = model.symbols.intern("tx");
+    let type_def = TypeDef {
+        id: struct_type_id,
+        name: struct_name_sym,
+        kind: TypeDefKind::Struct {
+            fields: vec![
+                regseq_model::model::FieldDef {
+                    name: rx_sym,
+                    ty: RegseqType::Scalar(ScalarType::U32),
+                },
+                regseq_model::model::FieldDef {
+                    name: tx_sym,
+                    ty: RegseqType::Scalar(ScalarType::U32),
+                },
+            ],
+        },
+        classification: TypeDefClassification::UserDefined,
+        attrs: Attrs::default(),
+    };
+    let driver_mod = model
+        .root_module
+        .submodules
+        .iter_mut()
+        .find(|m| m.kind == ModuleKind::Driver)
+        .expect("driver module");
+    driver_mod.type_defs.push(type_def);
+    model
+        .source_locations
+        .insert(struct_decl_id, origin(file, 230));
+
+    let ud_field = model.symbols.intern("counters");
+    let ud_decl_id = DeclId::new(231);
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::ZeroInit {
+            inner_type: RegseqType::Defined(struct_type_id),
+        },
+    });
+    model.source_locations.insert(ud_decl_id, origin(file, 231));
+
+    verify_phase_2(&model)
+        .expect("ZeroInit with a user-defined Copy struct of Rule-1 fields must pass verification");
+}
+
+fn accept_zero_init(inner: RegseqType, decl_id: u32) {
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let ud_field = model.symbols.intern("accepted_ud");
+    let ud_decl_id = DeclId::new(decl_id);
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::ZeroInit { inner_type: inner },
+    });
+    model
+        .source_locations
+        .insert(ud_decl_id, origin(file, decl_id));
+    verify_phase_2(&model).expect("Rule-1 ZeroInit must pass verification");
+}
+
+#[test]
+fn accepts_user_data_option_copy_field() {
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let ud_field = model.symbols.intern("slot");
+    let ud_decl_id = DeclId::new(212);
+
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::Option {
+            inner_type: RegseqType::Scalar(ScalarType::U32),
+        },
+    });
+    model.source_locations.insert(ud_decl_id, origin(file, 212));
+
+    verify_phase_2(&model).expect("Option { u32 } user-data field must pass Phase-2 verification");
+}
+
+#[test]
+fn rejects_user_data_zero_init_with_signed_scalar_inner() {
+    // Rule-1 Stage-1 whitelist admits only u8/u16/u32/u64/bool;
+    // signed integers must be rejected even though they satisfy
+    // Rust's `Copy` bound.
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let ud_field = model.symbols.intern("mismatched");
+    let ud_decl_id = DeclId::new(214);
+
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::ZeroInit {
+            inner_type: RegseqType::Scalar(ScalarType::I32),
+        },
+    });
+    model.source_locations.insert(ud_decl_id, origin(file, 214));
+
+    let err = verify_phase_2(&model).unwrap_err();
+    assert_eq!(err.level, VerifierLevel::DriverStruct);
+    match err.kind {
+        VerifierErrorKind::UserDataFieldNotZeroInitOrOptionCopy { field, .. } => {
+            assert_eq!(field, ud_decl_id);
+        }
+        other => panic!("expected UserDataFieldNotZeroInitOrOptionCopy, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_user_data_zero_init_with_option_inner() {
+    // `ZeroInit { Option<...> }` is a kind/inner mismatch: Option
+    // user-data belongs to the Rule-2 `Option` variant. The Rule-1
+    // whitelist must reject it.
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let ud_field = model.symbols.intern("opt_mismatched");
+    let ud_decl_id = DeclId::new(215);
+
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::ZeroInit {
+            inner_type: RegseqType::Option(Box::new(RegseqType::Scalar(ScalarType::U32))),
+        },
+    });
+    model.source_locations.insert(ud_decl_id, origin(file, 215));
+
+    let err = verify_phase_2(&model).unwrap_err();
+    assert_eq!(err.level, VerifierLevel::DriverStruct);
+    assert!(matches!(
+        err.kind,
+        VerifierErrorKind::UserDataFieldNotZeroInitOrOptionCopy { .. }
+    ));
+}
+
+#[test]
+fn rejects_user_data_zero_init_with_non_copy_inner() {
+    let mut model = build_minimal_phase_2_ok();
+    let file = model.symbols.intern_file("drv/lib.rs");
+    let ud_field = model.symbols.intern("buffer");
+    let ud_decl_id = DeclId::new(213);
+
+    driver_mut(&mut model).user_data.push(UserDataField {
+        id: UserDataId::from(ud_decl_id),
+        field_name: ud_field,
+        kind: UserDataKind::ZeroInit {
+            inner_type: RegseqType::Slice(Box::new(RegseqType::Scalar(ScalarType::U8))),
+        },
+    });
+    model.source_locations.insert(ud_decl_id, origin(file, 213));
+
+    let err = verify_phase_2(&model).unwrap_err();
+    assert_eq!(err.level, VerifierLevel::DriverStruct);
+    match err.kind {
+        VerifierErrorKind::UserDataFieldNotZeroInitOrOptionCopy { field, .. } => {
+            assert_eq!(field, ud_decl_id);
+        }
+        other => panic!("expected UserDataFieldNotZeroInitOrOptionCopy, got {other:?}"),
     }
 }
 

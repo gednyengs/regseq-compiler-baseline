@@ -503,3 +503,84 @@ items:
     spec_authoring_notes:
       - Only after all consumers are migrated and tests pass.
     generated_task_ids: []
+
+  # ---- Post-Phase-7 retrofit: PL011 fixture cleanup (drift + 4 issues) ----
+
+  - id: pl011-fixture-cleanup
+    phase: "post-7"
+    title: PL011 fixture cleanup (rename drift + four-issue fix + golden regeneration)
+    status: ready_to_elaborate
+    depends_on:
+      - user-data-init-path-a
+    target_harness_groups:
+      - regseq-driver
+    source_refs:
+      - docs/discussions/pl011-full-spec/pl011-full-spec-status.md
+      - docs/discussions/models/regseq-model/user-data-initialization.md
+      - docs/discussions/models/regseq-model/contex-handoff.md
+    brief: .harness/spec-batches/pl011-fixture-cleanup.md
+    summary: >
+      Resolve two entangled cleanup workstreams blocking golden
+      regeneration: (a) Stage-1 audit rename drift
+      (program_polling_port/configure_line_control/pending_tx)
+      in ~9 test files' hardcoded method-name lists and
+      specimen-fidelity assertions; (b) four compiler-pass-skip
+      fixture issues (tuple destructure, method-ref ZST,
+      bitflags constant, division assert) at
+      tests/fixtures/pl011-full-spec/src/driver.rs:148,190,334,529.
+      Plus regenerate raw-frontend.json, regseq-model.json,
+      and ir/*.json goldens after the fixes. Unblocks
+      regseq-backends-02 (Linux emission contract) and the
+      hand-authored Linux reference C driver authoring.
+    spec_authoring_notes:
+      - >-
+          Single cross-crate task covering fixture edits,
+          test-file updates, and golden regeneration.
+      - >-
+          Cross-crate scope (regseq-driver + regseq-model + test
+          fixtures) is an intentional override of
+          task-spec-workflow.md:120-121; authority is the
+          entanglement between fixture fixes, test updates, and
+          goldens (they must land together).
+      - >-
+          Four fixture issues are authoritatively enumerated in
+          pl011-full-spec-status.md under the Known-fixture-issues
+          section dated 2026-04-23.
+      - >-
+          Issue 4 (set_baud_rate Assert terminator) may require
+          a compiler change if release-profile MIR settings do
+          not suffice; if so, defer to a follow-up task.
+    generated_task_ids: []
+
+  # ---- Post-Phase-7 retrofit: user-data initialization Path A ----
+
+  - id: user-data-init-path-a
+    phase: "post-7"
+    title: User-data initialization Path A (zero-init whitelist + Option tier)
+    status: tasked
+    depends_on: []
+    target_harness_groups:
+      - regseq-model
+    source_refs:
+      - docs/discussions/models/regseq-model/user-data-initialization.md
+    brief: .harness/spec-batches/user-data-init-path-a.md
+    summary: >
+      Implement Path A of the user-data initialization contract:
+      extend construction to accept either Option<T: Copy> or a
+      compiler-controlled zero-init whitelist covering primitive
+      scalars (u8/u16/u32/u64/bool) plus arrays and Copy structs
+      of these. Unblocks PL011 Stage-1 fixture (imsc_shadow: u32)
+      and all downstream artifact regeneration.
+    spec_authoring_notes:
+      - Single cross-crate task covering 13 touch-points per the
+        design doc.
+      - Cross-crate scope (4 crates) is an intentional override
+        of task-spec-workflow.md:120-121; authority is the
+        design doc.
+      - Tuples excluded from Stage-1 Rule-1 whitelist (RegseqType
+        has no Tuple variant; adding one is out of scope).
+      - Legacy lowering pipeline carries an empty user-data list
+        (Path A asymmetry; RegseqModel pipeline populates real
+        entries).
+    generated_task_ids:
+      - regseq-model-64

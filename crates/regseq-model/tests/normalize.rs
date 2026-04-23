@@ -240,9 +240,10 @@ fn multi_driver_enrichment_returns_structural_violation() {
 
 #[test]
 fn non_option_user_data_returns_type_constraint_violation() {
-    // Brief example: `Option<T: Copy>` is required for user-data
-    // fields (spec.md Section 4.4). Set `field_type` to `u32` (not
-    // `Option<_>`) and assert the error fires.
+    // Under Path A, a non-Option bare type is accepted only if it
+    // belongs to the Rule-1 zero-init whitelist (u8, u16, u32, u64,
+    // bool, arrays of those). Types outside that whitelist -- like
+    // `i32` -- must still fail at normalization.
     let mut input = load_pl011();
     let enrichment = RawIdentityEnrichmentSurface {
         structs: vec![RawStructFact {
@@ -253,7 +254,7 @@ fn non_option_user_data_returns_type_constraint_violation() {
             is_register_block: false,
             fields: vec![RawFieldFact {
                 name: "counter".into(),
-                field_type: "u32".into(),
+                field_type: "i32".into(),
                 rseq_field_kind: "UserData".into(),
             }],
         }],
@@ -261,14 +262,14 @@ fn non_option_user_data_returns_type_constraint_violation() {
     };
     input.identity_enrichment = Some(enrichment);
 
-    let err = normalize(&input).expect_err("non-Option user data must fail");
+    let err = normalize(&input).expect_err("non-whitelisted non-Option user data must fail");
     assert!(!err.provenance.surface_path.is_empty());
     assert!(!err.provenance.containing_item.is_empty());
     match &err.kind {
         NormalizeErrorKind::TypeConstraintViolation { description } => {
             assert!(
                 description.contains("Option") || description.contains("user-data"),
-                "description should mention Option: {description}",
+                "description should mention Option or user-data: {description}",
             );
         }
         other => panic!("expected TypeConstraintViolation, got {other:?}"),
@@ -281,8 +282,12 @@ fn non_option_user_data_returns_type_constraint_violation() {
 fn option_user_data_with_non_copy_inner_returns_type_constraint_violation() {
     // The spec (Section 4.4) demands `Option<T: Copy>`. An outer
     // `Option<_>` wrapper alone is not sufficient; the inner type
-    // must also satisfy `Copy`. `String` is the classic non-`Copy`
-    // stdlib type, so this scenario exercises the inner-bound check.
+    // must also satisfy Rule-2 acceptance. Stage-1 normalization's
+    // Rule-2 inner-type table is primitive-string-only; a
+    // user-defined struct name (`String`) is rejected with a
+    // scope-narrowing error. The error still carries the
+    // `TypeConstraintViolation` kind and names the offending
+    // field, which is what downstream diagnostics assert on.
     let mut input = load_pl011();
     let enrichment = RawIdentityEnrichmentSurface {
         structs: vec![RawStructFact {
@@ -305,8 +310,12 @@ fn option_user_data_with_non_copy_inner_returns_type_constraint_violation() {
     match &err.kind {
         NormalizeErrorKind::TypeConstraintViolation { description } => {
             assert!(
-                description.contains("Copy"),
-                "description should mention Copy: {description}",
+                description.contains("user-data"),
+                "description should mention user-data: {description}",
+            );
+            assert!(
+                description.contains("String"),
+                "description should mention the offending inner type: {description}",
             );
         }
         other => panic!("expected TypeConstraintViolation, got {other:?}"),
@@ -336,6 +345,242 @@ fn option_user_data_type_is_accepted() {
     input.identity_enrichment = Some(enrichment);
 
     let _model = normalize(&input).expect("Option<T> user-data type must normalize cleanly");
+}
+
+// ---------------------------------------------------------- Path A (regseq-model-64)
+//
+// Rule-1 zero-init classification at normalization. Builds a
+// synthetic enrichment surface with a single user-data field of the
+// spelling under test, then asserts the resulting `UserDataField`
+// carries the expected `UserDataKind` variant and inner type.
+
+fn normalize_user_data(
+    spelling: &str,
+) -> Result<regseq_model::model::RegseqModel, regseq_model::NormalizeError> {
+    let mut input = load_pl011();
+    let enrichment = RawIdentityEnrichmentSurface {
+        structs: vec![RawStructFact {
+            canonical_path: "crate::driver::Pl011Driver".into(),
+            name: "Pl011Driver".into(),
+            module_path: "crate::driver".into(),
+            is_driver: true,
+            is_register_block: false,
+            fields: vec![RawFieldFact {
+                name: "ud".into(),
+                field_type: spelling.into(),
+                rseq_field_kind: "UserData".into(),
+            }],
+        }],
+        ..Default::default()
+    };
+    input.identity_enrichment = Some(enrichment);
+    normalize(&input)
+}
+
+fn user_data_kind_from(
+    model: &regseq_model::model::RegseqModel,
+) -> &regseq_model::model::UserDataKind {
+    let driver_mod = model
+        .root_module
+        .submodules
+        .iter()
+        .find(|m| m.kind == ModuleKind::Driver)
+        .expect("driver submodule");
+    let driver = driver_mod.driver.as_ref().expect("driver struct");
+    let ud = driver
+        .user_data
+        .iter()
+        .find(|u| model.symbols.resolve(u.field_name) == "ud")
+        .expect("user-data field");
+    &ud.kind
+}
+
+#[test]
+fn path_a_rule1_u8_classified_as_zero_init() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let model = normalize_user_data("u8").expect("u8 must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U8));
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_rule1_u16_classified_as_zero_init() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let model = normalize_user_data("u16").expect("u16 must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U16));
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_rule1_u32_classified_as_zero_init() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let model = normalize_user_data("u32").expect("u32 must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U32));
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_rule1_u64_classified_as_zero_init() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let model = normalize_user_data("u64").expect("u64 must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U64));
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_rule1_bool_classified_as_zero_init() {
+    use regseq_model::ir::RegseqType;
+    let model = normalize_user_data("bool").expect("bool must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Bool);
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_rule1_array_of_u32_classified_as_zero_init() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let model = normalize_user_data("[u32; 4]").expect("[u32; 4] must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            let expected = RegseqType::Array(Box::new(RegseqType::Scalar(ScalarType::U32)), 4);
+            assert_eq!(*inner_type, expected);
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_rule2_option_u32_classified_as_option() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let model = normalize_user_data("Option<u32>").expect("Option<u32> must normalize");
+    match user_data_kind_from(&model) {
+        regseq_model::model::UserDataKind::Option { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U32));
+        }
+        other => panic!("expected Option, got {other:?}"),
+    }
+}
+
+#[test]
+fn path_a_reject_u128() {
+    let err = normalize_user_data("u128").expect_err("u128 must fail Rule-1 whitelist");
+    assert!(matches!(
+        err.kind,
+        NormalizeErrorKind::TypeConstraintViolation { .. }
+    ));
+}
+
+#[test]
+fn path_a_reject_i128() {
+    let err = normalize_user_data("i128").expect_err("i128 must fail Rule-1 whitelist");
+    assert!(matches!(
+        err.kind,
+        NormalizeErrorKind::TypeConstraintViolation { .. }
+    ));
+}
+
+#[test]
+fn path_a_reject_char() {
+    let err = normalize_user_data("char").expect_err("char must fail Rule-1 whitelist");
+    assert!(matches!(
+        err.kind,
+        NormalizeErrorKind::TypeConstraintViolation { .. }
+    ));
+}
+
+#[test]
+fn path_a_reject_tuple() {
+    let err = normalize_user_data("(u32, u32)").expect_err("tuple must be rejected");
+    assert!(matches!(
+        err.kind,
+        NormalizeErrorKind::TypeConstraintViolation { .. }
+    ));
+}
+
+#[test]
+fn path_a_serialization_shape_zero_init_u32() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    // Build a UserDataField value directly and assert the serialized
+    // shape matches the spec-mandated adjacent-tagged representation.
+    let field = regseq_model::model::UserDataField {
+        id: regseq_model::identity::UserDataId::from(regseq_model::identity::DeclId::new(1)),
+        field_name: {
+            let mut s = regseq_model::identity::SymbolInterner::new();
+            s.intern("x")
+        },
+        kind: regseq_model::model::UserDataKind::ZeroInit {
+            inner_type: RegseqType::Scalar(ScalarType::U32),
+        },
+    };
+    let json = serde_json::to_value(&field).expect("serialize UserDataField");
+    let kind = &json["kind"];
+    assert_eq!(kind["kind"], "ZeroInit");
+    let data = &kind["data"];
+    let inner = &data["inner_type"];
+    assert_eq!(inner["kind"], "Scalar");
+    assert_eq!(inner["data"]["kind"], "U32");
+}
+
+#[test]
+fn path_a_serialization_shape_option_u32() {
+    use regseq_model::ir::{RegseqType, ScalarType};
+    let field = regseq_model::model::UserDataField {
+        id: regseq_model::identity::UserDataId::from(regseq_model::identity::DeclId::new(2)),
+        field_name: {
+            let mut s = regseq_model::identity::SymbolInterner::new();
+            s.intern("x")
+        },
+        kind: regseq_model::model::UserDataKind::Option {
+            inner_type: RegseqType::Scalar(ScalarType::U32),
+        },
+    };
+    let json = serde_json::to_value(&field).expect("serialize UserDataField");
+    let kind = &json["kind"];
+    assert_eq!(kind["kind"], "Option");
+    let inner = &kind["data"]["inner_type"];
+    assert_eq!(inner["kind"], "Scalar");
+    assert_eq!(inner["data"]["kind"], "U32");
+}
+
+#[test]
+fn path_a_serialization_shape_zero_init_bool() {
+    use regseq_model::ir::RegseqType;
+    let field = regseq_model::model::UserDataField {
+        id: regseq_model::identity::UserDataId::from(regseq_model::identity::DeclId::new(3)),
+        field_name: {
+            let mut s = regseq_model::identity::SymbolInterner::new();
+            s.intern("x")
+        },
+        kind: regseq_model::model::UserDataKind::ZeroInit {
+            inner_type: RegseqType::Bool,
+        },
+    };
+    let json = serde_json::to_value(&field).expect("serialize UserDataField");
+    let kind = &json["kind"];
+    assert_eq!(kind["kind"], "ZeroInit");
+    let inner = &kind["data"]["inner_type"];
+    assert_eq!(inner["kind"], "Bool");
+    // Unit variants of RegseqType omit "data".
+    assert!(inner.get("data").is_none());
 }
 
 // ---------------------------------------------------------- provenance

@@ -1,7 +1,7 @@
 # PL011 Feature To Construct Mapping
 
 This note maps the feature inventory in
-[pl011-feature-matrix.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/pl011-full-spec/pl011-feature-matrix.md)
+[pl011-feature-matrix.md](/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/pl011-full-spec/pl011-feature-matrix.md)
 onto the accepted Regseq construct set.
 
 The goal is to answer three questions in light of the current concrete
@@ -25,7 +25,7 @@ This is a planning document for the full PL011 target, not a lowering design.
 ## Core PL011 baseline
 
 These are the features evidenced across Linux, FreeBSD, and Zephyr in
-[pl011-feature-matrix.md](/Users/nyengele/Documents/sekekama/regseq-compiler-v2/docs/discussions/pl011-full-spec/pl011-feature-matrix.md).
+[pl011-feature-matrix.md](/Users/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/discussions/pl011-full-spec/pl011-feature-matrix.md).
 
 | PL011 feature | Primary Regseq construct(s) | Current status | Notes |
 | --- | --- | --- | --- |

@@ -128,7 +128,7 @@ span different mechanisms.
 | W-P5-01 (guest CPU / byte) | today-with-existing-perf-tools (Linux); not-applicable (Zephyr, absent CPU-accounting primitive) | Linux: `perf stat -e cycles,instructions` during workload. |
 | W-P6-01 (small-write latency) | today-byte-stream (redefined, see Section 4.2) | Host-only round-trip measurement: host writes byte; host times arrival of echoed byte. No cross-clock synchronization required. |
 | W-P7-01 (FIFO threshold responsiveness) | patch-required-ifls-semantics | QEMU v8.2.2 `pl011_set_read_trigger()` forces `read_trigger = 1` and ignores `IFLS`. Without Section 3.3 IFLS patch, interrupt cadence is invariant with `IFLS` setting in QEMU; the row cannot distinguish Regseq from native. |
-| W-P1-DMA-01, W-P2-DMA-01, W-P5-DMA-01 | today-byte-stream (once DMA lands) | Internal-stage-2 items; execute after DMA is captured in `driver.rs` and both backends emit the DMA path. |
+| W-P1-DMA-01, W-P2-DMA-01, W-P5-DMA-01 | today-byte-stream (once DMA lands) | Stage-3 items per `pl011-spec-requirements.md` Section 1.2; execute after DMA is captured in `driver.rs` (REQ-PERF-DMA-01/02) and both backends emit the DMA path; requires QEMU patch 3.3 for the paired P7 work in the same stage. |
 
 ### Integration workloads (I)
 

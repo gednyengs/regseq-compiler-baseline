@@ -305,16 +305,42 @@ pub struct PropertyField {
 
 /// An author-defined state field not managed by the framework.
 ///
-/// The spec-side type is `Option<T>` where `T: Copy`. `inner_type` is
-/// the `RegseqType` of `T`.
+/// Two acceptance rules are supported:
+/// - Rule 1 ([`UserDataKind::ZeroInit`]): a zero-init-friendly type
+///   admitted by a compiler-controlled whitelist (scalars, arrays,
+///   and `Copy` structs recursively composed of accepted fields).
+/// - Rule 2 ([`UserDataKind::Option`]): `Option<T>` where `T: Copy`.
 #[derive(Clone, Eq, PartialEq, Debug, Serialize)]
 pub struct UserDataField {
     /// The field's declaration identifier.
     pub id: UserDataId,
     /// The struct field's identifier.
     pub field_name: Symbol,
-    /// The inner type `T` in `Option<T>`. Constrained to `Copy` types.
-    pub inner_type: RegseqType,
+    /// Discriminator naming which acceptance rule admitted the field
+    /// plus the accepted inner type.
+    pub kind: UserDataKind,
+}
+
+/// Two-rule discriminator for [`UserDataField`].
+///
+/// Each variant carries `inner_type`, the `RegseqType` of the accepted
+/// value (for `Option`, it is the type `T` inside `Option<T>`; for
+/// `ZeroInit`, it is the type of the bare value).
+#[derive(Clone, Eq, PartialEq, Debug, Serialize)]
+#[serde(tag = "kind", content = "data")]
+pub enum UserDataKind {
+    /// Rule 2: `Option<T: Copy>`. `inner_type` is the `RegseqType` of
+    /// `T` inside the `Option`.
+    Option {
+        /// The type `T` of `Option<T>`. Must be `Copy`.
+        inner_type: RegseqType,
+    },
+    /// Rule 1: zero-init-accepted type. `inner_type` is the
+    /// `RegseqType` of the accepted bare value (no `Option` wrapping).
+    ZeroInit {
+        /// The bare value's type.
+        inner_type: RegseqType,
+    },
 }
 
 #[cfg(test)]
@@ -594,8 +620,15 @@ mod tests {
         let u = UserDataField {
             id: UserDataId::from(DeclId::new(30)),
             field_name: field,
-            inner_type: RegseqType::Scalar(ScalarType::U32),
+            kind: UserDataKind::ZeroInit {
+                inner_type: RegseqType::Scalar(ScalarType::U32),
+            },
         };
-        assert_eq!(u.inner_type, RegseqType::Scalar(ScalarType::U32));
+        match &u.kind {
+            UserDataKind::ZeroInit { inner_type } => {
+                assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U32));
+            }
+            other => panic!("expected ZeroInit, got {other:?}"),
+        }
     }
 }

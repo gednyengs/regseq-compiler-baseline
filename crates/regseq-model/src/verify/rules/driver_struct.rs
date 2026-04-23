@@ -8,11 +8,14 @@
 //!   identifier strings count as unpopulated.
 //! - **No duplicate IDs** (spec.md Section 13 line 1426): within a
 //!   single resource kind, every declared id string is unique.
-//! - **User-data fields are `Option<T>` where `T: Copy`** (spec.md
-//!   Section 13 line 1427, Section 4.4): every
-//!   `DriverStruct.user_data` field's `inner_type` represents a `Copy`
-//!   type. The walker recurses into user-defined structs/enums so
-//!   nested non-Copy fields are caught.
+//! - **User-data fields are admitted by one of two rules**: Rule 1
+//!   (zero-init-friendly whitelist) or Rule 2 (`Option<T>` where
+//!   `T: Copy`). Every `DriverStruct.user_data` field's
+//!   `UserDataKind` is matched, and the inner type of either variant
+//!   is validated to be `Copy` (the walker recurses into user-defined
+//!   structs/enums so nested non-Copy fields are caught). Raised as
+//!   [`VerifierErrorKind::UserDataFieldNotZeroInitOrOptionCopy`] on
+//!   violations.
 //!
 //! All three rules walk every Driver module the model carries (the
 //! verifier framework does not require the "exactly one Driver
@@ -28,7 +31,7 @@ use crate::model::driver::DriverStruct;
 use crate::model::framework::{FrameworkTypeKind, TypeDefClassification};
 use crate::model::module::Module;
 use crate::model::regseq_model::RegseqModel;
-use crate::model::resources::{SyncKind, UserDataField};
+use crate::model::resources::{SyncKind, UserDataField, UserDataKind};
 use crate::model::type_def::{TypeDef, TypeDefKind};
 
 use super::super::{VerifierError, VerifierErrorKind, VerifierLevel, VerifierProvenance};
@@ -212,11 +215,108 @@ where
 fn user_data_option_copy(model: &RegseqModel, driver: &DriverStruct) -> Result<(), VerifierError> {
     let type_defs = collect_type_defs(model);
     for u in &driver.user_data {
-        if !is_copy(&u.inner_type, &type_defs, &mut Vec::new()) {
-            return Err(user_data_not_copy(model, u, &u.inner_type));
+        let accepted = match &u.kind {
+            // Rule 2: Option<T> admits any T: Copy.
+            UserDataKind::Option { inner_type } => is_copy(inner_type, &type_defs, &mut Vec::new()),
+            // Rule 1: ZeroInit admits only the Stage-1 whitelist
+            // (u8/u16/u32/u64/bool, arrays of accepted types, and
+            // user-defined Copy structs recursively composed of
+            // accepted fields). Signed ints, usize/isize, floats,
+            // char, u128/i128, Option, Result, Slice, Ref, Unit,
+            // Never, framework types, abstraction types, enums are
+            // all rejected.
+            UserDataKind::ZeroInit { inner_type } => {
+                rule1_whitelist(inner_type, &type_defs, &mut Vec::new())
+            }
+        };
+        if !accepted {
+            let inner = match &u.kind {
+                UserDataKind::Option { inner_type } | UserDataKind::ZeroInit { inner_type } => {
+                    inner_type
+                }
+            };
+            return Err(user_data_not_copy(model, u, inner));
         }
     }
     Ok(())
+}
+
+/// Verifier-side Rule-1 zero-init whitelist predicate.
+///
+/// Admits the same shapes the construction-side walker does, but on
+/// the portable [`RegseqType`] surface (the verifier does not have
+/// access to `rustc` types). Returns `true` iff `ty` is:
+/// - A whitelisted scalar (`u8`, `u16`, `u32`, `u64`).
+/// - `Bool`.
+/// - An `Array` whose element is itself accepted.
+/// - A `Defined(TypeDefId)` resolving to a user-defined struct whose
+///   fields are every one accepted.
+///
+/// Every other variant (signed integers and platform-width scalars
+/// via `is_scalar_rule1`; `Unit`, `Never`, `Option`, `Result`,
+/// `Slice`, `Ref`; enum/union variants of user-defined types; and
+/// abstraction / framework types) is rejected.
+fn rule1_whitelist(
+    ty: &RegseqType,
+    type_defs: &BTreeMap<DeclId, &TypeDef>,
+    visiting: &mut Vec<DeclId>,
+) -> bool {
+    match ty {
+        RegseqType::Bool => true,
+        RegseqType::Scalar(s) => is_scalar_rule1(*s),
+        RegseqType::Array(inner, _) => rule1_whitelist(inner, type_defs, visiting),
+        RegseqType::Defined(target) => {
+            let decl_id = target.decl_id();
+            if visiting.contains(&decl_id) {
+                return true;
+            }
+            let Some(def) = type_defs.get(&decl_id) else {
+                // Dangling reference: the cross-item rule bucket
+                // already reports this separately. Mirror `is_copy`
+                // and return `true` here to avoid double-reporting.
+                return true;
+            };
+            match &def.classification {
+                TypeDefClassification::UserDefined => {
+                    visiting.push(decl_id);
+                    let accepted = match &def.kind {
+                        TypeDefKind::Struct { fields } => fields
+                            .iter()
+                            .all(|f| rule1_whitelist(&f.ty, type_defs, visiting)),
+                        // Enums are rejected under Rule 1 regardless
+                        // of whether every variant happens to be
+                        // field-free (the construction-side walker
+                        // applies the same narrowing).
+                        TypeDefKind::Enum { .. } => false,
+                    };
+                    visiting.pop();
+                    accepted
+                }
+                // Abstraction types (Clock, Mutex, etc.) are
+                // resource handles, not zero-init data.
+                TypeDefClassification::Abstraction(_) => false,
+                // Framework types are scalar wrappers at the facade;
+                // they are out of the Stage-1 user-data whitelist.
+                TypeDefClassification::Framework(_) => false,
+            }
+        }
+        RegseqType::Unit
+        | RegseqType::Never
+        | RegseqType::Option(_)
+        | RegseqType::Result(..)
+        | RegseqType::Slice(_)
+        | RegseqType::Ref(..) => false,
+    }
+}
+
+/// Stage-1 Rule-1 scalar predicate. Admits exactly `u8`, `u16`,
+/// `u32`, `u64`; rejects every other [`ScalarType`] variant
+/// (signed ints, platform-width `Usize`/`Isize`).
+fn is_scalar_rule1(s: ScalarType) -> bool {
+    matches!(
+        s,
+        ScalarType::U8 | ScalarType::U16 | ScalarType::U32 | ScalarType::U64
+    )
 }
 
 fn user_data_not_copy(
@@ -227,7 +327,7 @@ fn user_data_not_copy(
     let decl_id = field.id.decl_id();
     VerifierError {
         level: VerifierLevel::DriverStruct,
-        kind: VerifierErrorKind::UserDataFieldNotOptionCopy {
+        kind: VerifierErrorKind::UserDataFieldNotZeroInitOrOptionCopy {
             field: decl_id,
             offending_ty: format!("{:?}", offending),
         },
@@ -236,8 +336,8 @@ fn user_data_not_copy(
             lookup_origin(model, decl_id),
         ),
         details: format!(
-            "user-data field (DeclId {}) inner type {:?} is not Copy; spec requires \
-             Option<T> where T: Copy",
+            "user-data field (DeclId {}) inner type {:?} is not accepted; spec requires \
+             either a zero-init-whitelisted type (Rule 1) or Option<T> where T: Copy (Rule 2)",
             decl_id.index(),
             offending
         ),

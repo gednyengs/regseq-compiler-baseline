@@ -453,6 +453,53 @@ impl LinuxPropertyScalar {
     }
 }
 
+/// Supported user-data scalar types for Linux realization.
+///
+/// Mirrors the Stage-1 Rule-1 zero-init whitelist (`u8`, `u16`, `u32`,
+/// `u64`, `bool`). The Linux plan admits only these scalar shapes as
+/// user-data fields in `shared_struct_fields`; every other shape
+/// (Rule-1 arrays or Copy structs, and Rule-2 `Option<T>`) fails
+/// plan construction with
+/// [`LinuxPlanError::UnsupportedUserDataShape`].
+#[derive(Debug, Clone, Copy, Eq, PartialEq)]
+pub enum LinuxUserDataScalar {
+    U8,
+    U16,
+    U32,
+    U64,
+    Bool,
+}
+
+impl LinuxUserDataScalar {
+    /// Map a portable [`regseq_model::ir::RegseqType`] to the typed
+    /// variant. Returns `None` for every type outside the Stage-1
+    /// scalar whitelist (including `Array`, `Defined`, `Option`,
+    /// `Slice`, `Ref`, `Result`, and all signed or 128-bit integer
+    /// spellings in `ScalarType`).
+    pub fn parse_from_regseq_type(ty: &regseq_model::ir::RegseqType) -> Option<Self> {
+        use regseq_model::ir::{RegseqType, ScalarType};
+        Some(match ty {
+            RegseqType::Scalar(ScalarType::U8) => Self::U8,
+            RegseqType::Scalar(ScalarType::U16) => Self::U16,
+            RegseqType::Scalar(ScalarType::U32) => Self::U32,
+            RegseqType::Scalar(ScalarType::U64) => Self::U64,
+            RegseqType::Bool => Self::Bool,
+            _ => return None,
+        })
+    }
+
+    /// Linux kernel C type name (e.g. `"u32"`, `"bool"`).
+    pub fn c_type(self) -> &'static str {
+        match self {
+            Self::U8 => "u8",
+            Self::U16 => "u16",
+            Self::U32 => "u32",
+            Self::U64 => "u64",
+            Self::Bool => "bool",
+        }
+    }
+}
+
 /// Call shape for a Linux property-read API.
 #[derive(Debug, Clone, Copy, Eq, PartialEq)]
 pub enum LinuxPropertyReadShape {

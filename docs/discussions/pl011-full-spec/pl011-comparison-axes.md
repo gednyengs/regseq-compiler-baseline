@@ -7,7 +7,7 @@ ARM PrimeCell PL011 driver to the corresponding OS-native PL011 driver.
 The axes documented here are the sole source of "comparability" for the
 paper's central claim. Every requirement in
 `pl011-spec-requirements.md`, every workload in `pl011-workloads.md`,
-and every row in `pl011-comparison-matrix.md` traces back to an axis
+and every row in `pl011-feature-matrix.md` traces back to an axis
 defined here (or to correctness/safety or backend-contract rules,
 which are tracked separately).
 
@@ -50,15 +50,15 @@ These are the concrete deployed roles in which a PL011 UART actually
 does work in a system. They are the reason the hardware exists. The
 axes in Sections 3-5 are derived from what these use cases demand.
 
-| ID | Use case | Summary |
-|----|----------|---------|
-| U1 | Interactive shell TTY | A human types at a terminal; the driver mediates echo, line editing, and control characters between a shell and the wire. |
-| U2 | System console output | Kernel or firmware writes diagnostic text to the UART during boot and runtime. The driver must deliver bytes reliably under contention. |
-| U3 | Inter-device serial link | Two devices exchange data via the UART (e.g., SBC talking to a micro). Bidirectional byte stream at negotiated baud. |
-| U4 | Diagnostic / debug port | A developer tool (JTAG probe, OEM diagnostics, log capture) attaches to the UART to extract logs or interact with device under test. |
-| U5 | Firmware update channel | A bootloader or recovery agent receives a firmware image over UART. Bulk RX at a sustained rate, usually with handshaking and error detection. |
-| U6 | Sensor or peripheral data ingestion | An embedded device receives structured data from an attached peripheral (GPS NMEA at 9600, modem AT-set, 3D printer G-code, industrial sensor). |
-| U7 | Machine-to-machine framed protocol | A framed protocol (SLIP, PPP, custom binary protocol) runs over the UART stream. Requires byte-exact transport and occasionally framing signals like BREAK. |
+| ID  | Use case                            | Summary                                                                                                                                                     |
+| --- | ----------------------------------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| U1  | Interactive shell TTY               | A human types at a terminal; the driver mediates echo, line editing, and control characters between a shell and the wire.                                   |
+| U2  | System console output               | Kernel or firmware writes diagnostic text to the UART during boot and runtime. The driver must deliver bytes reliably under contention.                     |
+| U3  | Inter-device serial link            | Two devices exchange data via the UART (e.g., SBC talking to a micro). Bidirectional byte stream at negotiated baud.                                        |
+| U4  | Diagnostic / debug port             | A developer tool (JTAG probe, OEM diagnostics, log capture) attaches to the UART to extract logs or interact with device under test.                        |
+| U5  | Firmware update channel             | A bootloader or recovery agent receives a firmware image over UART. Bulk RX at a sustained rate, usually with handshaking and error detection.              |
+| U6  | Sensor or peripheral data ingestion | An embedded device receives structured data from an attached peripheral (GPS NMEA at 9600, modem AT-set, 3D printer G-code, industrial sensor).             |
+| U7  | Machine-to-machine framed protocol  | A framed protocol (SLIP, PPP, custom binary protocol) runs over the UART stream. Requires byte-exact transport and occasionally framing signals like BREAK. |
 
 Use cases considered and deferred:
 
@@ -83,18 +83,18 @@ independently observed and compared. Each axis is tagged with the
 system-use cases that imply it. Failures on a functional axis mean
 the driver does not correctly realize a use case.
 
-| ID | Axis | Implied by | Primary observable |
-|----|------|------------|---------------------|
-| F1 | TX path byte integrity | U1, U2, U3, U4, U6, U7 | Byte-for-byte match between guest-side write stream and host-side capture. |
-| F2 | RX path byte integrity | U1, U3, U5, U6, U7 | Byte-for-byte match between host-side injected stream and guest-side read stream. |
-| F3 | Baud rate configuration correctness | U1, U3, U4, U5, U6 | Programmed baud produces the expected wire rate (inferred from throughput matching). |
-| F4 | Line format configuration correctness | U1, U6, U7 | Word length, stop bits, parity configurable and honored; frames not mangled. |
-| F5 | Line-error reporting | U5, U6, U7 | Parity, framing, break, and overrun conditions are detected and surfaced to the OS. |
-| F6 | Interrupt-driven service lifecycle | U1, U2, U3, U5 | IRQ sources enabled, serviced, and cleared without loss under normal load. |
-| F7 | Enable/disable/reconfigure lifecycle | U1, U3, U4 | Driver can be opened, reconfigured, and closed without data corruption around transitions. |
-| F8 | Break generation | U7 | Driver can emit a break condition when asked; peer observes the break. |
-| F9 | Hardware flow control (CRTSCTS) | U3, U5, U6 | When enabled, auto-RTS and CTS-driven transmit pacing behave as the native driver behaves. |
-| F10 | RX throttle / unthrottle | U1, U5 | Driver can stop accepting bytes under buffer pressure, then resume, without data loss on the peer side if flow control is active, and with controlled loss rules otherwise. |
+| ID  | Axis                                  | Implied by             | Primary observable                                                                                                                                                          |
+| --- | ------------------------------------- | ---------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| F1  | TX path byte integrity                | U1, U2, U3, U4, U6, U7 | Byte-for-byte match between guest-side write stream and host-side capture.                                                                                                  |
+| F2  | RX path byte integrity                | U1, U3, U5, U6, U7     | Byte-for-byte match between host-side injected stream and guest-side read stream.                                                                                           |
+| F3  | Baud rate configuration correctness   | U1, U3, U4, U5, U6     | Programmed baud produces the expected wire rate (inferred from throughput matching).                                                                                        |
+| F4  | Line format configuration correctness | U1, U6, U7             | Word length, stop bits, parity configurable and honored; frames not mangled.                                                                                                |
+| F5  | Line-error reporting                  | U5, U6, U7             | Parity, framing, break, and overrun conditions are detected and surfaced to the OS.                                                                                         |
+| F6  | Interrupt-driven service lifecycle    | U1, U2, U3, U5         | IRQ sources enabled, serviced, and cleared without loss under normal load.                                                                                                  |
+| F7  | Enable/disable/reconfigure lifecycle  | U1, U3, U4             | Driver can be opened, reconfigured, and closed without data corruption around transitions.                                                                                  |
+| F8  | Break generation                      | U7                     | Driver can emit a break condition when asked; peer observes the break.                                                                                                      |
+| F9  | Hardware flow control (CRTSCTS)       | U3, U5, U6             | When enabled, auto-RTS and CTS-driven transmit pacing behave as the native driver behaves.                                                                                  |
+| F10 | RX throttle / unthrottle              | U1, U5                 | Driver can stop accepting bytes under buffer pressure, then resume, without data loss on the peer side if flow control is active, and with controlled loss rules otherwise. |
 
 Notes:
 
@@ -111,15 +111,15 @@ Performance axes compare Regseq-generated vs native driver under
 identical QEMU setups. All comparisons are relative. Absolute
 wire-rate claims are not paper-load-bearing.
 
-| ID | Axis | Implied by | Primary observable |
-|----|------|------------|---------------------|
-| P1 | Sustained TX throughput | U2, U3, U4, U5 | Bytes/second of a sustained TX workload at fixed baud. |
-| P2 | Sustained RX throughput | U3, U5, U6 | Bytes/second of a sustained RX workload at fixed baud. |
-| P3 | RX robustness under CPU stress | U2, U3, U5 | Byte loss rate of a sustained RX stream while guest runs a CPU-bound background workload. |
-| P4 | Interrupts per KiB (batching efficiency) | U3, U5 | ISR invocation count per KiB transferred under sustained RX or TX. |
-| P5 | Guest CPU cost per byte | U2, U5 | Guest CPU time per byte of a sustained workload (where QEMU / guest perf counters are available). |
-| P6 | Small-write latency | U1, U7 | p50/p95/p99 wall time from driver write call to peer observation of byte, under light load. |
-| P7 | FIFO threshold responsiveness | U3, U5 | Observed interrupt cadence correlates with the configured IFLS level. |
+| ID  | Axis                                     | Implied by     | Primary observable                                                                                |
+| --- | ---------------------------------------- | -------------- | ------------------------------------------------------------------------------------------------- |
+| P1  | Sustained TX throughput                  | U2, U3, U4, U5 | Bytes/second of a sustained TX workload at fixed baud.                                            |
+| P2  | Sustained RX throughput                  | U3, U5, U6     | Bytes/second of a sustained RX workload at fixed baud.                                            |
+| P3  | RX robustness under CPU stress           | U2, U3, U5     | Byte loss rate of a sustained RX stream while guest runs a CPU-bound background workload.         |
+| P4  | Interrupts per KiB (batching efficiency) | U3, U5         | ISR invocation count per KiB transferred under sustained RX or TX.                                |
+| P5  | Guest CPU cost per byte                  | U2, U5         | Guest CPU time per byte of a sustained workload (where QEMU / guest perf counters are available). |
+| P6  | Small-write latency                      | U1, U7         | p50/p95/p99 wall time from driver write call to peer observation of byte, under light load.       |
+| P7  | FIFO threshold responsiveness            | U3, U5         | Observed interrupt cadence correlates with the configured IFLS level.                             |
 
 DMA-bearing performance: P1, P2, and P5 extend to DMA paths once
 DMA is internally staged. DMA is not a separate axis; it is a
@@ -145,22 +145,22 @@ find or use the driver.
 
 Linux integration axes:
 
-| ID | Axis | Implied by | Observable |
-|----|------|------------|------------|
-| IL1 | Out-of-tree module builds and loads | all | `.ko` builds against pinned kernel; `insmod` / `modprobe` succeeds. |
-| IL2 | AMBA probe binds the reserved device | U1, U3, U4 | Driver's probe runs on the reserved second PL011 without stealing the console UART. |
-| IL3 | Usable tty device | U1, U4 | `/dev/ttyAMA<N>` is created; `stty`, `open`, `read`, `write`, `poll`/`select`, and `close` work. |
-| IL4 | serial_core integration hooks | U1, U5 | `uart_ops` callbacks invoked as expected for start_tx / stop_tx / startup / shutdown / set_termios etc.; serial counters update. |
-| IL5 | Devicetree / ACPI binding match | all | Binding to the intended device via the platform's configuration mechanism. |
+| ID  | Axis                                 | Implied by | Observable                                                                                                                       |
+| --- | ------------------------------------ | ---------- | -------------------------------------------------------------------------------------------------------------------------------- |
+| IL1 | Out-of-tree module builds and loads  | all        | `.ko` builds against pinned kernel; `insmod` / `modprobe` succeeds.                                                              |
+| IL2 | AMBA probe binds the reserved device | U1, U3, U4 | Driver's probe runs on the reserved second PL011 without stealing the console UART.                                              |
+| IL3 | Usable tty device                    | U1, U4     | `/dev/ttyAMA<N>` is created; `stty`, `open`, `read`, `write`, `poll`/`select`, and `close` work.                                 |
+| IL4 | serial_core integration hooks        | U1, U5     | `uart_ops` callbacks invoked as expected for start_tx / stop_tx / startup / shutdown / set_termios etc.; serial counters update. |
+| IL5 | Devicetree / ACPI binding match      | all        | Binding to the intended device via the platform's configuration mechanism.                                                       |
 
 Zephyr integration axes:
 
-| ID | Axis | Implied by | Observable |
-|----|------|------------|------------|
-| IZ1 | Builds in canonical app on `qemu_cortex_a53` | all | Zephyr sample app builds and boots with the generated driver. |
-| IZ2 | Devicetree `arm,pl011` binding | all | Node matches the generated driver; init sequence runs. |
-| IZ3 | `uart_driver_api` participation | U1, U3 | `uart_poll_in`, `uart_poll_out`, `uart_configure`, `uart_irq_*` APIs work against the generated driver. |
-| IZ4 | Interrupt-driven API path | U1, U3, U5 | `uart_irq_callback_set` + `uart_irq_rx_enable` / `uart_irq_tx_enable` behave against the generated driver. |
+| ID  | Axis                                         | Implied by | Observable                                                                                                 |
+| --- | -------------------------------------------- | ---------- | ---------------------------------------------------------------------------------------------------------- |
+| IZ1 | Builds in canonical app on `qemu_cortex_a53` | all        | Zephyr sample app builds and boots with the generated driver.                                              |
+| IZ2 | Devicetree `arm,pl011` binding               | all        | Node matches the generated driver; init sequence runs.                                                     |
+| IZ3 | `uart_driver_api` participation              | U1, U3     | `uart_poll_in`, `uart_poll_out`, `uart_configure`, `uart_irq_*` APIs work against the generated driver.    |
+| IZ4 | Interrupt-driven API path                    | U1, U3, U5 | `uart_irq_callback_set` + `uart_irq_rx_enable` / `uart_irq_tx_enable` behave against the generated driver. |
 
 Axes intentionally not included in the current claim:
 
@@ -173,8 +173,7 @@ Axes intentionally not included in the current claim:
 ## 6. Tolerance and verdict discipline
 
 Axes here enumerate WHAT is compared. `pl011-workloads.md` defines
-HOW each axis is exercised and WITH WHAT TOLERANCE. The matrix in
-`pl011-comparison-matrix.md` records the measured results.
+HOW each axis is exercised and WITH WHAT TOLERANCE.
 
 Tolerance rules (to be refined in `pl011-workloads.md`):
 
@@ -193,17 +192,17 @@ Axes that were considered and explicitly dropped, with rationale.
 This ledger exists so reviewers can see the derivation was
 principled rather than selective.
 
-| Dropped axis | Rationale |
-|--------------|-----------|
-| IrDA / SIR throughput | Not UART-mode; deferred along with the SIR encoding scope pin (U-DEF-2). |
-| RS-485 half-duplex | Board-dependent (requires RS-485 transceiver + direction-control hardware); rare on available evaluation platforms. Deferred with U-DEF-3. Spec surface models it optionally but it is not paper-load-bearing. |
-| Wire-rate absolute throughput on physical PL011 | Requires absolute-physical measurement; paper uses QEMU-relative evaluation. Captured as a deferred requirement. |
-| Interrupt latency under kernel panic / oops path | Linux-specific timing-critical integration; adjacent to console takeover, which is deferred. |
-| Full modem signaling (DTR, OUT1, OUT2) as a paper axis | Board-wiring dependent; evaluation platforms may not expose the lines. Modeled in the spec surface, not claim-load-bearing. |
-| Loopback as an independent axis | Diagnostic tool, not a system-use case (U-DEF-4). Used to drive F1/F2 workloads but not reported separately. |
-| Console takeover (kernel printk) | OS-specific deep integration; deferred with the Linux console use case (U-DEF-1). |
-| Per-chip revision quirks (`AMBA_REV` branches, etc.) | Out of scope per the PrimeCell scope pin; variant work is deferred. |
-| sysfs / procfs administrative interfaces | Administrative, not driver-behavior. |
+| **Dropped axis**                                       | **Rationale**                                                                                                              |
+| ------------------------------------------------------ | -------------------------------------------------------------------------------------------------------------------------- |
+| IrDA / SIR throughput                                  | Not UART-mode; deferred along with the SIR encoding scope pin (U-DEF-2).                                                   |
+| RS-485 half-duplex                                     | Board-dependent (requires RS-485 transceiver and direction-control hardware); rare on available eval. platforms. Deferred. |
+| Wire-rate absolute throughput on physical PL011        | Requires absolute-physical measurement; paper uses QEMU-relative evaluation. Captured as a deferred requirement.           |
+| Interrupt latency under kernel panic / oops path       | Linux-specific, timing-critical integration; adjacent to console takeover, which is deferred.                              |
+| Full modem signaling (DTR, OUT1, OUT2) as a paper axis | Board-wiring dependent; evaluation platforms may not expose the lines. Modeled in the spec, not claim-load-bearing.        |
+| Loopback as an independent axis                        | Diagnostic tool, not a system-use case (U-DEF-4). Used to drive F1/F2 workloads but not reported separately.               |
+| Console takeover (kernel printk)                       | OS-specific deep integration; deferred with the Linux console use case (U-DEF-1).                                          |
+| Per-chip revision quirks (`AMBA_REV` branches, etc.)   | Out of scope per the PrimeCell scope pin; variant work is deferred.                                                        |
+| sysfs / procfs administrative interfaces               | Administrative, not driver-behavior.                                                                                       |
 
 ## 8. Review discipline
 

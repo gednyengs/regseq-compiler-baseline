@@ -1,13 +1,20 @@
 # PL011 Cross-OS Feature Matrix
 
 This note summarizes the high-level PL011 hardware functionalities
-captured by the three PL011 drivers in the current corpus:
+captured by the four PL011 drivers in the current corpus:
 
 - Linux
 - FreeBSD
 - Zephyr
+- Windows 10 IoT Core (SerCx2 WDF driver; added after this matrix's
+  original three-OS version was written)
 
-There is no Windows PL011 driver in the current corpus.
+The matrix tables below still reflect the original three-OS
+comparison. Windows features are captured in
+`pl011-comparison-axes.md` and `pl011-spec-requirements.md` via
+the outcome-oriented axes derivation; updating this matrix to a
+four-column form is housekeeping only and does not change the
+paper claim.
 
 The goal is to identify:
 
@@ -23,31 +30,30 @@ Legend:
 - `P` = partial / conditional / limited
 - `N` = not implemented in the corpus driver
 
-| Hardware functionality | Linux | FreeBSD | Zephyr | Notes |
-| --- | --- | --- | --- | --- |
-| Polled TX/RX data path | Y | Y | Y | All three support low-level character I/O for boot/console/debug style use. |
-| Interrupt-driven TX/RX data path | Y | Y | Y | All three support IRQ-driven FIFO service. |
-| Baud-rate programming | Y | Y | Y | All three program integer/fractional divisors. |
-| Line-format configuration | Y | Y | Y | All three cover word length / parity / stop bits. |
-| FIFO enable/disable and threshold control | Y | Y | Y | All three manage FIFO mode and interrupt thresholds. |
-| UART enable/disable sequencing | Y | Y | Y | All three implement explicit enable/disable ordering. |
-| Error detection on RX path | Y | Y | Y | All three inspect error conditions during receive handling. |
-| Hardware revision / variant handling | Y | Y | Y | Linux is richest; FreeBSD and Zephyr also include variant or revision logic. |
-| Clock integration / clock-derived baud logic | Y | P | Y | Linux and Zephyr actively integrate clocks; FreeBSD mainly infers clock or consumes firmware state. |
-| Interrupt mask lifecycle / selective IRQ control | Y | Y | Y | All three manage interrupt mask state explicitly. |
-| DMA TX | Y | N | N | Linux only in current corpus. |
-| DMA RX | Y | N | N | Linux only in current corpus. |
-| Hardware flow control (RTS/CTS) | Y | N | Y | FreeBSD does not implement it. |
-| Modem status signals / modem control | Y | N | N | Linux only in current corpus. |
-| RS-485 half-duplex support | Y | N | N | Linux only in current corpus. |
-| Break generation / break control | Y | N | N | Linux only in current corpus. |
-| Loopback exposure | P | N | N | Linux exposes it through generic serial control paths; others do not. |
-| IrDA / SIR mode | P | N | P | Present in hardware, but not meaningfully exposed in current drivers. |
-| Pinctrl integration | Y | N | Y | Linux and Zephyr integrate pin configuration; FreeBSD corpus driver does not. |
-| Reset-controller integration | N | N | Y | Zephyr only in current corpus. |
-| Suspend/resume or PM-aware register preservation | Y | N | Y | Linux and Zephyr have real PM-aware handling. |
-| Console / early-console special paths | Y | Y | P | Strongest in Linux, present in FreeBSD, less central in Zephyr corpus driver. |
-| Board / SoC-specific hooks or quirks | Y | Y | Y | All three have some platform-specific adaptation logic. |
+| Hardware functionality                           | Linux | FreeBSD | Zephyr | Notes                                                                                               |
+| ------------------------------------------------ | ----- | ------- | ------ | --------------------------------------------------------------------------------------------------- |
+| Polled TX/RX data path                           | Y     | Y       | Y      | All three support low-level character I/O for boot/console/debug style use.                         |
+| Interrupt-driven TX/RX data path                 | Y     | Y       | Y      | All three support IRQ-driven FIFO service.                                                          |
+| Baud-rate programming                            | Y     | Y       | Y      | All three program integer/fractional divisors.                                                      |
+| Line-format configuration                        | Y     | Y       | Y      | All three cover word length / parity / stop bits.                                                   |
+| FIFO enable/disable and threshold control        | Y     | Y       | Y      | All three manage FIFO mode and interrupt thresholds.                                                |
+| UART enable/disable sequencing                   | Y     | Y       | Y      | All three implement explicit enable/disable ordering.                                               |
+| Error detection on RX path                       | Y     | Y       | Y      | All three inspect error conditions during receive handling.                                         |
+| Hardware revision / variant handling             | Y     | Y       | Y      | Linux is richest; FreeBSD and Zephyr also include variant or revision logic.                        |
+| Clock integration / clock-derived baud logic     | Y     | P       | Y      | Linux and Zephyr actively integrate clocks; FreeBSD mainly infers clock or consumes firmware state. |
+| Interrupt mask lifecycle / selective IRQ control | Y     | Y       | Y      | All three manage interrupt mask state explicitly.                                                   |
+| DMA TX                                           | Y     | N       | N      | Linux only in current corpus.                                                                       |
+| DMA RX                                           | Y     | N       | N      | Linux only in current corpus.                                                                       |
+| Hardware flow control (RTS/CTS)                  | Y     | N       | Y      | FreeBSD does not implement it.                                                                      |
+| Modem status signals / modem control             | Y     | N       | N      | Linux only in current corpus.                                                                       |
+| RS-485 half-duplex support                       | Y     | N       | N      | Linux only in current corpus.                                                                       |
+| Break generation / break control                 | Y     | N       | N      | Linux only in current corpus.                                                                       |
+| Loopback exposure                                | P     | N       | N      | Linux exposes it through generic serial control paths; others do not.                               |
+| Pinctrl integration                              | Y     | N       | Y      | Linux and Zephyr integrate pin configuration; FreeBSD corpus driver does not.                       |
+| Reset-controller integration                     | N     | N       | Y      | Zephyr only in current corpus.                                                                      |
+| Suspend/resume or PM-aware register preservation | Y     | N       | Y      | Linux and Zephyr have real PM-aware handling.                                                       |
+| Console / early-console special paths            | Y     | Y       | P      | Strongest in Linux, present in FreeBSD, less central in Zephyr corpus driver.                       |
+| Board / SoC-specific hooks or quirks             | Y     | Y       | Y      | All three have some platform-specific adaptation logic.                                             |
 
 ## Common baseline across all three OSes
 
@@ -57,11 +63,11 @@ The common PL011 baseline evidenced in Linux, FreeBSD, and Zephyr is:
 2. interrupt-driven TX/RX
 3. baud-rate programming
 4. line-format configuration
-5. FIFO control
-6. explicit UART enable/disable sequencing
+5. FIFO control and trigger programming
+6. UART enable/disable sequencing
 7. RX-path error handling
-8. interrupt mask lifecycle
-9. some form of variant or revision handling
+8. interrupt mask and status lifecycle
+9. hardware revision / variant handling
 
 This is the strongest candidate for the **mandatory core** of a unified
 PL011 Regseq spec.
@@ -79,8 +85,8 @@ the current corpus is:
 6. UART enable/disable sequencing
 7. RX-path error handling
 8. interrupt mask and status lifecycle
-9. clock integration
-10. hardware revision / variant handling
+9. hardware revision / variant handling
+10. clock integration
 11. DMA TX
 12. DMA RX
 13. hardware RTS/CTS flow control

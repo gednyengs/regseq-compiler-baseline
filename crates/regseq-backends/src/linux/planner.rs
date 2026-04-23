@@ -17,7 +17,7 @@ use super::plan::{
     LinuxPropertyScalar, LinuxRegisterBlock, LinuxRegisterDescriptor, LinuxRegisterFieldEntry,
     LinuxRegisterLayout, LinuxRegistrationShape, LinuxRemoveOrchestration, LinuxRemoveStep,
     LinuxSerialCoreRealization, LinuxSharedStructField, LinuxUartOpsBody, LinuxUartOpsEntry,
-    ParamBinding, ReturnAdaptation, SerialPortRole,
+    LinuxUserDataScalar, ParamBinding, ReturnAdaptation, SerialPortRole,
 };
 
 /// Errors that can occur during Linux backend plan construction.
@@ -52,6 +52,21 @@ pub enum LinuxPlanError {
         /// Property identifier from the authored declaration.
         property_id: String,
         /// Authored scalar spelling that failed the lookup.
+        spelling: String,
+    },
+    /// The authored user-data field is not a Stage-1 Linux-emittable
+    /// scalar. The Linux plan admits only
+    /// `UserDataKind::ZeroInit { inner_type: <scalar> }` where the
+    /// inner type is `u8`, `u16`, `u32`, `u64`, or `bool`. Every
+    /// other shape (Rule-1 arrays, Rule-1 Copy structs, Rule-2
+    /// `Option<T>` with any inner type) fails plan construction
+    /// with this variant, mirroring
+    /// [`LinuxPlanError::UnsupportedPropertyScalar`] for properties.
+    #[error("unsupported user-data shape '{spelling}' on field '{field_name}'")]
+    UnsupportedUserDataShape {
+        /// User-data field name from the authored driver struct.
+        field_name: String,
+        /// Rendered portable type spelling that failed the lookup.
         spelling: String,
     },
     /// The driver is a serial-core driver but its probe sequence
@@ -183,6 +198,37 @@ fn build_shared_struct_fields(
             field_name: "port".into(),
             doc: "Serial core port".into(),
         });
+    }
+    // Stage-1 Path A: scalar Rule-1 user-data fields follow the
+    // serial port, preserving declaration order among user-data
+    // entries. Non-scalar user-data (Rule-1 arrays, Rule-1 Copy
+    // structs, Rule-2 `Option<T>`) is rejected here so the C-AST
+    // renderer only ever sees a `<scalar-c-type> <field-name>;`
+    // shape.
+    for u in &plan.resources.user_data {
+        use crate::lowering::plan::UserDataShape;
+        match &u.shape {
+            UserDataShape::ZeroInit { inner_type } => {
+                let scalar =
+                    LinuxUserDataScalar::parse_from_regseq_type(inner_type).ok_or_else(|| {
+                        LinuxPlanError::UnsupportedUserDataShape {
+                            field_name: u.field_name.clone(),
+                            spelling: format!("{:?}", inner_type),
+                        }
+                    })?;
+                fields.push(LinuxSharedStructField {
+                    c_type: scalar.c_type().into(),
+                    field_name: u.field_name.clone(),
+                    doc: format!("User-data field: {}", u.field_name),
+                });
+            }
+            UserDataShape::Option { inner_type } => {
+                return Err(LinuxPlanError::UnsupportedUserDataShape {
+                    field_name: u.field_name.clone(),
+                    spelling: format!("Option<{:?}>", inner_type),
+                });
+            }
+        }
     }
 
     Ok(fields)

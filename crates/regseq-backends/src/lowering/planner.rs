@@ -465,6 +465,13 @@ fn build_resource_obligations(
 
     let bus_identity = build_bus_identity(input)?;
 
+    // Path-A Stage-1 asymmetry: the legacy `DeclarationModel`
+    // pipeline does not yet carry user-data facts. Populate an
+    // empty `user_data` vector so the type compiles; the
+    // RegseqModel-based pipeline (`from_model.rs`) is the
+    // authoritative source for user-data obligations in Stage 1.
+    let user_data = Vec::new();
+
     Ok(ResourceObligations {
         mmio,
         interrupts,
@@ -472,6 +479,7 @@ fn build_resource_obligations(
         clocks,
         resets,
         pinctrl,
+        user_data,
         bus_identity,
     })
 }

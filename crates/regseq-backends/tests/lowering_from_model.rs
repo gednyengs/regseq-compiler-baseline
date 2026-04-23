@@ -306,6 +306,72 @@ fn from_model_populates_diagnostics() {
 }
 
 #[test]
+fn from_model_populates_user_data_obligations() {
+    use regseq_backends::lowering::plan::UserDataShape;
+    use regseq_model::identity::UserDataId;
+    use regseq_model::ir::ScalarType;
+    use regseq_model::model::resources::{UserDataField, UserDataKind};
+
+    let mut model = build_minimal_model();
+
+    let driver_mod = model
+        .root_module
+        .submodules
+        .iter_mut()
+        .find(|m| m.kind == ModuleKind::Driver)
+        .expect("driver submodule");
+    let driver = driver_mod.driver.as_mut().expect("driver struct");
+
+    let ud_field_sym = model.symbols.intern("imsc_shadow");
+    driver.user_data.push(UserDataField {
+        id: UserDataId::from(DeclId::new(40)),
+        field_name: ud_field_sym,
+        kind: UserDataKind::ZeroInit {
+            inner_type: RegseqType::Scalar(ScalarType::U32),
+        },
+    });
+
+    let ud_opt_field_sym = model.symbols.intern("maybe_counter");
+    driver.user_data.push(UserDataField {
+        id: UserDataId::from(DeclId::new(41)),
+        field_name: ud_opt_field_sym,
+        kind: UserDataKind::Option {
+            inner_type: RegseqType::Scalar(ScalarType::U64),
+        },
+    });
+
+    let plan = build_driver_lowering_plan_from_model(&model, &LoweringConfig::default())
+        .expect("plan with user-data");
+
+    assert_eq!(plan.resources.user_data.len(), 2);
+    let scalar = plan
+        .resources
+        .user_data
+        .iter()
+        .find(|u| u.field_name == "imsc_shadow")
+        .expect("imsc_shadow obligation");
+    match &scalar.shape {
+        UserDataShape::ZeroInit { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U32));
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+
+    let opt = plan
+        .resources
+        .user_data
+        .iter()
+        .find(|u| u.field_name == "maybe_counter")
+        .expect("maybe_counter obligation");
+    match &opt.shape {
+        UserDataShape::Option { inner_type } => {
+            assert_eq!(*inner_type, RegseqType::Scalar(ScalarType::U64));
+        }
+        other => panic!("expected Option, got {other:?}"),
+    }
+}
+
+#[test]
 fn from_model_rejects_missing_bus_identity() {
     // A driver without a declared bus identity should fail the
     // structural check, surfacing LoweringError::InvariantViolated.

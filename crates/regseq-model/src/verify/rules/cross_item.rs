@@ -346,13 +346,11 @@ fn resolve_driver(
         resolve_sync(model, declared, r)?;
     }
     for u in &driver.user_data {
-        visit_type(
-            model,
-            declared,
-            u.id.decl_id(),
-            &u.inner_type,
-            "user data field",
-        )?;
+        let inner = match &u.kind {
+            crate::model::resources::UserDataKind::Option { inner_type }
+            | crate::model::resources::UserDataKind::ZeroInit { inner_type } => inner_type,
+        };
+        visit_type(model, declared, u.id.decl_id(), inner, "user data field")?;
     }
     Ok(())
 }

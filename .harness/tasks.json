@@ -1212,6 +1212,15 @@
           ],
           "artifacts": [],
           "fail_reason": null
+        },
+        {
+          "id": "regseq-model-64",
+          "name": "User-data initialization Path A: zero-init whitelist + Option tier",
+          "spec": ".harness/tasks/regseq-model/64-user-data-init-path-a.md",
+          "status": "done",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null
         }
       ]
     },
@@ -1370,6 +1379,7 @@
           "status": "pending",
           "depends_on": [
             "regseq-model-60",
+            "regseq-model-64",
             "regseq-linux-backend-06",
             "regseq-linux-backend-07",
             "regseq-linux-backend-08",

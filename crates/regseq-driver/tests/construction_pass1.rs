@@ -315,11 +315,16 @@ fn positive_specimen_constructs_declaration_skeleton() {
         .iter()
         .find(|u| model.symbols.resolve(u.field_name) == "stats")
         .expect("stats user_data field");
-    assert!(
-        matches!(stats_ud.inner_type, RegseqType::Defined(_)),
-        "Stats inner_type must resolve to Defined(TypeDefId), got {:?}",
-        stats_ud.inner_type
-    );
+    match &stats_ud.kind {
+        regseq_model::model::UserDataKind::Option { inner_type } => {
+            assert!(
+                matches!(inner_type, RegseqType::Defined(_)),
+                "Stats Option inner_type must resolve to Defined(TypeDefId), got {:?}",
+                inner_type
+            );
+        }
+        other => panic!("stats user-data must be Option<Stats>, got {other:?}"),
+    }
 
     // Constants populated.
     assert!(
@@ -781,22 +786,6 @@ pub struct B;
 }
 
 #[test]
-fn negative_invalid_user_data_shape() {
-    const SRC: &str = r#"
-#![no_std]
-#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
-pub struct D {
-    pub bad: u32,
-}
-"#;
-    let outcome = compile_and_build(SRC, "construction_pass1_invalid_user_data");
-    assert!(matches!(
-        outcome,
-        Err(ConstructionError::InvalidUserDataShape { .. })
-    ));
-}
-
-#[test]
 fn negative_user_data_not_copy() {
     const SRC: &str = r#"
 #![no_std]
@@ -812,6 +801,580 @@ pub struct D {
         outcome,
         Err(ConstructionError::UserDataNotCopy { .. })
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Path A (regseq-model-64): Rule-1 zero-init whitelist acceptance tests
+// ---------------------------------------------------------------------------
+
+/// Helper: build a one-field driver specimen with the given field type
+/// and field name, then compile it through the construction harness.
+fn compile_user_data_specimen(
+    field_name: &str,
+    field_type: &str,
+    test_name: &str,
+) -> ConstructionOutcome {
+    let src = format!(
+        r#"
+#![no_std]
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {{
+    pub {field_name}: {field_type},
+}}
+"#,
+    );
+    compile_and_build(&src, test_name)
+}
+
+fn assert_accepted_zero_init(
+    outcome: ConstructionOutcome,
+    field_name: &str,
+    expected: &RegseqType,
+) {
+    let model = outcome.expect("Rule-1 whitelist shape must be accepted");
+    let driver = find_driver_module(&model)
+        .and_then(|m| m.driver.as_ref())
+        .expect("driver struct");
+    let field = driver
+        .user_data
+        .iter()
+        .find(|u| model.symbols.resolve(u.field_name) == field_name)
+        .expect("user-data field present");
+    match &field.kind {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert_eq!(inner_type, expected, "inner_type mismatch");
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+fn assert_rule1_whitelist_rejected(outcome: ConstructionOutcome) {
+    match outcome {
+        Err(ConstructionError::UserDataNotZeroInitWhitelisted { .. }) => {}
+        other => panic!("expected UserDataNotZeroInitWhitelisted, got {other:?}"),
+    }
+}
+
+fn assert_user_data_not_copy(outcome: ConstructionOutcome) {
+    match outcome {
+        Err(ConstructionError::UserDataNotCopy { .. }) => {}
+        other => panic!("expected UserDataNotCopy, got {other:?}"),
+    }
+}
+
+// ----- Positive: scalar arm ------------------------------------------
+
+#[test]
+fn rule1_scalar_u8_accepted() {
+    let outcome = compile_user_data_specimen("s", "u8", "cp1_rule1_u8");
+    assert_accepted_zero_init(
+        outcome,
+        "s",
+        &RegseqType::Scalar(regseq_model::ir::ScalarType::U8),
+    );
+}
+
+#[test]
+fn rule1_scalar_u16_accepted() {
+    let outcome = compile_user_data_specimen("s", "u16", "cp1_rule1_u16");
+    assert_accepted_zero_init(
+        outcome,
+        "s",
+        &RegseqType::Scalar(regseq_model::ir::ScalarType::U16),
+    );
+}
+
+#[test]
+fn rule1_scalar_u32_accepted() {
+    let outcome = compile_user_data_specimen("s", "u32", "cp1_rule1_u32");
+    assert_accepted_zero_init(
+        outcome,
+        "s",
+        &RegseqType::Scalar(regseq_model::ir::ScalarType::U32),
+    );
+}
+
+#[test]
+fn rule1_scalar_u64_accepted() {
+    let outcome = compile_user_data_specimen("s", "u64", "cp1_rule1_u64");
+    assert_accepted_zero_init(
+        outcome,
+        "s",
+        &RegseqType::Scalar(regseq_model::ir::ScalarType::U64),
+    );
+}
+
+#[test]
+fn rule1_scalar_bool_accepted() {
+    let outcome = compile_user_data_specimen("s", "bool", "cp1_rule1_bool");
+    assert_accepted_zero_init(outcome, "s", &RegseqType::Bool);
+}
+
+// ----- Positive: array arm -------------------------------------------
+
+#[test]
+fn rule1_array_u32_4_accepted() {
+    let outcome = compile_user_data_specimen("a", "[u32; 4]", "cp1_rule1_arr_u32_4");
+    let expected = RegseqType::Array(
+        Box::new(RegseqType::Scalar(regseq_model::ir::ScalarType::U32)),
+        4,
+    );
+    assert_accepted_zero_init(outcome, "a", &expected);
+}
+
+#[test]
+fn rule1_array_u8_16_accepted() {
+    let outcome = compile_user_data_specimen("a", "[u8; 16]", "cp1_rule1_arr_u8_16");
+    let expected = RegseqType::Array(
+        Box::new(RegseqType::Scalar(regseq_model::ir::ScalarType::U8)),
+        16,
+    );
+    assert_accepted_zero_init(outcome, "a", &expected);
+}
+
+#[test]
+fn rule1_array_nested_u16_2x8_accepted() {
+    let outcome = compile_user_data_specimen("a", "[[u16; 2]; 8]", "cp1_rule1_arr_nested");
+    let inner = RegseqType::Array(
+        Box::new(RegseqType::Scalar(regseq_model::ir::ScalarType::U16)),
+        2,
+    );
+    let expected = RegseqType::Array(Box::new(inner), 8);
+    assert_accepted_zero_init(outcome, "a", &expected);
+}
+
+// ----- Positive: Copy struct arm -------------------------------------
+
+#[test]
+fn rule1_copy_struct_accepted() {
+    const SRC: &str = r#"
+#![no_std]
+#[derive(Copy, Clone)]
+pub struct Counters { pub rx: u32, pub tx: u32 }
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub counters: Counters,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_copy_struct");
+    let model = outcome.expect("Rule-1 Copy struct must be accepted");
+    let driver = find_driver_module(&model)
+        .and_then(|m| m.driver.as_ref())
+        .expect("driver struct");
+    let field = driver
+        .user_data
+        .iter()
+        .find(|u| model.symbols.resolve(u.field_name) == "counters")
+        .expect("counters user-data field present");
+    match &field.kind {
+        regseq_model::model::UserDataKind::ZeroInit { inner_type } => {
+            assert!(
+                matches!(inner_type, RegseqType::Defined(_)),
+                "Counters inner_type must resolve to Defined(TypeDefId), got {inner_type:?}",
+            );
+        }
+        other => panic!("expected ZeroInit, got {other:?}"),
+    }
+}
+
+// ----- Positive: nested Copy struct arm ------------------------------
+
+#[test]
+fn rule1_nested_copy_struct_accepted() {
+    const SRC: &str = r#"
+#![no_std]
+#[derive(Copy, Clone)]
+pub struct Inner { pub x: u8 }
+#[derive(Copy, Clone)]
+pub struct Outer { pub inner: Inner }
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub state: Outer,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_nested_copy_struct");
+    outcome.expect("nested Rule-1 Copy struct must be accepted");
+}
+
+// ----- Positive: Rule-2 regressions ----------------------------------
+
+#[test]
+fn rule2_option_u32_accepted() {
+    let outcome = compile_user_data_specimen("o", "Option<u32>", "cp1_rule2_opt_u32");
+    let model = outcome.expect("Option<u32> must be accepted");
+    let driver = find_driver_module(&model)
+        .and_then(|m| m.driver.as_ref())
+        .expect("driver struct");
+    let field = driver
+        .user_data
+        .iter()
+        .find(|u| model.symbols.resolve(u.field_name) == "o")
+        .expect("o user-data field present");
+    match &field.kind {
+        regseq_model::model::UserDataKind::Option { inner_type } => {
+            assert_eq!(
+                *inner_type,
+                RegseqType::Scalar(regseq_model::ir::ScalarType::U32)
+            );
+        }
+        other => panic!("expected Option, got {other:?}"),
+    }
+}
+
+#[test]
+fn rule2_option_u8_accepted() {
+    let outcome = compile_user_data_specimen("o", "Option<u8>", "cp1_rule2_opt_u8");
+    outcome.expect("Option<u8> must be accepted");
+}
+
+#[test]
+fn rule2_option_i32_accepted() {
+    // Critical regression check: `i32` is REJECTED by Rule-1
+    // whitelist but MUST remain accepted by Rule-2 because `i32` is
+    // `Copy`. Confirms the two predicates are not conflated.
+    let outcome = compile_user_data_specimen("o", "Option<i32>", "cp1_rule2_opt_i32");
+    let model = outcome.expect("Option<i32> must remain accepted by Rule-2");
+    let driver = find_driver_module(&model)
+        .and_then(|m| m.driver.as_ref())
+        .expect("driver struct");
+    let field = driver
+        .user_data
+        .iter()
+        .find(|u| model.symbols.resolve(u.field_name) == "o")
+        .expect("o user-data field present");
+    match &field.kind {
+        regseq_model::model::UserDataKind::Option { inner_type } => {
+            assert_eq!(
+                *inner_type,
+                RegseqType::Scalar(regseq_model::ir::ScalarType::I32)
+            );
+        }
+        other => panic!("expected Option, got {other:?}"),
+    }
+}
+
+// ----- Negative Category A: Copy but not on whitelist ----------------
+
+#[test]
+fn rule1_reject_copy_enum() {
+    const SRC: &str = r#"
+#![no_std]
+#[derive(Copy, Clone)]
+pub enum E { A, B }
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: E,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_enum");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_copy_union() {
+    const SRC: &str = r#"
+#![no_std]
+#[derive(Copy, Clone)]
+pub union U { pub a: u32, pub b: u32 }
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: U,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_union");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_non_zero_u32() {
+    const SRC: &str = r#"
+#![no_std]
+use core::num::NonZeroU32;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: NonZeroU32,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_nonzero_u32");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_non_null() {
+    const SRC: &str = r#"
+#![no_std]
+use core::ptr::NonNull;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: NonNull<u8>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_nonnull");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_static_reference() {
+    const SRC: &str = r#"
+#![no_std]
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: &'static u32,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_static_ref");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_fn_pointer() {
+    const SRC: &str = r#"
+#![no_std]
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: fn() -> (),
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_fn_ptr");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_raw_pointer() {
+    const SRC: &str = r#"
+#![no_std]
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: *mut u8,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_raw_ptr");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+// ----- Negative Category A: non-Copy types (outer Copy check) --------
+
+#[test]
+fn rule1_reject_box_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+extern crate alloc;
+use alloc::boxed::Box;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: Box<u32>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_box");
+    assert_user_data_not_copy(outcome);
+}
+
+#[test]
+fn rule1_reject_rc_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+extern crate alloc;
+use alloc::rc::Rc;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: Rc<u32>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_rc");
+    assert_user_data_not_copy(outcome);
+}
+
+#[test]
+fn rule1_reject_arc_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+extern crate alloc;
+use alloc::sync::Arc;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: Arc<u32>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_arc");
+    assert_user_data_not_copy(outcome);
+}
+
+#[test]
+fn rule1_reject_cell_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+use core::cell::Cell;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: Cell<u32>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_cell");
+    assert_user_data_not_copy(outcome);
+}
+
+#[test]
+fn rule1_reject_refcell_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+use core::cell::RefCell;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: RefCell<u32>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_refcell");
+    assert_user_data_not_copy(outcome);
+}
+
+#[test]
+fn rule1_reject_unsafecell_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+use core::cell::UnsafeCell;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: UnsafeCell<u32>,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_unsafecell");
+    assert_user_data_not_copy(outcome);
+}
+
+#[test]
+fn rule1_reject_atomic_u32_not_copy() {
+    const SRC: &str = r#"
+#![no_std]
+use core::sync::atomic::AtomicU32;
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D {
+    pub bad: AtomicU32,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_atomic_u32");
+    assert_user_data_not_copy(outcome);
+}
+
+// ----- Negative Category C: out-of-whitelist primitives --------------
+
+#[test]
+fn rule1_reject_i8() {
+    let outcome = compile_user_data_specimen("bad", "i8", "cp1_rule1_reject_i8");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_i16() {
+    let outcome = compile_user_data_specimen("bad", "i16", "cp1_rule1_reject_i16");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_i32() {
+    let outcome = compile_user_data_specimen("bad", "i32", "cp1_rule1_reject_i32");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_i64() {
+    let outcome = compile_user_data_specimen("bad", "i64", "cp1_rule1_reject_i64");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_usize() {
+    let outcome = compile_user_data_specimen("bad", "usize", "cp1_rule1_reject_usize");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_isize() {
+    let outcome = compile_user_data_specimen("bad", "isize", "cp1_rule1_reject_isize");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_f32() {
+    let outcome = compile_user_data_specimen("bad", "f32", "cp1_rule1_reject_f32");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_f64() {
+    let outcome = compile_user_data_specimen("bad", "f64", "cp1_rule1_reject_f64");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_char() {
+    let outcome = compile_user_data_specimen("bad", "char", "cp1_rule1_reject_char");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_u128() {
+    let outcome = compile_user_data_specimen("bad", "u128", "cp1_rule1_reject_u128");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_i128() {
+    let outcome = compile_user_data_specimen("bad", "i128", "cp1_rule1_reject_i128");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_tuple() {
+    let outcome = compile_user_data_specimen("bad", "(u32, u32)", "cp1_rule1_reject_tuple");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+// ----- Negative Category B: generic / projection gate ----------------
+
+#[test]
+fn rule1_reject_generic_param() {
+    const SRC: &str = r#"
+#![no_std]
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D<T: Copy> {
+    pub bad: T,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_generic_param");
+    assert_rule1_whitelist_rejected(outcome);
+}
+
+#[test]
+fn rule1_reject_projection() {
+    const SRC: &str = r#"
+#![no_std]
+
+pub trait HasAssoc { type Assoc: Copy; }
+
+#[rseq::driver(name = "d", compatible = ["x"], bus = "amba")]
+pub struct D<T: HasAssoc> {
+    pub bad: T::Assoc,
+}
+"#;
+    let outcome = compile_and_build(SRC, "cp1_rule1_reject_projection");
+    assert_rule1_whitelist_rejected(outcome);
 }
 
 #[test]

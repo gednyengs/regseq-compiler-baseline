@@ -783,3 +783,24 @@ fn legacy_planner_diagnostic_is_false_when_amba_id_absent() {
     assert_eq!(plan.resources.bus_identity.amba_id, None);
     assert!(!plan.diagnostics.amba_mask_default_applied);
 }
+
+// ---------------------------------------------------------------------------
+// Path A (regseq-model-64): cross-pipeline user-data asymmetry
+// ---------------------------------------------------------------------------
+//
+// The RegseqModel-based pipeline is the authoritative source of
+// user-data obligations in Stage 1. The legacy `DeclarationModel`
+// pipeline does not yet carry user-data facts, so its
+// `ResourceObligations.user_data` is always empty. This test pins
+// the asymmetry in place so a future extension of the legacy
+// pipeline can update it deliberately rather than accidentally.
+
+#[test]
+fn legacy_pipeline_leaves_user_data_empty() {
+    let input = make_analysis_input();
+    let plan = build_driver_lowering_plan(&input).expect("plan");
+    assert!(
+        plan.resources.user_data.is_empty(),
+        "legacy `DeclarationModel` pipeline must leave user_data empty in Stage 1",
+    );
+}

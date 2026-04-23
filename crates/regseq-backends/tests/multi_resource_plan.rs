@@ -106,6 +106,7 @@ fn two_of_everything_plan() -> DriverLoweringPlan {
         clocks,
         resets: vec![],
         pinctrl: vec![],
+        user_data: vec![],
         bus_identity: BusIdentity {
             bus_type: BusType::Platform,
             compatible: vec!["vendor,multi".into()],

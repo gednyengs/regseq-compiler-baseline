@@ -5,6 +5,8 @@
 //! categorized [`DriverStruct`]. Resource binding slots and property
 //! bound_value slots are all left `None`.
 
+use std::collections::HashSet;
+
 use rustc_ast::token::{LitKind, TokenKind};
 use rustc_ast::tokenstream::TokenTree;
 use rustc_hir::def_id::DefId;
@@ -16,7 +18,7 @@ use regseq_model::model::{
     Attrs, ClockDecl, ClockResource, DriverIdentity, DriverStruct, FieldDef, InterruptDecl,
     InterruptResource, MmioDecl, MmioResource, Module, PinCtrlDecl, PinCtrlResource, PropertyField,
     ResetDecl, ResetResource, Shape, SyncKind, SyncResource, TypeDef, TypeDefClassification,
-    TypeDefKind, UserDataField,
+    TypeDefKind, UserDataField, UserDataKind,
 };
 
 use super::walk::BuildContext;
@@ -213,15 +215,18 @@ pub fn build_driver_struct(
             continue;
         }
 
-        // User-data field: must be Option<T> with T scalar-ish (Copy).
+        // User-data field: two acceptance rules per Path A.
+        //
+        // Rule 2: `Option<T>` where `T: Copy`. Admits any user type
+        // that genuinely implements `Copy`.
+        // Rule 1: zero-init-whitelisted types. The outer field type
+        // must be `Copy` AND belong to a compiler-controlled
+        // whitelist of `u8`, `u16`, `u32`, `u64`, `bool`, arrays of
+        // accepted types, and `Copy` structs recursively composed
+        // of accepted fields.
         let rendered = super::walk::rendered_ty_string(f.ty);
+        let middle_field_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
         if is_option(f.ty) {
-            // Resolve Option's inner type through middle-ty and test `Copy`
-            // via `tcx.type_implements_trait` rather than matching a fixed
-            // list of primitive names. This accepts any user type that
-            // genuinely implements `Copy` (e.g., `#[derive(Copy, Clone)]`
-            // structs) and correctly rejects ones that do not.
-            let middle_field_ty = cx.tcx.type_of(field_def_id).instantiate_identity();
             let inner_middle = option_inner_middle_ty(middle_field_ty);
             let inner_hir = extract_option_inner(f.ty);
             let inner_is_copy = inner_middle
@@ -243,13 +248,53 @@ pub fn build_driver_struct(
             driver.user_data.push(UserDataField {
                 id: ud_id,
                 field_name: field_name_sym,
-                inner_type,
+                kind: UserDataKind::Option { inner_type },
             });
         } else {
-            return Err(ConstructionError::InvalidUserDataShape {
-                field: field_prov,
-                rendered_type: rendered,
-            });
+            // Rule 1 path. Reject unresolved generics / projections
+            // FIRST so the Rule-1 whitelist variant surfaces with
+            // the expected diagnostic shape. The Copy trait query
+            // under `fully_monomorphized` would otherwise fail on
+            // `TyKind::Param` and `TyKind::Alias` with a generic
+            // not-Copy verdict even when the field's trait bound
+            // (e.g. `T: Copy`) would structurally admit it.
+            if is_unresolved_generic_or_projection(middle_field_ty) {
+                return Err(ConstructionError::UserDataNotZeroInitWhitelisted {
+                    field: field_prov,
+                    rejected_type: rendered,
+                });
+            }
+            // The outer field type must be `Copy` (reuses the same
+            // helper that Rule 2 uses for the inner type); otherwise
+            // surface `UserDataNotCopy` with the bare rendered type
+            // so non-`Copy` shapes like `Box<u32>`, `Rc<u32>`,
+            // `Arc<u32>`, `Cell<u32>`, `RefCell<u32>`,
+            // `UnsafeCell<u32>`, `AtomicU32` fail with the
+            // familiar variant rather than the Rule-1 whitelist
+            // variant.
+            if !type_implements_copy(cx.tcx, middle_field_ty) {
+                return Err(ConstructionError::UserDataNotCopy {
+                    field: field_prov,
+                    inner_type: rendered,
+                });
+            }
+            let mut visited: HashSet<rustc_middle::ty::Ty<'_>> = HashSet::new();
+            match rule1_whitelist_ty(cx.tcx, &cx.type_def_map, middle_field_ty, &mut visited) {
+                Rule1Outcome::Accepted(inner_type) => {
+                    let ud_id = UserDataId::from(cx.alloc_and_record_public(field_def_id));
+                    driver.user_data.push(UserDataField {
+                        id: ud_id,
+                        field_name: field_name_sym,
+                        kind: UserDataKind::ZeroInit { inner_type },
+                    });
+                }
+                Rule1Outcome::Rejected => {
+                    return Err(ConstructionError::UserDataNotZeroInitWhitelisted {
+                        field: field_prov,
+                        rejected_type: rendered,
+                    });
+                }
+            }
         }
     }
 
@@ -618,4 +663,160 @@ fn sync_kind_for_field(
         None
     };
     Some((kind, payload.or(Some(RegseqType::Unit))))
+}
+
+/// Decide whether `ty` is an unresolved generic parameter or
+/// associated-type projection that Rule 1 must reject up-front.
+/// Covers every `TyKind` variant for which the whitelist walker
+/// cannot make a safe decision without a concrete monomorphized
+/// type.
+fn is_unresolved_generic_or_projection(ty: rustc_middle::ty::Ty<'_>) -> bool {
+    use rustc_middle::ty::TyKind;
+    matches!(
+        ty.kind(),
+        TyKind::Param(_) | TyKind::Alias(..) | TyKind::Bound(..) | TyKind::Placeholder(_)
+    )
+}
+
+// --- Rule-1 zero-init whitelist predicate ---------------------------
+
+/// Classification outcome for the Rule-1 whitelist walker. `Accepted`
+/// carries the faithful [`RegseqType`] representation of the accepted
+/// type; `Rejected` signals the caller should raise
+/// [`ConstructionError::UserDataNotZeroInitWhitelisted`].
+enum Rule1Outcome {
+    Accepted(RegseqType),
+    Rejected,
+}
+
+/// Rule-1 zero-init whitelist walker.
+///
+/// Admits exactly:
+/// - Primitive scalars `u8`, `u16`, `u32`, `u64`, `bool`.
+/// - Arrays `[T; N]` whose element `T` is itself accepted.
+/// - Structs whose fields are all accepted (recursively) and that
+///   the type system treats as `Copy`.
+///
+/// Every other Rust type (signed integers, `usize`/`isize`, floats,
+/// `char`, `u128`/`i128`, tuples, enums, unions, `NonZeroU*`,
+/// `NonNull`, references, function pointers, raw pointers,
+/// unresolved generic parameters / associated-type projections,
+/// slices, trait objects, etc.) is rejected.
+///
+/// The visited set uses monomorphized [`rustc_middle::ty::Ty`] keys
+/// so `Boxed<u32>` and `Boxed<NonZeroU32>` (sharing a `DefId`) are
+/// walked independently. A type already on the stack is treated as
+/// accepted so a hypothetical self-referential struct does not
+/// spin; the outer `Copy` check the caller applies before this
+/// walker still blocks genuinely unsound shapes.
+fn rule1_whitelist_ty<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    type_def_map: &std::collections::HashMap<DefId, regseq_model::identity::TypeDefId>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+    visited: &mut HashSet<rustc_middle::ty::Ty<'tcx>>,
+) -> Rule1Outcome {
+    use rustc_middle::ty::TyKind;
+
+    // Reject generic parameters and unresolved projections BEFORE
+    // applying the whitelist -- Rule 1 requires fully monomorphized
+    // types, and accepting these would be unsound.
+    match ty.kind() {
+        TyKind::Param(_) | TyKind::Alias(..) | TyKind::Bound(..) | TyKind::Placeholder(_) => {
+            return Rule1Outcome::Rejected;
+        }
+        _ => {}
+    }
+
+    if !visited.insert(ty) {
+        // Cycle -- accept at the recursion re-entry site. The outer
+        // Copy check the caller applies before invoking this walker
+        // guarantees we only reach cycle nodes via a Copy-bearing
+        // field, so accepting here cannot admit a non-Copy shape.
+        return Rule1Outcome::Accepted(RegseqType::Unit);
+    }
+    let outcome = rule1_whitelist_ty_inner(tcx, type_def_map, ty, visited);
+    visited.remove(&ty);
+    outcome
+}
+
+fn rule1_whitelist_ty_inner<'tcx>(
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    type_def_map: &std::collections::HashMap<DefId, regseq_model::identity::TypeDefId>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+    visited: &mut HashSet<rustc_middle::ty::Ty<'tcx>>,
+) -> Rule1Outcome {
+    use rustc_middle::ty::TyKind;
+    match ty.kind() {
+        TyKind::Bool => Rule1Outcome::Accepted(RegseqType::Bool),
+        TyKind::Uint(u) => match u {
+            rustc_middle::ty::UintTy::U8 => {
+                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U8))
+            }
+            rustc_middle::ty::UintTy::U16 => {
+                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U16))
+            }
+            rustc_middle::ty::UintTy::U32 => {
+                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U32))
+            }
+            rustc_middle::ty::UintTy::U64 => {
+                Rule1Outcome::Accepted(RegseqType::Scalar(ScalarType::U64))
+            }
+            // u128, usize: rejected by Stage-1 whitelist narrowing.
+            _ => Rule1Outcome::Rejected,
+        },
+        TyKind::Array(inner, len_const) => {
+            let len = match len_const.try_to_target_usize(tcx) {
+                Some(n) => n as usize,
+                None => return Rule1Outcome::Rejected,
+            };
+            match rule1_whitelist_ty(tcx, type_def_map, *inner, visited) {
+                Rule1Outcome::Accepted(elem_ty) => {
+                    Rule1Outcome::Accepted(RegseqType::Array(Box::new(elem_ty), len))
+                }
+                Rule1Outcome::Rejected => Rule1Outcome::Rejected,
+            }
+        }
+        TyKind::Adt(adt, args) => {
+            // Only structs qualify. Enums and unions are explicitly
+            // rejected (Stage-1 whitelist narrowing).
+            if !adt.is_struct() {
+                return Rule1Outcome::Rejected;
+            }
+            // Reject non-local ADTs (NonZeroU*, NonNull, Box, Rc,
+            // Arc, Cell, RefCell, UnsafeCell, AtomicU*, etc.). The
+            // Rule-1 whitelist admits only user-defined Copy
+            // structs whose fields are themselves accepted; the
+            // `TypeDef` map only carries local ADTs, so non-local
+            // ones surface here as missing.
+            let did = adt.did();
+            if !did.is_local() {
+                return Rule1Outcome::Rejected;
+            }
+            let tid = match type_def_map.get(&did) {
+                Some(tid) => *tid,
+                None => return Rule1Outcome::Rejected,
+            };
+            // Walk every field under the substituted args so nested
+            // generics monomorphize correctly. Structs only have one
+            // variant.
+            let variant = adt.non_enum_variant();
+            for field in &variant.fields {
+                let field_ty = field.ty(tcx, args);
+                match rule1_whitelist_ty(tcx, type_def_map, field_ty, visited) {
+                    Rule1Outcome::Accepted(_) => {}
+                    Rule1Outcome::Rejected => return Rule1Outcome::Rejected,
+                }
+            }
+            Rule1Outcome::Accepted(RegseqType::Defined(tid))
+        }
+        // Every other TyKind is rejected. This covers:
+        // - Int (i8..i64, i128), Float (f32, f64), Char
+        // - Tuple (including the unit tuple)
+        // - Enum, Union (handled above via !adt.is_struct())
+        // - Ref, RawPtr, FnPtr, FnDef, Closure, Coroutine
+        // - Dynamic (trait objects), Slice, Str
+        // - Foreign, Error, and the generic-param kinds already
+        //   filtered upstream.
+        _ => Rule1Outcome::Rejected,
+    }
 }

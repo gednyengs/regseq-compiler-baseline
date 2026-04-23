@@ -119,8 +119,42 @@ pub struct ResourceObligations {
     pub resets: Vec<ResetObligation>,
     /// Pin controller obligations.
     pub pinctrl: Vec<PinCtrlObligation>,
+    /// User-data (author-defined driver-state) obligations. Stage-1
+    /// Path A populates this only from the RegseqModel-based pipeline
+    /// (`from_model.rs`); the legacy `DeclarationModel` pipeline
+    /// leaves it empty because it does not yet carry user-data
+    /// facts.
+    pub user_data: Vec<UserDataObligation>,
     /// Explicit portable bus identity carried into lowering.
     pub bus_identity: BusIdentity,
+}
+
+/// Two acceptance rules govern a user-data field; the obligation
+/// records which one admitted it so downstream planners can apply
+/// rule-specific emission choices.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum UserDataShape {
+    /// Rule 1: zero-init whitelist. `inner_type` is the accepted
+    /// bare value's portable type.
+    ZeroInit {
+        /// Portable representation of the field's type.
+        inner_type: regseq_model::ir::RegseqType,
+    },
+    /// Rule 2: `Option<T>` where `T: Copy`. `inner_type` is the
+    /// portable type of `T`.
+    Option {
+        /// Portable representation of the Option inner type.
+        inner_type: regseq_model::ir::RegseqType,
+    },
+}
+
+/// User-data field obligation.
+#[derive(Debug, Clone)]
+pub struct UserDataObligation {
+    /// Field name on the driver struct.
+    pub field_name: String,
+    /// Rule + inner-type carriage for downstream planners.
+    pub shape: UserDataShape,
 }
 
 /// MMIO resource obligation.

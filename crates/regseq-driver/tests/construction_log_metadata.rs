@@ -674,12 +674,12 @@ fn pl011_fixture_contains_info_log_call() {
     )
     .expect("PL011 fixture source must be readable");
     assert!(
-        fixture.contains("regseq::log_info!(\"pl011 baud rate: {}\", baud_rate);"),
-        "PL011 fixture must contain the new info! call inside program_polling_port",
+        fixture.contains("regseq::log_info!(\"pl011 baud rate: {}\", config.baud_rate);"),
+        "PL011 fixture must contain the info! call with the baud-rate template",
     );
     assert!(
-        fixture.contains("fn program_polling_port(&mut self, uart_clk_hz: u32, baud_rate: u32)"),
-        "the info! call must live inside `program_polling_port`",
+        fixture.contains("fn bring_up_port(&mut self, config: &SerialConfig)"),
+        "the info! call must live inside a port bring-up method",
     );
 }
 
