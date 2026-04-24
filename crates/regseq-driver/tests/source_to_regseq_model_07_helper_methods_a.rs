@@ -10,8 +10,8 @@ extern crate rustc_session;
 mod harness;
 
 use harness::{
-    build_model_with_method_bodies, compile_and_build, find_driver_impl_block,
-    find_driver_impl_method, collect_call_names,
+    build_model_with_method_bodies, collect_call_names, compile_and_build, find_driver_impl_block,
+    find_driver_impl_method,
 };
 use regseq_model::ir::{Mutability, RegseqType, ScalarType};
 use regseq_model::model::ParamKind;
@@ -80,7 +80,10 @@ fn helper_inventory_and_signatures_survive_in_driver_impl_block() {
     assert_eq!(program_polling_port.return_type, RegseqType::Unit);
     assert_eq!(
         program_polling_port.params[0].ty,
-        RegseqType::Ref(Box::new(RegseqType::Defined(harness::driver_struct(&model).type_id)), Mutability::Mutable)
+        RegseqType::Ref(
+            Box::new(RegseqType::Defined(harness::driver_struct(&model).type_id)),
+            Mutability::Mutable
+        )
     );
 }
 

@@ -14,7 +14,6 @@
 //! Lint pass-through through [`MutationGuard::commit`] (no rollback
 //! on lint-only model) is covered in `mutation_api_auto_verify.rs`.
 
-use std::collections::{BTreeMap, BTreeSet};
 use regseq_model::identity::{
     DeclId, FileId, FunctionId, ModuleId, PropertyId, ResourceId, SourceLocation, SourceOrigin,
     SymbolInterner, TypeDefId,
@@ -31,6 +30,7 @@ use regseq_model::model::regseq_model::RegseqModel;
 use regseq_model::model::resources::{ClockDecl, ClockResource, PropertyField, Shape};
 use regseq_model::model::type_def::{Attrs, TypeDef, TypeDefKind};
 use regseq_model::verify::{verify_phase_1, LintKind, LintLevel};
+use std::collections::{BTreeMap, BTreeSet};
 
 // --- DeclId allocation for the minimal fixture ----------------------
 

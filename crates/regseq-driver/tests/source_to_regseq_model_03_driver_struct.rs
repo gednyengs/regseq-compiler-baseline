@@ -69,7 +69,10 @@ fn driver_identity_and_resources_land_in_regseq_model() {
     assert_eq!(resolve_symbol(&model, driver.name), "Pl011Like");
     assert_eq!(resolve_symbol(&model, driver.identity.name), "pl011-like");
     assert_eq!(driver.identity.compatible.len(), 1);
-    assert_eq!(resolve_symbol(&model, driver.identity.compatible[0]), "arm,pl011");
+    assert_eq!(
+        resolve_symbol(&model, driver.identity.compatible[0]),
+        "arm,pl011"
+    );
     assert_eq!(
         driver.identity.bus.map(|sym| resolve_symbol(&model, sym)),
         Some("amba")
@@ -97,7 +100,10 @@ fn driver_identity_and_resources_land_in_regseq_model() {
         resolve_symbol(&model, find_register_block(&model, "Regs").name),
         "Regs"
     );
-    assert_eq!(mmio.decl.register_block, find_register_block(&model, "Regs").id);
+    assert_eq!(
+        mmio.decl.register_block,
+        find_register_block(&model, "Regs").id
+    );
 
     assert_eq!(driver.interrupts.len(), 1);
     assert_eq!(
@@ -135,7 +141,10 @@ fn driver_properties_and_user_data_use_model_shapes() {
         .iter()
         .find(|prop| resolve_symbol(&model, prop.field_name) == "current_speed")
         .expect("current_speed property must exist");
-    assert_eq!(resolve_symbol(&model, current_speed.property_id), "current-speed");
+    assert_eq!(
+        resolve_symbol(&model, current_speed.property_id),
+        "current-speed"
+    );
     assert!(current_speed.required);
     assert_eq!(
         current_speed

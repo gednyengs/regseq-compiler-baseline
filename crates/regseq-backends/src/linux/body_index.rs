@@ -8,17 +8,9 @@
 //! body data.
 //!
 //! The index is constructed once from a `&RegseqModel` via
-//! [`FunctionBodyIndex::from_regseq_model`] and passed to
-//! [`crate::linux::emitter::emit_linux_artifacts`] alongside the Linux
-//! plan. Emitters query it through [`FunctionBodyIndex::get`]; the
-//! index does not mutate and it never copies bodies.
-//!
-//! Phase-7B note: the `emit_*` functions in this crate still consume
-//! the transitional `SemanticModel` handle carried on
-//! [`crate::linux::plan::LinuxBackendPlan`]. Later Phase-7C tasks
-//! (regseq-linux-backend-04/05) migrate the emitters to read bodies
-//! directly via this index; the index is threaded through now so the
-//! emission signature can stabilize ahead of the CFG-emitter rewrite.
+//! [`FunctionBodyIndex::from_regseq_model`]. Future emitters can query
+//! it through [`FunctionBodyIndex::get`]; the index does not mutate
+//! and it never copies bodies.
 
 use std::collections::BTreeMap;
 
@@ -73,11 +65,8 @@ impl<'a> FunctionBodyIndex<'a> {
 
 impl Default for FunctionBodyIndex<'_> {
     /// An empty index. Useful for call sites that do not yet have a
-    /// [`RegseqModel`] available -- the Phase-7B emit_driver path still
-    /// goes through the legacy pipeline until `regseq-driver-35` cuts
-    /// the orchestrator over. Once that cut-over lands, all production
-    /// call sites construct the index via
-    /// [`FunctionBodyIndex::from_regseq_model`].
+    /// [`RegseqModel`] available. Production call sites should
+    /// construct the index via [`FunctionBodyIndex::from_regseq_model`].
     fn default() -> Self {
         Self {
             inner: BTreeMap::new(),

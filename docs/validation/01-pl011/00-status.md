@@ -35,21 +35,11 @@ Stable issue records live in:
 
 ## Current Interpretation
 
-- The authored-source ledger in
-  [01-authored-source.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/01-authored-source.md)
-  has been decomposed into the source-to-extraction check suite under
-  [checks/](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/checks).
-- The current source-to-extraction check set `01` through `12` is clean at the
-  extraction boundary: reviewed certificates exist under
-  `docs/validation/01-pl011/checks/results/`, and the corresponding
-  remediation backlog under `docs/validation/01-pl011/checks/remediation/`
-  has no active open items.
-- This does not imply that the later validation layers
-  [02-hir-mir.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/02-hir-mir.md),
-  [03-regseq-model.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/03-regseq-model.md),
-  [04-linux-backend-plan.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/04-linux-backend-plan.md),
-  and [05-generated-c.md](/home/nyengele/Documents/sekekama/regseq-compiler-asplos/docs/validation/01-pl011/05-generated-c.md)
-  have been reviewed yet.
+- The previous extraction-boundary check suite has been retired.
+- Current validation should start at the live HIR/MIR-to-RegseqModel boundary
+  and then cover platform binding population.
+- Linux backend validation remains blocked until driver emission is connected
+  to the RegseqModel flow.
 
 ## Review Rule
 

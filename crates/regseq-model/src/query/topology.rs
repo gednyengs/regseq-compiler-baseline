@@ -6,12 +6,12 @@
 
 use std::collections::BTreeSet;
 
-use crate::declaration::callbacks::CallbackFamily;
 use crate::identity::{FunctionId, Symbol, TypeDefId};
 use crate::model::driver::{DriverStruct, PlatformBusBinding};
 use crate::model::module::{Module, ModuleKind};
 use crate::model::regseq_model::RegseqModel;
 use crate::model::resources::ResourceKind;
+use crate::model::CallbackFamily;
 
 /// A callback method projection.
 ///
@@ -52,9 +52,8 @@ pub struct CallbackImpl<'a> {
 /// exposing them here would require widening the enum and the
 /// downstream lowering match arms that consume it. Callers that need
 /// sync inventory should read `DriverStruct.sync` directly. This is
-/// the single deliberate deviation from the legacy
-/// `DeclarationModel::all_resource_field_names`, which reported sync
-/// fields under a string tag rather than a typed variant.
+/// a deliberate choice: synchronization primitives are not platform
+/// resources and are queried separately.
 ///
 /// Returns an empty vector when the model has no driver module (e.g.,
 /// a pathological pre-verification state).
@@ -159,9 +158,8 @@ pub fn bus_binding(model: &RegseqModel) -> Option<&PlatformBusBinding> {
 /// [`Symbol`] resolves through `model.symbols` to the authored bus
 /// family name (e.g., `"amba"`, `"pci"`, `"integrated"`).
 ///
-/// Counterpart to the legacy `AnalysisInput::bus_identity`, which
-/// returned a typed `BusType` enum. The new model stores the raw
-/// symbol; typed validation happens in `verify_phase_1`.
+/// The model stores the authored bus family symbol; typed validation
+/// happens in `verify_phase_1`.
 pub fn bus_identity(model: &RegseqModel) -> Option<Symbol> {
     find_driver_struct(&model.root_module).and_then(|driver| driver.identity.bus)
 }
@@ -191,8 +189,7 @@ fn find_driver_struct(module: &Module) -> Option<&DriverStruct> {
 ///
 /// Unknown trait names -- including inherent impls whose
 /// [`crate::model::impl_block::ImplBlock::trait_name`] is `None` --
-/// return `None`. The mapping matches the legacy
-/// `CallbackDeclSet` family tags.
+/// return `None`.
 fn classify_trait_name(
     model: &RegseqModel,
     trait_name: Option<crate::identity::Symbol>,

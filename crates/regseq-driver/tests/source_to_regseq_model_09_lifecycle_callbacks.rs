@@ -10,7 +10,7 @@ extern crate rustc_session;
 mod harness;
 
 use harness::{
-    build_model_with_method_bodies, compile_and_build, collect_call_names, find_trait_method,
+    build_model_with_method_bodies, collect_call_names, compile_and_build, find_trait_method,
     has_call_named_with_error_target,
 };
 use regseq_model::model::ParamKind;

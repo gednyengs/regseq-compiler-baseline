@@ -102,9 +102,8 @@ pub fn transitively_reachable_from(
 /// `TerminatorKind::Call` edges, **excluding the seed callbacks
 /// themselves**, projected to each function's [`Symbol`] name.
 ///
-/// Counterpart to the legacy `AnalysisInput::reachable_helper_names`
-/// and `mir_reachable_helper_names`. Callers that need ISRs or other
-/// seed sets should call [`transitively_reachable_from`] directly.
+/// Callers that need ISRs or other seed sets should call
+/// [`transitively_reachable_from`] directly.
 pub fn reachable_helper_names(model: &RegseqModel) -> BTreeSet<Symbol> {
     let seeds = callback_seed_set(model);
     let reachable = transitively_reachable_from(model, &seeds);

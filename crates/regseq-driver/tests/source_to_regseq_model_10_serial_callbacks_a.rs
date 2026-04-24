@@ -10,7 +10,7 @@ extern crate rustc_session;
 mod harness;
 
 use harness::{
-    build_model_with_method_bodies, compile_and_build, collect_call_names, count_switch_int,
+    build_model_with_method_bodies, collect_call_names, compile_and_build, count_switch_int,
     find_trait_method, has_call_named, has_call_named_with_error_target,
 };
 use regseq_model::ir::{RegseqType, ScalarType};
@@ -132,7 +132,11 @@ fn serial_open_close_and_configure_bodies_keep_helper_flow() {
     let port_open = find_trait_method(&model, "Serial", "port_open");
     assert_eq!(
         collect_call_names(&model, &port_open.body),
-        vec!["enable_clock_if_present", "uart_clock_hz", "program_polling_port"]
+        vec![
+            "enable_clock_if_present",
+            "uart_clock_hz",
+            "program_polling_port"
+        ]
     );
     assert!(has_call_named_with_error_target(
         &model,
@@ -149,7 +153,11 @@ fn serial_open_close_and_configure_bodies_keep_helper_flow() {
     let configure = find_trait_method(&model, "Serial", "configure");
     assert_eq!(
         collect_call_names(&model, &configure.body),
-        vec!["enable_clock_if_present", "uart_clock_hz", "program_polling_port"]
+        vec![
+            "enable_clock_if_present",
+            "uart_clock_hz",
+            "program_polling_port"
+        ]
     );
     assert!(has_call_named_with_error_target(
         &model,
@@ -171,7 +179,11 @@ fn serial_tx_and_rx_callbacks_keep_branchy_model_bodies() {
     assert!(count_switch_int(&tx_byte.body) >= 1);
     assert!(has_call_named(&model, &tx_byte.body, "tx_ready"));
     assert!(has_call_named(&model, &tx_byte.body, "send_byte"));
-    assert!(has_call_named(&model, &tx_byte.body, "enable_tx_interrupts"));
+    assert!(has_call_named(
+        &model,
+        &tx_byte.body,
+        "enable_tx_interrupts"
+    ));
 
     let rx_char = find_trait_method(&model, "Serial", "rx_char");
     assert!(count_switch_int(&rx_char.body) >= 1);

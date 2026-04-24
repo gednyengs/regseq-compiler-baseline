@@ -4,8 +4,6 @@
 //! exercises the function's core path plus a determinism test that
 //! asserts two calls return identical output.
 
-use std::collections::{BTreeMap, BTreeSet};
-use regseq_model::declaration::callbacks::CallbackFamily;
 use regseq_model::identity::{
     BasicBlockId, DeclId, FunctionId, LocalId, ModuleId, SourceOrigin, Symbol, SymbolInterner,
     TypeDefId,
@@ -15,7 +13,8 @@ use regseq_model::ir::{
     RegseqIntrinsic, RegseqType, Terminator, TerminatorKind,
 };
 use regseq_model::model::{
-    DriverIdentity, DriverStruct, Function, ImplBlock, Module, ModuleKind, RegseqModel,
+    CallbackFamily, DriverIdentity, DriverStruct, Function, ImplBlock, Module, ModuleKind,
+    RegseqModel,
 };
 use regseq_model::query::{
     bus_binding, bus_identity, callback_families_present, callback_impls, completion_call_sites,
@@ -23,6 +22,7 @@ use regseq_model::query::{
     reachable_helper_names, register_access_sites, resource_field_names, timed_delay_call_sites,
     transitively_reachable_from, wrapper_call_sites, ResourceKind,
 };
+use std::collections::{BTreeMap, BTreeSet};
 
 // ---------------------------------------------------------------------
 // Minimal hand-built-model helpers

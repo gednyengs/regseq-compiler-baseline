@@ -252,6 +252,42 @@ pub enum SyncKind {
     Completion,
 }
 
+/// Typed synchronization primitive kind for analysis and lowering obligations.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SyncFieldKind {
+    /// Mutex primitive.
+    Mutex,
+    /// Spin lock primitive.
+    SpinLock,
+    /// IRQ-safe spin lock primitive.
+    IrqSpinLock,
+    /// Completion primitive.
+    Completion,
+}
+
+impl SyncFieldKind {
+    /// Parse from the raw string representation.
+    pub fn from_raw(s: &str) -> Option<Self> {
+        match s {
+            "mutex" => Some(Self::Mutex),
+            "spinlock" => Some(Self::SpinLock),
+            "irq_spinlock" => Some(Self::IrqSpinLock),
+            "completion" => Some(Self::Completion),
+            _ => None,
+        }
+    }
+
+    /// Return the canonical string label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::Mutex => "mutex",
+            Self::SpinLock => "spinlock",
+            Self::IrqSpinLock => "irq_spinlock",
+            Self::Completion => "completion",
+        }
+    }
+}
+
 /// Synchronization primitive field on the driver struct.
 ///
 /// Synchronization primitives are purely spec-side entities with no

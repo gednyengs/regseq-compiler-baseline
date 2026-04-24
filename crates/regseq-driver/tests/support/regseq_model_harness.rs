@@ -16,8 +16,8 @@ use regseq_driver::extract::intrinsic_registry::IntrinsicRegistry;
 use regseq_model::identity::{FunctionId, Symbol};
 use regseq_model::ir::{Body, Operand, Rvalue, StatementKind, TerminatorKind};
 use regseq_model::model::{
-    Constant, DriverStruct, Function, ImplBlock, Module, ModuleKind, RegseqModel, RegisterBlock,
-    RegisterDescriptor,
+    Constant, DriverStruct, Function, ImplBlock, Module, ModuleKind, RegisterBlock,
+    RegisterDescriptor, RegseqModel,
 };
 
 pub type ConstructionOutcome = Result<RegseqModel, ConstructionError>;
@@ -274,11 +274,10 @@ pub fn build_model_with_method_bodies(
 
         for (self_ty, method) in &owned_targets {
             let def_id = find_method_def_id(tcx, self_ty, method);
-            let function_id = *pass1
-                .cross_refs
-                .functions
-                .get(&def_id)
-                .unwrap_or_else(|| panic!("Pass 1 missing FunctionId for `{self_ty}::{method}`"));
+            let function_id =
+                *pass1.cross_refs.functions.get(&def_id).unwrap_or_else(|| {
+                    panic!("Pass 1 missing FunctionId for `{self_ty}::{method}`")
+                });
 
             let body = build_body(
                 tcx,
@@ -392,13 +391,11 @@ pub fn find_register_block<'a>(model: &'a RegseqModel, name: &str) -> &'a Regist
         None
     }
 
-    walk(&model.root_module, model, name).unwrap_or_else(|| panic!("register block `{name}` not found"))
+    walk(&model.root_module, model, name)
+        .unwrap_or_else(|| panic!("register block `{name}` not found"))
 }
 
-pub fn find_register_descriptor<'a>(
-    model: &'a RegseqModel,
-    name: &str,
-) -> &'a RegisterDescriptor {
+pub fn find_register_descriptor<'a>(model: &'a RegseqModel, name: &str) -> &'a RegisterDescriptor {
     fn walk<'a>(
         m: &'a Module,
         model: &'a RegseqModel,
@@ -478,7 +475,10 @@ pub fn count_switch_int(body: &Body) -> usize {
         .count()
 }
 
-pub fn body_mentions_constant(body: &Body, constant_id: regseq_model::identity::ConstantId) -> bool {
+pub fn body_mentions_constant(
+    body: &Body,
+    constant_id: regseq_model::identity::ConstantId,
+) -> bool {
     fn operand_has_constant(op: &Operand, constant_id: regseq_model::identity::ConstantId) -> bool {
         matches!(op, Operand::Constant(id) if *id == constant_id)
     }

@@ -10,9 +10,9 @@ extern crate rustc_session;
 mod harness;
 
 use harness::{
-    body_mentions_constant, build_model_with_method_bodies, compile_and_build,
+    body_mentions_constant, build_model_with_method_bodies, collect_call_names, compile_and_build,
     count_switch_int, find_driver_constant, find_driver_impl_block, find_driver_impl_method,
-    has_call_named, has_call_named_with_error_target, collect_call_names,
+    has_call_named, has_call_named_with_error_target,
 };
 
 const SPECIMEN: &str = r#"
@@ -198,11 +198,18 @@ fn helper_b_bodies_use_model_calls_switches_and_constants() {
 
     let uart_clock_hz = find_driver_impl_method(&model, "uart_clock_hz");
     assert!(has_call_named(&model, &uart_clock_hz.body, "get_rate"));
-    assert!(body_mentions_constant(&uart_clock_hz.body, default_clock.id));
+    assert!(body_mentions_constant(
+        &uart_clock_hz.body,
+        default_clock.id
+    ));
 
     let enable_clock = find_driver_impl_method(&model, "enable_clock_if_present");
     assert!(has_call_named(&model, &enable_clock.body, "enable"));
-    assert!(has_call_named_with_error_target(&model, &enable_clock.body, "enable"));
+    assert!(has_call_named_with_error_target(
+        &model,
+        &enable_clock.body,
+        "enable"
+    ));
     assert!(count_switch_int(&enable_clock.body) >= 1);
 
     let disable_clock = find_driver_impl_method(&model, "disable_clock_if_present");

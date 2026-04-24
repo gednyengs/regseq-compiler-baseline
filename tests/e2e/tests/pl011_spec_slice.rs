@@ -77,17 +77,6 @@ fn make_options_json(fixture: &Path) -> String {
     )
 }
 
-/// Build a CompilerOptions JSON that also requests the raw-artifact emit kind.
-fn make_options_json_with_raw_artifact(fixture: &Path) -> String {
-    make_options_json_with_emit(
-        fixture,
-        serde_json::json!([
-            {"type": "driver", "match_id": null},
-            {"type": "raw-artifact"}
-        ]),
-    )
-}
-
 fn make_options_json_with_emit(fixture: &Path, emit: serde_json::Value) -> String {
     let platform_file = fixture.join("platform.toml");
     let output_dir = fixture.join("regseq-out");
@@ -112,11 +101,6 @@ fn make_options_json_with_emit(fixture: &Path, emit: serde_json::Value) -> Strin
 /// Run the fixture through regseq-driver as RUSTC_WRAPPER and return stderr.
 fn run_regseq_driver() -> String {
     run_regseq_driver_with_options(&make_options_json(&fixture_path()))
-}
-
-/// Run the fixture with the raw-artifact emit kind and return stderr.
-fn run_regseq_driver_with_raw_artifact() -> String {
-    run_regseq_driver_with_options(&make_options_json_with_raw_artifact(&fixture_path()))
 }
 
 fn run_regseq_driver_with_options(options_json: &str) -> String {
@@ -277,52 +261,5 @@ fn pl011_fixture_has_isolated_workspace() {
     assert!(
         cargo_toml.contains("[workspace]"),
         "fixture Cargo.toml must include an empty [workspace] table"
-    );
-}
-
-#[test]
-#[ignore]
-fn pl011_fixture_emits_raw_frontend_artifact() {
-    let stderr = run_regseq_driver_with_raw_artifact();
-
-    assert!(
-        stderr.contains("regseq-driver: raw artifact emitted to"),
-        "Expected raw artifact emission message in stderr, got:\n{stderr}"
-    );
-
-    let artifact_path = fixture_path().join("regseq-out/drivers/pl011-spec-slice.raw.json");
-    assert!(
-        artifact_path.exists(),
-        "Raw artifact file not found at {}",
-        artifact_path.display()
-    );
-}
-
-#[test]
-#[ignore]
-fn pl011_fixture_raw_artifact_matches_checked_in_snapshot() {
-    let _stderr = run_regseq_driver_with_raw_artifact();
-
-    let artifact_path = fixture_path().join("regseq-out/drivers/pl011-spec-slice.raw.json");
-    let expected_path = fixture_path().join("expected/raw-frontend.json");
-
-    let emitted: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&artifact_path)
-            .unwrap_or_else(|e| panic!("failed to read emitted artifact: {e}")),
-    )
-    .expect("emitted artifact is valid JSON");
-
-    let expected: serde_json::Value = serde_json::from_str(
-        &std::fs::read_to_string(&expected_path)
-            .unwrap_or_else(|e| panic!("failed to read expected snapshot: {e}")),
-    )
-    .expect("expected snapshot is valid JSON");
-
-    assert_eq!(
-        emitted, expected,
-        "Emitted raw artifact does not match checked-in snapshot.\n\
-         Re-run the compiler on the PL011 fixture and update \
-         tests/fixtures/pl011-spec-slice/expected/raw-frontend.json if the \
-         change is intentional."
     );
 }

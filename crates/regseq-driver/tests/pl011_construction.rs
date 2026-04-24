@@ -67,10 +67,7 @@ const GOLDENS: &[(&str, BodyLookup)] = &[
         BodyLookup::Method("enable_clock_if_present"),
     ),
     ("flush_rx_fifo", BodyLookup::Method("flush_rx_fifo")),
-    (
-        "program_polling_port",
-        BodyLookup::Method("bring_up_port"),
-    ),
+    ("program_polling_port", BodyLookup::Method("bring_up_port")),
     ("disable_fifo", BodyLookup::Method("disable_fifo")),
     (
         "configure_line_control",

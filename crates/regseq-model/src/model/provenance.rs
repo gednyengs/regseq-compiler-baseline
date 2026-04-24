@@ -1,34 +1,30 @@
-//! Per-entity source provenance for declaration-model nodes.
+//! Per-entity provenance for compiler-owned model projections.
 //!
-//! Every normalized declaration entity should carry enough provenance to
-//! answer: where did this come from, which item or method originated it,
-//! and which raw artifact family did it normalize from.
+//! Provenance records keep enough source context to explain where a
+//! lowering or analysis obligation came from without depending on a
+//! separate intermediate representation.
 
 use serde::{Deserialize, Serialize};
 
-/// Source provenance attached to a normalized declaration entity.
-///
-/// Tracks the origin of each entity back to the raw frontend artifact so
-/// that later analysis can audit the normalization path without relying on
-/// top-level metadata alone.
+/// Source provenance attached to a model-derived entity.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Provenance {
     /// Source file path where the entity was declared, if available.
     pub source_file: Option<String>,
     /// Containing item or method name that originated this entity.
     pub containing_item: Option<String>,
-    /// Raw artifact family this entity was normalized from
+    /// Model family this entity was derived from
     /// (e.g. `"identity"`, `"register_access"`, `"clock"`).
-    pub raw_family: String,
+    pub family: String,
 }
 
 impl Provenance {
     /// Create a new provenance record.
-    pub fn new(raw_family: impl Into<String>) -> Self {
+    pub fn new(family: impl Into<String>) -> Self {
         Self {
             source_file: None,
             containing_item: None,
-            raw_family: raw_family.into(),
+            family: family.into(),
         }
     }
 

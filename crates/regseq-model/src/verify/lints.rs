@@ -13,9 +13,7 @@
 //! findings by `(level, property-DeclId, kind-discriminant)` so two
 //! runs on identical input produce byte-identical output.
 //!
-//! Legacy lints carried via `DeclarationModel::property_lints` /
-//! `PropertyLintDecl` are folded here; see
-//! [`rules::property_required_with_default`] for the single
+//! See [`rules::property_required_with_default`] for the single
 //! property-side rule that currently exists. New non-property lint
 //! kinds can extend [`LintKind`] without reshaping the verifier
 //! surface.
@@ -81,9 +79,7 @@ pub enum LintLevel {
 /// serialized snapshots) treat each variant as a stable wire-level
 /// identifier.
 ///
-/// The current variants fold every rule that legacy
-/// `DeclarationModel::property_lints` produced. Additional non-property
-/// lint kinds may land here in future tasks.
+/// Additional non-property lint kinds may land here in future tasks.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 #[serde(tag = "kind", content = "data")]
 pub enum LintKind {
@@ -92,7 +88,6 @@ pub enum LintKind {
     /// required properties must be present in the platform file, so
     /// the default is reviewer-facing noise.
     ///
-    /// Mirrors legacy `PropertyLintDecl::RequiredWithDefault`.
     PropertyRequiredWithDefault {
         /// The [`DeclId`] of the offending property field.
         property: DeclId,

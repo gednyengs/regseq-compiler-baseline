@@ -1,8 +1,7 @@
 //! Deterministic read-only traversal helpers over a [`RegseqModel`].
 //!
-//! The [`query`](self) module replaces the pre-computed family maps that
-//! the legacy `AnalysisInput` exposed. Every helper here takes a
-//! `&RegseqModel` and walks the module tree + CFG bodies on demand.
+//! Every helper here takes a `&RegseqModel` and walks the module tree
+//! plus CFG bodies on demand.
 //!
 //! All helpers are pure: no caching, no mutation, no interior
 //! mutability. Collection-returning functions produce deterministic

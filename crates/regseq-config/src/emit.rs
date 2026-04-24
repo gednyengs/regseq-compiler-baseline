@@ -31,11 +31,8 @@ pub enum EmitSpec {
     },
     /// Emit the normalized `RegseqModel` as JSON.
     ///
-    /// This is the handoff artifact during the RegseqModel-only rebuild
-    /// (see `docs/discussions/models/regseq-model/legacy-removal-plan.md`):
-    /// the compiler builds a `RegseqModel` from rustc HIR/MIR and writes
-    /// its JSON form to the output tree for hand-authored golden C files,
-    /// test fixtures, and future backend-development agents to consume.
+    /// The compiler builds a `RegseqModel` from rustc HIR/MIR and writes
+    /// its JSON form to the output tree.
     Model {
         /// Output path, or None for default location under `drivers/`.
         path: Option<PathBuf>,

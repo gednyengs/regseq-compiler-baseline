@@ -176,15 +176,6 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         let logging_surface = crate::extract::logging::extract_logging_surface(tcx);
         eprintln!("regseq-driver: logging extraction: {logging_surface:?}");
 
-        // --- body extraction ---
-        let body_surface = crate::extract::body::extract_body_surface(tcx);
-        eprintln!("regseq-driver: body extraction: {body_surface:?}");
-
-        // --- identity enrichment ---
-        let enrichment_surface =
-            crate::extract::identity_enrichment::extract_identity_enrichment(tcx);
-        eprintln!("regseq-driver: identity enrichment extraction: {enrichment_surface:?}");
-
         // --- PM gate (requires trait surface for PM impl types) ---
         let pm_impl_types: std::collections::HashSet<String> = trait_surface
             .as_ref()
@@ -227,20 +218,16 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         // --- driver emission (stubbed during RegseqModel-only rebuild) ---
         if self.wants_driver() {
             eprintln!(
-                "regseq-driver: EmitSpec::Driver is not yet exercised in the \
-                 RegseqModel-only rebuild. See \
-                 docs/discussions/models/regseq-model/legacy-removal-plan.md \
-                 (DL-3). Skipping driver emission.",
+                "regseq-driver: EmitSpec::Driver is not yet connected to the \
+                 live RegseqModel flow. Skipping driver emission.",
             );
         }
 
         // --- analysis emission (stubbed during RegseqModel-only rebuild) ---
         if self.wants_analysis() {
             eprintln!(
-                "regseq-driver: EmitSpec::Analysis is not yet exercised in the \
-                 RegseqModel-only rebuild. See \
-                 docs/discussions/models/regseq-model/legacy-removal-plan.md \
-                 (DL-3). Skipping analysis emission.",
+                "regseq-driver: EmitSpec::Analysis is not yet connected to the \
+                 live RegseqModel flow. Skipping analysis emission.",
             );
         }
 
@@ -278,8 +265,7 @@ fn emit_regseq_model_json(
             .map_err(|e| format!("failed to create parent dir for {}: {e}", path.display()))?;
     }
 
-    std::fs::write(&path, json)
-        .map_err(|e| format!("failed to write {}: {e}", path.display()))?;
+    std::fs::write(&path, json).map_err(|e| format!("failed to write {}: {e}", path.display()))?;
     Ok(path)
 }
 

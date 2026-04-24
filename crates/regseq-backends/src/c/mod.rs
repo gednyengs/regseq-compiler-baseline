@@ -11,7 +11,7 @@
 //!
 //! - Translation-unit scaffolding: includes, defines, include guards,
 //!   struct definitions, static / const globals with designated
-//!   initializers, function definitions (legacy string-body form and
+//!   initializers, function definitions (string-body form and
 //!   structured form backed by [`statements::CStmt::Compound`]).
 //! - Statements ([`statements`]): compound, declaration, expression,
 //!   `if` / `if-else`, `while`, `return`, `goto`, labeled, empty, raw.
@@ -138,7 +138,7 @@ pub enum CTopLevelItem {
         /// Initializer lines (rendered inside `{ ... }`).
         initializer: Vec<String>,
     },
-    /// Function definition with a string-formatted body (legacy form).
+    /// Function definition with a string-formatted body.
     FuncDef {
         /// Full function signature line (e.g. `"static int foo(int x)"`).
         signature: String,

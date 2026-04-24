@@ -2,7 +2,7 @@ use std::path::{Path, PathBuf};
 
 use cargo_regseq::cli::{CargoCli, Cli};
 use cargo_regseq::Error;
-use clap::Parser;
+use clap::{CommandFactory, Parser};
 use regseq_config::{ColorChoice, DumpStage, EmitSpec, LogLevel, ParamScope, TargetOs};
 use tempfile::NamedTempFile;
 
@@ -104,6 +104,23 @@ fn emit_defaults_to_model_in_compiler_options() {
     let (_platform, args) = base_args();
     let options = parse_ok(args).into_compiler_options();
     assert_eq!(options.emit, vec![EmitSpec::Model { path: None }]);
+}
+
+#[test]
+fn help_documents_model_as_default_emit() {
+    let help = Cli::command().render_help().to_string();
+    assert!(
+        help.contains("default: model"),
+        "help must document model emission as the default:\n{help}"
+    );
+    assert!(
+        !help.contains("default: driver"),
+        "help must not document driver emission as the default:\n{help}"
+    );
+    assert!(
+        help.contains("model[=PATH]"),
+        "help must document the model emit spec spelling:\n{help}"
+    );
 }
 
 #[test]

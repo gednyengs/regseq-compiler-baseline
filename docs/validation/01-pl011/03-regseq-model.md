@@ -1,14 +1,13 @@
 # PL011 Layer 3: Regseq Portable Model and Lowering
 
-This file validates how PL011 facts move from extracted Rust-facing compiler
-surfaces into Regseq-owned model and lowering layers.
+This file validates how PL011 facts move from rustc HIR/MIR into Regseq-owned
+model and lowering layers.
 
 This includes:
 
-- declaration/joined model
-- item hierarchy
-- semantic bodies
-- `SemanticModel`
+- Phase-1 `RegseqModel`
+- platform-populated `RegseqModel`
+- CFG body IR
 - `DriverLoweringPlan`
 
 ## Status
@@ -23,7 +22,7 @@ This includes:
 
 ### Downstream representation
 
-- Regseq model and lowering artifacts
+- RegseqModel JSON and lowering artifacts
 
 ### Preserved
 

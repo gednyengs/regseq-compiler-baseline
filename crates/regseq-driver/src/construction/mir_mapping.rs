@@ -10,8 +10,7 @@
 //! helper.
 //!
 //! Every helper input is a live rustc value (`ty::Ty<'tcx>`,
-//! `mir::Operand<'tcx>`, ...). The legacy owned `Mir*` mirror types in
-//! `crate::mir_body` are not used here; this pass maps directly into the
+//! `mir::Operand<'tcx>`, ...). This pass maps directly into the
 //! model-level Regseq IR.
 
 use std::collections::HashMap;

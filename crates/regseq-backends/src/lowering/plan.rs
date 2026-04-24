@@ -3,15 +3,13 @@
 //! `DriverLoweringPlan` is the compiler-owned semantic realization plan
 //! that captures all driver obligations in a backend-neutral form. OS-specific
 //! backend planners consume this plan rather than re-deriving facts from the
-//! raw `AnalysisInput`.
+//! RegseqModel.
 //!
 //! No Linux, Zephyr, or other OS-specific types belong here.
 
-use regseq_model::declaration::callbacks::{CallbackContext, CallbackFamily};
-use regseq_model::declaration::driver::DeviceClass;
-use regseq_model::declaration::provenance::Provenance;
-use regseq_model::declaration::registers::WrapperMethod;
-use regseq_model::declaration::synchronization::SyncFieldKind;
+use regseq_model::model::{
+    CallbackContext, CallbackFamily, DeviceClassKind, Provenance, SyncFieldKind, WrapperMethod,
+};
 
 use super::diagnostics::DriverLoweringDiagnostics;
 
@@ -55,7 +53,7 @@ pub struct DriverLoweringPlan {
 // Driver identity
 // ---------------------------------------------------------------------------
 
-/// Driver identity and provenance extracted from the declaration model.
+/// Driver identity and provenance extracted from the RegseqModel.
 #[derive(Debug, Clone)]
 pub struct DriverIdentity {
     /// Driver name from the `#[rseq::driver]` attribute.
@@ -63,7 +61,7 @@ pub struct DriverIdentity {
     /// Compatible strings for device matching.
     pub compatible: Vec<String>,
     /// Device class (e.g. SerialUart, Network).
-    pub device_class: DeviceClass,
+    pub device_class: DeviceClassKind,
     /// Source modules that contributed to this driver specification.
     pub source_modules: Vec<String>,
     /// Provenance of the driver declaration.
@@ -120,10 +118,8 @@ pub struct ResourceObligations {
     /// Pin controller obligations.
     pub pinctrl: Vec<PinCtrlObligation>,
     /// User-data (author-defined driver-state) obligations. Stage-1
-    /// Path A populates this only from the RegseqModel-based pipeline
-    /// (`from_model.rs`); the legacy `DeclarationModel` pipeline
-    /// leaves it empty because it does not yet carry user-data
-    /// facts.
+    /// Path A populates this from the RegseqModel-based pipeline
+    /// (`from_model.rs`).
     pub user_data: Vec<UserDataObligation>,
     /// Explicit portable bus identity carried into lowering.
     pub bus_identity: BusIdentity,
@@ -339,8 +335,8 @@ pub use regseq_model::model::ResourceKind;
 /// Device-class role obligations that the backend must realize.
 #[derive(Debug, Clone)]
 pub struct DeviceClassRoles {
-    /// Device class from the declaration.
-    pub device_class: DeviceClass,
+    /// Device class from the RegseqModel.
+    pub device_class: DeviceClassKind,
     /// Which serial operations are realized (method names).
     pub serial_ops_realized: Vec<String>,
     /// Whether lifecycle callbacks are present.

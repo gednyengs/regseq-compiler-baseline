@@ -116,6 +116,46 @@ pub enum AccessKind {
     Reserved,
 }
 
+/// Typed register-wrapper method.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum WrapperMethod {
+    /// Raw read (no field masking).
+    ReadRaw,
+    /// Typed read.
+    Read,
+    /// Typed write.
+    Write,
+    /// Read-modify-write.
+    Modify,
+    /// Set (write with specific field bits).
+    Set,
+}
+
+impl WrapperMethod {
+    /// Parse from the raw string representation.
+    pub fn from_raw(s: &str) -> Option<Self> {
+        match s {
+            "read_raw" => Some(Self::ReadRaw),
+            "read" => Some(Self::Read),
+            "write" => Some(Self::Write),
+            "modify" => Some(Self::Modify),
+            "set" => Some(Self::Set),
+            _ => None,
+        }
+    }
+
+    /// Return the canonical string label.
+    pub fn as_str(&self) -> &'static str {
+        match self {
+            Self::ReadRaw => "read_raw",
+            Self::Read => "read",
+            Self::Write => "write",
+            Self::Modify => "modify",
+            Self::Set => "set",
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;

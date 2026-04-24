@@ -54,7 +54,7 @@ crates/
   regseq-backends/     Backend crate for Linux/Zephyr lowering work
   regseq-config/       Shared configuration and CLI types
   regseq-diagnostics/  Shared diagnostics support
-  regseq-driver/       rustc wrapper: frontend extraction and raw artifacts
+  regseq-driver/       rustc wrapper: frontend extraction and RegseqModel emission
   regseq-macros/       Proc macros and register-surface helpers
   regseq-model/        Rustc-independent declaration/binding/joined IR
 tests/

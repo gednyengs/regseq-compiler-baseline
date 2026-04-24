@@ -1020,7 +1020,9 @@ fn missing_resource_id_for_driver_field(
     kind: &'static str,
 ) -> ConstructionError {
     fn find_field(tcx: TyCtxt<'_>, module_def_id: DefId, field_name: &str) -> Option<DefId> {
-        let local = module_def_id.as_local().unwrap_or(rustc_hir::def_id::CRATE_DEF_ID);
+        let local = module_def_id
+            .as_local()
+            .unwrap_or(rustc_hir::def_id::CRATE_DEF_ID);
         let mod_id = rustc_hir::def_id::LocalModDefId::new_unchecked(local);
         for item_id in tcx.hir_module_items(mod_id).free_items() {
             let item = tcx.hir_item(item_id);
@@ -1032,7 +1034,9 @@ fn missing_resource_id_for_driver_field(
                             return false;
                         };
                         let segs = &item.path.segments;
-                        segs.len() == 2 && segs[0].as_str() == "rseq" && segs[1].as_str() == "driver"
+                        segs.len() == 2
+                            && segs[0].as_str() == "rseq"
+                            && segs[1].as_str() == "driver"
                     });
                     if !is_driver {
                         continue;

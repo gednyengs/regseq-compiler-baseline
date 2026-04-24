@@ -5,9 +5,7 @@
 //! to `check_readiness`, and asserts the resulting [`ReadinessReport`]
 //! surfaces the expected reviewer-facing observations.
 
-use std::collections::{BTreeMap, BTreeSet};
 use regseq_analysis::readiness::{check_readiness, ReadinessReport, ResourceKind};
-use regseq_model::declaration::callbacks::CallbackFamily;
 use regseq_model::identity::{
     DeclId, FileId, FunctionId, ModuleId, PropertyId, RegisterBlockId, ResourceId, SourceLocation,
     SourceOrigin, SymbolInterner, TypeDefId,
@@ -27,7 +25,9 @@ use regseq_model::model::resources::{
     ClockDecl, ClockResource, MmioDecl, MmioResource, PropertyField, Shape,
 };
 use regseq_model::model::type_def::{Attrs, TypeDef, TypeDefKind};
+use regseq_model::model::CallbackFamily;
 use regseq_model::verify::{verify_phase_1, LintKind, LintLevel};
+use std::collections::{BTreeMap, BTreeSet};
 
 // -------------------------------------------------------------------
 // Minimal model builders

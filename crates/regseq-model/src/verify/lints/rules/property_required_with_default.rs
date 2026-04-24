@@ -5,12 +5,6 @@
 //! as an [`Advisory`] lint alerts reviewers to either drop the
 //! default or flip the field to `Option<T>`.
 //!
-//! Mirrors legacy `PropertyLintDecl::RequiredWithDefault`, which was
-//! computed at declaration-normalization time and carried on
-//! `DeclarationModel::property_lints`. Folding the rule into the
-//! verifier removes the side-channel carry and pairs the finding with
-//! the phase that owns property validation.
-//!
 //! [`Advisory`]: super::super::LintLevel::Advisory
 
 use crate::identity::SourceOrigin;

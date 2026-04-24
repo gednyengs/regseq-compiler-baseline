@@ -10,8 +10,8 @@ extern crate rustc_session;
 mod harness;
 
 use harness::{
-    body_mentions_constant, build_model_with_method_bodies, compile_and_build, collect_call_names,
-    count_switch_int, find_driver_constant, find_driver_impl_method, driver_struct,
+    body_mentions_constant, build_model_with_method_bodies, collect_call_names, compile_and_build,
+    count_switch_int, driver_struct, find_driver_constant, find_driver_impl_method,
 };
 
 const SPECIMEN: &str = r#"
@@ -68,7 +68,11 @@ fn isr_method_and_interrupt_resource_survive_in_model() {
     assert_eq!(driver.interrupts.len(), 1);
     let handle_irq = find_driver_impl_method(&model, "handle_irq");
     assert!(
-        handle_irq.attrs.entries.iter().any(|entry| entry.key == "rseq::isr"),
+        handle_irq
+            .attrs
+            .entries
+            .iter()
+            .any(|entry| entry.key == "rseq::isr"),
         "handle_irq must retain the rseq::isr attribute in the model"
     );
 }

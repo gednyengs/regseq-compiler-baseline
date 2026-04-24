@@ -2,33 +2,19 @@
 //!
 //! Builds a [`DriverLoweringPlan`] directly from a verified
 //! [`RegseqModel`] plus backend-neutral [`LoweringConfig`] knobs. Does
-//! NOT go through `AnalysisInput` or the legacy
-//! declaration/joined/semantic projections.
-//!
-//! This entry coexists with
-//! [`crate::lowering::planner::build_driver_lowering_plan`] during
-//! Phases 7C/7D; `regseq-lowering-14` eventually deletes the legacy
-//! entry. The new entry does not produce a [`SemanticModel`] -- body
-//! access for backends is handled through a separate
-//! `FunctionBodyIndex` introduced by `regseq-linux-backend-03` (task
-//! 8).
+//! not go through any older intermediate representation.
 //!
 //! Internal helpers walk `model.root_module` and invoke
 //! [`regseq_model::query`] helpers from task
-//! `regseq-model-61`. No string matching against canonical paths; no
-//! `CanonicalPath` lookups; typed ids throughout.
+//! `regseq-model-61`.
 
-use regseq_model::declaration::callbacks::{CallbackContext, CallbackFamily};
-use regseq_model::declaration::driver::{BusType as DeclBusType, DeviceClass};
-use regseq_model::declaration::provenance::Provenance;
-use regseq_model::declaration::registers::WrapperMethod;
-use regseq_model::declaration::synchronization::SyncFieldKind;
 use regseq_model::identity::{Symbol, SymbolInterner};
 use regseq_model::ir::intrinsic::RegseqIntrinsic;
-use regseq_model::model::driver::{DriverStruct, PlatformBusBinding};
+use regseq_model::model::driver::{BusKind, DeviceClassKind, DriverStruct, PlatformBusBinding};
 use regseq_model::model::module::{Module, ModuleKind};
 use regseq_model::model::regseq_model::RegseqModel;
-use regseq_model::model::resources::{ResourceKind, SyncKind};
+use regseq_model::model::resources::{ResourceKind, SyncFieldKind, SyncKind};
+use regseq_model::model::{CallbackContext, CallbackFamily, Provenance, WrapperMethod};
 use regseq_model::platform::PlatformValue;
 use regseq_model::query;
 
@@ -41,13 +27,9 @@ use super::plan::{
     RegisterFieldInfo, RegisterObligations, ResetObligation, ResourceObligations, ResourcePolicy,
     SyncFieldObligation, SynchronizationObligations, TeardownStep,
 };
-// NOTE: Linux resource-sequencing and deployment-metadata diagnostics used
-// to be populated here via `super::planner::build_diagnostics`. That helper
-// lived in the legacy `planner.rs` (DISCARD in Wave A of the legacy-removal
-// plan). These diagnostics are reporting-only -- no emitter consumes them --
-// so during the rebuild period we leave `DriverLoweringDiagnostics` at its
-// default. When backends return and need the reporting, port the helpers
-// from the `pre-legacy-removal` git tag into this file (or `diagnostics.rs`).
+// NOTE: Linux resource-sequencing and deployment-metadata diagnostics are
+// reporting-only; no emitter consumes them during the RegseqModel-only
+// rebuild, so this entry leaves `DriverLoweringDiagnostics` at its default.
 
 /// Backend-neutral configuration knobs for portable lowering.
 ///
@@ -72,17 +54,10 @@ pub enum LoweringError {
     InvariantViolated(String),
 }
 
-/// Build a portable lowering plan directly from a verified
-/// [`RegseqModel`].
+/// Build a portable lowering plan directly from a verified [`RegseqModel`].
 ///
-/// Does NOT go through `AnalysisInput` or the legacy declaration /
-/// joined / semantic projections. All plan fields are derived by
-/// walking `model.root_module` and calling
-/// [`regseq_model::query`] helpers.
-///
-/// This is the `RegseqModel`-era entry; the legacy
-/// [`crate::lowering::planner::build_driver_lowering_plan`] remains
-/// alongside until `regseq-driver-35` cuts `emit_driver` over.
+/// All plan fields are derived by walking `model.root_module` and
+/// calling [`regseq_model::query`] helpers.
 pub fn build_driver_lowering_plan_from_model(
     model: &RegseqModel,
     _config: &LoweringConfig,
@@ -382,14 +357,14 @@ fn build_bus_identity(
     })?;
 
     let bus_str = model.symbols.resolve(bus_symbol);
-    let decl_bus = DeclBusType::from_raw(bus_str).ok_or_else(|| {
+    let bus_kind = BusKind::from_raw(bus_str).ok_or_else(|| {
         LoweringError::InvariantViolated(format!("unrecognized bus type '{bus_str}'"))
     })?;
 
-    let bus_type = match decl_bus {
-        DeclBusType::Integrated => PlanBusType::Platform,
-        DeclBusType::Amba => PlanBusType::Amba,
-        DeclBusType::Pci => PlanBusType::Pci,
+    let bus_type = match bus_kind {
+        BusKind::Integrated => PlanBusType::Platform,
+        BusKind::Amba => PlanBusType::Amba,
+        BusKind::Pci => PlanBusType::Pci,
     };
 
     let platform_bus = query::bus_binding(model);
@@ -433,7 +408,7 @@ fn platform_value_as_u32(value: &PlatformValue) -> Option<u32> {
 }
 
 // ---------------------------------------------------------------------------
-// Acquisition/teardown ordering (matches legacy policy)
+// Acquisition/teardown ordering
 // ---------------------------------------------------------------------------
 
 fn build_acquisition_order(resources: &ResourceObligations) -> Vec<AcquisitionStep> {
@@ -707,17 +682,17 @@ fn sym_string(interner: &SymbolInterner, symbol: Symbol) -> String {
     interner.resolve(symbol).to_string()
 }
 
-fn provenance_for(origin: &str, raw_family: &str) -> Provenance {
-    Provenance::new(raw_family).with_containing_item(origin)
+fn provenance_for(origin: &str, family: &str) -> Provenance {
+    Provenance::new(family).with_containing_item(origin)
 }
 
 fn device_class_from_symbol(
     interner: &SymbolInterner,
     model_class: Option<&regseq_model::model::driver::DeviceClass>,
-) -> DeviceClass {
+) -> DeviceClassKind {
     match model_class {
-        None => DeviceClass::Other(String::new()),
-        Some(cls) => DeviceClass::from_raw(interner.resolve(cls.class)),
+        None => DeviceClassKind::Other(String::new()),
+        Some(cls) => DeviceClassKind::from_raw(interner.resolve(cls.class)),
     }
 }
 

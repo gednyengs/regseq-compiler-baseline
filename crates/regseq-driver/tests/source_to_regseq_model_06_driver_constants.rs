@@ -10,8 +10,8 @@ extern crate rustc_session;
 mod harness;
 
 use harness::{
-    body_mentions_constant, build_model_with_method_bodies, compile_and_build, find_driver_constant,
-    find_driver_impl_block, find_driver_impl_method, resolve_symbol,
+    body_mentions_constant, build_model_with_method_bodies, compile_and_build,
+    find_driver_constant, find_driver_impl_block, find_driver_impl_method, resolve_symbol,
 };
 use regseq_model::ir::LiteralValue;
 
@@ -59,7 +59,10 @@ fn migrated_bodies_reference_driver_constants_through_model_ids() {
     let model = build_model_with_method_bodies(
         SPECIMEN,
         "source_to_regseq_model_06_bodies",
-        &[("Pl011Consts", "uart_clock_hz"), ("Pl011Consts", "clear_mask")],
+        &[
+            ("Pl011Consts", "uart_clock_hz"),
+            ("Pl011Consts", "clear_mask"),
+        ],
     )
     .expect("specimen must build with bodies");
 

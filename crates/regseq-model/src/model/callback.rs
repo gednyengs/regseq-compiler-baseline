@@ -1,42 +1,9 @@
-//! Callback-family impl declarations and callback contexts.
+//! Callback-family and callback-context model types.
 //!
-//! The raw artifact currently preserves callback-family impl facts, not
-//! method-by-method callback declarations. This module normalizes at
-//! impl level accordingly. Method-level callback identity can be added as
-//! a follow-on refinement if analysis pressure proves it necessary.
+//! These tags are shared by RegseqModel query helpers, reviewer-facing
+//! analyses, and backend lowering plans.
 
 use serde::{Deserialize, Serialize};
-
-use super::provenance::Provenance;
-
-/// Set of all callback-family impl declarations.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CallbackDeclSet {
-    /// Lifecycle trait impl declarations.
-    pub lifecycle_impls: Vec<CallbackImplDecl>,
-    /// Serial trait impl declarations.
-    pub serial_impls: Vec<CallbackImplDecl>,
-    /// Serial console trait impl declarations (optional companion trait).
-    pub serial_console_impls: Vec<CallbackImplDecl>,
-    /// Power management trait impl declarations.
-    pub power_management_impls: Vec<CallbackImplDecl>,
-}
-
-/// A single callback-family impl declaration.
-///
-/// Normalized at impl level (not method level) to match what the raw
-/// artifact currently provides.
-#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
-pub struct CallbackImplDecl {
-    /// The driver type that implements this callback family.
-    pub driver_type: String,
-    /// The callback context class for this impl.
-    pub context: CallbackContext,
-    /// Which callback family this impl belongs to.
-    pub family: CallbackFamily,
-    /// Provenance back to the raw artifact.
-    pub provenance: Provenance,
-}
 
 /// Typed callback family identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
@@ -64,9 +31,6 @@ impl CallbackFamily {
 }
 
 /// Callback-entry context class.
-///
-/// Maps the three accepted context classes from the synchronization and
-/// callback-context baseline.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum CallbackContext {
     /// Framework-managed entry (`F`).
