@@ -14,6 +14,7 @@ pub mod args;
 mod callbacks;
 pub mod construction;
 pub mod extract;
+pub mod mir_body;
 pub mod mir_repr;
 pub use callbacks::RegseqCallbacks;
 

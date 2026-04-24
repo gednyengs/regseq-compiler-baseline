@@ -1,13 +1,13 @@
-//! Thin re-export shim over the canonical MIR schema in `regseq_model`.
+//! Thin re-export shim over the driver-owned MIR extraction schema.
 //!
 //! All MIR body types are defined once in
-//! `regseq_model::declaration::mir_body` and re-exported here for
-//! backward-compatibility with existing driver code and test harnesses.
+//! `crate::mir_body` and re-exported here for backward-compatibility
+//! with existing driver code and test harnesses.
 //! Driver-specific surface types (`MirBodySurface`, `MirExtractedFn`)
 //! remain defined locally.
 
-// Re-export canonical MIR types from the model crate.
-pub use regseq_model::declaration::mir_body::{
+// Re-export driver-owned MIR extraction types.
+pub use crate::mir_body::{
     ConstField, FloatWidth, IntWidth, MirAggregateKind, MirBasicBlockData, MirBinOp, MirBody,
     MirBorrowKind, MirCastKind, MirConstValue, MirConstant, MirFieldTy, MirLocalDecl,
     MirMutability, MirOperand, MirPlace, MirProjectionElem, MirRvalue, MirSourceInfo,

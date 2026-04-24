@@ -34,6 +34,9 @@ mod identity_enrichment_types;
 #[path = "../src/extract/identity_enrichment.rs"]
 mod identity_enrichment;
 
+#[path = "../src/mir_body.rs"]
+mod mir_body;
+
 #[path = "../src/mir_repr.rs"]
 mod mir_repr;
 

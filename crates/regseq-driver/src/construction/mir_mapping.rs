@@ -11,8 +11,8 @@
 //!
 //! Every helper input is a live rustc value (`ty::Ty<'tcx>`,
 //! `mir::Operand<'tcx>`, ...). The legacy owned `Mir*` mirror types in
-//! `regseq-model::declaration::mir_body` are not used here and will be
-//! deleted by Phase 9.
+//! `crate::mir_body` are not used here; this pass maps directly into the
+//! model-level Regseq IR.
 
 use std::collections::HashMap;
 

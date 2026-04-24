@@ -323,7 +323,7 @@ are current as of this document.
 | `regseq-analysis/src/readiness.rs:20-24` | imports `regseq_model::compat::CallbackFamily` | B |
 | `regseq-model/src/item/function.rs:15` | depends on `semantic::*` | B (atomic) |
 | `regseq-model/src/compat.rs:61-132` | re-exports from `declaration`, `binding`, `joined`, `semantic`, `item` | B (atomic) |
-| `regseq-driver/src/mir_repr.rs:1-16` | re-exports `regseq_model::declaration::mir_body::*` | C / D |
+| `regseq-driver/src/mir_repr.rs:1-16` | re-exports driver-owned `mir_body` types | C / D |
 | `regseq-model/src/normalize/surface.rs:992-1030` | depends on `CanonicalPath`-based identity enrichment for user-data validation | C |
 
 ## Risks

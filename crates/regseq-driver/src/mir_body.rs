@@ -1,8 +1,7 @@
-//! MIR-based executable body model.
+//! MIR-based executable body extraction surface.
 //!
-//! These types represent the canonical executable-body representation in
-//! the declaration model. They carry post-drop-elaboration MIR structure
-//! from `mir_drops_elaborated_and_const_checked` without collapsing it into
+//! These types carry post-drop-elaboration MIR structure from
+//! `mir_drops_elaborated_and_const_checked` without collapsing it into
 //! device-specific, OS-specific, or backend-oriented lowering decisions.
 //!
 //! The types are rustc-independent owned values matching the JSON shape
@@ -10,7 +9,7 @@
 
 use serde::{Deserialize, Serialize};
 
-use super::provenance::Provenance;
+use regseq_model::declaration::Provenance;
 
 // ---------------------------------------------------------------------------
 // Top-level body declarations
@@ -18,7 +17,7 @@ use super::provenance::Provenance;
 
 /// Set of MIR-derived function body declarations.
 ///
-/// This is the canonical executable-body path in the declaration model.
+/// This is the executable-body extraction path in the driver.
 /// It carries CFG/basic-block MIR structure, not HIR expression trees.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct MirBodyDeclSet {

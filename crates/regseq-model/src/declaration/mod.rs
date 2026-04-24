@@ -13,7 +13,6 @@
 
 pub mod build_context;
 pub mod callbacks;
-pub mod mir_body;
 pub mod operations;
 pub mod properties;
 pub mod provenance;
