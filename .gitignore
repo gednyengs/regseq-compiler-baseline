@@ -30,6 +30,7 @@ __pycache__/
 # MIR/HIR dumps (machine-generated, used for hand-lowering)
 mir-dump/
 **/mir-dump/
+tests/fixtures/*/dump/
 
 # OS
 .DS_Store
