@@ -22,8 +22,11 @@
 > MonoRust artifact," read "RegseqModel construction consuming
 > optimized_mir." The substantive design content is unchanged.
 >
-> See `docs/discussions/manual-lowering/README.md` for the current
-> two-stage pipeline framing.
+> See `docs/discussions/regseq-model/README.md` for the
+> device-independent (linguistic) phase that owns RegseqModel
+> specification and the construction pass, and
+> `docs/discussions/manual-lowering/README.md` for phase-2 device
+> pressure (golden-C authoring for pl011).
 
 ## 1. What MonoRust Is
 

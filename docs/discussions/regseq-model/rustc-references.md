@@ -1,8 +1,9 @@
 # Rustc Source Pointers
 
-Files in the pinned rustc-src that are relevant to building
-RegseqModel construction's eventual extraction pass. Skim references,
-not a comprehensive study. Each entry says what it is and when to consult it.
+Files in the pinned rustc-src that are relevant to designing the
+MIR/HIR -> RegseqModel construction pass. Skim references, not a
+comprehensive study. Each entry says what it is and when to consult
+it.
 
 All paths are relative to:
 `~/.rustup/toolchains/nightly-2026-02-01-aarch64-apple-darwin/lib/rustlib/rustc-src/rust/compiler/`
@@ -10,7 +11,7 @@ All paths are relative to:
 ## Discovery / monomorphization collection
 
 ### `rustc_monomorphize/src/collector.rs` (~1840 lines)
-The reachability walker. Top-level entry is `pub(crate) fn collect_crate_mono_items(tcx, strategy) -> (Vec<MonoItem<'tcx>>, UsageMap<'tcx>)` at line 1803. The module doc-comment (lines 1-200) is the best single explanation of how rustc discovers everything that will be codegen'd: it starts from "roots" (`#[no_mangle]` items, lang items, and other non-generic, non-const callables), then transitively follows mentions through MIR bodies. It distinguishes "used" items (definitely needed) from "mentioned" items (e.g. function pointer references). Drop glue is resolved through `Instance::resolve_drop_in_place` (line 944). Generic instantiation flows through `Instance::resolve_*` calls (lines 790, 967, 1428). The big match on `InstanceKind` at lines 1018-1046 enumerates every kind of monomorphized thing rustc tracks (DropGlue, FutureDropPollShim, AsyncDropGlue, VTableShim, ReifyShim, ClosureOnceShim, FnPtrShim, CloneShim, FnPtrAddrShim, Item, Intrinsic, Virtual, ThreadLocalShim). Read this before designing reachability roots for the extractor.
+The reachability walker. Top-level entry is `pub(crate) fn collect_crate_mono_items(tcx, strategy) -> (Vec<MonoItem<'tcx>>, UsageMap<'tcx>)` at line 1803. The module doc-comment (lines 1-200) is the best single explanation of how rustc discovers everything that will be codegen'd: it starts from "roots" (`#[no_mangle]` items, lang items, and other non-generic, non-const callables), then transitively follows mentions through MIR bodies. It distinguishes "used" items (definitely needed) from "mentioned" items (e.g. function pointer references). Drop glue is resolved through `Instance::resolve_drop_in_place` (line 944). Generic instantiation flows through `Instance::resolve_*` calls (lines 790, 967, 1428). The big match on `InstanceKind` at lines 1018-1046 enumerates every kind of monomorphized thing rustc tracks (DropGlue, FutureDropPollShim, AsyncDropGlue, VTableShim, ReifyShim, ClosureOnceShim, FnPtrShim, CloneShim, FnPtrAddrShim, Item, Intrinsic, Virtual, ThreadLocalShim). Read this before designing reachability roots for the construction pass.
 
 ### `rustc_monomorphize/src/lib.rs` (~55 lines)
 Tiny re-export hub. Worth a glance to see what's exposed at crate boundary.
@@ -22,12 +23,12 @@ Calls `collect_crate_mono_items` (line 1138) and partitions results into codegen
 Post-collection sanity passes. Skim only if we want to understand what rustc considers "OK to monomorphize" so we can mirror those checks.
 
 ### `rustc_middle/src/ty/mod.rs` line 1671
-`pub fn instance_mir(self, instance: ty::InstanceKind<'tcx>) -> &'tcx Body<'tcx>` is the single function the extractor will call per `Instance` to get a `mir::Body`. It dispatches to `optimized_mir`, shim builders, or intrinsic fallback bodies depending on `InstanceKind`. This is the "fetch the body" primitive.
+`pub fn instance_mir(self, instance: ty::InstanceKind<'tcx>) -> &'tcx Body<'tcx>` is the single function the construction pass will call per `Instance` to get a `mir::Body`. It dispatches to `optimized_mir`, shim builders, or intrinsic fallback bodies depending on `InstanceKind`. This is the "fetch the body" primitive.
 
 ## Per-body walk pattern
 
 ### `rustc_codegen_ssa/src/mir/mod.rs` (~608 lines)
-The canonical end-to-end body walk. `pub fn codegen_mir(cx, instance)` at line 173 is the entry. The flow is exactly what RegseqModel construction's per-instance lowering will do:
+The canonical end-to-end body walk. `pub fn codegen_mir(cx, instance)` at line 173 is the entry. The flow is exactly what RegseqModel construction's per-instance lowering does:
 1. `tcx.instance_mir(instance.def)` to fetch the body (line 182).
 2. Construct `FunctionCx` (lines 50-156) holding `instance`, `mir`, per-local state, per-block cache.
 3. Compute `traversal_order = traversal::mono_reachable_reverse_postorder(...)` (line 250).
@@ -37,13 +38,13 @@ The canonical end-to-end body walk. `pub fn codegen_mir(cx, instance)` at line 1
 This is the most important reference for writing our own per-body walk.
 
 ### `rustc_codegen_ssa/src/mir/block.rs` (~2099 lines)
-The biggest file in the body walk. Contains `codegen_block`, `codegen_terminator`, and the giant per-`TerminatorKind` match. Notable rejection points (see Rejection Points table below) live here. Consult when hand-lowering hits an unfamiliar terminator.
+The biggest file in the body walk. Contains `codegen_block`, `codegen_terminator`, and the giant per-`TerminatorKind` match. Notable rejection points (see Rejection Points table below) live here. Consult when an unfamiliar terminator surfaces during construction-pass design.
 
 ### `rustc_codegen_ssa/src/mir/statement.rs` (~145 lines)
 Per-`StatementKind` dispatch. Small, readable. Good first-stop reference.
 
 ### `rustc_codegen_ssa/src/mir/rvalue.rs` (~1057 lines)
-Per-`Rvalue` dispatch (BinaryOp, Cast, Aggregate, Ref, AddressOf, Repeat, Len, Discriminant, etc.). Consult when hand-lowering hits an unfamiliar rvalue.
+Per-`Rvalue` dispatch (BinaryOp, Cast, Aggregate, Ref, AddressOf, Repeat, Len, Discriminant, etc.). Consult when an unfamiliar rvalue surfaces during construction-pass design.
 
 ### `rustc_codegen_ssa/src/mir/operand.rs` (~1161 lines)
 `Operand::Copy / Move / Constant` dispatch. `codegen_operand` at line 1038 has the full match. Constants flow through `eval_mir_constant_to_operand` and then the `ConstValue` cases at lines 169-194 (`Slice { alloc_id, meta }`, `Indirect { alloc_id, offset }`, `Scalar`, `ZeroSized`).
@@ -52,13 +53,13 @@ Per-`Rvalue` dispatch (BinaryOp, Cast, Aggregate, Ref, AddressOf, Repeat, Len, D
 `codegen_place` at line 324 walks `ProjectionElem` chains. The match (lines 354-400) covers `Deref`, `Field`, `OpaqueCast`, `UnwrapUnsafeBinder`, `Index`, `ConstantIndex` (both `from_end` variants), `Subslice`, `Downcast`. Reference for understanding any place projection variant.
 
 ### `rustc_codegen_ssa/src/mir/locals.rs` (~83 lines)
-Tiny. Defines `Locals<V>` indexed by `mir::Local`. Useful if our extractor needs a similar per-local sidecar map.
+Tiny. Defines `Locals<V>` indexed by `mir::Local`. Useful if the construction pass needs a similar per-local sidecar map.
 
 ### `rustc_codegen_ssa/src/mir/analyze.rs` (~395 lines)
-Pre-walk analysis (cleanup_kinds, non-SSA local detection). Probably not directly relevant — the extractor isn't trying to keep things in registers — but useful precedent for "iterate the whole body once before codegen to gather facts".
+Pre-walk analysis (cleanup_kinds, non-SSA local detection). Probably not directly relevant — the construction pass isn't trying to keep things in registers — but useful precedent for "iterate the whole body once before codegen to gather facts".
 
 ### `rustc_codegen_ssa/src/base.rs` (~1136 lines)
-Top-level codegen orchestration. `pub fn codegen_crate<B>(...)` at line 681 is the crate-wide driver. It collects mono items, partitions into CGUs, and feeds them to the backend. Not a per-body reference, but documents the outer loop our extractor's driver pass will resemble.
+Top-level codegen orchestration. `pub fn codegen_crate<B>(...)` at line 681 is the crate-wide driver. It collects mono items, partitions into CGUs, and feeds them to the backend. Not a per-body reference, but documents the outer loop the construction pass's driver will resemble.
 
 ### `rustc_codegen_ssa/src/mono_item.rs` (~98 lines)
 Tiny. The trait `MonoItemExt` defining `define`, `predefine`, `to_raw_string`. Shows the minimal interface a backend exposes per mono item.
@@ -77,7 +78,7 @@ Cranelift's inline-asm codegen. Reference if we want to know what an `asm!` bloc
 ## Stable IR extraction analog
 
 ### `rustc_public/src/lib.rs` (~319 lines)
-Crate root for the new SMIR-replacement extraction layer. Note: in this nightly the old `rustc_smir` crate has been split into **`rustc_public`** (the public-facing IR types) and **`rustc_public_bridge`** (the rustc-internal proxy that does the actual translation). This is exactly the boundary we'll need to draw between our extractor and the rest of RegseqModel construction. The doc comment at lines 1-7 calls out that the goal is eventual publication on crates.io, i.e. true `'tcx` independence.
+Crate root for the new SMIR-replacement extraction layer. Note: in this nightly the old `rustc_smir` crate has been split into **`rustc_public`** (the public-facing IR types) and **`rustc_public_bridge`** (the rustc-internal proxy that does the actual translation). This is exactly the boundary we'll need to draw between the rustc-facing surface of construction and the rest of RegseqModel construction. The doc comment at lines 1-7 calls out that the goal is eventual publication on crates.io, i.e. true `'tcx` independence.
 
 ### `rustc_public/src/mir/body.rs` (~1106 lines)
 The owned `Body` schema. `pub struct Body { blocks, locals, arg_count, var_debug_info, spread_arg, span }` (line 15). Mirror enums to study: `TerminatorKind` (line 154), `StatementKind` (line 477), `Rvalue` (line 493), `Operand` (line 672), `Place` (line 680). Note these enums are owned (no `'tcx`) and `Serialize`-able. This is the closest existing analog to RegseqModel's body-level IR shape.
@@ -101,7 +102,7 @@ The rustc-internal half. The key type is `Tables<'tcx, B: Bridge>` (line 45) whi
 Tiny support files defining the `Bridge` trait and ID builders. Quick read.
 
 ### `rustc_public_bridge/src/context/mod.rs` (~79 lines)
-The `CompilerCtxt` struct. Holds a `TyCtxt<'tcx>` plus a mutable `Tables`. This is the analog of what our extractor pass's context object will look like.
+The `CompilerCtxt` struct. Holds a `TyCtxt<'tcx>` plus a mutable `Tables`. This is the analog of what the construction pass's context object will look like.
 
 ## Constant resolution
 
@@ -109,7 +110,7 @@ The `CompilerCtxt` struct. Holds a `TyCtxt<'tcx>` plus a mutable `Tables`. This 
 Compact and very readable. `eval_mir_constant` at line 23 is the one-liner: `self.monomorphize(constant.const_).eval(self.cx.tcx(), self.cx.typing_env(), constant.span).expect("erroneous constant missed by mono item collection")`. Note the panic message — by the time codegen runs, the collector has already triggered evaluation of every required const. The `mir::Const::Unevaluated(uv, _)` arm at line 42 plus `eval_unevaluated_mir_constant_to_valtree` (lines 37-61) shows how named associated constants are resolved via `tcx.const_eval_resolve_for_typeck`. Directly relevant to driver-spec associated constants in RegseqModel.
 
 ### `rustc_codegen_ssa/src/mir/operand.rs` lines 169-260
-Where `ConstValue` is consumed: `Scalar`, `ZeroSized`, `Slice { alloc_id, meta }`, `Indirect { alloc_id, offset }`. Indirect constants are dereferenced via `bx.tcx().global_alloc(alloc_id).unwrap_memory()` (line 183). Reference for when our extractor encounters non-scalar consts.
+Where `ConstValue` is consumed: `Scalar`, `ZeroSized`, `Slice { alloc_id, meta }`, `Indirect { alloc_id, offset }`. Indirect constants are dereferenced via `bx.tcx().global_alloc(alloc_id).unwrap_memory()` (line 183). Reference for when the construction pass encounters non-scalar consts.
 
 ## Rejection points
 
@@ -125,12 +126,12 @@ Where `ConstValue` is consumed: `Scalar`, `ZeroSized`, `Slice { alloc_id, meta }
 | Unwinding under `panic = "abort"` | `rustc_mir_transform/src/abort_unwinding_calls.rs:47` | The `AbortUnwindingCalls` MIR pass rewrites unwind edges to `UnwindAction::Unreachable` when `tcx.sess.panic_strategy() == PanicStrategy::Abort`. By the time we read `optimized_mir`, panic=abort builds have already had cleanup paths removed. See also `rustc_mir_transform/src/remove_noop_landing_pads.rs:15` and `rustc_mir_transform/src/ffi_unwind_calls.rs:140`. |
 | Coroutine transform (panic=abort interaction) | `rustc_mir_transform/src/coroutine.rs:1175` | `if !tcx.sess.panic_strategy().unwinds() { ... }` — coroutine state machines skip unwind paths when configured for abort. |
 
-The pattern: rustc's late stages (codegen, post-collection) use `bug!` and `assert!` for "this MIR shape should never reach me." Our extractor should use `unsupported_construct!`-style errors instead so the driver author sees a useful message, but the *placement* of the checks should mirror what we see here.
+The pattern: rustc's late stages (codegen, post-collection) use `bug!` and `assert!` for "this MIR shape should never reach me." The construction pass should use `unsupported_construct!`-style errors instead so the driver author sees a useful message, but the *placement* of the checks should mirror what we see here.
 
 ## When to consult
 
-- Hand-lowering hits an unfamiliar MIR pattern -> `rustc_codegen_cranelift/src/base.rs:284` (`codegen_fn_body`) for the linear walk; then the relevant `rustc_codegen_ssa/src/mir/{block,statement,rvalue,operand,place}.rs` for variant-by-variant detail.
-- Designing reachability roots for the extractor -> `rustc_monomorphize/src/collector.rs` doc comment (lines 1-200) and `collect_crate_mono_items` at line 1803.
+- Encountering an unfamiliar MIR pattern -> `rustc_codegen_cranelift/src/base.rs:284` (`codegen_fn_body`) for the linear walk; then the relevant `rustc_codegen_ssa/src/mir/{block,statement,rvalue,operand,place}.rs` for variant-by-variant detail.
+- Designing reachability roots for the construction pass -> `rustc_monomorphize/src/collector.rs` doc comment (lines 1-200) and `collect_crate_mono_items` at line 1803.
 - Writing the per-body walk -> `rustc_codegen_ssa/src/mir/mod.rs:173` (`codegen_mir`) and the cranelift mirror at `rustc_codegen_cranelift/src/base.rs:33`.
 - Looking up an Operand/Place variant's intent -> `rustc_codegen_ssa/src/mir/operand.rs:1038` (`codegen_operand`) and `rustc_codegen_ssa/src/mir/place.rs:324` (`codegen_place`).
 - Resolving named/associated constants -> `rustc_codegen_ssa/src/mir/constant.rs` (entire file, ~107 lines).

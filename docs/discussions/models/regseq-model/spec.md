@@ -1,5 +1,24 @@
 # Regseq Model Spec
 
+> **STATUS: HISTORICAL DESIGN REFERENCE**
+>
+> This document is the older RegseqModel specification, designed
+> against a pre-monomorphization view of MIR that left source-level
+> constructs opaque in the IR. The compiler now consumes rustc's
+> `optimized_mir` (with `mir_opt_level=0`) plus a curated cleanup-pass
+> whitelist; the constructs that matter for driver lowering are
+> visible at that boundary in ways the older spec did not anticipate.
+>
+> This file is preserved as reference material -- prior decisions
+> stand only when they survive re-derivation against the new
+> evidence. Do not cite as authority.
+>
+> The current RegseqModel work lives at
+> `docs/discussions/regseq-model/`, which rebuilds the specification
+> from MIR/HIR observations rather than carrying this document
+> forward. The pl011 device-pressure exercise lives at
+> `docs/discussions/manual-lowering/`.
+
 ## 1. Overview
 
 ### Background

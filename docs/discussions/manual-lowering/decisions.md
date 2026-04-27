@@ -1,8 +1,14 @@
 # Decision Log
 
-Per-body lowering decisions for the pl011-full-spec fixture. The
-canonical record: every non-trivial transformation from MIR to C is
-captured here with its rationale and owning layer.
+Per-body lowering decisions for the pl011-full-spec fixture (phase-2
+device pressure). The canonical record: every non-trivial
+transformation from MIR to C is captured here with its rationale and
+owning layer.
+
+Generic decisions about MIR-shape filtering and RegseqModel
+construction belong in `docs/discussions/regseq-model/` once that
+folder grows its own decision log. This file scopes to pl011-specific
+device-pressure decisions.
 
 ## Format (proposed; not yet finalized)
 
@@ -43,22 +49,9 @@ section if none.)
 
 Trivial uniform decisions (drop StorageLive, drop unwind annotations,
 drop ZST writes, drop unreachable blocks following SwitchInt) do not
-appear per-body. They live in the "Uniform rules" section below and
-apply implicitly.
-
-## Uniform rules
-
-These rules apply to every body without per-entry justification. New
-uniform rules are added here when an empirical finding generalizes
-beyond a single body.
-
-| Rule | Disposition | Owning layer | Source of rule |
-|---|---|---|---|
-| `StorageLive` / `StorageDead` statements | dropped silently | RegseqModel construction (Rust-shape filtering) | C scopes encode lifetime |
-| `unwind continue` annotation on Call/Drop | dropped silently | RegseqModel construction (Rust-shape filtering) | spec is `panic = "abort"` |
-| ZST writes (`_n = ()`, unit Continue extractions) | dropped silently | RegseqModel construction (Rust-shape filtering) | no C representation |
-| `bb_unreachable` after a 2-variant `SwitchInt` | dropped silently | RegseqModel construction (Rust-shape filtering) | dead block by enum invariant |
-| Reborrow expressions (`_5 = &(*_1)` for receivers) | transformed to direct param use | C backend | C passes pointers; reborrow is a Rust shape only |
+appear per-body. Uniform-rule classification is rebuilt from MIR/HIR
+evidence as phase-1 work proceeds; this folder does not maintain a
+parallel table.
 
 ## Reviewer prompt template
 

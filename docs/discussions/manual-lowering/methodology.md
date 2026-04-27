@@ -1,7 +1,12 @@
 # Methodology
 
-The rules that govern hand-lowering work. New sessions should read this
-in full before contributing.
+The rules that govern phase-2 device-pressure hand-lowering for the
+pl011 fixture. Phase 1 (device-independent linguistic work on the
+RegseqModel spec and construction pass) lives at
+`docs/discussions/regseq-model/` and develops its own methodology as
+evidence accumulates; do not import rules from there.
+
+New sessions should read this document in full before contributing.
 
 ## 1. Disable-and-keep, not delete-and-rewrite
 
@@ -109,6 +114,24 @@ lower as conditional construct"; etc.
 `-Zbuild-std` (which we have deliberately not enabled). The opaque-call
 treatment is the design contract; hand-lowering must respect it or the
 captured decisions don't transfer.
+
+**Relationship to the facade collapse**: the proof-of-concept stage
+collapsed the previously-separate `regseq` facade crate into a
+`crate::regseq` submodule of each spec. That eliminated *infrastructure*
+cross-crate complexity (three-tier dispatch, Cargo metadata routing,
+RegseqAwareCallbacks, cross-crate MIR encoding). The same logic does
+not apply to `core` for two reasons. First, `core` is non-collapsible:
+`#![no_std]` Rust requires `core` for `Option`, `Result`, the `?`
+desugar lang items, and operator traits. We cannot embed `core` as a
+submodule the way we did the facade. Second, the kind of complexity
+`core` introduces is different: it is *recognition* complexity (know
+the lang-item identity of each call and its lowering), not the plumbing
+complexity the facade introduced. We address recognition complexity by
+treating `core` as a fixed vocabulary of opaque operations, recognized
+by lang-item lookup. Items in the recognized vocabulary are lowered to
+known structural or C constructs; items outside it are rejected. The
+recognized vocabulary will accumulate as hand-lowering surfaces each
+`core` call actually used by driver specs.
 
 ## 6. Reject defensive fallbacks
 

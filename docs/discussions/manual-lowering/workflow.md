@@ -1,6 +1,7 @@
 # Workflow
 
-Operational details for running a hand-lowering session. Read
+Operational details for running a phase-2 device-pressure
+hand-lowering session against the pl011-full-spec fixture. Read
 `methodology.md` first.
 
 ## 1. Refresh the dump
@@ -11,15 +12,15 @@ scripts/dump-fixture-mir.sh tests/fixtures/pl011-full-spec
 
 Produces `tests/fixtures/pl011-full-spec/dump/`:
 
-- `pl011_full_spec.mir` -- spec MIR. 43 bodies under `^fn ` markers.
-- `regseq.mir` -- facade MIR. Intrinsic stubs (recognized by
-  `#[rseq::intrinsic("...")]` attribute) plus real helpers like
-  `Mmio::modify`.
+- `pl011_full_spec.mir` -- spec MIR. The 43 spec bodies plus the inlined
+  facade bodies (intrinsic stubs recognized by
+  `#[rseq::intrinsic("...")]` attribute, real helpers like
+  `Mmio::modify`) all live here, since the facade is now a
+  `crate::regseq` submodule of the spec rather than a separate crate.
 - `spec.hir.txt` -- post-expansion HIR. Use for type definitions,
   attribute presence, module structure.
-- `mono-items.txt` -- 78-line manifest of monomorphized items.
-  Tells you which generic instantiations exist and which trait impls
-  rustc emitted.
+- `mono-items.txt` -- manifest of monomorphized items. Tells you which
+  generic instantiations exist and which trait impls rustc emitted.
 
 The `dump/` directory is gitignored. Re-run the script whenever the
 fixture or the script's flag set changes.
@@ -54,8 +55,10 @@ do not need to be re-logged per body. They are captured once in the
 "Uniform rules" section of `decisions.md`. Per-body entries record only
 the non-uniform decisions.
 
-If hand-lowering surfaces an empirical observation about MIR shape that
-generalizes beyond the body at hand, append it to `findings.md`.
+If hand-lowering surfaces an empirical observation about MIR shape
+that generalizes beyond the pl011 body at hand, escalate it to
+`docs/discussions/regseq-model/findings.md` (the phase-1 home for
+device-independent findings).
 
 ## 4. Validate
 
@@ -75,7 +78,8 @@ Before closing a hand-lowering session:
 
 1. Update `README.md`'s "Status" section with what was completed and
    where the next session should pick up.
-2. If new empirical findings landed, confirm they are in `findings.md`.
+2. If new empirical findings landed, confirm they are escalated to
+   `docs/discussions/regseq-model/findings.md`.
 3. If methodology questions arose that were not resolved, append them
    to a "Pending decisions" section in `README.md` so the next session
    can see them.
