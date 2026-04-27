@@ -1,12 +1,10 @@
-use regseq::{
+use crate::regseq::{
     ordered, Clock, DataBits, Duration, Field, FieldValue, FlowControl, Interrupt, IrqResult,
     Lifecycle, Mmio, Parity, PinCtrl, PinState, RegseqError, ResetLine, RxChar, Serial,
     SerialConfig, SerialErrors, StopBits,
 };
 
-use crate::registers::pl011::{
-    self, cr, dr, fbrd, fr, ibrd, icr, ifls, imsc, lcr_h, mis,
-};
+use crate::registers::pl011::{self, cr, dr, fbrd, fr, ibrd, icr, ifls, imsc, lcr_h, mis};
 
 /// Construct a `FieldValue` from a field descriptor and a raw shifted value.
 fn field_val<R>(field: Field<u32, R>, raw: u32) -> FieldValue<u32, R> {
@@ -287,7 +285,7 @@ impl Pl011FullSpec {
         self.disable_uart();
         self.wait_for_tx_complete();
         self.disable_fifo();
-        regseq::log_info!("pl011 baud rate: {}", config.baud_rate);
+        crate::regseq::log_info!("pl011 baud rate: {}", config.baud_rate);
         ordered! {
             self.set_baud_rate(uart_clk_hz, config.baud_rate);
             self.write_line_control(lcr_h_value);
@@ -313,7 +311,7 @@ impl Pl011FullSpec {
         let uart_clk_hz = self.uart_clock_hz();
         self.disable_uart();
         self.wait_for_tx_complete();
-        regseq::log_info!("pl011 baud rate: {}", config.baud_rate);
+        crate::regseq::log_info!("pl011 baud rate: {}", config.baud_rate);
         ordered! {
             self.set_baud_rate(uart_clk_hz, config.baud_rate);
             self.write_line_control(lcr_h_value);
@@ -503,8 +501,6 @@ impl Serial for Pl011FullSpec {
     /// ```text
     /// while caller_has_more && self.tx_ready() { self.tx_byte(b); }
     /// if caller_has_more { self.enable_tx_interrupts(); }
-    /// // Resume on TXIM via the ISR, which the OS layer ties to a
-    /// // refill callback.
     /// ```
     ///
     /// This unchecked shape satisfies REQ-PERF-BATCH-01 (no byte-at-a-time

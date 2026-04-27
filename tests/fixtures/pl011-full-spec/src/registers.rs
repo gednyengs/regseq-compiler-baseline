@@ -1,4 +1,4 @@
-use regseq::register_block;
+use crate::regseq::register_block;
 
 register_block! {
     #[endian = "little", access_width = 32]

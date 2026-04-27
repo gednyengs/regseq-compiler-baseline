@@ -24,43 +24,45 @@
 #![feature(register_tool)]
 #![register_tool(rseq)]
 
+pub mod regseq;
+
 #[rseq::driver(name = "log-intrinsic-smoke")]
 pub struct LogSmoke {}
 
 impl LogSmoke {
     pub fn log_display(value: u32) {
-        regseq::log_info!("display: {}", value);
+        crate::regseq::log_info!("display: {}", value);
     }
 
     pub fn log_lower_hex(value: u32) {
-        regseq::log_info!("lower hex: {:x}", value);
+        crate::regseq::log_info!("lower hex: {:x}", value);
     }
 
     pub fn log_upper_hex(value: u32) {
-        regseq::log_info!("upper hex: {:X}", value);
+        crate::regseq::log_info!("upper hex: {:X}", value);
     }
 
     pub fn log_lower_hex_prefixed(value: u32) {
-        regseq::log_info!("lower prefix: {:#x}", value);
+        crate::regseq::log_info!("lower prefix: {:#x}", value);
     }
 
     pub fn log_upper_hex_prefixed(value: u32) {
-        regseq::log_info!("upper prefix: {:#X}", value);
+        crate::regseq::log_info!("upper prefix: {:#X}", value);
     }
 
     pub fn log_padded_hex(value: u32) {
-        regseq::log_info!("padded: {:08x}", value);
+        crate::regseq::log_info!("padded: {:08x}", value);
     }
 
     pub fn log_padded_prefix_hex(value: u32) {
-        regseq::log_info!("padded prefix: {:#010x}", value);
+        crate::regseq::log_info!("padded prefix: {:#010x}", value);
     }
 
     pub fn log_two_args(value: u32) {
-        regseq::log_info!("two: {} {:#x}", value, value);
+        crate::regseq::log_info!("two: {} {:#x}", value, value);
     }
 
     pub fn log_no_args() {
-        regseq::log_info!("no args at all");
+        crate::regseq::log_info!("no args at all");
     }
 }

@@ -7,5 +7,4 @@ publish = false
 [workspace]
 
 [dependencies]
-regseq = { path = "../../../crates/regseq" }
 regseq-macros = { path = "../../../crates/regseq-macros" }

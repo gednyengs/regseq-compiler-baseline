@@ -277,7 +277,7 @@ impl RegisterBlock {
 
                     // Struct field
                     struct_fields.push(quote! {
-                        pub #reg_name: ::regseq::#wrapper_ty<#width_ty, #reg_name::Register>
+                        pub #reg_name: crate::regseq::#wrapper_ty<#width_ty, #reg_name::Register>
                     });
 
                     // Generate field items (constants or sub-modules)
@@ -293,8 +293,8 @@ impl RegisterBlock {
                                 // Direct constant (no named values)
                                 quote! {
                                     /// Field descriptor.
-                                    pub const #field_name: ::regseq::Field<#width_ty, Register> =
-                                        ::regseq::Field::new(#mask as #width_ty, #shift as #width_ty);
+                                    pub const #field_name: crate::regseq::Field<#width_ty, Register> =
+                                        crate::regseq::Field::new(#mask as #width_ty, #shift as #width_ty);
                                 }
                             } else {
                                 // Sub-module with FIELD constant and named values
@@ -306,8 +306,8 @@ impl RegisterBlock {
                                         let nv_value = nv.value << field.offset;
                                         quote! {
                                             /// Named field value.
-                                            pub const #nv_name: ::regseq::FieldValue<#width_ty, super::Register> =
-                                                ::regseq::FieldValue::new(#mask as #width_ty, #nv_value as #width_ty);
+                                            pub const #nv_name: crate::regseq::FieldValue<#width_ty, super::Register> =
+                                                crate::regseq::FieldValue::new(#mask as #width_ty, #nv_value as #width_ty);
                                         }
                                     })
                                     .collect();
@@ -317,8 +317,8 @@ impl RegisterBlock {
                                     #[allow(non_upper_case_globals)]
                                     pub mod #field_name {
                                         /// Field descriptor.
-                                        pub const FIELD: ::regseq::Field<#width_ty, super::Register> =
-                                            ::regseq::Field::new(#mask as #width_ty, #shift as #width_ty);
+                                        pub const FIELD: crate::regseq::Field<#width_ty, super::Register> =
+                                            crate::regseq::Field::new(#mask as #width_ty, #shift as #width_ty);
                                         #(#named_values)*
                                     }
                                 }
@@ -338,13 +338,13 @@ impl RegisterBlock {
                             pub const OFFSET: u32 = #current_offset;
 
                             /// RegisterId for full-register operations.
-                            pub const REG: ::regseq::RegisterId<#width_ty, Register> =
-                                ::regseq::RegisterId::new();
+                            pub const REG: crate::regseq::RegisterId<#width_ty, Register> =
+                                crate::regseq::RegisterId::new();
 
                             #(#field_items)*
 
-                            impl ::regseq::RegisterOf<super::Regs> for Register {
-                                type Access = ::regseq::#access_ty;
+                            impl crate::regseq::RegisterOf<super::Regs> for Register {
+                                type Access = crate::regseq::#access_ty;
                             }
                         }
                     });
@@ -357,7 +357,7 @@ impl RegisterBlock {
                     let count = res.count as usize;
 
                     struct_fields.push(quote! {
-                        #res_name: [::regseq::Reserved<#res_width_ty>; #count]
+                        #res_name: [crate::regseq::Reserved<#res_width_ty>; #count]
                     });
 
                     byte_offset += res.count * type_size_bytes(&res.width_ty);

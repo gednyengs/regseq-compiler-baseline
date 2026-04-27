@@ -64,10 +64,12 @@ rm -rf target
 echo "[1/3] cargo build (--emit=mir, whole graph)" >&2
 cargo build >&2
 
-# Copy the primary crate's MIR plus the regseq facade. Everything else
-# (proc-macro deps, build scripts) is irrelevant for hand-lowering.
+# Copy the primary crate's MIR. The regseq facade now lives inside each
+# spec crate as a `crate::regseq` submodule, so its bodies are inlined
+# into the spec's `.mir` -- no separate facade file is produced.
+# Everything else (proc-macro deps, build scripts) is irrelevant for
+# hand-lowering.
 cp "target/debug/deps/${PKG_UNDERSCORE}"-*.mir "$OUT/${PKG_UNDERSCORE}.mir"
-cp target/debug/deps/regseq-*.mir "$OUT/regseq.mir"
 
 echo "[2/3] cargo rustc -- -Zunpretty=hir > spec.hir.txt" >&2
 cargo rustc -- -Zunpretty=hir 2>/dev/null > "$OUT/spec.hir.txt"

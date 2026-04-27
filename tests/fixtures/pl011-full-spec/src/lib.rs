@@ -2,6 +2,8 @@
 #![feature(register_tool)]
 #![register_tool(rseq)]
 
+pub mod regseq;
+
 mod driver;
 pub mod registers;
 

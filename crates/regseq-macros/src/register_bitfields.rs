@@ -129,8 +129,8 @@ impl RegisterBitfields {
                                 let nv_name = &nv.name;
                                 let nv_value = nv.value << field.offset;
                                 quote! {
-                                    pub const #nv_name: ::regseq::FieldValue<#width, super::Register> =
-                                        ::regseq::FieldValue::new(#mask as #width, #nv_value as #width);
+                                    pub const #nv_name: crate::regseq::FieldValue<#width, super::Register> =
+                                        crate::regseq::FieldValue::new(#mask as #width, #nv_value as #width);
                                 }
                             })
                             .collect();
@@ -139,8 +139,8 @@ impl RegisterBitfields {
                             #[allow(non_snake_case)]
                             #[allow(non_upper_case_globals)]
                             pub mod #field_name {
-                                pub const FIELD: ::regseq::Field<#width, super::Register> =
-                                    ::regseq::Field::new(#mask as #width, #shift as #width);
+                                pub const FIELD: crate::regseq::Field<#width, super::Register> =
+                                    crate::regseq::Field::new(#mask as #width, #shift as #width);
                                 #(#named_values)*
                             }
                         }

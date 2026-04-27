@@ -4,7 +4,15 @@
 //! `#[rseq::abstraction("...")]`, and `#[rseq::pin_state(id = "...")]`
 //! attributes placed on facade crate types are visible via
 //! `tcx.get_all_attrs(def_id)` when extracting a dependent crate.
+//!
+//! GATED OUT: the facade was collapsed into a `crate::regseq`
+//! submodule of each spec fixture, so cross-crate attribute
+//! visibility is no longer the relevant case -- attributes are
+//! same-crate after the collapse. Restoring this coverage requires
+//! re-introducing a multi-crate fixture configuration; deferred
+//! beyond the PoC.
 
+#![cfg(false)]
 #![feature(rustc_private)]
 
 extern crate rustc_ast;

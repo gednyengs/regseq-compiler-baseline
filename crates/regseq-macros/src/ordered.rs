@@ -10,9 +10,9 @@ use quote::quote;
 pub fn expand(input: TokenStream) -> TokenStream {
     quote! {
         {
-            ::regseq::internal::ordered_region_begin();
+            crate::regseq::internal::ordered_region_begin();
             let __regseq_ordered_result = { #input };
-            ::regseq::internal::ordered_region_end();
+            crate::regseq::internal::ordered_region_end();
             __regseq_ordered_result
         }
     }

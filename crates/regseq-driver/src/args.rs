@@ -48,11 +48,6 @@ impl DriverArgs {
 pub enum DriverMode {
     /// Forward to rustc unchanged (cargo probe, dependency, etc.).
     Passthrough,
-    /// Apply regseq MIR shape settings, but let rustc proceed to codegen
-    /// normally (no `no_codegen`, no `after_analysis` extraction).
-    /// Used for the regseq facade and any future regseq-aware crates so
-    /// cross-crate MIR consumed by the spec extractor has a known shape.
-    RegseqAware,
     /// Run the regseq compilation pipeline.
     Regseq,
 }
@@ -68,15 +63,6 @@ pub struct DispatchSignals {
     pub has_cargo_primary_package: bool,
     /// Whether `REGSEQ_OPTIONS` is present in the environment.
     pub has_regseq_options: bool,
-    /// Value of `CARGO_PKG_NAME` (set by cargo for every rustc invocation
-    /// it spawns). `None` when the env var is missing — typically a
-    /// direct, non-cargo rustc invocation.
-    pub current_pkg_name: Option<String>,
-    /// Comma-split values from `REGSEQ_AWARE_CRATES`. `None` when the
-    /// env var is absent. An empty `Vec` (env present but empty / only
-    /// commas) means "no aware crates declared", distinguishable from
-    /// `None`.
-    pub regseq_aware_crates: Option<Vec<String>>,
 }
 
 impl DispatchSignals {
@@ -85,16 +71,12 @@ impl DispatchSignals {
         rustc_args: &[String],
         has_cargo_primary_package: bool,
         has_regseq_options: bool,
-        current_pkg_name: Option<String>,
-        regseq_aware_crates: Option<Vec<String>>,
     ) -> Self {
         Self {
             has_print_query: has_print_query(rustc_args),
             has_target: has_arg(rustc_args, "--target"),
             has_cargo_primary_package,
             has_regseq_options,
-            current_pkg_name,
-            regseq_aware_crates,
         }
     }
 
@@ -104,10 +86,6 @@ impl DispatchSignals {
             rustc_args,
             std::env::var_os("CARGO_PRIMARY_PACKAGE").is_some(),
             std::env::var_os("REGSEQ_OPTIONS").is_some(),
-            std::env::var("CARGO_PKG_NAME").ok(),
-            std::env::var("REGSEQ_AWARE_CRATES")
-                .ok()
-                .map(|raw| parse_aware_crates(&raw)),
         )
     }
 
@@ -122,24 +100,8 @@ impl DispatchSignals {
         if self.has_cargo_primary_package && self.has_regseq_options {
             return DriverMode::Regseq;
         }
-        if let (Some(name), Some(aware)) = (&self.current_pkg_name, &self.regseq_aware_crates) {
-            if aware.iter().any(|n| n == name) {
-                return DriverMode::RegseqAware;
-            }
-        }
         DriverMode::Passthrough
     }
-}
-
-/// Parse the comma-separated `REGSEQ_AWARE_CRATES` env value into a
-/// list of crate names. Empty entries (e.g. trailing commas) are
-/// dropped; whitespace around names is trimmed.
-fn parse_aware_crates(raw: &str) -> Vec<String> {
-    raw.split(',')
-        .map(|s| s.trim())
-        .filter(|s| !s.is_empty())
-        .map(|s| s.to_string())
-        .collect()
 }
 
 /// Check if an argument flag is present (e.g., "--target", "-vV").

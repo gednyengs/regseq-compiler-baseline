@@ -25,6 +25,7 @@ __pycache__/
 
 # Verification logs (machine-generated)
 /logs/verify/
+/logs/results/
 /output/
 
 # MIR/HIR dumps (machine-generated, used for hand-lowering)
