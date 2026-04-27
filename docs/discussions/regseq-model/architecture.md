@@ -542,6 +542,19 @@ commit `f0b2db1`:
    avoids a bulk copy of `f0b2db1`'s facade contents that would
    not match the new architecture, and lets per-item redesign
    happen against the new architecture without churn.
+5. **Document the symmetric `register_tool` rule in code.** Add
+   explanatory comment blocks at the points where an agent might
+   be tempted to violate the rule:
+   - `regseq` crate `lib.rs` -- explain that
+     `#![feature(register_tool)]` and `#![register_tool(rseq)]`
+     are deliberately source-side and must not be removed; without
+     them `cargo check` on the facade fails outside the wrapper.
+   - `RegseqAwareCallbacks::config` -- comment block listing what
+     is intentionally NOT injected (no `register_tool`, no
+     `no_codegen`, no `after_analysis`) and why.
+   - `RegseqCallbacks::config` -- reciprocal comment that
+     `register_tool` is also not injected here, with a pointer to
+     the methodology rule in `memory.md`.
 
 ### Re-open trigger
 

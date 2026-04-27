@@ -121,6 +121,18 @@ override any inferred convention from the codebase or older docs.
 - **Compiler-theory-first.** Solve pipeline gaps fundamentally via
   established compiler/language theory; prefer proper IR variants
   over narrow workarounds.
+- **Source declares its own compiler-relevant attributes.**
+  Crate-level declarations that enable tool-namespace recognition
+  (`#![feature(register_tool)]`, `#![register_tool(rseq)]`) live
+  in the regseq-aware source itself; neither `RegseqCallbacks` nor
+  `RegseqAwareCallbacks` injects them. Symmetric rule across both
+  callback paths. Reason: without source-side declarations,
+  `cargo check` and `rust-analyzer` on the `regseq` facade (or any
+  regseq-aware crate) fail outside the wrapper, because tool
+  attributes are unrecognized at parse time. The same principle
+  applies to `#![no_std]` and other source-required declarations
+  -- if removing the declaration breaks plain rustc invocation,
+  it must stay in the source.
 
 ## Operational pointers
 
