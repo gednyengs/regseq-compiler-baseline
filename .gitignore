@@ -27,6 +27,10 @@ __pycache__/
 /logs/verify/
 /output/
 
+# MIR/HIR dumps (machine-generated, used for hand-lowering)
+mir-dump/
+**/mir-dump/
+
 # OS
 .DS_Store
 Thumbs.db
