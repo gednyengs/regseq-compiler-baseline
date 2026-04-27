@@ -54,17 +54,20 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Multi-crate strategy revert + rebuild (Q6 in `architecture.md`).
-The facade collapse is being reverted as a single commit; the
-three-tier wrapper dispatch and `regseq` facade will be rebuilt in
-subsequent sessions with an updated `regseq_mir_passes()` whitelist
-and Q1-Q5 alignment. The historical implementation in commit
-`f0b2db1` is the structural reference.
+Multi-crate strategy rebuild (Q6 in `architecture.md`). The facade
+collapse has been reverted; the three-tier wrapper dispatch and
+`regseq` facade will be rebuilt in subsequent sessions. The
+`regseq` crate starts empty and items get promoted from each
+spec's `crate::regseq` submodule incrementally as redesign touches
+them. Intrinsic recognition follows Q7 (attribute-name based,
+closed vocabulary). The historical implementation in commit
+`f0b2db1` is the structural reference for the dispatch
+infrastructure.
 
 ## Open architectural decisions
 
-None at present. Q1-Q6 are closed in `architecture.md`. Future
-decisions land there as Q7, Q8, ... with references to evidence
+None at present. Q1-Q7 are closed in `architecture.md`. Future
+decisions land there as Q8, Q9, ... with references to evidence
 and rationale.
 
 ## Blockers / waiting on

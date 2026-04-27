@@ -531,10 +531,17 @@ commit `f0b2db1`:
    and `aware_compile.rs` (the latter `--ignored` by default)
    verify cargo-metadata recognition and end-to-end facade
    compilation under `RegseqAwareCallbacks`.
-4. **Facade contents.** Most of the historical facade structure
-   carries over (`clock.rs`, `delay.rs`, `intrinsics/`, etc.);
-   per-stage redesign decisions land as the recognized intrinsic
-   vocabulary firms up.
+4. **Facade contents -- start empty, populate incrementally.**
+   The new `regseq` crate is created empty: just the package
+   manifest with `[package.metadata.regseq]`, a minimal `lib.rs`,
+   and whatever `register_tool` declarations the symmetric rule
+   requires. Items currently inlined into each spec's
+   `crate::regseq` submodule stay there during the rebuild; each
+   one is promoted to the shared `regseq` crate on its own
+   schedule, as part of the redesign work that touches it. This
+   avoids a bulk copy of `f0b2db1`'s facade contents that would
+   not match the new architecture, and lets per-item redesign
+   happen against the new architecture without churn.
 
 ### Re-open trigger
 
@@ -554,6 +561,83 @@ that expectation would be the signal to revisit.
   `mir_emit_retag`, `mir_preserve_ub`, disabling `CheckAlignment`).
 - Q1, Q2, Q3 in this document -- the architectural decisions that
   make cross-crate handling tractable.
+
+## Q7. Intrinsic recognition: by attribute name, not by path
+
+**Decision**: the bridge recognizes domain intrinsics by the
+`NAME` argument of `#[rseq::intrinsic("NAME")]` on the callee, not
+by the callee's canonical path or `DefId`. Intrinsic names form a
+*closed* vocabulary; a function attributed with a name not in the
+vocabulary is rejected by the bridge, per the no-defensive-fallbacks
+methodology.
+
+### Rationale
+
+Path-based recognition couples the recognition mechanism to a
+specific crate layout. The bridge would need a fixed list of
+`(crate, path)` pairs that designate intrinsics. This breaks down
+when:
+
+- An item is moved from one module to another (path changes;
+  recognition rule must update).
+- An item is moved between crates (e.g., from a spec's
+  `crate::regseq` submodule to the shared `regseq` crate per Q6's
+  incremental promotion plan -- the move would invalidate
+  path-based rules).
+- A spec wants to define an intrinsic locally during development
+  (path will not match the canonical pattern).
+
+Attribute-based recognition is invariant under all of these. The
+intrinsic identity travels with the item. The `regseq` crate
+becomes a *convenient home* for shared intrinsic stubs, not a
+recognition oracle: it just so happens that intrinsic stubs live
+there for reusability.
+
+### Subordinate notes
+
+- **Closed vocabulary.** The bridge maintains a registry of valid
+  intrinsic names (likely a `const &[&str]` or an `enum
+  IntrinsicKind` with a `from_name` method). Items declaring an
+  intrinsic name not in the registry are rejected at the bridge
+  with a diagnostic, not silently treated as regular function
+  calls. Vocabulary updates are deliberate code changes in the
+  bridge.
+- **Recognition site is the callee, not the call site.** The
+  bridge looks up `#[rseq::intrinsic(...)]` on the callee's
+  `DefId` via `tcx.get_attr` (or equivalent for the `rseq` tool
+  attribute namespace). The attribute travels with the function
+  definition.
+- **Cross-crate compatibility.** `tcx.get_attr` works on any
+  `DefId`, including upstream-crate items. Combined with
+  `always_encode_mir = true` (per Q6), this means a stub in the
+  shared `regseq` crate is recognized identically whether the
+  call is intra-crate or cross-crate.
+- **Downstream stages reference intrinsics by `IntrinsicKind`.**
+  Once the bridge identifies an intrinsic and tags the call site
+  with its `IntrinsicKind`, subsequent passes (lowering, error
+  analysis, etc.) reference the intrinsic by enum value, not by
+  path string. Path is captured only for diagnostics.
+- **No path coupling anywhere in the recognition rule.** A
+  consequence worth restating: the bridge does not maintain
+  "regseq::busy_wait is the busy_wait intrinsic." It maintains
+  "any function with `#[rseq::intrinsic('busy_wait')]` is the
+  busy_wait intrinsic, and the vocabulary has `busy_wait` in it."
+
+### Re-open trigger
+
+If we ever want to permit *additional* intrinsics defined per-spec
+(i.e., the vocabulary becomes open per-driver), reconsider. The
+current methodology (closed vocabulary, central registry)
+explicitly rejects this.
+
+### References
+
+- Q6 -- intrinsic items live in the shared `regseq` crate by
+  convention but the recognition rule does not depend on their
+  location.
+- Methodology rule (`memory.md`): `core` is opaque (lang-item
+  recognition); domain intrinsics are name-recognized via
+  attribute; items outside the recognized vocabulary are rejected.
 
 ## Implications for stages 1-13
 

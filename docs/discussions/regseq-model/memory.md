@@ -79,11 +79,17 @@ Captured in `architecture.md`. One line per decision:
   wrapper dispatch (`PassthroughCallbacks` / `RegseqCallbacks` /
   `RegseqAwareCallbacks`) with cargo-metadata recognition of
   regseq-aware crates via `[package.metadata.regseq]`. Rebuild
-  planned with updated `regseq_mir_passes()` whitelist and Q1-Q5
-  alignment.
+  starts the `regseq` crate empty and promotes items from each
+  spec's `crate::regseq` submodule incrementally as redesign work
+  touches them.
+- **Q7 Intrinsic recognition by attribute name.** The bridge
+  identifies domain intrinsics by the `NAME` argument of
+  `#[rseq::intrinsic("NAME")]` on the callee, not by the callee's
+  path. Names form a closed vocabulary maintained in the bridge;
+  unknown names are rejected.
 
 These are binding unless explicitly revised. Future architectural
-decisions get appended as Q7, Q8, ... in `architecture.md`.
+decisions get appended as Q8, Q9, ... in `architecture.md`.
 
 ## Methodology rules
 
