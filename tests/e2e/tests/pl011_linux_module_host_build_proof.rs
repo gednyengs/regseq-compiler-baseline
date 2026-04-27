@@ -69,7 +69,7 @@ fn kernel_dir() -> PathBuf {
 }
 
 // ---------------------------------------------------------------------------
-// Helpers: toolchain detection (same as pl011_spec_slice.rs)
+// Helpers: toolchain detection
 // ---------------------------------------------------------------------------
 
 fn build_driver() -> PathBuf {

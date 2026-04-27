@@ -270,7 +270,6 @@ disposition rather than the cost-driven one).
 | File | Verdict | Rationale |
 |---|---|---|
 | driver_e2e.rs | KEEP | asserts wrapper reaches `after_analysis` for primary crate; routing/dispatch test, HIR/MIR-boundary |
-| pl011_spec_slice.rs | KEEP (edge) | asserts wrapper reaches `after_analysis` on PL011 slice plus parses platform.toml; routing + config |
 | platform_file_boundary.rs | KEEP (edge) | tests Layer 2 platform-file parser against fixture corpus; pre-HIR/MIR config concern |
 | pl011_driver_emission.rs | VOID | asserts emitted Linux artifact contents on disk; post-HIR/MIR backend output |
 | pl011_linux_module_host_build_proof.rs | VOID | host-builds emitted PL011 Linux module; post-HIR/MIR backend output |
@@ -377,12 +376,11 @@ logic over rustc-side types.
 
 ### 5. `tests/e2e/` files -- post-HIR/MIR or routing?
 
-Three of the five e2e files (`driver_e2e.rs`, `pl011_spec_slice.rs`,
-`platform_file_boundary.rs`) only assert that the wrapper reaches
-`after_analysis` for the primary crate, that dependencies route
-through passthrough, and that `platform.toml` parses. These are
-pre-/at-boundary assertions: they do not assert produced model or
-backend artifacts.
+Two of the four e2e files (`driver_e2e.rs`, `platform_file_boundary.rs`)
+only assert that the wrapper reaches `after_analysis` for the primary
+crate, that dependencies route through passthrough, and that
+`platform.toml` parses. These are pre-/at-boundary assertions: they
+do not assert produced model or backend artifacts.
 
 The other two (`pl011_driver_emission.rs`,
 `pl011_linux_module_host_build_proof.rs`) assert produced Linux
