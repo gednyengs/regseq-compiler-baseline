@@ -29,10 +29,10 @@ until the new extractor is designed against the cleaned shape.
 
 **Why**: the dormant `try_folding` recognizer in `construction/` keys on
 the uncleaned MIR shape. Modifying it to handle cleaned MIR before the
-new extractor exists would be wasted motion: when MonoRust extraction
-encodes its own recognition strategy, that strategy is informed by
-hand-lowering against the cleaned shape, and the dormant recognizer
-becomes irrelevant either way.
+new extractor exists would be wasted motion: when the new RegseqModel
+construction encodes its own recognition strategy, that strategy is
+informed by hand-lowering against the cleaned shape, and the dormant
+recognizer becomes irrelevant either way.
 
 **Practical implication**: hand-lower against `<fixture>/dump/` output.
 Do not regenerate dumps using the wrapper-driven path; that emits the
@@ -40,28 +40,36 @@ uncleaned shape and serves a different purpose.
 
 ## 3. Decisions are classified by owning layer
 
-Every captured decision must name the layer that owns it. The three layers:
+Every captured decision must name the layer that owns it. The two layers
+that survive after the MonoRust pivot:
 
-- **MonoRust extraction** -- decisions about Rust-shape filtering, faithful
-  representation of post-monomorphization Rust constructs, what to drop
-  silently, what to reject. Driven by the inclusion principle in
-  `docs/discussions/monorust/overview.md` Section 4.
-- **RegseqModel construction** -- decisions about domain-shape recognition:
-  intrinsics, ordered regions, register access, ISR classification, error
-  cleanup analysis, callback context inference. Driven by
-  `docs/discussions/models/regseq-model/spec.md`.
+- **RegseqModel construction** -- the single pass that consumes rustc's
+  `optimized_mir` and produces RegseqModel. Owns both the Rust-shape
+  filtering (what MIR constructs are kept, dropped silently, rejected,
+  or invisible at MIR level) AND the domain-shape recognition
+  (intrinsics, ordered regions, register access, ISR classification,
+  error cleanup analysis, callback context inference). Driven by
+  the inclusion principle preserved in
+  `docs/discussions/monorust/overview.md` Section 4 and the domain
+  rules in `docs/discussions/models/regseq-model/spec.md`.
 - **C backend** -- decisions about C rendering: type lowering (`const T*`
   vs `T*`, `restrict`, `_Bool` vs `uint8_t`), function name mangling,
   ordering-region barriers, error-cleanup goto chains, register field
   bit-shift expressions.
 
-Decisions that don't classify cleanly are an open question -- record them
-as such rather than forcing a choice.
+Decisions that don't classify cleanly between these two layers are an
+open question -- record them as such rather than forcing a choice.
+
+Within RegseqModel construction, two sub-categories may be useful when
+the distinction matters: **Rust-shape filtering** (kept/dropped/rejected
+at the MIR level) and **domain recognition** (intrinsics, ordered
+regions, register access, etc.). When relevant, note the sub-category
+in the decision entry; otherwise just say "RegseqModel construction."
 
 **Why**: a flat "MIR pattern -> C output" cookbook is negative-value debt.
 It captures the surface transformation but locks in wrong-layer thinking
 that the eventual compiler must unwind. Layered classification produces
-direct input to three separate design surfaces.
+direct input to two separate design surfaces.
 
 **Practical implication**: every decision-log entry includes an explicit
 "owning layer" field. If you are unsure, log the alternatives and ask in
@@ -88,13 +96,14 @@ The reviewer's role:
 
 ## 5. Treat `core` calls as opaque
 
-Per `docs/discussions/monorust/overview.md` Section 5.1 and the
-RegseqModel spec, calls into `core` (e.g. `Option::map`, `Result::and_then`,
-`Try::branch`, `FromResidual::from_residual`) are recognized by lang-item
-lookup or by canonical name, not by walking their MIR bodies. Hand-lowering
-follows the same rule: do not consult `core`'s MIR. Treat the call as
-"this is `?`, lower as conditional return"; "this is `Option::map`, lower
-as conditional construct"; etc.
+Per the RegseqModel spec and the inclusion-principle notes preserved
+in `docs/discussions/monorust/overview.md` Section 5.1, calls into
+`core` (e.g. `Option::map`, `Result::and_then`, `Try::branch`,
+`FromResidual::from_residual`) are recognized by lang-item lookup or
+by canonical name, not by walking their MIR bodies. Hand-lowering
+follows the same rule: do not consult `core`'s MIR. Treat the call
+as "this is `?`, lower as conditional return"; "this is `Option::map`,
+lower as conditional construct"; etc.
 
 **Why**: the redesigned pipeline cannot pull in `core`'s MIR without
 `-Zbuild-std` (which we have deliberately not enabled). The opaque-call

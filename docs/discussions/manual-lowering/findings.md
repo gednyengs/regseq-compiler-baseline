@@ -9,8 +9,8 @@ Each finding documents:
 - The construct or pattern observed.
 - The MIR fragment that surfaces it (file:fn or line range).
 - What it implies for the eventual extractor or backend.
-- The owning layer (MonoRust / RegseqModel / C backend) the finding
-  most affects.
+- The owning layer (RegseqModel construction / C backend) the
+  finding most affects.
 
 ## 2026-04-26 -- `?` Continue extraction is conditional on the OK type
 
@@ -36,8 +36,8 @@ recognizer in `crates/regseq-driver/src/construction/try_folding.rs`
 has a positional dependency on this statement; it is the reason
 enabling `RemoveZsts` in the wrapper would break that path.
 
-**Owning layer**: MonoRust extraction (or wherever `?`-recognition
-ultimately lives).
+**Owning layer**: RegseqModel construction (Rust-shape filtering
+sub-category: pattern recognition for `?` desugar).
 
 ## 2026-04-26 -- `&self` vs `&mut self` carry meaningful constraints into C
 
@@ -64,9 +64,10 @@ Caveats:
 (`_5 = &(*_1)` for `&self` callees, `_12 = &mut (*_1)` for `&mut self`
 callees).
 
-**Implication**: MonoRust and RegseqModel preserve the distinction
-faithfully; the C backend is the layer that emits `const T*` /
-`T* restrict` and decides on kernel-mode policy.
+**Implication**: RegseqModel preserves the distinction faithfully
+(via `Ref(RegseqType, Mutability)` per spec.md Section 8); the C
+backend is the layer that emits `const T*` / `T* restrict` and
+decides on kernel-mode policy.
 
 **Owning layer**: C backend.
 
@@ -85,5 +86,5 @@ presence in MIR is uniform.
 
 **Implication**: drop the annotation uniformly during extraction.
 
-**Owning layer**: MonoRust extraction (uniform-rule drop, no
+**Owning layer**: RegseqModel construction (uniform-rule drop, no
 per-call decision).

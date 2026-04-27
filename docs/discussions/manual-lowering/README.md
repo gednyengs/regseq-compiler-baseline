@@ -3,9 +3,10 @@
 Working directory for the hand-lowering exercise: read rustc-emitted MIR
 for the PL011 driver spec, hand-write the equivalent C, validate
 end-to-end in QEMU, capture every lowering decision in a structured
-log. The captured decisions inform the design of MonoRust extraction
-and the new RegseqModel construction; the validated golden C becomes
-the target the eventual compiler must reproduce.
+log. The captured decisions inform the design of the new RegseqModel
+construction (which consumes rustc's `optimized_mir` directly with
+`mir_opt_level=0`); the validated golden C becomes the target the
+eventual compiler must reproduce.
 
 This is bootstrapping in both directions: forward (we get a working
 driver before the redesigned pipeline can produce one) and backward
@@ -14,16 +15,17 @@ driver before the redesigned pipeline can produce one) and backward
 ## Why this exercise exists
 
 - **MIR is closer to RegseqModel and C than the source spec.** Lowering
-  from MIR captures rustc's substitution and desugar work, which the
-  redesigned pipeline will also consume. Decisions captured here
-  transfer to the eventual extractor; decisions from a source-level
-  exercise would not.
-- **Codegen bootstrapping** (per `docs/discussions/monorust/overview.md`
-  Section 3.1). Hand-written golden C lets us validate the backend
-  contract before the compiler can produce it.
+  from MIR captures rustc's substitution and desugar work, which
+  RegseqModel construction will also consume directly. Decisions
+  captured here transfer to the eventual extractor; decisions from a
+  source-level exercise would not.
+- **Codegen bootstrapping.** Hand-written golden C lets us validate
+  the backend contract before the compiler can produce it.
 - **The noise IS data.** Every MIR construct dropped, kept, or rejected
-  here populates the corresponding section of the MonoRust spec
-  (Sections 6, 7.1, 7.2, 7.3, 7.4). Hand-lowering 43 bodies produces
+  here populates the corresponding category in RegseqModel
+  construction's inclusion taxonomy (the kept/gone-by-mono/rejected/
+  invisible/dropped-silently classification preserved from the
+  historical MonoRust design notes). Hand-lowering 43 bodies produces
   ~43 instances of each rule the future extractor must encode.
 - **Spec-language friction surfaces.** Where the source spec is
   awkward to translate, that's a signal to revise the spec rather
@@ -42,10 +44,13 @@ driver before the redesigned pipeline can produce one) and backward
 
 External references referenced from this folder:
 
-- `docs/discussions/monorust/overview.md` -- the post-monomorphization
-  Rust IR that hand-lowering output informs.
 - `docs/discussions/models/regseq-model/spec.md` -- the domain IR that
-  consumes MonoRust.
+  RegseqModel construction produces directly from `optimized_mir`.
+- `docs/discussions/monorust/overview.md` -- historical design notes.
+  MonoRust as a separate IR is no longer pursued (see banner at the
+  top of that file). The inclusion principle, Rust-surface taxonomy,
+  and inclusion-category classification still apply to RegseqModel
+  construction's responsibilities.
 - `docs/discussions/compiler-refactoring/test-audit.md` -- the test
   classification under the disable-and-keep methodology.
 
@@ -83,9 +88,10 @@ External references referenced from this folder:
 
 **Retirement criterion** (carried over from the disable-and-keep
 methodology): the dormant post-HIR/MIR pipeline retires in a single
-deletion commit when the redesigned MonoRust + RegseqModel pipeline
-produces semantically-equivalent output for the pl011-full-spec
-fixture, validated by manual inspection plus targeted spot-tests.
+deletion commit when the redesigned RegseqModel construction
+(consuming `optimized_mir` directly) produces semantically-equivalent
+output for the pl011-full-spec fixture, validated by manual
+inspection plus targeted spot-tests.
 
 ## Cross-session continuity
 

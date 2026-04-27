@@ -30,7 +30,8 @@ For each non-uniform decision made during lowering:
    - Disposition: kept | dropped | rejected | transformed
    - MIR construct: `<the relevant snippet>`
    - Reason: <one or two lines explaining the choice>
-   - Owning layer: MonoRust | RegseqModel | C backend | open
+   - Owning layer: RegseqModel construction | C backend | open
+     (sub-category for RegseqModel: Rust-shape filtering | domain recognition)
    - References: optional pointer to spec section, prior finding,
      or related decision.
 
@@ -53,10 +54,10 @@ beyond a single body.
 
 | Rule | Disposition | Owning layer | Source of rule |
 |---|---|---|---|
-| `StorageLive` / `StorageDead` statements | dropped silently | MonoRust extraction | C scopes encode lifetime |
-| `unwind continue` annotation on Call/Drop | dropped silently | MonoRust extraction | spec is `panic = "abort"` |
-| ZST writes (`_n = ()`, unit Continue extractions) | dropped silently | MonoRust extraction | no C representation |
-| `bb_unreachable` after a 2-variant `SwitchInt` | dropped silently | MonoRust extraction | dead block by enum invariant |
+| `StorageLive` / `StorageDead` statements | dropped silently | RegseqModel construction (Rust-shape filtering) | C scopes encode lifetime |
+| `unwind continue` annotation on Call/Drop | dropped silently | RegseqModel construction (Rust-shape filtering) | spec is `panic = "abort"` |
+| ZST writes (`_n = ()`, unit Continue extractions) | dropped silently | RegseqModel construction (Rust-shape filtering) | no C representation |
+| `bb_unreachable` after a 2-variant `SwitchInt` | dropped silently | RegseqModel construction (Rust-shape filtering) | dead block by enum invariant |
 | Reborrow expressions (`_5 = &(*_1)` for receivers) | transformed to direct param use | C backend | C passes pointers; reborrow is a Rust shape only |
 
 ## Reviewer prompt template
@@ -69,16 +70,22 @@ Substitute `<entry>` with the candidate entry's text.
 <task>
 Review the decision-log entry below. Verify each numbered decision
 against the methodology document at docs/discussions/manual-lowering/methodology.md
-and the inclusion-principle taxonomy in docs/discussions/monorust/overview.md
-Section 6 (kept), 7.1 (gone by mono), 7.2 (rejected), 7.3 (invisible at MIR),
-7.4 (dropped silently).
+and the inclusion-principle taxonomy preserved in
+docs/discussions/monorust/overview.md (a historical design reference
+whose taxonomy still applies to RegseqModel construction):
+Section 6 (kept), 7.1 (gone by mono), 7.2 (rejected), 7.3
+(invisible at MIR), 7.4 (dropped silently).
 
 For each numbered decision, answer:
   1. Does the disposition (kept | dropped | rejected | transformed)
      match the inclusion-principle category cited?
   2. Does the owning layer attribution match the kind of decision
-     being made (Rust-shape filtering -> MonoRust; domain recognition
-     -> RegseqModel; C rendering -> C backend)?
+     being made? RegseqModel construction owns both Rust-shape
+     filtering (dropped/rejected/invisible) AND domain recognition
+     (intrinsics, ordered regions, register access, ISR, error
+     cleanup, callback context). C backend owns rendering decisions
+     (type lowering, restrict policy, name mangling, barriers, goto
+     chains, bit-shift expressions).
   3. Does the entry hide any non-local analysis as a local decision?
      (For example: "lower this as a goto-chain cleanup" without
      calling out that this requires a dominator-based reverse-of-

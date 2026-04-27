@@ -1,5 +1,16 @@
 # Test Audit -- Disable-and-Keep Classification
 
+> **NOTE (2026-04-26)**: this audit was performed when MonoRust was
+> still part of the planned architecture. References throughout to
+> "MonoRust extraction" or "MonoRust + new RegseqModel" should be
+> read as "the new RegseqModel construction (consuming
+> `optimized_mir` directly)." The decision to drop MonoRust as a
+> separate IR is recorded in the banner of
+> `docs/discussions/monorust/overview.md`. The classifications,
+> retirement criterion, and `#[ignore = "..."]` rationale strings
+> documented below remain valid -- only the planned-replacement
+> language is dated.
+
 ## Methodology
 
 A test is **KEEP** iff it asserts a property of rustc HIR/MIR consumption,
