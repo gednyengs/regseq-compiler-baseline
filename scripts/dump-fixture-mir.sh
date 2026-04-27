@@ -3,9 +3,14 @@
 # Dump per-crate MIR plus HIR plus monomorphization listing for a driver-spec
 # fixture, using rustc's built-in --emit=mir / -Zunpretty=hir / -Zprint-mono-items.
 #
-# Output lands under <FIXTURE>/dump/. The flag set mirrors what RegseqCallbacks
-# applies, so the MIR we read here matches what the wrapper consumes when
-# extraction eventually runs.
+# Output lands under <FIXTURE>/dump/.
+#
+# This script is intentionally a sandbox decoupled from the wrapper. It runs
+# AHEAD of regseq_mir_passes() in callbacks.rs: the cleanup-pass whitelist is
+# enabled here for hand-lowering readability, while the wrapper stays
+# conservative until extraction is rewritten to expect the cleaned shape.
+# The decisions captured during hand-lowering inform what the wrapper's
+# eventual whitelist and the new extractor's recognition strategy should be.
 #
 # Usage: scripts/dump-fixture-mir.sh <fixture-dir>
 # Example: scripts/dump-fixture-mir.sh tests/fixtures/pl011-full-spec
@@ -39,10 +44,21 @@ PKG_UNDERSCORE="${PKG_NAME//-/_}"
 
 cd "$FIXTURE_ABS"
 
-# Match RegseqCallbacks::config: opt level 0, encode MIR, force off UB checks.
-# When the cleanup whitelist lands in regseq_mir_passes(), mirror it here.
+# Sandbox flag set: opt level 0, encode MIR, UB checks off, full cleanup
+# whitelist on. The wrapper's regseq_mir_passes() is currently a strict
+# subset of this (UB-check force-offs only); when extraction is rewritten
+# to expect the cleaned shape these will converge. See script header.
+#
+# Cleanup passes (+):
+#   RemoveStorageMarkers   strip StorageLive/StorageDead
+#   RemoveZsts             elide zero-sized-type writes (incl. unit-payload)
+#   SimplifyLocals-final   compact unused local decls
+#   ReorderBasicBlocks     reverse-postorder block IDs (RPO)
+#   ReorderLocals          renumber locals in encounter order
+# UB-check passes (-):
+#   CheckAlignment, CheckNull, CheckEnums  no driver-spec instrumentation
 export RUSTFLAGS="--emit=mir -Zmir-opt-level=0 -Zalways-encode-mir \
--Zmir-enable-passes=-CheckAlignment,-CheckNull,-CheckEnums"
+-Zmir-enable-passes=+RemoveStorageMarkers,+RemoveZsts,+SimplifyLocals-final,+ReorderBasicBlocks,+ReorderLocals,-CheckAlignment,-CheckNull,-CheckEnums"
 
 rm -rf target
 echo "[1/3] cargo build (--emit=mir, whole graph)" >&2
