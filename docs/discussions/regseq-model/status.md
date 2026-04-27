@@ -54,12 +54,17 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-(none currently -- between stage 0 and stage 1)
+Multi-crate strategy revert + rebuild (Q6 in `architecture.md`).
+The facade collapse is being reverted as a single commit; the
+three-tier wrapper dispatch and `regseq` facade will be rebuilt in
+subsequent sessions with an updated `regseq_mir_passes()` whitelist
+and Q1-Q5 alignment. The historical implementation in commit
+`f0b2db1` is the structural reference.
 
 ## Open architectural decisions
 
-None at present. Q1-Q5 are closed in `architecture.md`. Future
-decisions land there as Q6, Q7, ... with references to evidence
+None at present. Q1-Q6 are closed in `architecture.md`. Future
+decisions land there as Q7, Q8, ... with references to evidence
 and rationale.
 
 ## Blockers / waiting on

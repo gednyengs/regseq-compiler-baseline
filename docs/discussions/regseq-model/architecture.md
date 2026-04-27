@@ -430,6 +430,131 @@ Re-open the question if any of the following appears:
 - rustc's `--emit=mir` output format -- the reference for the
   textual pretty-printer's shape.
 
+## Q6. Multi-crate strategy: separate `regseq` facade crate
+
+**Decision**: restore the `regseq` facade as a separate crate
+(reverting the proof-of-concept-stage collapse to a `crate::regseq`
+submodule). Bring back the three-tier wrapper dispatch
+(`PassthroughCallbacks` / `RegseqCallbacks` / `RegseqAwareCallbacks`)
+with cargo-metadata-based recognition of regseq-aware crates.
+
+### Rationale
+
+The proof-of-concept-stage collapse moved `regseq` into a
+`crate::regseq` submodule of each spec to eliminate cross-crate
+infrastructure complexity (three-tier dispatch, cargo-metadata
+routing, `RegseqAwareCallbacks`, cross-crate MIR encoding). At the
+time, hand-lowering against cross-crate MIR seemed challenging and
+the bridge layer that would normalize cross-crate-ness did not
+exist.
+
+With Q1-Q5 settled, two structural shifts make cross-crate handling
+tractable:
+
+1. **RegseqModel as a normalizing layer** (Q2). The bridge produces
+   a unified, monomorphized graph regardless of source crate;
+   `'tcx` terminates at the bridge boundary; downstream consumers
+   see one shape.
+2. **`core` opaque + everything else walked** methodology. Walking
+   a facade body via `tcx.optimized_mir(def_id)` is the same
+   operation as walking a spec body; cross-crate-ness is invisible
+   post-monomorphization.
+
+Benefits of the separate crate:
+
+- The facade can be developed independently from any specific
+  spec.
+- Facade work does not have to be replicated across driver crates.
+- The architecture matches the original intent (DSL primitives in
+  a shared library).
+
+### Subordinate notes
+
+- **Three callbacks tier:**
+  - `PassthroughCallbacks`: empty `rustc_driver::Callbacks` impl.
+    For cargo probes, dependencies that are not aware, anything
+    else.
+  - `RegseqCallbacks`: full extraction pipeline. Sets
+    `mir_opt_level = Some(0)`, `always_encode_mir = true`,
+    `mir_enable_passes = regseq_mir_passes()`,
+    `overflow_checks = Some(false)`,
+    `debug_assertions = Some(false)`. Sets `no_codegen` (extraction
+    stops after analysis). For the primary spec.
+  - `RegseqAwareCallbacks`: same MIR shape contract as
+    `RegseqCallbacks`, sourced from the shared
+    `regseq_mir_passes()` so they cannot drift. Does NOT set
+    `no_codegen` and does NOT override `after_analysis` -- rustc
+    must produce normal `rmeta` / `rlib` outputs because downstream
+    specs link against them.
+- **Recognition via cargo metadata.** Aware crates declare
+  `[package.metadata.regseq]` in their `Cargo.toml`. `cargo-regseq`
+  runs `cargo metadata`, walks packages, and injects names as
+  `REGSEQ_AWARE_CRATES` (comma-separated env var) into the build
+  environment. Presence of the table is the marker; the `role`
+  field is informational.
+- **Dispatch precedence:** Passthrough (cargo probes / no
+  `--target`) -> Regseq (primary package + `REGSEQ_OPTIONS`) ->
+  RegseqAware (matches `REGSEQ_AWARE_CRATES`) -> Passthrough.
+  Primary check beats aware check; deterministic for crates that
+  are both.
+- **Symmetric `register_tool` rule.** The aware crate's source
+  declares its own `#![feature(register_tool)]` /
+  `#![register_tool(rseq)]`. Neither callback injects this.
+  Discipline lets `cargo check` work directly on aware crates
+  without the wrapper being active.
+- **Same-compiler-options requirement.** Both `RegseqCallbacks` and
+  `RegseqAwareCallbacks` use `regseq_mir_passes()` to ensure the
+  cleanup whitelist is identical. Any future divergence requires a
+  justification.
+- **`always_encode_mir = true`** ensures upstream-crate MIR is in
+  the `.rmeta` and consumable by the bridge via
+  `tcx.optimized_mir(def_id)` for cross-crate `DefId`s.
+
+### Implementation plan
+
+The facade collapse is reverted in a single commit (drops the
+three-tier code, deletes the facade crate, updates fixtures and
+dump script). The rebuild proceeds in subsequent sessions with
+these modifications relative to the historical implementation in
+commit `f0b2db1`:
+
+1. **Updated `regseq_mir_passes()` whitelist.** The historical pass
+   list is conservative (UB-check force-offs only); the rebuild
+   aligns with the dump-script whitelist
+   (`+RemoveStorageMarkers,+RemoveZsts,+SimplifyLocals-final,+ReorderBasicBlocks,+ReorderLocals`
+   plus the UB-check force-offs).
+2. **Bridge integration aligned with Q1-Q5.**
+   `RegseqCallbacks::after_analysis` invokes the bridge to produce
+   RegseqModel (per Q2 eager translation), not the older
+   construction pipeline.
+3. **Tests rebuilt against the new pipeline.** `aware_routing.rs`
+   and `aware_compile.rs` (the latter `--ignored` by default)
+   verify cargo-metadata recognition and end-to-end facade
+   compilation under `RegseqAwareCallbacks`.
+4. **Facade contents.** Most of the historical facade structure
+   carries over (`clock.rs`, `delay.rs`, `intrinsics/`, etc.);
+   per-stage redesign decisions land as the recognized intrinsic
+   vocabulary firms up.
+
+### Re-open trigger
+
+If the rebuilt three-tier dispatch leaks cross-crate complexity
+into the bridge or into RegseqModel construction in ways that the
+normalizing-layer abstraction does not actually contain,
+reconsider. The Q6 expectation is that cross-crate-ness terminates
+at the bridge boundary and is invisible to consumers; failure of
+that expectation would be the signal to revisit.
+
+### References
+
+- Commit `f0b2db1` "feat: three-tier wrapper dispatch for
+  regseq-aware crates" -- structural reference for the rebuild.
+- `prior-art/charon.md` -- Charon validates the rustc-options set
+  used by both callbacks (`always_encode_mir`, `mir_opt_level=0`,
+  `mir_emit_retag`, `mir_preserve_ub`, disabling `CheckAlignment`).
+- Q1, Q2, Q3 in this document -- the architectural decisions that
+  make cross-crate handling tractable.
+
 ## Implications for stages 1-13
 
 ### Stage 1 (vocabulary) is heavier than originally sketched

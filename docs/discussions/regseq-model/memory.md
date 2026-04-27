@@ -74,9 +74,16 @@ Captured in `architecture.md`. One line per decision:
 - **Q5 Tests + serialization.** `insta` snapshots plus a custom
   textual MIR-inspired pretty-printer (primary) plus serde-derived
   JSON (secondary).
+- **Q6 Multi-crate strategy.** `regseq` facade is a separate crate
+  (reverting an earlier proof-of-concept collapse). Three-tier
+  wrapper dispatch (`PassthroughCallbacks` / `RegseqCallbacks` /
+  `RegseqAwareCallbacks`) with cargo-metadata recognition of
+  regseq-aware crates via `[package.metadata.regseq]`. Rebuild
+  planned with updated `regseq_mir_passes()` whitelist and Q1-Q5
+  alignment.
 
 These are binding unless explicitly revised. Future architectural
-decisions get appended as Q6, Q7, ... in `architecture.md`.
+decisions get appended as Q7, Q8, ... in `architecture.md`.
 
 ## Methodology rules
 
