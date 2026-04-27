@@ -126,25 +126,27 @@ override any inferred convention from the codebase or older docs.
 
 ## Where current work stands
 
-Stage-0 architectural foundation is complete (all of Q1-Q5
-decided). Stage 1 (vocabulary specification) is the next work to
-start. The methodology, decision log, and spec itself accumulate
-in this folder as evidence comes in. See `README.md` "Status" for
-the up-to-date snapshot at the start of any session.
+See `status.md` for the consolidated tracker (stage progress,
+active focus, blockers, next action). At time of writing the
+foundation snapshot is: stage-0 architectural decisions Q1-Q5
+complete; stage 1 (vocabulary) is the next work to start.
+`status.md` is the source of truth -- this paragraph may go stale.
 
 ## Read order for catching up
 
 In priority:
 
 1. This file (`memory.md`).
-2. `README.md` -- folder-level orientation and current status.
-3. `architecture.md` -- the Q1-Q5 decisions in detail.
-4. `prior-art/README.md` -- the synthesis of prior-art research
+2. `README.md` -- folder-level orientation.
+3. `status.md` -- current stage progress, active focus, next
+   action.
+4. `architecture.md` -- the Q1-Q5 decisions in detail.
+5. `prior-art/README.md` -- the synthesis of prior-art research
    that shaped the architectural decisions.
-5. `regseq-background.md` -- DSL background.
-6. `findings.md` -- empirical observations about MIR/HIR shape.
-7. `rustc-references.md` -- pointers into the pinned rustc-src.
-8. Per-project files in `prior-art/` -- consult on demand when a
+6. `regseq-background.md` -- DSL background.
+7. `findings.md` -- empirical observations about MIR/HIR shape.
+8. `rustc-references.md` -- pointers into the pinned rustc-src.
+9. Per-project files in `prior-art/` -- consult on demand when a
    specific external project comes up.
 
 ## What this file is NOT

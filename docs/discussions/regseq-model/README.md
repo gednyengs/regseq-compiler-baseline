@@ -44,6 +44,9 @@ indicate a phase-1 spec gap are escalated here.
 - `memory.md` -- briefing for an LLM agent landing fresh in this
   project. Self-contained context handoff; the right entry point
   for any new session.
+- `status.md` -- consolidated status tracker for phase-1 work
+  (stage progress, active focus, blockers, next action). Update
+  at the end of every session that changes anything material.
 - `architecture.md` -- settled stage-0 architectural decisions
   (Q1-Q5: crate layout, `'tcx` boundary policy, IR layering,
   rustc integration point, tests + serialization format). Treat
@@ -64,13 +67,10 @@ here as evidence comes in.
 
 ## Status
 
-All stage-0 architectural decisions closed (see `architecture.md`):
-two-crate split preserved (Q1); eager translation with fully owned
-RegseqModel and transient Tables in the bridge (Q2); single-level
-IR with stage-refinement (Q3); `rustc_driver::Callbacks` as the
-rustc integration point (Q4); `insta` snapshot tests with a
-textual MIR-inspired pretty-printer as the primary serialization
-format and serde-derived JSON as the secondary format (Q5).
+See `status.md` for the consolidated status tracker (stage progress,
+active focus, blockers, next action). Brief snapshot: stage-0
+architectural foundation is complete (Q1-Q5 in `architecture.md`);
+stage 1 (vocabulary) is the next work to start.
 
 Stage 1 (vocabulary) not yet started. Methodology and per-construct
 decision log not yet authored. The three findings carried over with
@@ -84,15 +84,15 @@ A new session should:
 1. Read `memory.md` for the self-contained project briefing
    (pivot context, methodology rules, operational pointers, read
    order).
-2. Read this `README.md` for folder-level orientation and current
-   status.
-3. Read `architecture.md` for settled stage-0 decisions (Q1-Q5).
-4. Skim `prior-art/README.md` for the synthesis of prior-art
+2. Read this `README.md` for folder-level orientation.
+3. Read `status.md` for current stage progress, active focus, and
+   next action.
+4. Read `architecture.md` for settled stage-0 decisions (Q1-Q5).
+5. Skim `prior-art/README.md` for the synthesis of prior-art
    research that shaped the architectural decisions.
-5. Skim `regseq-background.md` for DSL framing.
-6. Skim `findings.md` for prior empirical observations.
-7. Consult `rustc-references.md` when a rustc-internal question
+6. Skim `regseq-background.md` for DSL framing.
+7. Skim `findings.md` for prior empirical observations.
+8. Consult `rustc-references.md` when a rustc-internal question
    surfaces.
-8. Pick up where the previous session left off, recorded in the
-   "Status" section above (which should be updated when each
-   session ends).
+9. Pick up from `status.md`'s "Next action"; update `status.md`
+   at session end if anything material changed.
