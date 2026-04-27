@@ -14,7 +14,7 @@ pub mod args;
 mod callbacks;
 pub mod construction;
 pub mod extract;
-pub use callbacks::{regseq_mir_passes, RegseqCallbacks};
+pub use callbacks::{regseq_mir_passes, RegseqAwareCallbacks, RegseqCallbacks};
 
 const BUG_REPORT_URL: &str = "https://github.com/gednyengs/regseq-compiler-asplos/issues";
 
@@ -48,6 +48,9 @@ pub fn run() -> i32 {
         match args.dispatch() {
             args::DriverMode::Passthrough => {
                 rustc_driver::run_compiler(&rustc_args, &mut callbacks::PassthroughCallbacks);
+            }
+            args::DriverMode::RegseqAware => {
+                rustc_driver::run_compiler(&rustc_args, &mut callbacks::RegseqAwareCallbacks);
             }
             args::DriverMode::Regseq => {
                 let options_json = std::env::var("REGSEQ_OPTIONS")

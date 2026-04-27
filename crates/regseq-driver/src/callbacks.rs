@@ -34,6 +34,41 @@ pub struct PassthroughCallbacks;
 
 impl rustc_driver::Callbacks for PassthroughCallbacks {}
 
+/// Callbacks for regseq-aware crates (the facade and any future
+/// regseq-aware extensions). Applies the same MIR shape settings as
+/// `RegseqCallbacks` so cross-crate MIR consumed by the spec extractor
+/// has a known shape, but does NOT set `no_codegen` and does NOT
+/// override `after_analysis` — rustc must produce normal `rmeta`/`rlib`
+/// outputs and proceed to codegen as usual.
+///
+/// This struct deliberately has no fields and no constructor: its
+/// behavior is fully determined by the global MIR shape contract
+/// (`regseq_mir_passes`), so there is nothing to parameterize. If a
+/// future regseq-aware crate needs invocation-specific configuration,
+/// add it here with a justification.
+pub struct RegseqAwareCallbacks;
+
+impl rustc_driver::Callbacks for RegseqAwareCallbacks {
+    fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+        // Same MIR shape contract as RegseqCallbacks. The whitelist is
+        // sourced from the shared `regseq_mir_passes()` constructor so
+        // it cannot drift between the two callback types.
+        config.opts.unstable_opts.mir_opt_level = Some(0);
+        config.opts.unstable_opts.always_encode_mir = true;
+        config.opts.unstable_opts.mir_enable_passes = regseq_mir_passes();
+        config.opts.cg.overflow_checks = Some(false);
+        config.opts.cg.debug_assertions = Some(false);
+        config.opts.debug_assertions = false;
+        // Intentionally NOT set:
+        //   - config.opts.unstable_opts.no_codegen (rustc must codegen
+        //     a normal rlib for the facade)
+        //   - feature(register_tool) / register_tool(rseq) crate_attr
+        //     injection (the source declares its own; symmetric rule
+        //     with RegseqCallbacks::config)
+    }
+    // No `after_analysis` override: rustc proceeds to codegen normally.
+}
+
 /// Regseq callbacks that hook into the compilation pipeline.
 pub struct RegseqCallbacks {
     options: regseq_config::CompilerOptions,

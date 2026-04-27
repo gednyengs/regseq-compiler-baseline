@@ -3,5 +3,8 @@ name = "regseq"
 version = "0.1.0"
 edition = "2021"
 
+[package.metadata.regseq]
+role = "facade"
+
 [dependencies]
 regseq-macros = { path = "../regseq-macros" }
