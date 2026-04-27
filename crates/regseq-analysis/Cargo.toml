@@ -3,6 +3,9 @@ name = "regseq-analysis"
 version = "0.1.0"
 edition = "2021"
 
+[features]
+post-monorust-tests = []
+
 [dependencies]
 regseq-config = { path = "../regseq-config" }
 regseq-diagnostics = { path = "../regseq-diagnostics" }

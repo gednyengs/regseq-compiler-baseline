@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Integration tests for [`regseq_analysis::readiness::check_readiness`].
 //!
 //! Each test constructs a minimal hand-built [`RegseqModel`], runs

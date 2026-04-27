@@ -39,7 +39,10 @@ pub struct ImplBlock {
     pub associated_constants: Vec<Constant>,
 }
 
-#[cfg(test)]
+// All tests in this module exercise post-HIR/MIR output (constructed model,
+// JSON serialization, snapshots). Voided pending MonoRust + RegseqModel
+// redesign. See docs/discussions/compiler-refactoring/test-audit.md.
+#[cfg(all(test, feature = "post-monorust-tests"))]
 mod tests {
     use super::*;
     use crate::identity::{

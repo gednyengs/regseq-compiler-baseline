@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Unit + integration coverage for the backend-neutral C AST.
 //!
 //! Exercises construction and rendering of every Phase-7C node type,

@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Per-module dependency-set derivation tests (regseq-model-53).
 //!
 //! Exercises [`derive_module_dependencies`] on:

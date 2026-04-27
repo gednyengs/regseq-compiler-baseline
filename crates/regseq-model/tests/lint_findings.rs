@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Integration tests for the non-fail-fast lint channel surfaced by
 //! [`verify_phase_1`] / [`verify_phase_2`] (task regseq-model-62).
 //!

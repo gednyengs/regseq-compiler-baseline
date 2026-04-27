@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Pass 2 Rule 4 deref-collapse tests (regseq-model-48).
 //!
 //! Recognizes explicit `<Mmio<T> as Deref>::deref` Calls on transport

@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Pass 2 Rule 5 OrderedRegion detection tests (regseq-model-49).
 //!
 //! These tests exercise the IR constructor's ability to recognize

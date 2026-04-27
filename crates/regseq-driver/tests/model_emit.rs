@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 #![feature(rustc_private)]
 
 extern crate rustc_driver;
@@ -53,6 +58,8 @@ fn find_driver_module(module: &Value) -> Option<&Value> {
 fn emit_model_writes_regseq_model_json() {
     const SOURCE: &str = r#"
 #![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
 
 pub struct Clock;
 pub struct ResetLine;

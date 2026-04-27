@@ -21,6 +21,8 @@
 //! `{:p}` coverage will land alongside raw-pointer support in a
 //! later task.
 #![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
 
 #[rseq::driver(name = "log-intrinsic-smoke")]
 pub struct LogSmoke {}

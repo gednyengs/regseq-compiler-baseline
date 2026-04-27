@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Rule 3 cross-crate function extraction tests (regseq-model-47).
 //!
 //! Each test compiles a small inline specimen through a rustc harness

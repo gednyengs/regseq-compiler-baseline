@@ -7,7 +7,7 @@ use std::path::PathBuf;
 use regseq_config::{
     ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam, TargetOs,
 };
-use regseq_driver::RegseqCallbacks;
+use regseq_driver::{regseq_mir_passes, RegseqCallbacks};
 
 fn sample_options() -> CompilerOptions {
     CompilerOptions {
@@ -81,4 +81,81 @@ fn compiler_options_round_trip_through_json() {
     let json = serde_json::to_string(&options).expect("serialize options");
     let decoded: CompilerOptions = serde_json::from_str(&json).expect("deserialize options");
     assert_eq!(decoded, options);
+}
+
+/// The whitelist returned by `regseq_mir_passes` is the initial,
+/// conservative set: UB-check passes are force-disabled. The
+/// shape-altering cleanup passes (RemoveStorageMarkers, RemoveZsts,
+/// SimplifyLocals-final, ReorderBasicBlocks, ReorderLocals) are the
+/// design target but must wait on updates to the `?`-pattern
+/// recognizer in `construction/try_folding.rs` that currently keys
+/// on the unmodified MIR shape. See the docstring on
+/// `callbacks::regseq_mir_passes` for the deferred items.
+#[test]
+fn regseq_mir_passes_whitelist_matches_contract() {
+    let passes = regseq_mir_passes();
+    let expected: Vec<(String, bool)> = vec![
+        ("CheckAlignment".to_string(), false),
+        ("CheckNull".to_string(), false),
+        ("CheckEnums".to_string(), false),
+    ];
+    assert_eq!(passes, expected);
+}
+
+/// Regression guard: the `RegseqCallbacks::config` source must not
+/// inject `feature(register_tool)` or `register_tool(rseq)`. Driver
+/// spec fixtures declare these at their crate roots so the same
+/// source compiles uniformly under the wrapper, rust-analyzer, and
+/// any other non-wrapper compilation path. End-to-end tests
+/// (`model_emit`, `pl011_construction`) compile fixtures that
+/// self-declare `register_tool(rseq)`; if `RegseqCallbacks::config`
+/// regressed and re-injected the same registration, those compiles
+/// would fail with a duplicate-registration error. This text-level
+/// check is the lightweight first line of defense.
+#[test]
+fn regseq_callbacks_config_source_does_not_inject_register_tool() {
+    let source = include_str!("../src/callbacks.rs");
+
+    // Locate the RegseqCallbacks::config function body.
+    let config_start = source
+        .find("impl rustc_driver::Callbacks for RegseqCallbacks")
+        .expect("RegseqCallbacks impl not found in callbacks.rs");
+    let after_impl = &source[config_start..];
+    let fn_start = after_impl
+        .find("fn config")
+        .expect("RegseqCallbacks::config not found in callbacks.rs");
+    let body_start = after_impl[fn_start..]
+        .find('{')
+        .expect("config fn body open brace not found")
+        + fn_start;
+
+    // Find matching closing brace for the function body.
+    let bytes = after_impl.as_bytes();
+    let mut depth = 0usize;
+    let mut body_end = body_start;
+    for i in body_start..bytes.len() {
+        match bytes[i] {
+            b'{' => depth += 1,
+            b'}' => {
+                depth -= 1;
+                if depth == 0 {
+                    body_end = i + 1;
+                    break;
+                }
+            }
+            _ => {}
+        }
+    }
+    let body = &after_impl[body_start..body_end];
+
+    assert!(
+        !body.contains("register_tool"),
+        "RegseqCallbacks::config must not reference register_tool; \
+         found in body:\n{body}",
+    );
+    assert!(
+        !body.contains("feature(register_tool)"),
+        "RegseqCallbacks::config must not inject feature(register_tool); \
+         found in body:\n{body}",
+    );
 }

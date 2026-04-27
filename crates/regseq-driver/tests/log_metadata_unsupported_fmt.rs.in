@@ -1,4 +1,6 @@
 #![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
 
 #[rseq::driver(name = "log-metadata-unsupported-fmt")]
 pub struct BadDriver {}

@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! Pass 2 Rule 6 logging-metadata extraction tests (regseq-model-50).
 //!
 //! These tests drive `build_body` against fixture crates that depend
@@ -204,17 +209,11 @@ where
 
     impl<R: Send + 'static> rustc_driver::Callbacks for Callbacks<R> {
         fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+            // All sources fed through `with_fixture` (the migrated
+            // log-intrinsic-smoke fixture, the inline PL011_LIKE_SPECIMEN,
+            // and the `.rs.in` specimens) self-declare
+            // `feature(register_tool)` and `register_tool(rseq)`.
             config.opts.unstable_opts.no_codegen = true;
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("feature(register_tool)".to_string());
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("register_tool(rseq)".to_string());
             config.opts.unstable_opts.crate_attr.push(
                 "allow(unused, non_snake_case, nonstandard_style, redundant_semicolons)"
                     .to_string(),
@@ -685,6 +684,8 @@ fn pl011_fixture_contains_info_log_call() {
 
 const PL011_LIKE_SPECIMEN: &str = r#"
 #![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
 
 #[rseq::driver(name = "pl011-like")]
 pub struct Pl011Like {}

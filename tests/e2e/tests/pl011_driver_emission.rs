@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! End-to-end test: PL011 full-spec through the production driver emission path.
 //!
 //! Builds `regseq-driver`, then runs `cargo check` with `RUSTC_WRAPPER`

@@ -1,4 +1,6 @@
 #![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
 
 #[rseq::driver(name = "log-metadata-arity-mismatch")]
 pub struct BadDriver {}

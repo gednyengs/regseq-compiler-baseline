@@ -1,3 +1,34 @@
+/// MIR pass whitelist for Regseq compilation.
+///
+/// Force-disables UB-check instrumentation so generated MIR contains no
+/// runtime check artifacts (`CheckAlignment`, `CheckNull`, `CheckEnums`).
+///
+/// The design intent (see the manual-lowering planning discussion) is to
+/// ALSO force-enable a small set of shape-preserving cleanup passes that
+/// are off at `mir_opt_level=0`:
+///
+///   - `RemoveStorageMarkers` (strip `StorageLive` / `StorageDead`)
+///   - `RemoveZsts` (strip zero-sized-type ops)
+///   - `SimplifyLocals-final` (collapse unused locals)
+///   - `ReorderBasicBlocks` (RPO ordering)
+///   - `ReorderLocals` (use-order locals)
+///
+/// Those are deliberately omitted from this initial whitelist: the
+/// existing `?`-pattern recognizer in
+/// `crates/regseq-driver/src/construction/try_folding.rs` keys on the
+/// unmodified MIR shape (statement counts, block indices, local
+/// indices) and rejects bodies whose shape was rearranged. Enabling
+/// those passes here breaks `pl011_construction` and friends. They
+/// will be added once `try_folding` and adjacent recognizers are
+/// updated to consume the cleaned shape.
+pub fn regseq_mir_passes() -> Vec<(String, bool)> {
+    vec![
+        ("CheckAlignment".to_string(), false),
+        ("CheckNull".to_string(), false),
+        ("CheckEnums".to_string(), false),
+    ]
+}
+
 /// Passthrough callbacks that leave rustc behavior unchanged.
 pub struct PassthroughCallbacks;
 
@@ -54,18 +85,9 @@ impl RegseqCallbacks {
 impl rustc_driver::Callbacks for RegseqCallbacks {
     fn config(&mut self, config: &mut rustc_interface::interface::Config) {
         config.opts.unstable_opts.no_codegen = true;
-        config
-            .opts
-            .unstable_opts
-            .crate_attr
-            .push("feature(register_tool)".to_string());
-        config
-            .opts
-            .unstable_opts
-            .crate_attr
-            .push("register_tool(rseq)".to_string());
         config.opts.unstable_opts.mir_opt_level = Some(0);
         config.opts.unstable_opts.always_encode_mir = true;
+        config.opts.unstable_opts.mir_enable_passes = regseq_mir_passes();
         config.opts.cg.overflow_checks = Some(false);
         config.opts.cg.debug_assertions = Some(false);
         config.opts.debug_assertions = false;

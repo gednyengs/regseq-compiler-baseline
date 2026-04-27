@@ -6,6 +6,9 @@ edition = "2021"
 [package.metadata.rust-analyzer]
 rustc_private = true
 
+[features]
+post-monorust-tests = []
+
 [dependencies]
 regseq-analysis = { path = "../regseq-analysis" }
 regseq-backends = { path = "../regseq-backends" }

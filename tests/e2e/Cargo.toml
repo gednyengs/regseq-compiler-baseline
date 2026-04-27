@@ -4,6 +4,9 @@ version = "0.0.0"
 edition = "2021"
 publish = false
 
+[features]
+post-monorust-tests = []
+
 [dev-dependencies]
 regseq-analysis = { path = "../../crates/regseq-analysis" }
 regseq-model = { path = "../../crates/regseq-model" }

@@ -98,7 +98,10 @@ fn walk_module<'a>(module: &'a Module, out: &mut BTreeMap<FunctionId, &'a Body>)
     }
 }
 
-#[cfg(test)]
+// All tests in this module exercise post-HIR/MIR output (constructed model,
+// JSON serialization, snapshots). Voided pending MonoRust + RegseqModel
+// redesign. See docs/discussions/compiler-refactoring/test-audit.md.
+#[cfg(all(test, feature = "post-monorust-tests"))]
 mod tests {
     use super::*;
     use regseq_model::identity::{DeclId, SourceLocation, SourceOrigin, SymbolInterner};

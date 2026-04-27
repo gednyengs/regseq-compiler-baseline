@@ -14,7 +14,7 @@ pub mod args;
 mod callbacks;
 pub mod construction;
 pub mod extract;
-pub use callbacks::RegseqCallbacks;
+pub use callbacks::{regseq_mir_passes, RegseqCallbacks};
 
 const BUG_REPORT_URL: &str = "https://github.com/gednyengs/regseq-compiler-asplos/issues";
 

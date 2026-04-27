@@ -1,3 +1,7 @@
+#![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
 #[rseq::driver(name = "property-test")]
 pub struct PropertyTestDriver {
     #[rseq::property(id = "reg-io-width", default = 4)]

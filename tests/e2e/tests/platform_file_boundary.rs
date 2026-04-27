@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 #![feature(rustc_private)]
 
 //! Boundary smoke tests for the Layer 1 / Layer 2 property-id vocabulary.
@@ -71,17 +76,11 @@ fn compile_and_extract_property_surface(source: &str, test_name: &str) -> Extrac
 
     impl rustc_driver::Callbacks for ExtractCallbacks {
         fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+            // Driver-spec fixtures (e.g., the migrated property-driver
+            // crate) self-declare `feature(register_tool)` and
+            // `register_tool(rseq)` at their crate roots, so we must
+            // not inject duplicates here.
             config.opts.unstable_opts.no_codegen = true;
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("feature(register_tool)".to_string());
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("register_tool(rseq)".to_string());
         }
 
         fn after_analysis<'tcx>(

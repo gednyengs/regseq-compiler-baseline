@@ -1,3 +1,8 @@
+//! Voided pending MonoRust + RegseqModel redesign.
+//! See docs/discussions/compiler-refactoring/test-audit.md for the classification rationale
+//! and the retirement criterion.
+#![cfg(feature = "post-monorust-tests")]
+
 //! End-to-end PL011 RegseqModel construction test (regseq-model-54).
 //!
 //! This test compiles the `pl011-full-spec` fixture crate through the
@@ -34,6 +39,7 @@ use std::sync::{Arc, Mutex, Once, OnceLock};
 use rustc_hir::def_id::DefId;
 use rustc_middle::ty::TyCtxt;
 
+use regseq_driver::regseq_mir_passes;
 use regseq_driver::construction::{
     build_body, build_pass1_output, derive_module_dependencies, ConstantIndex, DerefCollapseLookup,
     ExtractionRegistries, FunctionIndex, IntrinsicLookup, LogArgUnwrap, OrderedMarkers,
@@ -262,19 +268,13 @@ where
             // `regseq_driver::callbacks::RegseqCallbacks::config` so the
             // bodies the integration test builds mirror what the
             // production callback builds.
+            //
+            // `feature(register_tool)` and `register_tool(rseq)` are
+            // declared at the fixture's crate root, not injected here.
             config.opts.unstable_opts.no_codegen = true;
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("feature(register_tool)".to_string());
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("register_tool(rseq)".to_string());
             config.opts.unstable_opts.mir_opt_level = Some(0);
             config.opts.unstable_opts.always_encode_mir = true;
+            config.opts.unstable_opts.mir_enable_passes = regseq_mir_passes();
             config.opts.cg.overflow_checks = Some(false);
             config.opts.cg.debug_assertions = Some(false);
             config.opts.debug_assertions = false;

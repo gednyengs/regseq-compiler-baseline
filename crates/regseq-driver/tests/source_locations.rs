@@ -258,17 +258,9 @@ fn compile_pl011_and_extract(test_name: &str) -> RawSourceLocationSurface {
 
     impl rustc_driver::Callbacks for Callbacks {
         fn config(&mut self, config: &mut rustc_interface::interface::Config) {
+            // The migrated pl011-full-spec fixture self-declares
+            // `feature(register_tool)` and `register_tool(rseq)`.
             config.opts.unstable_opts.no_codegen = true;
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("feature(register_tool)".to_string());
-            config
-                .opts
-                .unstable_opts
-                .crate_attr
-                .push("register_tool(rseq)".to_string());
             config
                 .opts
                 .unstable_opts
