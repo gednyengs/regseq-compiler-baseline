@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (post Option-B refactor; stage-1 spec done across four review rounds; implementation queued).
+Last updated: 2026-04-28 (stage-1 step 1 closed -- Idx + NonMaxU32 + newtype_index! + CrateId, commit `b8f1e67`).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -20,11 +20,12 @@ tracker is worse than no tracker.
   four review rounds (three Codex, one external) all addressed
   (`stage-1-review-log.md`), spec (`stage-1-vocabulary.md`)
   implementation-ready.
-- [ ] **Stage 1 implementation.** Population of
-  `crates/regseq-model/` with the stage-1 types. Workspace is
-  prepped (old stack moved to `*-old` siblings, un-suffixed crates
-  wiped to stubs); not yet started. Foundation-first order in
-  "Next action" below.
+- [in progress] **Stage 1 implementation.** Population of
+  `crates/regseq-model/` with the stage-1 types. Foundation-first
+  order in "Next action" below. Step 1 (Idx trait, NonMaxU32 niche
+  wrapper, `newtype_index!` macro, `CrateId` with hand-rolled serde)
+  closed in commit `b8f1e67`; Codex-reviewed (ACCEPT). Step 2
+  (`IndexVec<I, T>`) up next.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
   work tracks the rest of the stages -- per-stage variants gain
@@ -66,27 +67,25 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Between sessions; ready to start stage-1 implementation.
+Stage-1 step 2 (`IndexVec<I, T>` with flat-array JSON shape).
 
-State of the world (post commit `9352ea0`):
+State of the world:
 
-- *Stage 1 spec complete.* `stage-1-vocabulary.md` reflects three
-  review rounds (16 issues, all addressed). Implementation-ready.
-- *Workspace prepped.* Old IR stack (regseq-model, regseq-analysis,
-  regseq-backends, the `construction/`+`extract/` portions of
-  regseq-driver, tests/e2e content) moved to `*-old` siblings for
-  direct reference. Un-suffixed crates wiped to stubs. Tag
-  `pre-stage-1-impl-archive` points at the parent of `9352ea0`.
+- *Step 1 closed* in commit `b8f1e67`. `Idx` trait with `'static`
+  bound (R4.2), private `NonMaxU32` niche wrapper
+  (XOR-with-`u32::MAX`), declarative `newtype_index!` macro, and
+  `CrateId` instantiation with hand-rolled serde (route 1 of R4.1).
+  9 integration tests passing; Codex review verdict ACCEPT.
+- *Stage 1 spec round-4-revised.* `stage-1-vocabulary.md` reflects
+  four review rounds (R4.1 serde mechanism, R4.2 `Idx: 'static`).
+  Implementation-ready.
 - *Workspace builds clean.* `cargo check --workspace --tests`
   passes with only the inherited dead-code warnings from
-  `regseq-driver-old/src/extract/`. Stage-0 regression in
-  `regseq-driver/tests/args.rs` fixed in the refactor commit.
-- *Multi-crate rebuild (Q6) complete.* `crates/regseq/` empty
-  facade with `[package.metadata.regseq]` marker. Three-tier
-  dispatch verified end-to-end. The aware-crates env-var plumbing
-  and cleanup-pass whitelist are settled. New regseq-driver does
-  not yet contain bridge code; `RegseqCallbacks::after_analysis`
-  is empty until stage-1 implementation lands.
+  `regseq-driver-old/src/extract/`.
+- *Multi-crate dispatch (Q6) intact.* `crates/regseq/` facade,
+  three-tier dispatch, env-var plumbing, cleanup-pass whitelist
+  unchanged. `RegseqCallbacks::after_analysis` still empty until
+  bridge work begins (post-foundation).
 
 Open methodology guidance for the implementer: the spec is
 mutable. If type-shape ambiguities or composition issues surface
@@ -106,9 +105,12 @@ and rationale.
 
 ## Next action
 
-Implement stage 1 in `crates/regseq-model/` against
-`stage-1-vocabulary.md`. **Stage 1 is implemented directly in the
-active session, not delegated to a separate implementer agent.**
+Implement stage-1 step 2 in `crates/regseq-model/`: `IndexVec<I, T>`
+with flat-array JSON shape (`stage-1-vocabulary.md` IndexVec section,
+recommending `#[serde(transparent)]` over inner `Vec<T>` with
+`PhantomData<I>` skipped, or hand-rolled serde). Validate round-trip
+against an integration test. **Stage 1 is implemented directly in
+the active session, not delegated to a separate implementer agent.**
 Rationale: stage 1 is the foundation every later stage rides on,
 and the conversation context built across the spec-design sessions
 (including the methodology rules, decision history, and
@@ -116,12 +118,10 @@ spec-mutability posture) is hard to transfer cleanly to a fresh
 agent. Once stage 1 is validated under compilation, stages 3-13
 become more mechanical and can be delegated.
 
-Foundation-first order:
+Foundation-first order (step 1 done; remaining):
 
-1. `Idx` trait + `newtype_index!` analogue (with inherent
-   `pub const fn from_u32`) + custom serde for one ID; validate
-   that round-trip preserves the logical index, niche encoding
-   stays internal, and `Option<Id>` is 4 bytes.
+1. ~~`Idx` trait + `newtype_index!` analogue + custom serde for one
+   ID.~~ *Done in commit `b8f1e67`.*
 2. `IndexVec<I, T>` with flat-array JSON shape (likely
    `#[serde(transparent)]` over inner `Vec<T>` with `PhantomData<I>`
    skipped). Validate round-trip against a small integration test.
