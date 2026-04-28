@@ -102,7 +102,12 @@ Q2 cascades into several decisions that shape stage 1 directly.
 RegseqModel uses its own opaque integer IDs for everything:
 
 - `ItemId`, `BodyId`, `TyId`, `ConstId`, `BlockId`, `LocalId`,
-  `SpanId`, `StringId`, `SourceFileId`, ...
+  `StringId`, `SourceFileId`, ...
+
+(Spans are stored inline in IR nodes by value, not interned to a
+`SpanId`; this refinement is locked in `stage-1-research.md` F2.
+The Q2 pattern -- rustc-side handles intern to RegseqModel-owned
+IDs at the bridge -- still holds for every other ID listed above.)
 
 The bridge populates them from rustc-side handles (`DefId`,
 `Ty<'tcx>`, `AllocId`, `Span`, `Symbol`, ...) via transient
@@ -143,7 +148,6 @@ struct Tables<'tcx> {
     items:   HashMap<DefId, ItemId>,
     types:   HashMap<Ty<'tcx>, TyId>,
     consts:  HashMap<AllocId, ConstId>,
-    spans:   HashMap<Span, SpanId>,
     strings: HashMap<Symbol, StringId>,
     // ...
 }

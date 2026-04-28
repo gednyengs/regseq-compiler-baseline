@@ -171,11 +171,15 @@ In priority:
    currently) in detail.
 5. `prior-art/README.md` -- the synthesis of prior-art research
    that shaped the architectural decisions.
-6. `regseq-background.md` -- DSL background.
-7. `findings.md` -- empirical observations about MIR/HIR shape.
-8. `rustc-references.md` -- pointers into the pinned rustc-src.
-9. Per-project files in `prior-art/` -- consult on demand when a
-   specific external project comes up.
+6. `stage-1-research.md` -- prior-art research and locked sub-
+   decisions (F1-F4) for stage 1 (vocabulary). Read once stage 1
+   work is active.
+7. `stage-1-vocabulary.md` -- the stage-1 spec proper.
+8. `regseq-background.md` -- DSL background.
+9. `findings.md` -- empirical observations about MIR/HIR shape.
+10. `rustc-references.md` -- pointers into the pinned rustc-src.
+11. Per-project files in `prior-art/` -- consult on demand when a
+    specific external project comes up.
 
 ## What this file is NOT
 

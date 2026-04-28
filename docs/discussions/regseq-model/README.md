@@ -53,6 +53,29 @@ indicate a phase-1 spec gap are escalated here.
   multi-crate strategy, intrinsic recognition by attribute name).
   Treat as binding unless explicitly revised; future decisions
   append as Q8, Q9, ...
+- `stage-1-research.md` -- prior-art research synthesis for stage 1
+  (vocabulary): four-cluster survey (rustc internals, Rust-to-C
+  compilers, Rust verification IRs, general IR design), convergent
+  patterns settled by precedent, and the four locked sub-decisions
+  (F1-F4: span byte representation, span placement, source content,
+  ItemId determinism). Evidence base for the stage-1 spec.
+- `stage-1-vocabulary.md` -- the stage-1 spec proper. ID conventions,
+  the StringInterner, SourceFile and Span types, DefPath form,
+  Instance form, top-level RegseqModel struct, determinism rules,
+  serialization conventions, pretty-printer interface sketch.
+  Type signatures are sketches; field names and minor details are
+  at the implementation's discretion.
+- `stage-1-review-log.md` -- summary of two prior Codex adversarial
+  review rounds against the stage-1 work and how each issue was
+  addressed. Useful for future reviewers (don't re-litigate
+  resolved concerns) and for a future agent picking up the work.
+- `stage-1-review-prompt.md` -- self-contained prompt for an
+  external reviewer (no repo access). Pairs with the file
+  attachments listed inside it.
+- `rustc-excerpts.md` -- curated rustc-src quotations the stage-1
+  spec depends on, gathered for an external reviewer.
+  Authoritative for rustc-internal claims when the reviewer
+  cannot open the rustc-src tree directly.
 - `regseq-background.md` -- DSL background: `#![no_std]` spec
   environment, the three mechanisms (intrinsics, properties,
   traits).

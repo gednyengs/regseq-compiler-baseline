@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-27 (post multi-crate rebuild).
+Last updated: 2026-04-27 (stage-1 research synthesis, F1-F4 locked).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -11,9 +11,14 @@ tracker is worse than no tracker.
 - [x] **Stage 0: Architectural foundation.** Q1-Q7 closed; see
   `architecture.md`. Multi-crate three-tier dispatch infrastructure
   also rebuilt and verified end-to-end.
-- [ ] **Stage 1: Vocabulary.** ID types, StringInterner, SourceFile
-  table, DefPath form, top-level RegseqModel struct. Pre-loaded
-  with content from Q2 and Q5; not started.
+- [x] **Stage 1: Vocabulary.** ID types, StringInterner, SourceFile
+  table, Span representation, DefPath form, Instance form, top-level
+  RegseqModel struct, determinism rules, serialization conventions.
+  Research synthesis (`stage-1-research.md`) complete and Codex-
+  reviewed; F1-F4 locked. Spec (`stage-1-vocabulary.md`) drafted.
+  Implementation (population of the `regseq-model` crate with the
+  stage-1 types) not yet started; that is the next concrete work
+  unit.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
   work tracks the rest of the stages -- per-stage variants gain
@@ -55,7 +60,20 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-(none currently -- between the multi-crate rebuild and stage 1)
+Stage 1 (vocabulary) spec drafted and reviewed across three rounds
+(two Codex, one external). Research synthesis (`stage-1-
+research.md`) complete; spec (`stage-1-vocabulary.md`) covers all
+five components plus determinism, serialization, and pretty-printer
+interface. Sixteen issues surfaced across the three review rounds,
+all addressed; see `stage-1-review-log.md`.
+
+Round-3 fixes (latest): added `CrateId` and `CrateInfo` for
+multi-crate-graph identity (replacing the single-crate root
+fields), pinned custom serde for IDs and `StringInterner` (derive
+would expose internal encoding), pinned always-verbose
+`DefPath.rendered`, made `line_text` 1-based to match `Position`,
+tightened the bridge span invariant to keep both endpoints in the
+same source file. Spec is implementation-ready.
 
 Multi-crate rebuild (Q6) is complete:
 
@@ -93,9 +111,18 @@ and rationale.
 
 ## Next action
 
-Start stage 1 (vocabulary). Q2 and Q5 pre-loaded the content; see
-`architecture.md` "Implications for stages 1-13" for the concrete
-to-spec list.
+Implement stage 1 in the `regseq-model` crate against
+`stage-1-vocabulary.md` (post-three-review-rounds). Foundation-first
+order recommended: (1) `Idx` + `newtype_index!` analogue + custom
+serde for one ID, validate round-trip; (2) `IndexVec<I, T>` with
+flat-array on-wire shape; (3) `StringInterner` with custom serde
+and validation rules; (4) `SourceFile` + `Position` + `Span` with
+file-local F1 rule; (5) `DefPathData` + `DefPathSegment` + `DefPath`
+(now with `crate_id`) + `DefPathHash` + `CrateInfo` + `Instance`;
+(6) top-level `RegseqModel` struct including `crates` and
+`primary_crate`. Each step lands as its own commit; spec issues
+surfaced during implementation trigger spec revision (the spec is
+mutable per methodology) before continuing.
 
 ## How to update this file
 
