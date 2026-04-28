@@ -1,17 +1,18 @@
 # Stage 1 Review Log
 
-Summary of three adversarial review rounds against the stage-1
+Summary of four adversarial review rounds against the stage-1
 work, with each issue and how it was addressed. A reviewer working
 from this artifact set should not re-flag any issue listed here
 unless the resolution is itself unsound.
 
-Sixteen issues raised across the three rounds; all addressed.
+Eighteen issues raised across the four rounds; all addressed.
 
 | Round | Reviewer | Target | Verdict | Issues |
 |---|---|---|---|---|
 | 1 | Codex (gpt-5.5) | `stage-1-research.md` | REVISE_BEFORE_PROCEEDING | 5 |
 | 2 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (initial) | REVISE_BEFORE_IMPL | 6 |
 | 3 | external (no repo access) | `stage-1-vocabulary.md` (post-round-2) | REVISE_BEFORE_IMPL | 5 |
+| 4 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (implementation-readiness) | REVISE_BEFORE_APPLYING | 2 |
 
 ## Round 1 -- review of `stage-1-research.md`
 
@@ -284,14 +285,75 @@ that cross file boundaries.
 
 ---
 
+## Round 4 -- implementation-readiness revision review
+
+**Scope**: two proposed revisions to `stage-1-vocabulary.md` surfaced
+by an implementation-readiness analysis just before stage-1 step-1
+implementation began. Revision A reopens the serde-mechanism
+paragraph addressed in R3.2; revision B adds `'static` to the `Idx`
+trait bound. This round reviewed *only those two revisions*, not the
+whole spec.
+
+**Verdict**: REVISE_BEFORE_APPLYING. Both revisions accepted in
+substance; wording tightened per the findings below before being
+applied.
+
+### R4.1 -- SERDE (MEDIUM): correct R3.2's `from = "u32"` mechanism
+
+R3.2 required ID newtypes to use `#[serde(into = "u32", from =
+"u32")]` plus `From<Id> for u32` and `From<u32> for Id`. The
+infallible `From<u32>` path delegates to the inherent `from_u32`,
+which panics on niche-violating input (e.g., `u32::MAX` when the
+niche reserves the top value). Serde surfaces panics poorly compared
+to a clean `D::Error::custom(...)`. Additionally, the original
+paragraph's blanket "not derived" claim conflicts with the
+conversion-attribute derive route, and the prior wording did not
+explicitly ban `#[serde(transparent)]` over the niche-bearing inner
+field (which would also leak the internal representation).
+
+**Resolution**: rewrote the paragraph at lines 100-110 of
+`stage-1-vocabulary.md`. The new wording (a) bans field-derive and
+`#[serde(transparent)]` on ID newtypes explicitly, (b) names two
+acceptable routes -- hand-rolled `impl Serialize` / `impl
+Deserialize` *or* `#[serde(into = "u32", try_from = "u32")]` with
+`TryFrom<u32, Error: Display>` -- and (c) explicitly rules out the
+infallible `from = "u32"` shape. Either route must round-trip the
+*logical index* and reject niche-violating values at deserialize
+time. The conventions table (line 823) and the section header (lines
+814-817) were synced to allow either route. R3.2's resolution is
+strengthened (not invalidated) by R4.1 -- the wire-shape contract
+and niche-validation requirement carry through unchanged.
+
+### R4.2 -- TRAIT_BOUND (LOW): make `'static` explicit on `Idx`
+
+The `Idx` trait declaration (line 58) carried `Copy + Eq + Hash + Ord
++ Debug` but no `'static`. The IR is owned end-to-end by Q2 (`'tcx`
+dies at the bridge) and the model invariant later in the spec ("No
+`'tcx` references"). All stage-1 IDs are `u32`-backed and naturally
+`'static`. The trait bound did not surface this.
+
+**Resolution**: added `'static` to the `Idx` trait bound at line 58
+of `stage-1-vocabulary.md`. Appended a paragraph to the rationale
+calling out that the bound makes the existing owned/`'tcx`-free IR
+invariant explicit at the trait boundary, with rustc's
+`rustc_index::Idx` (also `'static`-bound) as secondary precedent.
+Initial draft justified `'static` via speculative `TypeId`/type-
+erased-registry use cases; this was rejected as defensive-fallback
+overreach (cf. methodology rule "no defensive fallbacks; toolchain is
+pinned") and replaced with the IR-invariant rationale.
+
+---
+
 ## Notes for the next reviewer
 
-Three rounds covered different scopes (research synthesis, initial
-spec, post-revision spec) and surfaced different categories of
-issues. Together they exercised: type-shape consistency, F1-F4
-instantiation correctness, methodology violations, rustc-internal
-traps, prior-art over-extrapolation, implementation-feasibility
-ambiguity, and (round 3) multi-crate-graph completeness.
+Four rounds covered different scopes (research synthesis, initial
+spec, post-revision spec, implementation-readiness revisions) and
+surfaced different categories of issues. Together they exercised:
+type-shape consistency, F1-F4 instantiation correctness, methodology
+violations, rustc-internal traps, prior-art over-extrapolation,
+implementation-feasibility ambiguity, multi-crate-graph completeness
+(round 3), and serde-mechanism / trait-bound implementation
+correctness (round 4).
 
 Areas that *have not* been adversarially reviewed yet, and which
 the next reviewer might profitably probe:

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (post Option-B refactor; stage-1 spec done across three review rounds; implementation queued).
+Last updated: 2026-04-28 (post Option-B refactor; stage-1 spec done across four review rounds; implementation queued).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -17,7 +17,7 @@ tracker is worse than no tracker.
   struct (with `crates` table and `primary_crate`), F4 determinism
   rules, custom serde for IDs and StringInterner, pretty-printer
   interface sketch. Research synthesis (`stage-1-research.md`),
-  three review rounds (two Codex, one external) all addressed
+  four review rounds (three Codex, one external) all addressed
   (`stage-1-review-log.md`), spec (`stage-1-vocabulary.md`)
   implementation-ready.
 - [ ] **Stage 1 implementation.** Population of

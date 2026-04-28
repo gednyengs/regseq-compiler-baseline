@@ -55,7 +55,7 @@ All IDs implement a small `Idx` trait that gives bidirectional
 conversion to/from `usize`:
 
 ```rust
-pub trait Idx: Copy + Eq + Hash + Ord + Debug {
+pub trait Idx: Copy + Eq + Hash + Ord + Debug + 'static {
     fn new(idx: usize) -> Self;
     fn index(self) -> usize;
 }
@@ -66,6 +66,13 @@ comparable for stable iteration order in dumps). Unlike rustc's
 `DefId` -- which deliberately omits `Ord` to discourage incremental-
 order-dependent code -- our typed IDs are post-bridge and assigned in
 deterministic order, so `Ord` is sound.
+
+`'static` makes the existing owned/`'tcx`-free IR invariant (see the
+"No `'tcx` references" model invariant later in this document, and Q2
+in `architecture.md`) explicit at the trait boundary. All stage-1 IDs
+are `u32`-backed and naturally `'static`; the bound costs nothing.
+rustc's `rustc_index::Idx` carries the same bound (rustc additionally
+omits `Ord`; we keep it for stable dump ordering).
 
 ### Backing representation
 
@@ -97,17 +104,32 @@ macro shape (in the `rustc_index_macros` crate) or hand-roll one;
 the IR-side stability contract is just that all IDs satisfy `Idx +
 Serialize + Deserialize + Hash + Ord`.
 
-`Serialize` / `Deserialize` are *not* derived. Niche-encoded IDs (e.g.,
-`NonZeroU32`-shifted) would otherwise expose the internal encoding on
-the wire instead of the logical index. Each ID newtype implements
-serde manually with the on-wire shape `u32 = Idx::index()`, ideally
-via `#[serde(into = "u32", from = "u32")]` plus `From<Id> for u32` /
-`From<u32> for Id` (the latter going through `from_u32`). At
-deserialize time the input `u32` must fit the niche-encoded
-representation (e.g., not `u32::MAX` if the niche reserves the top
-value); reject otherwise with a clear error. Bounds-against-table
-validation happens later as a model-level invariant, not a serde
-concern.
+`Serialize` / `Deserialize` must not be field-derived (i.e., a bare
+`#[derive(Serialize, Deserialize)]` on the niche-bearing struct), nor
+`#[serde(transparent)]` over the niche-bearing inner field -- both
+leak the internal niche-encoded representation to the wire. Each ID
+newtype implements serde with the on-wire shape `u32 = Idx::index()`
+via one of the following routes:
+
+1. *Hand-rolled `impl Serialize` / `impl Deserialize`.* Direct control
+   of error reporting; niche-violating input produces a clean
+   `D::Error::custom(...)`. Self-contained per ID.
+2. *`#[serde(into = "u32", try_from = "u32")]`* plus `From<Id> for u32`
+   and `TryFrom<u32, Error = E> for Id`, where `E: Display` (e.g., a
+   small `IdRangeError`) and the error message identifies the niche
+   violation. The infallible `from = "u32"` shape is *not* acceptable
+   -- delegating to `from_u32` panics on niche violations, which serde
+   surfaces poorly.
+
+Either route must:
+
+- Round-trip the *logical index* through the wire, never the niche-
+  encoded internal representation.
+- Reject niche-violating values (e.g., `u32::MAX` if the niche
+  reserves the top value) at deserialize time with a clear error.
+
+Bounds-against-table validation happens later as a model-level
+invariant, not a serde concern.
 
 In addition to the trait method `Idx::new(usize)`, every ID newtype
 exposes an inherent `pub const fn from_u32(idx: u32) -> Self` for use
@@ -812,15 +834,16 @@ would need a body fingerprint; out of scope for stage 1.
 ## Serialization conventions
 
 All stage-1 types are `Serialize` / `Deserialize` via serde. Most
-derive; IDs and `StringInterner` implement custom impls per the
-rules in their respective sections. JSON is the structured format
-(Q5).
+field-derive directly. IDs follow the rules in the `Idx` section
+(hand-written impls or serde conversion attributes); `StringInterner`
+uses a hand-written impl per its section. JSON is the structured
+format (Q5).
 
 ### Per-type conventions
 
 | Type | JSON shape | Mechanism |
 |---|---|---|
-| ID newtypes (`CrateId`, `StringId`, `SourceFileId`, `ItemId`, ...) | bare `u32` (logical `Idx::index()`) | custom `Serialize` / `Deserialize` with niche-range validation |
+| ID newtypes (`CrateId`, `StringId`, `SourceFileId`, `ItemId`, ...) | bare `u32` (logical `Idx::index()`) | hand-written `impl` or serde conversion attributes (`#[serde(into = "u32", try_from = "u32")]`); niche-range validation; default field derive and `#[serde(transparent)]` are not acceptable |
 | `StringInterner` | flat string array (the `storage` field) | custom `Serialize` / `Deserialize` with deserialize-time validation (index 0 is empty, no duplicates) |
 | `IndexVec<I, T>` | flat array of `T` (no per-element key, no phantom-data field) | `#[serde(transparent)]` over inner `Vec<T>` with `PhantomData<I>` skipped, or custom impl |
 | `CrateInfo` | object with `name` (StringId), `stable_crate_id` (u64) | derive |
