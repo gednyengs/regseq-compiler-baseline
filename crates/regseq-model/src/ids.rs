@@ -62,3 +62,27 @@ impl<'de> serde::Deserialize<'de> for StringId {
         Ok(Self::from_u32(raw))
     }
 }
+
+newtype_index! {
+    /// Identifies a `SourceFile` in `RegseqModel.source_files`.
+    pub struct SourceFileId {}
+}
+
+impl serde::Serialize for SourceFileId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for SourceFileId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "SourceFileId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}

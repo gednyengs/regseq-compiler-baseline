@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (stage-1 step 3 closed -- StringInterner + StringId).
+Last updated: 2026-04-28 (stage-1 step 4 closed -- SourceFile + Position + Span + SourceFileId).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -22,12 +22,16 @@ tracker is worse than no tracker.
   implementation-ready.
 - [in progress] **Stage 1 implementation.** Population of
   `crates/regseq-model/` with the stage-1 types. Foundation-first
-  order in "Next action" below. Steps 1-3 closed: Idx + NonMaxU32 +
+  order in "Next action" below. Steps 1-4 closed: Idx + NonMaxU32 +
   `newtype_index!` + CrateId (`b8f1e67`); `IndexVec<I, T>` with
-  flat-array serde (`fd0d3c8`); `StringInterner` + StringId with
-  hand-rolled serde and deserialize-time validation. All three
-  Codex-reviewed (ACCEPT each). Step 4 (`SourceFile` + `Position` +
-  `Span`) up next.
+  flat-array serde (`fd0d3c8`); `StringInterner` + StringId
+  (`82aaaed`); `SourceFile` + `Position` + `Span` + SourceFileId
+  with resolution methods (`position`, `line_text`, `Span::start`/
+  `end`/`slice`). All four Codex-reviewed; step 4 had one MEDIUM
+  correctness finding (position fallback when `line_starts[0] >
+  byte`), addressed with a fix and a regression test before
+  commit. Step 5 (DefPath family + CrateInfo + Instance +
+  GenericArg + StableCrateId) up next.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
   work tracks the rest of the stages -- per-stage variants gain
@@ -69,9 +73,8 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Stage-1 step 4 (`SourceFile` + `Position` + `Span` with the F1
-file-local byte-offset rule; resolution methods only, no bridge
-code yet).
+Stage-1 step 5 (DefPathData + DefPathSegment + DefPath +
+DefPathHash + CrateInfo + Instance + GenericArg + StableCrateId).
 
 State of the world:
 
@@ -83,14 +86,20 @@ State of the world:
   inner and `PhantomData<fn(&I)>` marker. Serde via
   `#[serde(transparent)]` + `#[serde(skip)]` produces a flat array
   of `T` on the wire. Codex ACCEPT.
-- *Step 3 closed.* `StringInterner` (`storage: Vec<Arc<str>>`,
-  `lookup: HashMap<Arc<str>, StringId>`) with hand-rolled serde:
-  wire shape is `storage`-only flat array of strings, lookup
-  rebuilt on deserialize, three rejection paths (empty array,
-  non-empty index 0, duplicate entries). `StringId` added as
-  second concrete ID via the `newtype_index!` macro. 38
-  integration tests passing total (12 idx + 11 index_vec + 15
-  string_interner). Codex ACCEPT.
+- *Step 3 closed* in `82aaaed`. `StringInterner` with hand-rolled
+  serde and deserialize-time validation; `StringId` added as the
+  second concrete ID. Codex ACCEPT.
+- *Step 4 closed.* `SourceFile`, `Position`, `Span`, and
+  `SourceFileId` (third concrete ID). Resolution methods:
+  `position` (binary search via `partition_point`), `line_text`
+  (1-based, strips `\n`/`\r\n`), `Span::start`/`end`/`slice`
+  (file-local). Serde derived for `SourceFile`/`Position`/`Span`;
+  `serde` `rc` feature added so `Option<Arc<str>>` content can be
+  derived. 60 integration tests passing total (12 idx + 11
+  index_vec + 22 source + 15 string_interner). Codex REVISE
+  (MEDIUM correctness finding on `position` fallback when
+  `line_starts[0] > byte`); fix applied and regression test added
+  before commit.
 - *Stage 1 spec round-4-revised.* `stage-1-vocabulary.md` reflects
   four review rounds (R4.1 serde mechanism, R4.2 `Idx: 'static`).
   Implementation-ready.
@@ -120,12 +129,14 @@ and rationale.
 
 ## Next action
 
-Implement stage-1 step 4 in `crates/regseq-model/`: `SourceFile` +
-`Position` + `Span` with the F1 file-local byte-offset rule (no
-bridge code yet; resolution methods only). See the "Source files
-and spans" section of `stage-1-vocabulary.md`. **Stage 1 is
-implemented directly in the active session, not delegated to a
-separate implementer agent.**
+Implement stage-1 step 5 in `crates/regseq-model/`: `DefPathData`
+(19 variants per the spec), `DefPathSegment`, `DefPath` (with
+`crate_id`), `DefPathHash`, `CrateInfo`, `Instance`, `GenericArg`,
+and `StableCrateId`. See the "DefPath form" and adjacent sections
+of `stage-1-vocabulary.md`. This is the largest single step --
+forward-declared by stages 11-12 but populated at stage 1.
+**Stage 1 is implemented directly in the active session, not
+delegated to a separate implementer agent.**
 Rationale: stage 1 is the foundation every later stage rides on,
 and the conversation context built across the spec-design sessions
 (including the methodology rules, decision history, and
@@ -133,14 +144,16 @@ spec-mutability posture) is hard to transfer cleanly to a fresh
 agent. Once stage 1 is validated under compilation, stages 3-13
 become more mechanical and can be delegated.
 
-Foundation-first order (steps 1-3 done; remaining):
+Foundation-first order (steps 1-4 done; remaining):
 
 1. ~~`Idx` trait + `newtype_index!` analogue + custom serde for one
    ID.~~ *Done in commit `b8f1e67`.*
 2. ~~`IndexVec<I, T>` with flat-array JSON shape.~~ *Done in
    commit `fd0d3c8`.*
 3. ~~`StringInterner` with custom `Serialize`/`Deserialize`.~~
-   *Done; closed in the present commit.*
+   *Done in commit `82aaaed`.*
+4. ~~`SourceFile` + `Position` + `Span` with the F1 file-local
+   byte-offset rule.~~ *Done; closed in the present commit.*
 3. `StringInterner` with custom `Serialize`/`Deserialize` (storage
    only on the wire; lookup rebuilt on deserialize; index-0-is-empty
    and no-duplicate validation).
