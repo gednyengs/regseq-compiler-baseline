@@ -7,9 +7,11 @@
 
 mod idx;
 mod ids;
+mod index_vec;
 
 pub use idx::Idx;
 pub use ids::CrateId;
+pub use index_vec::IndexVec;
 
 const _: () = assert!(core::mem::size_of::<CrateId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<CrateId>>() == 4);

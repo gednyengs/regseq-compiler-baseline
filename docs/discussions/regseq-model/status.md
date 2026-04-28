@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (stage-1 step 1 closed -- Idx + NonMaxU32 + newtype_index! + CrateId, commit `b8f1e67`).
+Last updated: 2026-04-28 (stage-1 step 2 closed -- IndexVec<I, T> with flat-array serde).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -22,10 +22,11 @@ tracker is worse than no tracker.
   implementation-ready.
 - [in progress] **Stage 1 implementation.** Population of
   `crates/regseq-model/` with the stage-1 types. Foundation-first
-  order in "Next action" below. Step 1 (Idx trait, NonMaxU32 niche
-  wrapper, `newtype_index!` macro, `CrateId` with hand-rolled serde)
-  closed in commit `b8f1e67`; Codex-reviewed (ACCEPT). Step 2
-  (`IndexVec<I, T>`) up next.
+  order in "Next action" below. Step 1 (Idx + NonMaxU32 +
+  `newtype_index!` + CrateId) closed in `b8f1e67`. Step 2
+  (`IndexVec<I, T>` with `#[serde(transparent)]` over inner
+  `Vec<T>` and skipped phantom marker) closed; both Codex-reviewed
+  (ACCEPT each). Step 3 (`StringInterner`) up next.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
   work tracks the rest of the stages -- per-stage variants gain
@@ -67,15 +68,21 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Stage-1 step 2 (`IndexVec<I, T>` with flat-array JSON shape).
+Stage-1 step 3 (`StringInterner` with hand-rolled serde, storage
+only on the wire, lookup rebuilt on deserialize).
 
 State of the world:
 
 - *Step 1 closed* in commit `b8f1e67`. `Idx` trait with `'static`
-  bound (R4.2), private `NonMaxU32` niche wrapper
-  (XOR-with-`u32::MAX`), declarative `newtype_index!` macro, and
-  `CrateId` instantiation with hand-rolled serde (route 1 of R4.1).
-  9 integration tests passing; Codex review verdict ACCEPT.
+  bound (R4.2), private `NonMaxU32` niche wrapper, declarative
+  `newtype_index!` macro, `CrateId` with hand-rolled serde (route 1
+  of R4.1). Codex ACCEPT.
+- *Step 2 closed.* `IndexVec<I, T>` with `Vec<T>` inner and
+  `PhantomData<fn(&I)>` marker (rustc-style variance and
+  unconditional `Send + Sync`). Serde via `#[serde(transparent)]` +
+  `#[serde(skip)]` produces a flat array of `T` on the wire. `I:
+  Idx` bound only on `push`, `Index<I>`, `IndexMut<I>`. 11
+  integration tests passing; Codex ACCEPT.
 - *Stage 1 spec round-4-revised.* `stage-1-vocabulary.md` reflects
   four review rounds (R4.1 serde mechanism, R4.2 `Idx: 'static`).
   Implementation-ready.
@@ -105,12 +112,12 @@ and rationale.
 
 ## Next action
 
-Implement stage-1 step 2 in `crates/regseq-model/`: `IndexVec<I, T>`
-with flat-array JSON shape (`stage-1-vocabulary.md` IndexVec section,
-recommending `#[serde(transparent)]` over inner `Vec<T>` with
-`PhantomData<I>` skipped, or hand-rolled serde). Validate round-trip
-against an integration test. **Stage 1 is implemented directly in
-the active session, not delegated to a separate implementer agent.**
+Implement stage-1 step 3 in `crates/regseq-model/`: `StringInterner`
+with hand-rolled `Serialize`/`Deserialize` (storage only on the wire;
+lookup rebuilt on deserialize; index-0-is-empty and no-duplicate
+validation). See the `StringInterner` section of
+`stage-1-vocabulary.md`. **Stage 1 is implemented directly in the
+active session, not delegated to a separate implementer agent.**
 Rationale: stage 1 is the foundation every later stage rides on,
 and the conversation context built across the spec-design sessions
 (including the methodology rules, decision history, and
@@ -118,13 +125,12 @@ spec-mutability posture) is hard to transfer cleanly to a fresh
 agent. Once stage 1 is validated under compilation, stages 3-13
 become more mechanical and can be delegated.
 
-Foundation-first order (step 1 done; remaining):
+Foundation-first order (steps 1-2 done; remaining):
 
 1. ~~`Idx` trait + `newtype_index!` analogue + custom serde for one
    ID.~~ *Done in commit `b8f1e67`.*
-2. `IndexVec<I, T>` with flat-array JSON shape (likely
-   `#[serde(transparent)]` over inner `Vec<T>` with `PhantomData<I>`
-   skipped). Validate round-trip against a small integration test.
+2. ~~`IndexVec<I, T>` with flat-array JSON shape.~~ *Done; closed in
+   the present commit.*
 3. `StringInterner` with custom `Serialize`/`Deserialize` (storage
    only on the wire; lookup rebuilt on deserialize; index-0-is-empty
    and no-duplicate validation).
