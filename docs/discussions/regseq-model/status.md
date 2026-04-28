@@ -8,8 +8,9 @@ tracker is worse than no tracker.
 
 ## Stage progress (phase 1)
 
-- [x] **Stage 0: Architectural foundation.** Q1-Q5 closed; see
-  `architecture.md`.
+- [x] **Stage 0: Architectural foundation.** Q1-Q7 closed; see
+  `architecture.md`. Multi-crate three-tier dispatch infrastructure
+  also rebuilt and verified end-to-end.
 - [ ] **Stage 1: Vocabulary.** ID types, StringInterner, SourceFile
   table, DefPath form, top-level RegseqModel struct. Pre-loaded
   with content from Q2 and Q5; not started.

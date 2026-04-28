@@ -670,11 +670,14 @@ rest of RegseqModel rides on:
 - The top-level `RegseqModel` struct: a record of tables (items,
   types, bodies, source files, ...) plus a root index into them.
 
-### Stage 2 (serialization) is unblocked but not yet decided
+### Stage 2 (serialization) is decided at the format level
 
-A self-contained owned IR is trivially serializable in principle.
-Format choice (textual / structured / binary; serde / custom) is
-still open and tracked under fork E in `prior-art/README.md`.
+Format choice settled by Q5: a custom textual MIR-inspired
+pretty-printer (primary, output-only, used for the `model` emit
+spec, insta snapshots, and human reading for golden-C authoring),
+plus serde-derived JSON (secondary, structured, for tooling and
+archival). Schema-level work continues per-stage as variants gain
+`Serialize`/`Deserialize` derives and pretty-printer output.
 
 ### Stages 3-11 are unaffected at the architectural level
 
@@ -683,13 +686,15 @@ terminators, blocks, bodies is owned. No `'tcx` references appear.
 Per-stage specifications proceed against the stage-1 vocabulary
 without re-litigating the architecture.
 
-### Stage 12 (items) inherits convergent pattern 5
+### Stage 12 (items) inherits convergent pattern 5 and Q7
 
 The bridge collapses MIR's many shim/coroutine variants into a
 small RegseqModel-side set, with rustc-side queries recovering
-detail during translation. Item-kind classification (intrinsic
-recognition, lang-item identity, drop-glue handling) is populated
-at the bridge.
+detail during translation. Item-kind classification is populated
+at the bridge: lang-item identity for `core` recognition (per the
+opaque-`core` methodology), drop-glue handling, and -- per Q7 --
+domain-intrinsic recognition by `#[rseq::intrinsic("NAME")]`
+attribute lookup against the bridge's closed name vocabulary.
 
 ### Stage 13 (domain extensions) is independent of Q2
 
@@ -698,7 +703,7 @@ with the `'tcx` boundary directly.
 
 ## Open architectural decisions
 
-All stage-0 architectural decisions (Q1-Q5) are now closed.
-Future architectural decisions encountered during stage work
-should be appended above as new Q sections, with references to
-the prior-art evidence and rationale.
+No open architectural decisions at present. All current decisions
+(Q1-Q7) are closed above. Future architectural decisions encountered
+during stage work should be appended above as new Q sections, with
+references to the prior-art evidence and rationale.

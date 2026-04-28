@@ -78,9 +78,10 @@ Captured in `architecture.md`. One line per decision:
   (reverting an earlier proof-of-concept collapse). Three-tier
   wrapper dispatch (`PassthroughCallbacks` / `RegseqCallbacks` /
   `RegseqAwareCallbacks`) with cargo-metadata recognition of
-  regseq-aware crates via `[package.metadata.regseq]`. Rebuild
-  starts the `regseq` crate empty and promotes items from each
-  spec's `crate::regseq` submodule incrementally as redesign work
+  regseq-aware crates via `[package.metadata.regseq]`.
+  Infrastructure rebuilt and verified end-to-end; the `regseq`
+  crate starts empty, items get promoted from each spec's
+  `crate::regseq` submodule incrementally as redesign work
   touches them.
 - **Q7 Intrinsic recognition by attribute name.** The bridge
   identifies domain intrinsics by the `NAME` argument of
@@ -153,8 +154,9 @@ override any inferred convention from the codebase or older docs.
 
 See `status.md` for the consolidated tracker (stage progress,
 active focus, blockers, next action). At time of writing the
-foundation snapshot is: stage-0 architectural decisions Q1-Q5
-complete; stage 1 (vocabulary) is the next work to start.
+foundation snapshot is: stage-0 architectural decisions Q1-Q7
+complete; multi-crate three-tier dispatch infrastructure rebuilt
+and verified; stage 1 (vocabulary) is the next work to start.
 `status.md` is the source of truth -- this paragraph may go stale.
 
 ## Read order for catching up
@@ -165,7 +167,8 @@ In priority:
 2. `README.md` -- folder-level orientation.
 3. `status.md` -- current stage progress, active focus, next
    action.
-4. `architecture.md` -- the Q1-Q5 decisions in detail.
+4. `architecture.md` -- the architectural decisions (Q1-Q7
+   currently) in detail.
 5. `prior-art/README.md` -- the synthesis of prior-art research
    that shaped the architectural decisions.
 6. `regseq-background.md` -- DSL background.

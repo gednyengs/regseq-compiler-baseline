@@ -47,10 +47,12 @@ indicate a phase-1 spec gap are escalated here.
 - `status.md` -- consolidated status tracker for phase-1 work
   (stage progress, active focus, blockers, next action). Update
   at the end of every session that changes anything material.
-- `architecture.md` -- settled stage-0 architectural decisions
-  (Q1-Q5: crate layout, `'tcx` boundary policy, IR layering,
-  rustc integration point, tests + serialization format). Treat
-  as binding unless explicitly revised.
+- `architecture.md` -- settled architectural decisions (Q1-Q7
+  currently: crate layout, `'tcx` boundary policy, IR layering,
+  rustc integration point, tests + serialization format,
+  multi-crate strategy, intrinsic recognition by attribute name).
+  Treat as binding unless explicitly revised; future decisions
+  append as Q8, Q9, ...
 - `regseq-background.md` -- DSL background: `#![no_std]` spec
   environment, the three mechanisms (intrinsics, properties,
   traits).
@@ -69,13 +71,14 @@ here as evidence comes in.
 
 See `status.md` for the consolidated status tracker (stage progress,
 active focus, blockers, next action). Brief snapshot: stage-0
-architectural foundation is complete (Q1-Q5 in `architecture.md`);
-stage 1 (vocabulary) is the next work to start.
+architectural foundation is complete (Q1-Q7 in `architecture.md`);
+multi-crate three-tier dispatch infrastructure is rebuilt; stage 1
+(vocabulary) is the next work to start.
 
-Stage 1 (vocabulary) not yet started. Methodology and per-construct
-decision log not yet authored. The three findings carried over with
-the migration are starter material -- they may be re-validated,
-refined, or displaced as phase-1 work proceeds.
+Methodology and per-construct decision log not yet authored. The
+three findings carried over with the migration are starter material
+-- they may be re-validated, refined, or displaced as phase-1 work
+proceeds.
 
 ## Cross-session continuity
 
@@ -87,7 +90,8 @@ A new session should:
 2. Read this `README.md` for folder-level orientation.
 3. Read `status.md` for current stage progress, active focus, and
    next action.
-4. Read `architecture.md` for settled stage-0 decisions (Q1-Q5).
+4. Read `architecture.md` for settled architectural decisions
+   (Q1-Q7 currently).
 5. Skim `prior-art/README.md` for the synthesis of prior-art
    research that shaped the architectural decisions.
 6. Skim `regseq-background.md` for DSL framing.
