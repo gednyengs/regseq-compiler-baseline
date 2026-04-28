@@ -1,7 +1,3 @@
-//! Static analysis pass infrastructure for the Regseq compiler.
-//!
-//! Hosts reviewer-facing readiness diagnostics computed directly
-//! against [`regseq_model::RegseqModel`] plus a
-//! [`regseq_model::verify::VerifyReport`].
+//! Regseq analysis passes over `RegseqModel`. Stage-1 stub: not yet
+//! re-implemented against the new vocabulary.
 
-pub mod readiness;

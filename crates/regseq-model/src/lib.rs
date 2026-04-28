@@ -1,19 +1,6 @@
-//! Rustc-independent internal model for the Regseq compiler.
+//! RegseqModel: the internal IR between rustc's `optimized_mir` and the C backends.
 //!
-//! Owns the target [`model::RegseqModel`] IR, its typed identity scheme,
-//! the CFG-based body IR (`ir`), Phase-1 normalization, platform Phase-2
-//! join, verification, query helpers, and JSON serialization. This crate
-//! has no rustc dependency.
+//! Stage 1 (vocabulary) types live here. See
+//! `docs/discussions/regseq-model/stage-1-vocabulary.md` for the spec.
+//! Implementation is in progress; this is currently an empty stub.
 
-pub mod identity;
-pub mod ir;
-pub mod join;
-pub mod model;
-pub mod platform;
-pub mod platform_parser;
-pub mod properties;
-pub mod query;
-pub mod serialize;
-pub mod verify;
-
-pub use join::{populate_bindings, JoinError, JoinErrorKind, JoinProvenance};

@@ -1,0 +1,13 @@
+[package]
+name = "regseq-e2e-old"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[features]
+post-monorust-tests = []
+
+[dev-dependencies]
+regseq-analysis-old = { path = "../../crates/regseq-analysis-old" }
+regseq-model-old = { path = "../../crates/regseq-model-old" }
+serde_json = "1"

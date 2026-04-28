@@ -3,16 +3,5 @@ name = "regseq-backends"
 version = "0.1.0"
 edition = "2021"
 
-[features]
-post-monorust-tests = []
-
 [dependencies]
-regseq-analysis = { path = "../regseq-analysis" }
-regseq-config = { path = "../regseq-config" }
-regseq-diagnostics = { path = "../regseq-diagnostics" }
 regseq-model = { path = "../regseq-model" }
-thiserror = "2"
-
-[dev-dependencies]
-serde_json = "1"
-tempfile = "3"

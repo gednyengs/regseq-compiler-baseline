@@ -1,0 +1,15 @@
+[package]
+name = "regseq-analysis-old"
+version = "0.1.0"
+edition = "2021"
+
+[features]
+post-monorust-tests = []
+
+[dependencies]
+regseq-config = { path = "../regseq-config" }
+regseq-diagnostics = { path = "../regseq-diagnostics" }
+regseq-model-old = { path = "../regseq-model-old" }
+
+[dev-dependencies]
+serde_json = "1"
