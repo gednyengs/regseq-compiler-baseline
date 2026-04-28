@@ -68,6 +68,18 @@ newtype_index! {
     pub struct SourceFileId {}
 }
 
+impl SourceFileId {
+    /// Sentinel for bridge-synthesized spans (no source location).
+    /// Equal to `SourceFileId::ZERO`; the named form is preferred
+    /// at use sites for readability. The bridge populates
+    /// `source_files[0]` with the synthesized-file sentinel
+    /// (`path = "<synthesized>"`, `content: None`,
+    /// `line_starts: vec![0]`); spans on bridge-synthesized
+    /// Instances use `Span { file: SourceFileId::SYNTHESIZED,
+    /// lo: 0, hi: 0 }`.
+    pub const SYNTHESIZED: SourceFileId = SourceFileId::ZERO;
+}
+
 impl serde::Serialize for SourceFileId {
     fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
         s.serialize_u32(self.as_u32())

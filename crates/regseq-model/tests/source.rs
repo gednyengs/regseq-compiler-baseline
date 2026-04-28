@@ -278,3 +278,32 @@ fn source_file_id_rejects_max_u32_on_deserialize() {
     let err = result.expect_err("u32::MAX must be rejected (niche-reserved)");
     assert!(err.to_string().contains("SourceFileId"));
 }
+
+#[test]
+fn source_file_id_synthesized_alias_equals_zero() {
+    // `SourceFileId::SYNTHESIZED` is a documentary alias for
+    // `SourceFileId::ZERO`, used by bridge code when constructing
+    // spans for items that have no source location.
+    assert_eq!(SourceFileId::SYNTHESIZED, SourceFileId::ZERO);
+    assert_eq!(SourceFileId::SYNTHESIZED.as_u32(), 0);
+}
+
+#[test]
+fn synthesized_span_slice_returns_none_via_sentinel_file() {
+    // The bridge populates source_files[0] as the synthesized
+    // sentinel: content=None, so any Span pointing at
+    // SourceFileId::SYNTHESIZED slices to None regardless of
+    // lo/hi -- consumers do not need Option<Span> checks.
+    let mut files: IndexVec<SourceFileId, SourceFile> = IndexVec::new();
+    files.push(SourceFile {
+        path: StringId::ZERO,
+        content: None,
+        line_starts: vec![0],
+    });
+    let span = Span {
+        file: SourceFileId::SYNTHESIZED,
+        lo: 0,
+        hi: 0,
+    };
+    assert_eq!(span.slice(&files), None);
+}
