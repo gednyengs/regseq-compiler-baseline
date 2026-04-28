@@ -2,6 +2,7 @@
 resolver = "2"
 members = [
     "crates/cargo-regseq",
+    "crates/regseq",
     "crates/regseq-analysis",
     "crates/regseq-backends",
     "crates/regseq-config",
