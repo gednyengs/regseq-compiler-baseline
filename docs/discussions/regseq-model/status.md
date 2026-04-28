@@ -107,7 +107,16 @@ and rationale.
 ## Next action
 
 Implement stage 1 in `crates/regseq-model/` against
-`stage-1-vocabulary.md`. Foundation-first order:
+`stage-1-vocabulary.md`. **Stage 1 is implemented directly in the
+active session, not delegated to a separate implementer agent.**
+Rationale: stage 1 is the foundation every later stage rides on,
+and the conversation context built across the spec-design sessions
+(including the methodology rules, decision history, and
+spec-mutability posture) is hard to transfer cleanly to a fresh
+agent. Once stage 1 is validated under compilation, stages 3-13
+become more mechanical and can be delegated.
+
+Foundation-first order:
 
 1. `Idx` trait + `newtype_index!` analogue (with inherent
    `pub const fn from_u32`) + custom serde for one ID; validate

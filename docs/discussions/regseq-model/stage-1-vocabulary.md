@@ -681,6 +681,40 @@ driver-init / IRQ-handler / register-access functions that the C
 backend must emit. For phase 1 linguistic snippets, it is whatever
 top-level item the test drives.
 
+### Design rationale: local IDs vs stable identity
+
+The model uses two parallel ID schemes for things that need both
+cheap addressing inside the IR and stable cross-build identity:
+
+| Concern | Local addressing (cheap, per-build) | Stable cross-build identity |
+|---|---|---|
+| Items | `ItemId(u32)` indexes `items` | `DefPathHash` stored at `item_def_paths[ItemId]` (parallel side table) |
+| Crates | `CrateId(u32)` indexes `crates` | `StableCrateId(u64)` stored on each `CrateInfo` (embedded field) |
+
+The local IDs (`ItemId`, `CrateId`) keep IR field sizes small (4
+bytes per reference) and serialization compact. They are *not*
+stable across builds: two RegseqModels for the same source can have
+identical `DefPath`s mapped to different sequential IDs if the
+reachable set differs (incremental builds, partial extraction). A
+build-internal value uses these directly.
+
+The stable forms (`DefPathHash`, `StableCrateId`) are needed at
+boundaries the local IDs cannot serve: cross-build diff alignment
+("which item in build B corresponds to `ItemId(7)` in build A?"),
+cross-graph item identity (rustc's own `DefPathHash` is
+`(StableCrateId, Hash64)`; both halves are stored), and any
+artifact consumed across incremental rebuilds. A consumer that
+needs to compare across runs hashes by these fields, never by
+local indices.
+
+The two schemes are stored differently because their cardinalities
+differ. There is exactly one `StableCrateId` per crate, so
+embedding it as a `CrateInfo` field is cheaper than a separate
+`IndexVec<CrateId, StableCrateId>`. For items, the side-table form
+(`item_def_paths`) is used because `Item` itself (stage 12) carries
+heavier data; consumers that want path-hash without paying for the
+full `Item` load read the side table directly.
+
 ## Determinism (F4 in detail)
 
 ### The sort comparator
