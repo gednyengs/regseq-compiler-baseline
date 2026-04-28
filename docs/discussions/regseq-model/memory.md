@@ -168,11 +168,14 @@ override any inferred convention from the codebase or older docs.
   (warnings are expected from the `regseq-driver-old/src/extract/`
   inherited dead code; errors are not).
 - `cargo test -p regseq-model` runs the active stage-1 crate's
-  integration tests (62 tests across `tests/idx_round_trip.rs`,
-  `tests/index_vec.rs`, `tests/string_interner.rs`,
-  `tests/source.rs` as of step-4 close). Use this during step-5
-  implementation iteration; the workspace-wide `cargo test` is
-  noisier due to the `*-old` crates.
+  integration tests (181 tests across the eight test files
+  `tests/idx_round_trip.rs`, `tests/index_vec.rs`,
+  `tests/string_interner.rs`, `tests/source.rs`,
+  `tests/crate_info.rs`, `tests/def_path.rs`,
+  `tests/instance.rs`, and `tests/model.rs` as of stage-1 close).
+  Use this during stage-3+ implementation iteration; the
+  workspace-wide `cargo test` is noisier due to the `*-old`
+  crates.
 
 ## Crate layout (post-refactor)
 
@@ -213,10 +216,10 @@ Snapshot at time of writing:
   external round 5e + Codex round 6 across the round-5
   monomorphization-and-C-semantics revision). All 39 issues
   addressed. See `stage-1-review-log.md`.
-- Stage 1 implementation: **steps 1-4 of 6 complete and
+- Stage 1 implementation: **all 6 steps complete and
   committed** in `crates/regseq-model/` (`b8f1e67`, `fd0d3c8`,
-  `82aaaed`, `f34df65`, plus a `f8e7b4e` follow-up adding
-  `SourceFileId::SYNTHESIZED` after the round-5 patch).
+  `82aaaed`, `f34df65`, `f8e7b4e`, `d78db53`, plus the step-6
+  commit accompanying this update).
   - Step 1: `Idx` trait + `newtype_index!` macro + niche
     encoding via `NonMaxU32` + `CrateId`.
   - Step 2: `IndexVec<I, T>` with serde-transparent flat
@@ -224,20 +227,31 @@ Snapshot at time of writing:
   - Step 3: `StringInterner` + `StringId`; pre-interns empty
     string at `StringId::ZERO`.
   - Step 4: `SourceFile` + `Position` + `Span` + `SourceFileId`
-    (with `SYNTHESIZED` alias). Resolution methods (position,
-    line_text, Span::start/end/slice).
-  - 62 integration tests passing; `cargo check --workspace
-    --tests` clean.
-- Stage 1 implementation: **steps 5-6 not yet started**.
-  - Step 5: DefPath family + `Instance` + `InstanceKind` +
-    `GenericArg` + `StableCrateId` + `CrateInfo` +
-    `FnSigId` forward-declaration.
-  - Step 6: top-level `RegseqModel` struct + construction
-    invariants.
+    (with `SYNTHESIZED` alias). Resolution methods.
+  - Step 5: forward-declared `ItemId` / `BodyId` / `TyId` /
+    `ConstId` / `FnSigId` / `InstanceId`; `StableCrateId` +
+    `CrateInfo`; `DefPathData` (19 variants) + `DefPathSegment`
+    + `DefPath` + `DefPathHash`; `def_path_data_sort_rank`
+    (0..=18); `GenericArg` + `Instance` + `InstanceKind` (six
+    variants); `regseq_instance_kind_rank` (0..=5);
+    `RustcInstanceKindTag` + `rustc_instance_kind_sort_rank`
+    (0..=14, kept inside regseq-model so all rank values are
+    pinned in one place; bridge converts the live rustc enum
+    to a tag at the boundary).
+  - Step 6: top-level `RegseqModel` + `with_primary`
+    constructor (interns `<synthesized>` and primary crate
+    name through the model's own interner) +
+    `validate(&self)` enforcing the stage-1-checkable subset
+    of the 10 spec invariants. Empty placeholder structs
+    `Item` / `Ty` / `Const` / `FnSig` / `Body` ship as
+    forward-decls for stages 3, 4, 11, 12.
+  - 181 integration tests passing across eight test files;
+    `cargo check --workspace --tests` clean.
 - Phase 2 (pl011 device pressure) not yet started; gated on
-  enough of stage 1 to author golden C against the fixture.
+  enough of stages 3, 4, 11, 12 to author golden C against the
+  fixture.
 
-Known follow-ups surfaced during steps 1-4 that are deferred:
+Known follow-ups surfaced during stage 1 that are deferred:
 
 - The `newtype_index!` macro currently accepts only empty-body
   invocations (`pub struct $Name {}`). When step 11 introduces
@@ -251,6 +265,12 @@ Known follow-ups surfaced during steps 1-4 that are deferred:
   `Vec<String>` (one extra allocation per entry); could be
   refactored to `Vec<Arc<str>>` directly using the `rc` feature.
   Codex flagged as optional/non-blocking; deferred.
+- Construction invariants 3, 6, and 9 (and the
+  spec_crate_stable_id half of invariant 4) are deferred in
+  `RegseqModel::validate` until stage 12 (`Item.def_path`),
+  stage 9/12 (sites holding `InstanceId`), and the bridge's
+  `BridgeInput`. Each deferred invariant has an in-source
+  comment naming the stage that will close the gap.
 
 ## Read order for catching up
 
@@ -284,9 +304,11 @@ In priority:
 13. Per-project files in `prior-art/` -- consult on demand when
     a specific external project comes up.
 
-For an agent picking up step-5 implementation specifically: the
-load-bearing reads are 1, 3, 5, 6, and the relevant sections of
-9 (`Instance`/`InstanceKind`, `DefPath`/`DefPathData`).
+For an agent picking up stage-3 (Type system) implementation
+specifically: the load-bearing reads are 1, 3, 5, 6, and the
+sections of 9 covering `Ty` representation; the empty `Ty`
+placeholder lives in `crates/regseq-model/src/placeholders.rs`
+and graduates to its own module once expanded.
 
 ## What this file is NOT
 

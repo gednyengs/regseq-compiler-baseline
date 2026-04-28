@@ -11,6 +11,8 @@ mod idx;
 mod ids;
 mod index_vec;
 mod instance;
+mod model;
+mod placeholders;
 mod source;
 mod string_interner;
 
@@ -23,6 +25,8 @@ pub use instance::{
     regseq_instance_kind_rank, rustc_instance_kind_sort_rank, GenericArg, GenericArgs, Instance,
     InstanceKind, RustcInstanceKindTag,
 };
+pub use model::{InvariantViolation, RegseqModel};
+pub use placeholders::{Body, Const, FnSig, Item, Ty};
 pub use ids::{
     BodyId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
 };

@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (round-5 spec revision committed: Instance/InstanceKind/lifting/C-semantics; reviewed via Codex round 5 + external review + Codex round 6, all findings resolved; spec implementation-ready for step 5).
+Last updated: 2026-04-28 (stage-1 implementation closed: steps 5 and 6 landed in `crates/regseq-model/`; full DefPath / Instance / RegseqModel surface populated; 181 integration tests passing; ready for stage 3).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -25,9 +25,8 @@ tracker is worse than no tracker.
   rustc excerpts cover Instance/InstanceKind/SymbolName/VtblEntry
   (`rustc-excerpts.md`), spec (`stage-1-vocabulary.md`)
   implementation-ready.
-- [in progress] **Stage 1 implementation.** Population of
-  `crates/regseq-model/` with the stage-1 types. Foundation-first
-  order in "Next action" below. Steps 1-4 closed:
+- [x] **Stage 1 implementation.** All six foundation steps
+  landed in `crates/regseq-model/`:
   - Step 1: Idx + NonMaxU32 + `newtype_index!` + CrateId
     (`b8f1e67`).
   - Step 2: `IndexVec<I, T>` with flat-array serde (`fd0d3c8`).
@@ -38,14 +37,33 @@ tracker is worse than no tracker.
     round-5 spec revision named the alias.
   - Round-5 spec revision committed in `8215cdc` (after step 4)
     redesigned the monomorphization story (Instance shape,
-    InstanceKind, lifting) and the C-semantics framing; no
-    step-1-4 code change was required beyond the SYNTHESIZED
-    alias.
-  - 62 integration tests passing; `cargo check --workspace
-    --tests` clean.
-  - Step 5 (DefPath family + CrateInfo + Instance + InstanceKind
-    + GenericArg + StableCrateId + FnSigId forward-decl) up
-    next.
+    InstanceKind, lifting) and the C-semantics framing.
+  - Step 5 (`d78db53`): forward-declared `ItemId` / `BodyId` /
+    `TyId` / `ConstId` / `FnSigId` / `InstanceId`;
+    `StableCrateId` + `CrateInfo`; `DefPathData` (19 variants)
+    + `DefPathSegment` + `DefPath` + `DefPathHash`;
+    `def_path_data_sort_rank` (0..=18); `GenericArg` +
+    `GenericArgs`; `Instance` + `InstanceKind` (six variants);
+    `regseq_instance_kind_rank` (0..=5);
+    `RustcInstanceKindTag` (Regseq-side mirror of rustc's
+    15-variant `ty::InstanceKind`) +
+    `rustc_instance_kind_sort_rank` (0..=14). Codex round 1
+    returned MINOR (two test additions) -- both addressed.
+  - Step 6 (this commit): top-level `RegseqModel` struct +
+    `RegseqModel::with_primary` constructor +
+    `validate(&self) -> Result<(), InvariantViolation>`
+    enforcing the stage-1-checkable subset of the 10 spec
+    invariants (1, 2, 4, 5, 8, 10 enforced; 3, 6, 9 deferred to
+    later stages; 7 is structural). Empty placeholder structs
+    `Item` / `Ty` / `Const` / `FnSig` / `Body` ship with the
+    crate as forward-decls for stages 3, 4, 11, 12. Codex round
+    1 returned APPROVE (one doc nit + optional dangling-ID
+    coverage); both addressed.
+  - 181 integration tests passing across
+    `idx_round_trip` / `index_vec` / `source` /
+    `string_interner` / `crate_info` / `def_path` /
+    `instance` / `model`; `cargo check --workspace --tests`
+    clean.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
   work tracks the rest of the stages -- per-stage variants gain
@@ -87,34 +105,39 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Step 5 (DefPathData + DefPathSegment + DefPath + DefPathHash +
-CrateInfo + Instance + InstanceKind + GenericArg + StableCrateId
-+ FnSigId forward-decl) implementation. Round-5 spec revision
-is committed; spec is implementation-ready.
+Stage 1 implementation is **closed**. Steps 1-6 are in
+`crates/regseq-model/`; the foundation surface is complete and
+ready for stage 3 (Type system) to start expanding the empty `Ty`
+placeholder. The bridge (in `crates/regseq-driver/`) and stage 13
+(domain extensions) can also start consuming the stage-1 surface.
 
 State of the world:
 
 - *Stage 1 spec is round-5-revised.* `stage-1-vocabulary.md`
   reflects seven review passes (R1-R6 + R5.7-R5.21 across an
-  external follow-up). Spec is implementation-ready. See
-  `stage-1-review-log.md` for the audit trail.
-- *Steps 1-4 closed* in `crates/regseq-model/` (commits
-  `b8f1e67`, `fd0d3c8`, `82aaaed`, `f34df65`, plus follow-up
-  `f8e7b4e` for `SourceFileId::SYNTHESIZED`). 62 integration
-  tests passing.
+  external follow-up). See `stage-1-review-log.md` for the audit
+  trail.
+- *All six steps closed* in `crates/regseq-model/`. Step 5 and
+  step 6 each went through one Codex review round; step 5
+  returned MINOR (two tests added), step 6 returned APPROVE
+  (one doc nit + optional dangling-ID coverage; both addressed).
+- *181 integration tests* across the eight test files
+  (`idx_round_trip`, `index_vec`, `source`, `string_interner`,
+  `crate_info`, `def_path`, `instance`, `model`).
 - *Workspace builds clean.* `cargo check --workspace --tests`
   passes with only the inherited dead-code warnings from
   `regseq-driver-old/src/extract/`.
 - *Multi-crate dispatch (Q6) intact.* `crates/regseq/` facade,
   three-tier dispatch, env-var plumbing, cleanup-pass whitelist
   unchanged. `RegseqCallbacks::after_analysis` still empty until
-  bridge work begins (post-foundation).
+  bridge work begins.
 
-Open methodology guidance for the implementer: the spec is
+Open methodology guidance for stage 3+: the spec is still
 mutable. If type-shape ambiguities or composition issues surface
-during implementation, revise `stage-1-vocabulary.md` (and trigger
-a Codex review of the revision) before continuing -- do not paper
-over with implementer judgment.
+during stage-N implementation, revise `stage-1-vocabulary.md` (or
+the relevant stage spec) and trigger a Codex review of the
+revision before continuing -- do not paper over with implementer
+judgment.
 
 ## Open architectural decisions
 
@@ -128,61 +151,46 @@ and rationale.
 
 ## Next action
 
-Implement stage-1 step 5 in `crates/regseq-model/` against the
-round-5-revised spec. Types in scope:
+Stage 1 is closed. The next concrete unit of work is one of:
 
-- `DefPathData` (19-variant rustc-mirror enum) + `DefPathSegment`
-  + `DefPath` (with `crate_id`) + `DefPathHash`.
-- `StableCrateId` (transparent `pub struct StableCrateId(pub u64);`
-  wrapper).
-- `CrateInfo { name: StringId, stable_crate_id: StableCrateId }`.
-- `Instance { item, generic_args, symbol_name, span, kind }` +
-  `InstanceKind` (six-variant enum: Function/Static/Const/Struct/
-  Enum/Union; see "Instances: monomorphized items" in the spec).
-- `GenericArg` enum (Type/Const) + `GenericArgs = Vec<GenericArg>`.
-- Forward-declarations: `FnSigId` ID type (FnSig itself lands in
-  stage 11; step 5 just declares the ID).
-- The two pinned rank tables (`regseq_instance_kind_rank` for the
-  six Regseq kinds; `rustc_instance_kind_sort_rank` for rustc's
-  15-variant `InstanceKind`).
+1. **Stage 3 (Type system).** Begin expanding the `Ty`
+   placeholder in `crates/regseq-model/src/placeholders.rs` into
+   the full type vocabulary (standard scalar types, references,
+   `!`, ZSTs, struct / enum / union layouts). Pin the canonical
+   `Ty` representation rule that the F4-2 `ArgsKey` depends on.
+   Ship behind one or more new modules (e.g., `ty.rs`) once the
+   shape stabilizes; remove `Ty` from `placeholders.rs` when it
+   moves out.
+2. **Bridge (`crates/regseq-driver/src/`).** Begin implementing
+   `RegseqCallbacks::after_analysis`: drive the stage-1
+   construction pipeline (rustc tcx -> RegseqModel via
+   `with_primary` + push) for the `field_val` first-body candidate
+   in the pl011 fixture. This is also where the
+   `rustc_ty::InstanceKind -> RustcInstanceKindTag` conversion
+   lives. Surfacing requirements here may force stage-3 work
+   (since you can't construct meaningful `Instance`s without
+   `Ty`).
+3. **Stage 13 (Domain extensions).** Pin the intrinsic vocabulary
+   (per Q7); identify the Regseq-side enum / variant-on-existing
+   surface that the bridge will populate.
 
-Read `stage-1-vocabulary.md` sections "DefPath form", "Lifting
-`impl` items", "Instances: monomorphized items", and
-"Bridge-synthesized Items" before starting. **Stage 1 is
-implemented directly in the active session, not delegated to a
-separate implementer agent.**
-Rationale: stage 1 is the foundation every later stage rides on,
-and the conversation context built across the spec-design sessions
-(including the methodology rules, decision history, and
-spec-mutability posture) is hard to transfer cleanly to a fresh
-agent. Once stage 1 is validated under compilation, stages 3-13
-become more mechanical and can be delegated.
+Foundation-first order (all done):
 
-Foundation-first order (steps 1-4 done; remaining):
+1. ~~`Idx` trait + `newtype_index!` + CrateId.~~ Commit `b8f1e67`.
+2. ~~`IndexVec<I, T>`.~~ Commit `fd0d3c8`.
+3. ~~`StringInterner`.~~ Commit `82aaaed`.
+4. ~~`SourceFile` + `Position` + `Span`.~~ Commit `f34df65`
+   (plus `f8e7b4e` for `SourceFileId::SYNTHESIZED`).
+5. ~~`DefPathData` family + Instance / InstanceKind / GenericArg
+   + StableCrateId + CrateInfo + forward-declared IDs + rank
+   tables.~~ Commit `d78db53`.
+6. ~~Top-level `RegseqModel` + constructor + invariants.~~ This
+   commit.
 
-1. ~~`Idx` trait + `newtype_index!` analogue + custom serde for one
-   ID.~~ *Done in commit `b8f1e67`.*
-2. ~~`IndexVec<I, T>` with flat-array JSON shape.~~ *Done in
-   commit `fd0d3c8`.*
-3. ~~`StringInterner` with custom `Serialize`/`Deserialize`.~~
-   *Done in commit `82aaaed`.*
-4. ~~`SourceFile` + `Position` + `Span` with the F1 file-local
-   byte-offset rule.~~ *Done in commit `f34df65`.*
-5. `DefPathData` (19 variants) + `DefPathSegment` + `DefPath`
-   (with `crate_id`) + `DefPathHash` + `StableCrateId` +
-   `CrateInfo` + `Instance` + `InstanceKind` (six variants) +
-   `GenericArg` + `FnSigId` forward-decl. Round-5 spec is
-   committed in `8215cdc` and implementation-ready. Implementer
-   should also bake the `regseq_instance_kind_rank` and
-   `rustc_instance_kind_sort_rank` tables (per the "Instance"
-   section).
-6. Top-level `RegseqModel` struct including `crates`,
-   `primary_crate`, `sigs`, and the full construction-invariants
-   assertions (1-10).
-
-Each step lands as its own commit. Spec issues surfaced during
-implementation trigger spec revision (the spec is mutable per
-methodology) before continuing.
+Stage-N implementation may now be delegated to a fresh
+implementer agent; the foundation has stabilized enough that the
+load-bearing context lives in the spec and the `regseq-model`
+public surface rather than the spec-design conversation history.
 
 Reference material in `crates/*-old/` is one `cargo build -p
 regseq-model-old` (etc.) away if patterns from the prior design

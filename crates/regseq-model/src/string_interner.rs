@@ -22,6 +22,7 @@ use serde::{Deserialize, Deserializer, Serialize, Serializer};
 use crate::ids::StringId;
 use crate::idx::Idx;
 
+#[derive(Clone)]
 pub struct StringInterner {
     storage: Vec<Arc<str>>,
     lookup: HashMap<Arc<str>, StringId>,
@@ -95,6 +96,19 @@ impl core::fmt::Debug for StringInterner {
             .finish()
     }
 }
+
+impl PartialEq for StringInterner {
+    /// Equality is content-equality on `storage`. The `lookup` map
+    /// is a content-derived index of `storage`, so two interners
+    /// with equal `storage` necessarily have equivalent lookup
+    /// behavior; comparing the HashMap directly would expose its
+    /// non-deterministic iteration order to the equality check.
+    fn eq(&self, other: &Self) -> bool {
+        self.storage == other.storage
+    }
+}
+
+impl Eq for StringInterner {}
 
 impl Serialize for StringInterner {
     fn serialize<S: Serializer>(&self, ser: S) -> Result<S::Ok, S::Error> {
