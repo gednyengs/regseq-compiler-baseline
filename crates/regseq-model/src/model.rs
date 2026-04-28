@@ -26,6 +26,7 @@ use crate::ids::{
 use crate::index_vec::IndexVec;
 use crate::instance::{GenericArg, Instance, InstanceKind};
 use crate::placeholders::{Body, Const, FnSig, Item, Ty};
+use crate::pretty::PrettyPrinter;
 use crate::source::SourceFile;
 use crate::string_interner::StringInterner;
 
@@ -152,6 +153,12 @@ impl RegseqModel {
     /// `StringInterner` -- a pre-built `CrateInfo` would carry a
     /// `StringId` that came from somewhere else, which the model
     /// cannot resolve.
+    /// Returns a context-bearing pretty-printer over this model.
+    /// Convenience accessor for `PrettyPrinter::new(self)`.
+    pub fn pretty(&self) -> PrettyPrinter<'_> {
+        PrettyPrinter::new(self)
+    }
+
     pub fn with_primary(primary_name: &str, primary_stable_crate_id: StableCrateId) -> Self {
         let mut strings = StringInterner::new();
 

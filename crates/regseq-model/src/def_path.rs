@@ -18,8 +18,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::crate_info::StableCrateId;
+use crate::crate_info::{CrateInfo, StableCrateId};
 use crate::ids::{CrateId, StringId};
+use crate::index_vec::IndexVec;
+use crate::string_interner::StringInterner;
 
 /// Closed enum mirroring `rustc_hir::definitions::DefPathData`.
 ///
@@ -136,6 +138,192 @@ pub struct DefPathHash {
 ///
 /// See the spec section "Determinism (F4 in detail) -> Stable rank
 /// table" for the authoritative ordering.
+/// Renders a `DefPath` to its canonical verbose form.
+///
+/// This is the single source of truth for the `DefPath.rendered`
+/// invariant pinned in `stage-1-vocabulary.md:545-562` ("Two
+/// RegseqModels for the same source must produce byte-identical
+/// `rendered` strings for corresponding items"). Both the bridge
+/// (when populating `DefPath.rendered` during `Item` construction)
+/// and the pretty-printer call this helper, so the rendering rule
+/// lives in exactly one place.
+///
+/// The form mirrors rustc's `DisambiguatedDefPathData::as_sym(verbose=true)`
+/// applied to the resolved crate name plus the segment vector
+/// (`rustc_hir/src/definitions.rs:185-204` against the pinned
+/// `nightly-2026-02-01-aarch64-apple-darwin` toolchain). Anonymous
+/// segments always render as `{namespace#disambig}` (including
+/// disambig 0); plain name-bearing segments render as `name` or
+/// `name#N` (the `#N` is omitted when disambig is 0). `AnonAssocTy`
+/// is a hybrid: the payload name appears, then `::`, then
+/// `{anon_assoc#disambig}`. `DesugaredAnonymousLifetime` is mapped
+/// by rustc to `Named(kw::UnderscoreLifetime)`, so it renders as
+/// the literal `'_` with the named-segment disambig rule.
+///
+/// # Construction precondition
+///
+/// `CrateRoot` may appear only at index 0 (where it is skipped in
+/// favor of the resolved crate prefix). A non-leading `CrateRoot`
+/// is a bridge bug; rustc never emits one in `DefPath.data`. Per
+/// methodology ("no defensive fallbacks") the helper panics rather
+/// than emit a placeholder.
+///
+/// # Panics
+///
+/// Panics with diagnostic messages on:
+///
+/// - `path.crate_id` out of range for `crates`.
+/// - The crate's `name` `StringId` out of range for `strings`.
+/// - `CrateRoot` appearing at any segment index other than 0.
+/// - A name-bearing variant carrying an out-of-range `StringId`
+///   (propagates from `StringInterner::resolve`'s underlying `Vec`
+///   panic).
+pub fn render_def_path(
+    path: &DefPath,
+    crates: &IndexVec<CrateId, CrateInfo>,
+    strings: &StringInterner,
+) -> String {
+    if path.crate_id.index() >= crates.len() {
+        panic!(
+            "render_def_path: crate_id {} out of range (crates.len() = {})",
+            path.crate_id.as_u32(),
+            crates.len()
+        );
+    }
+    let crate_name_id = crates[path.crate_id].name;
+    if crate_name_id.index() >= strings.len() {
+        panic!(
+            "render_def_path: crate name StringId {} out of range (strings.len() = {})",
+            crate_name_id.as_u32(),
+            strings.len()
+        );
+    }
+
+    let mut out = String::with_capacity(32);
+    out.push_str(strings.resolve(crate_name_id));
+
+    for (idx, seg) in path.segments.iter().enumerate() {
+        match seg.data {
+            DefPathData::CrateRoot => {
+                if idx != 0 {
+                    panic!(
+                        "render_def_path: CrateRoot at non-leading position {}",
+                        idx
+                    );
+                }
+                // Index 0 CrateRoot: skip; the crate prefix already covers it.
+            }
+
+            // Plain name-bearing variants: render `name`; append
+            // `#N` only when disambiguator != 0.
+            DefPathData::TypeNs(s)
+            | DefPathData::ValueNs(s)
+            | DefPathData::MacroNs(s)
+            | DefPathData::LifetimeNs(s)
+            | DefPathData::OpaqueLifetime(s) => {
+                out.push_str("::");
+                out.push_str(strings.resolve(s));
+                if seg.disambiguator != 0 {
+                    out.push('#');
+                    out.push_str(&seg.disambiguator.to_string());
+                }
+            }
+
+            // DesugaredAnonymousLifetime is rustc's
+            // `Named(kw::UnderscoreLifetime)`; the named-segment
+            // verbose rule applies to the literal `'_` name.
+            DefPathData::DesugaredAnonymousLifetime => {
+                out.push_str("::'_");
+                if seg.disambiguator != 0 {
+                    out.push('#');
+                    out.push_str(&seg.disambiguator.to_string());
+                }
+            }
+
+            // AnonAssocTy is the rustc hybrid: emits the payload
+            // name, then `::`, then `{anon_assoc#disambig}`.
+            DefPathData::AnonAssocTy(s) => {
+                out.push_str("::");
+                out.push_str(strings.resolve(s));
+                out.push_str("::{anon_assoc#");
+                out.push_str(&seg.disambiguator.to_string());
+                out.push('}');
+            }
+
+            // Pure anonymous segments: always `{namespace#N}`,
+            // including N == 0.
+            DefPathData::Impl
+            | DefPathData::ForeignMod
+            | DefPathData::Use
+            | DefPathData::GlobalAsm
+            | DefPathData::Closure
+            | DefPathData::Ctor
+            | DefPathData::AnonConst
+            | DefPathData::LateAnonConst
+            | DefPathData::OpaqueTy
+            | DefPathData::SyntheticCoroutineBody
+            | DefPathData::NestedStatic => {
+                out.push_str("::{");
+                out.push_str(anon_namespace_name(&seg.data));
+                out.push('#');
+                out.push_str(&seg.disambiguator.to_string());
+                out.push('}');
+            }
+        }
+    }
+
+    out
+}
+
+/// Lowercase namespace string for each pure anonymous variant.
+///
+/// Pinned against `rustc_hir/src/definitions.rs:509-520` for the
+/// `nightly-2026-02-01-aarch64-apple-darwin` toolchain. Append-only;
+/// adding a variant during a toolchain bump is a methodology event
+/// (per the spec's "Closed-vocabulary scope" note) that updates
+/// this table together with `def_path_data_sort_rank`.
+///
+/// # Panics
+///
+/// Panics if called with a variant that is not a pure anonymous
+/// one. `CrateRoot` is filtered at the call site (skipped at index
+/// 0; panics earlier at non-leading positions). Name-bearing
+/// variants, `DesugaredAnonymousLifetime`, and `AnonAssocTy` are
+/// rendered by their own arms in `render_def_path` and never reach
+/// this function.
+fn anon_namespace_name(data: &DefPathData) -> &'static str {
+    match data {
+        DefPathData::Impl => "impl",
+        DefPathData::ForeignMod => "extern",
+        DefPathData::Use => "use",
+        DefPathData::GlobalAsm => "global_asm",
+        DefPathData::Closure => "closure",
+        DefPathData::Ctor => "constructor",
+        DefPathData::AnonConst => "constant",
+        DefPathData::LateAnonConst => "constant",
+        DefPathData::OpaqueTy => "opaque",
+        DefPathData::SyntheticCoroutineBody => "synthetic",
+        DefPathData::NestedStatic => "nested",
+
+        DefPathData::CrateRoot => {
+            panic!("anon_namespace_name called on CrateRoot")
+        }
+        DefPathData::DesugaredAnonymousLifetime => {
+            panic!("anon_namespace_name called on DesugaredAnonymousLifetime")
+        }
+        DefPathData::AnonAssocTy(_) => {
+            panic!("anon_namespace_name called on AnonAssocTy")
+        }
+        DefPathData::TypeNs(_)
+        | DefPathData::ValueNs(_)
+        | DefPathData::MacroNs(_)
+        | DefPathData::LifetimeNs(_)
+        | DefPathData::OpaqueLifetime(_) => {
+            panic!("anon_namespace_name called on name-bearing variant")
+        }
+    }
+}
+
 pub const fn def_path_data_sort_rank(data: &DefPathData) -> u8 {
     match data {
         DefPathData::CrateRoot => 0,

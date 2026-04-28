@@ -13,12 +13,13 @@ mod index_vec;
 mod instance;
 mod model;
 mod placeholders;
+mod pretty;
 mod source;
 mod string_interner;
 
 pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
-    def_path_data_sort_rank, DefPath, DefPathData, DefPathHash, DefPathSegment,
+    def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
 pub use idx::Idx;
 pub use instance::{
@@ -27,6 +28,7 @@ pub use instance::{
 };
 pub use model::{InvariantViolation, RegseqModel};
 pub use placeholders::{Body, Const, FnSig, Item, Ty};
+pub use pretty::PrettyPrinter;
 pub use ids::{
     BodyId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
 };

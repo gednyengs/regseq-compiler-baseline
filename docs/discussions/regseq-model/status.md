@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (stage-1 implementation closed: steps 5 and 6 landed in `crates/regseq-model/`; full DefPath / Instance / RegseqModel surface populated; 181 integration tests passing; ready for stage 3).
+Last updated: 2026-04-28 (stage-1 fully closed: step-7 added the canonical `render_def_path` helper and the `PrettyPrinter` scaffold, closing the two responsibilities the post-step-6 audit surfaced; 229 integration tests passing).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -25,8 +25,8 @@ tracker is worse than no tracker.
   rustc excerpts cover Instance/InstanceKind/SymbolName/VtblEntry
   (`rustc-excerpts.md`), spec (`stage-1-vocabulary.md`)
   implementation-ready.
-- [x] **Stage 1 implementation.** All six foundation steps
-  landed in `crates/regseq-model/`:
+- [x] **Stage 1 implementation.** Seven steps total in
+  `crates/regseq-model/`:
   - Step 1: Idx + NonMaxU32 + `newtype_index!` + CrateId
     (`b8f1e67`).
   - Step 2: `IndexVec<I, T>` with flat-array serde (`fd0d3c8`).
@@ -59,10 +59,24 @@ tracker is worse than no tracker.
     crate as forward-decls for stages 3, 4, 11, 12. Codex round
     1 returned APPROVE (one doc nit + optional dangling-ID
     coverage); both addressed.
-  - 181 integration tests passing across
-    `idx_round_trip` / `index_vec` / `source` /
-    `string_interner` / `crate_info` / `def_path` /
-    `instance` / `model`; `cargo check --workspace --tests`
+  - Step 7 (this commit): canonical `render_def_path(path,
+    crates, strings) -> String` helper in `def_path.rs`
+    (pinned per-variant rendering against `nightly-2026-02-01`
+    `rustc_hir/src/definitions.rs:185-204, :248-249, :505-520`);
+    `PrettyPrinter<'a>` scaffold in new `pretty.rs` with
+    stage-1 functional methods `render_span` and
+    `render_def_path_value`, stage-N stubs for `render`,
+    `render_ty`, `render_const`, `render_def_path(ItemId)`,
+    `render_instance`; `RegseqModel::pretty()` accessor.
+    Plan reviewed by Codex over three rounds (BLOCK -> BLOCK
+    -> APPROVE) before implementation. Implementation reviewed
+    by Codex once (MINOR -- one panic-prefix consistency note
+    kept as a deliberate improvement, one missing negative
+    test added).
+  - 229 integration tests passing across ten test files
+    (`idx_round_trip`, `index_vec`, `source`, `string_interner`,
+    `crate_info`, `def_path`, `instance`, `model`,
+    `render_def_path`, `pretty`); `cargo check --workspace --tests`
     clean.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
@@ -117,13 +131,16 @@ State of the world:
   reflects seven review passes (R1-R6 + R5.7-R5.21 across an
   external follow-up). See `stage-1-review-log.md` for the audit
   trail.
-- *All six steps closed* in `crates/regseq-model/`. Step 5 and
-  step 6 each went through one Codex review round; step 5
-  returned MINOR (two tests added), step 6 returned APPROVE
-  (one doc nit + optional dangling-ID coverage; both addressed).
-- *181 integration tests* across the eight test files
+- *All seven steps closed* in `crates/regseq-model/`. Step 5
+  Codex round returned MINOR (two tests added); step 6
+  returned APPROVE; step 7's plan went through three Codex
+  rounds (anonymous-namespace string corrections against
+  pinned rustc) and the implementation review returned MINOR
+  (one missing negative test added).
+- *229 integration tests* across the ten test files
   (`idx_round_trip`, `index_vec`, `source`, `string_interner`,
-  `crate_info`, `def_path`, `instance`, `model`).
+  `crate_info`, `def_path`, `instance`, `model`,
+  `render_def_path`, `pretty`).
 - *Workspace builds clean.* `cargo check --workspace --tests`
   passes with only the inherited dead-code warnings from
   `regseq-driver-old/src/extract/`.

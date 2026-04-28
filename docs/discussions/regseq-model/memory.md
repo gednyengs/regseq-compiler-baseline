@@ -168,14 +168,15 @@ override any inferred convention from the codebase or older docs.
   (warnings are expected from the `regseq-driver-old/src/extract/`
   inherited dead code; errors are not).
 - `cargo test -p regseq-model` runs the active stage-1 crate's
-  integration tests (181 tests across the eight test files
+  integration tests (229 tests across the ten test files
   `tests/idx_round_trip.rs`, `tests/index_vec.rs`,
   `tests/string_interner.rs`, `tests/source.rs`,
   `tests/crate_info.rs`, `tests/def_path.rs`,
-  `tests/instance.rs`, and `tests/model.rs` as of stage-1 close).
-  Use this during stage-3+ implementation iteration; the
-  workspace-wide `cargo test` is noisier due to the `*-old`
-  crates.
+  `tests/instance.rs`, `tests/model.rs`,
+  `tests/render_def_path.rs`, and `tests/pretty.rs` as of
+  stage-1 close). Use this during stage-3+ implementation
+  iteration; the workspace-wide `cargo test` is noisier due to
+  the `*-old` crates.
 
 ## Crate layout (post-refactor)
 
@@ -216,10 +217,10 @@ Snapshot at time of writing:
   external round 5e + Codex round 6 across the round-5
   monomorphization-and-C-semantics revision). All 39 issues
   addressed. See `stage-1-review-log.md`.
-- Stage 1 implementation: **all 6 steps complete and
+- Stage 1 implementation: **all 7 steps complete and
   committed** in `crates/regseq-model/` (`b8f1e67`, `fd0d3c8`,
-  `82aaaed`, `f34df65`, `f8e7b4e`, `d78db53`, plus the step-6
-  commit accompanying this update).
+  `82aaaed`, `f34df65`, `f8e7b4e`, `d78db53`, the step-6
+  commit, plus the step-7 commit accompanying this update).
   - Step 1: `Idx` trait + `newtype_index!` macro + niche
     encoding via `NonMaxU32` + `CrateId`.
   - Step 2: `IndexVec<I, T>` with serde-transparent flat
@@ -245,7 +246,25 @@ Snapshot at time of writing:
     of the 10 spec invariants. Empty placeholder structs
     `Item` / `Ty` / `Const` / `FnSig` / `Body` ship as
     forward-decls for stages 3, 4, 11, 12.
-  - 181 integration tests passing across eight test files;
+  - Step 7: canonical `render_def_path(path, crates, strings)
+    -> String` helper in `def_path.rs` -- pinned per-variant
+    rendering against `nightly-2026-02-01`
+    `rustc_hir/src/definitions.rs:185-204, :248-249, :505-520`
+    (anonymous-namespace strings: `impl`, `extern`, `use`,
+    `global_asm`, `closure`, `constructor`, `constant`,
+    `constant`, `opaque`, `synthetic`, `nested`; AnonAssocTy
+    hybrid `name::{anon_assoc#N}`; DesugaredAnonymousLifetime
+    literal `'_` with named-segment disambig). New
+    `pretty.rs` ships the `PrettyPrinter<'a>` scaffold per
+    spec lines 1323-1348, with stage-1 functional methods
+    (`render_span`, `render_def_path_value`) and stage-N
+    stubs naming the stage that fills them.
+    `RegseqModel::pretty()` is the convenience accessor.
+    Plan went through three Codex rounds before
+    implementation (BLOCK -> BLOCK -> APPROVE) +
+    implementation review (MINOR; one missing negative test
+    added).
+  - 229 integration tests passing across ten test files;
     `cargo check --workspace --tests` clean.
 - Phase 2 (pl011 device pressure) not yet started; gated on
   enough of stages 3, 4, 11, 12 to author golden C against the
