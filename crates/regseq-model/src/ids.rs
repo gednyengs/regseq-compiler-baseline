@@ -34,3 +34,31 @@ impl<'de> serde::Deserialize<'de> for CrateId {
         Ok(Self::from_u32(raw))
     }
 }
+
+newtype_index! {
+    /// Identifies an interned string.
+    ///
+    /// Indexes into the `StringInterner`. `StringId::ZERO` is
+    /// reserved for the empty string by interner construction
+    /// (pre-interned in `StringInterner::new`).
+    pub struct StringId {}
+}
+
+impl serde::Serialize for StringId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for StringId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "StringId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}

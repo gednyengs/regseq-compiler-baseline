@@ -9,7 +9,7 @@
 //!   here; if this file compiles, encapsulation holds).
 //! - `Option<CrateId>` is 4 bytes.
 
-use regseq_model::{CrateId, Idx};
+use regseq_model::{CrateId, Idx, StringId};
 use std::cmp::Ordering;
 use std::mem::size_of;
 
@@ -85,4 +85,37 @@ fn option_crate_id_is_four_bytes() {
 fn debug_format_matches_typename_paren() {
     let id = CrateId::from_u32(7);
     assert_eq!(format!("{:?}", id), "CrateId(7)");
+}
+
+// ---------------------------------------------------------------
+// StringId direct tests. The macro structurally guarantees the
+// same shape as CrateId, but each ID has its own hand-rolled serde
+// impl, so a focused smoke test guards against copy-paste drift.
+// ---------------------------------------------------------------
+
+#[test]
+fn string_id_round_trips_through_json() {
+    for raw in [0u32, 1, 7, 1024, StringId::MAX_AS_U32] {
+        let id = StringId::from_u32(raw);
+        let json = serde_json::to_string(&id).unwrap();
+        assert_eq!(json, raw.to_string());
+        let back: StringId = serde_json::from_str(&json).unwrap();
+        assert_eq!(id, back);
+    }
+}
+
+#[test]
+fn string_id_rejects_max_u32_on_deserialize() {
+    let json = u32::MAX.to_string();
+    let result: Result<StringId, _> = serde_json::from_str(&json);
+    let err = result.expect_err("u32::MAX must be rejected (niche-reserved)");
+    let msg = err.to_string();
+    assert!(msg.contains("StringId"), "error names the type: {msg}");
+    assert!(msg.contains(&u32::MAX.to_string()), "error names the value: {msg}");
+}
+
+#[test]
+fn option_string_id_is_four_bytes() {
+    assert_eq!(size_of::<Option<StringId>>(), 4);
+    assert_eq!(size_of::<StringId>(), 4);
 }
