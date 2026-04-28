@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-27.
+Last updated: 2026-04-27 (post multi-crate rebuild).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -54,15 +54,31 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Multi-crate strategy rebuild (Q6 in `architecture.md`). The facade
-collapse has been reverted; the three-tier wrapper dispatch and
-`regseq` facade will be rebuilt in subsequent sessions. The
-`regseq` crate starts empty and items get promoted from each
-spec's `crate::regseq` submodule incrementally as redesign touches
-them. Intrinsic recognition follows Q7 (attribute-name based,
-closed vocabulary). The historical implementation in commit
-`f0b2db1` is the structural reference for the dispatch
-infrastructure.
+(none currently -- between the multi-crate rebuild and stage 1)
+
+Multi-crate rebuild (Q6) is complete:
+
+- `crates/regseq/` exists as an empty facade crate with the
+  `[package.metadata.regseq]` marker and the symmetric
+  `register_tool` declarations in source.
+- `RegseqAwareCallbacks` restored in `regseq-driver`, sharing the
+  full cleanup whitelist with `RegseqCallbacks` via
+  `regseq_mir_passes()`.
+- `regseq_mir_passes()` updated to the canonical "clean MIR"
+  whitelist matching `scripts/dump-fixture-mir.sh`.
+- `RegseqCallbacks::after_analysis` is empty until the bridge
+  lands; the prior extraction code in `extract/` and
+  `construction/` stays as dormant reference (per
+  disable-and-keep).
+- `cargo-regseq` recognizes regseq-aware crates via
+  `cargo metadata` and injects `REGSEQ_AWARE_CRATES`.
+- Tests verify the dispatch end-to-end (default smoke + ignored
+  full cargo build under wrapper).
+
+Items will be promoted from each spec's `crate::regseq` submodule
+to the shared `regseq` crate incrementally as redesign work
+touches them. Intrinsic recognition follows Q7 (attribute-name
+based, closed vocabulary).
 
 ## Open architectural decisions
 
