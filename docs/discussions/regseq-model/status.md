@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-28 (stage-1 step 4 closed -- SourceFile + Position + Span + SourceFileId).
+Last updated: 2026-04-28 (round-5 spec revision committed: Instance/InstanceKind/lifting/C-semantics; reviewed via Codex round 5 + external review + Codex round 6, all findings resolved; spec implementation-ready for step 5).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -13,12 +13,17 @@ tracker is worse than no tracker.
   also rebuilt and verified end-to-end.
 - [x] **Stage 1 spec.** ID conventions (with `CrateId`),
   StringInterner, SourceFile / Span (file-local), DefPath form
-  (full 19-variant `DefPathData`), Instance, top-level RegseqModel
-  struct (with `crates` table and `primary_crate`), F4 determinism
-  rules, custom serde for IDs and StringInterner, pretty-printer
-  interface sketch. Research synthesis (`stage-1-research.md`),
-  four review rounds (three Codex, one external) all addressed
-  (`stage-1-review-log.md`), spec (`stage-1-vocabulary.md`)
+  (full 19-variant `DefPathData`), Instance / InstanceKind /
+  monomorphization story, `impl` lifting principle, C-semantics
+  framing, Rust -> C lowering reference, bridge-synthesized
+  Items rule, top-level RegseqModel struct (with `crates`
+  table, `primary_crate`, `sigs`, etc.), F4 + F4-2 determinism
+  rules with explicit rank tables, custom serde for IDs and
+  StringInterner, pretty-printer interface sketch. Research
+  synthesis (`stage-1-research.md`), seven review passes (five
+  Codex, two external) all addressed (`stage-1-review-log.md`),
+  rustc excerpts cover Instance/InstanceKind/SymbolName/VtblEntry
+  (`rustc-excerpts.md`), spec (`stage-1-vocabulary.md`)
   implementation-ready.
 - [in progress] **Stage 1 implementation.** Population of
   `crates/regseq-model/` with the stage-1 types. Foundation-first
@@ -73,8 +78,10 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Stage-1 step 5 (DefPathData + DefPathSegment + DefPath +
-DefPathHash + CrateInfo + Instance + GenericArg + StableCrateId).
+Step 5 (DefPathData + DefPathSegment + DefPath + DefPathHash +
+CrateInfo + Instance + InstanceKind + GenericArg + StableCrateId
++ FnSigId forward-decl) implementation. Round-5 spec revision
+is committed; spec is implementation-ready.
 
 State of the world:
 
@@ -153,15 +160,12 @@ Foundation-first order (steps 1-4 done; remaining):
 3. ~~`StringInterner` with custom `Serialize`/`Deserialize`.~~
    *Done in commit `82aaaed`.*
 4. ~~`SourceFile` + `Position` + `Span` with the F1 file-local
-   byte-offset rule.~~ *Done; closed in the present commit.*
-3. `StringInterner` with custom `Serialize`/`Deserialize` (storage
-   only on the wire; lookup rebuilt on deserialize; index-0-is-empty
-   and no-duplicate validation).
-4. `SourceFile` + `Position` + `Span` with the F1 file-local
-   byte-offset rule. (No bridge code yet; resolution methods only.)
+   byte-offset rule.~~ *Done in commit `f34df65`.*
 5. `DefPathData` (19 variants) + `DefPathSegment` + `DefPath`
-   (with `crate_id`) + `DefPathHash` + `CrateInfo` + `Instance` +
-   `GenericArg` + `StableCrateId` mirror.
+   (with `crate_id`) + `DefPathHash` + `CrateInfo` + `Instance`
+   (with `InstanceKind` per round-5 revision) + `GenericArg` +
+   `StableCrateId` mirror. Pending round-5 spec acceptance
+   (Codex pass + external review) before implementation begins.
 6. Top-level `RegseqModel` struct including `crates`,
    `primary_crate`, and the construction-invariants assertions.
 

@@ -134,6 +134,24 @@ override any inferred convention from the codebase or older docs.
   applies to `#![no_std]` and other source-required declarations
   -- if removing the declaration breaks plain rustc invocation,
   it must stay in the source.
+- **C semantics with information preservation.** RegseqModel uses
+  C-shaped lowerings rather than mirroring Rust-internal compiler
+  shapes. Drop-glue calls are regular Calls, trait objects are
+  vtables, closures are structs + methods, generics are
+  monomorphized away, `impl` blocks are lifted. The bridge does
+  the desugaring; consumers see C-shape. Preserve information
+  rustc gives us for free even when C doesn't strictly require
+  it, but always interrogated per construct: ask what it carries,
+  who consumes it, what shape best serves them. Don't pass
+  annotations through as opaque source-side metadata. Where
+  rustc has done the work (layout resolution, monomorphization,
+  region erasure), store the result, not the input. Examples:
+  `&mut T` carries `provenance: UniqueBorrow` (the stage-3
+  `Pointer` field) so codegen MAY emit `T* restrict` in
+  declaration contexts where uniqueness is preserved -- not
+  baked into the type unconditionally; `repr(C)` becomes a
+  resolved `Layout` on `Ty::Struct`; ABI annotations become an
+  `Abi` enum on `FnSig`.
 
 ## Operational pointers
 

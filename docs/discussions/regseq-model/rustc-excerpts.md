@@ -664,3 +664,267 @@ impl StableCrateId {
 
 The "hash by string content, not by SymbolIndex" rule appears
 again in StableCrateId's own derivation.
+
+---
+
+## 7. `Instance` and `InstanceKind`
+
+### `Instance` definition
+
+`rustc_middle/src/ty/instance.rs:33-38`:
+
+```rust
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug, TyEncodable, TyDecodable)]
+#[derive(HashStable, Lift, TypeFoldable, TypeVisitable)]
+pub struct Instance<'tcx> {
+    pub def: InstanceKind<'tcx>,
+    pub args: GenericArgsRef<'tcx>,
+}
+```
+
+The doc-comment above the struct (`rustc_middle/src/ty/instance.rs:25-29`):
+
+```rust
+/// A monomorphized `InstanceKind`.
+///
+/// Monomorphization happens on-the-fly and no monomorphized MIR is ever created. Instead, this type
+/// simply couples a potentially generic `InstanceKind` with some args, and codegen and const eval
+/// will do all required instantiations as they run.
+```
+
+The Regseq spec uses a richer interning key than rustc's
+`(InstanceKind, args)`, defined in `stage-1-vocabulary.md` under
+"Instance" as `RegseqInstanceKey`:
+
+```text
+(regseq_kind_rank:  u8,        // 0..5; Regseq InstanceKind variant
+ item:              ItemId,
+ generic_args_key:  ArgsKey,
+ fn_shim_disambig:  u8)        // 0 for non-Function;
+                               // for Function: rustc InstanceKind rank
+```
+
+The Regseq key separates the six Regseq emission kinds
+(Function/Static/Const/Struct/Enum/Union) and additionally
+distinguishes rustc shim variants within the `Function` kind --
+because rustc's `InstanceKind` taxonomy is callable-only and
+its variants can share `DefId`s (see `def_id()` below).
+
+### `InstanceKind` enum
+
+`rustc_middle/src/ty/instance.rs:62-185`. The full set of
+rustc-side variants (each carrying a `DefId` and possibly extra
+data):
+
+```rust
+#[derive(Copy, Clone, PartialEq, Eq, Hash, Debug)]
+#[derive(TyEncodable, TyDecodable, HashStable, TypeFoldable, TypeVisitable, Lift)]
+pub enum InstanceKind<'tcx> {
+    /// A user-defined callable item.
+    /// Includes `fn` items, closures, coroutines.
+    Item(DefId),
+
+    /// An intrinsic `fn` item (with `#[rustc_intrinsic]`).
+    Intrinsic(DefId),
+
+    /// `<T as Trait>::method` where `method` receives unsizeable
+    /// `self: Self`.
+    VTableShim(DefId),
+
+    /// `fn()` pointer where the function itself cannot be turned
+    /// into a pointer. Used for virtual calls and `#[track_caller]`
+    /// reification.
+    ReifyShim(DefId, Option<ReifyReason>),
+
+    /// `<fn() as FnTrait>::call_*`.
+    FnPtrShim(DefId, Ty<'tcx>),
+
+    /// Dynamic dispatch to `<dyn Trait as Trait>::fn`.
+    Virtual(DefId, usize),
+
+    /// `<[FnMut/Fn closure] as FnOnce>::call_once`.
+    ClosureOnceShim { call_once: DefId, track_caller: bool },
+
+    /// `<[FnMut/Fn coroutine-closure] as FnOnce>::call_once`.
+    ConstructCoroutineInClosureShim {
+        coroutine_closure_def_id: DefId,
+        receiver_by_ref: bool,
+    },
+
+    /// Compiler-generated accessor for thread locals.
+    ThreadLocalShim(DefId),
+
+    /// Proxy shim for async drop of future.
+    FutureDropPollShim(DefId, Ty<'tcx>, Ty<'tcx>),
+
+    /// `core::ptr::drop_in_place::<T>`.
+    DropGlue(DefId, Option<Ty<'tcx>>),
+
+    /// Compiler-generated `<T as Clone>::clone` implementation.
+    CloneShim(DefId, Ty<'tcx>),
+
+    /// Compiler-generated `<T as FnPtr>::addr` implementation.
+    FnPtrAddrShim(DefId, Ty<'tcx>),
+
+    /// `core::future::async_drop::async_drop_in_place::<'_, T>`.
+    AsyncDropGlueCtorShim(DefId, Ty<'tcx>),
+
+    /// `core::future::async_drop::async_drop_in_place::<'_, T>::{closure}`.
+    AsyncDropGlue(DefId, Ty<'tcx>),
+}
+```
+
+### `InstanceKind::def_id()` (every variant carries a `DefId`)
+
+`rustc_middle/src/ty/instance.rs:242-265`:
+
+```rust
+impl<'tcx> InstanceKind<'tcx> {
+    #[inline]
+    pub fn def_id(self) -> DefId {
+        match self {
+            InstanceKind::Item(def_id)
+            | InstanceKind::VTableShim(def_id)
+            | InstanceKind::ReifyShim(def_id, _)
+            | InstanceKind::FnPtrShim(def_id, _)
+            | InstanceKind::Virtual(def_id, _)
+            | InstanceKind::Intrinsic(def_id)
+            | InstanceKind::ThreadLocalShim(def_id)
+            | InstanceKind::ClosureOnceShim { call_once: def_id, track_caller: _ }
+            | ty::InstanceKind::ConstructCoroutineInClosureShim {
+                coroutine_closure_def_id: def_id,
+                receiver_by_ref: _,
+            }
+            | InstanceKind::DropGlue(def_id, _)
+            | InstanceKind::CloneShim(def_id, _)
+            | InstanceKind::FnPtrAddrShim(def_id, _)
+            | InstanceKind::FutureDropPollShim(def_id, _, _)
+            | InstanceKind::AsyncDropGlue(def_id, _)
+            | InstanceKind::AsyncDropGlueCtorShim(def_id, _) => def_id,
+        }
+    }
+    ...
+}
+```
+
+This grounds the spec's claim that *every* `Instance` has an
+originating source-level item: rustc's `def_id()` is total over
+`InstanceKind`. The Regseq spec uses this in the `Instance.item`
+field's "always present" rule.
+
+Note that distinct variants can share a `DefId` (e.g.,
+`Item(foo)` and `ReifyShim(foo, _)` both have `def_id == foo`).
+This is the basis for the spec's interning rule: keying by
+`(item, generic_args)` alone is insufficient when shims can
+share `DefId`s; the key must include the full `InstanceKind`
+discriminator.
+
+## 8. Symbol names: `tcx.symbol_name`
+
+### `SymbolName` type
+
+`rustc_middle/src/ty/mod.rs:2191-2201`:
+
+```rust
+#[derive(Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, TyEncodable, HashStable)]
+pub struct SymbolName<'tcx> {
+    /// `&str` gives a consistent ordering, which ensures reproducible builds.
+    pub name: &'tcx str,
+}
+
+impl<'tcx> SymbolName<'tcx> {
+    pub fn new(tcx: TyCtxt<'tcx>, name: &str) -> SymbolName<'tcx> {
+        SymbolName { name: tcx.arena.alloc_str(name) }
+    }
+}
+```
+
+A `SymbolName` is a `&'tcx str` interned in the type-context
+arena. It is `Ord`-comparable for reproducible-build ordering.
+
+### `tcx.symbol_name` query
+
+`rustc_symbol_mangling/src/lib.rs:124-148`:
+
+```rust
+pub fn provide(providers: &mut Providers) {
+    *providers = Providers { symbol_name: symbol_name_provider, ..*providers };
+}
+
+// The `symbol_name` query provides the symbol name for calling a given
+// instance from the local crate. In particular, it will also look up the
+// correct symbol name of instances from upstream crates.
+fn symbol_name_provider<'tcx>(tcx: TyCtxt<'tcx>, instance: Instance<'tcx>) -> ty::SymbolName<'tcx> {
+    let symbol_name = compute_symbol_name(tcx, instance, || {
+        // This closure determines the instantiating crate for instances that
+        // need an instantiating-crate-suffix for their symbol name, in order
+        // to differentiate between local copies.
+        if is_generic(instance) {
+            instance.upstream_monomorphization(tcx).unwrap_or(LOCAL_CRATE)
+        } else {
+            LOCAL_CRATE
+        }
+    });
+
+    ty::SymbolName::new(tcx, &symbol_name)
+}
+```
+
+`tcx.symbol_name(instance)` is the canonical rustc-side query
+that produces the mangled name for an `Instance`. It accounts
+for the full `InstanceKind` (shims and base items get distinct
+names by construction) and the `args`. The Regseq bridge calls
+this and interns the resulting string into `StringInterner` to
+populate `Instance.symbol_name`.
+
+The doc-comment in `compute_symbol_name`
+(`rustc_symbol_mangling/src/lib.rs:160-175`) shows the full
+derivation pulls `instance.def_id()` and `instance.args` plus
+codegen attributes, instantiating crate, and any
+`#[rustc_std_internal_symbol]` overrides. The result is a
+`String` which `SymbolName::new` interns.
+
+## 9. Vtable entries: `VtblEntry` and `tcx.vtable_entries`
+
+`rustc_middle/src/ty/vtable.rs:12-26`:
+
+```rust
+#[derive(Clone, Copy, PartialEq, HashStable)]
+pub enum VtblEntry<'tcx> {
+    /// destructor of this type (used in vtable header)
+    MetadataDropInPlace,
+    /// layout size of this type (used in vtable header)
+    MetadataSize,
+    /// layout align of this type (used in vtable header)
+    MetadataAlign,
+    /// non-dispatchable associated function that is excluded from trait object
+    Vacant,
+    /// dispatchable associated function
+    Method(Instance<'tcx>),
+    /// pointer to a separate supertrait vtable, can be used by trait upcasting coercion
+    TraitVPtr(TraitRef<'tcx>),
+}
+```
+
+A trait-object vtable is **not** just a struct of fn pointers.
+Each entry can be:
+
+- `MetadataDropInPlace` -- a fn pointer to drop glue for the
+  concrete `Self` type.
+- `MetadataSize` -- the size of the concrete type, encoded inline
+  as a usize-shaped slot.
+- `MetadataAlign` -- the alignment of the concrete type, encoded
+  inline as a usize-shaped slot.
+- `Vacant` -- a slot for a non-dispatchable associated function
+  (excluded from the trait object). Encoded as a null fn ptr in
+  codegen.
+- `Method(Instance)` -- a fn pointer to the resolved method
+  Instance.
+- `TraitVPtr(TraitRef)` -- a pointer to a supertrait's vtable
+  (for upcasting).
+
+The Regseq spec models a vtable as a synthesized Static
+`Instance` whose value is a struct matching this entry sequence
+(metadata header, then per-method fn pointers, then any
+supertrait vtable pointers). Stage 9/12 will pin the precise
+struct layout; stage 1 reserves the policy.

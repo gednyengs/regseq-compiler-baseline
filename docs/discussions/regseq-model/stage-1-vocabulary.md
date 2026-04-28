@@ -47,6 +47,46 @@ stage. The top-level `RegseqModel` struct accordingly contains
 `IndexVec<TyId, Ty>`, `IndexVec<ConstId, Const>`, and similar fields
 whose element types are stage-N concerns.
 
+## Rust -> C lowering reference
+
+RegseqModel is a C-shaped IR. The bridge translates Rust-side
+constructs into C-friendly normalized fields whose shape is
+dictated by downstream stakeholder needs (domain analyses + the
+C codegen backend). For each construct, ask what it carries
+semantically, who consumes it, and what shape serves them best --
+then translate. Don't pass annotations through as opaque
+source-side metadata. Where rustc has done the work (layout
+resolution, monomorphization, region erasure), store the result,
+not the input.
+
+| Rust construct | RegseqModel shape | Notes |
+|---|---|---|
+| Generics | Monomorphized; each instantiation is a distinct `Instance` | Q2 + this stage |
+| Lifetimes | Erased | rustc's `erasing_regions` |
+| Closures | Already MIR-desugared to struct + method; mirrored as such | Stage 11/12 |
+| `Drop` terminator | Lowered to `Call` targeting drop-glue `Instance` | Stage 9 |
+| Trait objects | Vtable as Static `Instance` of mixed-aggregate type matching rustc's `tcx.vtable_entries` sequence: `MetadataDropInPlace` (fn ptr) + `MetadataSize` + `MetadataAlign` + per-method fn pointers + supertrait vtable pointers (`TraitVPtr`) + `Vacant` slots for non-dispatchable fns. See `rustc-excerpts.md` section 9. Dynamic dispatch is indirect call through the loaded fn ptr. | Stage 9, 12, 13 |
+| `&T` | `Pointer { mutability: Const, provenance: SharedBorrow, pointee }` -> `const T*` | Stage 3 |
+| `&mut T` | `Pointer { mutability: Mut, provenance: UniqueBorrow, pointee }` -> `T*`; codegen MAY emit `T* restrict` only in declaration contexts where unique-borrow provenance is preserved (function parameters and locals with no escape into stored state, returns, or raw-pointer reborrows). Codegen decides per-context; the type itself does not bake `restrict`. | Stage 3 / 9 |
+| `*const T` / `*mut T` | `Pointer { mutability: Const \| Mut, provenance: Raw, pointee }` -> `const T*` / `T*` | Stage 3; no `restrict` (raw pointers may alias) |
+| `Result`, `Option`, ADTs | Tagged unions or sum-of-product structs via `Ty::Enum` | Stage 3, 4 |
+| `match`, `?` | Already MIR-lowered to control flow | Stages 8, 9 |
+| `impl` blocks | Lifted; not represented as Items (see "Lifting `impl` items") | This stage |
+| `repr(C)`, `repr(packed)`, etc. | **Resolved layout** stored on `Ty::Struct`, not the annotation | Stage 3; bridge calls `tcx.layout_of` |
+| `extern "C"` etc. | `Abi` enum on `FnSig` | Stage 11 |
+| `#[no_mangle]`, `#[export_name]` | `Linkage` enum on `Item` | Stage 12 |
+| `#[inline]`, `#[cold]` | `InlineHint` enum on `Item` | Stage 12 |
+| `unsafe fn` | `is_unsafe: bool` on `Item` (consumed by analyses, not codegen) | Stage 12 |
+| `const fn` | Likely not represented (drop after const-eval consumes it) | Confirm with a real driver case |
+| `async fn` | Reject if encountered (no_std drivers don't use async) | n/a |
+| `global_asm!` | Reject if encountered (driver code uses inline asm at fn level, not module level) | n/a |
+| `Vec`, `String`, `Box`, other std | **N/A -- not usable in regseq specs (`no_std`, no `alloc`)** | n/a |
+| `#[rseq::*]` attributes | Structured `DomainAttr` on `Item` / `Instance` | Stage 13 |
+
+This table is descriptive, not exhaustive: it pins the
+already-decided lowerings and serves as a check on future stage
+work. New rows are added as new constructs are settled.
+
 ## ID conventions
 
 ### The `Idx` trait
@@ -170,6 +210,7 @@ The IDs introduced or named at stage 1, with their referents:
 | `TyId` | u32 | `RegseqModel.types` | stage 3 (forward) |
 | `ConstId` | u32 | `RegseqModel.consts` | stage 4 (forward) |
 | `InstanceId` | u32 | `RegseqModel.instances` | stage 1 |
+| `FnSigId` | u32 | `RegseqModel.sigs` | stage 11 (forward) |
 | `LocalId` | u32 | per-`Body` `local_decls` | stage 11 (body-local) |
 | `BlockId` | u32 | per-`Body` `basic_blocks` | stage 10 (body-local) |
 
@@ -547,11 +588,66 @@ struct.
 The F4 cross-build identity table `item_def_paths: IndexVec<ItemId,
 DefPathHash>` lives at the `RegseqModel` level (stage 1).
 
-## Monomorphization: `Instance`
+## Lifting `impl` items
 
-Per Q2, the bridge bakes monomorphization. Each call to a generic
-function in MIR is resolved to a specific `(item, generic-args)`
-tuple. The IR carries this as an `Instance`.
+`impl` blocks are source-level scopes, not emittable units.
+RegseqModel does not represent them as Items. Their contents lift
+to the top-level `items` / `instances` tables:
+
+- **Inherent impl methods** (`impl Foo { fn bar(&self) }`):
+  lifted to top-level Function Items with an explicit receiver
+  parameter. `&self` becomes `&Foo` after substitution.
+- **Trait impl methods** (`impl Trait for Foo { fn bar() }`):
+  same lifting. The trait association survives only via DefPath
+  (`crate::Foo::{impl#0 as Trait}::bar`) and -- for dynamic
+  dispatch only -- via vtables synthesized as Static Instances.
+- **Associated constants**: lifted to top-level Const Items.
+- **Associated types**: erased. All uses are substituted at
+  monomorphization (`<Foo as Iterator>::Item` -> the resolved
+  type). They never appear as Items.
+- **Trait declarations**: erased. Static dispatch resolves
+  directly to the implementing function's Instance; dynamic
+  dispatch goes through a vtable. The trait itself has no
+  emittable counterpart.
+- **Default trait method bodies**: a default body in a trait
+  declaration (`trait Foo { fn bar() { ... default ... } }`) is
+  owned by the trait, not by any impl. Its body lives at the
+  trait's DefPath (e.g., `crate::Foo::bar`); a single Function
+  Item is created there, just like for inherent fns. When `impl
+  Foo for X` does not override `bar`, the use-site `<X as
+  Foo>::bar()` resolves to an `Instance { item: <trait::bar
+  Item>, generic_args: [Self=X, ...] }` whose body is the
+  default body monomorphized for the substitution. No impl-side
+  Item is created for the inherited default.
+
+Consequences:
+
+- `ItemKind` (stage 12) has six variants -- `Function`, `Static`,
+  `Const`, `Struct`, `Enum`, `Union` -- mirroring `InstanceKind`.
+  No `Impl`, `Trait`, or `AssocType` variants.
+- `DefPathData` keeps its full 19-variant inventory. `Impl`
+  remains a path-segment variant for source-level traceback; it
+  is not an Item kind.
+- The method-vs-function distinction does not survive lifting.
+  Consumers see regular functions with whatever first parameter
+  the source declared.
+
+## Instances: monomorphized items
+
+Per Q2 the bridge bakes monomorphization. **Instance is the
+primary monomorphized unit in RegseqModel.** Every emittable
+construct -- functions, statics, consts, structs, enums, unions
+-- appears in `instances` as a fully-resolved monomorphization.
+Generic forms live in `items` only as the alphabet for
+source-level traceback (DefPath identity, attributes, span);
+generic items themselves are not emitted.
+
+Downstream stakeholders -- domain analyses and the C codegen
+backend -- traverse `instances` and treat each as one C-level
+entity. They do not iterate `items` for emission. The
+`(item, generic_args)` back-reference exists for diagnostics,
+custom naming strategies, source navigation, and cross-build
+identity, not for emission.
 
 ### `GenericArg`
 
@@ -559,43 +655,327 @@ tuple. The IR carries this as an `Instance`.
 pub enum GenericArg {
     Type(TyId),
     Const(ConstId),
-    // Lifetime: erased post-monomorphization, not represented
+    // Lifetimes: erased post-monomorphization, not represented.
 }
 
 pub type GenericArgs = Vec<GenericArg>;
 ```
 
-Lifetimes are erased at monomorphization (rustc's
-`erasing_regions` step at the bridge). They do not appear in
-`GenericArgs`.
+Lifetimes are erased at the bridge (rustc's `erasing_regions`
+step). They never appear in `GenericArgs`.
 
 ### `Instance`
 
 ```rust
 pub struct Instance {
-    pub item: ItemId,
-    pub args: GenericArgs,
+    pub item:         ItemId,         // origin: source-level item, always present
+    pub generic_args: GenericArgs,    // origin: resolved args; empty for non-generic items
+    pub symbol_name:  StringId,       // default mangled name from `tcx.symbol_name`
+    pub span:         Span,           // source span; synthesized => sentinel (see below)
+    pub kind:         InstanceKind,
 }
 
 newtype_index! { pub struct InstanceId {} }
 ```
 
-The bridge interns instances during construction so that two call
-sites referring to the same `(item, args)` tuple share an
-`InstanceId`. The interning HashMap is transient bridge state (not
-in the IR); the IR holds `IndexVec<InstanceId, Instance>`.
+Common fields:
 
-Pretty-printer rendering follows rustc's MIR-dump convention:
-`crate::module::Item::<u32>` for `Instance { item: my_func,
-args: [Type(u32_ty)] }`.
+- `item`: back-reference to the source-level Item. Always present;
+  every rustc instance variant carries a `DefId`, so an originating
+  item exists for every Instance. For Instances whose origin is a
+  recognized `core` lang-item (e.g., `drop_in_place` for drop
+  glue), the `Item` entry is metadata-only: DefPath, kind, span,
+  attributes -- captured by the bridge from rustc-side metadata,
+  with no body in our `bodies` table. This is consistent with the
+  "core is opaque" methodology rule (we don't walk core MIR);
+  per-monomorphization `Instances` of these origins still have
+  rustc-generated bodies (e.g., the per-type drop-glue MIR), which
+  do appear in `bodies`.
+- `generic_args`: the resolved type/const args used for this
+  instantiation. Empty for non-generic items.
+- `symbol_name`: the bridge-provided default symbol name,
+  derived from rustc's `tcx.symbol_name(instance)` (see
+  `rustc-excerpts.md` section 8). Format follows rustc's
+  standard mangling scheme; uniqueness across `instances` is
+  guaranteed by the bridge by construction (rustc's mangler
+  factors in the full `InstanceKind`, args, and instantiating
+  crate). Consumers wanting a different naming strategy may
+  walk `(item.def_path, generic_args)` and synthesize their
+  own. **Caveat**: `(item.def_path, generic_args)` is *not*
+  unique when rustc shims share a `DefId` (e.g., `Item(foo)`
+  vs. `ReifyShim(foo)` -- see `rustc-excerpts.md` section 7).
+  Custom names that may encounter shim-distinguished Instances
+  must include `InstanceId` or the bridge-provided
+  `symbol_name` as a disambiguating suffix to avoid collisions.
+- `span`: source location. For bridge-synthesized items (drop
+  glue, vtable shims, closure-capture structs that have no source
+  location), this is `Span { file: SourceFileId::SYNTHESIZED,
+  lo: 0, hi: 0 }` -- the synthesized sentinel.
+
+Origin is just `(item, generic_args)`. There is no separate
+`Origin` enum exposed in the public type; the two fields *are*
+the origin from the consumer's point of view.
+
+The bridge interns instances during construction. The interning
+key is a **Regseq-level instance key** that distinguishes both
+the Regseq `InstanceKind` variant *and*, for `Function` instances,
+the rustc-side shim discriminator. Two call sites that produce
+the same Regseq instance key share an `InstanceId`.
+
+```text
+RegseqInstanceKey = (
+    regseq_kind_rank:    u8,    // Regseq InstanceKind variant rank (table below)
+    item:                ItemId,
+    generic_args_key:    ArgsKey,
+    fn_shim_disambig:    u8,    // 0 for non-Function variants;
+                                // for Function: rustc InstanceKind rank (table below)
+)
+```
+
+**Why both ranks**: Regseq's `InstanceKind` covers six emission
+kinds (Function/Static/Const/Struct/Enum/Union); rustc's
+`InstanceKind` is a *callable*-only taxonomy with shim variants
+(`Item`, `DropGlue`, `VTableShim`, `ReifyShim`, `FnPtrShim`,
+`Virtual`, `ClosureOnceShim`, etc.) that can share a `DefId`.
+The `regseq_kind_rank` separates the six emission kinds; the
+`fn_shim_disambig` further separates rustc shims within the
+`Function` Regseq kind. Without the second discriminator,
+`Item(foo)` and `ReifyShim(foo)` would collapse into one
+`Instance` despite having distinct semantics, bodies, and
+symbol names.
+
+The shim discriminator is **not** exposed as a public field on
+`Instance`. It survives only:
+
+- in `symbol_name` (`tcx.symbol_name(instance)` derives from the
+  full rustc instance identity, so distinct rustc instances get
+  distinct mangled names);
+- in `body` (each rustc instance gets its own MIR body);
+- in the F4-2 sort key (Regseq instance key as defined above).
+
+The interning HashMap is transient bridge state.
+
+#### `regseq_instance_kind_rank` table
+
+Stable rank for the Regseq `InstanceKind` variant. Append-only
+(new variants get new ranks at the end; existing ranks are
+immutable):
+
+```rust
+fn regseq_instance_kind_rank(kind: &InstanceKind) -> u8 {
+    match kind {
+        InstanceKind::Function { .. } => 0,
+        InstanceKind::Static   { .. } => 1,
+        InstanceKind::Const    { .. } => 2,
+        InstanceKind::Struct   { .. } => 3,
+        InstanceKind::Enum     { .. } => 4,
+        InstanceKind::Union    { .. } => 5,
+    }
+}
+```
+
+#### `rustc_instance_kind_sort_rank` table
+
+Stable rank for rustc's `ty::InstanceKind` variant, used as
+`fn_shim_disambig` when the Regseq kind is `Function`. Pinned
+for the toolchain `nightly-2026-02-01-aarch64-apple-darwin`
+(see `rustc-excerpts.md` section 7 for the variant inventory).
+Append-only:
+
+```rust
+fn rustc_instance_kind_sort_rank(kind: &rustc_ty::InstanceKind<'_>) -> u8 {
+    match kind {
+        InstanceKind::Item(..)                    => 0,
+        InstanceKind::Intrinsic(..)               => 1,
+        InstanceKind::VTableShim(..)              => 2,
+        InstanceKind::ReifyShim(..)               => 3,
+        InstanceKind::FnPtrShim(..)               => 4,
+        InstanceKind::Virtual(..)                 => 5,
+        InstanceKind::ClosureOnceShim { .. }      => 6,
+        InstanceKind::ConstructCoroutineInClosureShim { .. } => 7,
+        InstanceKind::ThreadLocalShim(..)         => 8,
+        InstanceKind::FutureDropPollShim(..)      => 9,
+        InstanceKind::DropGlue(..)                => 10,
+        InstanceKind::CloneShim(..)               => 11,
+        InstanceKind::FnPtrAddrShim(..)           => 12,
+        InstanceKind::AsyncDropGlueCtorShim(..)   => 13,
+        InstanceKind::AsyncDropGlue(..)           => 14,
+    }
+}
+```
+
+For non-`Function` Regseq kinds (Static/Const/Struct/Enum/Union),
+`fn_shim_disambig` is unconditionally `0` -- they have no
+rustc-shim discrimination to encode.
+
+There is no `is_root` flag on `Instance`. Roots (e.g.,
+`#[no_mangle]` exports for codegen, analysis-specific reachability
+roots) are consumer-derived predicates over `instance.item`'s
+attributes, ABI, and visibility -- which live on `Item`
+(stage 12).
+
+### `InstanceKind`
+
+```rust
+pub enum InstanceKind {
+    /// Function instantiation. `sig` is the substituted
+    /// signature for this monomorphization (always present, even
+    /// for foreign declarations where there is no body). `body`
+    /// is `None` for foreign declarations whose bodies are not
+    /// in our crate set (e.g., `extern "C" { fn foo(); }`); C
+    /// codegen still has the prototype via `sig`.
+    Function { sig: FnSigId, body: Option<BodyId> },
+
+    /// Static. Covers both `static` (immutable) and `static mut`
+    /// (mutable). The mutability flag lives on the source `Item`
+    /// (stage 12, `ItemKind::Static { mutability, .. }`); C
+    /// codegen reads it via `instance.item` to decide whether to
+    /// emit `const` qualification on the global. `init` is the
+    /// const-evaluated initializer.
+    Static { ty: TyId, init: ConstId },
+
+    /// Const item.
+    Const { ty: TyId, value: ConstId },
+
+    /// Nominal struct. `layout` points at the corresponding
+    /// `Ty::Struct` for field structure.
+    Struct { layout: TyId },
+
+    /// Nominal enum. `layout` points at `Ty::Enum`.
+    Enum { layout: TyId },
+
+    /// Nominal C-style union. `layout` points at `Ty::Union`.
+    Union { layout: TyId },
+}
+```
+
+Each variant carries only the IDs needed to find kind-specific
+rich data in the appropriate stage's table:
+
+- `Function.sig` -> `sigs` (stage 11). The substituted `FnSig`
+  for this monomorphization. Always present, including for
+  foreign declarations (`body: None`). C codegen reads the
+  prototype from `sig` regardless of body presence; analyses
+  read it for call-shape information.
+- `Function.body` -> `bodies` (stage 11). Monomorphized MIR
+  body. `None` for foreign declarations whose bodies are not in
+  our crate set.
+- `Static.ty` / `Const.ty` -> `types` (stage 3).
+- `Static.init` / `Const.value` -> `consts` (stage 4).
+- `Struct.layout` / `Enum.layout` / `Union.layout` -> `types`
+  (stage 3 will define `Ty::Struct { fields }`,
+  `Ty::Enum { variants }`, `Ty::Union { fields }`).
+
+Stage 13 may extend `InstanceKind` with domain-specific variants
+(e.g., an `Isr` subkind of `Function`). For stage 1, the six
+variants above are the closed set.
 
 ### Where `InstanceId` references appear
 
-Call sites in MIR carry `InstanceId` (not `ItemId`) when the callee
-is a regular function. Calls to drop glue, virtual methods through
-trait objects, or domain intrinsics use other forms; those are
-stage-12 / stage-13 concerns and reuse `InstanceId` where
-appropriate.
+Call sites in MIR (stage 9 terminators) carry `InstanceId`
+identifying the callee. This includes:
+
+- Regular function calls.
+- Direct dispatch on trait methods (resolved at monomorphization).
+- Drop-glue calls: stage 9 lowers `Drop` terminators to regular
+  `Call` terminators targeting the drop-glue `Instance` for the
+  type. There is no `Drop` variant in stage-9 terminators.
+
+Dynamic dispatch through trait objects becomes an indirect call
+through a vtable. The vtable is a synthesized Static `Instance`
+(see "Bridge-synthesized Items" above) whose value is a mixed
+aggregate matching rustc's `tcx.vtable_entries(trait_ref)`
+sequence: drop-glue fn pointer, size, alignment, then
+per-trait-method fn pointers, supertrait vtable pointers, and
+`Vacant` slots for non-dispatchable methods (see
+`rustc-excerpts.md` section 9). Each method fn pointer is the
+lifted `Instance` for the corresponding method. The precise
+struct layout (`Ty`) for the vtable's mixed-aggregate value is
+defined in stage 9/12 when vtable lowering is implemented;
+stage 1 reserves the policy.
+
+Pretty-printer rendering follows rustc's MIR-dump convention:
+`crate::module::Item::<u32>` for `Instance { item: my_func,
+generic_args: [Type(u32_ty)], ... }`.
+
+### Bridge-synthesized Items
+
+Some Instances arise from constructs the bridge synthesizes
+rather than from source-level definitions. The principal case
+is **trait-object vtables**: when MIR has a `dyn Trait` value,
+the bridge synthesizes a Static `Instance` whose value is the
+vtable struct. This Static needs an `Item`; rustc has no
+source-level `DefId` for the vtable itself.
+
+Bridge-synthesized Items live in `items` alongside source-level
+items, with these construction rules:
+
+- **`def_path`**: synthetic, under a reserved canonical form.
+  For vtable items, the rendered form is `<vtable for `Trait`
+  for `SelfTy`>` (rendering pinned by the pretty-printer). The
+  internal `DefPathData` segment representation is pinned in
+  stage 9/12 when vtable lowering is implemented; stage 1
+  reserves the synthetic-item slot in `items`. **Note**:
+  `DefPathData` is a closed 19-variant enum mirroring rustc.
+  If stage 9/12 needs a *new* `DefPathData` variant for
+  synthetic vtable scopes (rather than overloading an existing
+  variant), that is a stage-1 revision: the variant is
+  appended to `DefPathData`, the `def_path_data_sort_rank`
+  table receives a new append-only entry (rank 19), and stage
+  9/12's vtable lowering uses the new variant. Spec-mutability
+  rule applies (Codex/external review of the variant addition
+  before merge).
+- **`def_path_hash`**: derived deterministically from the
+  synthetic components. For vtable items: `hash((trait_def_path_hash,
+  self_ty_canonical_hash))`. Stable across builds.
+- **`crate_id`**: the `crate_id` of the crate that triggered
+  the synthesis (typically the primary crate or the
+  regseq-aware crate that constructed the trait object).
+
+Construction invariant 2 (`item_def_paths` mirrors `items`)
+extends to synthetic items: `item_def_paths[item_id]` for a
+synthetic item is the bridge-derived `DefPathHash` defined
+above.
+
+Synthetic items are conceptually owned by the bridge; they
+appear in all the same tables as source-level items so
+consumers can walk `instances` uniformly without special-casing.
+
+### Synthesized source-file sentinel
+
+`source_files[0]` (i.e., `SourceFileId::ZERO`) is reserved for
+the synthesized-source sentinel. The bridge populates it as the
+first entry of the `source_files` table during construction:
+
+```rust
+SourceFile {
+    path:        strings.intern("<synthesized>"),
+    content:     None,
+    line_starts: vec![0],
+}
+```
+
+Real source files start at `SourceFileId(1)`. Spans on
+bridge-synthesized items use `Span { file: SourceFileId::SYNTHESIZED,
+lo: 0, hi: 0 }`. Consumers don't need `Option<Span>` checks: a
+synthesized span resolves through `Span::slice` to `None`
+naturally because the sentinel's `content` is `None`.
+
+`SourceFileId::SYNTHESIZED` is a documentary alias for
+`SourceFileId::ZERO` (the macro-generated index-0 constant from
+`newtype_index!`):
+
+```rust
+impl SourceFileId {
+    /// Sentinel for bridge-synthesized spans (no source location).
+    /// Equal to `SourceFileId::ZERO`; the named form is preferred
+    /// at use sites for readability.
+    pub const SYNTHESIZED: SourceFileId = SourceFileId::ZERO;
+}
+```
+
+This mirrors `StringId::ZERO == ""` -- both are stable index-0
+sentinels reserved by construction.
 
 ## Top-level `RegseqModel`
 
@@ -609,26 +989,37 @@ pub struct CrateInfo {
 }
 
 pub struct RegseqModel {
-    // Crate inventory (one entry per crate the model contains items from)
+    // Crate inventory (one entry per crate the model contains items from).
     pub crates:        IndexVec<CrateId, CrateInfo>,
     pub primary_crate: CrateId,                          // points at the spec crate
 
-    // Interning tables (stage 1)
+    // Interning tables (stage 1).
+    // `source_files[0]` is the synthesized-source sentinel.
     pub strings:      StringInterner,
     pub source_files: IndexVec<SourceFileId, SourceFile>,
 
-    // Type / const tables (stages 3-4)
+    // Type / const tables (stages 3-4).
     pub types:  IndexVec<TyId,    Ty>,
     pub consts: IndexVec<ConstId, Const>,
 
-    // Item / body / instance tables (stages 11-12)
+    // Source-level item alphabet (stage 12). Holds generic-form
+    // definitions (DefPath, kind, attributes, span). NOT the
+    // emission table; emission walks `instances`.
+    // `item_def_paths` is the F4 cross-build-identity side table.
     pub items:          IndexVec<ItemId, Item>,
-    pub item_def_paths: IndexVec<ItemId, DefPathHash>,   // F4 cross-build identity
-    pub bodies:         IndexVec<BodyId, Body>,
-    pub instances:      IndexVec<InstanceId, Instance>,
+    pub item_def_paths: IndexVec<ItemId, DefPathHash>,
 
-    // Roots
-    pub entry_points: Vec<ItemId>,
+    // Function signatures (stage 11). Every `InstanceKind::Function`
+    // has an entry; foreign declarations have `body: None` but still
+    // have a sig.
+    pub sigs:   IndexVec<FnSigId, FnSig>,
+
+    // Bodies for body-carrying Instances (stage 11).
+    pub bodies: IndexVec<BodyId, Body>,
+
+    // The primary monomorphized table. Iteration target for
+    // domain analyses and C codegen.
+    pub instances: IndexVec<InstanceId, Instance>,
 }
 ```
 
@@ -653,15 +1044,26 @@ The bridge guarantees:
 
 1. *Tables are populated before they are referenced.* Every `CrateId`,
    `TyId`, `ConstId`, `ItemId`, `BodyId`, `InstanceId`,
-   `SourceFileId`, `StringId` that appears anywhere in the model
-   resolves to a valid index in its table. This is a debug-build
-   assertion.
+   `FnSigId`, `SourceFileId`, `StringId` that appears anywhere
+   in the model resolves to a valid index in its table. In
+   particular: every `Function.sig: FnSigId` resolves to a valid
+   entry in `sigs`, including for foreign declarations. This is
+   a debug-build assertion.
 2. *`item_def_paths` mirrors `items`.* `item_def_paths.len() ==
    items.len()`, and for every valid `item_id`,
-   `item_def_paths[item_id]` is the rustc `DefPathHash` corresponding
-   to `items[item_id].def_path` (rustc's own `DefPathHash` of the
-   originating `DefId`). Stage 12 specifies the placement of
-   `def_path` on `Item` but inherits this consistency rule.
+   `item_def_paths[item_id]` is a stable identity hash for
+   `items[item_id]`:
+   - For **source-level Items** (the common case):
+     `item_def_paths[item_id]` is rustc's own `DefPathHash` of
+     the originating `DefId`.
+   - For **bridge-synthesized Items** (see "Bridge-synthesized
+     Items"; principal case is trait-object vtables):
+     `item_def_paths[item_id]` is the bridge-derived stable
+     hash defined in that section (e.g., for vtable items:
+     `hash((trait_def_path_hash, self_ty_canonical_hash))`).
+   Both forms are stable across builds and globally unique.
+   Stage 12 specifies the placement of `def_path` on `Item` but
+   inherits this consistency rule.
 3. *Items are sorted at construction.* Per F4, items are placed in
    `items` (and `item_def_paths`) in the order produced by the F4
    sort comparator. Two builds of the same source produce identical
@@ -680,28 +1082,34 @@ The bridge guarantees:
    item, `item.def_path.crate_id.index() < crates.len()`. Items
    from upstream crates (per Q6 cross-crate handling) appear in the
    `crates` table just like the primary crate.
-7. *`entry_points` references items in `primary_crate`.* The
-   reachable items the bridge identified as entry points (functions
-   called from outside the spec crate, e.g., the regseq-aware
-   driver init). Stage 12 specifies the classification rule; stage
-   1 just reserves the field and pins the
-   `def_path.crate_id == primary_crate` constraint.
-8. *No `'tcx` references.* The model is fully owned and `'static`-
+7. *No `'tcx` references.* The model is fully owned and `'static`-
    compatible; serialization round-trips losslessly.
+8. *Synthesized source-file sentinel.* `source_files[0]` is the
+   synthesized sentinel: `path` interned as `"<synthesized>"`,
+   `content: None`, `line_starts: vec![0]`. Real source files
+   start at `SourceFileId(1)`. Bridge-synthesized Instances have
+   `span.file == SourceFileId::SYNTHESIZED`.
+9. *Instance closure-completeness.* The bridge computes the
+   monomorphization closure from a settled root set: the full
+   rustc mono-item closure for the primary crate plus all
+   regseq-aware dependency crates (per Q6's
+   `[package.metadata.regseq]` discovery), plus all synthesized
+   artifacts those mono-items require (drop glue, vtable shims,
+   etc., per rustc's `MonoItem` collection logic). The set is
+   **bridge-determined and not consumer-influenced**; downstream
+   consumers filter the resulting `instances` table for their
+   own analysis-specific or codegen-specific roots. Every
+   `InstanceId` referenced anywhere in the model resolves to a
+   valid entry in `instances`; dangling `InstanceId`s are
+   debug-assertion failures.
+10. *Body presence matches kind.* For every `Instance` with
+    `kind: InstanceKind::Function { body: Some(b) }`, `b`
+    resolves to a valid `Body`. `body: None` is reserved for
+    foreign declarations whose bodies are not in our crate set;
+    the bridge does not synthesize empty bodies.
 
 Invariants outside debug builds are enforced by construction; the
 bridge produces the model in one pass and writes only valid indices.
-
-### Roots / entry points
-
-`entry_points: Vec<ItemId>` lists the items the bridge identified as
-entry points for downstream emit specs. Stage 12 specifies the
-classification rule; stage 1 just defines the field.
-
-For phase 2 (device pressure), the entry-point set will be the
-driver-init / IRQ-handler / register-access functions that the C
-backend must emit. For phase 1 linguistic snippets, it is whatever
-top-level item the test drives.
 
 ### Design rationale: local IDs vs stable identity
 
@@ -831,6 +1239,36 @@ maps "this `ItemId` in build A" to "that `ItemId` in build B."
 Detecting body changes between builds is a separate question that
 would need a body fingerprint; out of scope for stage 1.
 
+### F4-2: Instance ordering
+
+Instances are sorted at construction by the same `RegseqInstanceKey`
+the bridge uses for interning (defined in "Instance" above):
+
+```text
+(regseq_kind_rank:  u8,        // 0..5; see `regseq_instance_kind_rank`
+ item_id:           ItemId,    // already F4-sorted
+ generic_args_key:  ArgsKey,
+ fn_shim_disambig:  u8)        // 0 for non-Function; rustc kind rank for Function
+```
+
+`ArgsKey` is a deterministic fingerprint of `generic_args`:
+
+- Type args compared by structural `Ty` representation
+  (canonical form pinned in stage 3).
+- Const args compared by canonical const-eval result (pinned in
+  stage 4).
+- Lifetimes erased; not part of the key.
+
+Two builds of the same source produce identical
+`RegseqInstanceKey` tuples, so `InstanceId` assignments are
+stable across builds the same way `ItemId` assignments are.
+
+The two rank tables (`regseq_instance_kind_rank` and
+`rustc_instance_kind_sort_rank`) are pinned in the "Instance"
+section above and are append-only. The `ArgsKey` form is
+defined in stage 3 once `Ty`'s canonical-form rule is pinned;
+stage 1 reserves the rule and the sort obligation.
+
 ## Serialization conventions
 
 All stage-1 types are `Serialize` / `Deserialize` via serde. Most
@@ -852,7 +1290,9 @@ format (Q5).
 | `DefPath` | object with `crate_id` (CrateId), `segments` (array), `rendered` (StringId) | derive |
 | `DefPathHash` | object `{ "stable_crate_id": u64, "local_hash": u64 }` | derive |
 | `StableCrateId` | bare u64 | `#[serde(transparent)]` |
-| `Instance` | object `{ "item": u32, "args": [...] }` | derive |
+| `Instance` | object `{ "item": u32, "generic_args": [...], "symbol_name": u32, "span": {...}, "kind": {...} }` | derive |
+| `InstanceKind` | externally-tagged enum (serde default), e.g. `{"Function":{"sig":2,"body":7}}` / `{"Function":{"sig":2,"body":null}}` (foreign decl) / `{"Static":{"ty":3,"init":12}}` / `{"Struct":{"layout":4}}` | derive |
+| `GenericArg` | externally-tagged enum, e.g. `{"Type":3}` / `{"Const":12}` | derive |
 | `RegseqModel` | top-level object with all fields | derive |
 
 JSON consumers reconstruct the interner lookup map on load (per the

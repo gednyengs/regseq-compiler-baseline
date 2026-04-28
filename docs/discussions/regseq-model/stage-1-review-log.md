@@ -1,11 +1,11 @@
 # Stage 1 Review Log
 
-Summary of four adversarial review rounds against the stage-1
+Summary of five adversarial review rounds against the stage-1
 work, with each issue and how it was addressed. A reviewer working
 from this artifact set should not re-flag any issue listed here
 unless the resolution is itself unsound.
 
-Eighteen issues raised across the four rounds; all addressed.
+Thirty-nine issues raised across seven review passes; all addressed.
 
 | Round | Reviewer | Target | Verdict | Issues |
 |---|---|---|---|---|
@@ -13,6 +13,9 @@ Eighteen issues raised across the four rounds; all addressed.
 | 2 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (initial) | REVISE_BEFORE_IMPL | 6 |
 | 3 | external (no repo access) | `stage-1-vocabulary.md` (post-round-2) | REVISE_BEFORE_IMPL | 5 |
 | 4 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (implementation-readiness) | REVISE_BEFORE_APPLYING | 2 |
+| 5 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (round-5 monomorphization + C-semantics revision) | REVISE | 6 |
+| 5e | external (no repo access) | `stage-1-vocabulary.md` (post-round-5-Codex) | REVISE_BEFORE_IMPL | 10 |
+| 6 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (post-round-5e cascade check) | REVISE | 5 |
 
 ## Round 1 -- review of `stage-1-research.md`
 
@@ -344,16 +347,427 @@ pinned") and replaced with the IR-invariant rationale.
 
 ---
 
+## Round 5 -- monomorphization + C-semantics revision
+
+**Scope**: stage-1 vocabulary spec on the monomorphization story
+(Instance, GenericArg, RegseqModel-level emission table) and on
+the C-semantics framing of RegseqModel as a whole. Surfaced
+between the close of step 4 (SourceFile + Position + Span) and
+the start of step 5 (DefPath + Instance + GenericArg + ...) by
+deeper interrogation of what RegseqModel must capture for its
+two downstream stakeholders (domain analyses and the C codegen
+backend). The conversation touched stage 11/12/13 design surface
+and bent the stage-1 spec around the conclusions.
+
+**Verdict**: REVISE (Codex round-5 found 6 issues; all addressed
+before applying the patch). An independent external pass over
+the patched spec followed and found 10 additional issues, all
+HIGH/MEDIUM/LOW; addressed in the "Round 5 -- external follow-up"
+subsection below.
+
+### R5.1 -- INSTANCE_SHAPE (HIGH): Instance was a thin (item, args) tuple
+
+The original `Instance { item: ItemId, args: GenericArgs }` did
+not actually bake monomorphization. Consumers had to walk both
+`items` and `instances` and reconcile them. Q2 in
+`architecture.md` promised "bake monomorphization in the bridge,"
+but the type didn't honor that promise. The thin shape also
+forced consumers to reach into `Item` for kind discrimination
+(struct vs. fn vs. const), which conflated source-side identity
+with monomorphized emission units.
+
+**Resolution**: redesigned `Instance` to be the unified
+monomorphized table. Common fields: `item`, `generic_args`,
+`symbol_name`, `span`, `kind`. `kind: InstanceKind` is a closed
+six-variant enum (`Function { body }`, `Static { ty, init }`,
+`Const { ty, value }`, `Struct { layout }`, `Enum { layout }`,
+`Union { layout }`). Each variant carries only the IDs needed
+to find its rich data in stage-3/4/11 tables. Field rename
+`args` -> `generic_args` for clarity. The bridge interns
+`(item, generic_args)` tuples; ordering pinned by F4-2
+(deterministic across builds via the same key as F4 plus an
+`ArgsKey` fingerprint defined in stage 3).
+
+### R5.2 -- ROOTS (MEDIUM): `entry_points` baked one notion of "root"
+
+The original `RegseqModel.entry_points: Vec<ItemId>` baked one
+notion of "root" into the IR. Different consumers want different
+root predicates (`#[no_mangle]` exports for codegen vs.
+analysis-specific reachability roots vs. test-driver entry
+points). Embedding one notion forced a one-size-fits-all
+contract that doesn't actually fit any of them.
+
+**Resolution**: removed `entry_points` entirely. Removed the
+construction invariant tying it to `primary_crate`. Removed the
+"Roots / entry points" subsection. Roots are consumer-derived
+predicates over `instance.item`'s attributes, ABI, and
+visibility (which live on `Item`, stage 12). Implications for
+Item: stage 12 must surface source-level metadata
+(`linkage: Linkage`, `abi: Abi`, `inline_hint`, `is_unsafe`,
+etc.) so consumers can run their predicates.
+
+### R5.3 -- RUST_TO_C (HIGH): C-semantics framing wasn't explicit
+
+Decisions about how Rust constructs lower into RegseqModel
+(`Drop` terminators, trait objects, `&mut T`, `repr(C)`,
+`impl` blocks, closures, std collections) were ambiguous. Some
+were implied by Q2 + Q3 but not pinned. Without an explicit
+framing, future stages would re-litigate each construct.
+
+**Resolution**: added a methodology rule to
+`docs/discussions/regseq-model/memory.md` ("C semantics with
+information preservation") establishing that RegseqModel is a
+C-shaped IR, the bridge does the desugaring, and information
+rustc gives us for free is preserved when downstream
+stakeholders benefit -- but always per-construct interrogated.
+Added a "Rust -> C lowering reference" section to
+`stage-1-vocabulary.md` enumerating the already-decided
+construct lowerings as a cross-stage check. The table is
+descriptive (pins what is decided) and informs stage-3/4/9/11/12
+work without dictating shape.
+
+### R5.4 -- IMPL (MEDIUM): `impl` block representation unpinned
+
+The original spec did not pin how `impl` blocks were represented
+in RegseqModel. Could have been an Item kind (faithful to
+rustc), a path scope only (lifted), or a hybrid. The choice
+affects whether downstream consumers see `impl` as a first-class
+construct (with associated methods nested inside) or as a flat
+list of top-level entities.
+
+**Resolution**: pinned full lifting. `impl` is a path scope only,
+preserved in DefPath via `DefPathData::Impl`. Methods lift to
+top-level Function Items with explicit receivers. Trait
+declarations and associated types are erased; static dispatch
+resolves directly, dynamic dispatch via synthesized vtables
+(Static Instances of fn-pointer-struct type). Consequence:
+`ItemKind` (stage 12) has six variants -- `Function`, `Static`,
+`Const`, `Struct`, `Enum`, `Union` -- mirroring `InstanceKind`.
+No `Impl`, `Trait`, or `AssocType` Item kinds. New section
+"Lifting `impl` items" added to the spec.
+
+### R5.5 -- SOURCE_SENTINEL (LOW): synthesized SourceFile sentinel
+
+Bridge-synthesized Instances (drop glue, vtable shims, closure
+captures) need source spans, but have no source location.
+Without a sentinel rule, every consumer had to special-case
+`Option<Span>`.
+
+**Resolution**: reserved `SourceFileId::ZERO` for the synthesized
+sentinel. Bridge populates `source_files[0]` as
+`SourceFile { path: <interned "<synthesized>">, content: None,
+line_starts: vec![0] }`. Real source files start at
+`SourceFileId(1)`. Added construction invariant. Mirrors the
+`StringId::ZERO == ""` pattern. Consumers don't need
+`Option<Span>`: a synthesized span resolves through `Span::slice`
+to `None` because the sentinel's `content` is `None`.
+
+### R5.6 -- KIND_DISCRIMINATION (LOW): InstanceKind explicit vs. derived
+
+Once `Instance` is the unified table, the question arose whether
+`InstanceKind` should be an explicit enum on `Instance`, or
+derivable from `instance.item.kind` (ergonomically cheaper but
+forces an extra hop). Static and Const could also collapse into
+a single `Data { ty, value, mutable: bool }` variant.
+
+**Resolution**: explicit, with six variants (Function, Static,
+Const, Struct, Enum, Union). Static and Const stay distinct
+(they have different C lowering: const can be `#define`-style
+or constexpr-baked, static gets a global). The explicit form
+makes serialization shape clear and saves the hop through Item
+on hot iteration paths. Field naming pinned: `generic_args`
+(not `args`) for clarity at consumer sites.
+
+---
+
+## Round 5 -- external follow-up
+
+**Scope**: independent external review of the round-5 patch
+(Codex round-5 already addressed). Reviewer had no repo access;
+attachments included the full round-5-revised spec, methodology
+rules, prior review log, and rustc excerpts. Verdict:
+REVISE_BEFORE_IMPL with 10 issues (5 HIGH, 4 MEDIUM, 1 LOW).
+All addressed inline before the round-5 patch was committed.
+
+### R5.7 -- INSTANCE_SHAPE (HIGH): interning + F4-2 rule incomplete for nominals
+
+The round-5 interning rule said "key on full rustc instance
+identity (`InstanceKind` + args)." That covers Function-like
+constructs, but Regseq's `InstanceKind` includes
+Struct/Enum/Union -- which are *types*, not callables, and
+have no rustc `InstanceKind`. The rule was incomplete: an
+implementer could not tell whether nominal Instances sort
+under rustc `Item`, under a Regseq kind rank, or outside F4-2.
+
+**Resolution**: defined a Regseq-level `RegseqInstanceKey`
+with two explicit rank tables (pinned in the spec, not
+deferred):
+- `regseq_instance_kind_rank` for the six Regseq kinds
+  (Function=0, Static=1, Const=2, Struct=3, Enum=4, Union=5).
+- `rustc_instance_kind_sort_rank` for rustc's full
+  `ty::InstanceKind` taxonomy (Item=0, Intrinsic=1, ...,
+  AsyncDropGlue=14), used as `fn_shim_disambig` only for
+  Function variants. Other Regseq kinds use `fn_shim_disambig
+  = 0` unconditionally. F4-2 sorts on the same key. Both
+  tables are append-only.
+
+### R5.8 -- INSTANCE_SHAPE (HIGH): custom-naming uniqueness gap
+
+The spec told consumers to walk `(item.def_path, generic_args)`
+for custom names, but that tuple is *not* unique under rustc
+shims sharing a `DefId` (e.g., `Item(foo)` vs.
+`ReifyShim(foo)`). Custom-naming consumers using only the
+tuple could collide names. The "always-unique by construction"
+claim about `symbol_name` also lacked grounding in
+`rustc-excerpts.md`.
+
+**Resolution**: (a) added an explicit caveat to the
+custom-naming guidance requiring `InstanceId` or
+`symbol_name` as a disambiguating suffix; (b) weakened the
+`symbol_name` claim from "always-unique by construction" to
+"bridge-provided default symbol; uniqueness is guaranteed by
+the bridge by construction (via rustc's mangler factoring in
+the full InstanceKind)"; (c) added rustc excerpts for
+`tcx.symbol_name`, `ty::SymbolName`, `Instance`, `InstanceKind`,
+and `InstanceKind::def_id()` to `rustc-excerpts.md` (new
+sections 7-8) so the spec's claims are grounded.
+
+### R5.9 -- FORWARD_FIT (HIGH): synthesized vtable Items + `item_def_paths`
+
+Round 5 declared vtables to be Static `Instance`s, but every
+`Instance` has `item: ItemId`, and construction invariant 2
+requires `item_def_paths[item_id]` to be the rustc
+`DefPathHash` of `items[item_id].def_path`. Synthesized
+vtables have no source-level `DefId`, so the invariant
+couldn't be satisfied as written.
+
+**Resolution**: added a "Bridge-synthesized Items" subsection
+pinning the policy. Synthesized vtable Items live in `items`
+alongside source-level items with: a synthetic `def_path`
+under a reserved canonical form (`<vtable for Trait for
+SelfTy>`); a synthetic `def_path_hash` derived from
+`hash((trait_def_path_hash, self_ty_canonical_hash))`, stable
+across builds; a `crate_id` of the triggering crate.
+Construction invariant 2 extends to synthetic items. The
+precise `DefPathData` segment representation (new variant or
+reused existing) is deferred to stage 9/12 when vtable
+lowering lands.
+
+### R5.10 -- FORWARD_FIT (HIGH): extern fn signatures had no home
+
+`InstanceKind::Function { body: Option<BodyId> }` reserved
+`body: None` for foreign declarations, with the spec saying
+"signature lives on Body." This left no place for the
+signature of a body-less foreign declaration -- breaking C
+codegen (no prototype) and analyses (no call shape).
+
+**Resolution**: added `sig: FnSigId` to `Function` variant.
+`Function { sig: FnSigId, body: Option<BodyId> }`. Forward-
+declared `FnSigId` in the ID inventory; added `sigs:
+IndexVec<FnSigId, FnSig>` to `RegseqModel`. The `sig` field
+is always present (foreign decls included); it stores the
+substituted signature for this monomorphization. Stage 11
+defines `FnSig`; stage 1 reserves the table.
+
+### R5.11 -- CASCADE (HIGH): undefined bridge root policy
+
+After removing `entry_points`, invariant 9 said the bridge
+"computes the closure from the consumer-relevant root set" --
+undefined and seemingly consumer-influenced, contradicting
+Q4's principle that the bridge produces RegseqModel uniformly.
+
+**Resolution**: pinned an explicit bridge root policy. The
+bridge computes the full rustc mono-item closure for the
+primary crate plus all regseq-aware dependency crates (per Q6
+discovery), plus all synthesized artifacts those mono-items
+require (drop glue, vtable shims, etc., per rustc's
+`MonoItem` collection logic). The set is bridge-determined
+and not consumer-influenced. Downstream consumers filter the
+resulting `instances` table for their own roots. Construction
+invariant 9 reworded accordingly.
+
+### R5.12 -- F4_2 (MEDIUM): rank table determinism hazard
+
+The round-5 spec deferred the `instance_kind_disambig` rank
+table to stage 3/11 -- recreating exactly the determinism
+hazard that R2.2 fixed for `DefPathData`. Two bridge
+implementations could pick different ranks and produce
+different stable `InstanceId` assignments for the same
+source.
+
+**Resolution**: subsumed by R5.7. The
+`rustc_instance_kind_sort_rank` table is now pinned in
+stage 1, append-only, with the toolchain version explicitly
+referenced.
+
+### R5.13 -- IMPL_LIFTING (MEDIUM): default trait method bodies
+
+The lifting principle covered inherent methods, trait impl
+methods (with explicit overrides), associated constants,
+associated types, and trait declarations -- but not default
+method bodies. An impl that inherits a default has no
+overriding implementing function body, so the spec was
+ambiguous about where the body comes from.
+
+**Resolution**: added a bullet to "Lifting impl items".
+Default bodies live at the trait's DefPath (e.g.,
+`crate::Foo::bar`); a single Function Item is created there.
+When `impl Foo for X` doesn't override, the use-site
+`<X as Foo>::bar()` resolves to an `Instance` whose `item` is
+the trait's default-bar Item and whose `generic_args` include
+`Self=X`. The body is the default body monomorphized for the
+substitution. No impl-side Item is created for the inherited
+default.
+
+### R5.14 -- IMPL_LIFTING (MEDIUM): vtable shape underspecified
+
+Round 5 described vtables as "structs of fn pointers." Per
+rustc's `tcx.vtable_entries`, a vtable entry can be
+`MetadataDropInPlace`, `MetadataSize`, `MetadataAlign`,
+`Vacant`, `Method(Instance)`, or `TraitVPtr(TraitRef)` -- a
+mixed aggregate, not just fn pointers.
+
+**Resolution**: updated the lowering reference table and
+"Where InstanceId references appear" text to describe vtables
+as Static `Instance`s of mixed-aggregate type matching rustc's
+full vtable-entry sequence (drop fn ptr + size + align +
+per-method fn pointers + supertrait vtable pointers + Vacant
+slots). Added rustc-excerpts.md section 9 grounding the
+`VtblEntry` enum. Precise struct layout pinned at stage 9/12;
+stage 1 reserves the policy.
+
+### R5.15 -- C_SEMANTICS (MEDIUM): `&mut T -> T* restrict` overreach
+
+Round 5's lowering reference said `&mut T` becomes
+`T* restrict`. `restrict` is a C declaration-level promise
+about pointer provenance, not a type-level qualifier. Stored
+fields, returned references, and unsafe escape patterns may
+invalidate it. Baking `restrict` into every `&mut T` pointer
+is unsound.
+
+**Resolution**: split mutability from provenance. `&T` lowers
+to `Pointer { mutability: Const, provenance: SharedBorrow }`;
+`&mut T` lowers to `Pointer { mutability: Mut, provenance:
+UniqueBorrow }`; raw `*const T` / `*mut T` lower to
+`provenance: Raw`. Codegen at stage 9+ decides per-context
+where `restrict` is safe to emit (function parameters and
+locals with no escape; not stored fields, returns, or
+reborrowed raw pointers). Updated the methodology rule in
+`memory.md` to remove the over-strong claim.
+
+### R5.16 -- SENTINEL (LOW): naming consistency
+
+The round-5 spec used `SourceFileId::ZERO` in the
+synthesized-source-file section, but ID conventions only
+documented constants for body-local IDs (`LocalId::RETURN_PLACE`,
+`BlockId::START_BLOCK`). A step-5 implementer might be unsure
+whether to use `ZERO` or a more descriptive name.
+
+**Resolution**: added a documentary alias
+`SourceFileId::SYNTHESIZED = SourceFileId::ZERO`. The macro-
+generated `ZERO` constant remains valid; `SYNTHESIZED` is
+preferred at use sites for readability. Spec updated to use
+`SYNTHESIZED` in the synthesized-source-file section.
+
+---
+
+## Round 6 -- post-external-cascade check
+
+**Scope**: final adversarial pass over the round-5+5e patched
+spec, verifying that R5.7-R5.16 fixes did not introduce new
+gaps or cascade inconsistencies. Codex reviewed across the same
+12 concern axes used in round 5e. Verdict: REVISE with 5
+findings (1 HIGH, 3 MEDIUM, 1 LOW). All addressed inline before
+commit.
+
+### R5.17 -- INTERNAL_CONSISTENCY (HIGH): invariant 2 didn't accommodate synthetic items
+
+The R5.9 fix introduced bridge-synthesized vtable Items with
+bridge-derived `DefPathHash`es, but construction invariant 2
+still asserted `item_def_paths[item_id]` is rustc's
+`DefPathHash` of the originating `DefId`. Synthetic vtable
+items have no rustc `DefId`, so the invariant was unsatisfiable
+for them.
+
+**Resolution**: split invariant 2 into two cases. For
+source-level Items: rustc's `DefPathHash` of the originating
+`DefId`. For bridge-synthesized Items: the bridge-derived
+stable hash from "Bridge-synthesized Items" (e.g.,
+`hash((trait_def_path_hash, self_ty_canonical_hash))` for
+vtables). Both forms remain stable across builds and globally
+unique.
+
+### R5.18 -- FORWARD_FIT (MEDIUM): FnSigId not in invariant 1's "every ID resolves" list
+
+The R5.10 fix added `FnSigId` to the ID inventory and `sigs` to
+RegseqModel, but construction invariant 1 still listed only
+the pre-R5.10 IDs. An implementer following invariant 1
+literally would not know to validate FnSigId references.
+
+**Resolution**: added `FnSigId` to invariant 1's ID list, with
+an explicit sub-clause: "every `Function.sig: FnSigId` resolves
+to a valid entry in `sigs`, including for foreign declarations."
+
+### R5.19 -- INTERNAL_CONSISTENCY (MEDIUM): rustc-excerpts.md section 7 still described old interning key
+
+The R5.7 fix introduced `RegseqInstanceKey` (4-field key) and
+made it canonical in `stage-1-vocabulary.md`. But
+`rustc-excerpts.md` section 7's commentary still said "the
+interning key in stage 1 is `(InstanceKind, args)` -- the same
+shape rustc uses." This is stale.
+
+**Resolution**: updated the section-7 explanatory paragraph to
+describe `RegseqInstanceKey` (the four-field shape) and
+explicitly reference `stage-1-vocabulary.md` as the
+authoritative definition.
+
+### R5.20 -- FORWARD_FIT (MEDIUM): vtable DefPathData punt was structurally ambiguous
+
+The R5.9 fix punted the precise `DefPathData` segment
+representation for synthetic vtable scopes to stage 9/12,
+suggesting "a new `SyntheticVTable` variant or a reused
+existing variant." But `DefPathData` is described as a closed
+19-variant enum mirroring rustc. Adding a new variant to a
+closed enum is a structural change that the punt did not
+acknowledge as a stage-1 revision.
+
+**Resolution**: tightened the punt wording. Stage 9/12 may
+overload an existing variant, OR may add a new variant to
+`DefPathData`. The latter is explicitly a stage-1 revision:
+new variant appended, `def_path_data_sort_rank` table extended
+with rank 19 (append-only), spec revision goes through the
+same Codex/external review cadence as R4/R5. Stage 1 reserves
+the slot but does not commit to the choice.
+
+### R5.21 -- WORDING (LOW): SourceFileId::ZERO use-site inconsistency
+
+R5.16 added the `SYNTHESIZED` alias and said spec text should
+prefer it at use sites, but several spec spots still used the
+underlying `SourceFileId::ZERO` constant in describing what a
+synthesized span looks like.
+
+**Resolution**: replaced use-site occurrences of
+`SourceFileId::ZERO` with `SourceFileId::SYNTHESIZED` (in the
+Instance field doc and in construction invariant 8). The alias
+definition itself and the rendering-explanation paragraph
+continue to reference `ZERO` since that is the underlying
+constant.
+
+---
+
 ## Notes for the next reviewer
 
-Four rounds covered different scopes (research synthesis, initial
-spec, post-revision spec, implementation-readiness revisions) and
-surfaced different categories of issues. Together they exercised:
-type-shape consistency, F1-F4 instantiation correctness, methodology
-violations, rustc-internal traps, prior-art over-extrapolation,
-implementation-feasibility ambiguity, multi-crate-graph completeness
-(round 3), and serde-mechanism / trait-bound implementation
-correctness (round 4).
+Seven review passes covered different scopes (research synthesis,
+initial spec, post-revision spec, implementation-readiness
+revisions, the monomorphization + C-semantics pivot, the external
+follow-up on the round-5 patch, and the post-cascade check).
+Together they exercised: type-shape consistency, F1-F4
+instantiation correctness,
+methodology violations, rustc-internal traps, prior-art
+over-extrapolation, implementation-feasibility ambiguity,
+multi-crate-graph completeness (round 3), serde-mechanism /
+trait-bound implementation correctness (round 4), and
+monomorphization + IR shape vs. C-semantics framing (round 5).
 
 Areas that *have not* been adversarially reviewed yet, and which
 the next reviewer might profitably probe:
