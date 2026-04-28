@@ -98,3 +98,172 @@ impl<'de> serde::Deserialize<'de> for SourceFileId {
         Ok(Self::from_u32(raw))
     }
 }
+
+newtype_index! {
+    /// Identifies a source-level `Item` in `RegseqModel.items`.
+    ///
+    /// `Item` itself is defined in stage 12 (Rust Items). Stage 1
+    /// forward-declares the ID so that `Instance.item: ItemId` and
+    /// the `item_def_paths` side table compile against the
+    /// foundation crate.
+    pub struct ItemId {}
+}
+
+impl serde::Serialize for ItemId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ItemId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "ItemId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a `Body` in `RegseqModel.bodies`.
+    ///
+    /// `Body` itself is defined in stage 11 (MIR bodies). Stage 1
+    /// forward-declares the ID so that
+    /// `InstanceKind::Function { body: Option<BodyId>, .. }`
+    /// compiles against the foundation crate.
+    pub struct BodyId {}
+}
+
+impl serde::Serialize for BodyId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BodyId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "BodyId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a `Ty` in `RegseqModel.types`.
+    ///
+    /// `Ty` itself is defined in stage 3 (Type system). Stage 1
+    /// forward-declares the ID so that `GenericArg::Type(TyId)`
+    /// and the type-bearing `InstanceKind` variants compile.
+    pub struct TyId {}
+}
+
+impl serde::Serialize for TyId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for TyId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "TyId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a `Const` in `RegseqModel.consts`.
+    ///
+    /// `Const` itself is defined in stage 4 (Constants). Stage 1
+    /// forward-declares the ID so that `GenericArg::Const(ConstId)`
+    /// and the const-bearing `InstanceKind` variants compile.
+    pub struct ConstId {}
+}
+
+impl serde::Serialize for ConstId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for ConstId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "ConstId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a function signature `FnSig` in `RegseqModel.sigs`.
+    ///
+    /// `FnSig` itself is defined in stage 11 (MIR bodies). Stage 1
+    /// forward-declares the ID so that
+    /// `InstanceKind::Function { sig: FnSigId, .. }` compiles.
+    pub struct FnSigId {}
+}
+
+impl serde::Serialize for FnSigId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FnSigId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "FnSigId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies an `Instance` in `RegseqModel.instances`.
+    ///
+    /// `Instance` is the primary monomorphized unit; defined in
+    /// stage 1 alongside this ID.
+    pub struct InstanceId {}
+}
+
+impl serde::Serialize for InstanceId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for InstanceId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "InstanceId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}

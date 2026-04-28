@@ -5,14 +5,27 @@
 //! `docs/discussions/regseq-model/stage-1-vocabulary.md` for the
 //! spec and `status.md` in the same folder for the per-step plan.
 
+mod crate_info;
+mod def_path;
 mod idx;
 mod ids;
 mod index_vec;
+mod instance;
 mod source;
 mod string_interner;
 
+pub use crate_info::{CrateInfo, StableCrateId};
+pub use def_path::{
+    def_path_data_sort_rank, DefPath, DefPathData, DefPathHash, DefPathSegment,
+};
 pub use idx::Idx;
-pub use ids::{CrateId, SourceFileId, StringId};
+pub use instance::{
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, GenericArg, GenericArgs, Instance,
+    InstanceKind, RustcInstanceKindTag,
+};
+pub use ids::{
+    BodyId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
+};
 pub use index_vec::IndexVec;
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
@@ -23,4 +36,16 @@ const _: () = assert!(core::mem::size_of::<StringId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<StringId>>() == 4);
 const _: () = assert!(core::mem::size_of::<SourceFileId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<SourceFileId>>() == 4);
+const _: () = assert!(core::mem::size_of::<ItemId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<ItemId>>() == 4);
+const _: () = assert!(core::mem::size_of::<BodyId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<BodyId>>() == 4);
+const _: () = assert!(core::mem::size_of::<TyId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<TyId>>() == 4);
+const _: () = assert!(core::mem::size_of::<ConstId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<ConstId>>() == 4);
+const _: () = assert!(core::mem::size_of::<FnSigId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<FnSigId>>() == 4);
+const _: () = assert!(core::mem::size_of::<InstanceId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<InstanceId>>() == 4);
 const _: () = assert!(core::mem::size_of::<Span>() == 12);
