@@ -61,17 +61,21 @@ indicate a phase-1 spec gap are escalated here.
   ItemId determinism). Evidence base for the stage-1 spec.
 - `stage-1-vocabulary.md` -- the stage-1 spec proper. ID conventions,
   the StringInterner, SourceFile and Span types, DefPath form,
-  Instance form, top-level RegseqModel struct, determinism rules,
-  serialization conventions, pretty-printer interface sketch.
-  Type signatures are sketches; field names and minor details are
-  at the implementation's discretion.
-- `stage-1-review-log.md` -- summary of two prior Codex adversarial
-  review rounds against the stage-1 work and how each issue was
-  addressed. Useful for future reviewers (don't re-litigate
-  resolved concerns) and for a future agent picking up the work.
+  the "Rust -> C lowering reference" (cross-stage construct
+  policy), `impl` lifting principle, Instance / InstanceKind /
+  monomorphization story, bridge-synthesized Items rule,
+  top-level RegseqModel struct, F4 + F4-2 determinism rules with
+  pinned rank tables, serialization conventions, pretty-printer
+  interface sketch. Round-5-revised; type signatures are sketches
+  and field names at the implementation's discretion.
+- `stage-1-review-log.md` -- record of seven adversarial review
+  passes (R1-R6 + R5.7-R5.21 across an external follow-up) with
+  every issue and how it was addressed. Useful for future
+  reviewers (don't re-litigate resolved concerns) and for a
+  future agent picking up the work.
 - `stage-1-review-prompt.md` -- self-contained prompt for an
-  external reviewer (no repo access). Pairs with the file
-  attachments listed inside it.
+  external reviewer (no repo access). Currently scoped to the
+  round-5 revision. Pairs with the file attachments listed inside.
 - `rustc-excerpts.md` -- curated rustc-src quotations the stage-1
   spec depends on, gathered for an external reviewer.
   Authoritative for rustc-internal claims when the reviewer
@@ -95,12 +99,15 @@ here as evidence comes in.
 See `status.md` for the consolidated status tracker (stage progress,
 active focus, blockers, next action). Brief snapshot: stage-0
 architectural foundation complete (Q1-Q7 in `architecture.md`);
-stage-1 spec (`stage-1-vocabulary.md`) complete after three review
-rounds, sixteen issues addressed (see `stage-1-review-log.md`);
-workspace prepped (old IR stack moved to `*-old` sibling crates,
-un-suffixed crates wiped to stubs). Stage-1 implementation in
-`crates/regseq-model/` is the next concrete work unit;
-foundation-first order is documented in `status.md`.
+stage-1 spec (`stage-1-vocabulary.md`) implementation-ready after
+seven review passes, 39 issues addressed (see
+`stage-1-review-log.md`); stage-1 implementation in
+`crates/regseq-model/` is in progress -- steps 1-4 of the
+foundation-first order are committed (`b8f1e67`, `fd0d3c8`,
+`82aaaed`, `f34df65`, plus follow-up `f8e7b4e`); 62 integration
+tests passing. Step 5 (DefPath family + Instance + InstanceKind +
+GenericArg + StableCrateId + CrateInfo + FnSigId forward-decl) is
+the next concrete work unit.
 
 Methodology and per-construct decision log not yet authored. The
 three findings carried over with the migration are starter material

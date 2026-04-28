@@ -195,15 +195,56 @@ implementation a clean grep / autocomplete surface:
 ## Where current work stands
 
 See `status.md` for the consolidated tracker (stage progress,
-active focus, blockers, next action). At time of writing the
-foundation snapshot is: stage-0 architectural decisions Q1-Q7
-complete and verified end-to-end; stage-1 spec
-(`stage-1-vocabulary.md`) complete after three review rounds;
-workspace prepped for implementation (old IR stack moved to
-`*-old` siblings, un-suffixed crates wiped to stubs). The next
-concrete work is populating `crates/regseq-model/` with the
-stage-1 types in foundation-first order. `status.md` is the
-source of truth -- this paragraph may go stale.
+active focus, blockers, next action). `status.md` is the source
+of truth -- this paragraph may go stale.
+
+Snapshot at time of writing:
+
+- Stage 0 (Q1-Q7) closed.
+- Stage 1 spec: implementation-ready after **seven review
+  passes** (Codex round 1 against research; Codex rounds 2/4
+  against the spec; external round 3; Codex round 5 +
+  external round 5e + Codex round 6 across the round-5
+  monomorphization-and-C-semantics revision). All 39 issues
+  addressed. See `stage-1-review-log.md`.
+- Stage 1 implementation: **steps 1-4 of 6 complete and
+  committed** in `crates/regseq-model/` (`b8f1e67`, `fd0d3c8`,
+  `82aaaed`, `f34df65`, plus a `f8e7b4e` follow-up adding
+  `SourceFileId::SYNTHESIZED` after the round-5 patch).
+  - Step 1: `Idx` trait + `newtype_index!` macro + niche
+    encoding via `NonMaxU32` + `CrateId`.
+  - Step 2: `IndexVec<I, T>` with serde-transparent flat
+    array.
+  - Step 3: `StringInterner` + `StringId`; pre-interns empty
+    string at `StringId::ZERO`.
+  - Step 4: `SourceFile` + `Position` + `Span` + `SourceFileId`
+    (with `SYNTHESIZED` alias). Resolution methods (position,
+    line_text, Span::start/end/slice).
+  - 62 integration tests passing; `cargo check --workspace
+    --tests` clean.
+- Stage 1 implementation: **steps 5-6 not yet started**.
+  - Step 5: DefPath family + `Instance` + `InstanceKind` +
+    `GenericArg` + `StableCrateId` + `CrateInfo` +
+    `FnSigId` forward-declaration.
+  - Step 6: top-level `RegseqModel` struct + construction
+    invariants.
+- Phase 2 (pl011 device pressure) not yet started; gated on
+  enough of stage 1 to author golden C against the fixture.
+
+Known follow-ups surfaced during steps 1-4 that are deferred:
+
+- The `newtype_index!` macro currently accepts only empty-body
+  invocations (`pub struct $Name {}`). When step 11 introduces
+  `LocalId::RETURN_PLACE` and `BlockId::START_BLOCK` const
+  associates, the macro will need a const-body arm. Plan-agent
+  flagged this in the step-1 plan; deferred per "don't add
+  features beyond what the task requires."
+- `serde` `rc` feature was added in step 4 to derive serde for
+  `Option<Arc<str>>` on `SourceFile.content`. The
+  `StringInterner` deserialize path still goes through
+  `Vec<String>` (one extra allocation per entry); could be
+  refactored to `Vec<Arc<str>>` directly using the `rc` feature.
+  Codex flagged as optional/non-blocking; deferred.
 
 ## Read order for catching up
 
@@ -215,17 +256,31 @@ In priority:
    action.
 4. `architecture.md` -- the architectural decisions (Q1-Q7
    currently) in detail.
-5. `prior-art/README.md` -- the synthesis of prior-art research
+5. `stage-1-vocabulary.md` -- the stage-1 spec (round-5
+   revised; covers Instance/InstanceKind, the DefPath family,
+   the Rust -> C lowering reference, and `impl` lifting).
+6. `stage-1-review-log.md` -- seven review passes documented
+   (R1-R6 + R5.7-R5.21). Skim before adding new revisions so
+   prior resolutions aren't re-litigated.
+7. `prior-art/README.md` -- synthesis of prior-art research
    that shaped the architectural decisions.
-6. `stage-1-research.md` -- prior-art research and locked sub-
-   decisions (F1-F4) for stage 1 (vocabulary). Read once stage 1
-   work is active.
-7. `stage-1-vocabulary.md` -- the stage-1 spec proper.
-8. `regseq-background.md` -- DSL background.
-9. `findings.md` -- empirical observations about MIR/HIR shape.
-10. `rustc-references.md` -- pointers into the pinned rustc-src.
-11. Per-project files in `prior-art/` -- consult on demand when a
-    specific external project comes up.
+8. `stage-1-research.md` -- prior-art research and locked sub-
+   decisions (F1-F4) for stage 1.
+9. `rustc-excerpts.md` -- curated quotations from the pinned
+   rustc-src for the rustc-internal claims the spec depends on
+   (now covers Idx, Symbol, Span / SourceMap, DefId, DefPath /
+   DefPathData, DefPathHash, StableCrateId, Instance /
+   InstanceKind, tcx.symbol_name, VtblEntry).
+10. `regseq-background.md` -- DSL background.
+11. `findings.md` -- empirical observations about MIR/HIR shape.
+12. `rustc-references.md` -- pointers into the pinned rustc-src
+    (paths, not excerpts).
+13. Per-project files in `prior-art/` -- consult on demand when
+    a specific external project comes up.
+
+For an agent picking up step-5 implementation specifically: the
+load-bearing reads are 1, 3, 5, 6, and the relevant sections of
+9 (`Instance`/`InstanceKind`, `DefPath`/`DefPathData`).
 
 ## What this file is NOT
 
