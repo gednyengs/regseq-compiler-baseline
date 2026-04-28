@@ -167,6 +167,12 @@ override any inferred convention from the codebase or older docs.
 - `cargo check --workspace --tests` is the standard smoke check
   (warnings are expected from the `regseq-driver-old/src/extract/`
   inherited dead code; errors are not).
+- `cargo test -p regseq-model` runs the active stage-1 crate's
+  integration tests (62 tests across `tests/idx_round_trip.rs`,
+  `tests/index_vec.rs`, `tests/string_interner.rs`,
+  `tests/source.rs` as of step-4 close). Use this during step-5
+  implementation iteration; the workspace-wide `cargo test` is
+  noisier due to the `*-old` crates.
 
 ## Crate layout (post-refactor)
 
