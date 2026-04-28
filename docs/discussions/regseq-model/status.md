@@ -1,6 +1,6 @@
 # Status
 
-Last updated: 2026-04-27 (stage-1 research synthesis, F1-F4 locked).
+Last updated: 2026-04-28 (post Option-B refactor; stage-1 spec done across three review rounds; implementation queued).
 
 Consolidated status tracker for phase-1 RegseqModel work. Update at
 the end of every session that changes anything material -- a stale
@@ -11,14 +11,20 @@ tracker is worse than no tracker.
 - [x] **Stage 0: Architectural foundation.** Q1-Q7 closed; see
   `architecture.md`. Multi-crate three-tier dispatch infrastructure
   also rebuilt and verified end-to-end.
-- [x] **Stage 1: Vocabulary.** ID types, StringInterner, SourceFile
-  table, Span representation, DefPath form, Instance form, top-level
-  RegseqModel struct, determinism rules, serialization conventions.
-  Research synthesis (`stage-1-research.md`) complete and Codex-
-  reviewed; F1-F4 locked. Spec (`stage-1-vocabulary.md`) drafted.
-  Implementation (population of the `regseq-model` crate with the
-  stage-1 types) not yet started; that is the next concrete work
-  unit.
+- [x] **Stage 1 spec.** ID conventions (with `CrateId`),
+  StringInterner, SourceFile / Span (file-local), DefPath form
+  (full 19-variant `DefPathData`), Instance, top-level RegseqModel
+  struct (with `crates` table and `primary_crate`), F4 determinism
+  rules, custom serde for IDs and StringInterner, pretty-printer
+  interface sketch. Research synthesis (`stage-1-research.md`),
+  three review rounds (two Codex, one external) all addressed
+  (`stage-1-review-log.md`), spec (`stage-1-vocabulary.md`)
+  implementation-ready.
+- [ ] **Stage 1 implementation.** Population of
+  `crates/regseq-model/` with the stage-1 types. Workspace is
+  prepped (old stack moved to `*-old` siblings, un-suffixed crates
+  wiped to stubs); not yet started. Foundation-first order in
+  "Next action" below.
 - [partial] **Stage 2: Serialization format.** Format chosen
   (textual primary + serde JSON secondary, see Q5). Schema-level
   work tracks the rest of the stages -- per-stage variants gain
@@ -60,44 +66,33 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Stage 1 (vocabulary) spec drafted and reviewed across three rounds
-(two Codex, one external). Research synthesis (`stage-1-
-research.md`) complete; spec (`stage-1-vocabulary.md`) covers all
-five components plus determinism, serialization, and pretty-printer
-interface. Sixteen issues surfaced across the three review rounds,
-all addressed; see `stage-1-review-log.md`.
+Between sessions; ready to start stage-1 implementation.
 
-Round-3 fixes (latest): added `CrateId` and `CrateInfo` for
-multi-crate-graph identity (replacing the single-crate root
-fields), pinned custom serde for IDs and `StringInterner` (derive
-would expose internal encoding), pinned always-verbose
-`DefPath.rendered`, made `line_text` 1-based to match `Position`,
-tightened the bridge span invariant to keep both endpoints in the
-same source file. Spec is implementation-ready.
+State of the world (post commit `9352ea0`):
 
-Multi-crate rebuild (Q6) is complete:
+- *Stage 1 spec complete.* `stage-1-vocabulary.md` reflects three
+  review rounds (16 issues, all addressed). Implementation-ready.
+- *Workspace prepped.* Old IR stack (regseq-model, regseq-analysis,
+  regseq-backends, the `construction/`+`extract/` portions of
+  regseq-driver, tests/e2e content) moved to `*-old` siblings for
+  direct reference. Un-suffixed crates wiped to stubs. Tag
+  `pre-stage-1-impl-archive` points at the parent of `9352ea0`.
+- *Workspace builds clean.* `cargo check --workspace --tests`
+  passes with only the inherited dead-code warnings from
+  `regseq-driver-old/src/extract/`. Stage-0 regression in
+  `regseq-driver/tests/args.rs` fixed in the refactor commit.
+- *Multi-crate rebuild (Q6) complete.* `crates/regseq/` empty
+  facade with `[package.metadata.regseq]` marker. Three-tier
+  dispatch verified end-to-end. The aware-crates env-var plumbing
+  and cleanup-pass whitelist are settled. New regseq-driver does
+  not yet contain bridge code; `RegseqCallbacks::after_analysis`
+  is empty until stage-1 implementation lands.
 
-- `crates/regseq/` exists as an empty facade crate with the
-  `[package.metadata.regseq]` marker and the symmetric
-  `register_tool` declarations in source.
-- `RegseqAwareCallbacks` restored in `regseq-driver`, sharing the
-  full cleanup whitelist with `RegseqCallbacks` via
-  `regseq_mir_passes()`.
-- `regseq_mir_passes()` updated to the canonical "clean MIR"
-  whitelist matching `scripts/dump-fixture-mir.sh`.
-- `RegseqCallbacks::after_analysis` is empty until the bridge
-  lands; the prior extraction code in `extract/` and
-  `construction/` stays as dormant reference (per
-  disable-and-keep).
-- `cargo-regseq` recognizes regseq-aware crates via
-  `cargo metadata` and injects `REGSEQ_AWARE_CRATES`.
-- Tests verify the dispatch end-to-end (default smoke + ignored
-  full cargo build under wrapper).
-
-Items will be promoted from each spec's `crate::regseq` submodule
-to the shared `regseq` crate incrementally as redesign work
-touches them. Intrinsic recognition follows Q7 (attribute-name
-based, closed vocabulary).
+Open methodology guidance for the implementer: the spec is
+mutable. If type-shape ambiguities or composition issues surface
+during implementation, revise `stage-1-vocabulary.md` (and trigger
+a Codex review of the revision) before continuing -- do not paper
+over with implementer judgment.
 
 ## Open architectural decisions
 
@@ -111,18 +106,35 @@ and rationale.
 
 ## Next action
 
-Implement stage 1 in the `regseq-model` crate against
-`stage-1-vocabulary.md` (post-three-review-rounds). Foundation-first
-order recommended: (1) `Idx` + `newtype_index!` analogue + custom
-serde for one ID, validate round-trip; (2) `IndexVec<I, T>` with
-flat-array on-wire shape; (3) `StringInterner` with custom serde
-and validation rules; (4) `SourceFile` + `Position` + `Span` with
-file-local F1 rule; (5) `DefPathData` + `DefPathSegment` + `DefPath`
-(now with `crate_id`) + `DefPathHash` + `CrateInfo` + `Instance`;
-(6) top-level `RegseqModel` struct including `crates` and
-`primary_crate`. Each step lands as its own commit; spec issues
-surfaced during implementation trigger spec revision (the spec is
-mutable per methodology) before continuing.
+Implement stage 1 in `crates/regseq-model/` against
+`stage-1-vocabulary.md`. Foundation-first order:
+
+1. `Idx` trait + `newtype_index!` analogue (with inherent
+   `pub const fn from_u32`) + custom serde for one ID; validate
+   that round-trip preserves the logical index, niche encoding
+   stays internal, and `Option<Id>` is 4 bytes.
+2. `IndexVec<I, T>` with flat-array JSON shape (likely
+   `#[serde(transparent)]` over inner `Vec<T>` with `PhantomData<I>`
+   skipped). Validate round-trip against a small integration test.
+3. `StringInterner` with custom `Serialize`/`Deserialize` (storage
+   only on the wire; lookup rebuilt on deserialize; index-0-is-empty
+   and no-duplicate validation).
+4. `SourceFile` + `Position` + `Span` with the F1 file-local
+   byte-offset rule. (No bridge code yet; resolution methods only.)
+5. `DefPathData` (19 variants) + `DefPathSegment` + `DefPath`
+   (with `crate_id`) + `DefPathHash` + `CrateInfo` + `Instance` +
+   `GenericArg` + `StableCrateId` mirror.
+6. Top-level `RegseqModel` struct including `crates`,
+   `primary_crate`, and the construction-invariants assertions.
+
+Each step lands as its own commit. Spec issues surfaced during
+implementation trigger spec revision (the spec is mutable per
+methodology) before continuing.
+
+Reference material in `crates/*-old/` is one `cargo build -p
+regseq-model-old` (etc.) away if patterns from the prior design
+need consulting; per "re-derive from evidence; do not import
+baggage", consult deliberately, do not lift code wholesale.
 
 ## How to update this file
 

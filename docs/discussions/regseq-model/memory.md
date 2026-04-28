@@ -142,22 +142,50 @@ override any inferred convention from the codebase or older docs.
 - `scripts/python/codex_runner.py` -- non-interactive Codex
   invocation. Full contract in `../../../CLAUDE.md` (project root).
 - Pinned toolchain (paths in `rustc-references.md`).
-- `crates/regseq-driver/` is the only crate with
-  `rustc_private = true`. All other crates are rustc-free by Cargo
-  enforcement.
+- `crates/regseq-driver/` and `crates/regseq-driver-old/` are the
+  only crates with `rustc_private = true`. All other crates are
+  rustc-free by Cargo enforcement.
 - Existing pl011 fixture: `tests/fixtures/pl011-full-spec/`.
-- Test-audit gating: a per-crate `post-monorust-tests` cargo
-  feature gates dormant tests off by default. See
-  `../compiler-refactoring/test-audit.md`.
+- `cargo check --workspace --tests` is the standard smoke check
+  (warnings are expected from the `regseq-driver-old/src/extract/`
+  inherited dead code; errors are not).
+
+## Crate layout (post-refactor)
+
+The workspace was reorganized in commit `9352ea0` to give stage-1
+implementation a clean grep / autocomplete surface:
+
+- *Active crates (un-suffixed)*: `regseq-model`, `regseq-analysis`,
+  `regseq-backends` are stubs (single `lib.rs` each) waiting for
+  stage-by-stage population. `regseq-driver` carries only the new
+  Q6 multi-crate dispatch layer (`callbacks.rs`, `args.rs`,
+  `lib.rs`, `main.rs`, plus the four kept tests).
+- *Reference crates (`*-old`)*: `regseq-model-old`,
+  `regseq-analysis-old`, `regseq-backends-old`,
+  `regseq-driver-old`, `tests/e2e-old` hold the prior IR design.
+  Self-contained and fully buildable
+  (`cargo build -p regseq-model-old` etc.); not on the active
+  build path of the un-suffixed stack. Treat as reference per the
+  "re-derive from evidence; do not import baggage" methodology
+  rule -- consult deliberately, do not lift wholesale.
+- *Unchanged*: `regseq` (empty facade per Q6), `regseq-config`,
+  `regseq-diagnostics`, `regseq-macros`, `cargo-regseq`.
+- *Tag*: `pre-stage-1-impl-archive` points at the parent of
+  `9352ea0` if a future agent needs to inspect the un-renamed
+  pre-refactor state directly.
 
 ## Where current work stands
 
 See `status.md` for the consolidated tracker (stage progress,
 active focus, blockers, next action). At time of writing the
 foundation snapshot is: stage-0 architectural decisions Q1-Q7
-complete; multi-crate three-tier dispatch infrastructure rebuilt
-and verified; stage 1 (vocabulary) is the next work to start.
-`status.md` is the source of truth -- this paragraph may go stale.
+complete and verified end-to-end; stage-1 spec
+(`stage-1-vocabulary.md`) complete after three review rounds;
+workspace prepped for implementation (old IR stack moved to
+`*-old` siblings, un-suffixed crates wiped to stubs). The next
+concrete work is populating `crates/regseq-model/` with the
+stage-1 types in foundation-first order. `status.md` is the
+source of truth -- this paragraph may go stale.
 
 ## Read order for catching up
 

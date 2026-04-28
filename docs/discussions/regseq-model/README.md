@@ -94,9 +94,13 @@ here as evidence comes in.
 
 See `status.md` for the consolidated status tracker (stage progress,
 active focus, blockers, next action). Brief snapshot: stage-0
-architectural foundation is complete (Q1-Q7 in `architecture.md`);
-multi-crate three-tier dispatch infrastructure is rebuilt; stage 1
-(vocabulary) is the next work to start.
+architectural foundation complete (Q1-Q7 in `architecture.md`);
+stage-1 spec (`stage-1-vocabulary.md`) complete after three review
+rounds, sixteen issues addressed (see `stage-1-review-log.md`);
+workspace prepped (old IR stack moved to `*-old` sibling crates,
+un-suffixed crates wiped to stubs). Stage-1 implementation in
+`crates/regseq-model/` is the next concrete work unit;
+foundation-first order is documented in `status.md`.
 
 Methodology and per-construct decision log not yet authored. The
 three findings carried over with the migration are starter material
