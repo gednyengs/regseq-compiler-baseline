@@ -1,7 +1,6 @@
 //! Integration tests for stage-1 step 2: `IndexVec<I, T>`.
 //!
-//! Validates the four spec requirements from the IndexVec section
-//! of `docs/discussions/regseq-model/stage-1-vocabulary.md`:
+//! Validates the four `IndexVec` spec requirements:
 //! - `push` returns the assigned ID;
 //! - `iter`/`iter_mut`/indexing by `I` work and yield in order;
 //! - length-as-`I::index` semantics (iteration order equals ID

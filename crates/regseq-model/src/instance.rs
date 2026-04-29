@@ -11,10 +11,6 @@
 //! `regseq_instance_kind_rank` over the six Regseq emission kinds
 //! and `rustc_instance_kind_sort_rank` over rustc's 15-variant
 //! callable taxonomy. Both are append-only.
-//!
-//! See `docs/discussions/regseq-model/stage-1-vocabulary.md`
-//! sections "Instances: monomorphized items" and "Determinism (F4
-//! in detail) -> F4-2: Instance ordering" for the spec.
 
 use serde::{Deserialize, Serialize};
 
@@ -118,8 +114,7 @@ pub const fn regseq_instance_kind_rank(kind: &InstanceKind) -> u8 {
 /// cannot be referenced directly. The bridge converts a
 /// `rustc_ty::InstanceKind<'_>` to one of these tags before calling
 /// `rustc_instance_kind_sort_rank`. The taxonomy is pinned for the
-/// toolchain `nightly-2026-02-01-aarch64-apple-darwin`; see
-/// `docs/discussions/regseq-model/rustc-excerpts.md` section 7.
+/// toolchain `nightly-2026-02-01-aarch64-apple-darwin`.
 ///
 /// Append-only: a toolchain bump that adds a rustc variant adds a
 /// new tag at the end and a matching new rank.

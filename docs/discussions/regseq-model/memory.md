@@ -152,6 +152,32 @@ override any inferred convention from the codebase or older docs.
   baked into the type unconditionally; `repr(C)` becomes a
   resolved `Layout` on `Ty::Struct`; ABI annotations become an
   `Abi` enum on `FnSig`.
+- **Code does not reference discussion-folder paths.** Code
+  comments must NOT cite `docs/discussions/regseq-model/...`
+  paths, file names like `stage-1/vocabulary.md`, section titles,
+  or line numbers. Discussion docs evolve; line numbers and
+  section titles drift; nothing in the build catches a stale
+  citation. Two acceptable patterns: (a) restate the rule
+  inline so the comment stands alone; (b) reference a stable
+  architectural-decision tag (`Q1`-`Q7`, `F1`-`F4`) whose name
+  does not depend on file layout. The frozen `*-old` reference
+  crates retain their historical citations untouched as
+  archived artifacts; the rule is forward-looking.
+- **Forward expectations live in `stage-N/expectations.md`.**
+  When a stage surfaces a concern or follow-up that a later
+  stage must address, the entry is appended to the relevant
+  later stage's `expectations.md` (incoming forward refs --
+  things prior stages have asked stage N to deliver). Stage
+  folders are created lazily: the first content for a stage
+  -- including an inbound expectation written by an earlier
+  stage -- creates the folder. Stage implementer's first
+  action when opening their stage: read `stage-N/expectations.md`
+  as a checklist; tick entries off as they're addressed.
+  Outbound expectations (stage X writing about stage Y) are
+  appended to `stage-Y/expectations.md`, not stage X's own
+  folder. Cross-stage scaffold information that has no clear
+  later-stage owner stays in `memory.md` here under "Known
+  follow-ups" or in `status.md` deferral notes.
 
 ## Operational pointers
 
@@ -216,7 +242,7 @@ Snapshot at time of writing:
   against the spec; external round 3; Codex round 5 +
   external round 5e + Codex round 6 across the round-5
   monomorphization-and-C-semantics revision). All 39 issues
-  addressed. See `stage-1-review-log.md`.
+  addressed. See `stage-1/review-log.md`.
 - Stage 1 implementation: **all 7 steps complete and
   committed** in `crates/regseq-model/` (`b8f1e67`, `fd0d3c8`,
   `82aaaed`, `f34df65`, `f8e7b4e`, `d78db53`, the step-6
@@ -301,23 +327,23 @@ In priority:
    action.
 4. `architecture.md` -- the architectural decisions (Q1-Q7
    currently) in detail.
-5. `stage-1-vocabulary.md` -- the stage-1 spec (round-5
+5. `stage-1/vocabulary.md` -- the stage-1 spec (round-5
    revised; covers Instance/InstanceKind, the DefPath family,
    the Rust -> C lowering reference, and `impl` lifting).
-6. `stage-1-review-log.md` -- seven review passes documented
+6. `stage-1/review-log.md` -- seven review passes documented
    (R1-R6 + R5.7-R5.21). Skim before adding new revisions so
    prior resolutions aren't re-litigated.
 7. `prior-art/README.md` -- synthesis of prior-art research
    that shaped the architectural decisions.
-8. `stage-1-research.md` -- prior-art research and locked sub-
+8. `stage-1/research.md` -- prior-art research and locked sub-
    decisions (F1-F4) for stage 1.
-9. `rustc-excerpts.md` -- curated quotations from the pinned
+9. `stage-1/rustc-excerpts.md` -- curated quotations from the pinned
    rustc-src for the rustc-internal claims the spec depends on
    (now covers Idx, Symbol, Span / SourceMap, DefId, DefPath /
    DefPathData, DefPathHash, StableCrateId, Instance /
    InstanceKind, tcx.symbol_name, VtblEntry).
 10. `regseq-background.md` -- DSL background.
-11. `findings.md` -- empirical observations about MIR/HIR shape.
+11. `stage-1/findings.md` -- empirical observations about MIR/HIR shape.
 12. `rustc-references.md` -- pointers into the pinned rustc-src
     (paths, not excerpts).
 13. Per-project files in `prior-art/` -- consult on demand when

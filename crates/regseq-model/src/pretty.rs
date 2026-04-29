@@ -2,22 +2,22 @@
 //!
 //! Per Q5 the pretty-printer is the primary serialization (the
 //! textual MIR-inspired form is the human-readable contract;
-//! serde JSON is the structured-format secondary). Per
-//! `stage-1-vocabulary.md:1325-1327`, per-type `Display` impls
-//! are insufficient because rendering requires context (the
-//! model's tables for ID resolution); the pretty-printer holds a
-//! reference to a `RegseqModel` and resolves IDs through it.
+//! serde JSON is the structured-format secondary). Per-type
+//! `Display` impls are insufficient: rendering requires context
+//! (the model's tables for ID resolution), so the pretty-printer
+//! holds a reference to a `RegseqModel` and resolves IDs through
+//! it.
 //!
 //! Stage 1's contribution is the *shape* and the conventions
-//! table (`stage-1-vocabulary.md:1306-1317`, :1347-1348). Methods
-//! that depend on stage-1 surface only -- `render_span`,
-//! `render_def_path_value` -- are implemented here. Methods that
-//! depend on later-stage IR content (`render_ty`, `render_const`,
-//! `render_def_path(ItemId)`, `render_instance`, top-level
-//! `render`) are stubbed `unimplemented!(...)` with messages
-//! pointing at the stage that fills them.
+//! table. Methods that depend on stage-1 surface only --
+//! `render_span`, `render_def_path_value` -- are implemented
+//! here. Methods that depend on later-stage IR content
+//! (`render_ty`, `render_const`, `render_def_path(ItemId)`,
+//! `render_instance`, top-level `render`) are stubbed
+//! `unimplemented!(...)` with messages pointing at the stage
+//! that fills them.
 //!
-//! Sigil-conventions table (spec `:1306-1317`):
+//! Sigil-conventions table:
 //!
 //! | ID            | Sigil                                   |
 //! |---------------|-----------------------------------------|
@@ -56,7 +56,6 @@ impl<'a> PrettyPrinter<'a> {
     }
 
     /// Renders a `Span` per the spec sigil
-    /// (`stage-1-vocabulary.md:1316`):
     /// `"{path}:{lo_line}:{lo_col}: {hi_line}:{hi_col}"`.
     ///
     /// The synthesized-source sentinel renders uniformly --
@@ -112,7 +111,8 @@ impl<'a> PrettyPrinter<'a> {
     /// Stage 12's body resolves
     /// `self.model.strings.resolve(self.model.items[id].def_path.rendered).to_owned()`
     /// -- no re-rendering, just resolving the cached canonical
-    /// form per `stage-1-vocabulary.md:545-547, :560-562`.
+    /// form (the eager `rendered` field is the cached result of
+    /// `render_def_path` at construction time).
     pub fn render_def_path(&self, _item: ItemId) -> String {
         unimplemented!(
             "stage 12 fills render_def_path by reading Item.def_path.rendered (an interned StringId); use render_def_path_value(&DefPath) at stage 1"

@@ -40,10 +40,17 @@ indicate a phase-1 spec gap are escalated here.
 
 ## Contents
 
+Layout: cross-stage docs at top level; per-stage discussion
+artifacts in `stage-N/` subfolders. Each stage's folder is created
+lazily when its first content lands (which can be an earlier
+stage's forward expectation; see `memory.md` for the convention).
+
+### Top-level (cross-stage)
+
 - `README.md` -- this file.
 - `memory.md` -- briefing for an LLM agent landing fresh in this
   project. Self-contained context handoff; the right entry point
-  for any new session.
+  for any new session. Holds the methodology rules.
 - `status.md` -- consolidated status tracker for phase-1 work
   (stage progress, active focus, blockers, next action). Update
   at the end of every session that changes anything material.
@@ -53,66 +60,61 @@ indicate a phase-1 spec gap are escalated here.
   multi-crate strategy, intrinsic recognition by attribute name).
   Treat as binding unless explicitly revised; future decisions
   append as Q8, Q9, ...
-- `stage-1-research.md` -- prior-art research synthesis for stage 1
-  (vocabulary): four-cluster survey (rustc internals, Rust-to-C
-  compilers, Rust verification IRs, general IR design), convergent
-  patterns settled by precedent, and the four locked sub-decisions
-  (F1-F4: span byte representation, span placement, source content,
-  ItemId determinism). Evidence base for the stage-1 spec.
-- `stage-1-vocabulary.md` -- the stage-1 spec proper. ID conventions,
-  the StringInterner, SourceFile and Span types, DefPath form,
-  the "Rust -> C lowering reference" (cross-stage construct
-  policy), `impl` lifting principle, Instance / InstanceKind /
-  monomorphization story, bridge-synthesized Items rule,
-  top-level RegseqModel struct, F4 + F4-2 determinism rules with
-  pinned rank tables, serialization conventions, pretty-printer
-  interface sketch. Round-5-revised; type signatures are sketches
-  and field names at the implementation's discretion.
-- `stage-1-review-log.md` -- record of seven adversarial review
-  passes (R1-R6 + R5.7-R5.21 across an external follow-up) with
-  every issue and how it was addressed. Useful for future
-  reviewers (don't re-litigate resolved concerns) and for a
-  future agent picking up the work.
-- `stage-1-review-prompt.md` -- self-contained prompt for an
-  external reviewer (no repo access). Currently scoped to the
-  round-5 revision. Pairs with the file attachments listed inside.
-- `rustc-excerpts.md` -- curated rustc-src quotations the stage-1
-  spec depends on, gathered for an external reviewer.
-  Authoritative for rustc-internal claims when the reviewer
-  cannot open the rustc-src tree directly.
 - `regseq-background.md` -- DSL background: `#![no_std]` spec
   environment, the three mechanisms (intrinsics, properties,
   traits).
 - `rustc-references.md` -- pointers into the pinned rustc-src for
   designing the construction pass.
-- `findings.md` -- empirical observations about MIR/HIR shape;
-  append-only.
 - `prior-art/` -- per-project research files plus a synthesis
-  README identifying convergent patterns, the (now resolved)
-  forks in the road, and implications for the bottom-up plan.
+  README identifying convergent patterns and implications for the
+  bottom-up plan.
 
-Methodology rules, the decision log, and the spec itself accumulate
-here as evidence comes in.
+### Per-stage subfolders
+
+- `stage-1/` -- stage-1 (vocabulary) discussion artifacts.
+  - `vocabulary.md` -- the stage-1 spec proper. ID conventions,
+    StringInterner, SourceFile/Span, DefPath form, the
+    Rust -> C lowering reference, `impl` lifting principle,
+    Instance / InstanceKind / monomorphization, bridge-synthesized
+    Items, top-level RegseqModel, F4/F4-2 determinism with pinned
+    rank tables, serialization conventions, pretty-printer
+    interface sketch.
+  - `research.md` -- prior-art synthesis (rustc internals,
+    Rust-to-C compilers, verification IRs, IR design) and the four
+    locked sub-decisions F1-F4.
+  - `review-log.md` -- record of seven adversarial review passes
+    (R1-R6 + R5.7-R5.21).
+  - `review-prompt.md` -- self-contained prompt for an external
+    reviewer (no repo access).
+  - `findings.md` -- empirical observations about MIR/HIR shape
+    that informed stage-1 decisions; append-only.
+  - `rustc-excerpts.md` -- curated rustc-src quotations stage 1
+    depends on. Authoritative for rustc-internal claims.
+  - `expectations.md` -- incoming forward expectations from other
+    stages (currently: none; stage 1 closed before any later stage
+    surfaced retrospective concerns).
+
+Future stage folders (`stage-3/`, `stage-4/`, `stage-9/`,
+`stage-10/`, `stage-11/`, `stage-12/`, `stage-13/`) follow the
+same pattern. Each may contain its own `vocabulary.md`,
+`research.md`, `findings.md`, `rustc-excerpts.md`, etc., and an
+`expectations.md` listing forward refs accumulated from earlier
+stages.
+
+Methodology rules, the decision log, and per-stage specs all
+accumulate here as evidence comes in.
 
 ## Status
 
-See `status.md` for the consolidated status tracker (stage progress,
-active focus, blockers, next action). Brief snapshot: stage-0
-architectural foundation complete (Q1-Q7 in `architecture.md`);
-stage-1 spec (`stage-1-vocabulary.md`) implementation-ready after
-seven review passes, 39 issues addressed (see
-`stage-1-review-log.md`); stage-1 implementation in
-`crates/regseq-model/` is in progress -- steps 1-4 of the
-foundation-first order are committed (`b8f1e67`, `fd0d3c8`,
-`82aaaed`, `f34df65`, plus follow-up `f8e7b4e`); 62 integration
-tests passing. Step 5 (DefPath family + Instance + InstanceKind +
-GenericArg + StableCrateId + CrateInfo + FnSigId forward-decl) is
-the next concrete work unit.
-
-Methodology and per-construct decision log not yet authored. The
-three findings carried over with the migration are starter material
--- they may be re-validated, refined, or displaced as phase-1 work
-proceeds.
+See `status.md` for the consolidated tracker. Brief snapshot:
+stage-0 architectural foundation complete (Q1-Q7 in
+`architecture.md`); stage-1 spec (`stage-1/vocabulary.md`)
+implementation-ready after seven review passes (see
+`stage-1/review-log.md`); stage-1 implementation in
+`crates/regseq-model/` is closed -- all seven foundation steps
+committed; 229 integration tests passing. Next-action menu: stage 3
+(Type system), bridge implementation, or stage 13 (domain
+extensions); see `status.md` "Next action" for the current pick.
 
 ## Cross-session continuity
 
@@ -129,7 +131,8 @@ A new session should:
 5. Skim `prior-art/README.md` for the synthesis of prior-art
    research that shaped the architectural decisions.
 6. Skim `regseq-background.md` for DSL framing.
-7. Skim `findings.md` for prior empirical observations.
+7. Skim `stage-1/findings.md` for prior empirical observations
+   that fed stage-1 design.
 8. Consult `rustc-references.md` when a rustc-internal question
    surfaces.
 9. Pick up from `status.md`'s "Next action"; update `status.md`

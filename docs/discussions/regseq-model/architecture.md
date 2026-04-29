@@ -105,7 +105,7 @@ RegseqModel uses its own opaque integer IDs for everything:
   `StringId`, `SourceFileId`, ...
 
 (Spans are stored inline in IR nodes by value, not interned to a
-`SpanId`; this refinement is locked in `stage-1-research.md` F2.
+`SpanId`; this refinement is locked in `stage-1/research.md` F2.
 The Q2 pattern -- rustc-side handles intern to RegseqModel-owned
 IDs at the bridge -- still holds for every other ID listed above.)
 

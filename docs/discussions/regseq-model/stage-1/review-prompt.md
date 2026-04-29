@@ -47,7 +47,7 @@ cleanup-pass whitelist) and produces C for target operating systems
 The bridge between MIR and the C backend is an internal IR called
 `RegseqModel`. The IR is specified bottom-up in 13 stages. The
 stage-1 (vocabulary) spec has gone through four prior review rounds
-documented in `stage-1-review-log.md`; this round-5 review focuses
+documented in `review-log.md`; this round-5 review focuses
 on the specific revisions introduced after round 4 closed and before
 step-5 implementation begins.
 
@@ -60,7 +60,7 @@ analyses and the C codegen backend.
 ## Round-5 scope
 
 Round 5 revised the spec on six points, documented as R5.1 through
-R5.6 in `stage-1-review-log.md`. In summary:
+R5.6 in `review-log.md`. In summary:
 
 - **R5.1 (Instance shape).** The thin `Instance { item, args }`
   was replaced with a richer `Instance { item, generic_args,
@@ -82,7 +82,7 @@ R5.6 in `stage-1-review-log.md`. In summary:
 - **R5.3 (Rust → C semantics framing).** A new methodology rule
   was added to `memory.md` ("C semantics with information
   preservation") and a new "Rust → C lowering reference" section
-  was added to `stage-1-vocabulary.md`. Together, they pin that
+  was added to `vocabulary.md`. Together, they pin that
   RegseqModel is a C-shaped IR, the bridge does the desugaring
   (drop glue → regular Calls; trait objects → vtables; closures
   → structs + methods; etc.), and source-side annotations are
@@ -118,12 +118,12 @@ through R5.6 are MEDIUM-LOW.
 | File | Role for this review |
 |---|---|
 | **PRIMARY (must read)** | |
-| `stage-1-vocabulary.md` | The revised specification. The new "Rust → C lowering reference," "Lifting `impl` items," "Instances: monomorphized items" (incl. `Instance`, `InstanceKind`, interning rule, F4-2 ordering, sentinel rule), the updated `RegseqModel` struct, the renumbered construction invariants, and the updated conventions table are the round-5 substance. |
-| `stage-1-review-log.md` | Rounds 1-4 already addressed; do not re-flag those issues. Round-5 entries (R5.1-R5.6) document the new revisions and their rationale. The "Notes for the next reviewer" section flags areas not yet adversarially probed. |
+| `vocabulary.md` | The revised specification. The new "Rust → C lowering reference," "Lifting `impl` items," "Instances: monomorphized items" (incl. `Instance`, `InstanceKind`, interning rule, F4-2 ordering, sentinel rule), the updated `RegseqModel` struct, the renumbered construction invariants, and the updated conventions table are the round-5 substance. |
+| `review-log.md` | Rounds 1-4 already addressed; do not re-flag those issues. Round-5 entries (R5.1-R5.6) document the new revisions and their rationale. The "Notes for the next reviewer" section flags areas not yet adversarially probed. |
 | `memory.md` | Project briefing and methodology rules. The new "C semantics with information preservation" rule is the foundational policy that R5.3 codifies. The pre-existing rules (`core` is opaque, no defensive fallbacks, compiler-theory-first, etc.) still apply. |
 | `architecture.md` | Q1-Q7 architectural decisions the spec sits inside. SETTLED. R5 must not contradict any of them. Q2 ("eager translation; no `'tcx` past the bridge") and Q3 ("single-level IR") are particularly load-bearing for round 5. |
 | **STRONGLY RELEVANT** | |
-| `stage-1-research.md` | F1-F4 sub-decisions. F2 (spans inline, no SpanId) and F4 (item determinism) interact with R5.5 (sentinel) and R5.1 (F4-2 ordering). |
+| `research.md` | F1-F4 sub-decisions. F2 (spans inline, no SpanId) and F4 (item determinism) interact with R5.5 (sentinel) and R5.1 (F4-2 ordering). |
 | `regseq-background.md` | DSL background; useful for understanding what driver-spec source actually looks like and what consumers (analyses + codegen) need from RegseqModel. |
 | `rustc-excerpts.md` | Curated quotations from the pinned rustc-src checkout. Treat as authoritative for rustc-internal claims (especially `InstanceKind` taxonomy, drop glue, vtables, `SymbolName`). R5.1's interning correctness depends on these. |
 | `status.md` | Current state of stage-1 implementation. Steps 1-4 have shipped (commits `b8f1e67`, `fd0d3c8`, `82aaaed`, `f34df65`); step 5 is queued behind this review. |
@@ -134,19 +134,19 @@ through R5.6 are MEDIUM-LOW.
 
 Read order if approaching cold: `memory.md` first (briefing +
 methodology), then `architecture.md` (Q1-Q7), then
-`stage-1-review-log.md` Round 5 (the *what changed* and *why*),
-then `stage-1-vocabulary.md` (the spec, with R5 sections in mind).
+`review-log.md` Round 5 (the *what changed* and *why*),
+then `vocabulary.md` (the spec, with R5 sections in mind).
 The other files are reference material; consult on demand.
 
 ## Out of scope
 
 Do not flag any of the following:
 
-- **Issues already addressed in R1-R5 of `stage-1-review-log.md`.**
+- **Issues already addressed in R1-R5 of `review-log.md`.**
   Re-flagging these wastes effort.
 - **Q1-Q7 architectural decisions** in `architecture.md`. Settled.
   R5 is reviewed *against* them; they are not subject to review.
-- **F1-F4 sub-decisions** in `stage-1-research.md`. Settled.
+- **F1-F4 sub-decisions** in `research.md`. Settled.
 - **Stage 3-13 IR shapes.** R5 forward-references types, bodies,
   consts, items -- those are out of stage-1 scope. Only flag
   inconsistencies between R5 and what stages 3-13 will need from
@@ -194,7 +194,7 @@ Specific probes:
 
 Is the methodology rule in `memory.md` internally consistent and
 free of contradictions with the existing rules? Does the
-"Rust → C lowering reference" table in `stage-1-vocabulary.md`
+"Rust → C lowering reference" table in `vocabulary.md`
 match the methodology principle, or do any rows pass through
 source-side annotations as opaque metadata?
 
@@ -316,7 +316,7 @@ Specific probes:
 ## Grounding rules
 
 - **Cite file and section for every claim.** Format:
-  `stage-1-vocabulary.md "Lifting impl items"` is acceptable.
+  `vocabulary.md "Lifting impl items"` is acceptable.
   Line numbers are not required.
 - **Treat `rustc-excerpts.md` as authoritative** for any
   rustc-internal claim. Do not invent rustc behavior.

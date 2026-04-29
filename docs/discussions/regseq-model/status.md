@@ -20,10 +20,10 @@ tracker is worse than no tracker.
   table, `primary_crate`, `sigs`, etc.), F4 + F4-2 determinism
   rules with explicit rank tables, custom serde for IDs and
   StringInterner, pretty-printer interface sketch. Research
-  synthesis (`stage-1-research.md`), seven review passes (five
-  Codex, two external) all addressed (`stage-1-review-log.md`),
+  synthesis (`stage-1/research.md`), seven review passes (five
+  Codex, two external) all addressed (`stage-1/review-log.md`),
   rustc excerpts cover Instance/InstanceKind/SymbolName/VtblEntry
-  (`rustc-excerpts.md`), spec (`stage-1-vocabulary.md`)
+  (`stage-1/rustc-excerpts.md`), spec (`stage-1/vocabulary.md`)
   implementation-ready.
 - [x] **Stage 1 implementation.** Seven steps total in
   `crates/regseq-model/`:
@@ -127,9 +127,9 @@ placeholder. The bridge (in `crates/regseq-driver/`) and stage 13
 
 State of the world:
 
-- *Stage 1 spec is round-5-revised.* `stage-1-vocabulary.md`
+- *Stage 1 spec is round-5-revised.* `stage-1/vocabulary.md`
   reflects seven review passes (R1-R6 + R5.7-R5.21 across an
-  external follow-up). See `stage-1-review-log.md` for the audit
+  external follow-up). See `stage-1/review-log.md` for the audit
   trail.
 - *All seven steps closed* in `crates/regseq-model/`. Step 5
   Codex round returned MINOR (two tests added); step 6
@@ -151,7 +151,7 @@ State of the world:
 
 Open methodology guidance for stage 3+: the spec is still
 mutable. If type-shape ambiguities or composition issues surface
-during stage-N implementation, revise `stage-1-vocabulary.md` (or
+during stage-N implementation, revise `stage-1/vocabulary.md` (or
 the relevant stage spec) and trigger a Codex review of the
 revision before continuing -- do not paper over with implementer
 judgment.

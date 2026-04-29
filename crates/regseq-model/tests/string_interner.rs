@@ -1,7 +1,6 @@
 //! Integration tests for stage-1 step 3: `StringInterner`.
 //!
-//! Validates the spec requirements from `StringInterner` in
-//! `docs/discussions/regseq-model/stage-1-vocabulary.md`:
+//! Validates the `StringInterner` spec requirements:
 //! - `new()` pre-interns the empty string at `StringId::ZERO`.
 //! - `intern` is content-deduplicating; equal strings collapse to
 //!   the same `StringId`.

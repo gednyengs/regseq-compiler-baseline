@@ -1,8 +1,7 @@
 //! Integration tests for stage-1 step 4: `SourceFile`,
 //! `Position`, `Span` (and the third concrete ID, `SourceFileId`).
 //!
-//! Validates the spec requirements from the "Source files and
-//! spans" section of `docs/discussions/regseq-model/stage-1-vocabulary.md`:
+//! Validates the source-files-and-spans spec requirements:
 //! - 1-based line, 1-based byte column for `Position`;
 //! - `[lo, hi)` end-exclusive, file-local byte offsets for `Span`;
 //! - `position` is a binary search over `line_starts`;

@@ -3,9 +3,8 @@ name = "regseq"
 version = "0.1.0"
 edition = "2021"
 
-# Marker for cargo-regseq's regseq-aware-crate recognition. Presence of
-# this table is what cargo-regseq looks for; the `role` field is
-# informational. See architecture.md Q6 in
-# docs/discussions/regseq-model/.
+# Marker for cargo-regseq's regseq-aware-crate recognition (Q6).
+# Presence of this table is what cargo-regseq looks for; the `role`
+# field is informational.
 [package.metadata.regseq]
 role = "facade"

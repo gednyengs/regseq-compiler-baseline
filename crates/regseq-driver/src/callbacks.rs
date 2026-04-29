@@ -21,8 +21,7 @@
 ///
 /// This whitelist is the canonical "clean MIR" shape and matches the
 /// flag set in `scripts/dump-fixture-mir.sh`. The bridge consumes MIR
-/// in this shape. See architecture.md Q6 in
-/// `docs/discussions/regseq-model/`.
+/// in this shape. Per Q6.
 pub fn regseq_mir_passes() -> Vec<(String, bool)> {
     vec![
         ("RemoveStorageMarkers".to_string(), true),
@@ -77,8 +76,8 @@ impl rustc_driver::Callbacks for RegseqAwareCallbacks {
         //     injection. The aware crate's source declares its own;
         //     without source-side declarations `cargo check` and
         //     `rust-analyzer` fail on the facade outside the wrapper.
-        //     See `docs/discussions/regseq-model/memory.md`
-        //     methodology rules.
+        //     This is the symmetric "source declares its own
+        //     compiler-relevant attributes" methodology rule.
     }
     // No `after_analysis` override: rustc proceeds to codegen normally.
 }
@@ -114,9 +113,9 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         // INTENTIONALLY NOT SET (symmetric register_tool rule, mirrors
         // the matching note in `RegseqAwareCallbacks::config`):
         //   - feature(register_tool) / register_tool(rseq) crate_attr
-        //     injection. The spec source declares its own. See
-        //     `docs/discussions/regseq-model/memory.md` methodology
-        //     rules.
+        //     injection. The spec source declares its own (symmetric
+        //     "source declares its own compiler-relevant attributes"
+        //     methodology rule).
     }
 
     fn after_analysis<'tcx>(
@@ -124,11 +123,10 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         _compiler: &rustc_interface::interface::Compiler,
         _tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
-        // Bridge entry point. Currently empty: the new RegseqModel-producing
-        // bridge is being built bottom-up (stage 1+ in
-        // docs/discussions/regseq-model/status.md). Until the bridge can
-        // produce a RegseqModel for the configured emit specs, this
-        // method just stops compilation cleanly.
+        // Bridge entry point. Currently empty: the RegseqModel-producing
+        // bridge is being built bottom-up. Until the bridge can produce
+        // a RegseqModel for the configured emit specs, this method just
+        // stops compilation cleanly.
         eprintln!(
             "regseq-driver: after_analysis reached for target_os={:?}; \
              bridge not yet wired -- skipping all extraction.",

@@ -1,8 +1,7 @@
 //! Integration tests for stage-1 step-1: the `Idx` trait,
 //! `newtype_index!` macro, and `CrateId`.
 //!
-//! Locks in the three properties named in
-//! `docs/discussions/regseq-model/status.md`:
+//! Locks in three foundational properties:
 //! - JSON round-trip preserves the logical index.
 //! - Niche encoding stays internal (the `NonMaxU32` wrapper and the
 //!   `private_use_methods_instead` field are not reachable from

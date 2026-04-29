@@ -5,7 +5,7 @@ the prior-art reading across four clusters, the convergent patterns that
 fall out of that reading, and the four stage-1 sub-decisions (F1-F4) that
 required explicit calls.
 
-This is *not* the spec. The spec lives at `stage-1-vocabulary.md` (to be
+This is *not* the spec. The spec lives at `vocabulary.md` (to be
 authored after Codex review of this document). This is the evidence base
 that the spec rests on.
 

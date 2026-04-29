@@ -1,9 +1,10 @@
 //! RegseqModel: the internal IR between rustc's `optimized_mir` and
 //! the C backends.
 //!
-//! Stage 1 (vocabulary) types live here. See
-//! `docs/discussions/regseq-model/stage-1-vocabulary.md` for the
-//! spec and `status.md` in the same folder for the per-step plan.
+//! Stage 1 (vocabulary) types live here. The model is owned (no
+//! `'tcx`), serializable, and rustc-free per Q1; the bridge in
+//! `regseq-driver` builds a `RegseqModel` from `tcx` and hands it
+//! off.
 
 mod crate_info;
 mod def_path;

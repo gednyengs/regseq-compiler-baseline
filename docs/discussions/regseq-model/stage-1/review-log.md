@@ -9,15 +9,15 @@ Thirty-nine issues raised across seven review passes; all addressed.
 
 | Round | Reviewer | Target | Verdict | Issues |
 |---|---|---|---|---|
-| 1 | Codex (gpt-5.5) | `stage-1-research.md` | REVISE_BEFORE_PROCEEDING | 5 |
-| 2 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (initial) | REVISE_BEFORE_IMPL | 6 |
-| 3 | external (no repo access) | `stage-1-vocabulary.md` (post-round-2) | REVISE_BEFORE_IMPL | 5 |
-| 4 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (implementation-readiness) | REVISE_BEFORE_APPLYING | 2 |
-| 5 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (round-5 monomorphization + C-semantics revision) | REVISE | 6 |
-| 5e | external (no repo access) | `stage-1-vocabulary.md` (post-round-5-Codex) | REVISE_BEFORE_IMPL | 10 |
-| 6 | Codex (gpt-5.5) | `stage-1-vocabulary.md` (post-round-5e cascade check) | REVISE | 5 |
+| 1 | Codex (gpt-5.5) | `research.md` | REVISE_BEFORE_PROCEEDING | 5 |
+| 2 | Codex (gpt-5.5) | `vocabulary.md` (initial) | REVISE_BEFORE_IMPL | 6 |
+| 3 | external (no repo access) | `vocabulary.md` (post-round-2) | REVISE_BEFORE_IMPL | 5 |
+| 4 | Codex (gpt-5.5) | `vocabulary.md` (implementation-readiness) | REVISE_BEFORE_APPLYING | 2 |
+| 5 | Codex (gpt-5.5) | `vocabulary.md` (round-5 monomorphization + C-semantics revision) | REVISE | 6 |
+| 5e | external (no repo access) | `vocabulary.md` (post-round-5-Codex) | REVISE_BEFORE_IMPL | 10 |
+| 6 | Codex (gpt-5.5) | `vocabulary.md` (post-round-5e cascade check) | REVISE | 5 |
 
-## Round 1 -- review of `stage-1-research.md`
+## Round 1 -- review of `research.md`
 
 **Scope**: prior-art synthesis and the F1-F4 sub-decisions
 (span byte representation, span placement, source content, ItemId
@@ -35,7 +35,7 @@ example.
 **Resolution**: amended `architecture.md` Q2 to drop the `SpanId`
 references (in the internal-IDs bullet and the Tables example),
 with a forward pointer to F2; added a "Reconciliation with Q2"
-subordinate note to F2 in `stage-1-research.md` documenting the
+subordinate note to F2 in `research.md` documenting the
 amendment and confirming the rest of Q2's pattern still applies
 to the other IDs.
 
@@ -91,7 +91,7 @@ present (`lo <= hi`, `hi <= content.len()`).
 
 ---
 
-## Round 2 -- review of `stage-1-vocabulary.md`
+## Round 2 -- review of `vocabulary.md`
 
 **Scope**: the spec proper. Type sketches, ID inventory,
 StringInterner, SourceFile/Span, DefPath form, Instance,
@@ -189,11 +189,11 @@ consistency rule when it specifies the placement of `def_path` on
 
 ---
 
-## Round 3 -- external review of `stage-1-vocabulary.md` (post-round-2)
+## Round 3 -- external review of `vocabulary.md` (post-round-2)
 
 **Scope**: the spec proper, after round-2 fixes had landed. External
 reviewer with no repo access, working from the file-attachment
-package and the `stage-1-review-prompt.md` prompt.
+package and the `review-prompt.md` prompt.
 
 **Verdict**: REVISE_BEFORE_IMPL.
 
@@ -290,7 +290,7 @@ that cross file boundaries.
 
 ## Round 4 -- implementation-readiness revision review
 
-**Scope**: two proposed revisions to `stage-1-vocabulary.md` surfaced
+**Scope**: two proposed revisions to `vocabulary.md` surfaced
 by an implementation-readiness analysis just before stage-1 step-1
 implementation began. Revision A reopens the serde-mechanism
 paragraph addressed in R3.2; revision B adds `'static` to the `Idx`
@@ -315,7 +315,7 @@ explicitly ban `#[serde(transparent)]` over the niche-bearing inner
 field (which would also leak the internal representation).
 
 **Resolution**: rewrote the paragraph at lines 100-110 of
-`stage-1-vocabulary.md`. The new wording (a) bans field-derive and
+`vocabulary.md`. The new wording (a) bans field-derive and
 `#[serde(transparent)]` on ID newtypes explicitly, (b) names two
 acceptable routes -- hand-rolled `impl Serialize` / `impl
 Deserialize` *or* `#[serde(into = "u32", try_from = "u32")]` with
@@ -336,7 +336,7 @@ dies at the bridge) and the model invariant later in the spec ("No
 `'static`. The trait bound did not surface this.
 
 **Resolution**: added `'static` to the `Idx` trait bound at line 58
-of `stage-1-vocabulary.md`. Appended a paragraph to the rationale
+of `vocabulary.md`. Appended a paragraph to the rationale
 calling out that the bound makes the existing owned/`'tcx`-free IR
 invariant explicit at the trait boundary, with rustc's
 `rustc_index::Idx` (also `'static`-bound) as secondary precedent.
@@ -421,7 +421,7 @@ C-shaped IR, the bridge does the desugaring, and information
 rustc gives us for free is preserved when downstream
 stakeholders benefit -- but always per-construct interrogated.
 Added a "Rust -> C lowering reference" section to
-`stage-1-vocabulary.md` enumerating the already-decided
+`vocabulary.md` enumerating the already-decided
 construct lowerings as a cross-stage check. The table is
 descriptive (pins what is decided) and informs stage-3/4/9/11/12
 work without dictating shape.
@@ -711,14 +711,14 @@ to a valid entry in `sigs`, including for foreign declarations."
 ### R5.19 -- INTERNAL_CONSISTENCY (MEDIUM): rustc-excerpts.md section 7 still described old interning key
 
 The R5.7 fix introduced `RegseqInstanceKey` (4-field key) and
-made it canonical in `stage-1-vocabulary.md`. But
+made it canonical in `vocabulary.md`. But
 `rustc-excerpts.md` section 7's commentary still said "the
 interning key in stage 1 is `(InstanceKind, args)` -- the same
 shape rustc uses." This is stale.
 
 **Resolution**: updated the section-7 explanatory paragraph to
 describe `RegseqInstanceKey` (the four-field shape) and
-explicitly reference `stage-1-vocabulary.md` as the
+explicitly reference `vocabulary.md` as the
 authoritative definition.
 
 ### R5.20 -- FORWARD_FIT (MEDIUM): vtable DefPathData punt was structurally ambiguous

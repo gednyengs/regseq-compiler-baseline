@@ -25,9 +25,9 @@ fn pretty_printer_new_constructs_from_model() {
 }
 
 // ------------------------------------------------------------------
-// render_span: per the spec sigil at stage-1-vocabulary.md:1316,
-// renders `path:line:col: line:col`. Synthesized sentinel renders
-// uniformly via the existing position-resolution path.
+// render_span: per the spec sigil, renders `path:line:col: line:col`.
+// Synthesized sentinel renders uniformly via the existing
+// position-resolution path.
 // ------------------------------------------------------------------
 
 #[test]

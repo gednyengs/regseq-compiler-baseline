@@ -5,7 +5,7 @@ RegseqModel rides on. Specifies five components: ID types, the string
 interner, the source-file table and span representation, the DefPath
 form, and the top-level `RegseqModel` struct.
 
-This document is the spec; `stage-1-research.md` is the evidence base
+This document is the spec; `research.md` is the evidence base
 behind the choices. F1-F4 from that document are taken as given here
 and instantiated as concrete type shapes.
 
@@ -1369,7 +1369,7 @@ deferred:
 
 ## References
 
-- `stage-1-research.md` -- the evidence base; F1-F4 decisions and
+- `research.md` -- the evidence base; F1-F4 decisions and
   prior-art cluster summaries.
 - `architecture.md` Q1 (two-crate split), Q2 (eager translation /
   internal IDs / self-describing IR), Q3 (single-level IR), Q5

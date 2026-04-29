@@ -2,8 +2,7 @@
 //!
 //! Mirrors rustc's `DefPathData` / `DisambiguatedDefPathData` /
 //! `DefPath` / `DefPathHash` quartet through the model's interner
-//! and ID conventions. See `docs/discussions/regseq-model/
-//! stage-1-vocabulary.md` section "DefPath form" for the full spec.
+//! and ID conventions.
 //!
 //! - `DefPathData` is a closed 19-variant enum mirroring
 //!   `rustc_hir::definitions::DefPathData` for the pinned toolchain.
@@ -136,22 +135,20 @@ pub struct DefPathHash {
 /// means appending a new rank at the end (e.g., 19); existing ranks
 /// are immutable.
 ///
-/// See the spec section "Determinism (F4 in detail) -> Stable rank
-/// table" for the authoritative ordering.
+/// Authoritative ordering for the F4 sort comparator.
+
 /// Renders a `DefPath` to its canonical verbose form.
 ///
-/// This is the single source of truth for the `DefPath.rendered`
-/// invariant pinned in `stage-1-vocabulary.md:545-562` ("Two
-/// RegseqModels for the same source must produce byte-identical
-/// `rendered` strings for corresponding items"). Both the bridge
-/// (when populating `DefPath.rendered` during `Item` construction)
-/// and the pretty-printer call this helper, so the rendering rule
-/// lives in exactly one place.
+/// Single source of truth for the `DefPath.rendered` byte-identical-
+/// across-builds invariant. Both the bridge (when populating
+/// `DefPath.rendered` during `Item` construction) and the pretty-
+/// printer call this helper, so the rendering rule lives in exactly
+/// one place.
 ///
-/// The form mirrors rustc's `DisambiguatedDefPathData::as_sym(verbose=true)`
-/// applied to the resolved crate name plus the segment vector
-/// (`rustc_hir/src/definitions.rs:185-204` against the pinned
-/// `nightly-2026-02-01-aarch64-apple-darwin` toolchain). Anonymous
+/// The form mirrors rustc's
+/// `DisambiguatedDefPathData::as_sym(verbose=true)` applied to the
+/// resolved crate name plus the segment vector, against the pinned
+/// `nightly-2026-02-01-aarch64-apple-darwin` toolchain. Anonymous
 /// segments always render as `{namespace#disambig}` (including
 /// disambig 0); plain name-bearing segments render as `name` or
 /// `name#N` (the `#N` is omitted when disambig is 0). `AnonAssocTy`

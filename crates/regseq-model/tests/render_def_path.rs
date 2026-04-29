@@ -1,14 +1,13 @@
 //! Integration tests for stage-1 step-7: the canonical
 //! `render_def_path` helper.
 //!
-//! Per-variant rendering rules are pinned against
-//! `nightly-2026-02-01-aarch64-apple-darwin`
-//! `rustc_hir/src/definitions.rs:185-204, :248-249, :505-520`.
-//! The 19-variant battery + closed-set guard catches a future
-//! `DefPathData` variant addition that forgets a rendering arm.
-//! The determinism test guards the spec invariant
-//! ("byte-identical `rendered` strings across builds")
-//! at `stage-1-vocabulary.md:556-559`.
+//! Per-variant rendering rules are pinned against pinned
+//! toolchain `nightly-2026-02-01-aarch64-apple-darwin` rustc
+//! source. The 19-variant battery + closed-set guard catches a
+//! future `DefPathData` variant addition that forgets a
+//! rendering arm. The determinism test guards the spec invariant
+//! that two RegseqModels for the same source produce
+//! byte-identical `rendered` strings for corresponding items.
 
 use regseq_model::{
     render_def_path, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, IndexVec,

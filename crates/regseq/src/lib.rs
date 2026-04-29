@@ -1,8 +1,8 @@
 //! Regseq facade crate. Empty placeholder.
 //!
 //! Items are promoted from each spec's `crate::regseq` submodule
-//! incrementally as redesign work touches them. See `architecture.md`
-//! Q6 in `docs/discussions/regseq-model/` for the rebuild plan.
+//! incrementally as redesign work touches them. Per Q6, regseq-aware
+//! crates are discovered via `[package.metadata.regseq]`.
 //!
 //! ## Source-declared compiler attributes (do not remove)
 //!
@@ -13,10 +13,6 @@
 //! source-side declarations, `cargo check` and `rust-analyzer` fail
 //! on this crate outside the wrapper, because the `rseq` tool
 //! attribute namespace is unrecognized at parse time.
-//!
-//! References:
-//! - `docs/discussions/regseq-model/memory.md` (methodology rules)
-//! - `docs/discussions/regseq-model/architecture.md` (Q6)
 //!
 //! Removing these declarations breaks plain rustc invocation. Don't.
 
