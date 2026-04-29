@@ -135,5 +135,9 @@ A new session should:
    that fed stage-1 design.
 8. Consult `rustc-references.md` when a rustc-internal question
    surfaces.
-9. Pick up from `status.md`'s "Next action"; update `status.md`
-   at session end if anything material changed.
+9. **If picking up a specific stage N**: read
+   `stage-N/expectations.md` as your first action under that
+   stage. It lists incoming forward refs earlier stages surfaced;
+   treat as a checklist and tick entries off as you address them.
+10. Pick up from `status.md`'s "Next action"; update `status.md`
+    at session end if anything material changed.

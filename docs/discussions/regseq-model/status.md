@@ -119,11 +119,19 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-Stage 1 implementation is **closed**. Steps 1-6 are in
+Stage 1 implementation is **closed**. Steps 1-7 are in
 `crates/regseq-model/`; the foundation surface is complete and
 ready for stage 3 (Type system) to start expanding the empty `Ty`
 placeholder. The bridge (in `crates/regseq-driver/`) and stage 13
 (domain extensions) can also start consuming the stage-1 surface.
+
+When opening any stage in a new session, **first read
+`stage-N/expectations.md`** -- it lists the incoming forward refs
+earlier stages have surfaced for stage N. Treat each entry as a
+checklist item; tick them off as the implementation addresses
+them. The convention is documented in `memory.md` "Methodology
+rules" under "Forward expectations live in
+`stage-N/expectations.md`."
 
 State of the world:
 
@@ -201,8 +209,10 @@ Foundation-first order (all done):
 5. ~~`DefPathData` family + Instance / InstanceKind / GenericArg
    + StableCrateId + CrateInfo + forward-declared IDs + rank
    tables.~~ Commit `d78db53`.
-6. ~~Top-level `RegseqModel` + constructor + invariants.~~ This
-   commit.
+6. ~~Top-level `RegseqModel` + constructor + invariants.~~
+   Commit `6c16cc9`.
+7. ~~Canonical `render_def_path` helper + `PrettyPrinter<'a>`
+   scaffold.~~ Commit `5025755`.
 
 Stage-N implementation may now be delegated to a fresh
 implementer agent; the foundation has stabilized enough that the

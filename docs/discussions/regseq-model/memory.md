@@ -321,6 +321,11 @@ Known follow-ups surfaced during stage 1 that are deferred:
 
 In priority:
 
+0. **If you are opening a specific stage**: read
+   `stage-N/expectations.md` for that stage as your first action.
+   It lists the inbound forward refs earlier stages have surfaced
+   for stage N. Treat as a checklist; tick entries off as you
+   address them. (Reads 1-13 below give the cross-stage briefing.)
 1. This file (`memory.md`).
 2. `README.md` -- folder-level orientation.
 3. `status.md` -- current stage progress, active focus, next
@@ -350,10 +355,11 @@ In priority:
     a specific external project comes up.
 
 For an agent picking up stage-3 (Type system) implementation
-specifically: the load-bearing reads are 1, 3, 5, 6, and the
-sections of 9 covering `Ty` representation; the empty `Ty`
-placeholder lives in `crates/regseq-model/src/placeholders.rs`
-and graduates to its own module once expanded.
+specifically: the load-bearing reads are 0 (`stage-3/expectations.md`),
+1, 3, 5, 6, and the sections of 9 covering `Ty` representation;
+the empty `Ty` placeholder lives in
+`crates/regseq-model/src/placeholders.rs` and graduates to its
+own module once expanded.
 
 ## What this file is NOT
 
