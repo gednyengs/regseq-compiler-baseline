@@ -4,7 +4,7 @@ Stage 12 covers Rust Items: expands the `Item` placeholder to
 carry source-level item metadata (`def_path`, `kind`, attributes,
 visibility, ABI / linkage / inline hints, unsafe flag).
 
-The convention is described in `../memory.md` under "Forward
+The convention is described in `../README.md` under "Forward
 expectations live in `stage-N/expectations.md`."
 
 ## From stage 1
@@ -66,7 +66,7 @@ expectations live in `stage-N/expectations.md`."
 
 - **Lang-item / instance-kind classification.** Stage 12 covers
   the convergent-pattern-5 lang-item recognition described in
-  `prior-art/README.md`. Stage 13 builds on this for intrinsic
+  `stage-0/prior-art/README.md`. Stage 14 builds on this for intrinsic
   recognition (Q7).
 
 - **Bridge-synthesized Items.** Per the spec section on
@@ -100,7 +100,7 @@ expectations live in `stage-N/expectations.md`."
   before assigning `ItemId`s, with rustc's `Symbol` interner in
   scope. After sort + ItemId assignment, names are re-interned
   through the model's `StringInterner`. See
-  `stage-1/vocabulary.md` "Determinism (F4 in detail)" for the
+  `stage-1/spec-snapshot.md` "Determinism (F4 in detail)" for the
   full algorithm.
 
 - **`item_def_paths` parallel side table.** Bridge populates
@@ -108,3 +108,248 @@ expectations live in `stage-N/expectations.md`."
   originating `DefId` (or the bridge-derived hash for synthetic
   items). Construction invariant 2 enforces length parity at
   stage 1; content correctness lands here.
+
+## From stage 3
+
+- [ ] **Define and synthesise vtable type Items, vtable instance
+  Items, vtable shim Function Items, and closure synthesis
+  details** (from stage 3 D5 and D6).
+
+  *Stage-3 work already done.* The Ty-level shapes are pinned:
+  `Ty::Dynamic { auto_traits, vtable_ty: TyId }` (D5.1);
+  `Ty::Closure(ItemId, GenericArgs)` (D1.1 + D6.1 contract);
+  the `Ty::Closure` / `Ty::Struct` shared-Item connection (D6.3).
+  See `stage-3/spec-snapshot.md` Sections 1.10 and 1.11.
+
+  *Stage-12 deliverable.* Synthesise the following
+  bridge-synthesised Items (extending stage-1's
+  "Bridge-synthesized Items" framework at
+  `stage-1/spec-snapshot.md:901-942`):
+
+  ### A. Vtable type Items (D5)
+
+  Per `(Trait, projection_bindings)` reachable in the IR (via
+  `Ty::Dynamic` construction), synthesise:
+
+  - **One Item.**
+    - `kind`: `ItemKind::Struct`.
+    - `def_path` rendered form: `<vtable type for `Trait`<projection_args>>`
+      (or alternative; pick a form distinct from the per-(Trait,
+      SelfTy) instance Item below).
+    - `def_path_hash`: `hash((trait_def_path_hash,
+      projection_args_canonical_hash))`. Stable across builds.
+    - `crate_id`: per `stage-1/spec-snapshot.md:931-933`.
+    - DefPathData segment representation: pick concrete encoding
+      (overload an existing variant, or add a new
+      `DefPathData::VTableType` variant per stage-1's
+      anticipated revision procedure at
+      `stage-1/spec-snapshot.md:919-927`).
+
+  - **One `Ty::Struct(item, args, layout)`.** Interned via
+    `translate_adt`'s reservation flow with the synthesised
+    ItemId. Layout: synthesised directly from rustc's
+    `tcx.vtable_entries(trait_ref)` sequence (drop_glue ptr
+    field + size + align + per-method fn-ptr fields + supertrait
+    vtable ptrs + Vacant slots for non-dispatchable methods, per
+    `stage-1/spec-snapshot.md:884-895`). Field types use **erased**
+    receivers (`*const ()` / `*mut ()`) per the rustc vtable
+    convention.
+
+    *Vacant slot representation.* Each `Vacant` entry from
+    rustc's `tcx.vtable_entries` corresponds to a
+    non-dispatchable method (e.g., a method with a `Self: Sized`
+    bound). Stage-12 must represent these as **explicit
+    placeholder fn-pointer fields with a fixed null
+    initializer** in the vtable instance, *not* as omitted
+    fields. The rationale: stage-11's rewriting pass identifies
+    methods by their position in `tcx.vtable_entries`, and that
+    position must align with the field index in the vtable
+    `Ty::Struct`. Omitting Vacant entries would shift indices
+    and break method-index lookup; using an explicit placeholder
+    preserves index alignment with rustc's vtable layout. The
+    placeholder field type is the same erased fn-pointer shape
+    as a normal method entry; the instance initialiser sets it
+    to `0` (NULL).
+
+  ### B. Vtable instance Items (D5)
+
+  Per `(Trait, ConcreteImpl)` reachable (via `Cast::Unsize`
+  rvalues at coercion sites; stage-11's pass triggers
+  registration), synthesise:
+
+  - **One Item per stage-1's reservation at
+    `stage-1/spec-snapshot.md:910-927`**:
+    - `kind`: `ItemKind::Static`.
+    - `def_path` rendered form: `<vtable for `Trait` for
+      `SelfTy`>` (stage-1's existing reservation).
+    - `def_path_hash`: `hash((trait_def_path_hash,
+      self_ty_canonical_hash))` (stage-1's existing reservation).
+    - DefPathData segment representation: same as the type Item
+      above (or distinct -- stage-1 anticipates either choice).
+
+  - **One Instance** with:
+    - `InstanceKind::Static { ty: <vtable type Item's
+      Ty::Struct's TyId>, init: <ConstId for the const aggregate> }`.
+    - `init` references the drop-in-place shim Function Item's
+      InstanceId (per C.2 below) plus per-method shim Function
+      Item InstanceIds (one per method, per C.1 below) plus
+      const size/align values, in the field order of the vtable
+      type. **Both** the drop slot and the method slots use
+      shims rather than raw concrete-receiver Instances, because
+      the vtable fn-pointer field types are erased-receiver
+      throughout.
+
+  ### C. Vtable shim Function Items (D5)
+
+  Two families of shims, both motivated by the same
+  erased-vs-concrete receiver mismatch -- vtable fn-pointer slots
+  use erased receivers (`*const ()` / `*mut ()`); impl methods
+  and rustc's `DropGlue` Instance use concrete receivers.
+
+  **C.1 Method shims.** Per `(Trait, ConcreteImpl, method)`
+  (where method ranges over the trait's dispatchable methods),
+  synthesise:
+
+  - **One Function Item** (rustc precedent:
+    `InstanceKind::VTableShim` per
+    `stage-1/spec-snapshot.md:786-805`):
+    - `kind`: `ItemKind::Function`.
+    - `def_path` rendered form: pick a synthetic form (e.g.,
+      `<shim for `Trait`::`method` for `SelfTy`>`).
+    - Body: takes erased receiver (`*const ()` or `*mut ()`),
+      casts to concrete (`&SelfTy` or `&mut SelfTy`), tail-calls
+      the lifted impl method (which has concrete receiver per
+      `stage-1/spec-snapshot.md:597-603`).
+    - Signature: matches the vtable type Item's corresponding
+      function-pointer field (erased receiver).
+
+  **C.2 Drop-in-place shim.** Per `(Trait, ConcreteImpl)` (i.e.,
+  per concrete `SelfTy` reachable as a trait object), synthesise:
+
+  - **One Function Item**:
+    - `kind`: `ItemKind::Function`.
+    - `def_path` rendered form: pick a synthetic form (e.g.,
+      `<drop shim for `SelfTy` for `Trait`>`).
+    - Body: takes erased receiver `*mut ()`, casts to `*mut
+      SelfTy`, tail-calls `core::ptr::drop_in_place::<SelfTy>`
+      (rustc's `DropGlue` Instance for `SelfTy` per
+      `rustc_middle/src/ty/instance.rs:152-157`).
+    - Signature: `fn(*mut ())` -- erased receiver, matches the
+      vtable type Item's `drop_in_place` slot.
+
+  Without C.1 method shims, vtable method-slot initializers
+  cannot type-check; without the C.2 drop-in-place shim, the
+  vtable's drop slot has the same problem -- rustc's
+  `tcx.vtable_entries` resolves the drop entry to concrete
+  `drop_in_place::<SelfTy>` per
+  `rustc_middle/src/ty/vtable.rs:121-130`, whose `fn(*mut
+  SelfTy)` signature does not type-equal the vtable slot's
+  `fn(*mut ())`. Both shim families bridge the erased-receiver
+  gap with identical synthesis machinery; the only difference is
+  what the shim tail-calls (a lifted impl method vs.
+  `drop_in_place::<SelfTy>`).
+
+  ### D. `RegseqModel.vtables` dedup table (D5)
+
+  - **Schema:** `vtables: HashMap<(DefPathHash, ArgsKey),
+    ItemId>`. Key components are IR types (`DefPathHash` is a
+    stage-1 concept; `ArgsKey` is the F4-2 deep-canonicalizer
+    output for `GenericArgs` per `stage-3/spec-snapshot.md` Section
+    3.1); zero rustc deps (Q1 preserved). Using `ArgsKey` rather
+    than raw `GenericArgs` ensures the key is stable cross-build
+    (raw `GenericArgs` carry `TyId`/`ConstId` whose integer
+    values may differ across builds per Section 3.2's cross-build
+    determinism rule; only canonical forms are stable).
+  - **Population:** by the bridge during type translation, when
+    `rustc::TyKind::Dynamic` is encountered. The bridge mints
+    the vtable type Item (one-shot) and caches its ItemId for
+    repeat encounters of the same `(Trait,
+    projection_bindings)`. The `ArgsKey` is computed once per
+    insertion via the deep canonicalizer over the projection
+    args.
+  - **Serde:** mark as `#[serde(skip)]` (bridge-only,
+    non-serialized); rebuild on deserialize from
+    `RegseqModel.items` by walking synthesised vtable type Items
+    and re-keying by `(trait_def_path_hash, ArgsKey-of-
+    projection_args)`. Mirrors how `TyInterner.lookup` is
+    rebuilt at deserialize per `stage-3/spec-snapshot.md` Section
+    3.2's serialization rules.
+
+  ### E. Closure captures-struct Items (D6)
+
+  Per closure encountered in MIR, synthesise:
+
+  - **One Item.**
+    - `kind`: `ItemKind::Struct`.
+    - `def_path`: rustc's closure DefPath verbatim (uses
+      `DefPathData::Closure` segment per
+      `stage-1/spec-snapshot.md:472`).
+    - Fields: from rustc's `tupled_upvars_ty()` (per
+      `stage-3/findings-rustc-draft.md` A.3:125), flattened to
+      named fields (`_0`, `_1`, ...).
+    - Layout: from `tcx.layout_of(closure_ty)`.
+
+  - **Two Ty entries** for the same Item:
+    - `Ty::Closure(item, args)` -- identity view, no inline
+      layout (D1.1).
+    - `Ty::Struct(item, args, layout)` -- layout-bearing view.
+    - Connection: shared `(ItemId, GenericArgs)` per D6.3;
+      consumers use `model.types.find` to navigate.
+
+  ### F. Closure call-method Function Items (D6)
+
+  Per closure, synthesise 1-3 Function Items based on
+  `ClosureKind` (per `stage-3/findings-rustc-draft.md`
+  A.3:127):
+
+  - **`FnOnce`-typed closure** -> `call_once`.
+  - **`FnMut`-typed closure** -> `call_mut` + inherited
+    `call_once`.
+  - **`Fn`-typed closure** -> `call` + inherited `call_mut` +
+    inherited `call_once`.
+
+  Each Function Item:
+  - `kind`: `ItemKind::Function`.
+  - `def_path`: closure's DefPath as parent +
+    `ValueNs(intern("call" | "call_mut" | "call_once"))` segment
+    with disambiguator 0 (D6.2).
+  - Signature: substituted from `closure_sig_as_fn_ptr_ty`
+    (`stage-3/findings-rustc-draft.md` A.3:108-114), with the
+    captures struct as receiver:
+    - `call_once`: receiver by value.
+    - `call_mut`: receiver by `&mut`.
+    - `call`: receiver by `&`.
+
+  ### G. Closure drop-glue Function Item (D6)
+
+  Iff the captures need dropping (any field has non-trivial
+  drop), synthesise a drop-glue Function Item:
+
+  - `kind`: `ItemKind::Function`.
+  - Body: `drop_in_place` semantics for the captures struct.
+  - Handled by the same drop-glue machinery used for any other
+    struct with non-trivial fields per
+    `stage-1/spec-snapshot.md:686-693`; not closure-specific.
+
+  *Cross-refs.*
+  - `stage-3/spec-snapshot.md` Sections 1.10, 1.11, 4.9, 4.10
+    (full SESSION-A spec).
+  - `stage-3/discussions.md` Section 1 D5 / D6 entries; Section
+    2.6 region-erasure primer.
+  - `stage-1/spec-snapshot.md:786-805` (rustc InstanceKind including
+    Virtual / VTableShim); :820-868 (current six-variant
+    InstanceKind); :884-895 (vtable Ty deferred to stage 9/12);
+    :901-942 (Bridge-synthesized Items framework, vtable Static
+    Item reservation).
+  - `stage-1/spec-snapshot.md:597-603` (impl-method lifting with
+    concrete receivers; motivates the vtable shim need).
+  - `stage-1/spec-snapshot.md:472`, `:545-554`
+    (`DefPathData::Closure` and verbose anon-namespace
+    rendering); `:600-611` (impl-method lifting for closure call
+    methods); `:655-659` (`GenericArg` has no lifetime variant).
+  - `stage-3/findings-rustc-draft.md` A.3 (`ClosureArgs`,
+    `ClosureKind`), A.4 (`Dynamic`).
+  - `stage-3/prior-art/charon.md` F.2 (closure synthesis), F.3
+    (vtable synthesis).
+  - `stage-3/prior-art/mrustc.md` F (closures-as-structs, fat
+    pointers).
