@@ -1,4 +1,9 @@
-# Stage 1: Vocabulary Specification
+# Stage 1 RegseqModel Spec Snapshot
+
+> **Snapshot at close of stage 1.** Frozen historical artifact
+> preserving stage 1's contribution at its close, including the
+> full audit-shape decision text. The current RegseqModel spec
+> lives in top-level [`../spec.md`](../spec.md).
 
 The foundational table-and-id scaffolding that every later stage of
 RegseqModel rides on. Specifies five components: ID types, the string
@@ -37,7 +42,7 @@ Out of scope (deferred to later stages):
 - Place / Operand / Rvalue / Statement / Terminator / BasicBlock /
   Body shapes (stages 5-11).
 - The `Item` enum and Item-kind classification (stage 12).
-- Domain extensions (stage 13).
+- Domain extensions (stage 14).
 - Bridge translation logic (separate document, post-spec).
 
 Stage 1 forward-declares ID types like `TyId`, `ConstId`, `BodyId`,
@@ -66,9 +71,9 @@ not the input.
 | Closures | Already MIR-desugared to struct + method; mirrored as such | Stage 11/12 |
 | `Drop` terminator | Lowered to `Call` targeting drop-glue `Instance` | Stage 9 |
 | Trait objects | Vtable as Static `Instance` of mixed-aggregate type matching rustc's `tcx.vtable_entries` sequence: `MetadataDropInPlace` (fn ptr) + `MetadataSize` + `MetadataAlign` + per-method fn pointers + supertrait vtable pointers (`TraitVPtr`) + `Vacant` slots for non-dispatchable fns. See `rustc-excerpts.md` section 9. Dynamic dispatch is indirect call through the loaded fn ptr. | Stage 9, 12, 13 |
-| `&T` | `Pointer { mutability: Const, provenance: SharedBorrow, pointee }` -> `const T*` | Stage 3 |
-| `&mut T` | `Pointer { mutability: Mut, provenance: UniqueBorrow, pointee }` -> `T*`; codegen MAY emit `T* restrict` only in declaration contexts where unique-borrow provenance is preserved (function parameters and locals with no escape into stored state, returns, or raw-pointer reborrows). Codegen decides per-context; the type itself does not bake `restrict`. | Stage 3 / 9 |
-| `*const T` / `*mut T` | `Pointer { mutability: Const \| Mut, provenance: Raw, pointee }` -> `const T*` / `T*` | Stage 3; no `restrict` (raw pointers may alias) |
+| `&T` | `Ty::Ref(TyId, Provenance::SharedBorrow)` -> `const T*` (drops `const` if pointee transitively contains `UnsafeCell`, per stage-3 D7/D8) | Stage 3 |
+| `&mut T` | `Ty::Ref(TyId, Provenance::UniqueBorrow)` -> `T*`; codegen MAY emit `T* restrict` only in declaration contexts where unique-borrow provenance is preserved (function parameters and locals with no escape into stored state, returns, or raw-pointer reborrows). Codegen decides per-context; the type itself does not bake `restrict`. | Stage 3 / 9 |
+| `*const T` / `*mut T` | `Ty::Ptr(TyId, Mutability::Not \| Mut)` -> `const T*` / `T*`. Raw provenance is encoded by the variant tag (`Ty::Ptr` vs `Ty::Ref`), not by an enum value -- there is no `Provenance::Raw`. | Stage 3; no `restrict` (raw pointers may alias) |
 | `Result`, `Option`, ADTs | Tagged unions or sum-of-product structs via `Ty::Enum` | Stage 3, 4 |
 | `match`, `?` | Already MIR-lowered to control flow | Stages 8, 9 |
 | `impl` blocks | Lifted; not represented as Items (see "Lifting `impl` items") | This stage |
@@ -81,7 +86,7 @@ not the input.
 | `async fn` | Reject if encountered (no_std drivers don't use async) | n/a |
 | `global_asm!` | Reject if encountered (driver code uses inline asm at fn level, not module level) | n/a |
 | `Vec`, `String`, `Box`, other std | **N/A -- not usable in regseq specs (`no_std`, no `alloc`)** | n/a |
-| `#[rseq::*]` attributes | Structured `DomainAttr` on `Item` / `Instance` | Stage 13 |
+| `#[rseq::*]` attributes | Structured `DomainAttr` on `Item` / `Instance` | Stage 14 |
 
 This table is descriptive, not exhaustive: it pins the
 already-decided lowerings and serves as a check on future stage
@@ -138,11 +143,15 @@ newtype_index! {
 ```
 
 expands to a struct with a `u32` (or niche-equivalent) field, an
-`Idx` impl, and derives for `Copy`, `Clone`, `Eq`, `PartialEq`, `Ord`,
-`PartialOrd`, `Hash`, `Debug`. The implementation may borrow rustc's
-macro shape (in the `rustc_index_macros` crate) or hand-roll one;
-the IR-side stability contract is just that all IDs satisfy `Idx +
-Serialize + Deserialize + Hash + Ord`.
+`Idx` impl, derives for `Copy`, `Clone`, `Eq`, `PartialEq`, `Ord`,
+`PartialOrd`, `Hash`, `Debug`, and an associated `pub const ZERO:
+Self = Self::from_u32(0);` constant for the index-0 sentinel
+pattern (used e.g. as `SourceFileId::ZERO`, `StringId::ZERO`; see
+"Synthesized source-file sentinel" below). The implementation may
+borrow rustc's macro shape (in the `rustc_index_macros` crate) or
+hand-roll one; the IR-side stability contract is that all IDs
+satisfy `Idx + Serialize + Deserialize + Hash + Ord` and expose
+the `ZERO` const.
 
 `Serialize` / `Deserialize` must not be field-derived (i.e., a bare
 `#[derive(Serialize, Deserialize)]` on the niche-bearing struct), nor
@@ -238,7 +247,7 @@ behavior: `LocalId(0)` is the implicit return slot of every body, and
 
 ### IDs added at later stages
 
-Stage 13 (domain extensions) may introduce additional IDs (e.g.,
+Stage 14 (domain extensions) may introduce additional IDs (e.g.,
 `RegisterId`, `IsrId`). They follow the same conventions and live in
 the same single namespace per kind.
 
@@ -866,7 +875,7 @@ rich data in the appropriate stage's table:
   (stage 3 will define `Ty::Struct { fields }`,
   `Ty::Enum { variants }`, `Ty::Union { fields }`).
 
-Stage 13 may extend `InstanceKind` with domain-specific variants
+Stage 14 may extend `InstanceKind` with domain-specific variants
 (e.g., an `Isr` subkind of `Function`). For stage 1, the six
 variants above are the closed set.
 
@@ -888,11 +897,20 @@ aggregate matching rustc's `tcx.vtable_entries(trait_ref)`
 sequence: drop-glue fn pointer, size, alignment, then
 per-trait-method fn pointers, supertrait vtable pointers, and
 `Vacant` slots for non-dispatchable methods (see
-`rustc-excerpts.md` section 9). Each method fn pointer is the
-lifted `Instance` for the corresponding method. The precise
-struct layout (`Ty`) for the vtable's mixed-aggregate value is
-defined in stage 9/12 when vtable lowering is implemented;
-stage 1 reserves the policy.
+`rustc-excerpts.md` section 9). Both the drop-glue slot and each
+method fn pointer reference synthesized **vtable shim** Function
+Items (per stage-12 expectations, section C: a drop-in-place
+shim per `(Trait, ConcreteImpl)` plus a method shim per
+`(Trait, ConcreteImpl, method)`); each shim takes an erased
+receiver (`*const ()` or `*mut ()`), casts to the concrete
+receiver, and tail-calls the lifted impl-method `Instance` (or
+concrete `drop_in_place::<SelfTy>` for the drop slot). The shims
+bridge the type mismatch between the vtable slot's erased-
+receiver function-pointer signature and the concrete-receiver
+signature on the lifted impl method or rustc's `DropGlue`
+Instance. The precise struct layout (`Ty`) for the vtable's
+mixed-aggregate value is defined in stage 9/12 when vtable
+lowering is implemented; stage 1 reserves the policy.
 
 Pretty-printer rendering follows rustc's MIR-dump convention:
 `crate::module::Item::<u32>` for `Instance { item: my_func,
@@ -1375,7 +1393,7 @@ deferred:
   internal IDs / self-describing IR), Q3 (single-level IR), Q5
   (insta + textual pretty-printer + serde JSON), Q6 (multi-crate
   strategy), Q7 (intrinsic recognition).
-- `memory.md` -- methodology rules, especially "no defensive
+- `README.md` -- methodology rules, especially "no defensive
   fallbacks" and "compiler-theory-first."
 - rustc-internal landmarks (against the pinned toolchain):
   - `compiler/rustc_index/src/idx.rs` -- the `Idx` trait.

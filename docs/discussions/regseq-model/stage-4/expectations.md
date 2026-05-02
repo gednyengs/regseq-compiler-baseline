@@ -4,7 +4,7 @@ Stage 4 expands the `Const` placeholder
 (`crates/regseq-model/src/placeholders.rs`) into the full
 constants-and-literals vocabulary.
 
-The convention is described in `../memory.md` under "Forward
+The convention is described in `../README.md` under "Forward
 expectations live in `stage-N/expectations.md`."
 
 ## From stage 1
@@ -14,7 +14,7 @@ expectations live in `stage-N/expectations.md`."
   (`GenericArg::Const(ConstId)`); two builds must produce
   identical fingerprints for equivalent const-evaluated values.
   Stage 1 reserved the rule; stage 4 pins the canonical const
-  representation. See the F4-2 section of `stage-1/vocabulary.md`.
+  representation. See the F4-2 section of `stage-1/spec-snapshot.md`.
 
 - **Const types covered.** Per the spec, stage 4 covers scalars,
   byte arrays, aggregate constants (struct / array / enum

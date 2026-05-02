@@ -10,12 +10,12 @@ Thirty-nine issues raised across seven review passes; all addressed.
 | Round | Reviewer | Target | Verdict | Issues |
 |---|---|---|---|---|
 | 1 | Codex (gpt-5.5) | `research.md` | REVISE_BEFORE_PROCEEDING | 5 |
-| 2 | Codex (gpt-5.5) | `vocabulary.md` (initial) | REVISE_BEFORE_IMPL | 6 |
-| 3 | external (no repo access) | `vocabulary.md` (post-round-2) | REVISE_BEFORE_IMPL | 5 |
-| 4 | Codex (gpt-5.5) | `vocabulary.md` (implementation-readiness) | REVISE_BEFORE_APPLYING | 2 |
-| 5 | Codex (gpt-5.5) | `vocabulary.md` (round-5 monomorphization + C-semantics revision) | REVISE | 6 |
-| 5e | external (no repo access) | `vocabulary.md` (post-round-5-Codex) | REVISE_BEFORE_IMPL | 10 |
-| 6 | Codex (gpt-5.5) | `vocabulary.md` (post-round-5e cascade check) | REVISE | 5 |
+| 2 | Codex (gpt-5.5) | `spec-snapshot.md` (initial) | REVISE_BEFORE_IMPL | 6 |
+| 3 | external (no repo access) | `spec-snapshot.md` (post-round-2) | REVISE_BEFORE_IMPL | 5 |
+| 4 | Codex (gpt-5.5) | `spec-snapshot.md` (implementation-readiness) | REVISE_BEFORE_APPLYING | 2 |
+| 5 | Codex (gpt-5.5) | `spec-snapshot.md` (round-5 monomorphization + C-semantics revision) | REVISE | 6 |
+| 5e | external (no repo access) | `spec-snapshot.md` (post-round-5-Codex) | REVISE_BEFORE_IMPL | 10 |
+| 6 | Codex (gpt-5.5) | `spec-snapshot.md` (post-round-5e cascade check) | REVISE | 5 |
 
 ## Round 1 -- review of `research.md`
 
@@ -91,7 +91,7 @@ present (`lo <= hi`, `hi <= content.len()`).
 
 ---
 
-## Round 2 -- review of `vocabulary.md`
+## Round 2 -- review of `spec-snapshot.md`
 
 **Scope**: the spec proper. Type sketches, ID inventory,
 StringInterner, SourceFile/Span, DefPath form, Instance,
@@ -189,7 +189,7 @@ consistency rule when it specifies the placement of `def_path` on
 
 ---
 
-## Round 3 -- external review of `vocabulary.md` (post-round-2)
+## Round 3 -- external review of `spec-snapshot.md` (post-round-2)
 
 **Scope**: the spec proper, after round-2 fixes had landed. External
 reviewer with no repo access, working from the file-attachment
@@ -290,7 +290,7 @@ that cross file boundaries.
 
 ## Round 4 -- implementation-readiness revision review
 
-**Scope**: two proposed revisions to `vocabulary.md` surfaced
+**Scope**: two proposed revisions to `spec-snapshot.md` surfaced
 by an implementation-readiness analysis just before stage-1 step-1
 implementation began. Revision A reopens the serde-mechanism
 paragraph addressed in R3.2; revision B adds `'static` to the `Idx`
@@ -315,7 +315,7 @@ explicitly ban `#[serde(transparent)]` over the niche-bearing inner
 field (which would also leak the internal representation).
 
 **Resolution**: rewrote the paragraph at lines 100-110 of
-`vocabulary.md`. The new wording (a) bans field-derive and
+`spec-snapshot.md`. The new wording (a) bans field-derive and
 `#[serde(transparent)]` on ID newtypes explicitly, (b) names two
 acceptable routes -- hand-rolled `impl Serialize` / `impl
 Deserialize` *or* `#[serde(into = "u32", try_from = "u32")]` with
@@ -336,7 +336,7 @@ dies at the bridge) and the model invariant later in the spec ("No
 `'static`. The trait bound did not surface this.
 
 **Resolution**: added `'static` to the `Idx` trait bound at line 58
-of `vocabulary.md`. Appended a paragraph to the rationale
+of `spec-snapshot.md`. Appended a paragraph to the rationale
 calling out that the bound makes the existing owned/`'tcx`-free IR
 invariant explicit at the trait boundary, with rustc's
 `rustc_index::Idx` (also `'static`-bound) as secondary precedent.
@@ -415,13 +415,13 @@ were implied by Q2 + Q3 but not pinned. Without an explicit
 framing, future stages would re-litigate each construct.
 
 **Resolution**: added a methodology rule to
-`docs/discussions/regseq-model/memory.md` ("C semantics with
+`docs/discussions/regseq-model/README.md` ("C semantics with
 information preservation") establishing that RegseqModel is a
 C-shaped IR, the bridge does the desugaring, and information
 rustc gives us for free is preserved when downstream
 stakeholders benefit -- but always per-construct interrogated.
 Added a "Rust -> C lowering reference" section to
-`vocabulary.md` enumerating the already-decided
+`spec-snapshot.md` enumerating the already-decided
 construct lowerings as a cross-stage check. The table is
 descriptive (pins what is decided) and informs stage-3/4/9/11/12
 work without dictating shape.
@@ -653,7 +653,7 @@ UniqueBorrow }`; raw `*const T` / `*mut T` lower to
 where `restrict` is safe to emit (function parameters and
 locals with no escape; not stored fields, returns, or
 reborrowed raw pointers). Updated the methodology rule in
-`memory.md` to remove the over-strong claim.
+`README.md` to remove the over-strong claim.
 
 ### R5.16 -- SENTINEL (LOW): naming consistency
 
@@ -711,14 +711,14 @@ to a valid entry in `sigs`, including for foreign declarations."
 ### R5.19 -- INTERNAL_CONSISTENCY (MEDIUM): rustc-excerpts.md section 7 still described old interning key
 
 The R5.7 fix introduced `RegseqInstanceKey` (4-field key) and
-made it canonical in `vocabulary.md`. But
+made it canonical in `spec-snapshot.md`. But
 `rustc-excerpts.md` section 7's commentary still said "the
 interning key in stage 1 is `(InstanceKind, args)` -- the same
 shape rustc uses." This is stale.
 
 **Resolution**: updated the section-7 explanatory paragraph to
 describe `RegseqInstanceKey` (the four-field shape) and
-explicitly reference `vocabulary.md` as the
+explicitly reference `spec-snapshot.md` as the
 authoritative definition.
 
 ### R5.20 -- FORWARD_FIT (MEDIUM): vtable DefPathData punt was structurally ambiguous
@@ -776,7 +776,7 @@ the next reviewer might profitably probe:
   `ConstId`, `BodyId`, `Item`, etc. Whether the table shapes will
   actually accommodate what those stages produce is not
   empirically verified.
-- *Cross-stage interaction.* Domain extensions (stage 13:
+- *Cross-stage interaction.* Domain extensions (stage 14:
   intrinsics, registers, ISRs) need to ride on the stage-1
   vocabulary. Whether the convention scales to that workload has
   not been stress-tested.

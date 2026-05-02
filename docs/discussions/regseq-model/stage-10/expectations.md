@@ -3,7 +3,7 @@
 Stage 10 covers MIR basic blocks and introduces the `BlockId`
 typed-ID.
 
-The convention is described in `../memory.md` under "Forward
+The convention is described in `../README.md` under "Forward
 expectations live in `stage-N/expectations.md`."
 
 ## From stage 1

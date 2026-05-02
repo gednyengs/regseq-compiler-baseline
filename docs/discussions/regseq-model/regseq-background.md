@@ -43,10 +43,14 @@ the driver domain.
 - **`regseq_macros`**: Provides procedural macros that make it easier to define some Regseq constructs.
   These macros are completely expanded into valid Regseq rust code that uses the supported subset of Rust and
   Regseq constructs.
-- **`driver crate`**: This have two parts:
-  - The **regseq library**: this contains the primitives provided by the Regseq DSL. Driver authors use these primitives
-    to author device driver specifications. To avoid issues related to cross-crate resolutions, this should be a sub-module in the 
-    driver crate.
-  - The **driver specification**: this is the authored device driver specification that uses the **regseq library** and various Regseq-specific
-    attributes (`#[rseq::]`) to describe intent driver intent.
+- **`regseq` facade crate**: A separate crate (per architecture decision Q6) that contains the
+  primitives provided by the Regseq DSL. Driver authors use these primitives to author device driver
+  specifications. Cross-crate resolution is normalised by the bridge: the three-tier wrapper dispatch
+  (`PassthroughCallbacks` / `RegseqCallbacks` / `RegseqAwareCallbacks`) plus `always_encode_mir = true`
+  ensure upstream-crate MIR is consumable post-bridge regardless of which crate defined an item.
+  Recognition of regseq-aware crates is via `[package.metadata.regseq]` in `Cargo.toml`.
+- **`driver crate`**: The authored device driver specification crate. It depends on the
+  `regseq` facade crate for DSL primitives and uses Regseq-specific attributes (`#[rseq::]`) to
+  describe driver intent. The driver crate is the primary spec target; the `regseq` facade is
+  recognised as an aware dependency by the wrapper.
   

@@ -2,7 +2,7 @@
 
 This file lists incoming forward expectations -- things later
 stages have asked stage 1 to address. The convention is described
-in `../memory.md` "Methodology rules" under "Forward expectations
+in `../README.md` "Methodology rules" under "Forward expectations
 live in `stage-N/expectations.md`."
 
 ## From later stages

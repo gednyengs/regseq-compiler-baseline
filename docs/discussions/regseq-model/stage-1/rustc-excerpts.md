@@ -301,7 +301,7 @@ pub struct SourceFile {
 The spec's `SourceFile` keeps `name` (as `path: StringId`), `src`
 (as `content: Option<Arc<str>>`), `lines` (as `line_starts:
 Vec<u32>`). Multi-byte / normalization tables are deferred (see
-`vocabulary.md` "Open items").
+`spec-snapshot.md` "Open items").
 
 ### `SourceMap::lookup_byte_offset` (global -> file-local)
 
@@ -693,7 +693,7 @@ The doc-comment above the struct (`rustc_middle/src/ty/instance.rs:25-29`):
 ```
 
 The Regseq spec uses a richer interning key than rustc's
-`(InstanceKind, args)`, defined in `vocabulary.md` under
+`(InstanceKind, args)`, defined in `spec-snapshot.md` under
 "Instance" as `RegseqInstanceKey`:
 
 ```text

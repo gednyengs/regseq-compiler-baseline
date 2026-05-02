@@ -7,7 +7,7 @@ recorded here as binding unless explicitly revised; ambiguities
 surfaced during stage work are resolved against the rationale in
 this document.
 
-Decisions are grounded in `prior-art/README.md`. Each section cites
+Decisions are grounded in `stage-0/prior-art/README.md`. Each section cites
 the convergent patterns and per-project files that informed the
 choice.
 
@@ -64,8 +64,8 @@ overhead.
 
 ### References
 
-- `prior-art/rustc-codegen-c.md` -- two-crate split pattern.
-- `prior-art/rustc-public.md` -- the further bridge-crate split,
+- `stage-0/prior-art/rustc-codegen-c.md` -- two-crate split pattern.
+- `stage-0/prior-art/rustc-public.md` -- the further bridge-crate split,
   with the publishability rationale that does not apply to us.
 
 ## Q2. `'tcx` boundary policy
@@ -170,11 +170,11 @@ then. Do not pay for it speculatively.
 
 ### References
 
-- `prior-art/rustc-public.md` -- the TLS / Tables / PhantomData
+- `stage-0/prior-art/rustc-public.md` -- the TLS / Tables / PhantomData
   scheme and what it solves.
-- `prior-art/smir-history.md` -- PR #115934, the `'tcx`-leak
+- `stage-0/prior-art/smir-history.md` -- PR #115934, the `'tcx`-leak
   history that motivated the scheme.
-- `prior-art/charon.md`, `prior-art/kani.md` -- eager-translation
+- `stage-0/prior-art/charon.md`, `stage-0/prior-art/kani.md` -- eager-translation
   precedents.
 
 ## Q3. IR layering: single-level
@@ -210,19 +210,19 @@ These follow from the decision; they are not separate decisions.
   variants, or by rewriting parts of the IR. The mechanism is
   chosen when each stage is specified; the IR design does not
   prescribe one.
-- **Domain extensions are part of the same IR.** Stage 13's
+- **Domain extensions are part of the same IR.** Stage 14's
   intrinsics, ordered regions, register access, ISR classification,
   etc. are additional enum variants or tags on existing variants
   -- not a separate layer above the MIR-mirror core. The
-  variant-vs-tag choice is per-construct and made during stage 13's
+  variant-vs-tag choice is per-construct and made during stage 14's
   specification.
 
 ### References
 
-- `prior-art/llvm-ir.md` -- single-IR model with intrinsics +
+- `stage-0/prior-art/llvm-ir.md` -- single-IR model with intrinsics +
   metadata.
-- `prior-art/compcert.md`, `prior-art/charon.md`,
-  `prior-art/verus.md`, `prior-art/prusti.md` -- counterexamples
+- `stage-0/prior-art/compcert.md`, `stage-0/prior-art/charon.md`,
+  `stage-0/prior-art/verus.md`, `stage-0/prior-art/prusti.md` -- counterexamples
   (multi-tier IRs).
 
 ## Q4. rustc integration point: `Callbacks`
@@ -305,11 +305,11 @@ Migration cost is bounded by the test infrastructure on the
 
 ### References
 
-- `prior-art/kani.md`, `prior-art/rustc-codegen-c.md`,
-  `prior-art/rustc-codegen-clr.md` -- the `CodegenBackend`
+- `stage-0/prior-art/kani.md`, `stage-0/prior-art/rustc-codegen-c.md`,
+  `stage-0/prior-art/rustc-codegen-clr.md` -- the `CodegenBackend`
   precedents and why their primary-job framing differs from
   Regseq's.
-- `prior-art/README.md` -- the integration-point fork in the road
+- `stage-0/prior-art/README.md` -- the integration-point fork in the road
   and the prior-art convergent signal.
 - `crates/regseq-driver/src/callbacks.rs`,
   `crates/regseq-driver/src/lib.rs` -- current `Callbacks`-based
@@ -426,10 +426,10 @@ Re-open the question if any of the following appears:
 
 ### References
 
-- `prior-art/mlir.md`, `prior-art/llvm-ir.md`,
-  `prior-art/rustc-codegen-c.md` -- FileCheck/lit precedent we are
+- `stage-0/prior-art/mlir.md`, `stage-0/prior-art/llvm-ir.md`,
+  `stage-0/prior-art/rustc-codegen-c.md` -- FileCheck/lit precedent we are
   consciously not following, with reasons.
-- `prior-art/README.md` -- fork D (test machinery) and fork E
+- `stage-0/prior-art/README.md` -- fork D (test machinery) and fork E
   (serialization format) sources.
 - rustc's `--emit=mir` output format -- the reference for the
   textual pretty-printer's shape.
@@ -558,7 +558,7 @@ commit `f0b2db1`:
      `no_codegen`, no `after_analysis`) and why.
    - `RegseqCallbacks::config` -- reciprocal comment that
      `register_tool` is also not injected here, with a pointer to
-     the methodology rule in `memory.md`.
+     the methodology rule in `README.md`.
 
 ### Re-open trigger
 
@@ -573,7 +573,7 @@ that expectation would be the signal to revisit.
 
 - Commit `f0b2db1` "feat: three-tier wrapper dispatch for
   regseq-aware crates" -- structural reference for the rebuild.
-- `prior-art/charon.md` -- Charon validates the rustc-options set
+- `stage-0/prior-art/charon.md` -- Charon validates the rustc-options set
   used by both callbacks (`always_encode_mir`, `mir_opt_level=0`,
   `mir_emit_retag`, `mir_preserve_ub`, disabling `CheckAlignment`).
 - Q1, Q2, Q3 in this document -- the architectural decisions that
@@ -652,7 +652,7 @@ explicitly rejects this.
 - Q6 -- intrinsic items live in the shared `regseq` crate by
   convention but the recognition rule does not depend on their
   location.
-- Methodology rule (`memory.md`): `core` is opaque (lang-item
+- Methodology rule (`README.md`): `core` is opaque (lang-item
   recognition); domain intrinsics are name-recognized via
   attribute; items outside the recognized vocabulary are rejected.
 
@@ -700,7 +700,7 @@ opaque-`core` methodology), drop-glue handling, and -- per Q7 --
 domain-intrinsic recognition by `#[rseq::intrinsic("NAME")]`
 attribute lookup against the bridge's closed name vocabulary.
 
-### Stage 13 (domain extensions) is independent of Q2
+### Stage 14 (domain extensions) is independent of Q2
 
 Domain extensions ride on top of stages 1-12 and do not interact
 with the `'tcx` boundary directly.

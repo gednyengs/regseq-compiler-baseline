@@ -5,7 +5,7 @@ the prior-art reading across four clusters, the convergent patterns that
 fall out of that reading, and the four stage-1 sub-decisions (F1-F4) that
 required explicit calls.
 
-This is *not* the spec. The spec lives at `vocabulary.md` (to be
+This is *not* the spec. The spec lives at `spec-snapshot.md` (to be
 authored after Codex review of this document). This is the evidence base
 that the spec rests on.
 
@@ -43,16 +43,16 @@ top-level container) plus a fit-for-Regseq judgment given Q1-Q7.
 - Cluster A (rustc internals + rustc_public): general-purpose agent over
   the pinned rustc-src checkout.
 - Cluster B (Rust-to-C compilers): explore agent over
-  `prior-art/rustc-codegen-c.md`, `rustc-codegen-clr.md`, `mrustc.md`,
+  `stage-0/prior-art/rustc-codegen-c.md`, `rustc-codegen-clr.md`, `mrustc.md`,
   `c2rust.md`.
 - Cluster C (Rust verification IRs): explore agent over
-  `prior-art/charon.md`, `kani.md`, `creusot.md`, `prusti.md`,
+  `stage-0/prior-art/charon.md`, `kani.md`, `creusot.md`, `prusti.md`,
   `verus.md`, `rust-stainless.md`, `mirai.md`.
-- Cluster D (general IR design): explore agent over `prior-art/llvm-ir.md`,
+- Cluster D (general IR design): explore agent over `stage-0/prior-art/llvm-ir.md`,
   `mlir.md`, `compcert.md`.
 
 Synthesis is mine; per-cluster findings condensed to the parts that bear
-on stage-1 vocabulary. Per-project files in `prior-art/` remain the raw
+on stage-1 vocabulary. Per-project files in `stage-0/prior-art/` remain the raw
 evidence.
 
 ## Findings by cluster
@@ -494,12 +494,12 @@ Architectural decisions:
 Prior-art clusters:
 
 - Cluster A (rustc internals, rustc_public): `rustc-references.md` for
-  rustc-src paths; `prior-art/rustc-public.md`; `prior-art/smir-history.md`.
-- Cluster B (Rust-to-C): `prior-art/rustc-codegen-c.md`,
+  rustc-src paths; `stage-0/prior-art/rustc-public.md`; `stage-0/prior-art/smir-history.md`.
+- Cluster B (Rust-to-C): `stage-0/prior-art/rustc-codegen-c.md`,
   `rustc-codegen-clr.md`, `mrustc.md`, `c2rust.md`.
-- Cluster C (verification IRs): `prior-art/charon.md`, `kani.md`,
+- Cluster C (verification IRs): `stage-0/prior-art/charon.md`, `kani.md`,
   `creusot.md`, `prusti.md`, `verus.md`, `rust-stainless.md`, `mirai.md`.
-- Cluster D (general IR design): `prior-art/llvm-ir.md`, `mlir.md`,
+- Cluster D (general IR design): `stage-0/prior-art/llvm-ir.md`, `mlir.md`,
   `compcert.md`.
 
 Specific rustc-src landmarks (against the pinned toolchain):

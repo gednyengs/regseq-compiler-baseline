@@ -80,9 +80,9 @@ R5.6 in `review-log.md`. In summary:
   ABI / visibility (which live on `Item`, stage 12).
 
 - **R5.3 (Rust → C semantics framing).** A new methodology rule
-  was added to `memory.md` ("C semantics with information
+  was added to `README.md` ("C semantics with information
   preservation") and a new "Rust → C lowering reference" section
-  was added to `vocabulary.md`. Together, they pin that
+  was added to `spec-snapshot.md`. Together, they pin that
   RegseqModel is a C-shaped IR, the bridge does the desugaring
   (drop glue → regular Calls; trait objects → vtables; closures
   → structs + methods; etc.), and source-side annotations are
@@ -118,9 +118,9 @@ through R5.6 are MEDIUM-LOW.
 | File | Role for this review |
 |---|---|
 | **PRIMARY (must read)** | |
-| `vocabulary.md` | The revised specification. The new "Rust → C lowering reference," "Lifting `impl` items," "Instances: monomorphized items" (incl. `Instance`, `InstanceKind`, interning rule, F4-2 ordering, sentinel rule), the updated `RegseqModel` struct, the renumbered construction invariants, and the updated conventions table are the round-5 substance. |
+| `spec-snapshot.md` | The revised specification. The new "Rust → C lowering reference," "Lifting `impl` items," "Instances: monomorphized items" (incl. `Instance`, `InstanceKind`, interning rule, F4-2 ordering, sentinel rule), the updated `RegseqModel` struct, the renumbered construction invariants, and the updated conventions table are the round-5 substance. |
 | `review-log.md` | Rounds 1-4 already addressed; do not re-flag those issues. Round-5 entries (R5.1-R5.6) document the new revisions and their rationale. The "Notes for the next reviewer" section flags areas not yet adversarially probed. |
-| `memory.md` | Project briefing and methodology rules. The new "C semantics with information preservation" rule is the foundational policy that R5.3 codifies. The pre-existing rules (`core` is opaque, no defensive fallbacks, compiler-theory-first, etc.) still apply. |
+| `README.md` | Project briefing and methodology rules. The new "C semantics with information preservation" rule is the foundational policy that R5.3 codifies. The pre-existing rules (`core` is opaque, no defensive fallbacks, compiler-theory-first, etc.) still apply. |
 | `architecture.md` | Q1-Q7 architectural decisions the spec sits inside. SETTLED. R5 must not contradict any of them. Q2 ("eager translation; no `'tcx` past the bridge") and Q3 ("single-level IR") are particularly load-bearing for round 5. |
 | **STRONGLY RELEVANT** | |
 | `research.md` | F1-F4 sub-decisions. F2 (spans inline, no SpanId) and F4 (item determinism) interact with R5.5 (sentinel) and R5.1 (F4-2 ordering). |
@@ -128,14 +128,14 @@ through R5.6 are MEDIUM-LOW.
 | `rustc-excerpts.md` | Curated quotations from the pinned rustc-src checkout. Treat as authoritative for rustc-internal claims (especially `InstanceKind` taxonomy, drop glue, vtables, `SymbolName`). R5.1's interning correctness depends on these. |
 | `status.md` | Current state of stage-1 implementation. Steps 1-4 have shipped (commits `b8f1e67`, `fd0d3c8`, `82aaaed`, `f34df65`); step 5 is queued behind this review. |
 | **OPTIONAL (use for cross-checks)** | |
-| `prior-art/README.md` | Synthesis of prior-art research that informed the architectural decisions. |
-| `prior-art/rustc-public.md` | The "BodyBuilder + monomorphization" pattern R5 leans on. |
-| `prior-art/charon.md`, `prior-art/llvm-ir.md`, `prior-art/rustc-codegen-c.md`, `prior-art/kani.md` | Per-project prior art. Use to verify any "X does Y" claim before challenging. |
+| `stage-0/prior-art/README.md` | Synthesis of prior-art research that informed the architectural decisions. |
+| `stage-0/prior-art/rustc-public.md` | The "BodyBuilder + monomorphization" pattern R5 leans on. |
+| `stage-0/prior-art/charon.md`, `stage-0/prior-art/llvm-ir.md`, `stage-0/prior-art/rustc-codegen-c.md`, `stage-0/prior-art/kani.md` | Per-project prior art. Use to verify any "X does Y" claim before challenging. |
 
-Read order if approaching cold: `memory.md` first (briefing +
+Read order if approaching cold: `README.md` first (briefing +
 methodology), then `architecture.md` (Q1-Q7), then
 `review-log.md` Round 5 (the *what changed* and *why*),
-then `vocabulary.md` (the spec, with R5 sections in mind).
+then `spec-snapshot.md` (the spec, with R5 sections in mind).
 The other files are reference material; consult on demand.
 
 ## Out of scope
@@ -192,9 +192,9 @@ Specific probes:
 
 ### 2. C-semantics framing (R5.3)
 
-Is the methodology rule in `memory.md` internally consistent and
+Is the methodology rule in `README.md` internally consistent and
 free of contradictions with the existing rules? Does the
-"Rust → C lowering reference" table in `vocabulary.md`
+"Rust → C lowering reference" table in `spec-snapshot.md`
 match the methodology principle, or do any rows pass through
 source-side annotations as opaque metadata?
 
@@ -277,7 +277,7 @@ Specific probes:
   R5 implies a six-variant `ItemKind` mirroring `InstanceKind`.
   Is anything missing that stage 12 will be forced to add as a
   seventh variant?
-- Stage 13 (domain extensions) is allowed to extend
+- Stage 14 (domain extensions) is allowed to extend
   `InstanceKind`. Is the extension surface clean enough?
 
 ### 7. Cascade and consistency
@@ -316,7 +316,7 @@ Specific probes:
 ## Grounding rules
 
 - **Cite file and section for every claim.** Format:
-  `vocabulary.md "Lifting impl items"` is acceptable.
+  `spec-snapshot.md "Lifting impl items"` is acceptable.
   Line numbers are not required.
 - **Treat `rustc-excerpts.md` as authoritative** for any
   rustc-internal claim. Do not invent rustc behavior.
