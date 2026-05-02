@@ -42,7 +42,7 @@ use crate::source::Span;
 
 /// Context-bearing renderer over a `RegseqModel`.
 ///
-/// Stage 1 ships the shape; stages 3-13 fill in the
+/// Stage 1 ships the shape; stages 4-14 fill in the
 /// `unimplemented!()` per-type render methods as their IR types
 /// land.
 pub struct PrettyPrinter<'a> {
@@ -97,9 +97,14 @@ impl<'a> PrettyPrinter<'a> {
         unimplemented!("stage 12+ fills the top-level render")
     }
 
-    /// Type rendering. Filled in stage 3 (Type system).
+    /// Type rendering. Filled in stage 13 (type-system
+    /// pretty-printing). Stage 3 specified the closed `Ty` enum
+    /// but deferred the renderer-style decision (originally
+    /// reserved as D14) to stage 13, where the renderer's input
+    /// is fully populated by stage-11 (`FnSig`) and stage-12
+    /// (`Item` / DefPath) content.
     pub fn render_ty(&self, _ty: TyId) -> String {
-        unimplemented!("stage 3 fills render_ty")
+        unimplemented!("stage 13 fills render_ty")
     }
 
     /// Const rendering. Filled in stage 4 (Constants).
@@ -119,8 +124,9 @@ impl<'a> PrettyPrinter<'a> {
         )
     }
 
-    /// Instance rendering. Filled in stage 13.
+    /// Instance rendering. Filled in stage 14
+    /// (domain-specific extensions).
     pub fn render_instance(&self, _id: InstanceId) -> String {
-        unimplemented!("stage 13 fills render_instance")
+        unimplemented!("stage 14 fills render_instance")
     }
 }
