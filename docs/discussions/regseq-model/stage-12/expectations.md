@@ -353,3 +353,23 @@ expectations live in `stage-N/expectations.md`."
     (vtable synthesis).
   - `stage-3/prior-art/mrustc.md` F (closures-as-structs, fat
     pointers).
+
+## From stage 4
+
+- **`SyntheticItemKind::ConstMemoryStatic` family (or
+  equivalent).** Stage 4 D-4-1 deferred reference-typed const
+  handling for `&str` / `&[T]` literals (rustc
+  `mir::ConstValue::Slice` and `mir::ConstValue::Indirect` arms
+  targeting `GlobalAlloc::Memory(_)`). Closing the case
+  requires extending §13.3's `SyntheticItemKind` universe with
+  a new family backing immutable `Static` Items synthesised
+  from anonymous memory-content blobs, plus extending §13.4's
+  synthesised-DefPath construction with a memory-content-keyed
+  segment encoding so two builds with identical byte content
+  produce the same synthesised `DefPathHash`. Stage 12 may
+  land the family as part of broader Item-synthesis work;
+  alternatively, stage 4 may close the family within a follow-
+  on D-4-K decision while remaining stage-12-coordinated for
+  any parallel §13 changes. See `stage-4/spec-snapshot.md`
+  §9.7 ("Stage-4 deferred: reference-typed const handling")
+  and `stage-4/status.md` "Stage-4-specific deferred items."
