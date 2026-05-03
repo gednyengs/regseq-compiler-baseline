@@ -636,17 +636,25 @@ inner interners are validated first.
    `target` well-formedness (invariant 15), including
    `scalar_layouts` populated; `build` well-formedness
    (invariant 17).
-4. Validate `ConstInterner` content uniqueness (no duplicate
-   canonical values) — type-level const phase per §9.7
-   "Const validation phase split." Validates
-   `ConstInterner.lookup` injectivity over canonical-content
-   keys for all variants, and validates that every `ConstId`
-   appearing in `GenericArg::Const(_)` positions resolves to a
-   type-level scalar variant (`Bool` / `Char` / `Int` / `Uint`
-   / `Float`) with a well-formed canonical encoding. Value-
-   level sub-reference resolution (e.g., `NullPtr`'s pointee
-   `TyId`, `Reloc`'s `InstanceRef` projection) defers to step 9
-   after `TyInterner` and `instances` validate.
+4. Validate `ConstInterner` type-level content — the
+   type-level const phase per §9.7 "Const validation phase
+   split." Validates: (a) for every type-level scalar entry
+   (`Bool` / `Char` / `Int` / `Uint` / `Float`), recompute the
+   canonical-content key per §9.7's per-`Const`-variant
+   byte-encoding tags and verify it matches the stored
+   `ConstInterner.lookup` key (canonical-form
+   well-formedness); (b) injectivity over the type-level
+   subset of `ConstInterner.lookup` (no two type-level entries
+   share a canonical key); (c) every `ConstId` appearing in
+   `GenericArg::Const(_)` positions resolves to a type-level
+   scalar variant. Value-level entries are NOT recomputed at
+   this step — their canonical-content keys involve recursion
+   through `Aggregate.0` / `EnumValue.payload` and require
+   const-graph acyclicity (verified at step 9) to terminate.
+   Value-level sub-reference resolution (e.g., `NullPtr`'s
+   pointee `TyId`, `Reloc`'s `InstanceRef` projection) and
+   value-level lookup injectivity defer to step 9 after
+   `TyInterner` and `instances` validate.
 5. Validate `FnSigInterner` content uniqueness (no duplicate
    canonical `FnSig`s); validate every `TyId` referenced
    inside `FnSig.inputs` / `FnSig.output` is in-bounds
@@ -806,15 +814,21 @@ Specifically, Phase B also enforces:
 
 **Phase B (continued) — late value-level const validation.**
 
-The Phase B step at item 4 validates `ConstInterner` content
-uniqueness (no duplicate canonical-content lookup-map keys) and
-the type-level scalar variants' canonical-form well-formedness
-(`Bool` / `Char` / `Int` / `Uint` / `Float`). The remaining
-value-level variants (`ZST`, `Bytes`, `Aggregate`, `EnumValue`,
-`NullPtr`, `Reloc` per §9.7) reference resolved `TyId` and
-`InstanceRef` content that is not available until step 6
-(`TyInterner`) and step 8 (`instances`) have run, so their
-sub-reference resolution is validated late:
+The Phase B step at item 4 validates the **type-level subset**
+of `ConstInterner` content: canonical-content lookup-map
+injectivity over the type-level scalar entries, and
+canonical-form well-formedness for `Bool` / `Char` / `Int` /
+`Uint` / `Float` (whose canonical keys do not recurse through
+`ConstId`, so they are safe to compute before const-graph
+acyclicity is established). Full `ConstInterner.lookup`
+injectivity over the entire key set is completed by the
+value-level pass at step 9 after acyclicity verifies. The
+remaining value-level variants (`ZST`, `Bytes`, `Aggregate`,
+`EnumValue`, `NullPtr`, `Reloc` per §9.7) also reference
+resolved `TyId` and `InstanceRef` content that is not available
+until step 6 (`TyInterner`) and step 8 (`instances`) have run,
+so their sub-reference resolution and value-level lookup
+injectivity are validated late:
 
 9. Validate value-level `Const` content sub-references per the
    §9.7 invariants:
@@ -841,6 +855,43 @@ sub-reference resolution is validated late:
      `Ty::Enum`'s `EnumShape.variants` (per §11.1); every
      `payload[i]: ConstId` resolves and is field-type
      admissible per the variant's `VariantLayout.fields`.
+   - **Const-graph acyclicity.** The `Aggregate.0` and
+     `EnumValue.payload` recursion edges (the only `ConstId`-
+     valued positions inside `Const`; `Bytes::Reloc` and
+     `Reloc` carry `InstanceRef`, not `ConstId`, so they do
+     not extend the const-recursion graph) form a DAG: no
+     `ConstId` appears in its own transitive `Aggregate` /
+     `EnumValue` payload reachability set. Validation uses
+     **three-state DFS marks** (`Unseen`, `Visiting`, `Done`):
+     entering a node sets it to `Visiting`; leaving sets it to
+     `Done`; an edge to a `Visiting` node is a back-edge and a
+     model-corruption error; an edge to a `Done` node is
+     skipped (shared DAG children are admissible). A
+     single-bit visited-set is insufficient — it cannot
+     distinguish "currently on the recursion stack" (cycle)
+     from "already fully validated" (DAG sharing). Well-typed
+     Rust + const-eval termination guarantee acyclicity at
+     construction time; the explicit check defends snapshot
+     integrity against tampered serialised models, matching
+     the same defence posture used for §3.3 Phase C's vtable
+     rebuild.
+   - **Value-level lookup injectivity and canonical-form
+     well-formedness.** *Ordering note: this sub-check runs
+     after acyclicity above so that recursive
+     `canonical_const(ConstId)` computation terminates.* For
+     every value-level entry (`ZST`, `Bytes`, `Aggregate`,
+     `EnumValue`, `NullPtr`, `Reloc`), recompute the
+     canonical-content key per §9.7's per-`Const`-variant
+     byte-encoding tags (the recursion into `Aggregate.0` /
+     `EnumValue.payload` is now safe: the DAG verified above
+     bounds the call depth to the topological-order length).
+     Verify the recomputed key matches the stored
+     `ConstInterner.lookup` key (canonical-form
+     well-formedness); verify injectivity over the value-level
+     subset of `ConstInterner.lookup` (no two value-level
+     entries share a canonical key). Combined with step 4's
+     type-level check, this completes `ConstInterner.lookup`
+     injectivity over the full key set.
 
 **Phase C — rebuild transient maps.**
 
@@ -1622,7 +1673,8 @@ bridge rejects them at construction, never widens to "Other" /
 The canonical-form rules below close the F4-2 fingerprint
 (`ArgsKey` traversal in §12.3 reaches const arguments via
 `GenericArg::Const(ConstId)` and queries
-`canonical_const_repr(ConstId)`).
+`canonical_const(ConstId)` per the per-`Const`-variant
+byte-encoding tags subsection below).
 
 #### `Const` enum (closed, 11 variants)
 
@@ -1857,6 +1909,170 @@ is itself value-level — the type-level boundary is structural,
 not transitive. The bridge admits aggregates only at value-level
 positions.
 
+#### Per-`Const`-variant byte-encoding tags (`ConstIdentityKey` byte form)
+
+The `ConstIdentityKey` byte form is a tagged-tree byte stream
+parallel to §12.3's per-`Ty` encoding. The same global rules apply:
+each node emits a 1-byte variant tag followed by tag-specific
+payload bytes; all multi-byte integers are little-endian; lengths
+emit as little-endian `u32` prefixes; nested nodes recurse via
+`canonical_const(ConstId)` (defined below). The encoding is
+consumed by `canonical_args.recurse(ConstId)` (the `ConstId`
+walk-rule row in §12.3) and by `ConstInterner.lookup`'s key
+computation.
+
+Per-`Const`-variant byte-encoding tags — append-only constants
+pinned for the v1 const universe:
+
+```text
+const_variant_tag = u8
+  0  = Bool                followed by u8 (0x00 | 0x01)
+  1  = Char                followed by u32 LE Unicode scalar value
+  2  = Int(IntKind, u128)  followed by u8 IntKind discriminant + u128 LE value
+                           (small widths sign-extended into u128 per §9.7
+                           D-4-1.1)
+  3  = Uint(UintKind, u128) followed by u8 UintKind discriminant + u128 LE value
+                           (small widths zero-extended)
+  4  = Float(FloatKind, u128) followed by u8 FloatKind discriminant + u128 LE
+                           bit-pattern (IEEE-754 bit-pattern occupies low-
+                           order bits; high-order bits zero for narrow widths
+                           per §9.7 D-4-1.1)
+  5  = ZST                 (no payload — type comes from consumer context)
+  6  = Bytes(Vec<Byte>)    followed by u32 LE byte_count + byte_count * Byte
+                           encoding (see byte_sub_tag table below)
+  7  = Aggregate(Vec<ConstId>) followed by u32 LE child_count + child_count *
+                           canonical_const(ConstId)
+  8  = EnumValue           followed by u32 LE variant_idx + u32 LE
+                           payload_count + payload_count * canonical_const(ConstId)
+  9  = NullPtr(TyId)       followed by canonical_ty(TyId) (recursive per
+                           §12.3 walk rules)
+ 10  = Reloc(InstanceRef)  followed by InstanceRef bytes (see InstanceRef
+                           encoding below)
+```
+
+`IntKind` / `UintKind` / `FloatKind` discriminants reuse the
+`#[repr(u8)]` numeric assignments pinned in the §10 enum
+definitions (the normative source for the `u8` discriminant
+values: `IntKind { I8=0, I16=1, I32=2, I64=3, I128=4, Isize=5 }`,
+`UintKind { U8=0, ..., Usize=5 }`, `FloatKind { F16=0, F32=1,
+F64=2, F128=3 }`). §12.3's per-`Ty` table reuses the same
+values; D-4-2's per-`Const` table reuses them again — the
+single source of truth is §10.
+
+The encoding is **append-only**: new `Const` variants admitted by
+future spec revisions (e.g., the deferred reference-typed
+`ConstMemoryStatic`-backed family per §13.3 / §13.4 follow-on)
+append at the next free tag value (`11+`); existing tags remain
+immutable so cross-build hashes for already-admitted consts never
+change. No tag values are reserved for future use.
+
+**`Byte` sub-encoding** (used inside `Bytes(Vec<Byte>)`'s payload):
+
+```text
+byte_sub_tag = u8
+  0  = Uninit             (no payload)
+  1  = Value(u8)          followed by 1 byte (the initialised payload byte)
+  2  = Reloc(InstanceRef) followed by InstanceRef bytes (see InstanceRef
+                          encoding below)
+```
+
+**`InstanceRef` byte encoding** (used by `const_variant_tag = 10`
+and by `byte_sub_tag = 2`):
+
+```text
+InstanceRef encoding (34 bytes total):
+  u8       regseq_kind_rank
+  16 bytes def_path_hash       (StableCrateId u64 LE + local_hash u64 LE
+                                per §12.3 termination rules)
+  16 bytes args_key            (emitted as `ArgsKey.0.to_be_bytes()` —
+                                the canonical big-endian byte serialisation
+                                of the `u128` field, which by §12.3's
+                                BE-load convention reproduces the original
+                                SHA-256-leading-16-bytes sequence; native
+                                memory layout / `transmute` MUST NOT be
+                                used)
+  u8       fn_shim_disambig
+```
+
+The 16-byte `args_key` field is emitted as `ArgsKey.0.to_be_bytes()`
+(the standard big-endian `u128` serialisation). This pinning is
+load-bearing: the serialised model stores `ArgsKey` only as a
+`u128` (§12.3), so the canonical byte form must be specified by
+operation on the `u128` value, not by appeal to "underlying
+bytes" (which leaves a native-endian / `transmute` interpretation
+open). `to_be_bytes()` is consistent with the BE-load convention
+in §12.3 (`ArgsKey::EMPTY.0` is "loaded as a big-endian u128")
+and reproduces the original SHA-256-leading-16-bytes sequence
+that the bridge computed before storing into `ArgsKey.0`.
+The general "multi-byte integers are little-endian" rule in
+§12.3 governs other multi-byte fields (`StableCrateId`,
+`local_hash`, `u128` value-bits in scalars, lengths); `args_key`
+is the documented BE exception, anchored on the BE-load
+convention already pinned in §12.3.
+
+**`canonical_const(ConstId)` recursion.** When the encoding above
+calls `canonical_const(ConstId)` (in `Aggregate` and
+`EnumValue.payload`), the rule is: resolve the `ConstId` against
+`model.consts.resolve(...)`, recursively encode the resolved
+`Const` per the per-variant rules above, and inline the resulting
+bytes into the parent's stream. Local `ConstId` integers are
+**never** emitted — they are build-local indices and would defeat
+cross-build stability. This is the const-side analogue of §12.3's
+"`TyId` field — resolve via `model.types.resolve(...)` and
+recurse on the resolved `Ty`" rule.
+
+The recursion is bounded by const-graph acyclicity: well-typed
+Rust + const-eval termination guarantee that no `Const`
+transitively contains itself. §3.3 Phase B step 9 validates this
+property explicitly (three-state DFS marks --
+`Unseen` / `Visiting` / `Done` -- over the `Aggregate` /
+`EnumValue` recursion edges; back-edge to `Visiting` is
+corruption, edge to `Done` is skipped as a legitimate shared
+DAG child) so that tampered serialised models cannot cause
+infinite recursion at canonical-key computation time.
+
+**Worked examples.**
+
+```text
+Const::Bool(true)
+  -> 0x00 0x01                         (tag=0, payload=true)
+
+Const::Int(I32, -7_i32 as u128)
+  -> 0x02 <IntKind::I32 disc>
+        0xF9 0xFF 0xFF 0xFF  0xFF 0xFF 0xFF 0xFF
+        0xFF 0xFF 0xFF 0xFF  0xFF 0xFF 0xFF 0xFF
+        (tag=2, IntKind disc, sign-extended -7 as u128 LE)
+
+Const::Float(F32, 0x3f800000_u128)     (= 1.0f32 bit-pattern)
+  -> 0x04 <FloatKind::F32 disc>
+        0x00 0x00 0x80 0x3F  0x00 0x00 0x00 0x00
+        0x00 0x00 0x00 0x00  0x00 0x00 0x00 0x00
+        (tag=4, FloatKind disc, IEEE bits in low 4 bytes, high 12 bytes zero)
+
+Const::ZST
+  -> 0x05                              (tag=5, no payload)
+
+Const::Aggregate(vec![c1, c2])         (e.g., a 2-tuple)
+  -> 0x07 0x02 0x00 0x00 0x00          (tag=7, child_count=2 LE)
+     <canonical_const(c1)>
+     <canonical_const(c2)>
+
+Const::EnumValue { variant_idx: 1, payload: vec![c1] }
+  -> 0x08 0x01 0x00 0x00 0x00          (tag=8, variant_idx=1 LE)
+        0x01 0x00 0x00 0x00            (payload_count=1 LE)
+        <canonical_const(c1)>
+
+Const::NullPtr(t_i32)                  (where t_i32 is the TyId of *const i32)
+  -> 0x09 <canonical_ty(t_i32)>        (tag=9, recursive Ty encoding)
+
+Const::Reloc(InstanceRef { regseq_kind_rank: 0, def_path_hash: H,
+                            args_key: A, fn_shim_disambig: 0 })
+  -> 0x0A 0x00                         (tag=10, regseq_kind_rank=0)
+        <16 bytes H>
+        <16 bytes A>
+        0x00                           (fn_shim_disambig=0)
+```
+
 #### Bridge construction (rustc → `Const` dispatch)
 
 Given a rustc `mir::ConstValue` post-monomorphisation (per the
@@ -1927,12 +2143,15 @@ might land before stage-4 D-4-K closes.
 steps:
 
 - **Type-level const phase** at step 4 (before `TyInterner` at
-  step 6): validate `ConstInterner.lookup` injectivity over
-  canonical-content keys; validate that every `ConstId`
-  appearing in `GenericArg::Const(_)` positions resolves to a
-  type-level variant (one of the 5 scalars `Bool` / `Char` /
-  `Int` / `Uint` / `Float`); validate scalar canonical-form
-  well-formedness.
+  step 6): validate `ConstInterner.lookup` injectivity over the
+  type-level subset of canonical-content keys; recompute
+  canonical keys for type-level scalar entries (`Bool` / `Char`
+  / `Int` / `Uint` / `Float`) and verify they match stored
+  keys; validate that every `ConstId` appearing in
+  `GenericArg::Const(_)` positions resolves to a type-level
+  variant. Type-level scalar key computation is bounded
+  (no recursion through `ConstId`), so this is safe before
+  acyclicity is established.
 
 - **Value-level const phase** at step 9 (after `instances` at
   step 8; before Phase C transient-map rebuild at step 10):
@@ -1943,7 +2162,21 @@ steps:
   `Aggregate` children resolve, with type-level scalar
   children admissible inside value-level aggregates per the
   non-transitive-boundary rule; `EnumValue.variant_idx` is
-  in-bounds for the consumer's `Ty::Enum`).
+  in-bounds for the consumer's `Ty::Enum`). The step-9 sub-
+  bullets run in this order: (1) `NullPtr` / `Reloc` /
+  `Bytes::Reloc` sub-reference resolution against `types` /
+  `instances`; (2) `Bytes` / `Aggregate` / `EnumValue` content
+  checks (sequence well-formedness, child resolution,
+  variant_idx in-bounds); (3) const-graph acyclicity via
+  three-state DFS; (4) value-level canonical-content key
+  recomputation and lookup-map injectivity over the value-level
+  subset. Acyclicity must run before step (4) so recursive
+  `canonical_const(ConstId)` calls into `Aggregate.0` /
+  `EnumValue.payload` terminate; steps (1) and (2) are
+  recursion-free (they check resolution, not key recomputation),
+  so they can run before acyclicity. Combined with the step-4
+  type-level pass, step (4) completes injectivity over the full
+  `ConstInterner.lookup` key set.
 
 The split is a contract on the validation order and the
 membership rule — not on the interner shape. A single
@@ -2670,7 +2903,7 @@ walk):
 | `ItemId`           | replace with `DefPathHash` from `model.item_def_paths` (cross-build terminator)                                              |
 | `FnSigId`          | resolve and **expand** FnSig content (see §14.3 minimum schema)                                                              |
 | `StringId`         | resolve to content (UTF-8 bytes, length-prefixed)                                                                            |
-| `ConstId`          | canonical const-eval result (stage-4 schema)                                                                                 |
+| `ConstId`          | resolve via `model.consts.resolve(...)` and recurse on the resolved `Const` per §9.7's per-`Const`-variant byte-encoding tags |
 | `DefPathHash`      | terminal: emit the 16-byte content (StableCrateId u64 LE + local_hash u64 LE)                                                |
 
 Per-`Ty`-variant byte-encoding tags (for the
@@ -2722,11 +2955,12 @@ GenericArg entry:
     disc = 0:  canonical Ty bytes per the per-`Ty` rules above
                (i.e., recursively encode the resolved Ty content,
                not the local TyId integer)
-    disc = 1:  canonical Const bytes per the §9.7 per-variant
-               rules (resolved Const content, not the local
-               ConstId integer; Const ↔ ArgsKey closure
-               resolves via the value-level identity-key rules
-               pinned in D-4-2)
+    disc = 1:  canonical Const bytes per the per-`Const`-variant
+               byte-encoding rules pinned in D-4-2 / §9.7
+               (resolved Const content, not the local ConstId
+               integer). `GenericArg::Const(_)` positions resolve
+               to type-level scalar variants only per §3.3 step 4
+               and §9.7's type-level / value-level partition.
 ```
 
 Per stage-1 §9.1, `GenericArg` has no lifetime variant (regions

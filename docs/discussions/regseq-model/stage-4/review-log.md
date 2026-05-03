@@ -391,7 +391,7 @@ sub-decisions.
 
 ---
 
-## Round-trajectory summary
+## Round-trajectory summary -- D-4-1
 
 ```
 R1: 10 issues (7 BLOCK / 3 MINOR / 0 NIT)   [BLOCK]
@@ -403,9 +403,409 @@ R6:  0 issues                                [APPROVE] -- R5 closed
 ```
 
 20 distinct findings closed across the iteration. D-4-1 cluster
-ready to be marked `[LOCKED]` in `discussions.md` and
-`status.md`. The cluster is the first stage-4 spec contribution
-ready for the merger contract (per `../README.md` §5.5); the
-merger will run after subsequent stage-4 sub-decisions
-(D-4-2 onward) close, since stage-4 is solo and the merger is
-end-of-stage, not end-of-cluster.
+LOCKED in `discussions.md` and `status.md`. The cluster is the
+first stage-4 spec contribution ready for the merger contract
+(per `../README.md` §5.5); the merger will run after subsequent
+stage-4 sub-decisions (D-4-2 onward) close, since stage-4 is
+solo and the merger is end-of-stage, not end-of-cluster.
+
+---
+
+## Round 1 -- D-4-2 initial review
+
+**Date.** 2026-05-03.
+
+**Scope.** D-4-2 cluster (parent decision + sub-decisions D-4-2.1
+through D-4-2.9) covering the per-`Const`-variant byte-encoding
+tags subsection of §9.7 (the `ConstIdentityKey` byte form),
+§12.3's concrete `ConstId` walk-rule row replacing the
+stage-4-schema stub, and §3.3 Phase B step 9's added const-graph
+acyclicity sub-bullet.
+
+**Verdict.** BLOCK -- 6 issues (2 BLOCK / 4 MINOR / 0 NIT).
+
+**Issues raised.**
+
+1. **[BLOCK] args-key-byte-source.** §9.7's `args_key` byte
+   form said "underlying 16 bytes from `ArgsKey.0`" without
+   pinning a `u128`-to-bytes operation; native-endian /
+   transmute interpretation possible.
+2. **[BLOCK] acyclicity-algorithm.** §3.3 step 9 + D-4-2.6
+   said "DFS visited-set" without distinguishing
+   "currently-on-stack" from "already-validated"; could miss
+   cycles or falsely reject shared DAG children.
+3. **[MINOR] scalar-kind-discriminant-crossref.** §9.7
+   pointed at "§12.3 assignments" for `IntKind` /
+   `UintKind` / `FloatKind` discs, but the normative
+   source is §10's `#[repr(u8)]` enum definitions.
+4. **[MINOR] append-only-audit-wording.** D-4-2.1 said
+   "245 reserved tag values" right after invoking the
+   no-forward-looking-placeholders rule -- contradiction.
+5. **[MINOR] stale-line-crossrefs.** D-4-2 audit text used
+   line refs (`spec-snapshot.md:2680-2706`,
+   `spec-snapshot.md:2716`, `spec-snapshot.md:2684-2686`,
+   `spec-snapshot.md:2658-2660`, `spec-snapshot.md:2649-2650`)
+   that drifted after §9.7's byte-encoding subsection
+   shifted line numbers.
+6. **[MINOR] prior-art-overclaim.** D-4-2 parent cited
+   `prior-art/README.md` §3.1 as "cross-cluster framing of
+   hash-based identity keys for content-addressed dedup,"
+   but §3.1 actually documents the *negative* result
+   (5-of-5 non-rustc projects fail) with only rustc as
+   adjacent precedent.
+
+**Corrections applied.**
+
+- Issue 1: Replaced "underlying 16 bytes" wording in §9.7
+  and D-4-2.8 with explicit `ArgsKey.0.to_be_bytes()`;
+  forbid native memory layout / transmute; spelled out the
+  documented BE exception to §12.3's general LE rule
+  (anchored on §12.3's BE-load convention for
+  `ArgsKey::EMPTY`).
+- Issue 2: Replaced "DFS visited-set" wording in §3.3
+  step 9 and D-4-2.6 with explicit three-state DFS
+  (`Unseen` / `Visiting` / `Done`); back-edge to
+  `Visiting` is corruption, edge to `Done` is skipped
+  (legitimate DAG sharing).
+- Issue 3: Updated §9.7 byte-encoding subsection and
+  D-4-2.2 to cite §10's `#[repr(u8)]` enum definitions
+  as the normative source for `IntKind` / `UintKind` /
+  `FloatKind` discs; noted §12.3 reuses the same values.
+- Issue 4: Reworded D-4-2.1 from "245 reserved tag values"
+  to "245 currently-unassigned tag values available for
+  append-only future variants"; clarified
+  no-forward-looking-placeholders means values are not
+  pre-reserved for any specific extension.
+- Issue 5: Replaced specific line refs in D-4-2 audit text
+  (D-4-2 parent reasoning, D-4-2.2's discriminant cite,
+  D-4-2.3's `GenericArgs` cite, D-4-2.8's BE-load
+  convention cite) with section-only refs that don't drift
+  with line numbers.
+- Issue 6: Reframed D-4-2's `README.md` §3.1 cite to
+  match D-4-1.5's accurate framing (5-of-5 negative;
+  rustc adjacent); reframed D-4-2.1 / D-4-2.3's cites
+  to use per-project files (LLVM, MLIR, charon, mrustc,
+  regseq-model-old) instead of overclaiming via §3.1;
+  reframed D-4-2.8's cite to inherit from D-4-1.5's
+  framing.
+
+Round-2 prompt focus: verify each correction; surface any
+new issues introduced by the corrections; check residual
+soundness across the cluster.
+
+---
+
+## Round 2 -- D-4-2 re-review after round-1 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 1. Round-1 corrections summarised
+above.
+
+**Verdict.** MINOR -- 4 issues (0 BLOCK / 4 MINOR / 0 NIT).
+All round-1 issues verified closed. Findings are residual
+cleanup of the round-1 fixes (incomplete propagation across
+parallel mentions of the same concept).
+
+**Issues raised.**
+
+1. **[MINOR] args-key-underlying-bytes-residual.** D-4-2.8's
+   normative text correctly pinned `to_be_bytes()`, but a
+   downstream paragraph still said the stream "emits the
+   underlying bytes directly, making endianness a
+   non-question" -- partial regression on the R1 fix.
+2. **[MINOR] acyclicity-visited-set-residual.** §3.3 step 9
+   and D-4-2.6's main text correctly say "three-state DFS
+   marks," but §9.7's recursion paragraph and D-4-2.6's
+   first option text still summarised as "DFS visited-set."
+3. **[MINOR] scalar-kind-crossref-residual.** D-4-2.2's
+   normative text correctly cites §10's enum definitions,
+   but the option text still said "reusing the §12.3
+   assignments" and the cross-ref still located the disc
+   assignments in §12.3.
+4. **[MINOR] stale-line-crossrefs-residual.** R1 cleanup
+   missed several stale `spec-snapshot.md:NNNN` refs:
+   D-4-2 parent's "lines 2680-2706," D-4-2.4's
+   `spec-snapshot.md:162`, D-4-2.4's
+   `spec-snapshot.md:1689-1692`, D-4-2.5's
+   `spec-snapshot.md:1741-1758`, D-4-2.7's
+   `spec-snapshot.md:2669`, D-4-2.8's
+   `spec-snapshot.md:1767-1803`.
+
+**Corrections applied.**
+
+- Issue 1: Replaced D-4-2.8's lingering "underlying bytes
+  directly, making endianness a non-question" paragraph
+  with explicit `ArgsKey.0.to_be_bytes()` wording, anchored
+  on §12.3's BE-load convention.
+- Issue 2: Updated §9.7's recursion paragraph from
+  "DFS visited-set" to "three-state DFS marks --
+  Unseen / Visiting / Done -- ... back-edge to Visiting
+  is corruption, edge to Done is skipped as a legitimate
+  shared DAG child." Updated D-4-2.6's first option text
+  from "visited-set" to "three-state DFS marks
+  (Unseen / Visiting / Done)" with back-edge-to-Visiting
+  rejection.
+- Issue 3: Updated D-4-2.2's option 1 text and Cross-refs
+  to cite §10's `#[repr(u8)]` enum definitions as the
+  normative source; §12.3 noted only as downstream reuse.
+- Issue 4: Replaced all six remaining stale line refs in
+  discussions.md with section-only cross-references
+  (`§12.3's per-Ty byte-encoding-tags table`,
+  `§3 VariantIdx type-alias declaration`,
+  `§9.7's Const::EnumValue declaration`,
+  `§9.7's Byte enum "Byte-sequence well-formedness
+  invariants" subsection`,
+  `§12.3's per-IR-identifier termination rule for TyId`,
+  `§9.7's InstanceRef struct-declaration order`).
+
+Round-3 prompt focus: verify R2 corrections; confirm no
+further residual ambiguity; check whether the cluster is
+ready for APPROVE.
+
+---
+
+## Round 3 -- D-4-2 re-review after round-2 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 2. Round-2 corrections summarised
+above.
+
+**Verdict.** BLOCK -- 1 issue (1 BLOCK / 0 MINOR / 0 NIT).
+All round-2 issues verified closed (R2.1 / R2.2 / R2.3 / R2.4
+all confirmed). The BLOCK is a deeper architectural finding
+about validation ordering that the cumulative-consistency
+pass surfaced after R2's residual cleanup completed.
+
+**Issue raised.**
+
+1. **[BLOCK] validation-order-before-acyclicity.** §3.3 step 4
+   said it validates `ConstInterner.lookup` injectivity over
+   canonical-content keys "for all variants" before step 9's
+   acyclicity sub-bullet. But computing canonical keys for
+   `Aggregate` / `EnumValue` requires recursive
+   `canonical_const(ConstId)` calls, and step 9's three-state
+   DFS is what makes such recursion safe (prevents infinite
+   loops on tampered cyclic models). The validator was ordered
+   to compute recursive value-level keys BEFORE the cycle
+   check that makes those computations safe.
+
+**Correction applied.**
+
+- Restructured the §3.3 phase split so step 4 is type-level
+  only: (a) recompute canonical-content keys for type-level
+  scalar entries (no recursion; bounded), (b) verify they
+  match stored `ConstInterner.lookup` keys, (c) injectivity
+  over the type-level subset of `ConstInterner.lookup`,
+  (d) every `GenericArg::Const(_)` reference resolves to a
+  type-level variant. Value-level entries are NOT recomputed
+  at step 4.
+- Added a new value-level sub-bullet to §3.3 step 9 ordered
+  AFTER the const-graph acyclicity sub-bullet:
+  "Value-level lookup injectivity and canonical-form
+  well-formedness." Recomputes canonical keys for value-level
+  entries (now safe to recurse — DAG verified), checks they
+  match stored keys, verifies injectivity over the value-level
+  subset. Combined with step 4's type-level pass, this
+  completes injectivity over the full `ConstInterner.lookup`
+  key set.
+- Updated §9.7's "Const validation phase split" subsection to
+  reflect the refined split and the step-9 ordering.
+- Updated D-4-2.6 audit-shape entry with a "Validation-order
+  refinement" paragraph spelling out the four sub-steps of
+  step 9 in order: resolve → content checks → acyclicity →
+  value-level key recomputation + injectivity.
+
+Round-4 prompt focus: verify R3 correction; confirm no
+further validation-order issues; check whether the cluster is
+ready for APPROVE.
+
+---
+
+## Round 4 -- D-4-2 re-review after round-3 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 3. Round-3 correction summarised
+above.
+
+**Verdict.** BLOCK -- 2 issues (1 BLOCK / 1 MINOR / 0 NIT).
+Both are residual cleanup of the round-3 phase-split
+restructuring that did not propagate to two parallel
+mentions.
+
+**Issues raised.**
+
+1. **[BLOCK] phase-split-summary-still-claims-full-step4-uniqueness.**
+   §3.3's "Phase B (continued) — late value-level const
+   validation" preface still said "item 4 validates
+   `ConstInterner` content uniqueness (no duplicate canonical-
+   content lookup-map keys)" without the type-level qualifier
+   — partial regression on the R3 fix. As written, the summary
+   could be read as reintroducing the round-3 defect: full
+   lookup-key uniqueness before value-level recursive keys are
+   safe to compute.
+2. **[MINOR] phase-split-order-wording-ambiguous.** §9.7's
+   "Const validation phase split" subsection said
+   "step-9 sub-bullets are ordered so const-graph acyclicity
+   verifies first," but §3.3 step 9 actually orders sub-
+   reference / content checks BEFORE acyclicity, then value-
+   level key recomputation AFTER acyclicity. The §9.7 wording
+   contradicted the §3.3 step ordering and D-4-2.6's audit-
+   shape sub-step description.
+
+**Corrections applied.**
+
+- Issue 1: Updated §3.3's late-value-level preface to qualify
+  step 4 as the type-level subset only ("type-level scalar
+  entries: canonical-content lookup-map injectivity and
+  canonical-form well-formedness for `Bool` / `Char` / `Int`
+  / `Uint` / `Float`"); explicitly noted that "full
+  `ConstInterner.lookup` injectivity over the entire key set
+  is completed by the value-level pass at step 9 after
+  acyclicity verifies." Updated step 9's preface to say
+  "sub-reference resolution and value-level lookup injectivity
+  are validated late."
+- Issue 2: Replaced §9.7's "acyclicity verifies first" wording
+  with the explicit four-sub-step ordering: (1) sub-reference
+  resolution; (2) content checks; (3) acyclicity via three-
+  state DFS; (4) value-level key recomputation + lookup
+  injectivity. Noted that steps (1) and (2) are recursion-
+  free (resolution, not key recomputation) so they can run
+  before acyclicity; step (4) runs after acyclicity so
+  recursive `canonical_const(ConstId)` calls terminate.
+
+Round-5 prompt focus: verify R4 corrections; confirm no
+further parallel mentions of validation order need updating;
+check whether the cluster is ready for APPROVE.
+
+---
+
+## Round 5 -- D-4-2 re-review after round-4 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 4. Round-4 corrections summarised
+above.
+
+**Verdict.** MINOR -- 1 issue (0 BLOCK / 1 MINOR / 0 NIT).
+All round-4 issues verified closed. The one finding is a
+naming inconsistency surfaced by the cumulative-consistency
+lens.
+
+**Issue raised.**
+
+1. **[MINOR] stale-canonical-const-repr-name.** §9.7's
+   identity contract still said `ArgsKey` traversal queries
+   `canonical_const_repr(ConstId)`, but the D-4-2 byte-form
+   subsection defined the recursion as
+   `canonical_const(ConstId)`, leaving one stale, undefined
+   helper name in the cluster. Pre-existing wording from
+   D-4-1's draft phase; surfaced now because R4's cleanup
+   pass made naming consistency tractable to verify.
+
+**Correction applied.**
+
+- Replaced §9.7's `canonical_const_repr(ConstId)` reference
+  with `canonical_const(ConstId)` and added "per the per-
+  `Const`-variant byte-encoding tags subsection below" so
+  readers can locate the helper's definition.
+- Replaced one further `canonical_const_repr` reference in
+  D-4-1.3's locked audit-shape entry (at `discussions.md:331`)
+  with `canonical_const` plus a note that this is D-4-2's
+  per-`Const`-variant byte-encoding helper. D-4-1.3 is
+  LOCKED but the corrected naming is normative now, and the
+  prior inconsistent name was a placeholder.
+
+Round-6 prompt focus: verify R5 correction; check whether the
+cluster is ready for APPROVE.
+
+---
+
+## Round 6 -- D-4-2 re-review after round-5 fix
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 5. Round-5 correction summarised
+above.
+
+**Verdict.** MINOR -- 2 issues (0 BLOCK / 2 MINOR / 0 NIT).
+R5 fix verified closed. Both findings are residual cross-
+reference inaccuracies surfaced by the cumulative-consistency
+lens.
+
+**Issues raised.**
+
+1. **[MINOR] stale-genericarg-const-phase-label.** §12.3's
+   `GenericArg::Const` encoding said "the value-level
+   identity-key rules pinned in D-4-2," but
+   `GenericArg::Const(_)` positions resolve to type-level
+   scalar variants only per §3.3 step 4 and §9.7's partition.
+   Pre-existing wording from before D-4-2 closed; surfaced
+   now because R5's naming-consistency pass made phase-label
+   verification tractable.
+2. **[MINOR] d-4-2-array-constid-crossref.** D-4-2 parent's
+   reasoning said §12.3's `ConstId` walk-rule calls
+   `canonical_const(ConstId)` from the per-`Ty` table for
+   "(`Array`, `GenericArg::Const`)," but `Ty::Array` carries
+   `(TyId, u64)` (a literal `u64` length, not a `ConstId`),
+   so `Array` is not actually a `ConstId` call site. The
+   only `ConstId` call site in the per-`Ty` walk is the
+   `GenericArgs` container's `GenericArg::Const(ConstId)`
+   arm.
+
+**Corrections applied.**
+
+- Issue 1: Replaced §12.3's `disc = 1` payload note from
+  "the value-level identity-key rules pinned in D-4-2" to
+  "the per-`Const`-variant byte-encoding rules pinned in
+  D-4-2 / §9.7" plus "GenericArg::Const(_) positions resolve
+  to type-level scalar variants only per §3.3 step 4 and
+  §9.7's type-level / value-level partition."
+- Issue 2: Updated D-4-2 parent's reasoning (iii) to drop
+  `Array` from the call-site list and clarify that the only
+  `ConstId` call site is the `GenericArgs` container's
+  `GenericArg::Const(ConstId)` arm; noted that
+  `Ty::Array(elem, n: u64)` carries a literal `u64`, not a
+  `ConstId`.
+
+Round-7 prompt focus: verify R6 corrections; final
+cumulative-consistency check; expected to APPROVE.
+
+---
+
+## Round 7 -- D-4-2 final close-out re-review after round-6 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 6. Round-6 corrections summarised
+above.
+
+**Verdict.** APPROVE -- 0 issues (0 BLOCK / 0 MINOR / 0 NIT).
+All round-6 issues verified closed. Cumulative-consistency
+pass found no further issues. D-4-2 cluster closed.
+
+**Corrections applied.** None required.
+
+---
+
+## Round-trajectory summary -- D-4-2
+
+```
+R1: 6 issues (2 BLOCK / 4 MINOR / 0 NIT)   [BLOCK]
+R2: 4 issues (0 BLOCK / 4 MINOR / 0 NIT)   [MINOR] -- all R1 closed; residual cleanup
+R3: 1 issue  (1 BLOCK / 0 MINOR / 0 NIT)   [BLOCK] -- all R2 closed; deeper validation-order finding surfaced
+R4: 2 issues (1 BLOCK / 1 MINOR / 0 NIT)   [BLOCK] -- R3 closed; phase-split parallel mentions not propagated
+R5: 1 issue  (0 BLOCK / 1 MINOR / 0 NIT)   [MINOR] -- all R4 closed; naming inconsistency surfaced
+R6: 2 issues (0 BLOCK / 2 MINOR / 0 NIT)   [MINOR] -- R5 closed; cross-reference inaccuracies surfaced
+R7: 0 issues                                [APPROVE] -- all R6 closed
+```
+
+16 distinct findings closed across the iteration. D-4-2
+cluster LOCKED in `discussions.md` and `status.md`. The
+trajectory pattern (alternating BLOCK / MINOR rounds with
+deeper findings surfacing as cumulative-consistency tightened)
+mirrors D-4-1's R1=10 → R2=5 → R3=2 → R4=1 → R5=1 → R6=0
+trajectory; both clusters required ~6-7 rounds to converge,
+which is the established stage-4 spec-review depth.
