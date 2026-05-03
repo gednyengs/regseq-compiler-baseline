@@ -1,11 +1,13 @@
 # Stage 4 Status
 
-Status: **OPEN -- D-4-1 LOCKED, D-4-2 LOCKED.** D-4-1 closed
-at APPROVE on 2026-05-02 across 6 Codex review rounds (20
-findings closed). D-4-2 closed at APPROVE on 2026-05-03 across
-7 Codex review rounds (16 findings closed). Next: D-4-3+
-(reference-typed const handling -- `SyntheticItemKind::ConstMemoryStatic`
-family extension; intersects stage-12 territory).
+Status: **OPEN -- D-4-1 LOCKED, D-4-2 LOCKED, D-4-3 LOCKED.**
+D-4-1 closed at APPROVE on 2026-05-02 across 6 Codex review
+rounds (20 findings closed). D-4-2 closed at APPROVE on
+2026-05-03 across 7 Codex review rounds (16 findings closed).
+D-4-3 closed at APPROVE on 2026-05-03 across 4 Codex review
+rounds (10 findings closed). Next: D-4-K (`pretty.rs::render_const`
+renderer style; possibly deferable to a later stage following
+the D14 → stage-13 precedent).
 
 Last updated: 2026-05-03.
 
@@ -37,8 +39,10 @@ Four items, all from stage 1:
   (struct / array / enum variants), and function pointers as
   constants.** Closed by D-4-1 — 11-variant `Const` enum
   covers all listed surfaces. Reference-typed `&str` / `&[T]`
-  remains stage-4-deferred (see "Stage-4-specific deferred
-  items" below).
+  closed by D-4-3 (in active Codex review) via the
+  `SyntheticItemKind::ConstMemoryStatic` family extension and
+  compositional `Aggregate([Reloc, Uint])` / `Reloc(_)`
+  dispatch arms.
 - [ ] **Fill `pretty.rs::render_const` stub.** Open. Renderer-
   style decision will be tagged D-4-K (post-D-4-2) or
   deferred to a later stage following the D14 → stage-13
@@ -67,11 +71,78 @@ cumulative consistency tightens.
 Stage 3's parallelisation was justified by 11 decisions
 splitting into independent clusters; stage 4's sub-decisions
 fit one cohesive cluster per cluster. If a later sub-decision
-(e.g., the deferred renderer-style decision or D-4-3+
-reference-typed handling) surfaces a different evidence base,
-late split is tractable per stage-3 precedent.
+(e.g., the deferred renderer-style decision D-4-K) surfaces a
+different evidence base, late split is tractable per stage-3
+precedent.
 
 ## Locked decisions
+
+- **D-4-3** (3.1-3.10): Reference-typed const handling --
+  `SyntheticItemKind::ConstMemoryStatic` family. Whole-family
+  scope (stage-4 + stage-12 §13). Locked across 4 Codex review
+  rounds (R1-R4), 10 findings closed.
+  - **D-4-3.1** -- Family name + payload:
+    `SyntheticItemKind::ConstMemoryStatic { content_hash:
+    ContentHash }`.
+  - **D-4-3.2** -- `ContentHash` construction: SHA-256
+    truncated to leading 16 bytes BE-loaded into `u128`,
+    parallel to `ArgsKey` / `ProjectionBindingsKey`. Canonical
+    input = the canonical D-4-2 `Const::Bytes(Vec<Byte>)`
+    byte form of the memory allocation.
+  - **D-4-3.3** -- §13.3 variant placement: append after
+    `VTableDropShim` (append-only stability).
+  - **D-4-3.4** -- §13.4 segments: three-segment form
+    `["<regseq_synth>", "const_memory_static", <content_hash
+    hex>]` (mirrors `VTableType` depth).
+  - **D-4-3.5** -- §13.4 DefPathHash payload: just the
+    16-byte content hash (`content_hash.0.to_be_bytes()`).
+  - **D-4-3.6** -- Bridge synthesis rule: lazy on dispatch;
+    synthesised Item carries `ItemKind::Static` + corresponding
+    Instance with `kind: InstanceKind::Static { ty: array_ty,
+    init: Some(c), mutability: Mutability::Not }`. Per-kind
+    rich data lives on the Instance per stage-1 schema.
+  - **D-4-3.7** -- Synthesised Static's Ty + Mutability:
+    `Ty::Array(Ty::Uint(U8), N)` (type-erased to bytes for
+    content-keyed dedup); `Mutability::Not` (matches
+    `VTableInstance` precedent).
+  - **D-4-3.8** -- Bridge dispatch arms: `Slice { data, meta }`
+    → `Aggregate([Reloc, Uint(Usize, meta)])` (wide pointer);
+    `Indirect { alloc_id, offset = 0 }` over Memory →
+    `Reloc(synth_static_inst_ref(alloc_id))` (thin pointer);
+    `Indirect { alloc_id, offset != 0 }` over Memory →
+    bridge-rejected (no slot reserved).
+  - **D-4-3.9** -- §3.3 Phase B step 9 dedup check:
+    recompute `ContentHash` from each synth Static's
+    `init: Some(c)` content; verify match with stored
+    `content_hash` field; verify no two `ConstMemoryStatic`
+    Items share a `content_hash`. Ordered after value-level
+    lookup injectivity pass.
+  - **D-4-3.10** -- Stage-12 outbound closure: flip
+    `stage-12/expectations.md` "From stage 4" entry to
+    `[CLOSED by D-4-3]` (bookkeeping).
+
+D-4-3's contribution also includes:
+- §13.3 `ContentHash` type + canonical-encoding subsection +
+  collision honesty note (parallel to `ArgsKey` /
+  `ProjectionBindingsKey`).
+- §13.4 const-memory family entries: segments row, canonical-
+  payload-bytes row, ownership rule (`primary_crate`).
+- §9.7 "Reference-typed const handling (D-4-3)" subsection
+  replacing the prior deferred subsection (lazy synthesis
+  rule + worked examples + non-zero-offset rejection +
+  pointee-type-at-use-site paragraph).
+- §9.7 bridge dispatch table extended with `Slice` and
+  `Indirect`-over-Memory rows; `Memory(memory)` GlobalAlloc
+  projection row updated from "bridge-rejected" to the full
+  4-tuple synthesis projection.
+- §3.3 Phase B step 9 extended with `ConstMemoryStatic dedup`
+  sub-bullet; §3.3's `SyntheticItemKind` ↔ `ItemKind`
+  consistency list extended with `ConstMemoryStatic →
+  ItemKind::Static`; new `ConstMemoryStatic Items are
+  immutable byte-array statics with Bytes initialiser`
+  validation rule (parallel to `VTableInstance` rule).
+- `stage-12/expectations.md` "From stage 4" outbound flipped
+  to `[CLOSED by D-4-3]`.
 
 - **D-4-2** (2.1-2.9): `ConstIdentityKey` per-variant byte-form
   schema. Locked across 7 Codex review rounds (R1-R7), 16
@@ -173,11 +244,8 @@ D-4-1's contribution also includes:
   `consts (type-level) ← sigs ← types ← (layout, instances) ←
   consts (value-level)`.
 
-## Open decisions (post-D-4-2)
+## Open decisions (post-D-4-3)
 
-- **D-4-3+** -- Reference-typed const handling
-  (`SyntheticItemKind::ConstMemoryStatic` family extension).
-  See "Stage-4-specific deferred items" below.
 - **D-4-K (open)** -- `pretty.rs::render_const` renderer style.
 
 ## Codex review cadence (status)
@@ -192,6 +260,17 @@ D-4-1's contribution also includes:
   - R5: 1 MINOR (pre-existing float-padding wording
     inconsistency surfaced as deeper-residual). Closed by R6.
   - R6: APPROVE 0.
+
+- **D-4-3 cluster** (initial review, 2026-05-03): closed at
+  R4=APPROVE.
+  Trajectory:
+  - R1: 6 issues (2 BLOCK / 3 MINOR / 1 NIT). All closed by R2.
+  - R2: 3 issues (1 BLOCK / 2 MINOR / 0 NIT). All closed by R3.
+    Deepest finding: `item.ty` schema mismatch (per-kind
+    rich data lives on Instance, not Item).
+  - R3: 1 MINOR (cross-ref propagation after status.md
+    restructuring). Closed by R4.
+  - R4: APPROVE 0.
 
 - **D-4-2 cluster** (initial review, 2026-05-03): closed at
   R7=APPROVE.
@@ -219,42 +298,21 @@ Prompt template: see `memory.md` Section 4.
 
 ## Stage-4-specific deferred items
 
-- **Reference-typed const handling for `&str` / `&[T]`.**
-  D-4-1's bridge construction explicitly defers
-  `mir::ConstValue::Slice { data, meta }` and
-  `mir::ConstValue::Indirect` arms targeting
-  `GlobalAlloc::Memory(_)`. Closing the case requires:
-  - extending §13.3's `SyntheticItemKind` universe with a new
-    family `ConstMemoryStatic { content_hash }` (or similar
-    name) to bridge-synthesise an immutable `Static` Item per
-    unique memory-content blob,
-  - extending §13.4's synthesised-DefPath construction with a
-    memory-content-keyed segment encoding so two builds with
-    identical byte content produce the same synthesised
-    `DefPathHash`,
-  - extending §3.3 Phase B's value-level const validation step
-    (the new step 9 stage 4 introduces) with a duplicate-
-    content-hash check against the materialised
-    `ConstMemoryStatic` Items,
-  - extending the §9.7 bridge construction table with the
-    `Slice` / `Indirect`-via-`Memory` dispatch arms producing
-    `Aggregate([Reloc(memory_static_inst_ref), Uint(Usize,
-    meta)])`.
-  Filed for a follow-on D-4-K decision (likely D-4-3 or
-  later, depending on whether D-4-2 covers it as part of the
-  full identity-key schema). Outbound expectation filed in
-  `stage-12/expectations.md` (since §13.3 / §13.4 changes
-  intersect stage-12 territory).
+- **None currently active.** The `&str` / `&[T]`
+  reference-typed const handling deferred from D-4-1 is now
+  closed by D-4-3 (in active Codex review). Non-zero offsets
+  into anonymous Memory allocations (`Indirect { alloc_id,
+  offset != 0 }`) are bridge-rejected by D-4-3.8; these would
+  arise from references into the middle of a larger
+  anonymous-memory blob (e.g., `&FOO.field` where `FOO` is
+  itself anonymous-memory-backed) and are not load-bearing
+  for driver code. No slot is reserved in the dispatch table
+  or `InstanceRef` shape; the case is rejected unless a
+  future spec revision admits it.
 
 ## Next concrete unit of work
 
-1. **Frame D-4-3+** -- Reference-typed const handling
-   (`SyntheticItemKind::ConstMemoryStatic` family extension).
-   This is the largest remaining stage-4 piece; it intersects
-   stage-12 territory (§13.3 `SyntheticItemKind` universe;
-   §13.4 synthesised-DefPath construction). Outbound
-   expectation already filed in `stage-12/expectations.md`.
-2. **Frame D-4-K** -- `pretty.rs::render_const` renderer style.
+1. **Frame D-4-K** -- `pretty.rs::render_const` renderer style.
    May be deferable to a later stage following the D14 →
    stage-13 precedent if the renderer's input depends on
    content not yet pinned.

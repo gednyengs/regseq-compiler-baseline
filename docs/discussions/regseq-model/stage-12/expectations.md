@@ -356,20 +356,24 @@ expectations live in `stage-N/expectations.md`."
 
 ## From stage 4
 
-- **`SyntheticItemKind::ConstMemoryStatic` family (or
-  equivalent).** Stage 4 D-4-1 deferred reference-typed const
-  handling for `&str` / `&[T]` literals (rustc
-  `mir::ConstValue::Slice` and `mir::ConstValue::Indirect` arms
-  targeting `GlobalAlloc::Memory(_)`). Closing the case
-  requires extending §13.3's `SyntheticItemKind` universe with
-  a new family backing immutable `Static` Items synthesised
-  from anonymous memory-content blobs, plus extending §13.4's
-  synthesised-DefPath construction with a memory-content-keyed
-  segment encoding so two builds with identical byte content
-  produce the same synthesised `DefPathHash`. Stage 12 may
-  land the family as part of broader Item-synthesis work;
-  alternatively, stage 4 may close the family within a follow-
-  on D-4-K decision while remaining stage-12-coordinated for
-  any parallel §13 changes. See `stage-4/spec-snapshot.md`
-  §9.7 ("Stage-4 deferred: reference-typed const handling")
-  and `stage-4/status.md` "Stage-4-specific deferred items."
+- **[CLOSED by D-4-3]** **`SyntheticItemKind::ConstMemoryStatic`
+  family.** Closed in stage 4 under decision D-4-3
+  (whole-family scope). Stage 4 closed both halves: the
+  stage-4 contribution (bridge dispatch arms, const-shape
+  composition, §3.3 Phase B step 9 dedup check) and the
+  stage-12-territory contribution (§13.3 `SyntheticItemKind`
+  enum extension with `ConstMemoryStatic { content_hash:
+  ContentHash }` variant; §13.4 const-memory-family segments
+  and `DefPathHash` canonical-payload-bytes row). All edits
+  landed in `stage-4/spec-snapshot.md`. Stage 12 inherits the
+  changes by reference; no further stage-12 spec work is
+  required for this family. Cross-refs:
+  `stage-4/spec-snapshot.md` §9.7 ("Reference-typed const
+  handling (D-4-3)" subsection + bridge dispatch table
+  `Slice` / `Indirect`-over-Memory rows + `Memory(memory)`
+  GlobalAlloc projection row), §13.3 (`ContentHash` type +
+  `ConstMemoryStatic` variant), §13.4 (const-memory family
+  segments + DefPathHash construction), §3.3 Phase B step 9
+  (`ConstMemoryStatic` dedup sub-bullet);
+  `stage-4/discussions.md` D-4-3 parent + D-4-3.1 through
+  D-4-3.10; `stage-4/review-log.md` D-4-3 rounds.

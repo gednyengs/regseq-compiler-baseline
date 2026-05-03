@@ -1666,6 +1666,726 @@ inline-only rationale).
 
 ---
 
+### D-4-3 -- Reference-typed const handling: `SyntheticItemKind::ConstMemoryStatic` family [LOCKED]
+
+**Question.** How does the bridge represent reference-typed
+const values whose storage is backed by an anonymous
+`GlobalAlloc::Memory` allocation (`&str` / `&[T]` literals,
+plus thin-pointer references into anonymous memory) such that
+two builds with the same source produce byte-identical
+canonical content for the resulting `Const` value?
+
+**Key options.**
+
+1. **Option A -- bridge-synthesised content-keyed Static.**
+   Synthesise an immutable `Static` Item per unique memory-
+   content blob, with a content-derived `DefPathHash`.
+   Reference-typed const values then compose from D-4-1's
+   existing variants: wide-pointer references become
+   `Aggregate([Reloc, Uint(Usize, len)])`; thin-pointer
+   references become `Reloc(synth_static_inst_ref)`.
+   Structurally parallel to vtable instance synthesis (§13.2 /
+   §13.3 / §13.4).
+2. **Option B -- new top-level `Const` variant for memory-
+   blobs.** Add a `MemoryConst { bytes: Vec<Byte>, meta: u64 }`
+   variant that inlines the content directly.
+3. **Option C -- bridge-rejection.** Continue rejecting
+   `GlobalAlloc::Memory` arms; reference-typed consts remain
+   permanently out of scope.
+
+**Decision.** Option A. Closed across ten sub-decisions
+D-4-3.1 through D-4-3.10 pinning the family name and payload,
+the `ContentHash` construction, the §13.3 enum extension, the
+§13.4 segment / DefPathHash construction, the bridge synthesis
+rule, the synthesised Static's `Ty` and mutability, the bridge
+dispatch arms (with explicit non-zero-offset rejection), the
+§3.3 Phase B step 9 dedup check, and the closure of the
+outbound expectation in `stage-12/expectations.md`.
+
+**Reasoning.**
+
+*Why not Option B (new `Const` variant).* The existing
+11-variant `Const` set (D-4-1) is closed and exhaustive over
+post-mono `mir::ConstValue` shapes. Adding a `MemoryConst`
+variant duplicates `Const::Bytes` (which already encodes
+arbitrary byte sequences with init/provenance) and wide-
+pointer values (which `Aggregate([Reloc, Uint])` already
+expresses compositionally). It violates D-4-1.9's first-class-
+aggregate decision retroactively — D-4-1.9 was made *because*
+this case was on the horizon. A new variant adds an
+identity-key encoding obligation (D-4-2 would need extending)
+for no signal that doesn't already live elsewhere.
+
+*Why not Option C (bridge-rejection).* Every Rust program
+containing a string literal, byte slice, or `&[T]` literal
+hits the `GlobalAlloc::Memory` arm. Permanent rejection makes
+the bridge unusable for any real driver code. Rejection is
+the wrong methodology answer here — the no-defensive-fallbacks
+rule applies to *partially-handled* cases (where the bridge
+might silently widen), not to *known-essential* cases that
+need a closed encoding.
+
+*Why bridge-synthesised content-keyed Static (Option A).*
+Three voices: (i) the vtable family at §13.2 / §13.3 / §13.4
+already solves the structurally-parallel problem (anonymous
+bridge-fabricated Items needing cross-build-stable identity);
+the same pattern fits memory blobs uniformly. (ii) Content-
+keyed dedup means two bytes-identical allocations across
+builds (or even within one build, e.g., the same string
+literal appearing in two crates) collapse to one synth Item —
+which is what consumers expect. (iii) Composition over D-4-1's
+existing variants means D-4-3 is mechanical extension of the
+established axes (one new `SyntheticItemKind` variant; one new
+§13.4 family row; one new §13.4 payload-bytes row; revised
+bridge dispatch arms; one new §3.3 step 9 sub-bullet) — no new
+design space.
+
+The non-zero-offset edge case (`Indirect { alloc_id, offset != 0 }`
+over `GlobalAlloc::Memory`) is **bridge-rejected** with a
+no-defensive-fallbacks rule rather than handled in v1: drivers
+in practice don't produce these (named statics carry shared
+structures where field-pointers might be needed); and
+extending `InstanceRef` with an offset field would be a
+substantial change to a stage-4-locked `InstanceRef` shape (D-4-1.5 / §9.7). The case is
+rejected unless a future spec revision admits it; no slot is
+reserved in the dispatch table or `InstanceRef` shape.
+
+*Why whole-family scope (stage-4 + stage-12 in one decision).*
+The two halves are tightly coupled: D-4-3's stage-4
+contribution (bridge dispatch arms producing
+`Aggregate([Reloc(synth_static_inst_ref), Uint])`) names a
+`synthesised_static_inst_ref` that the §13.3 / §13.4 family
+extension must produce. Splitting across stages leaves
+forward-looking placeholders in the spec until stage 12 closes
+the gap, violating the no-forward-looking-placeholders rule.
+The §13 changes are mechanical mirror of the vtable family
+precedent — one new enum variant, one new segments row, one
+new payload-bytes row — and don't merit independent stage-12
+framing time. `stage-12/expectations.md:357-375` already
+admits this path.
+
+**Methodology rules invoked.**
+
+- *Store the result, not the input.* The synthesised Item
+  carries `content_hash` (the cross-build-stable identity);
+  the bridge does not store the rustc `AllocId`.
+- *Cross-build canonicalisation via stable identity.*
+  `ContentHash` is computed via the established
+  SHA-256-truncated hash family (parallel to `ArgsKey` /
+  `ProjectionBindingsKey`); the synthesised `DefPathHash` is
+  computed per §13.4's existing rule with the new family's
+  canonical payload bytes.
+- *No defensive fallbacks.* Non-zero offsets and
+  `feature(type_id)` are rejection-enforced; the bridge raises
+  a diagnostic naming the rustc shape, never silently widens.
+- *No forward-looking placeholders.* Non-zero offset handling
+  is **rejected** rather than reserved; no slot in the
+  dispatch table or `InstanceRef` shape is reserved for a
+  future extension. If the case ever becomes load-bearing, a
+  future spec revision admits it append-only.
+- *Compositional behavior beats special-case flags.*
+  `Aggregate([Reloc, Uint])` falls out of D-4-1.9's first-
+  class-aggregate decision; no new variant.
+
+**Prior-art evidence.**
+
+- `prior-art/rustc.md` Finding 9 -- `mir::ConstValue::Slice`
+  and `Indirect`-via-`GlobalAlloc::Memory` are the rustc
+  shapes that need closure. The bridge-rejection of `Memory`
+  in D-4-1 was justified by deferral; D-4-3 closes the
+  deferral.
+- `prior-art/charon.md` Finding 8 -- charon synthesises
+  per-content statics (`StaticGlobalDecl` family) for
+  reference-typed constants; closest peer's design and the
+  precedent for content-keyed synthesis.
+- `prior-art/llvm.md` Finding 6 -- LLVM's
+  `internal constant` global per string literal is the
+  C-codegen-side counterpart of D-4-3's synthesised Static
+  (downstream codegen lowers `ConstMemoryStatic` to exactly
+  this form).
+- `prior-art/README.md` §3.1 -- 5-of-5 non-rustc projects
+  fail cross-build determinism; rustc's `HashStable` /
+  resolve-then-hash discipline is the only adjacent
+  precedent. D-4-3 inherits the same discipline (resolve
+  the anonymous AllocId to its memory-content target before
+  hashing).
+- `prior-art/regseq-model-old.md` Finding 5 -- old
+  `LiteralValue` had no string-literal handling; stage-4
+  closes via the synthesised-Static path rather than
+  introducing a new `LiteralValue` variant (which would
+  duplicate D-4-1.9's compositional aggregate).
+
+**Worked examples.** Pinned in sub-decisions D-4-3.6 through
+D-4-3.8; assembled into `spec-snapshot.md` §9.7's
+"Reference-typed const examples" block within the new
+"Reference-typed const handling (D-4-3)" subsection.
+
+**Cross-refs.** `spec-snapshot.md` §9.7 ("Reference-typed
+const handling (D-4-3)" subsection; bridge dispatch table
+`Memory(memory)` row; bridge dispatch table `Slice` /
+`Indirect`-over-Memory rows); `spec-snapshot.md` §13.3
+(`ContentHash` type; `SyntheticItemKind::ConstMemoryStatic`
+variant); `spec-snapshot.md` §13.4 (const-memory family
+segments + DefPathHash construction); `spec-snapshot.md`
+§3.3 Phase B step 9 (`ConstMemoryStatic` dedup sub-bullet);
+`stage-12/expectations.md` "From stage 4" section (closed by
+D-4-3); `status.md` "In-flight decisions" / "Open decisions
+(post-D-4-3)"; `review-log.md` D-4-3 rounds.
+
+---
+
+### D-4-3.1 -- Family name + payload shape [LOCKED]
+
+**Question.** What name and payload does the new
+`SyntheticItemKind` variant carry?
+
+**Key options.**
+
+1. `ConstMemoryStatic { content_hash: ContentHash }` (the
+   proposed name from the D-4-1 deferred subsection).
+2. Rename (e.g., `MemoryBlobStatic`, `ConstAllocStatic`).
+3. Extended payload (carry the byte length or a
+   `Ty::Array(u8, N)` reference inline).
+
+**Decision.** Option 1.
+
+```rust
+ConstMemoryStatic { content_hash: ContentHash },
+```
+
+**Reasoning.** The proposed name is already in three spec
+locations + `stage-12/expectations.md`; rename costs cross-ref
+churn for no semantic benefit. "ConstMemoryStatic" reads
+correctly: an immutable Static synthesised to back a
+reference-typed const. Payload = just `content_hash` because
+the *identity* of the synth Item is the content; the byte
+length and `Ty::Array(u8, N)` are *consequences* of the
+content (length is computed from `Allocation.bytes.len()`;
+`Ty` is computed from length), not part of identity. Same
+discipline as `VTableInstance { principal, self_ty }` carrying
+only identity-bearing fields and computing the `vtable_ty`
+shape from those.
+
+**Methodology rules invoked.** *Store the result, not the
+input;* *compositional behavior beats special-case flags*.
+
+**Prior-art evidence.**
+
+- `prior-art/charon.md` Finding 8 -- charon's static-global
+  synthesis carries content as a payload; identity is by
+  declaration shape. Stage-4 inverts: identity is by content
+  hash; content is on the resolved Static's `init`.
+
+**Cross-refs.** `spec-snapshot.md` §13.3
+(`SyntheticItemKind::ConstMemoryStatic` variant declaration;
+`ContentHash` type definition).
+
+---
+
+### D-4-3.2 -- `ContentHash` construction [LOCKED]
+
+**Question.** What is the canonical hash construction for
+`ContentHash`?
+
+**Key options.**
+
+1. SHA-256 truncated to leading 16 bytes BE-loaded into
+   `u128`, identical to `ArgsKey` / `ProjectionBindingsKey`
+   (the established stage-4 hash family).
+2. Full SHA-256 (32 bytes).
+3. Non-cryptographic (SipHash, FxHash, etc.).
+
+**Decision.** Option 1.
+
+```rust
+pub struct ContentHash(pub u128);
+```
+
+Canonical input = the canonical D-4-2
+`Const::Bytes(Vec<Byte>)` byte form of the memory allocation
+per §9.7's per-`Const`-variant byte-encoding tags (variant
+tag(6) + u32 LE byte_count + per-Byte sub-tag-encoded payload,
+including any internal `Byte::Reloc(InstanceRef)` for
+relocation-bearing memory).
+
+**Reasoning.** Matches `ArgsKey` and `ProjectionBindingsKey`
+— one hash family in the stage; consumers know the collision
+model (§13.3 honesty note: < 2^-50 collision probability for
+realistic driver-crate volume). Reusing D-4-2's `Bytes` byte
+form means `ContentHash` naturally captures all three sources
+of allocation distinctness uniformly: (a) initialised payload
+bytes; (b) `init_mask` ranges (encoded as `Byte::Uninit`
+runs); (c) `provenance` entries (encoded as
+`Byte::Reloc(InstanceRef)` runs). No new canonicalisation is
+introduced.
+
+**Methodology rules invoked.** *Cross-build canonicalisation
+via stable identity;* *compositional behavior beats
+special-case flags*.
+
+**Prior-art evidence.**
+
+- `prior-art/rustc.md` Finding 8 -- `HashStable for AllocId`
+  resolves to content before hashing; ContentHash inherits
+  the same discipline.
+- `prior-art/charon.md` Finding 8 -- per-content statics
+  use a hash-of-content key (charon's `static_id` is
+  content-derived).
+
+**Cross-refs.** `spec-snapshot.md` §13.3 (`ContentHash`
+canonical encoding subsection; collision honesty note);
+`spec-snapshot.md` §9.7 (per-`Const`-variant byte-encoding
+tags `Bytes` row -- the canonical input grammar).
+
+---
+
+### D-4-3.3 -- §13.3 `SyntheticItemKind` variant placement [LOCKED]
+
+**Question.** Where in the `SyntheticItemKind` enum does
+`ConstMemoryStatic` go?
+
+**Decision.** Append after `VTableDropShim`, per the §13.3
+append-only stability rule.
+
+**Reasoning.** Append-only is the §13.3 invariant: existing
+discriminants are immutable so cross-build hashes for
+already-admitted synth Items never change. The §13.4
+`synthetic_kind_discriminant` byte in the canonical payload
+(per `spec-snapshot.md`'s "synth.local_hash = ..." rule)
+depends on this stability; reordering would break every
+existing synth Item's `DefPathHash`.
+
+**Methodology rules invoked.** *No forward-looking
+placeholders;* *cross-build canonicalisation via stable
+identity*.
+
+**Prior-art evidence.**
+
+- §13.3's existing append-only rule at
+  `spec-snapshot.md` directly applies to D-4-3.
+
+**Cross-refs.** `spec-snapshot.md` §13.3
+(`SyntheticItemKind` enum -- the append-only stability
+contract is the relevant rule).
+
+---
+
+### D-4-3.4 -- §13.4 segments for the const-memory family [LOCKED]
+
+**Question.** What's the canonical `DefPath.segments` form
+for `ConstMemoryStatic` Items?
+
+**Key options.**
+
+1. Three segments: marker + family-name + content-hash hex
+   (mirroring `VTableType`'s depth).
+2. Two segments: marker + content-hash hex (no family-name
+   segment).
+3. Four segments: marker + "const" + "memory_static" +
+   content-hash hex (split for matching the closure family's
+   deeper hierarchy).
+
+**Decision.** Option 1.
+
+```text
+ConstMemoryStatic family
+  segments = [
+    TypeNs("<regseq_synth>"),
+    TypeNs("const_memory_static"),
+    TypeNs(<content_hash hex>),
+  ]
+```
+
+**Reasoning.** Matches the vtable family's depth and pattern.
+The "const_memory_static" segment is the family discriminator
+— auditors reading segments alone can identify the synth kind
+without parsing the trailing hex. A two-segment form would be
+ambiguous if future synth families share `<regseq_synth>` +
+hex without a family-name segment (the hex alone is not
+self-describing). A four-segment form is over-elaboration —
+the closure family's depth comes from its ClosureCallKind sub-
+discriminator, which has no analogue here.
+
+**Methodology rules invoked.** *Compositional behavior beats
+special-case flags;* *cross-build canonicalisation via stable
+identity*.
+
+**Prior-art evidence.**
+
+- `prior-art/llvm.md` Finding 6 -- LLVM's
+  `@.str.<index>` / `@__const.<fn>.<name>` naming convention
+  uses a family-discriminator-then-identity pattern. D-4-3.4
+  mirrors this structurally.
+
+**Cross-refs.** `spec-snapshot.md` §13.4 (synthetic
+`DefPath.segments` encoding; vtable family precedent).
+
+---
+
+### D-4-3.5 -- §13.4 DefPathHash canonical payload bytes [LOCKED]
+
+**Question.** What canonical payload bytes feed the family-
+specific SHA-256 input for `ConstMemoryStatic`?
+
+**Key options.**
+
+1. Just the 16-byte content hash
+   (`content_hash.0.to_be_bytes()`).
+2. Add the byte length explicitly (16 + 8 bytes).
+3. Add the original Rust element type (e.g., `u8`, `u32`)
+   as a field tag.
+
+**Decision.** Option 1.
+
+```text
+ConstMemoryStatic
+  ++ ContentHash bytes (16 B; equivalently
+     content_hash.0.to_be_bytes() per §13.3 ContentHash byte form)
+```
+
+**Reasoning.** The content hash is the identity by
+construction; the byte length is content-disambiguated by
+SHA-256 already (two allocations of different lengths can't
+collide except probabilistically below the threat-model
+bound). Adding the byte length would duplicate. The original
+Rust element type isn't part of identity (D-4-3.7's type-
+erase-to-bytes rationale); two allocations with identical
+bytes share the synth Static regardless of element type.
+
+**Methodology rules invoked.** *Store the result, not the
+input;* *no forward-looking placeholders*.
+
+**Prior-art evidence.**
+
+- §13.4's existing per-family payload bytes pattern
+  (`spec-snapshot.md`'s VTableInstance / VTableMethodShim
+  rows) is the direct precedent.
+
+**Cross-refs.** `spec-snapshot.md` §13.4 (synthetic
+`DefPathHash` construction; per-family canonical payload
+bytes table -- D-4-3 row).
+
+---
+
+### D-4-3.6 -- Bridge synthesis rule (lazy) [LOCKED]
+
+**Question.** When does the bridge create a `ConstMemoryStatic`
+Item, and what storage does it carry?
+
+**Key options.**
+
+1. **Lazy.** When the bridge dispatches a
+   `mir::ConstValue::Slice` / `Indirect`-over-Memory arm, look
+   up the underlying `Allocation`, compute its canonical D-4-2
+   `Bytes` byte form, hash to get `ContentHash`, look up an
+   existing `ConstMemoryStatic { content_hash }` in
+   `item_synthetic_kinds`; if absent, synthesise a new Static
+   Item.
+2. **Eager.** Pre-walk all `GlobalAlloc::Memory` entries
+   upfront, before the const dispatch.
+
+**Decision.** Option 1 (lazy). Synthesised Item carries:
+
+- `item.kind = ItemKind::Static`
+- `item_def_paths[item]` synthesised per §13.4
+- `item_synthetic_kinds[item] = ConstMemoryStatic { content_hash }`
+- A corresponding `Instance` with
+  `kind = InstanceKind::Static { ty: array_ty, init: Some(c),
+  mutability: Mutability::Not }`, where `array_ty` is the
+  `TyId` for `Ty::Array(Ty::Uint(U8), N)` with
+  `N = memory.bytes.len() as u64` (resolved against the
+  `TyInterner`; created if absent), and `c` is the `ConstId`
+  for the `Const::Bytes(Vec<Byte>)` computed from the
+  allocation in step 2 of the lazy lookup. `init: None` is
+  invalid for `ConstMemoryStatic` Items (rejected in §3.3
+  Phase B's `ConstMemoryStatic` immutable-statics rule).
+
+(Per the stage-1 Item schema, per-kind rich data — including
+the `Static`'s `ty` and `init` — lives on the `Instance`, not
+the `Item`. The `Item` itself carries only `def_path`, `kind`,
+`span`, flags, and `opaque_handle_eligible`. The
+`Ty::Array(U8, N)` shape and the `Const::Bytes` initialiser
+live on the corresponding `Instance.kind`.)
+
+**Reasoning.** Lazy synthesis matches closure / vtable family
+precedent (the bridge's existing pattern is to synth Items
+on-demand during dispatch, not pre-emptively). Eager would
+require walking rustc's full alloc table upfront, which
+doesn't compose with rustc's lazy `tcx.global_alloc(id)` query
+model and conflicts with the bridge's existing per-Item
+discovery walk. Dedup-by-`ContentHash` lookup means lazy
+synthesis still dedupes correctly across all dispatch sites:
+two arms with the same content land at the same `ContentHash`
+and reuse the existing synth Item.
+
+**Methodology rules invoked.** *Compositional behavior beats
+special-case flags* (one synthesis pathway, not separate
+eager / lazy modes); *cross-build canonicalisation via stable
+identity*.
+
+**Prior-art evidence.**
+
+- `prior-art/charon.md` Finding 8 -- charon's static-global
+  synthesis is also lazy / on-demand.
+- `prior-art/rustc.md` Finding 9 -- rustc's
+  `tcx.eval_static_initializer` and `tcx.global_alloc` are
+  query-driven (lazy by default); D-4-3.6 fits this model.
+
+**Cross-refs.** `spec-snapshot.md` §9.7 ("Reference-typed
+const handling (D-4-3)" subsection -- bridge synthesis rule
+steps 1-5).
+
+---
+
+### D-4-3.7 -- Synthesised Static's Ty + Mutability [LOCKED]
+
+**Question.** What `Ty` and `Mutability` does the synthesised
+Static carry?
+
+**Key options.**
+
+1. `Ty::Array(u8, N)` + `Mutability::Not`.
+2. The original Rust element type (e.g., `Ty::Array(u32, M)`
+   for `&[u32]`).
+3. `Ty::Array(u8, N)` + mutability inherited from the rustc
+   allocation's flags.
+
+**Decision.** Option 1.
+
+```text
+ty:         Ty::Array(Ty::Uint(U8), N)    where N = memory.bytes.len() as u64
+mutability: Mutability::Not
+```
+
+**Reasoning.** *Type-erasure to bytes.* The Static is content-
+keyed — its identity is the bytes, not the original element
+type. Two Memory allocations with identical bytes (e.g., the
+same byte sequence appearing as `&[u8]` and as `&str`) must
+dedup to one synth Static, which only works if the Static is
+type-erased to bytes. The wrapping `Aggregate([Reloc, Uint])`
+(for `Slice` arms) carries the typed-pointer side; the Static
+itself doesn't need to "be" the element type. C codegen
+lowers as `static const uint8_t mem_<hash>[N] = { ... };` —
+natural fit.
+
+*Mutability.* Reference-typed consts are by definition
+immutable in Rust source (`&str`, `&[T]`, `&dyn Trait`).
+Mutable references can never be const. The synth Static's
+mutability is a synthesis-time choice tied to the
+reference-typed-const semantics, not a passthrough from
+rustc's allocation flags. Matches `VTableInstance` precedent
+(also `Mutability::Not`).
+
+**Methodology rules invoked.** *Store the result, not the
+input;* *no defensive fallbacks* (mutability is fixed by
+reference-typed-const semantics, not derived from
+allocation flags that might drift).
+
+**Prior-art evidence.**
+
+- `prior-art/llvm.md` Finding 6 -- LLVM's
+  `private constant [N x i8]` for string literals is exactly
+  the C-codegen-side analogue of D-4-3.7's chosen form.
+- §13.2's `VTableInstance` precedent (`spec-snapshot.md:798`)
+  -- `Mutability::Not` is the established discipline for
+  bridge-synthesised statics.
+
+**Cross-refs.** `spec-snapshot.md` §9.7 ("Reference-typed
+const handling (D-4-3)" -- bridge synthesis rule step 4
+specifying `Ty::Array(u8, N)` and `Mutability::Not`);
+`spec-snapshot.md` §13.2 (`VTableInstance` immutability
+precedent).
+
+---
+
+### D-4-3.8 -- Bridge dispatch arms (and offset handling) [LOCKED]
+
+**Question.** How do `mir::ConstValue::Slice { data, meta }`
+and `mir::ConstValue::Indirect { alloc_id, offset }`-over-
+Memory arms map to RegseqModel `Const`?
+
+**Key options.**
+
+1. **Slice → wide-pointer Aggregate; Indirect-thin → bare
+   `Reloc`.** Slice carries explicit `meta`; Indirect over
+   sized pointee is a thin pointer.
+2. Both produce `Aggregate([Reloc, Uint])`.
+3. Add a new top-level `Const` variant.
+
+**Decision.** Option 1.
+
+```text
+mir::ConstValue::Slice { data, meta }                      ->  Aggregate([
+                                                                   Reloc(synth_static_inst_ref(data)),
+                                                                   Uint(Usize, meta),
+                                                               ])
+mir::ConstValue::Indirect { alloc_id, offset = 0 }         ->  Reloc(synth_static_inst_ref(alloc_id))
+  over GlobalAlloc::Memory, sized pointee Ty
+mir::ConstValue::Indirect { alloc_id, offset != 0 }        ->  bridge-rejected
+  over GlobalAlloc::Memory
+```
+
+**Reasoning.** *Wide vs thin pointer split.* `Slice { data,
+meta }` is rustc's post-mono representation for `&str` /
+`&[T]` — explicitly wide-pointer-shaped (data half + meta
+half). `Indirect { alloc_id, offset = 0 }` over sized pointee
+is rustc's representation for `&[T; N]` / `&T` (thin pointer).
+The distinction is real at the value level — wrapping both in
+`Aggregate([Reloc, Uint])` would force-fabricate a `meta`
+field for thin pointers (no rustc source for it), violating
+*store the result, not the input*. Option 1 distinguishes
+them per their actual semantics.
+
+*Non-zero offset rejection.* Non-zero offsets into Memory
+allocations occur when const-eval produces a pointer into the
+middle of a larger anonymous allocation (e.g., `&FOO.field`
+where `FOO` is itself anonymous-memory-backed). Drivers in
+practice don't produce these — driver code uses named statics
+for shared structures, so any "field of an anonymous memory
+blob" pattern would produce a `GlobalAlloc::Static`, not
+`GlobalAlloc::Memory`. Rejecting at the bridge with a
+diagnostic preserves the no-defensive-fallbacks discipline;
+extending `InstanceRef` with an offset field would be a
+substantial change to a stage-4-locked `InstanceRef` shape (D-4-1.5 / §9.7) for a case
+that may never become load-bearing. The case is rejected
+unless a future spec revision admits it; no slot is reserved
+in the dispatch table or `InstanceRef` shape.
+
+**Methodology rules invoked.** *Store the result, not the
+input;* *no defensive fallbacks;* *no forward-looking
+placeholders* (the rejection is a hard rejection, not a
+reserved slot).
+
+**Prior-art evidence.**
+
+- `prior-art/rustc.md` Finding 9 -- `mir::ConstValue::Slice`
+  and `Indirect`-over-Memory are the two distinct rustc
+  shapes; D-4-3.8 mirrors the distinction.
+- `prior-art/charon.md` Finding 8 -- charon's
+  `Const::Slice` / `Const::Ref` distinction parallels Slice
+  / Indirect-thin.
+
+**Cross-refs.** `spec-snapshot.md` §9.7 (bridge dispatch
+table -- `Slice` row, `Indirect`-over-Memory rows including
+non-zero offset rejection; "Reference-typed const handling
+(D-4-3)" subsection -- worked examples).
+
+---
+
+### D-4-3.9 -- §3.3 Phase B step 9 dedup check [LOCKED]
+
+**Question.** Does the spec need a new Phase B step 9 sub-
+bullet for `ConstMemoryStatic` dedup, or is it covered by
+existing checks?
+
+**Key options.**
+
+1. New sub-bullet ordered after the value-level lookup
+   injectivity pass: recompute `ContentHash` from each synth
+   Static's `init` and verify it matches the stored
+   `content_hash` field; verify no two `ConstMemoryStatic`
+   Items share a `content_hash`.
+2. Rely on existing checks (lookup injectivity over
+   `item_synthetic_kinds` should suffice).
+3. Move the dedup check to Phase C (alongside the vtable
+   rebuild).
+
+**Decision.** Option 1.
+
+```text
+- ConstMemoryStatic dedup (D-4-3). For every Item I with
+  item_synthetic_kinds[I] = ConstMemoryStatic { content_hash },
+  recompute ContentHash from the resolved Static's
+  init: Some(c) content (where c is the ConstId for the
+  Const::Bytes(Vec<Byte>) value; init: None is rejected by
+  the ConstMemoryStatic immutable-statics rule earlier in
+  this Phase B pass) per the canonical D-4-2 Const::Bytes
+  byte form per §9.7's per-Const-variant byte-encoding tags,
+  and verify it matches the stored content_hash field;
+  verify no two ConstMemoryStatic Items share a content_hash.
+  (Ordered after the value-level lookup injectivity pass --
+  the recomputation depends on canonical Const::Bytes bytes
+  for the synth Static's init.)
+```
+
+**Reasoning.** *Why a new sub-bullet.* Existing step 9 checks
+(value-level lookup injectivity over `ConstInterner`; sub-
+reference resolution for `Reloc` / `Bytes::Reloc`) cover the
+*Const* level — they ensure no two `Const` values share a
+canonical key. They do *not* cover the *Item* level — they
+don't verify that two anonymous memory allocations with
+identical content collapse to one synth Item. That's a
+separate invariant: `ConstMemoryStatic`'s `content_hash`
+field is the identity, and content-equal allocations must
+produce content-equal `content_hash` values, which must
+land at the same Item.
+
+*Why ordered after value-level lookup injectivity.* The
+recomputation step needs to read the canonical bytes of each
+synth Static's `init: ConstId`, which is a value-level
+`Const::Bytes` entry. Reading is safe only after the value-
+level pass has verified canonical-form well-formedness for
+those entries.
+
+*Why not Phase C.* Phase C is for transient-map rebuild
+(vtables, etc.); the `ConstMemoryStatic` dedup is a
+content-uniqueness invariant, structurally a Phase B check.
+
+**Methodology rules invoked.** *No defensive fallbacks*
+(reject corruption rather than silently accept duplicate
+content-hash Items); *cross-build canonicalisation via stable
+identity*.
+
+**Prior-art evidence.**
+
+- §3.3 step 9's existing value-level pass (D-4-2)
+  established the recomputation-and-match pattern; D-4-3.9
+  applies it at the Item level.
+- §3.3 Phase C step 10's vtable-rebuild duplicate-rejection
+  pattern is the structural analogue (reject duplicate
+  principal keys for `VTableType`); D-4-3.9 rejects
+  duplicate `content_hash` for `ConstMemoryStatic`.
+
+**Cross-refs.** `spec-snapshot.md` §3.3 Phase B step 9
+(`ConstMemoryStatic` dedup sub-bullet); `spec-snapshot.md`
+§13.3 (`ContentHash` definition); `spec-snapshot.md` §9.7
+(per-`Const`-variant byte-encoding tags -- the canonical
+`Const::Bytes` byte form recomputed in this check).
+
+---
+
+### D-4-3.10 -- Stage-12 `expectations.md` closure [LOCKED]
+
+**Question.** How does `stage-12/expectations.md`'s outbound
+"From stage 4" entry get marked closed?
+
+**Decision.** Edit `stage-12/expectations.md`'s "From stage 4"
+section to flip the `SyntheticItemKind::ConstMemoryStatic`
+family bullet from open / pending to "closed by D-4-3 in
+stage 4," with cross-refs to the spec sections that landed
+(§13.3 enum extension; §13.4 segments + DefPathHash; §9.7
+dispatch arms; §3.3 step 9 dedup check).
+
+**Reasoning.** Bookkeeping; not a design decision. The whole-
+family scope (per the Phase A sign-off) means D-4-3 closes
+both the stage-4 and stage-12 halves; the outbound expectation
+recording the gap is no longer accurate. Updating preserves
+the audit trail per the project-wide convention
+(`../README.md` "Forward expectations live in
+`stage-N/expectations.md`").
+
+**Methodology rules invoked.** None applicable — audit-trail
+bookkeeping. (The project-wide outbound-expectations
+convention at `../README.md` is the relevant rule, not a
+stage-4 methodology rule.)
+
+**Prior-art evidence.** None applicable -- bookkeeping rule.
+
+**Cross-refs.** `stage-12/expectations.md` "From stage 4"
+section; `discussions.md` D-4-3 parent (Cross-refs).
+
+---
+
 ## 2. Reference primer
 
 (To be filled as concepts surface during stage-4 work that

@@ -809,3 +809,237 @@ deeper findings surfacing as cumulative-consistency tightened)
 mirrors D-4-1's R1=10 → R2=5 → R3=2 → R4=1 → R5=1 → R6=0
 trajectory; both clusters required ~6-7 rounds to converge,
 which is the established stage-4 spec-review depth.
+
+---
+
+## Round 1 -- D-4-3 initial review
+
+**Date.** 2026-05-03.
+
+**Scope.** D-4-3 cluster (parent decision + sub-decisions
+D-4-3.1 through D-4-3.10) covering reference-typed const
+handling via the new `SyntheticItemKind::ConstMemoryStatic`
+family. Whole-family scope: stage-4 owns bridge dispatch +
+const composition + Phase B validation; stage-12 territory
+(§13.3 enum extension + §13.4 segments / DefPathHash) closed
+in stage 4 since the changes mirror the vtable family
+precedent. Spec under review: `stage-4/spec-snapshot.md` §9.7
+(new "Reference-typed const handling (D-4-3)" subsection
+replacing the prior deferred subsection; new dispatch table
+rows for `Slice`, `Indirect`-over-Memory, and `Memory(memory)`
+GlobalAlloc projection); §13.3 (`ContentHash` type;
+`ConstMemoryStatic` variant + canonical encoding subsection);
+§13.4 (const-memory family segments + DefPathHash + ownership
+rule); §3.3 Phase B step 9 (`ConstMemoryStatic dedup` sub-
+bullet). Audit shape: `stage-4/discussions.md` D-4-3 parent +
+D-4-3.1 through D-4-3.10. Outbound: `stage-12/expectations.md`
+"From stage 4" flipped to `[CLOSED by D-4-3]`.
+
+**Verdict.** BLOCK -- 6 issues (2 BLOCK / 3 MINOR / 1 NIT).
+
+**Issues raised.**
+
+1. **[BLOCK] static-init-shape.** `InstanceKind::Static`
+   stores `init: Option<ConstId>`, but the synthesis rule
+   said `init: ConstId` (without the `Option` wrapper).
+   Schema mismatch.
+2. **[BLOCK] phase-b-family-validation.** §3.3 Phase B's
+   `SyntheticItemKind ↔ ItemKind` consistency list omitted
+   `ConstMemoryStatic → ItemKind::Static`. Step 9 had a
+   dedup check but no immutable-statics validation parallel
+   to the existing `VTableInstance` immutable-statics rule.
+3. **[MINOR] stale-deferred-const-text.** §9.7 still had
+   inline doc-comments on `Const::Bytes` and `Const::NullPtr`
+   saying reference-typed handling "is deferred" even though
+   D-4-3 closes it. The append-only `Const`-tag note also
+   mentioned a future `ConstMemoryStatic`-backed family
+   appending at tag `11+`, contradicting D-4-3's "no new
+   `Const` variant" decision.
+4. **[MINOR] thin-pointer-type-side.** The synthesised Static
+   is type-erased to `Ty::Array(U8, N)`. Wide-pointer (Slice)
+   dispatch documented how the typed-pointer side is carried
+   by the wrapping `Aggregate`, but thin-pointer (Indirect)
+   dispatch had no equivalent statement about how the
+   pointee type is recovered at the use site.
+5. **[MINOR] forward-placeholder-d4k.** Non-zero offset
+   rejection text named a "future D-4-K extension" — a
+   forward-looking placeholder that contradicts D-4-3.8's
+   audit-shape claim of "no slot reserved."
+6. **[NIT] methodology-mislabel.** D-4-3.10 (audit-trail
+   bookkeeping) cited "Cross-build canonicalisation via
+   stable identity" as its methodology rule, which is a
+   substantive methodology rule that doesn't apply to
+   bookkeeping.
+
+**Corrections applied.**
+
+- Issue 1: Updated §9.7 synthesis rule and D-4-3.6 audit-shape
+  to write `init: Some(c)` with the full `Static { ty, init,
+  mutability }` shape; explicitly noted that `init: None` is
+  invalid for `ConstMemoryStatic` Items. Updated §3.3 step 9
+  dedup sub-bullet to read `init: Some(c)` and reference the
+  immutable-statics rule for `init: None` rejection.
+- Issue 2: Added `ConstMemoryStatic { .. } → ItemKind::Static`
+  to the `SyntheticItemKind ↔ ItemKind` consistency list in
+  §3.3 Phase B. Added a new `ConstMemoryStatic` immutable-
+  statics validation bullet parallel to the
+  `VTableInstance` rule, requiring `mutability: Not`,
+  `init: Some(c)`, byte-array `Ty` shape, and `Const::Bytes`
+  init shape.
+- Issue 3: Updated §9.7's `Const::Bytes` doc-comment to
+  reference `ConstMemoryStatic` synthesised statics directly
+  (no longer "deferred"). Updated `Const::NullPtr` doc-comment
+  to clarify that reference-typed consts are handled by D-4-3,
+  not as `NullPtr`. Updated the append-only `Const`-tag note
+  to remove the `ConstMemoryStatic`-backed-family example
+  (since D-4-3 confirmed no new `Const` variant) and replaced
+  with a generic future-variant statement.
+- Issue 4: Added a "Pointee type at the use site" paragraph
+  after the bridge dispatch arms, explicitly stating that the
+  consumer's context supplies the pointee type for both Slice
+  (via the wrapping `Aggregate`'s position type) and
+  Indirect-thin (via the `Reloc`'s position type). Noted
+  C codegen casts from the byte static at the use site.
+- Issue 5: Removed "future D-4-K extension" wording from §9.7
+  and from the D-4-3 parent + D-4-3.8 audit entries. Replaced
+  with "rejected unless a future spec revision admits them"
+  (no specific decision name reserved).
+- Issue 6: D-4-3.10 methodology rules updated to "None
+  applicable — audit-trail bookkeeping," referencing the
+  project-wide outbound-expectations convention rather than
+  a stage-4 methodology rule.
+
+Round-2 prompt focus: verify each correction; surface any
+new issues introduced by the corrections; check residual
+soundness across the cluster.
+
+---
+
+## Round 2 -- D-4-3 re-review after round-1 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 1. Round-1 corrections summarised
+above.
+
+**Verdict.** BLOCK -- 3 issues (1 BLOCK / 2 MINOR / 0 NIT).
+All round-1 issues verified closed. The findings are
+schema-shape and provenance / consistency cleanups surfaced
+by the cumulative-consistency lens.
+
+**Issues raised.**
+
+1. **[BLOCK] item-ty-schema.** D-4-3 synthesis said
+   `item.ty = TyId for Ty::Array(...)`, but the stage-1 `Item`
+   schema does not have a `ty` field -- per-kind rich data
+   (including the Static's `ty`) lives on the `Instance`, not
+   the `Item`. `Item` carries only `def_path`, `kind`, `span`,
+   flags, and `opaque_handle_eligible`.
+2. **[MINOR] stale-stage4-status.** `stage-12/expectations.md`
+   was already flipped to `[CLOSED by D-4-3]`, but
+   `stage-4/status.md` still said D-4-3 was "next / open" with
+   the deferred-items section flagging `&str` / `&[T]` as
+   open. Inconsistent in-flight state.
+3. **[MINOR] wrong-lock-provenance.** D-4-3's non-zero-offset
+   rationale said adding an offset would change a "stage-3-
+   locked structure" twice, but `InstanceRef` is the
+   stage-4-locked const-relocation shape from D-4-1.5 / §9.7.
+
+**Corrections applied.**
+
+- Issue 1: Removed `item.ty = TyId for Ty::Array(...)` from
+  the §9.7 synthesis rule and from D-4-3.6's audit-shape
+  decision text. Updated the synthesised `Instance` shape to
+  carry the `ty` (`InstanceKind::Static { ty: array_ty, init:
+  Some(c), mutability: Not }`) and added an explanatory note
+  in both places that per-kind rich data lives on the
+  `Instance`, not the `Item`, per the stage-1 schema. The
+  immutable-statics validation rule was already correct
+  (reads `array_ty` from the Instance, not the Item) -- no
+  change needed there.
+- Issue 2: Updated `stage-4/status.md`'s top-of-file Status
+  line to "D-4-3 IN CODEX REVIEW"; reworked the inbound-
+  expectations bullet to mark `&str` / `&[T]` closed by D-4-3
+  (in active review); added an "In-flight decisions" section
+  for D-4-3; renamed "Open decisions" to "(post-D-4-3)";
+  rewrote the "Stage-4-specific deferred items" section to
+  state no items are currently active; rewrote "Next concrete
+  unit of work" to focus on completing the D-4-3 review loop;
+  updated the cluster-split discussion to reference D-4-K
+  (not D-4-3+) as the only remaining decision after D-4-3.
+- Issue 3: Replaced "stage-3-locked structure" with
+  "stage-4-locked `InstanceRef` shape (D-4-1.5 / §9.7)" in
+  both occurrences in `discussions.md` (D-4-3 parent reasoning
+  + D-4-3.8 reasoning).
+
+Round-3 prompt focus: verify R2 corrections; check whether
+the cluster is ready for APPROVE.
+
+---
+
+## Round 3 -- D-4-3 re-review after round-2 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 2. Round-2 corrections summarised
+above.
+
+**Verdict.** MINOR -- 1 issue (0 BLOCK / 1 MINOR / 0 NIT).
+All round-2 issues verified closed. The single finding is a
+cross-reference inaccuracy in the D-4-3 parent's audit-shape
+entry that did not propagate when status.md was restructured.
+
+**Issue raised.**
+
+1. **[MINOR] stale-d4-3-crossrefs.** D-4-3 parent's "Cross-refs"
+   section pointed at `status.md` "Open decisions / Locked
+   decisions" but D-4-3 now lives under "In-flight decisions"
+   (with "Open decisions (post-D-4-3)" containing only D-4-K).
+   Same cross-ref said `review-log.md` rounds were "none yet,"
+   but D-4-3 had Round 1 and Round 2 entries.
+
+**Correction applied.**
+
+- Updated D-4-3 parent's cross-ref to point at `status.md`
+  "In-flight decisions" / "Open decisions (post-D-4-3)" and
+  `review-log.md` "D-4-3 rounds" (replacing "rounds (none
+  yet)").
+
+Round-4 prompt focus: verify R3 correction; final cumulative-
+consistency check; expected to APPROVE.
+
+---
+
+## Round 4 -- D-4-3 final close-out re-review after round-3 fix
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 3.
+
+**Verdict.** APPROVE -- 0 issues (0 BLOCK / 0 MINOR / 0 NIT).
+All round-3 issues verified closed. Cumulative-consistency
+pass found no further issues. D-4-3 cluster closed.
+
+**Corrections applied.** None required.
+
+---
+
+## Round-trajectory summary -- D-4-3
+
+```
+R1: 6 issues (2 BLOCK / 3 MINOR / 1 NIT)   [BLOCK]
+R2: 3 issues (1 BLOCK / 2 MINOR / 0 NIT)   [BLOCK] -- all R1 closed; schema + provenance findings
+R3: 1 issue  (0 BLOCK / 1 MINOR / 0 NIT)   [MINOR] -- all R2 closed; cross-ref propagation
+R4: 0 issues                                [APPROVE] -- R3 closed
+```
+
+10 distinct findings closed across the iteration. D-4-3
+cluster LOCKED in `discussions.md` and `status.md`. The
+trajectory was tighter than D-4-1 (R1=10, 6 rounds) and
+D-4-2 (R1=6, 7 rounds) -- 4 rounds total -- because most
+D-4-3 design decisions were mechanical mirror of the
+vtable-family precedent (§13.2 / §13.3 / §13.4) rather than
+new design space. The deepest finding (R2 item-ty-schema)
+was a real schema-shape error caught by the cumulative-
+consistency lens after the surface-level wording errors
+had been cleared.
