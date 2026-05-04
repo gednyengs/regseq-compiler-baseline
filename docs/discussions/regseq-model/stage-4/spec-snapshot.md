@@ -1,4 +1,15 @@
-# RegseqModel Specification
+# RegseqModel Specification — Stage-4 snapshot
+
+**Snapshot at close of stage 4 (2026-05-03) — current spec
+lives in top-level `spec.md`.** This file is frozen as a
+historical artefact preserving stage 4's contributions in the
+audit-shape form they had at close. Top-level
+`docs/discussions/regseq-model/spec.md` carries the live spec
+(stage-1 + stage-3 + stage-4 contributions integrated by the
+merger per README §5.5 step 5; post-merge Codex review pass
+R1-R4 closed at APPROVE on 2026-05-03).
+
+---
 
 Live snapshot of the RegseqModel spec — what RegseqModel IS today,
 organised by topic. History (audit trail of decisions, alternatives

@@ -210,4 +210,118 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
 
 ## Stage 4+ (going forward, prefixed `D-{stage}-{decision}` format)
 
-(none yet)
+### Stage 4 (constants and literals)
+
+- **D-4-1** [LOCKED] — Closed `Const` enum at 11 variants:
+  `Bool(bool)`, `Char(u32)`, `Int(IntKind, u128)`,
+  `Uint(UintKind, u128)`, `Float(FloatKind, u128)`, `ZST`,
+  `Bytes(Vec<Byte>)`, `Aggregate(Vec<ConstId>)`,
+  `EnumValue { variant_idx, payload }`, `NullPtr(TyId)`,
+  `Reloc(InstanceRef)`. Plus three-state `Byte` (`Uninit |
+  Value(u8) | Reloc(InstanceRef)`) and the cross-build-stable
+  `InstanceRef` 4-tuple `(regseq_kind_rank, def_path_hash,
+  args_key, fn_shim_disambig)`. Type-level vs value-level
+  partition resolves stage 3's deferred dependency cycle via
+  the §3.3 Phase B step-4 / step-9 split.
+  - **D-4-1.1** [LOCKED] — Scalar grouping: per-type variants
+    (`Bool` / `Char` / `Int` / `Uint` / `Float`); bit-pattern
+    in `u128`; high-order zero for narrow widths; small-width
+    sign/zero extension into `u128`.
+  - **D-4-1.2** [LOCKED] — ZST canonicalisation: single `ZST`
+    variant; type from consumer context.
+  - **D-4-1.3** [LOCKED] — Aggregate field elements:
+    `Aggregate(Vec<ConstId>)` with interned children.
+  - **D-4-1.4** [LOCKED] — Enum payload:
+    `EnumValue { variant_idx: VariantIdx, payload: Vec<ConstId> }`;
+    discriminant lives on the consumer's `Ty::Enum`.
+  - **D-4-1.5** [LOCKED] — `InstanceRef` 4-tuple replaces local
+    `InstanceId` in `Reloc`; cross-build stability via
+    `def_path_hash` + `args_key`.
+  - **D-4-1.6** [LOCKED] — Null pointer typing: `NullPtr(TyId)`
+    per pointee type.
+  - **D-4-1.7** [LOCKED] — Inline-only type tag placement; no
+    outer `Const { ty, kind }` wrapper.
+  - **D-4-1.8** [LOCKED] — Three-state `Byte` for uninit /
+    initialised / pointer-bearing memory; maximal-relocation-
+    run well-formedness invariant.
+  - **D-4-1.9** [LOCKED] — Aggregate first-class (not
+    demote-to-static); bridge picks `Bytes` vs `Aggregate`
+    based on rustc's const-eval shape.
+
+- **D-4-2** [LOCKED] — `ConstIdentityKey` per-variant byte-form
+  schema. Tagged-tree byte stream parallel to §12.3's per-`Ty`
+  table; `u8` variant tags `0..=10` (append-only); per-variant
+  payload byte forms (scalars: `u128` LE bit-patterns; `Bytes`:
+  three-state per-`Byte` sub-tag; `Aggregate` / `EnumValue`:
+  recursive `canonical_const(ConstId)`); `u32` LE length
+  prefixes; `InstanceRef` 34-byte layout with
+  `args_key.to_be_bytes()` BE exception. §3.3 step 4 scoped
+  to type-level scalars; step 9 extended with three-state-DFS
+  acyclicity check + value-level lookup-injectivity check
+  ordered after acyclicity.
+  - **D-4-2.1** [LOCKED] — Variant tag: `u8` width,
+    contiguous `0..=10`, append-only.
+  - **D-4-2.2** [LOCKED] — Scalar payload byte forms.
+  - **D-4-2.3** [LOCKED] — Length prefix: `u32` LE.
+  - **D-4-2.4** [LOCKED] — `EnumValue.variant_idx` encoding:
+    `u32` LE before payload length.
+  - **D-4-2.5** [LOCKED] — `Byte` sub-discriminator:
+    `u8` (Uninit=0 / Value=1 / Reloc=2).
+  - **D-4-2.6** [LOCKED] — Aggregate / EnumValue recursion
+    via `canonical_const(ConstId)` + three-state DFS
+    acyclicity validation.
+  - **D-4-2.7** [LOCKED] — `NullPtr(TyId)` via recursive
+    `canonical_ty(TyId)`.
+  - **D-4-2.8** [LOCKED] — `Reloc(InstanceRef)` 34-byte layout
+    with `args_key.to_be_bytes()` BE exception.
+  - **D-4-2.9** [LOCKED] — `ZST` identity: tag-only.
+
+- **D-4-3** [LOCKED] — Reference-typed const handling
+  (`&str` / `&[T]` literals) via the new
+  `SyntheticItemKind::ConstMemoryStatic { content_hash:
+  ContentHash }` family. Bridge synthesises an immutable
+  byte-array Static per unique memory-content blob with a
+  content-derived `DefPathHash`; reference-typed const value
+  composes from D-4-1's existing variants as
+  `Aggregate([Reloc(synth_inst_ref), Uint(Usize, len)])`
+  (wide pointer) or `Reloc(synth_inst_ref)` (thin pointer).
+  No new `Const` variant needed. Whole-family scope:
+  stage-4 + stage-12 territory closed under one decision.
+  Non-zero offsets into Memory bridge-rejected.
+  - **D-4-3.1** [LOCKED] — Family name + payload:
+    `ConstMemoryStatic { content_hash: ContentHash }`.
+  - **D-4-3.2** [LOCKED] — `ContentHash` construction:
+    SHA-256-truncated `u128` parallel to `ArgsKey` /
+    `ProjectionBindingsKey`; canonical input = D-4-2
+    `Const::Bytes` byte form.
+  - **D-4-3.3** [LOCKED] — §13.3 enum extension append-only.
+  - **D-4-3.4** [LOCKED] — §13.4 segments
+    `["<regseq_synth>", "const_memory_static", <hash hex>]`.
+  - **D-4-3.5** [LOCKED] — §13.4 DefPathHash payload =
+    16-byte content hash.
+  - **D-4-3.6** [LOCKED] — Bridge synthesis rule: lazy
+    on-demand; per-kind rich data (Static's `ty` and `init`)
+    on the Instance, not the Item.
+  - **D-4-3.7** [LOCKED] — Synthesised Static carries
+    `Ty::Array(Ty::Uint(U8), N)` + `Mutability::Not`;
+    type-erased to bytes for content-keyed dedup.
+  - **D-4-3.8** [LOCKED] — Bridge dispatch arms:
+    `Slice { data, meta }` → `Aggregate([Reloc, Uint])`;
+    `Indirect { offset = 0 }` → `Reloc`; non-zero offset
+    rejected.
+  - **D-4-3.9** [LOCKED] — §3.3 Phase B step 9
+    `ConstMemoryStatic` dedup sub-bullet ordered after
+    value-level lookup injectivity.
+  - **D-4-3.10** [LOCKED] — Stage-12 outbound flipped to
+    `[CLOSED by D-4-3]`.
+
+- **D-4-K** [DEFERRED to stage 14] — `pretty.rs::render_const`
+  renderer-style decision deferred to stage 14 (extending the
+  D14 → stage-13 precedent for `render_ty` one stage further
+  because `render_const`'s dependency chain is longer:
+  5 of 11 variants depend on `render_ty` (stage 13);
+  `Reloc(InstanceRef)` additionally depends on
+  `render_def_path(ItemId)` (stage 12) and `render_instance`
+  (stage 14)). Stage 14 is the latest dependency. Outbound
+  expectation in `stage-14/expectations.md` "From stage 4."
+  No specific rendering style pre-committed by stage 4.

@@ -11,20 +11,7 @@ integrates that stage's contribution. See `README.md` Section 5.9
 for the update guidelines and Section 5.5 for the merger contract.
 
 Currently reflects: stage 1 (foundation) + stage 3 (type system)
-contributions.
-
-**Snapshot scope.** This document fully specifies the stage-1
-foundation and the stage-3 type-system shape. Several IR
-constructs reference value-level constants (vtable instance
-statics, string literals backing `&str`, static initialisers,
-aggregate constants, function-pointer relocations) whose full
-canonicalisation depends on stage-4's `Const` /
-`ConstIdentityKey` schema (see §9.7). A `RegseqModel`
-containing only stage-3-scope content (type definitions,
-function signatures, scalar const generics, scalar / array-
-length constants) is fully serialisable and validatable by
-this document alone. Models containing the richer value-level
-constants listed above are partial until stage 4 lands.
++ stage 4 (constants and literals) contributions.
 
 ---
 
@@ -482,7 +469,7 @@ The bridge guarantees:
     time per the §14.5 rustc-side predicate.
     `FnSig.inputs`/`output` preserve the **original Rust
     `TyId`s** — this keeps rustc-distinct function types
-    distinct in the IR per D15 (e.g.,
+    distinct in the IR (e.g.,
     `extern "C" fn(Handle) -> Handle` and
     `extern "C" fn(u32) -> u32` have distinct `FnSigId`s even
     when `Handle` is `repr(transparent)` over `u32`).
@@ -510,7 +497,7 @@ The bridge guarantees:
     - `Item.kind == ItemKind::Struct` (model-checkable).
     - The Item's source-side rustc `adt_def.repr()` is `C`
       (**bridge certificate** — the source repr is not stored
-      in the model per §11.3, D11; presence of
+      in the model per §11.3; presence of
       `opaque_handle_eligible == true` is the bridge's
       attestation that this fact held at construction time per
       the §3.3 validation trust model).
@@ -636,8 +623,25 @@ inner interners are validated first.
    `target` well-formedness (invariant 15), including
    `scalar_layouts` populated; `build` well-formedness
    (invariant 17).
-4. Validate `ConstInterner` content uniqueness (no duplicate
-   canonical values).
+4. Validate `ConstInterner` type-level content — the
+   type-level const phase per §9.7 "Const validation phase
+   split." Validates: (a) for every type-level scalar entry
+   (`Bool` / `Char` / `Int` / `Uint` / `Float`), recompute the
+   canonical-content key per §9.7's per-`Const`-variant
+   byte-encoding tags and verify it matches the stored
+   `ConstInterner.lookup` key (canonical-form
+   well-formedness); (b) injectivity over the type-level
+   subset of `ConstInterner.lookup` (no two type-level entries
+   share a canonical key); (c) every `ConstId` appearing in
+   `GenericArg::Const(_)` positions resolves to a type-level
+   scalar variant. Value-level entries are NOT recomputed at
+   this step — their canonical-content keys involve recursion
+   through `Aggregate.0` / `EnumValue.payload` and require
+   const-graph acyclicity (verified at step 9) to terminate.
+   Value-level sub-reference resolution (e.g., `NullPtr`'s
+   pointee `TyId`, `Reloc`'s `InstanceRef` projection) and
+   value-level lookup injectivity defer to step 9 after
+   `TyInterner` and `instances` validate.
 5. Validate `FnSigInterner` content uniqueness (no duplicate
    canonical `FnSig`s); validate every `TyId` referenced
    inside `FnSig.inputs` / `FnSig.output` is in-bounds
@@ -667,6 +671,99 @@ inner interners are validated first.
    `(InstanceKey)` projection is unique across all instances
    (invariant 16-derived) and `flavor` matches the bridge's
    F4-2 sort key (§9.3).
+9. Validate value-level `Const` content sub-references per the
+   §9.7 invariants (value-level const phase per §9.7 "Const
+   validation phase split"):
+   - **`NullPtr(t)`**: `t` resolves in `types`; `t` is a
+     pointer-pointee-admissible type per the consumer's
+     context.
+   - **`Reloc(r)`** and **`Bytes::Reloc(r)`**: each
+     `InstanceRef r` projects to exactly one `Instance` in
+     the `instances` table. The projection is by re-deriving
+     `InstanceRef` from each Instance's
+     `(regseq_kind_rank, def_path_hash, args_key,
+     fn_shim_disambig)` and checking equality with `r`.
+   - **`Bytes(vec)`**: byte-sequence well-formedness per §9.7
+     (maximal-relocation-run rule, length matches the
+     consumer's expected size, etc.).
+   - **`Aggregate(children)`**: every `child: ConstId`
+     resolves; type-level scalar variants are admissible as
+     children of value-level aggregates (the type-level /
+     value-level boundary is variant-intrinsic and
+     non-transitive — a value-level aggregate may carry
+     type-level scalar children without becoming type-level
+     itself).
+   - **`EnumValue { variant_idx, payload }`**: `variant_idx`
+     is in-bounds for the consumer-context's `Ty::Enum`'s
+     `EnumShape.variants` (per §11.1); every
+     `payload[i]: ConstId` resolves and is field-type
+     admissible per the variant's `VariantLayout.fields`.
+   - **Const-graph acyclicity.** The `Aggregate.0` and
+     `EnumValue.payload` recursion edges (the only `ConstId`-
+     valued positions inside `Const`; `Bytes::Reloc` and
+     `Reloc` carry `InstanceRef`, not `ConstId`, so they do
+     not extend the const-recursion graph) form a DAG: no
+     `ConstId` appears in its own transitive `Aggregate` /
+     `EnumValue` payload reachability set. Validation uses
+     **three-state DFS marks** (`Unseen`, `Visiting`, `Done`):
+     entering a node sets it to `Visiting`; leaving sets it
+     to `Done`; an edge to a `Visiting` node is a back-edge
+     and a model-corruption error; an edge to a `Done` node
+     is skipped (shared DAG children are admissible). A
+     single-bit visited-set is insufficient — it cannot
+     distinguish "currently on the recursion stack" (cycle)
+     from "already fully validated" (DAG sharing). Well-typed
+     Rust + const-eval termination guarantee acyclicity at
+     construction time; the explicit check defends snapshot
+     integrity against tampered serialised models.
+   - **Value-level lookup injectivity and canonical-form
+     well-formedness.** *Ordering note: this sub-check runs
+     after acyclicity above so that recursive
+     `canonical_const(ConstId)` computation terminates.* For
+     every value-level entry (`ZST`, `Bytes`, `Aggregate`,
+     `EnumValue`, `NullPtr`, `Reloc`), recompute the
+     canonical-content key per §9.7's per-`Const`-variant
+     byte-encoding tags (the recursion into `Aggregate.0` /
+     `EnumValue.payload` is now safe: the DAG verified above
+     bounds the call depth to the topological-order length).
+     Verify the recomputed key matches the stored
+     `ConstInterner.lookup` key (canonical-form
+     well-formedness); verify injectivity over the
+     value-level subset of `ConstInterner.lookup` (no two
+     value-level entries share a canonical key). Combined
+     with step 4's type-level check, this completes
+     `ConstInterner.lookup` injectivity over the full key set.
+   - **`ConstMemoryStatic` dedup.** For every Item `I` with
+     `item_synthetic_kinds[I] = SyntheticItemKind::ConstMemoryStatic
+     { content_hash }`, recompute `ContentHash` from the
+     resolved Static's `init: Some(c)` content (where `c` is
+     the `ConstId` for the `Const::Bytes(Vec<Byte>)` value).
+     For each such Item, this sub-check first verifies the
+     `ConstMemoryStatic` Static-shape invariants inline:
+     (a) the corresponding Instance has `kind: InstanceKind::Static
+     { ty: array_ty, init: Some(c), mutability: Mutability::Not }`
+     (no `init: None`); (b) `array_ty` resolves to
+     `Ty::Array(elem_ty, n)` with `elem_ty` resolving to
+     `Ty::Uint(UintKind::U8)` (byte-array shape);
+     (c) `c` resolves to a `Const::Bytes(Vec<Byte>)`; (d) `n`
+     equals the resolved `Const::Bytes` sequence length. After the shape check,
+     recompute `ContentHash` from the resolved
+     `Const::Bytes(Vec<Byte>)` per the canonical byte form per
+     §9.7's per-`Const`-variant byte-encoding tags, verify it
+     matches the stored `content_hash` field, and verify no
+     two `ConstMemoryStatic` Items share a `content_hash`
+     value (content-keyed Item uniqueness — two
+     anonymous-memory allocations with identical canonical
+     byte form must collapse to one synthesised Static). The
+     "Phase B continued — invariant enforcement" subsection
+     below restates the same Static-shape invariants
+     standalone (so consumers walking the invariant list
+     find the same rule); the two presentations are
+     equivalent. *Ordering note: this sub-check depends on
+     the value-level lookup injectivity pass above (it
+     recomputes `Const::Bytes` canonical bytes for each synth
+     Static's `init`), so it runs after acyclicity and after
+     the value-level recomputation pass.*
 
 **Phase B (continued) — invariant enforcement beyond reachability.**
 
@@ -705,6 +802,7 @@ Specifically, Phase B also enforces:
   - `VTableInstance { .. }` → `ItemKind::Static`.
   - `VTableMethodShim { .. }` → `ItemKind::Function`.
   - `VTableDropShim { .. }` → `ItemKind::Function`.
+  - `ConstMemoryStatic { .. }` → `ItemKind::Static`.
   - `None` → any source-derivable `ItemKind`.
 - **`item_def_paths` global uniqueness (invariant 18).** No
   two distinct `ItemId`s map to the same `DefPathHash`.
@@ -727,7 +825,8 @@ Specifically, Phase B also enforces:
     traversal in §14.5 (model-checkable — the traversal
     domain is closed and listed there).
   The remaining condition — *source-side `repr(C)`* — is a
-  rustc-side fact not stored in the model (per §11.3, D11).
+  rustc-side fact not stored in the model (per §11.3; see
+  `discussions.md` D11 for rationale).
   Validation **does not re-prove** it; it is a bridge
   certificate per the trust model. Presence of
   `opaque_handle_eligible == true` is the bridge's attestation
@@ -784,6 +883,21 @@ Specifically, Phase B also enforces:
   init: Some(_), .. }`. Vtable instances must be immutable
   with a present initialiser; mutable or missing-init
   vtables are model corruption.
+- **`ConstMemoryStatic` Items are immutable byte-array
+  statics with `Bytes` initialiser.** For every Item with
+  `item_synthetic_kinds[id] == SyntheticItemKind::ConstMemoryStatic
+  { content_hash }`, validation checks: (a) the corresponding
+  Static Instance has `kind: InstanceKind::Static { ty:
+  array_ty, init: Some(c), mutability: Mutability::Not }`
+  with a present initialiser (no `None`); (b) the `array_ty`
+  resolves to `Ty::Array(elem, n)` with `elem` resolving to
+  `Ty::Uint(UintKind::U8)` (byte-array shape); (c) the `c`
+  resolves to a `Const::Bytes(Vec<Byte>)` value (per the
+  type-erase-to-bytes discipline pinned in §9.7); (d) the
+  `n` field of the array Ty equals the resolved
+  `Const::Bytes` sequence length. Mutable, missing-init,
+  non-byte-array, or non-Bytes-init `ConstMemoryStatic`
+  Items are model corruption.
 - **Source-file span bounds (sentinel-aware).** For
   `SourceFile { content: Some(_), .. }`, validation checks
   every `Span { file, lo, hi }` referencing this file has
@@ -1121,27 +1235,14 @@ const/static values via `ConstId`, ADT layout via `TyId` on
 `InstanceKind::{Struct, Enum, Union}`. The Item itself carries
 only the source-level alphabet.
 
-**Attribute storage is scoped to the stage-3 type system.**
-For the type-system shape pinned in this document, no general
-attribute table is stored on `Item`. The only attribute-driven
-recognition this stage's translation needs is
-`#[rseq::intrinsic("NAME")]` (Q7), identified at the callee's
-`DefId` during call translation, not via per-Item attribute
-storage.
-
-This claim is **scoped to stage 3**. The Regseq DSL has three
-mechanisms (intrinsics + properties + traits — see
-`regseq-background.md`); declarative property attributes
+**No general attribute table on `Item`.** The only
+attribute-driven recognition the current spec's translation
+needs is `#[rseq::intrinsic("NAME")]` (Q7), identified at the
+callee's `DefId` during call translation, not via per-Item
+attribute storage. Declarative property attributes
 (`#[rseq::mmio(access_width = 32)]`,
-`#[rseq::interrupt(trigger_type = "...")]`, etc.) are a
-core DSL mechanism that the type system does not yet
-represent. Property metadata is a forward expectation for
-**stage 14** (domain-specific extensions): a sibling table
-keyed by `ItemId` / `InstanceId` / `FieldPath` / `Span` (the
-exact key kind chosen per property family) will record
-property values that downstream domain analyses and codegen
-consume. Stage 14 owns the property vocabulary; stage 3
-intentionally carries no attribute storage.
+`#[rseq::interrupt(trigger_type = "...")]`, etc.) are not
+represented as a sibling table in the current spec.
 
 ### 8.1 Lifting `impl` items
 
@@ -1292,10 +1393,10 @@ kinds; `fn_shim_disambig` separates rustc shims within the
 
 The shim discriminator **is** exposed as a public field on
 `Instance` via `InstanceKind::Function.flavor`
-(`FunctionInstanceFlavor`, §9.4) — added in Round 7 to give
-deserialised consumers a structured way to reconstruct stable
-instance identity for shims sharing `(item, args)` without
-parsing `emission_name`. The mapping
+(`FunctionInstanceFlavor`, §9.4), giving deserialised
+consumers a structured way to reconstruct stable instance
+identity for shims sharing `(item, args)` without parsing
+`emission_name`. The mapping
 `FunctionInstanceFlavor` → `fn_shim_disambig: u8` is the rank
 table at §9.3 (`rustc_instance_kind_sort_rank`). For non-
 `Function` Regseq kinds, no `flavor` field is needed because
@@ -1355,7 +1456,8 @@ is injective over the admitted `InstanceKind` set under the
 pinned toolchain. Two distinct rustc `InstanceKind` values that
 share the same `(rank, did, args)` would collapse into one
 RegseqModel `Instance` — breaking the same identity-preservation
-contract D15 enforces for `FnAbi`. Verification is a debug-build
+contract that the `FnAbi` shape enforces (see `discussions.md`
+D15 for rationale). Verification is a debug-build
 assertion at instance interning. If a future toolchain bump
 introduces a non-injective shim variant (i.e., two distinct
 rustc `InstanceKind` carrying additional discriminating payload
@@ -1429,9 +1531,10 @@ rich data in the appropriate table (`sigs`, `consts`, `types`,
 `FunctionInstanceFlavor` is the structured form of the
 `fn_shim_disambig: u8` rank used inside `RegseqInstanceKey`
 (§9.3). Storing it on `InstanceKind::Function` (rather than
-deriving it from `emission_name`) avoids the brittleness the
-Round 6 SyntheticItemKind change avoided for synthetic Items
-(§13.3). The rank-table mapping
+deriving it from `emission_name`) avoids the brittleness of
+parsing structured discriminators back out of name strings —
+the same brittleness the structured `SyntheticItemKind` shape
+in §13.3 avoids for synthetic Items. The rank-table mapping
 `rustc_instance_kind_sort_rank(flavor) -> u8` is stable per
 the toolchain pinning (§9.3).
 
@@ -1515,7 +1618,7 @@ for a synthetic item is the bridge-derived `DefPathHash`
 (§13.4); for the source-derived ClosureCaptures Item it is
 rustc's `tcx.def_path_hash(closure_did)`.
 
-### 9.7 `ConstInterner`
+### 9.7 `ConstInterner` and the `Const` vocabulary
 
 Const values participate in nominal type identity via
 `GenericArg::Const(ConstId)` (§9.1) and in static / const
@@ -1544,111 +1647,686 @@ impl ConstInterner {
 Same BiMap pattern as `TyInterner` (§12) and `StringInterner`
 (§4). Custom serde mirrors the same shape.
 
-`Const` and `ConstIdentityKey` schemas are **pinned in stage 4**.
-Stage 3's commitment is the content-uniqueness invariant
-(construction invariant 11, §3.1) and the canonicalisation
-contract: `ConstIdentityKey` is computed from the value's
-const-eval result (`Discr.val: u128` for scalar consts, fully-
-evaluated bytes for aggregate consts), not from any
-allocation-order rustc handle. Unevaluated or symbolic consts
-that survive monomorphisation are a bridge bug per the no-
-defensive-fallbacks methodology.
+`ConstId` is `u32`-backed via `NonMaxU32` so that
+`size_of::<Option<ConstId>>() == 4`. Variant choices below
+preserve this invariant by routing all variant-internal
+references to other consts through nested `ConstId` (no
+`Box<Const>` payloads).
 
-For stage-3 type-system purposes, the minimum shape `Const` must
-support:
+#### Identity contract
 
-- scalar primitives (`Bool`, `Char`, `Int(IntKind, value)`,
-  `Uint(UintKind, value)`, `Float(FloatKind, bits)`),
-- evaluated array lengths (used in `Ty::Array(elem, n: u64)` —
-  the `u64` is sourced from the const-eval result, not a separate
-  `ConstId`).
+Construction invariant 11 (§3.1) requires `ConstId`
+content-uniqueness. The `ConstIdentityKey` is computed from
+the value's canonical content (the variant tag + per-variant
+canonical payload form below), never from any allocation-order
+rustc handle (`AllocId`, `DefId`, `mir::AllocId`) or any local
+RegseqModel handle (`InstanceId`, `ItemId`). Cross-build
+identity relies exclusively on the closed canonical encodings
+defined here.
 
-Generic-arg const positions (`GenericArg::Const(ConstId)`) reach
-the canonicaliser via §12.3's "ConstId → canonical const-eval
-result" rule; the ConstInterner ensures equal canonical results
-share a `ConstId`.
+Unevaluated or symbolic consts that survive monomorphisation
+are a bridge bug per the no-defensive-fallbacks methodology —
+the bridge rejects them at construction, never widens to
+"Other" / "Opaque" variants.
 
-#### Stage-3 minimum vs stage-4 requirement
+The canonical-form rules below close the F4-2 fingerprint
+(`ArgsKey` traversal in §12.3 reaches const arguments via
+`GenericArg::Const(ConstId)` and queries `canonical_const(ConstId)`
+per the per-`Const`-variant byte-encoding tags subsection
+below).
 
-Stage 3 commits to ConstId content-uniqueness (invariant 11) and
-the scalar-primitive + array-length stub above. Several stage-3
-spec constructs *reference* `ConstId` for richer values that
-stage 4 must canonicalise:
+#### `Const` enum (closed, 11 variants)
 
-- `InstanceKind::Static { init: Option<ConstId>, .. }` —
-  initial-value constant (may be aggregate, may carry
-  relocations to other Instances). `None` for foreign statics
-  (no init expression).
-- `InstanceKind::Const { value: ConstId }` — const item value.
-- Vtable instance values (§13.2) — aggregate constants
-  containing function pointers (relocations to vtable shim
-  Function Items), size/align scalars, vacant slots.
-- String literals backing `&str` — byte-array constants.
-- Aggregate constants for arrays/structs/tuples/enums.
-- Reference-typed constants — null pointer, function pointer,
-  vtable pointer, static address.
+```rust
+pub enum Const {
+    /// Boolean scalar.
+    Bool(bool),
 
-These reference shapes are pinned at stage 3 by virtue of being
-mentioned in the IR; stage 4's full `Const` and
-`ConstIdentityKey` schemas must support canonical equality over
-all of them. Implementations that materialise vtable instances
-or static initialisers are gated on stage-4 const-vocabulary
-expansion. The minimum surface stage 4 must cover:
+    /// Unicode scalar value as 32-bit code point. Bridge has
+    /// already validated the value is a valid `char` at
+    /// construction; storage is `u32` for deterministic
+    /// canonicalisation independent of Rust's `char` validity
+    /// invariant in serialisation paths.
+    Char(u32),
 
-- scalar values with type tag (so `1u32` and `1u64` differ);
-- ZST values (single canonical representative);
-- byte arrays / raw initialised bytes;
-- aggregate field sequences (preserving order);
-- enum discriminant + payload constants;
-- references to `InstanceId` (function/static/vtable pointer
-  relocations); the **cross-build** canonical encoding of such
-  a relocation must use stable instance identity, not local
-  `InstanceId` integer — encoded as
-  `(regseq_instance_kind_rank, item_def_path_hash,
-  canonical_generic_args, fn_shim_disambig_or_None)` so that
-  two builds satisfying the build-equivalence quad produce
-  identical canonical const keys for relocations to the same
-  Instance. Stage-4's `ConstIdentityKey` schema is responsible
-  for this encoding;
-- typed null pointers (one per pointee type);
-- padding/uninitialised bytes if they appear in constants
-  (canonicalisation must distinguish "uninit" from any specific
-  byte pattern).
+    /// Signed integer scalar. Smaller widths sign-extend to
+    /// `u128` (e.g. `Int(I8, -1)` stores as `u128::MAX`).
+    Int(IntKind, u128),
 
-##### Stage-4 const-validation phase split (forward expectation)
+    /// Unsigned integer scalar. Smaller widths zero-extend.
+    Uint(UintKind, u128),
 
-Stage 3's `ConstInterner` is validated **before** `TyInterner`
-(per §3.3 Phase B), because nominal-type identity depends on
-`GenericArg::Const(ConstId)` content uniqueness. That ordering
-is sound for stage-3 const usage (scalar primitives + array
-lengths), which can be canonicalised without resolving any
-`Ty` or `Instance`.
+    /// IEEE-754 bit-pattern. The bit-pattern occupies the
+    /// low-order bits of `u128`; the high-order bits are zero
+    /// for narrow widths (e.g., `1.0f32` stores as
+    /// `0x3f800000` per the IEEE-754 binary32 encoding, which
+    /// is `Float(F32, 0x3f800000_u128)` with the upper 96 bits
+    /// of the `u128` field zero). Per-`FloatKind` natural-width
+    /// storage; no lossy `f64` collapse.
+    Float(FloatKind, u128),
 
-Richer const values listed above (vtable instances, static
-initialisers, typed null pointers, function-pointer
-relocations) need access to type identity (for typed-null
-canonicalisation) and instance identity (for relocation
-encoding). That introduces a dependency cycle if all const
-values share a single validation phase.
+    /// Zero-sized value. Single canonical representative for
+    /// all ZSTs (`()`, fieldless structs, `PhantomData<T>`,
+    /// etc.). Type comes from the consumer's context (the
+    /// owning Item's `ty` or the InstanceKind's payload).
+    ZST,
 
-Stage 4 will resolve this with a **two-phase const validation**
-discipline:
+    /// Byte-level value: a sequence of bytes mixing initialised
+    /// payload, uninit bytes, and pointer-bearing relocations.
+    /// Used for vtable instance values (§13.2),
+    /// `ConstMemoryStatic` synthesised statics (§13.3), and
+    /// any aggregate whose rustc-evaluated form is a flat
+    /// allocation with `provenance` entries or an `init_mask`
+    /// other than all-init. `&str` / `&[T]` reference-typed
+    /// const handling backs the slice's data pointer with a
+    /// `ConstMemoryStatic` synthesised Static — see
+    /// "Reference-typed const handling" below.
+    Bytes(Vec<Byte>),
 
-1. **Type-level const phase** (validated early, before
-   `TyInterner`): the subset of `Const` values reachable from
-   `GenericArg::Const(ConstId)` — scalar primitives only in
-   v1. Canonicalisation uses a type-independent key.
-2. **Value-level const phase** (validated late, after
-   `TyInterner` and `instances`): the full `Const` value
-   universe (statics, vtable instances, aggregates,
-   relocations). Canonicalisation may reference type and
-   instance identity.
+    /// Structured aggregate: struct / tuple / array literals
+    /// where rustc's const-eval produced a `ValTree::Branch`
+    /// shape. Field-aligned children, each interned for
+    /// sharing. C codegen lowers as a compound literal at use
+    /// site; does NOT take program-image storage on its own
+    /// (contrast with vtable-instance Static synthesis,
+    /// §13.2).
+    Aggregate(Vec<ConstId>),
 
-Implementation may use a single `ConstInterner` table with a
-two-pass validation discipline, or two separate interner
-tables (`TypeConstInterner` + `ConstInterner`) — the spec
-deferral is the validation phase split, not the interner
-shape.
+    /// Enum value: explicit variant index plus payload children.
+    /// The discriminant value is implicit via the consumer's
+    /// `Ty::Enum`'s `VariantLayout.discriminant` (§11.1);
+    /// `EnumValue` does NOT carry the discriminant byte form
+    /// — that lives on the type, per the layout/value
+    /// separation pinned in §11.1.
+    EnumValue {
+        variant_idx: VariantIdx,
+        payload: Vec<ConstId>,
+    },
+
+    /// Typed null pointer. Per-pointee-type for canonical
+    /// equality: `NullPtr(t1) != NullPtr(t2)` whenever
+    /// `t1 != t2`. Vacant vtable slots and source-level
+    /// `core::ptr::null::<T>()` / `core::ptr::null_mut::<T>()`
+    /// canonicalise here. (Reference-typed consts pointing at
+    /// non-null anonymous-memory blobs are handled by the
+    /// `ConstMemoryStatic` synthesised-Static path below, not
+    /// as `NullPtr`.)
+    NullPtr(TyId),
+
+    /// Whole-pointer relocation: this const is exactly a
+    /// pointer to that Instance (function / static / vtable
+    /// pointer). The `Bytes::Reloc` byte-level case applies
+    /// when the relocation is one field of an aggregate
+    /// already encoded as bytes.
+    Reloc(InstanceRef),
+}
+```
+
+The eleven variants are exhaustive: a rustc post-mono const
+value must canonicalise into exactly one variant (the bridge
+construction rule below names the dispatch). There is no
+"escape" variant; non-conforming inputs are bridge-rejected.
+
+#### `Byte` enum (three-state, used by `Const::Bytes`)
+
+```rust
+pub enum Byte {
+    /// Uninitialised byte. Canonicalises distinct from any
+    /// initialised byte value, including `Value(0)`. Sourced
+    /// from rustc's `Allocation::init_mask` ranges absent from
+    /// the materialised mask.
+    Uninit,
+
+    /// Initialised payload byte with a specific value.
+    Value(u8),
+
+    /// Pointer-bearing byte: this byte is part of a stored
+    /// pointer to the named Instance. A run of consecutive
+    /// `Reloc(r)` bytes whose length equals the target's
+    /// pointer width and whose start offset is pointer-aligned
+    /// represents one whole pointer to `r`; no other
+    /// pattern is admissible.
+    Reloc(InstanceRef),
+}
+```
+
+**Byte-sequence well-formedness invariants** (validated in
+§3.3 Phase B):
+
+- *Maximal relocation runs are pointer-shaped.* Define a
+  *relocation run* as a maximal contiguous subsequence of
+  `Byte::Reloc(r)` values sharing the same `InstanceRef r`
+  (a run cannot extend into a neighbouring `Byte::Reloc(r')`
+  with `r != r'`, nor into `Byte::Uninit` / `Byte::Value(_)`).
+  Every relocation run has length exactly `ptr_size` and starts
+  at an offset aligned to `ptr_align`. (`ptr_size`, `ptr_align`
+  come from `target.scalar_layouts.fn_ptr`.) No relocation run
+  may straddle a `ptr_align` boundary, and two adjacent runs
+  cannot share the same `InstanceRef` (i.e., any apparent
+  "double pointer" of the same target is actually one run; if
+  two distinct same-target pointers appear in a sequence they
+  occupy non-adjacent slots separated by at least one
+  non-Reloc byte or by a same-target run break). This single
+  rule replaces a per-byte test: it suffices to enumerate runs
+  and check the length and start-alignment of each.
+- The sequence length matches the consumer-context's expected
+  byte size (the owning Item's `Layout.size`, or the
+  vtable-instance `Layout.size`, etc.). Length-mismatch is a
+  bridge bug.
+
+#### `InstanceRef` (cross-build stable identity)
+
+```rust
+pub struct InstanceRef {
+    /// Regseq `InstanceKind` variant rank, per §9.3's
+    /// `regseq_instance_kind_rank` table:
+    /// `Function`=0, `Static`=1, `Const`=2, `Struct`=3,
+    /// `Enum`=4, `Union`=5. Stable per F4-2.
+    pub regseq_kind_rank: u8,
+
+    /// rustc's stable cross-build hash of the source-side
+    /// DefPath (or the bridge-synthesised DefPath for synthetic
+    /// Items per §13.4). Build-stable; carries cross-build
+    /// instance identity per §7.3.
+    pub def_path_hash: DefPathHash,
+
+    /// Canonical encoding of the Instance's generic arguments
+    /// per the §12.3 deep canonicaliser. `ArgsKey` is the same
+    /// type used by F4-2 instance ordering; the same canonical
+    /// form is reused here to avoid duplication. For
+    /// non-generic statics and for synthetic Items whose
+    /// generic-args identity is fully captured in
+    /// `def_path_hash` (per §13.4 segment encoding),
+    /// `ArgsKey::EMPTY` is the canonical value.
+    pub args_key: ArgsKey,
+
+    /// rustc-shim flavor disambiguator, mirroring §9.3's
+    /// `fn_shim_disambig: u8`. For `Function` Regseq kind, this
+    /// is `rustc_instance_kind_sort_rank(flavor)` per §9.3's
+    /// table (`Item`=0, `Intrinsic`=1, `VTableShim`=2,
+    /// `ReifyShim`=3, `FnPtrShim`=4, `Virtual`=5,
+    /// `ClosureOnceShim`=6, ..., `DropGlue`=10, ...). For
+    /// non-`Function` Regseq kinds, unconditionally `0`. For
+    /// bridge-synthesised Function Items (vtable method shims,
+    /// vtable drop shims, closure call methods, closure drop
+    /// glue) where there is no rustc `InstanceKind` origin,
+    /// also `0` — the synthesised `def_path_hash` (per §13.4)
+    /// already disambiguates these.
+    pub fn_shim_disambig: u8,
+}
+```
+
+The 4-tuple matches the same shape used by §9.3's
+`RegseqInstanceKey` (which is the in-build instance interning
+key); `InstanceRef` is the build-stable projection of that key
+where the local `ItemId` is replaced with `def_path_hash` (and
+optionally where `ArgsKey` collapses to `ArgsKey::EMPTY` for
+synthetic Items whose identity §13.4 already encodes in the
+DefPath segments). Each component is build-stable:
+`regseq_kind_rank` is the §9.3-fixed Regseq InstanceKind rank;
+`def_path_hash` is rustc's stable cross-build hash (or the
+deterministic bridge-synthesised hash per §13.4); `args_key`
+is the §12.3 deep canonicaliser; `fn_shim_disambig` is the
+§9.3-fixed rustc shim rank. No local `InstanceId` or `ItemId`
+ever appears in any `InstanceRef`, neither in
+`Const::Reloc(_)` nor in `Byte::Reloc(_)`. Two builds
+satisfying the build-equivalence quad (§12.4) produce identical
+`InstanceRef` for relocations to the same Instance.
+
+#### Type-level vs value-level partition
+
+The `Const` variants partition into two phase-membership classes
+based on which RegseqModel positions admit them:
+
+| Variant       | Type-level admissible (`GenericArg::Const`) | Value-level admissible (`InstanceKind`, `Bytes::Reloc`, etc.) |
+| ------------- | ------------------------------------------- | ------------------------------------------------------------- |
+| `Bool`        | yes                                         | yes                                                           |
+| `Char`        | yes                                         | yes                                                           |
+| `Int(_, _)`   | yes                                         | yes                                                           |
+| `Uint(_, _)`  | yes                                         | yes                                                           |
+| `Float(_, _)` | yes                                         | yes                                                           |
+| `ZST`         | no (v1 bridge-rejected at GenericArg slot)  | yes                                                           |
+| `Bytes`       | no (would force AllocId churn)              | yes                                                           |
+| `Aggregate`   | no                                          | yes                                                           |
+| `EnumValue`   | no                                          | yes                                                           |
+| `NullPtr`     | no (requires resolved `TyId`)               | yes                                                           |
+| `Reloc`       | no (requires resolved `InstanceRef`)        | yes                                                           |
+
+The five scalar variants (`Bool` / `Char` / `Int` / `Uint` /
+`Float`) form the **type-level subset**: they canonicalise
+without resolving any `TyId` or `InstanceRef`, so they are
+admissible from `GenericArg::Const(_)` positions and validate
+in §3.3 Phase B step 4 before `TyInterner` (step 6).
+
+The remaining six variants form the **value-level remainder**:
+they reach the IR only through `InstanceKind::Static.init`,
+`InstanceKind::Const.value`, `Const::Bytes::Reloc`, and
+`Const::Aggregate` / `Const::EnumValue` payload children. Their
+canonical form references resolved `TyId` / `InstanceRef`, so
+they validate after `TyInterner` and the `instances` table.
+
+A `Const::Aggregate` whose children are all type-level scalars
+is itself value-level — the type-level boundary is structural,
+not transitive. The bridge admits aggregates only at value-level
+positions.
+
+#### Per-`Const`-variant byte-encoding tags (`ConstIdentityKey` byte form)
+
+The `ConstIdentityKey` byte form is a tagged-tree byte stream
+parallel to §12.3's per-`Ty` encoding. The same global rules
+apply: each node emits a 1-byte variant tag followed by
+tag-specific payload bytes; all multi-byte integers are
+little-endian; lengths emit as little-endian `u32` prefixes;
+nested nodes recurse via `canonical_const(ConstId)` (defined
+below). The encoding is consumed by
+`canonical_args.recurse(ConstId)` (the `ConstId` walk-rule row
+in §12.3) and by `ConstInterner.lookup`'s key computation.
+
+Per-`Const`-variant byte-encoding tags — append-only constants
+pinned for the v1 const universe:
+
+```text
+const_variant_tag = u8
+  0  = Bool                followed by u8 (0x00 | 0x01)
+  1  = Char                followed by u32 LE Unicode scalar value
+  2  = Int(IntKind, u128)  followed by u8 IntKind discriminant + u128 LE value
+                           (small widths sign-extended into u128)
+  3  = Uint(UintKind, u128) followed by u8 UintKind discriminant + u128 LE value
+                           (small widths zero-extended)
+  4  = Float(FloatKind, u128) followed by u8 FloatKind discriminant + u128 LE
+                           bit-pattern (IEEE-754 bit-pattern occupies low-
+                           order bits; high-order bits zero for narrow widths)
+  5  = ZST                 (no payload — type comes from consumer context)
+  6  = Bytes(Vec<Byte>)    followed by u32 LE byte_count + byte_count * Byte
+                           encoding (see byte_sub_tag table below)
+  7  = Aggregate(Vec<ConstId>) followed by u32 LE child_count + child_count *
+                           canonical_const(ConstId)
+  8  = EnumValue           followed by u32 LE variant_idx + u32 LE
+                           payload_count + payload_count * canonical_const(ConstId)
+  9  = NullPtr(TyId)       followed by canonical_ty(TyId) (recursive per
+                           §12.3 walk rules)
+ 10  = Reloc(InstanceRef)  followed by InstanceRef bytes (see InstanceRef
+                           encoding below)
+```
+
+`IntKind` / `UintKind` / `FloatKind` discriminants reuse the
+`#[repr(u8)]` numeric assignments pinned in the §10 enum
+definitions (the normative source for the `u8` discriminant
+values: `IntKind { I8=0, I16=1, I32=2, I64=3, I128=4, Isize=5 }`,
+`UintKind { U8=0, ..., Usize=5 }`, `FloatKind { F16=0, F32=1,
+F64=2, F128=3 }`). §12.3's per-`Ty` table reuses the same
+values; this per-`Const` table reuses them again — the single
+source of truth is §10.
+
+The encoding is **append-only**: any new `Const` variant
+admitted by a future spec revision appends at the next free
+tag value (`11+`); existing tags remain immutable so cross-build
+hashes for already-admitted consts never change. No tag values
+are reserved for future use. Reference-typed const handling did
+NOT introduce a new `Const` variant — it composes from the
+existing 11 variants via `Aggregate([Reloc, Uint])` for wide
+pointers and `Reloc(synth_static_inst_ref)` for thin pointers
+(per the compositional-behavior-beats-special-case-flags
+methodology).
+
+**`Byte` sub-encoding** (used inside `Bytes(Vec<Byte>)`'s payload):
+
+```text
+byte_sub_tag = u8
+  0  = Uninit             (no payload)
+  1  = Value(u8)          followed by 1 byte (the initialised payload byte)
+  2  = Reloc(InstanceRef) followed by InstanceRef bytes (see InstanceRef
+                          encoding below)
+```
+
+**`InstanceRef` byte encoding** (used by `const_variant_tag = 10`
+and by `byte_sub_tag = 2`):
+
+```text
+InstanceRef encoding (34 bytes total):
+  u8       regseq_kind_rank
+  16 bytes def_path_hash       (StableCrateId u64 LE + local_hash u64 LE
+                                per §12.3 termination rules)
+  16 bytes args_key            (emitted as `ArgsKey.0.to_be_bytes()` —
+                                the canonical big-endian byte serialisation
+                                of the `u128` field, which by §12.3's
+                                BE-load convention reproduces the original
+                                SHA-256-leading-16-bytes sequence; native
+                                memory layout / `transmute` MUST NOT be
+                                used)
+  u8       fn_shim_disambig
+```
+
+The 16-byte `args_key` field is emitted as `ArgsKey.0.to_be_bytes()`
+(the standard big-endian `u128` serialisation). This pinning is
+load-bearing: the serialised model stores `ArgsKey` only as a
+`u128` (§12.3), so the canonical byte form must be specified by
+operation on the `u128` value, not by appeal to "underlying
+bytes" (which leaves a native-endian / `transmute` interpretation
+open). `to_be_bytes()` is consistent with the BE-load convention
+in §12.3 (`ArgsKey::EMPTY.0` is "loaded as a big-endian u128")
+and reproduces the original SHA-256-leading-16-bytes sequence
+that the bridge computed before storing into `ArgsKey.0`.
+The general "multi-byte integers are little-endian" rule in
+§12.3 governs other multi-byte fields (`StableCrateId`,
+`local_hash`, `u128` value-bits in scalars, lengths); `args_key`
+is the documented BE exception, anchored on the BE-load
+convention already pinned in §12.3.
+
+**`canonical_const(ConstId)` recursion.** When the encoding above
+calls `canonical_const(ConstId)` (in `Aggregate` and
+`EnumValue.payload`), the rule is: resolve the `ConstId` against
+`model.consts.resolve(...)`, recursively encode the resolved
+`Const` per the per-variant rules above, and inline the
+resulting bytes into the parent's stream. Local `ConstId`
+integers are **never** emitted — they are build-local indices
+and would defeat cross-build stability. This is the const-side
+analogue of §12.3's "`TyId` field — resolve via
+`model.types.resolve(...)` and recurse on the resolved `Ty`"
+rule.
+
+The recursion is bounded by const-graph acyclicity: well-typed
+Rust + const-eval termination guarantee that no `Const`
+transitively contains itself. §3.3 Phase B step 9 validates
+this property explicitly (three-state DFS marks --
+`Unseen` / `Visiting` / `Done` -- over the `Aggregate` /
+`EnumValue` recursion edges; back-edge to `Visiting` is
+corruption, edge to `Done` is skipped as a legitimate shared
+DAG child) so that tampered serialised models cannot cause
+infinite recursion at canonical-key computation time.
+
+**Worked examples.**
+
+```text
+Const::Bool(true)
+  -> 0x00 0x01                         (tag=0, payload=true)
+
+Const::Int(I32, -7_i32 as u128)
+  -> 0x02 <IntKind::I32 disc>
+        0xF9 0xFF 0xFF 0xFF  0xFF 0xFF 0xFF 0xFF
+        0xFF 0xFF 0xFF 0xFF  0xFF 0xFF 0xFF 0xFF
+        (tag=2, IntKind disc, sign-extended -7 as u128 LE)
+
+Const::Float(F32, 0x3f800000_u128)     (= 1.0f32 bit-pattern)
+  -> 0x04 <FloatKind::F32 disc>
+        0x00 0x00 0x80 0x3F  0x00 0x00 0x00 0x00
+        0x00 0x00 0x00 0x00  0x00 0x00 0x00 0x00
+        (tag=4, FloatKind disc, IEEE bits in low 4 bytes, high 12 bytes zero)
+
+Const::ZST
+  -> 0x05                              (tag=5, no payload)
+
+Const::Aggregate(vec![c1, c2])         (e.g., a 2-tuple)
+  -> 0x07 0x02 0x00 0x00 0x00          (tag=7, child_count=2 LE)
+     <canonical_const(c1)>
+     <canonical_const(c2)>
+
+Const::EnumValue { variant_idx: 1, payload: vec![c1] }
+  -> 0x08 0x01 0x00 0x00 0x00          (tag=8, variant_idx=1 LE)
+        0x01 0x00 0x00 0x00            (payload_count=1 LE)
+        <canonical_const(c1)>
+
+Const::NullPtr(t_i32)                  (where t_i32 is the TyId of *const i32)
+  -> 0x09 <canonical_ty(t_i32)>        (tag=9, recursive Ty encoding)
+
+Const::Reloc(InstanceRef { regseq_kind_rank: 0, def_path_hash: H,
+                            args_key: A, fn_shim_disambig: 0 })
+  -> 0x0A 0x00                         (tag=10, regseq_kind_rank=0)
+        <16 bytes H>
+        <16 bytes A>
+        0x00                           (fn_shim_disambig=0)
+```
+
+#### Bridge construction (rustc → `Const` dispatch)
+
+Given a rustc `mir::ConstValue` post-monomorphisation (per the
+post-mono guarantee surfaced at codegen — see also §15
+translation rules), the bridge dispatches:
+
+| Rustc shape (`mir::ConstValue` arm)                        | RegseqModel `Const` variant                                                                                      |
+| ---------------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------- |
+| `Scalar(Scalar::Int(scalar_int))` over scalar `Ty::Bool`   | `Bool(b)`                                                                                                        |
+| `Scalar(Scalar::Int(_))` over `Ty::Char`                   | `Char(value as u32)`                                                                                             |
+| `Scalar(Scalar::Int(_))` over `Ty::Int(k)`                 | `Int(k, sign_extend_to_u128(value))`                                                                             |
+| `Scalar(Scalar::Int(_))` over `Ty::Uint(k)`                | `Uint(k, value as u128)`                                                                                         |
+| `Scalar(Scalar::Int(_))` over `Ty::Float(k)`               | `Float(k, bits as u128)` (bit-pattern in low-order bits; high-order bits zero for narrow widths)                 |
+| `Scalar(Scalar::Int(_))` over a pointer type, all-zero     | `NullPtr(pointee_ty)` (pointee derived from the consumer's `Ty`)                                                 |
+| `Scalar(Scalar::Ptr(ptr, _))`                              | `Reloc(InstanceRef::from_alloc_id(ptr.alloc_id))`                                                                |
+| `ZeroSized`                                                | `ZST`                                                                                                            |
+| `Indirect { alloc, .. }` with structural valtree available | walk valtree → `Aggregate(_)` or `EnumValue { .. }`                                                              |
+| `Indirect { alloc_id, offset = 0 }` over `GlobalAlloc::Memory(_)`, sized pointee Ty | `Reloc(synth_static_inst_ref(alloc_id))` (thin pointer to synthesised `ConstMemoryStatic` Item per "Reference-typed const handling" subsection below)                                          |
+| `Indirect { alloc_id, offset != 0 }` over `GlobalAlloc::Memory(_)` | bridge-rejected (no-defensive-fallbacks rule; see "Reference-typed const handling" subsection below)                          |
+| `Indirect { alloc, .. }` otherwise                         | `Bytes(Vec<Byte>)` from `alloc.bytes`, `alloc.provenance`, `alloc.init_mask`                                     |
+| `Slice { data, meta }`                                     | `Aggregate([Reloc(synth_static_inst_ref(data)), Uint(Usize, meta)])` (wide pointer per "Reference-typed const handling" subsection below)                                                       |
+
+The bridge constructs `InstanceRef` from a rustc `AllocId` by
+resolving via `tcx.global_alloc(alloc_id)` to a `GlobalAlloc`,
+then projecting per §9.3's `regseq_instance_kind_rank` and
+`rustc_instance_kind_sort_rank` tables:
+
+| `GlobalAlloc` variant            | `InstanceRef` projection                                                                                                                                                                                                                                                                            |
+| -------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `Function { instance }`          | `regseq_kind_rank: 0` (`Function`); `def_path_hash: def_path_hash(<source DefId underlying instance>)` (extracted from `instance.def_id()` per rustc's `Instance` API — the source-side DefId, distinct from the rustc-shim flavor); `args_key: argskey_of(instance.args)` (or `ArgsKey::EMPTY` if `instance.args.is_empty()`); `fn_shim_disambig`: the `u8` rank looked up in §9.3's `rustc_instance_kind_sort_rank` table for the `FunctionInstanceFlavor` corresponding to `instance.def` (§9.4's `FunctionInstanceFlavor` is the structured Regseq-side wrapper for each admitted rustc `InstanceKind` variant; the §9.3 rank table assigns the same `u8` to a flavor and to the rustc `InstanceKind` variant it wraps). The shim rank distinguishes shims sharing `(DefId, args)` — e.g., `Item(foo)` (rank `0`) vs `ReifyShim(foo)` (rank `3`) vs `DropGlue(foo)` (rank `10`). |
+| `Static(def_id)`                 | `regseq_kind_rank: 1` (`Static`), `def_path_hash: def_path_hash(def_id)`, `args_key: ArgsKey::EMPTY` (statics are non-generic), `fn_shim_disambig: 0`.                                                                                                                                  |
+| `VTable(ty, preds)`              | `regseq_kind_rank: 1` (`Static` — vtable instances are bridge-synthesised Static Items per §13.2, marked in `item_synthetic_kinds` as `SyntheticItemKind::VTableInstance { principal, self_ty }`); `def_path_hash: synthesised_def_path_hash(per §13.4)`; `args_key: ArgsKey::EMPTY` (vtable instance Items are non-generic — `principal` and `self_ty` are baked into the synthesised DefPath segments per §13.4); `fn_shim_disambig: 0`. |
+| `Memory(memory)`                 | `regseq_kind_rank: 1` (`Static` — `ConstMemoryStatic` Items are bridge-synthesised Static Items per the "Reference-typed const handling" subsection below, marked in `item_synthetic_kinds` as `SyntheticItemKind::ConstMemoryStatic { content_hash }`); `def_path_hash: synthesised_def_path_hash(per §13.4 const-memory-family)`; `args_key: ArgsKey::EMPTY` (the synthesised Static is non-generic — `content_hash` is baked into the synthesised DefPath segments per §13.4); `fn_shim_disambig: 0`.                                              |
+| `TypeId { ty }`                  | bridge-rejected (`feature(type_id)` const generic; out of v1 driver-DSL scope per the no-defensive-fallbacks methodology rule).                                                                                                                                                                     |
+
+The bridge does **not** route value-level aggregates through
+`valtree_to_const_val`: that path materialises fresh `AllocId`s
+for non-primitive aggregates inside rustc, which would propagate
+build-local handle churn into the canonical const key. The
+bridge walks `ValTree::Branch` directly to `Aggregate` /
+`EnumValue` for structured aggregates, and walks
+`mir::ConstValue::Indirect` for byte-level values.
+
+#### Reference-typed const handling
+
+Reference-typed const values whose storage is backed by an
+anonymous rustc `GlobalAlloc::Memory` allocation — primarily
+`&str` and `&[T]` literals — are handled by **bridge-synthesising
+an immutable `Static` Item per unique memory-content blob**, with
+a content-derived `DefPathHash` that is cross-build stable. The
+const value is then composed compositionally from the existing
+`Const` variants — no new `Const` variant is required.
+
+**Bridge synthesis rule (lazy).** When the bridge dispatches a
+`mir::ConstValue::Slice { data, meta }` or
+`mir::ConstValue::Indirect { alloc_id, offset = 0 }` arm
+targeting `GlobalAlloc::Memory(memory)`:
+
+1. Look up the underlying `Allocation` (`memory.bytes`,
+   `memory.init_mask`, `memory.provenance`).
+2. Compute the canonical `Const::Bytes(Vec<Byte>)` byte-encoding
+   of the allocation per §9.7's per-`Const`-variant byte-encoding
+   tags (the three-state `Byte` form captures all three sources
+   of allocation distinctness uniformly).
+3. Compute `content_hash: ContentHash` by hashing the canonical
+   bytes per §13.3's `ContentHash` definition (SHA-256-truncated
+   leading 16 bytes BE-loaded into `u128`).
+4. Look up `SyntheticItemKind::ConstMemoryStatic { content_hash }`
+   in `item_synthetic_kinds`. If present (a prior synth Item with
+   the same content), reuse its `ItemId`. If absent, synthesise a
+   new `Item` with:
+   - `item.def_path` = synthesised per §13.4 const-memory-family
+     segments (`["<regseq_synth>", "const_memory_static",
+     <content_hash hex>]`); `item_def_paths[item]` = the
+     synthesised `DefPathHash` per §13.4 with payload bytes
+     `content_hash.0.to_be_bytes()`.
+   - `item.kind = ItemKind::Static`.
+   - `item_synthetic_kinds[item] = SyntheticItemKind::ConstMemoryStatic
+     { content_hash }`.
+   - Plus a corresponding `Instance` with
+     `kind = InstanceKind::Static { ty: array_ty, init: Some(c), mutability: Mutability::Not }`,
+     where `array_ty` is the `TyId` for `Ty::Array(elem_ty, N)`
+     with `elem_ty` the `TyId` for `Ty::Uint(UintKind::U8)`
+     and `N = memory.bytes.len() as u64` (both resolved against
+     the `TyInterner`; created if absent), and `c` is the
+     `ConstId` for the `Const::Bytes(Vec<Byte>)` value computed
+     in step 2.
+     The Static is **type-erased to bytes**: two allocations
+     with identical bytes share the synth Item regardless of
+     their original Rust element type. The wrapping
+     `Aggregate([Reloc, Uint(Usize, len)])` (for `Slice`)
+     carries the typed-pointer side; the Static itself is
+     bytes. `init: None` is invalid for `ConstMemoryStatic`
+     Items (validated in §3.3 Phase B per the
+     `ConstMemoryStatic` immutable-statics rule). Per the §8
+     `Item` schema, per-kind rich data (including the
+     Static's `ty`) lives on the `Instance`, not the `Item`;
+     `Item` itself carries only `def_path`, `kind`, `span`,
+     flags, and `opaque_handle_eligible`.
+5. Construct the dispatch result:
+
+```text
+mir::ConstValue::Slice { data, meta }                 ->  Aggregate([
+                                                            Reloc(synth_static_inst_ref(data)),
+                                                            Uint(Usize, meta),
+                                                          ])
+mir::ConstValue::Indirect { alloc_id, offset = 0 }    ->  Reloc(synth_static_inst_ref(alloc_id))
+  over GlobalAlloc::Memory, sized pointee Ty
+```
+
+`synth_static_inst_ref(alloc_id)` denotes the `InstanceRef`
+4-tuple for the synthesised Static: `regseq_kind_rank: 1`
+(`Static`); `def_path_hash`: the `DefPathHash` synthesised
+per §13.4 with `content_hash.0.to_be_bytes()` payload;
+`args_key: ArgsKey::EMPTY`; `fn_shim_disambig: 0`.
+
+**Pointee type at the use site.** For both Slice and
+Indirect-thin dispatch, the synthesised Static is type-erased
+to a byte-array `Ty::Array(elem_ty, N)` whose `elem_ty`
+resolves to `Ty::Uint(UintKind::U8)`. The original Rust pointee
+type (e.g., `[u32]`, `[u32; 3]`, `MyStruct`) is **supplied by
+the consumer's context** — the `Ty` of the `Const`'s position
+in the IR (e.g., the `Ty` of the `InstanceKind::Static.init`
+slot's pointer field, or of the `InstanceKind::Const.value`).
+C codegen casts from the byte static to the pointee type at
+the use site (e.g., emits `(const struct Foo *)mem_<hash>`
+rather than synthesising a re-typed copy of the static). This
+mirrors how `&str` lowers to a wide pointer with a
+`(const char *)mem_<hash>` data field — the bytes are shared;
+the type lives on the use.
+
+**Reference-typed const examples.**
+
+```text
+&str literal "hello":   (memory blob = b"hello", N = 5)
+  Const::Aggregate([
+    Reloc(InstanceRef {
+      regseq_kind_rank: 1,                   // Static
+      def_path_hash: <synth DefPathHash for content_hash(b"hello")>,
+      args_key: ArgsKey::EMPTY,
+      fn_shim_disambig: 0,
+    }),
+    Uint(Usize, 5),
+  ])
+
+&[u32; 3] literal &[1, 2, 3]:   (memory blob = bytes-of-three-u32s, thin pointer)
+  Const::Reloc(InstanceRef {
+    regseq_kind_rank: 1,
+    def_path_hash: <synth DefPathHash for content_hash(memory_bytes)>,
+    args_key: ArgsKey::EMPTY,
+    fn_shim_disambig: 0,
+  })
+
+&[u32] slice &[1, 2, 3]:        (memory blob = bytes-of-three-u32s, wide pointer)
+  Const::Aggregate([
+    Reloc(<same synth Static as the &[u32; 3] case if bytes match>),
+    Uint(Usize, 3),
+  ])
+```
+
+The third example illustrates the type-erasure dedup: a `&[u32; 3]`
+literal and a `&[u32]` slice over identical bytes share the
+synthesised Static — only the wrapping `Const` differs (thin
+pointer vs wide pointer aggregate).
+
+**Out-of-scope cases.**
+
+- **Non-zero offsets into Memory** (`Indirect { alloc_id, offset != 0 }`
+  over `GlobalAlloc::Memory`): bridge-rejected per the
+  no-defensive-fallbacks rule. These would arise from
+  taking a reference into the middle of a larger anonymous
+  allocation (e.g., `&FOO.field` where `FOO` is itself
+  anonymous-memory-backed). Driver code in practice does not
+  produce these; named statics carry shared structures where
+  field-pointers might be needed. The current spec is closed
+  at `offset = 0`; non-zero offsets remain rejected unless a
+  future spec revision admits them (no slot is reserved in
+  the dispatch table or `InstanceRef` shape).
+- **`feature(type_id)`** (`GlobalAlloc::TypeId { ty }`):
+  bridge-rejected.
+
+These rejections are **rejection-enforced**, not silent fallback:
+the bridge raises a diagnostic naming the rustc shape that was
+encountered. No future-extension slot is reserved; if the case
+becomes load-bearing, a future spec revision can add an
+admitting rule append-only.
+
+**Cross-build stability.** Two builds satisfying the
+build-equivalence quad (§12.4) produce identical
+`Allocation.bytes` / `init_mask` / `provenance` for the same
+source-level `&str` / `&[T]` literal, hence identical canonical
+byte form, hence identical `ContentHash`, hence identical
+synthesised `DefPathHash`, hence identical `InstanceRef` values
+in the `Reloc` field of the resulting `Const` value. The
+synthesised Static's `ItemId` is build-local; cross-build
+identity flows through `def_path_hash`, the same discipline
+applied to vtable instance Items per §13.2.
+
+#### Const validation phase split
+
+`ConstInterner` validation is split across two §3.3 Phase B
+steps:
+
+- **Type-level const phase** at step 4 (before `TyInterner` at
+  step 6): validate `ConstInterner.lookup` injectivity over the
+  type-level subset of canonical-content keys; recompute
+  canonical keys for type-level scalar entries (`Bool` / `Char`
+  / `Int` / `Uint` / `Float`) and verify they match stored
+  keys; validate that every `ConstId` appearing in
+  `GenericArg::Const(_)` positions resolves to a type-level
+  variant. Type-level scalar key computation is bounded
+  (no recursion through `ConstId`), so this is safe before
+  acyclicity is established.
+
+- **Value-level const phase** at step 9 (after `instances` at
+  step 8; before Phase C transient-map rebuild at step 10):
+  validate value-level `Const` content sub-references per the
+  invariants enumerated in §3.3 step 9 (`Byte` sequence
+  well-formedness; `NullPtr` pointee resolves; `Reloc` /
+  `Bytes::Reloc` `InstanceRef` projects to a unique Instance;
+  `Aggregate` children resolve, with type-level scalar
+  children admissible inside value-level aggregates per the
+  non-transitive-boundary rule; `EnumValue.variant_idx` is
+  in-bounds for the consumer's `Ty::Enum`). The step-9 sub-
+  bullets run in this order: (1) `NullPtr` / `Reloc` /
+  `Bytes::Reloc` sub-reference resolution against `types` /
+  `instances`; (2) `Bytes` / `Aggregate` / `EnumValue` content
+  checks (sequence well-formedness, child resolution,
+  variant_idx in-bounds); (3) const-graph acyclicity via
+  three-state DFS; (4) value-level canonical-content key
+  recomputation and lookup-map injectivity over the value-level
+  subset; (5) `ConstMemoryStatic` dedup (per-Item Static-shape
+  check + recompute `ContentHash` from each synth Static's
+  `init` and verify against the stored `content_hash`; verify
+  no two `ConstMemoryStatic` Items share a `content_hash`).
+  Acyclicity must run before step (4) so recursive
+  `canonical_const(ConstId)` calls into `Aggregate.0` /
+  `EnumValue.payload` terminate; steps (1) and (2) are
+  recursion-free (they check resolution, not key recomputation),
+  so they can run before acyclicity. Step (5) depends on the
+  value-level recomputation in step (4) (it re-canonicalises
+  each synth Static's `init: Const::Bytes`), so it runs after.
+  Combined with the step-4 type-level pass, step (4) completes
+  injectivity over the full `ConstInterner.lookup` key set.
+
+The split is a contract on the validation order and the
+membership rule — not on the interner shape. A single
+`ConstInterner` table with the two-pass discipline above and a
+variant-discriminant-keyed phase classifier satisfies the
+contract; the v1 implementation uses one table.
 
 ---
 
@@ -1790,7 +2468,7 @@ Naming note: `Provenance` here means *borrow flavor* — the source
 reference's shared/unique distinction that drives C qualification
 and the `restrict` decision. It is **not** rustc-style pointer
 provenance (Stacked Borrows, Tree Borrows, alias history); the
-IR carries no aliasing-history metadata (per D7/D8).
+IR carries no aliasing-history metadata (see `discussions.md` D7 / D8).
 
 ### 10.2 Unsized variants
 
@@ -2151,16 +2829,14 @@ remains for diagnostics and target-identity verification.
 ## 12. Type interning
 
 **Identity model (private interner key + public full-value
-equality).** R2.9 declined a *spec-level* `TyIdentityKey` type
-(no extracted public identity surface). The Round 9 refinement
-preserves that decision while removing the API hazard of
-identity-only public `Eq`/`Hash` on `Ty`:
+equality).** No public `TyIdentityKey` type is exposed; the
+spec-surface model uses a private interner key paired with
+public full-value equality on `Ty`:
 
 - The interner uses a **private** `TyIdentityKey` for its
   `lookup: HashMap<TyIdentityKey, TyId>` map. `TyIdentityKey`
   is internal to `regseq-model` (not exposed in the public
-  spec surface — consistent with R2.9's lock against a public
-  identity type). It encodes the §12.1 nominal/structural
+  spec surface). It encodes the §12.1 nominal/structural
   identity rules (layout excluded from nominal ADTs and
   tuples).
 - Public `Ty` derives ordinary `PartialEq` / `Eq` / `Hash` —
@@ -2186,15 +2862,13 @@ identity-only public `Eq`/`Hash` on `Ty`:
   content-addressing interner ensures equal canonical content
   → equal `TyId`).
 
-This refinement is **consistent with R2.9**, not a relitigation:
-R2.9 was about whether the public spec exposes a
-`TyIdentityKey` type; the answer is still no. The internal
+The public spec does not expose a `TyIdentityKey` type; the
 `TyInterner.lookup` mechanism is implementation detail.
 
 ```rust
 pub struct TyInterner {
     storage: IndexVec<TyId, Ty>,
-    lookup:  HashMap<TyIdentityKey, TyId>,    // private key per Round 9 refinement
+    lookup:  HashMap<TyIdentityKey, TyId>,    // private key (not part of public API)
 }
 
 // Private to the regseq-model crate. Encodes the §12.1
@@ -2238,11 +2912,11 @@ concrete `Ty` (or its `Layout`) for the lookup to succeed.
 
 ### 12.1 Identity rules (private `TyIdentityKey` shape)
 
-The private `TyIdentityKey` (introduced in Round 9 per F8) is
-the interner's lookup key. It encodes the per-variant identity
-rule per the buckets below. Public `Ty` has derived
-`PartialEq`/`Eq`/`Hash` (full-value equality including
-`Layout`); identity equality is *not* exposed on `Ty` itself.
+The private `TyIdentityKey` is the interner's lookup key. It
+encodes the per-variant identity rule per the buckets below.
+Public `Ty` has derived `PartialEq` / `Eq` / `Hash`
+(full-value equality including `Layout`); identity equality is
+*not* exposed on `Ty` itself.
 
 | Bucket                                      | Variants                                                             | `TyIdentityKey` shape                 | Layout role                                                          |
 | ------------------------------------------- | -------------------------------------------------------------------- | ------------------------------------- | -------------------------------------------------------------------- |
@@ -2342,7 +3016,7 @@ walk):
 | `ItemId`           | replace with `DefPathHash` from `model.item_def_paths` (cross-build terminator)                                              |
 | `FnSigId`          | resolve and **expand** FnSig content (see §14.3 minimum schema)                                                              |
 | `StringId`         | resolve to content (UTF-8 bytes, length-prefixed)                                                                            |
-| `ConstId`          | canonical const-eval result (stage-4 schema)                                                                                 |
+| `ConstId`          | resolve via `model.consts.resolve(...)` and recurse on the resolved `Const` per §9.7's per-`Const`-variant byte-encoding tags |
 | `DefPathHash`      | terminal: emit the 16-byte content (StableCrateId u64 LE + local_hash u64 LE)                                                |
 
 Per-`Ty`-variant byte-encoding tags (for the
@@ -2376,6 +3050,65 @@ The encoding is **append-only**: new `Ty` variants admitted by
 future spec revisions append at the next free tag value;
 existing tags remain immutable so cross-build hashes for
 already-admitted types never change.
+
+#### `GenericArgs` container encoding
+
+Wherever `canonical_args(GenericArgs)` appears in the per-`Ty`
+encodings above (`FnDef`, `Closure`, `Struct`, `Enum`, `Union`),
+the container grammar is:
+
+```text
+GenericArgs encoding:
+  u32 LE arg_count
+  followed by arg_count * GenericArg entry
+
+GenericArg entry:
+  u8 disc     // 0 = Type(TyId), 1 = Const(ConstId)
+  followed by disc-specific payload:
+    disc = 0:  canonical Ty bytes per the per-`Ty` rules above
+               (i.e., recursively encode the resolved Ty content,
+               not the local TyId integer)
+    disc = 1:  canonical Const bytes per the per-`Const`-variant
+               byte-encoding rules in §9.7 (resolved Const
+               content, not the local ConstId integer).
+               `GenericArg::Const(_)` positions resolve to
+               type-level scalar variants only per §3.3 step 4
+               and §9.7's type-level / value-level partition.
+```
+
+Per §9.1, `GenericArg` has no lifetime variant (regions are
+erased pre-bridge); the closed two-tag set above is
+exhaustive. The grammar is **append-only**: a future
+`GenericArg` variant (e.g., the unstable `feature(adt_const_params)`-
+extended forms, if v2 admits them) appends at the next free
+discriminant value.
+
+**`ArgsKey::EMPTY`.** The well-known constant value of `ArgsKey`
+for an empty `GenericArgs`:
+
+```rust
+impl ArgsKey {
+    /// Canonical `ArgsKey` for an empty `GenericArgs` value
+    /// (no type / lifetime / const arguments). Every reference
+    /// to a non-generic Item — including non-generic statics,
+    /// non-generic `Const` Items, and bridge-synthesised Items
+    /// whose generic-args identity is fully captured in the
+    /// synthesised `DefPath` segments per §13.4 — uses
+    /// `ArgsKey::EMPTY` rather than re-canonicalising at every
+    /// reference site.
+    pub const EMPTY: ArgsKey = ArgsKey(<canonical SHA-256-truncated hash of the
+        empty-GenericArgs canonical byte form>);
+}
+```
+
+The canonical byte form of an empty `GenericArgs` is a single
+4-byte little-endian `u32` length prefix `0x00_00_00_00`
+followed by zero entries. `ArgsKey::EMPTY.0` is therefore the
+leading 16 bytes of `SHA-256(0x00 0x00 0x00 0x00)` loaded as
+a big-endian `u128`. This value is fixed by the canonical
+encoding and the SHA-256 function; an implementation computes
+it once at compile time (or at startup) and shares the
+constant across all uses.
 
 #### Cross-build determinism
 
@@ -2813,6 +3546,20 @@ pub struct PrincipalTraitKey {
 
 pub struct ProjectionBindingsKey(pub u128);    // 128-bit content hash
 
+/// Content fingerprint for an anonymous-memory `GlobalAlloc::Memory`
+/// allocation backing a reference-typed const (`&str` / `&[T]`).
+/// Same hash family as `ArgsKey` and `ProjectionBindingsKey`:
+/// SHA-256 truncated to the leading 16 bytes loaded as a
+/// big-endian `u128`. Canonical input bytes = the canonical
+/// `Const::Bytes(Vec<Byte>)` byte-encoding of the memory
+/// allocation per §9.7's per-`Const`-variant byte-encoding tags
+/// (per-`Byte` sub-tag + payload, including any internal
+/// `Byte::Reloc(InstanceRef)` for relocation-bearing memory).
+/// This inherits the three-state `Byte` discipline so
+/// allocations with `init_mask` ranges or `provenance` entries
+/// are identity-distinguished from pure-byte allocations.
+pub struct ContentHash(pub u128);              // 128-bit content hash
+
 pub enum SyntheticItemKind {
     /// Source-level item from rustc; `item_def_paths[id]` is
     /// `tcx.def_path_hash(did)` for the originating `DefId`.
@@ -2837,6 +3584,21 @@ pub enum SyntheticItemKind {
     VTableInstance   { principal: PrincipalTraitKey, self_ty: ArgsKey },
     VTableMethodShim { principal: PrincipalTraitKey, self_ty: ArgsKey, vtable_entry_index: u32, method_def_path: DefPathHash },
     VTableDropShim   { principal: PrincipalTraitKey, self_ty: ArgsKey },
+
+    // Const-memory family (§13.4, §9.7). A bridge-synthesised
+    // immutable `Static` Item per unique anonymous-memory blob
+    // backing a reference-typed const (`&str` / `&[T]` literals).
+    // Identity is content-keyed: two allocations with identical
+    // canonical byte form produce identical `content_hash`,
+    // hence identical synthesised `DefPathHash`, hence one
+    // de-duplicated synth Item per content blob. The synthesised
+    // Static carries `ty = Ty::Array(elem_ty, N)` (where
+    // `elem_ty` is the `TyId` for `Ty::Uint(UintKind::U8)` and
+    // N is the allocation's byte length) and `Mutability::Not`;
+    // its `Instance` has `kind = InstanceKind::Static { init }`
+    // where `init` resolves to a `Const::Bytes(Vec<Byte>)`
+    // carrying the three-state byte encoding.
+    ConstMemoryStatic { content_hash: ContentHash },
 }
 
 pub enum ClosureCallKind { Call, CallMut, CallOnce }
@@ -2862,7 +3624,7 @@ ProjectionBindings canonical byte encoding:
                     // future kinds append
         canonical value bytes:
                     if TypeEq:  ArgsKey-style canonical Ty bytes (§12.3)
-                    if ConstEq: ConstIdentityKey bytes (stage 4)
+                    if ConstEq: ConstIdentityKey bytes per §9.7
 ```
 
 Sort order on `assoc_item DefPathHash` ensures that
@@ -2884,6 +3646,38 @@ bytes. At 128 bits with SHA-256 truncation, collision
 probability for any realistic driver-crate volume is below
 `2^-50`. Regseq treats truncated SHA-256 collision as outside
 the threat model.
+
+**`ContentHash` canonical encoding.** Same hash construction
+as `ArgsKey` and `ProjectionBindingsKey` (SHA-256 truncated
+to leading 16 bytes, big-endian, loaded as `u128`), but
+different canonical input grammar — anonymous-memory blob
+content:
+
+```text
+ContentHash canonical byte input:
+    canonical `Const::Bytes(Vec<Byte>)` byte-encoding of the
+    memory allocation per §9.7's per-`Const`-variant byte-encoding tags
+    (variant tag(6) + u32 LE byte_count + byte_count * Byte-sub-tag-encoded
+    payload, where each Byte is encoded per the `byte_sub_tag` table:
+    Uninit=0 (no payload), Value(b)=1 + 1 byte, Reloc(r)=2 + 34-byte
+    InstanceRef encoding).
+```
+
+Reusing the `Bytes` byte form means `ContentHash` naturally
+captures all three sources of allocation distinctness:
+(a) initialised payload bytes; (b) `init_mask` ranges (encoded
+as `Byte::Uninit` runs); (c) `provenance` entries (encoded as
+`Byte::Reloc(InstanceRef)` runs). Two allocations with
+identical `(bytes, init_mask, provenance)` produce identical
+`ContentHash`; any difference in any of the three produces
+distinct hashes.
+
+**Collision model (honesty note for `ContentHash`).** Same
+framing as `ArgsKey` and `ProjectionBindingsKey`. The
+serialised model stores only the `u128`, not the canonical
+allocation bytes. At 128 bits with SHA-256 truncation,
+collision probability for any realistic driver-crate volume
+is below `2^-50`; treated as outside the threat model.
 
 **Why `PrincipalTraitKey` not just `trait_path`.** A trait
 identity at the trait-object boundary is `(path, generic_args,
@@ -2948,9 +3742,10 @@ captures-struct (§13.1) is **excluded**: it is source-derived
 and `DefPathHash` come from rustc directly. The
 `SyntheticItemKind::ClosureCaptures` discriminator marks the
 shape but does **not** trigger synthetic-DefPath construction.
-The remaining six synthetic kinds (`ClosureCall`,
+The remaining seven synthetic kinds (`ClosureCall`,
 `ClosureDropGlue`, `VTableType`, `VTableInstance`,
-`VTableMethodShim`, `VTableDropShim`) use the encoding below.
+`VTableMethodShim`, `VTableDropShim`, `ConstMemoryStatic`)
+use the encoding below.
 
 #### Synthetic `DefPath.segments` encoding
 
@@ -2989,6 +3784,13 @@ Vtable family
     TypeNs(<vtable_entry_index decimal>),
     TypeNs(<method_def_path hex>),
   ]
+
+Const-memory family
+  segments = [
+    TypeNs("<regseq_synth>"),
+    TypeNs("const_memory_static"),
+    TypeNs(<content_hash hex>),
+  ]
 ```
 
 The canonical segments give F4 a deterministic per-segment sort
@@ -3012,6 +3814,13 @@ Per-family ownership for *cross-references and display*
   originating crate when present in `model.crates`; otherwise
   `primary_crate` (deterministic per `(principal, self_ty)`,
   not per discovery order).
+- Const-memory family: owner crate = `primary_crate`. The
+  underlying `GlobalAlloc::Memory` allocation has no
+  source-side `DefPath`, so there is no rustc-derived
+  ownership; assigning to `primary_crate` keeps display /
+  cross-references deterministic (the same `ConstMemoryStatic`
+  Item across builds with identical content lands at the same
+  owner crate).
 
 #### Synthetic `DefPathHash` construction
 
@@ -3061,13 +3870,17 @@ VTableInstance / VTableMethodShim / VTableDropShim
        u32 LE vtable_entry_index
        ++ DefPathHash bytes of method_def_path (16 B; StableCrateId
           u64 LE + local_hash u64 LE per §7.3 byte form)
+
+ConstMemoryStatic
+  ++ ContentHash bytes (16 B; equivalently
+     `content_hash.0.to_be_bytes()` per §13.3 ContentHash byte form)
 ```
 
 `DefPathHash` bytes = the 16-byte content (StableCrateId u64 LE
-+ local_hash u64 LE per §7.3). `ArgsKey` and
-`ProjectionBindingsKey` byte form per §12.3 / §13.3 (leading 16
-SHA-256 digest bytes in digest order, equivalently
-`<key>.0.to_be_bytes()`).
++ local_hash u64 LE per §7.3). `ArgsKey`,
+`ProjectionBindingsKey`, and `ContentHash` byte form per §12.3
+/ §13.3 (leading 16 SHA-256 digest bytes in digest order,
+equivalently `<key>.0.to_be_bytes()`).
 
 The reserved `StableCrateId(0)` for synthetic items
 domain-separates synthetic `DefPathHash` values from real-crate
@@ -3234,7 +4047,7 @@ the C-side lowering shape (for codegen).
 consults rustc directly for repr classification
 (`adt_def.repr().c()`, `adt_def.repr().transparent()`,
 `adt_def.repr().int`) which are *not* stored on the IR
-(intentionally, per §11.3 — D11 dropped `IS_C` /
+(intentionally, per §11.3 dropped `IS_C` /
 `IS_TRANSPARENT` from `Layout` because they are not needed for
 layout reproduction). The model carries two bridge outcomes:
 (1) the *fact* that the predicate held (presence of the FnSig
@@ -3297,10 +4110,10 @@ walks W → Status → u32 to a fixed point and records `Substituted
 { emit_as: TyId(u32), reason: TransparentChainAndTagScalar }`.
 Without composition into `emit_as`, codegen would have to re-
 derive the unwrap chain — but repr facts are intentionally not
-stored in the IR (§11.3, D11). Storing the final emit target
+stored in the IR (§11.3). Storing the final emit target
 keeps codegen executable from the model alone.
 
-**Type identity preservation (D15).** `FnSig.inputs/output`
+**Type identity preservation.** `FnSig.inputs/output`
 preserve the **original Rust `TyId`s**. The lowering is
 *recorded alongside* in `sig_c_abi_lowerings`, not substituted
 into the FnSig. This keeps rustc-distinct function types
@@ -3321,8 +4134,8 @@ distinct in the IR:
 
 Both lowerings emit identical C function signatures
 (`uint32_t f(uint32_t)`), but the FnSigs are distinct in the
-model — preserving the D15 type-identity contract for rustc-
-distinct types.
+model — preserving the type-identity contract for
+rustc-distinct types (see `discussions.md` D15 for rationale).
 
 **`CAbiLowering` is sibling-only metadata.** Per the §14.3
 convention, diagnostic / sibling data does not affect FnSig
@@ -3348,8 +4161,8 @@ acceptance criteria:
 
 Some types differ between the two: arrays and ZST markers
 admitted as fields but rejected at top-level positions; tuples
-rejected in both. Conflating the two predicates (Round 6's
-single-recursive rule) would either reject `repr(C) struct
+rejected in both. Conflating the two predicates into a single
+recursive rule would either reject `repr(C) struct
 { bytes: [u8; 16] }` at the boundary (because Array is rejected
 at positions and the recursion uses one rule for both) or admit
 arrays at boundary positions (which has no by-value C ABI).
@@ -3669,16 +4482,14 @@ and listed below; bridge implementations and validation
 | `Ty::Struct { item: this }` as a `Tuple.fields` element           | by-value             | **yes**                                            |
 | `GenericArg::Type(TyId(this_ty))` in any `GenericArgs`            | by-value (generic arg)| **yes**                                           |
 | Nested `FnPtr(sig)` whose `sigs[sig].inputs/output` reach `this_ty` directly | recurse via sig    | applies the same rules to the nested signature    |
-| `Const` value referencing the type (stage-4-pinned shape)         | TBD per stage 4      | stage-4 forward expectation; stage 3 conservatively rejects eligibility for any Item appearing in a `Const` value |
-| Body local types, place projection types (stages 9-11)            | by-value             | stage-9/11 forward expectation; stage 3 reserves the right to disqualify based on body-stage occurrences |
+| `Ty::Struct { item: this }` reached via a `Const` value's recursive walk (`Aggregate.0`, `EnumValue.payload`, `NullPtr(TyId)`, or as the resolved pointee of a `Reloc(InstanceRef)` whose target Item references the type by-value) | by-value | **yes** — `Const` values may carry by-value Ty references that disqualify the type from opaque-handle eligibility |
 
-For stage 3, the traversal walks `model.types`, `model.sigs`,
-and `model.items` (lang-item flag fields, `def_path`
-attribute references). Stages 9-11 (body lowering) and stage 4
-(consts) extend the traversal as forward expectations. The
-bridge stores the **outcome** as `Item.opaque_handle_eligible`
-after running the traversal at construction time; consumers
-read the bool, not re-run the walk.
+The traversal walks `model.types`, `model.sigs`, `model.items`
+(lang-item flag fields, `def_path` attribute references), and
+`model.consts` (per the `Const` row above). The bridge stores
+the **outcome** as `Item.opaque_handle_eligible` after running
+the traversal at construction time; consumers read the bool,
+not re-run the walk.
 
 This formal traversal makes opaque-handle eligibility
 **deterministic across bridge implementations** — two bridges
@@ -3713,11 +4524,11 @@ What the bridge does for each rustc `TyKind` after
 `TyKind::Adt(adt_def, args)`, it checks the closed special-ADT
 set *before* generic struct/enum/union translation:
 
-1. **Lang-item flagged ADTs** (D1.5): `PhantomData`, `UnsafeCell`,
+1. **Lang-item flagged ADTs**: `PhantomData`, `UnsafeCell`,
    `ManuallyDrop`. Recognition via `adt_def.is_*()`. Translation
    continues as ordinary `Ty::Struct`; the corresponding flag
    on the resulting `Item` is set per §8.2.
-2. **DSL-rejected ADTs** (D1.4 + D10 + D16): `Box` (via
+2. **DSL-rejected ADTs**: `Box` (via
    `adt_def.is_box()` / `IS_BOX`), `core::ffi::c_void` (via
    `tcx.is_lang_item(LangItem::CVoid)`),
    `core::sync::atomic::Atomic*` (via canonical-name match),
@@ -3753,7 +4564,7 @@ survive normalisation but lie outside the v1 driver-DSL scope).
 | `core::ffi::c_void`                                                       | type translation | recognised via `tcx.is_lang_item(LangItem::CVoid)`; opaque-struct pattern recommended |
 | `core::sync::atomic::Atomic*` types                                       | type translation | use `regseq::Atomic<T>`                                                               |
 | `core::sync::atomic::Atomic*::*()` methods + `core::intrinsics::atomic_*` | call translation | use `#[rseq::intrinsic("atomic_*")]`                                                  |
-| `core::sync::atomic::{fence, compiler_fence}`                             | call translation | outside the v1 admitted intrinsic vocabulary; **stage-14 forward expectation:** Regseq intrinsic vocabulary will admit barrier intrinsics (`#[rseq::intrinsic("compiler_fence" \| "device_fence" \| ...)]`) when the domain intrinsic surface is specified. Until then, drivers requiring explicit ordering barriers between MMIO and normal memory are out of v1 scope |
+| `core::sync::atomic::{fence, compiler_fence}`                             | call translation | outside the v1 admitted intrinsic vocabulary; drivers requiring explicit ordering barriers between MMIO and normal memory are out of v1 scope |
 | `core::ptr::{read,write}_volatile`                                        | call translation | use `#[rseq::intrinsic("mmio_*")]`                                                    |
 | `extern "C" { unwind: true }` and other `ExternAbi` variants              | type translation | only `Rust` and `C` accepted (§14)                                                    |
 | `FnAbi::C` `FnSig` with non-C-ABI-admissible parameter or return type     | type translation | C ABI admissibility predicate (§14.5); `BridgeError::UnsupportedCAbiType`              |
@@ -3922,8 +4733,10 @@ types.
    requires `'static` or closure environment); the restriction
    has minimal practical impact.
 
-Condition 4 is what prevents the type-identity collapse D15
-forbids: rustc treats `for<'a> fn(&'a A, &'a B)` (relational —
+Condition 4 is what prevents the type-identity collapse the
+type-identity-preservation contract forbids (see
+`discussions.md` D15 for rationale): rustc treats
+`for<'a> fn(&'a A, &'a B)` (relational —
 single bound region used twice) and
 `for<'a, 'b> fn(&'a A, &'b B)` (independent — two bound regions
 used once each) as **distinct types**. Both have the same
@@ -3997,10 +4810,10 @@ not distinguish `fn(&u32)` from `fn(&'static u32)`. Rationale:
 This is **not** a methodology-violating identity collapse: the
 distinct rustc types are subtype-related (one accepts a
 strict superset of values), so collapsing them is sound at the
-machine level. D15's lock applies to types with *distinct* C
+machine level. The type-identity-preservation contract (see
+`discussions.md` D15) applies to types with *distinct* C
 outputs — `fn(&u32)` and `fn(&'static u32)` have identical C
-output, so the collapse preserves the codegen contract D15
-guards.
+output, so the collapse preserves the codegen contract.
 
 The predicate is checked at the parent `Ty::FnPtr` /
 `Ty::Dynamic` level *before* any nested `TyKind::Ref` translates.
@@ -4076,10 +4889,9 @@ the relaxation path is to add a `binder_shape` carrier field
 on `FnSig` (a canonical encoding of the bound-region linkage
 partition) so distinct binder shapes get distinct `FnSigId`s.
 This preserves rustc-distinct identity at the cost of an
-extra `FnSig` field; D15's locking argument applies. Stage-3
-v1 takes the simpler path (reject) per the
-no-defensive-fallbacks methodology and lazy-vocabulary-
-expansion pattern.
+extra `FnSig` field. The current spec takes the simpler path
+(reject) per the no-defensive-fallbacks methodology and
+lazy-vocabulary-expansion pattern.
 
 ### 17.2 No QualType layer (S0 framing)
 
@@ -4149,7 +4961,7 @@ C-qualification rule (codegen) — applies when the pointee `t` is
 - `Ref(t, UniqueBorrow)` lowers to `T*` (mutable borrow already
   drops `const`; `restrict` is a separate per-context decision).
 - `Ptr(t, Mutability::Not)` lowers to `const T*` (raw pointers
-  do not consult `is_unsafe_cell`; D9 / S0 framing).
+  do not consult `is_unsafe_cell`; raw-pointer framing).
 - `Ptr(t, Mutability::Mut)` lowers to `T*`.
 
 #### Wide-pointee carve-out
@@ -4241,12 +5053,12 @@ expansion, not for domain extension.
 ### 17.5 Type-identity preservation contract (with explicit exception)
 
 RegseqModel preserves Rust type identity end-to-end: rustc-
-distinct types remain distinct in the IR. This is the D15 lock
-that drove `FnAbi` storage on `FnSig`, the
-`sig_c_abi_lowerings` side table (so `extern "C" fn(Handle)`
-and `extern "C" fn(u32)` remain distinct), and the
-`PrincipalTraitKey` shape (so `dyn Register<u32>` and
-`dyn Register<u64>` remain distinct).
+distinct types remain distinct in the IR (see `discussions.md`
+D15 for the rationale). This contract drove `FnAbi` storage
+on `FnSig`, the `sig_c_abi_lowerings` side table (so
+`extern "C" fn(Handle)` and `extern "C" fn(u32)` remain
+distinct), and the `PrincipalTraitKey` shape (so
+`dyn Register<u32>` and `dyn Register<u64>` remain distinct).
 
 **Single exception: erased region-only distinctions accepted by
 §17.1.** Free-region versus single-use input-bound-region
@@ -4327,13 +5139,33 @@ The interface is pinned; only `render_span` is currently
 implemented. Other renderer methods are stubs that panic with
 messages indicating they are not yet filled. **Full-model
 rendering is not yet available**; snapshot tests for the
-complete stage-3 model surface are blocked on filling the
-remaining renderers (§13 stage 13 owns this work).
+complete model surface are blocked on filling the remaining
+renderers. Per-method ownership:
+
+- `render_ty(TyId)` -- stage 13.
+- `render_const(ConstId)` -- stage 14. 5 of 11 `Const`
+  variants depend on `render_ty` (stage 13;
+  `ZST` / `Bytes` / `Aggregate` / `EnumValue` / `NullPtr`),
+  and `Reloc(InstanceRef)` depends additionally on
+  `render_def_path(ItemId)` (stage 12) and `render_instance`
+  (stage 14); `render_const` lands at stage 14 (the latest
+  dependency) inheriting the rendering-style decision from
+  stage 13's `render_ty`.
+- `render_def_path(ItemId)` -- stage 12 (resolves the eager
+  `Item.def_path.rendered: StringId` cached at construction
+  time).
+- `render_instance(InstanceId)` -- stage 14.
+- `render()` (top-level) -- stage 12+ (composes the per-Item
+  / per-Instance renderers above).
 
 Until then, snapshot tests covering the spec's structural
 invariants use the secondary JSON serialisation (per Q5)
 where readability is acceptable; tests that depend on
-human-readable structural output are deferred to stage 13.
+human-readable structural output are deferred to the owning
+renderer stages per the table above (stage 13 for `render_ty`;
+stage 14 for `render_const` and `render_instance`; stage 12
+for `render_def_path(ItemId)`; stage 12+ for top-level
+`render()`).
 Calling the textual pretty-printer the "primary serialisation"
 remains accurate as a *contract direction*, not a current
 capability.
