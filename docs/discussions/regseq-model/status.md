@@ -1,12 +1,19 @@
 # Status
 
-Last updated: 2026-05-01 (stage 3 closed and merged: top-level
-`spec.md` and `decisions.md` created; D14 deferred to new
-stage 13 [type-system pretty-printing]; old stage 13
-[domain-specific extensions] renumbered to stage 14;
-post-iteration cross-cluster Codex sweep R1-R10 closed at
-APPROVE on 2026-04-30; post-merge Codex review R1-R4 on
-top-level `spec.md` closed at APPROVE on 2026-05-01).
+Last updated: 2026-05-03 (stage 4 spec-side closed: all four
+inbound expectations from stage 1 closed via D-4-1 / D-4-2 /
+D-4-3 / D-4-K. D-4-1 LOCKED 2026-05-02 (Const enum, R1-R6,
+20 findings); D-4-2 LOCKED 2026-05-03 (ConstIdentityKey
+byte-form, R1-R7, 16 findings); D-4-3 LOCKED 2026-05-03
+(reference-typed const handling via ConstMemoryStatic family,
+R1-R4, 10 findings); D-4-K LOCKED 2026-05-03 (render_const
+deferred to stage 14, R1-R4, 7 findings). Stage 4
+implementation-side work (filling `crates/regseq-model/src/`
+with the locked design) not yet started -- separate workstream
+parallel to stage 1's 7-step shipping pattern. Stage 3's
+2026-05-01 merger remains in effect: canonical spec lives at
+top-level `spec.md`; stage-4 spec contributions await a
+second-stage merger pass per README §5.5 step 1-2.).
 
 Top-level project tracker. Captures cross-stage signals only:
 high-level stage progress, active focus, blockers, and deferred
@@ -61,9 +68,23 @@ pointer to detail.
   52 findings closed across the iteration).
   - Stage status file: `stage-3/status.md`.
 
-- [ ] **Stage 4: Constants and literals.** Scalars, byte arrays,
-  aggregate constants, function pointers as constants.
-  - Stage status file: (lazily created when stage opens).
+- [partial] **Stage 4: Constants and literals.** Spec-side
+  closed across four locked decisions. D-4-1: closed 11-variant
+  `Const` enum (Bool / Char / Int / Uint / Float / ZST /
+  Bytes / Aggregate / EnumValue / NullPtr / Reloc) plus `Byte`
+  three-state and `InstanceRef` 4-tuple cross-build identity.
+  D-4-2: per-variant `ConstIdentityKey` byte-form schema +
+  three-state-DFS acyclicity validation + value-level lookup
+  injectivity ordering. D-4-3: reference-typed const handling
+  (`&str` / `&[T]` literals) via the new
+  `SyntheticItemKind::ConstMemoryStatic` family, with a
+  content-derived `DefPathHash` and the existing variant set
+  composing wide-pointer / thin-pointer references via
+  `Aggregate([Reloc, Uint])` / `Reloc` (no new `Const` variant
+  needed). D-4-K: deferred `render_const` to stage 14 (latest
+  of its dependencies). Implementation-side work
+  (filling `crates/regseq-model/src/`) not yet started.
+  - Stage status file: `stage-4/status.md`.
 
 - [ ] **Stage 5: MIR places and projections.**
   - Stage status file: (lazily created).
@@ -128,25 +149,43 @@ See `../manual-lowering/README.md` for phase-2 specifics.
 
 ## Active focus
 
-**No stage in progress.** Stage 3 closed and merged 2026-05-01:
-top-level `spec.md` and `decisions.md` reflect the integrated
-stage-1 + stage-3 contributions, with the post-merge Codex
-review iterating to APPROVE in 4 rounds.
-The canonical RegseqModel spec now lives at top-level
-`spec.md`; per-stage `stage-1/spec-snapshot.md` and
-`stage-3/spec-snapshot.md` are frozen historical snapshots
-(headers note "current spec lives in top-level `spec.md`").
-Top-level `discussions.md` and `review-log.md` were not
-created — only stage 3 has produced these artefacts under the
-new convention, so per the append-if-exists rule (README
-§5.5 step 1-2) the per-stage versions remain the project record
-until a second stage closes.
+**Stage 4 spec-side closed; merger pending.** All four stage-1
+inbound expectations are closed under D-4-1 / D-4-2 / D-4-3 /
+D-4-K (53 distinct Codex findings closed across 21 rounds
+total over four clusters). The canonical RegseqModel spec
+still lives at top-level `spec.md` (post-stage-3 merger);
+stage-4's spec contributions live in
+`stage-4/spec-snapshot.md` and have not yet been merged into
+top-level. Per the README §5.5 step 1-2 append-if-exists rule,
+stage 4 is the second stage to close under the new convention,
+which means:
 
-Candidates for the next stage to open: stage 4 (constants),
-stage 11 (MIR bodies + `FnSig`), stage 12 (Rust Items +
-DefPath), stage 13 (type-system pretty-printing), stage 14
-(domain extensions). Stage 13 and stage 14 wait on stage 11 +
-stage 12 for input-readiness.
+- Top-level `spec.md` should be extended with stage-4 §9.7
+  (Const enum + byte-form + reference-typed handling), §13.3
+  (`SyntheticItemKind::ConstMemoryStatic` + `ContentHash`),
+  §13.4 (const-memory family segments + DefPathHash), §3.3
+  Phase B step 9 changes (acyclicity + value-level injectivity
+  + ConstMemoryStatic dedup), §18.2 (renderer-method
+  ownership table refinement), and the supporting
+  `Const::Bytes` / `Const::NullPtr` doc-comment updates.
+- Top-level `discussions.md` and `review-log.md` should be
+  *created* on this merger (the second stage to close under
+  the new convention triggers the append-if-exists creation
+  per README §5.5).
+- A post-merge Codex review pass on the integrated top-level
+  `spec.md` should iterate to APPROVE before the merger is
+  considered complete (mirroring stage 3's 4-round R1-R4
+  post-merge sweep).
+
+Stage 4 implementation-side work (filling
+`crates/regseq-model/src/` with the locked design) is a
+separate workstream and is not blocked on the merger.
+
+Candidates for the next stage to open: stage 11 (MIR bodies +
+`FnSig`), stage 12 (Rust Items + DefPath), stage 13
+(type-system pretty-printing), stage 14 (domain extensions).
+Stage 13 and stage 14 wait on stage 11 + stage 12 for
+input-readiness.
 
 ## Open architectural decisions
 
@@ -188,17 +227,32 @@ later-stage owner. Stage-specific deferrals live in the relevant
 
 ## Next action
 
-Stage 3 closed and merged. **Open the next stage.** Candidates:
-stage 4 (constants), stage 11 (MIR bodies + `FnSig`), stage 12
-(Rust Items + DefPath), stage 13 (type-system pretty-printing),
-stage 14 (domain extensions). User picks based on driver of
-value:
+Stage 4 spec-side closed. **Two parallel workstreams available:**
 
-- Phase-2 pl011 work needs stage 11/12 first.
-- Stage 13 (pretty-printing) and stage 14 (domain extensions)
-  need stage 11/12 input-readiness.
-- Stage 4 (constants) feeds `Ty::Array` length canonicalisation
-  and is independent of stages 11/12.
+1. **Stage-4 merger.** Integrate stage-4 spec contributions
+   into top-level `spec.md` per README §5.5 step 1-2; create
+   top-level `discussions.md` and `review-log.md` (second
+   stage to close under the new convention triggers the
+   append-if-exists creation); run post-merge Codex review
+   pass to APPROVE.
+
+2. **Stage-4 implementation.** Fill `crates/regseq-model/src/`
+   with the locked stage-4 design (`Const` enum, `Byte`,
+   `InstanceRef`, `ContentHash`, `SyntheticItemKind::ConstMemoryStatic`,
+   bridge dispatch arms, §3.3 Phase B validation rules).
+   Parallel to stage-1's 7-step shipping pattern; not blocked
+   on the merger.
+
+3. **Open the next stage.** Candidates: stage 11 (MIR bodies +
+   `FnSig`), stage 12 (Rust Items + DefPath), stage 13
+   (type-system pretty-printing), stage 14 (domain extensions).
+   User picks based on driver of value:
+
+   - Phase-2 pl011 work needs stage 11/12 first.
+   - Stage 13 (pretty-printing) and stage 14 (domain extensions)
+     need stage 11/12 input-readiness.
+   - Stage 4 (constants) is closed; `Ty::Array` length
+     canonicalisation is now grounded.
 
 ## How to update this file
 
