@@ -107,9 +107,26 @@ impl<'a> PrettyPrinter<'a> {
         unimplemented!("stage 13 fills render_ty")
     }
 
-    /// Const rendering. Filled in stage 4 (Constants).
+    /// Const rendering. Stage 4 specified the closed 11-variant
+    /// `Const` enum (D-4-1) + per-variant byte-encoding (D-4-2)
+    /// + reference-typed handling via `ConstMemoryStatic` (D-4-3),
+    /// but deferred the renderer to stage 14 per D-4-K
+    /// (mirroring the D14 → stage-13 precedent for `render_ty`,
+    /// extended one stage further because `render_const`'s
+    /// dependency chain is longer). Of the 11 `Const` variants:
+    /// 5 are self-contained (`Bool` / `Char` / `Int` / `Uint` /
+    /// `Float`); 5 depend on `render_ty` for consumer-context
+    /// type rendering (`ZST` / `Bytes` / `Aggregate` / `EnumValue`
+    /// / `NullPtr`); `Reloc(InstanceRef)` depends additionally on
+    /// `render_def_path(ItemId)` (stage 12) and `render_instance`
+    /// (stage 14). Stage 14 is the latest of those dependencies,
+    /// so `render_const` lands there as a complete implementation
+    /// inheriting the rendering-style decision from stage 13's
+    /// `render_ty`. Landing at stage 4 would either panic
+    /// transitively (calling stub renderers) or require a
+    /// debug-grade form thrown away once stage 14 closes.
     pub fn render_const(&self, _c: ConstId) -> String {
-        unimplemented!("stage 4 fills render_const")
+        unimplemented!("stage 14 fills render_const (deferred per D-4-K)")
     }
 
     /// Item-keyed `DefPath` rendering. Filled in stage 12 (Items).

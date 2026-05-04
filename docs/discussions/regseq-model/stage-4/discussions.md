@@ -2386,6 +2386,150 @@ section; `discussions.md` D-4-3 parent (Cross-refs).
 
 ---
 
+### D-4-K -- `pretty.rs::render_const` renderer-style decision: defer to stage 14 [LOCKED]
+
+**Question.** What rendering style does `pretty.rs::render_const`
+adopt, and at which stage is the renderer filled?
+
+**Key options.**
+
+1. **Option A -- defer to stage 14.** Update the stub message
+   to `"stage 14 fills render_const (deferred per D-4-K)"`;
+   add an outbound expectation in `stage-14/expectations.md`
+   (alongside the existing `render_instance` outbound);
+   record the deferral in this audit entry. No spec rendering-
+   style call is made at stage 4. Stage 14 is the latest of
+   `render_const`'s dependencies (stage 12 for
+   `render_def_path`; stage 13 for `render_ty`; stage 14 for
+   `render_instance`); landing the renderer there ensures all
+   transitive dependencies are filled.
+2. **Option B -- land a debug-grade renderer at stage 4.**
+   Produce structural output that does not recurse into
+   `render_ty` / `render_def_path(ItemId)` / `render_instance`
+   (e.g., `Const::Int(I32, 0xfffffffffffffffffffffffffffffff9)`
+   for `-7i32`; `Const::Reloc(Static @ defhash=<hex>, args=
+   <hex>, shim=0)` for relocations). Useful for stage-4-
+   internal snapshot tests; throwaway once stage 14 fills its
+   own `render_const`.
+3. **Option C -- land a complete renderer at stage 4** by
+   having `render_const` call into stub `render_ty` /
+   `render_def_path(ItemId)` / `render_instance`. Doesn't
+   compose -- those stubs panic, so `render_const` would
+   panic transitively for almost every input.
+4. **Option D -- defer to stage 13.** Stage 13 owns
+   `render_ty`, so the rendering-style decision could co-locate
+   there. But `Reloc(InstanceRef)` depends on `render_instance`
+   (stage 14); a stage-13 `render_const` would still panic
+   transitively in the `Reloc` arm -- the same Option-C
+   failure mode for one variant. Splitting "stage 13 owns
+   non-Reloc; stage 14 closes Reloc arm" leaves the renderer
+   half-implemented through the gap; not preferred.
+
+**Decision.** Option A (defer to stage 14).
+
+**Reasoning.**
+
+*Why not Option C.* Mechanically broken. `render_ty`
+(in §18 of the spec / `pretty.rs::render_ty`),
+`render_def_path(ItemId)` (`pretty.rs::render_def_path`), and
+`render_instance` (`pretty.rs::render_instance`) all
+`unimplemented!()`; calling into them would panic for every
+`Const` variant except the 5 self-contained scalars
+(`Bool` / `Char` / `Int` / `Uint` / `Float`).
+
+*Why not Option B.* The debug-grade form is a temporary
+artefact. Once stage 14 fills `render_const`, the natural
+`render_const` becomes the Rust-source-style form that recurses
+into `render_ty` / `render_def_path` / `render_instance` (e.g.,
+`5i32` / `(1, 2, 3)` / `Foo { a: 5 }` /
+`null::<*const i32>()`). A debug-grade renderer at stage 4
+would be replaced wholesale; the stage-14 fill would not
+incrementally extend it. Methodology cost: the debug-grade
+form would invite snapshot tests during stage-4 implementation
+work, which would then need migration when stage 14 lands the
+real renderer. The store-result-not-input rule applies: store
+the *spec-blessed* renderer (stage 14's), not an interim
+debugging facility.
+
+*Why not Option D.* Stage 13's `render_ty` is one of
+`render_const`'s three dependencies, but `render_instance`
+(stage 14) is also load-bearing for `Reloc(InstanceRef)`.
+Deferring to stage 13 would land a `render_const` that panics
+transitively for `Reloc` -- a common variant (every function
+pointer, every vtable instance, every `&str` literal via the
+D-4-3 synthesised-Static path). That's the same Option-C
+failure mode applied to one variant; not preferred. Stage 13
+remains the natural home for the *style coordination* (D-4-K
+inherits stage 13's `render_ty` style choice), but the
+*implementation* belongs at stage 14 when all dependencies
+have filled.
+
+*Why Option A.* Extends the D14 → stage-13 precedent (see
+`pretty.rs::render_ty` doc-comment + `stage-13/expectations.md`
+"From stage 3") one stage further: where `render_ty` defers to
+stage 13 (its only late dependency is `render_def_path` from
+stage 12), `render_const` defers to stage 14 (its latest
+dependency is `render_instance` from stage 14). Of the 11
+`Const` variants, 5 are self-contained scalars; 5 depend on
+`render_ty` (stage 13); `Reloc` additionally depends on
+`render_def_path(ItemId)` (stage 12) and `render_instance`
+(stage 14). The latest-dependency stage is the right home;
+locking the renderer style at stage 4 would produce a spec
+that changes shape every time later stages fill content.
+
+The §18.2 spec (`spec-snapshot.md`) already locates "remaining
+renderers" under stage 13+ ownership in blanket language;
+D-4-K refines the per-method ownership table to call out the
+dependency chain explicitly: `render_const` lands at stage 14,
+not 13.
+
+**Methodology rules invoked.**
+
+- *Store the result, not the input.* The spec-blessed renderer
+  belongs to stage 14 (where all its dependencies are filled);
+  recording the deferral here, not landing an interim form,
+  preserves the rule.
+- *No defensive fallbacks.* A debug-grade renderer that
+  doesn't recurse into the real type/instance renderers is a
+  workaround for the dependency gap, not a fix. The
+  no-defensive-fallbacks rule says "don't paper over the gap;
+  defer until the gap is real-fixed."
+- *No forward-looking placeholders.* The deferral is a *real*
+  deferral (handed over to stage 14 with the dependency
+  analysis on record), not a reserved slot. Stage 14 is free
+  to choose any renderer style consistent with stage 13's
+  `render_ty`; no specific style is pre-committed by D-4-K.
+
+**Prior-art evidence.**
+
+- `pretty.rs::render_ty` doc-comment -- the D14 → stage-13
+  precedent for `render_ty`, with the same dependency-driven
+  reasoning. D-4-K extends it one stage further per the
+  longer dependency chain.
+- `stage-13/expectations.md` "From stage 3" -- the existing
+  "From stage 3" entry for `render_ty`; D-4-K's "From stage 4"
+  outbound (filed in `stage-14/expectations.md`) mirrors this
+  shape.
+- `prior-art/charon.md` -- charon's renderer style (Theme G in
+  the stage-3 prior-art file) is the lean for `render_ty`
+  and would carry naturally to `render_const` in
+  Rust-source-style form. Cited for stage 14's evaluation,
+  not binding here.
+
+**Cross-refs.** `crates/regseq-model/src/pretty.rs`
+`render_const` method (updated stub message +
+doc-comment); `spec-snapshot.md` §18.2 (Renderer status --
+per-method ownership table updated to include `render_const`
+at stage 14); `stage-14/expectations.md` "From stage 4"
+section (outbound expectation filed);
+`stage-13/expectations.md` (top-of-file note pointing at
+stage-14 for `render_const`); `stage-4/status.md`
+"Inbound expectations" (stage-1 inbound "Fill
+`pretty.rs::render_const` stub" closed by D-4-K with deferral
+to stage 14).
+
+---
+
 ## 2. Reference primer
 
 (To be filled as concepts surface during stage-4 work that

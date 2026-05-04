@@ -5182,12 +5182,34 @@ implemented. Other renderer methods are stubs that panic with
 messages indicating they are not yet filled. **Full-model
 rendering is not yet available**; snapshot tests for the
 complete stage-3 model surface are blocked on filling the
-remaining renderers (§13 stage 13 owns this work).
+remaining renderers. Per-method ownership:
+
+- `render_ty(TyId)` -- stage 13 (deferred from stage 3, D14).
+- `render_const(ConstId)` -- stage 14 (deferred from stage 4
+  per D-4-K, extending the D14 → stage-13 precedent one stage
+  further because `render_const`'s dependency chain is longer:
+  5 of 11 `Const` variants depend on `render_ty` (stage 13;
+  `ZST` / `Bytes` / `Aggregate` / `EnumValue` / `NullPtr`),
+  and `Reloc(InstanceRef)` additionally depends on
+  `render_def_path(ItemId)` (stage 12) and `render_instance`
+  (stage 14). Stage 14 is the latest dependency; `render_const`
+  lands there inheriting the rendering-style decision from
+  stage 13's `render_ty`).
+- `render_def_path(ItemId)` -- stage 12 (resolves the eager
+  `Item.def_path.rendered: StringId` cached at construction
+  time per the stage-1 contract).
+- `render_instance(InstanceId)` -- stage 14.
+- `render()` (top-level) -- stage 12+ (composes the per-Item
+  / per-Instance renderers above).
 
 Until then, snapshot tests covering the spec's structural
 invariants use the secondary JSON serialisation (per Q5)
 where readability is acceptable; tests that depend on
-human-readable structural output are deferred to stage 13.
+human-readable structural output are deferred to the owning
+renderer stages per the table above (stage 13 for `render_ty`;
+stage 14 for `render_const` and `render_instance`; stage 12
+for `render_def_path(ItemId)`; stage 12+ for top-level
+`render()`).
 Calling the textual pretty-printer the "primary serialisation"
 remains accurate as a *contract direction*, not a current
 capability.

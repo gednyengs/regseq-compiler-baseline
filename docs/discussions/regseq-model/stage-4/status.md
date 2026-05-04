@@ -1,13 +1,21 @@
 # Stage 4 Status
 
-Status: **OPEN -- D-4-1 LOCKED, D-4-2 LOCKED, D-4-3 LOCKED.**
+Status: **CLOSED (spec-side) -- D-4-1 / D-4-2 / D-4-3 / D-4-K LOCKED.**
+All four stage-1 inbound expectations are closed.
 D-4-1 closed at APPROVE on 2026-05-02 across 6 Codex review
 rounds (20 findings closed). D-4-2 closed at APPROVE on
 2026-05-03 across 7 Codex review rounds (16 findings closed).
 D-4-3 closed at APPROVE on 2026-05-03 across 4 Codex review
-rounds (10 findings closed). Next: D-4-K (`pretty.rs::render_const`
-renderer style; possibly deferable to a later stage following
-the D14 → stage-13 precedent).
+rounds (10 findings closed). D-4-K closed at APPROVE on
+2026-05-03 across 4 Codex review rounds (7 findings closed) --
+deferred `pretty.rs::render_const` to stage 14 (extending the
+D14 → stage-13 precedent for `render_ty` one stage further
+because `render_const`'s dependency chain is longer: 5 of 11
+variants depend on `render_ty`; `Reloc` additionally depends
+on `render_def_path` + `render_instance`, and stage 14 is the
+latest of those). Stage 4's implementation-side work
+(filling `crates/regseq-model/src/` with the locked design)
+follows separately.
 
 Last updated: 2026-05-03.
 
@@ -39,15 +47,23 @@ Four items, all from stage 1:
   (struct / array / enum variants), and function pointers as
   constants.** Closed by D-4-1 — 11-variant `Const` enum
   covers all listed surfaces. Reference-typed `&str` / `&[T]`
-  closed by D-4-3 (in active Codex review) via the
+  closed by D-4-3 via the
   `SyntheticItemKind::ConstMemoryStatic` family extension and
   compositional `Aggregate([Reloc, Uint])` / `Reloc(_)`
   dispatch arms.
-- [ ] **Fill `pretty.rs::render_const` stub.** Open. Renderer-
-  style decision will be tagged D-4-K (post-D-4-2) or
-  deferred to a later stage following the D14 → stage-13
-  precedent if the renderer's input depends on content not
-  yet pinned.
+- [x] **Fill `pretty.rs::render_const` stub.** Closed by D-4-K
+  via deferral to stage 14 (extending the D14 → stage-13
+  precedent for `render_ty` one stage further because
+  `render_const`'s dependency chain is longer). Of the 11
+  `Const` variants: 5 are self-contained scalars; 5 depend on
+  `render_ty` for rendering (stage 13); `Reloc` additionally
+  depends on `render_def_path(ItemId)` (stage 12) and
+  `render_instance` (stage 14). Stage 14 is the latest of
+  those dependencies, so `render_const` lands there as a
+  complete implementation. Stub message updated to "stage 14
+  fills render_const (deferred per D-4-K)"; outbound
+  expectation filed in `stage-14/expectations.md`
+  "From stage 4."
 - [x] **Preserve `Option<ConstId>` 4-byte niche optimization.**
   Closed by D-4-1 (`ConstId = u32` with `NonMaxU32` niche; no
   variant payload widens `ConstId`).
@@ -76,6 +92,22 @@ different evidence base, late split is tractable per stage-3
 precedent.
 
 ## Locked decisions
+
+- **D-4-K**: `pretty.rs::render_const` renderer-style decision.
+  Deferred to stage 14 (extending D14 → stage-13 precedent
+  one stage further per the longer dependency chain). Locked
+  across 4 Codex review rounds (R1-R4), 7 findings closed.
+  Single-decision cluster (no sub-decisions). Of the 11 `Const`
+  variants: 5 self-contained scalars; 5 depend on `render_ty`
+  (stage 13); `Reloc` additionally depends on
+  `render_def_path(ItemId)` (stage 12) and `render_instance`
+  (stage 14). Outbound expectation filed in
+  `stage-14/expectations.md` "From stage 4"; cross-reference
+  in `stage-13/expectations.md` top-of-file note;
+  `stage-4/expectations.md` render_const inbound flipped to
+  `[CLOSED by D-4-K via deferral to stage 14]`;
+  `spec-snapshot.md` §18.2 per-method ownership table
+  refined.
 
 - **D-4-3** (3.1-3.10): Reference-typed const handling --
   `SyntheticItemKind::ConstMemoryStatic` family. Whole-family
@@ -244,9 +276,13 @@ D-4-1's contribution also includes:
   `consts (type-level) ← sigs ← types ← (layout, instances) ←
   consts (value-level)`.
 
-## Open decisions (post-D-4-3)
+## Open decisions
 
-- **D-4-K (open)** -- `pretty.rs::render_const` renderer style.
+- None remaining. Stage 4's spec-side work is complete:
+  D-4-1 (const-eval result form), D-4-2 (identity-key byte
+  form), D-4-3 (reference-typed handling), D-4-K (render_const
+  stub via deferral to stage 14) -- all four stage-1 inbound
+  expectations closed.
 
 ## Codex review cadence (status)
 
@@ -260,6 +296,20 @@ D-4-1's contribution also includes:
   - R5: 1 MINOR (pre-existing float-padding wording
     inconsistency surfaced as deeper-residual). Closed by R6.
   - R6: APPROVE 0.
+
+- **D-4-K cluster** (initial review, 2026-05-03): closed at
+  R4=APPROVE.
+  Trajectory:
+  - R1: 4 issues (2 BLOCK / 2 MINOR / 0 NIT). All closed by R2.
+    Largest: deferral-target retarget from stage 13 to stage 14
+    (Reloc needs render_instance which is stage 14, so
+    stage-13 deferral would still leave a transitive-stub gap).
+  - R2: 2 issues (1 BLOCK / 1 MINOR / 0 NIT). All closed by R3.
+    Missed-files retarget findings (stage-4/expectations.md
+    + status.md review-target list).
+  - R3: 1 MINOR (§18.2 snapshot-test prose holdover). Closed
+    by R4.
+  - R4: APPROVE 0.
 
 - **D-4-3 cluster** (initial review, 2026-05-03): closed at
   R4=APPROVE.
@@ -299,8 +349,8 @@ Prompt template: see `memory.md` Section 4.
 ## Stage-4-specific deferred items
 
 - **None currently active.** The `&str` / `&[T]`
-  reference-typed const handling deferred from D-4-1 is now
-  closed by D-4-3 (in active Codex review). Non-zero offsets
+  reference-typed const handling deferred from D-4-1 is closed
+  by D-4-3. Non-zero offsets
   into anonymous Memory allocations (`Indirect { alloc_id,
   offset != 0 }`) are bridge-rejected by D-4-3.8; these would
   arise from references into the middle of a larger
@@ -312,10 +362,11 @@ Prompt template: see `memory.md` Section 4.
 
 ## Next concrete unit of work
 
-1. **Frame D-4-K** -- `pretty.rs::render_const` renderer style.
-   May be deferable to a later stage following the D14 →
-   stage-13 precedent if the renderer's input depends on
-   content not yet pinned.
-3. Lay out options + recommendation + sub-questions per
-   Phase A; edit `spec-snapshot.md` and `discussions.md`;
-   run Codex review loop to APPROVE; lock and commit.
+Stage 4's **spec-side work is complete**. All four stage-1
+inbound expectations are closed (D-4-1, D-4-2, D-4-3, D-4-K).
+
+The remaining stage-4 work is **implementation**: filling
+`crates/regseq-model/src/` with the locked design. This is
+parallel to stage-1's 7-step shipping pattern and is a
+separate workstream from the spec-side decisions tracked in
+this `status.md`.

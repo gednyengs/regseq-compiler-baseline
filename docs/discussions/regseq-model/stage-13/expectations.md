@@ -4,7 +4,11 @@ Stage 13 covers type-system pretty-printing: filling
 `pretty.rs::render_ty` and any related rendering concerns
 required to pretty-print the `Ty` enum once all its content
 sources have been filled (FnSig from stage 11; Item / DefPath
-from stage 12).
+from stage 12). Stage 13's rendering-style decision for `Ty`
+also serves as the input for stage 14's `render_const`
+(deferred from stage 4 per D-4-K because `render_const`'s
+dependency chain is longer than `render_ty`'s — see
+`../stage-14/expectations.md` "From stage 4").
 
 The convention is described in `../README.md` under "Forward
 expectations live in `stage-N/expectations.md`."

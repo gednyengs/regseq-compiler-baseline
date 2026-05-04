@@ -20,11 +20,25 @@ expectations live in `stage-N/expectations.md`."
   byte arrays, aggregate constants (struct / array / enum
   variants), and function pointers as constants.
 
-- **Fill `pretty.rs::render_const` stub.** The stage-1 stub at
-  `crates/regseq-model/src/pretty.rs` panics with
-  `unimplemented!("stage 4 fills render_const")`. Stage 4
-  replaces the body with a renderer that produces strings for
-  each const variant.
+- **[CLOSED by D-4-K via deferral to stage 14]**
+  **Fill `pretty.rs::render_const` stub.** Stage 4 closed this
+  inbound by *deferring* the renderer to stage 14 (extending
+  the D14 → stage-13 precedent for `render_ty` one stage
+  further because `render_const`'s dependency chain is longer).
+  Of the 11 `Const` variants: 5 are self-contained scalars
+  (`Bool` / `Char` / `Int` / `Uint` / `Float`); 5 depend on
+  `render_ty` (stage 13; `ZST` / `Bytes` / `Aggregate` /
+  `EnumValue` / `NullPtr`); `Reloc(InstanceRef)` depends
+  additionally on `render_def_path(ItemId)` (stage 12) and
+  `render_instance` (stage 14). Stage 14 is the latest of
+  those dependencies; landing the renderer there ensures all
+  transitive dependencies are filled. The stub at
+  `crates/regseq-model/src/pretty.rs` now panics with
+  `unimplemented!("stage 14 fills render_const (deferred per
+  D-4-K)")`. Outbound expectation filed in
+  `stage-14/expectations.md` "From stage 4" with the full
+  variant-by-variant dependency analysis. Audit shape:
+  `discussions.md` D-4-K parent.
 
 - **Niche optimization for `Option<ConstId>`.** Stage 1's
   `lib.rs` asserts `Option<ConstId>` is 4 bytes. Don't break it.

@@ -1043,3 +1043,197 @@ new design space. The deepest finding (R2 item-ty-schema)
 was a real schema-shape error caught by the cumulative-
 consistency lens after the surface-level wording errors
 had been cleared.
+
+## Round 1 -- D-4-K initial review
+
+**Date.** 2026-05-03.
+
+**Scope.** D-4-K cluster (single decision; no sub-decisions)
+covering the `pretty.rs::render_const` renderer-style decision.
+Phase B edits applied across `crates/regseq-model/src/pretty.rs`
+(stub message + doc-comment), `stage-4/spec-snapshot.md` §18.2
+(Renderer status per-method ownership table),
+`stage-13/expectations.md` (initial deferral target -- later
+moved per R1.2), `stage-4/discussions.md` D-4-K parent entry,
+`stage-4/status.md` (Inbound expectations + In-flight decisions).
+
+**Verdict.** BLOCK -- 4 issues (2 BLOCK / 2 MINOR / 0 NIT).
+
+**Issues raised.**
+
+1. **[BLOCK] dependency-count.** "7 of 11 variants depend on
+   `render_ty`" was wrong in five locations. Actual count:
+   5 self-contained scalars (`Bool` / `Char` / `Int` / `Uint`
+   / `Float`) + 5 depending on `render_ty` (`ZST` / `Bytes` /
+   `Aggregate` / `EnumValue` / `NullPtr`) + `Reloc` depending
+   additionally on `render_def_path` + `render_instance` =
+   11 total. Of these, 5 of 11 depend on `render_ty`; 6 of 11
+   depend on at least one not-yet-filled renderer. The
+   "four self-contained scalars" wording at one location also
+   miscounted (it's 5, not 4).
+2. **[BLOCK] deferral-target.** D-4-K deferred `render_const`
+   to stage 13, but the stage-13 fill would still have a
+   transitive-stub gap for `Reloc(InstanceRef)` -- which
+   depends on `render_instance` (stage 14). That's the same
+   "transitive panic" failure mode D-4-K rejected for
+   Option C, applied to one variant. Codex suggested either
+   defer to stage 14 (where all dependencies are filled) or
+   split "stage 13 owns non-Reloc; stage 14 closes Reloc arm."
+3. **[MINOR] stale-line-refs.** D-4-K reasoning cited
+   `pretty.rs:121` and `pretty.rs:130` for `render_def_path` /
+   `render_instance` stub lines, but the actual line numbers
+   were 132 and 140 after the doc-comment expansion.
+4. **[MINOR] status-staleness.** Two `stage-4/status.md`
+   mentions of D-4-3 still said "in active Codex review"
+   even though D-4-3 was LOCKED in the previous decision
+   commit.
+
+**Corrections applied.**
+
+- Issue 1: Replaced "7 of 11" with the accurate count
+  (5 / 5 / 1 = 11) in all five locations:
+  `pretty.rs::render_const` doc-comment, `spec-snapshot.md`
+  §18.2 ownership table, `stage-14/expectations.md`
+  "From stage 4" (formerly stage-13's), `discussions.md` D-4-K
+  parent reasoning, `status.md` top-of-file Status. Also fixed
+  "four self-contained scalars" → "5 self-contained scalars"
+  in D-4-K reasoning.
+- Issue 2: Retargeted D-4-K's deferral from stage 13 to
+  stage 14 (where all dependencies -- `render_def_path` from
+  stage 12, `render_ty` from stage 13, `render_instance` from
+  stage 14 -- are filled). Updated the stub message to
+  "stage 14 fills render_const (deferred per D-4-K)"; moved
+  the "From stage 4" outbound from `stage-13/expectations.md`
+  to `stage-14/expectations.md` (alongside the existing
+  `render_instance` outbound); added a top-of-file note in
+  `stage-13/expectations.md` pointing at stage 14 for
+  `render_const`. D-4-K audit-shape decision text rewrote
+  Option A as "defer to stage 14" + added Option D
+  (defer-to-stage-13 with the rejection reasoning). Updated
+  reasoning to note D-4-K extends the D14 → stage-13
+  precedent one stage further.
+- Issue 3: Removed brittle line-number references from
+  D-4-K reasoning (pointing at stub method names instead).
+- Issue 4: Removed "(in active Codex review)" parentheticals
+  from the two stale D-4-3 mentions in `status.md`.
+
+Round-2 prompt focus: verify each correction; surface any
+new issues introduced by the retarget; check residual
+soundness across the cluster.
+
+---
+
+## Round 2 -- D-4-K re-review after round-1 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 1. Round-1 corrections summarised
+above.
+
+**Verdict.** BLOCK -- 2 issues (1 BLOCK / 1 MINOR / 0 NIT).
+All round-1 issues verified closed. The findings are missed
+files in the round-1 retarget pass.
+
+**Issues raised.**
+
+1. **[BLOCK] stale-inbound-expectation.** R1's retarget from
+   stage-13 to stage-14 didn't propagate to
+   `stage-4/expectations.md`'s render_const inbound entry,
+   which still said "stage 4 replaces the body with a renderer"
+   and quoted the old `unimplemented!("stage 4 fills
+   render_const")` message. The inbound contradicted D-4-K's
+   selected Option A deferral and the actual stub message.
+2. **[MINOR] review-scope-bookkeeping.** `stage-4/status.md`'s
+   "Next concrete unit of work" review-target list omitted
+   `stage-14/expectations.md` after the retarget (it still
+   listed `stage-13/expectations.md` as the outbound location).
+
+**Corrections applied.**
+
+- Issue 1: Updated `stage-4/expectations.md`'s render_const
+  inbound entry to mark it `[CLOSED by D-4-K via deferral to
+  stage 14]`; replaced the stale stub-replacement promise with
+  a description of D-4-K's deferral rationale + the variant-
+  by-variant dependency breakdown + cross-refs to the
+  stage-14 outbound and the audit-shape entry.
+- Issue 2: Updated `stage-4/status.md`'s review-target list
+  to include `stage-14/expectations.md` (the actual outbound
+  location), `stage-13/expectations.md` (top-of-file pointer
+  only), and `stage-4/expectations.md` (the inbound closure).
+
+Round-3 prompt focus: verify R2 corrections; final
+cumulative-consistency check; expected to APPROVE.
+
+---
+
+## Round 3 -- D-4-K re-review after round-2 fixes
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 2.
+
+**Verdict.** MINOR -- 1 issue (0 MINOR / 1 MINOR / 0 NIT).
+All round-2 issues verified closed. The single finding is a
+follow-on §18.2 prose inconsistency.
+
+**Issue raised.**
+
+1. **[MINOR] stale-snapshot-test-deferral.** §18.2's per-method
+   ownership table now correctly assigns `render_const` to
+   stage 14, but the follow-on snapshot-test prose note still
+   said tests with human-readable output are "deferred to
+   stage 13" (a holdover from before the per-method table
+   existed).
+
+**Correction applied.**
+
+- Updated §18.2's snapshot-test deferral prose to reference
+  the per-method ownership table directly: "deferred to the
+  owning renderer stages per the table above (stage 13 for
+  render_ty; stage 14 for render_const and render_instance;
+  stage 12 for render_def_path(ItemId); stage 12+ for
+  top-level render())."
+
+Round-4 prompt focus: verify R3 correction; expected to APPROVE.
+
+---
+
+## Round 4 -- D-4-K final close-out re-review after round-3 fix
+
+**Date.** 2026-05-03.
+
+**Scope.** Same as round 3.
+
+**Verdict.** APPROVE -- 0 issues (0 BLOCK / 0 MINOR / 0 NIT).
+All round-3 issues verified closed. Cumulative-consistency
+pass found no further issues. D-4-K cluster closed.
+
+**Corrections applied.** None required.
+
+---
+
+## Round-trajectory summary -- D-4-K
+
+```
+R1: 4 issues (2 BLOCK / 2 MINOR / 0 NIT)   [BLOCK]
+R2: 2 issues (1 BLOCK / 1 MINOR / 0 NIT)   [BLOCK] -- all R1 closed; missed-files retarget findings
+R3: 1 issue  (0 BLOCK / 1 MINOR / 0 NIT)   [MINOR] -- R2 closed; §18.2 prose
+R4: 0 issues                                [APPROVE] -- R3 closed
+```
+
+7 distinct findings closed across the iteration. D-4-K
+cluster LOCKED in `discussions.md` and `status.md`. The
+trajectory was the tightest of stage 4's four clusters
+(R1=10/6/6/4; ending in 6/7/4/4 rounds), reflecting D-4-K's
+lighter design surface (deferral decision; no spec-shape
+work) -- the only "real" finding was R1's deferral-target
+retarget from stage 13 to stage 14, surfaced by Codex's
+careful dependency analysis. The other findings were
+mechanical propagation issues across the multi-file edit
+surface.
+
+Stage 4's spec-side work is now complete: D-4-1 (variant set),
+D-4-2 (byte-form schema), D-4-3 (reference-typed handling),
+D-4-K (renderer deferral). All four stage-1 inbound
+expectations are closed. Implementation-side work follows
+separately.

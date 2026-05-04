@@ -56,6 +56,98 @@ expectations live in `stage-N/expectations.md`."
   conventions (`newtype_index!` macro, niche-encoded u32, hand-
   written serde, single namespace per kind).
 
+## From stage 4
+
+- [ ] **Fill `pretty.rs::render_const` stub.** The stub at
+  `crates/regseq-model/src/pretty.rs` panics with
+  `unimplemented!("stage 14 fills render_const (deferred per
+  D-4-K)")`. Stage 4 specified the closed 11-variant `Const`
+  enum (D-4-1) + per-variant byte-encoding (D-4-2) +
+  reference-typed handling via `SyntheticItemKind::ConstMemoryStatic`
+  (D-4-3), but deferred the renderer to stage 14 per D-4-K
+  (extending the D14 → stage-13 precedent for `render_ty` one
+  stage further because `render_const`'s dependency chain is
+  longer). Stage 14 is the latest of `render_const`'s
+  dependencies; landing the renderer there ensures all
+  transitive renderers are filled.
+
+  *Variant-by-variant dependency.*
+
+  | Variant            | Renderer needs                                                   |
+  | ------------------ | ---------------------------------------------------------------- |
+  | `Bool` / `Char`    | self-contained (variant + payload renders directly)              |
+  | `Int` / `Uint` / `Float` | self-contained (kind discriminant + value-bits)            |
+  | `ZST`              | consumer's `Ty` to render which ZST it is (`()` vs `PhantomData<u32>` etc.) |
+  | `Bytes(_)`         | consumer's `Ty` (bytes-as-struct vs bytes-as-array; field labels) |
+  | `Aggregate(_)`     | consumer's `Ty` (tuple field labels vs struct field names vs array) |
+  | `EnumValue { variant_idx, payload }` | consumer's `Ty::Enum` to resolve `variant_idx` to a variant name |
+  | `NullPtr(TyId)`    | `render_ty` (stage 13) for the pointee type                      |
+  | `Reloc(InstanceRef)` | `render_def_path(ItemId)` (stage 12) + `render_instance` (stage 14, this stage) for the target Instance's identity |
+
+  Counts: 5 of 11 variants are self-contained scalars
+  (`Bool` / `Char` / `Int` / `Uint` / `Float`); 5 of 11 depend
+  on `render_ty` (stage 13); 1 of 11 (`Reloc`) additionally
+  depends on `render_def_path(ItemId)` (stage 12) and
+  `render_instance` (stage 14, filled in this stage).
+
+  *Stage-4 lean (preserved as input, not binding).* No specific
+  rendering style was endorsed at stage 4 -- D-4-K explicitly
+  declined to make the call. Sample structural form for
+  reference (debug-grade only, not authoritative):
+
+  ```text
+  Const::Bool(true)
+  Const::Int(I32, 0xfffffffffffffffffffffffffffffff9)   // -7i32
+  Const::Aggregate([Const/3, Const/7])
+  Const::EnumValue { variant_idx: 1, payload: [Const/3] }
+  Const::Reloc(Static @ defhash=<hex>, args=<hex>, shim=0)
+  ```
+
+  Stage 14 inherits the rendering-style decision from stage
+  13's `render_ty` (Rust-source-style is the stage-3 lean
+  preserved into stage-13 expectations -- e.g., `5i32`,
+  `"hello"`, `(1, 2, 3)`, `Foo { a: 5 }` -- which would
+  compose naturally with `render_const`).
+
+  *Stage-14 deliverables.*
+
+  1. Coordinate with stage 13's `render_ty` style decision;
+     specify the rendering for each `Const` variant compatible
+     with that style. Pin as a stage-14 decision (mint a fresh
+     `D-14-X` tag or fold into stage 14's renderer-style work
+     for `render_instance`).
+  2. Specify the rendering for each variant of the closed
+     11-variant `Const` enum (see
+     `../stage-4/spec-snapshot.md` §9.7 for the variant list).
+     Cover scalars (`Bool` / `Char` / `Int` / `Uint` / `Float`),
+     `ZST`, `Bytes` (three-state byte sequence), `Aggregate` /
+     `EnumValue` (recursion via `canonical_const`), `NullPtr`
+     (recurses into `render_ty`), and `Reloc` (composes
+     `render_def_path` + `render_instance`).
+  3. Implement the renderer. Coordinate with stage 12's
+     `render_def_path`, this stage's own `render_instance`, and
+     stage 13's `render_ty` -- the four renderers should
+     produce coherent output.
+  4. Update insta snapshots accordingly.
+
+  *Cross-refs.*
+  - `../stage-4/spec-snapshot.md` §9.7 -- the 11-variant
+    `Const` enum the renderer must handle, plus the `Byte`
+    three-state and `InstanceRef` 4-tuple shapes.
+  - `../stage-4/spec-snapshot.md` §13.3 -- `ConstMemoryStatic`
+    family (D-4-3); rendering of `Reloc` targets pointing at
+    synthesised statics.
+  - `../stage-4/discussions.md` D-4-K parent -- deferral
+    rationale (dependency analysis on `render_ty` /
+    `render_def_path` / `render_instance`).
+  - `../stage-1/spec-snapshot.md` -- pretty-printer scaffold
+    interface and the existing `render_const` stub.
+  - `../stage-12/expectations.md` -- coordination on
+    `render_def_path` style.
+  - `../stage-13/expectations.md` -- coordination on
+    `render_ty` style (the input that `render_const` inherits
+    from).
+
 ## Bridge concerns
 
 - **Domain attribute parsing.** `#[rseq::*]` attributes become
