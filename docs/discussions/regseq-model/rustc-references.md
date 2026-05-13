@@ -112,6 +112,46 @@ Compact and very readable. `eval_mir_constant` at line 23 is the one-liner: `sel
 ### `rustc_codegen_ssa/src/mir/operand.rs` lines 169-260
 Where `ConstValue` is consumed: `Scalar`, `ZeroSized`, `Slice { alloc_id, meta }`, `Indirect { alloc_id, offset }`. Indirect constants are dereferenced via `bx.tcx().global_alloc(alloc_id).unwrap_memory()` (line 183). Reference for when the construction pass encounters non-scalar consts.
 
+## Const rendering (MIR pretty-printer)
+
+Surfaced by the stage-14 D-14-4 evidence pass. Landmarks for `render_const(ConstId, TyId) -> String` per-arm specs across the closed 11-variant `Const` enum.
+
+### `rustc_middle/src/mir/pretty.rs:1851-1989`
+
+`pretty_print_const_value_tcx(tcx, ct, ty, fmt)` is the primary const-rendering entry. Tuple-match on `(ct, ty.kind())` at line 1872 dispatches across `&str` / `&[u8]` / `[u8; N]` byte-string special cases (1874-1898), `Array` / `Tuple` / `Adt` aggregate forms (1907-1966), `Scalar` (1968-1975) and `ZeroSized` over `FnDef` (1976-1982). All-uninit shortcut at 1864-1869 returns `<uninit>`. Verbose-internals shortcut at 1859-1862. Fallback at 1988 is `{ct:?}: {ty}` debug. **The load-bearing API contract: the renderer takes both `ConstValue` and `Ty` -- type-context is required for `Bytes` / `Aggregate` / `ZST` / `NullPtr` / `Reloc` arms.**
+
+### `rustc_middle/src/mir/pretty.rs:1835-1849`
+
+`comma_sep` -- the recursion helper for Aggregate arms. Takes `Vec<(ConstValue, Ty<'tcx>)>` and renders comma-separated. Each child carries its own per-field type (resolved via `try_destructure_mir_constant_for_user_output`). The pair-form `(ConstValue, Ty)` is the recursion shape.
+
+### `rustc_middle/src/mir/pretty.rs:1831-1833`
+
+`pretty_print_byte_str` -- the byte-literal helper. `write!(fmt, "b\"{}\"", byte_str.escape_ascii())` produces forms like `b"hello"` and `b"\x00\x01\x02"`. Consumed at lines 1885, 1896.
+
+### `rustc_middle/src/mir/pretty.rs:1269-1277`
+
+`Display for ConstOperand` -- the operand-level wrapper. Prefixes `const ` unless the const's type is `FnDef`. Stage-13 D-13-6 already pinned a divergence from rustc here: RegseqModel's `render_operand` for `Operand::Constant(id)` does NOT add the `const ` prefix.
+
+### `rustc_middle/src/ty/print/pretty.rs:1706-1849`
+
+`pretty_print_const_scalar` (1706-1717), `pretty_print_const_scalar_ptr` (1719-1774), `pretty_print_const_scalar_int` (1776-1849). Scalar dispatch: pointer scalars route to byte-string / fn-pointer / typed-cast forms; int scalars dispatch on `ty.kind()` for `Bool` / `Float(_)` / `Uint(_)` / `Int(_)` / `Char` / pointer types / "nontrivial scalar" fallback (`transmute(0x...)`).
+
+### `rustc_middle/src/ty/consts/int.rs:51-138`
+
+`impl fmt::Debug for ConstInt` -- the integer-rendering primitive. Alternate-form (`{:#?}`) used by MIR pretty-printing produces underscore-prefixed suffix: `42_i32`, `42_u32`, `42_isize`. Sentinel collapsing for MIN/MAX at exact-bits equality: `i32::MIN`, `i32::MAX`, `u32::MAX`, etc. The `is_ptr_sized_integral` flag drives `_isize` / `_usize` suffix vs width-specific.
+
+### `rustc_apfloat::ieee::{Half, Single, Double, Quad}::Display`
+
+The IEEE-754 decoded float-display primitives consumed by `pretty_print_const_scalar_int` Float arms (lines 1788-1803). Forms: finite `1.5`, `1`, `0`, `-0`; non-finite `inf`, `-inf`, `NaN`. Rustc concatenates `<val><underscore-if-nonfinite><width-suffix>`: `1.5f32`, `inf_f32`, `NaN_f32`.
+
+### `rustc_public/src/mir/pretty.rs:339-345`
+
+`pretty_mir_const` / `pretty_ty_const` -- stable-IR delegation form. Both call back through `with(|cx| cx.{mir,ty}_const_pretty(...))` to rustc-internal pretty-printers rather than reimplementing. **The escape hatch is unavailable to RegseqModel (no `tcx` at render time), so RegseqModel must implement the dispatch self-contained.**
+
+### `rustc_public/src/mir/pretty.rs:397-430`
+
+`pretty_aggregate` -- stable-IR aggregate rendering (for `Rvalue::Aggregate`, not Const, but the dispatch shape is informative). Forms: `Array` -> `[ ... ]`, `Tuple` -> `( ... )`, `Adt::Enum` -> `<def.trimmed_name()>::<variant.name()>(...)`, `Adt::Struct` -> `<variant.name()>(...)`. No 1-tuple trailing-comma treatment (StableMIR FIXME).
+
 ## Rejection points
 
 | Construct | File:line | What rustc does |
@@ -127,6 +167,50 @@ Where `ConstValue` is consumed: `Scalar`, `ZeroSized`, `Slice { alloc_id, meta }
 | Coroutine transform (panic=abort interaction) | `rustc_mir_transform/src/coroutine.rs:1175` | `if !tcx.sess.panic_strategy().unwinds() { ... }` — coroutine state machines skip unwind paths when configured for abort. |
 
 The pattern: rustc's late stages (codegen, post-collection) use `bug!` and `assert!` for "this MIR shape should never reach me." The construction pass should use `unsupported_construct!`-style errors instead so the driver author sees a useful message, but the *placement* of the checks should mirror what we see here.
+
+## Tool-namespace attributes
+
+Surfaced by the stage-14 D-14-1 evidence pass. Landmarks for Q7 intrinsic recognition (`#[rseq::intrinsic("NAME")]`) and the DomainAttr surface.
+
+### `rustc_middle/src/ty/mod.rs:1707-1758`
+
+`tcx.get_attrs` (single segment), `tcx.get_all_attrs`, `tcx.get_attrs_by_path` (multi-segment via `Attribute::path_matches`), and `has_attr` / `has_attrs_with_path`. **`get_attrs_by_path(did, &[sym::rseq, sym::intrinsic])` is the primary API for stage 14.**
+
+### `rustc_hir/src/hir.rs:1184-1268`
+
+`AttrArgs` (`Empty` / `Delimited(DelimArgs)` / `Eq`), `AttrPath { segments: Box<[Symbol]>, span }`, `AttrItem`, and `Attribute = Parsed(AttributeKind) | Unparsed(Box<AttrItem>)`. **Custom tool attributes always land in `Unparsed`** (doc at 1265-1267).
+
+### `rustc_hir/src/hir.rs:1303-1395`
+
+`AttributeExt` impl. `path_matches` (1351) matches segment sequences exactly on `Unparsed`; `meta_item_list` (1313) returns `Some(ThinVec<MetaItemInner>)` for `Delimited` args only.
+
+### `rustc_hir/src/attrs/mod.rs:34-54`
+
+`find_attr!` macro. **Only matches `Attribute::Parsed`** -- skips `Unparsed`. Unusable for tool attributes despite `get_all_attrs`' doc recommending it.
+
+### `rustc_ast/src/ast.rs:597-605` + `2250-2253`
+
+`MetaItemInner = MetaItem | Lit(MetaItemLit)`; `LitKind::Str(Symbol, StrStyle)`. The `meta_item_list()` -> `MetaItemInner::Lit` -> `LitKind::Str(name, _)` chain extracts `"NAME"`.
+
+### `rustc_ast/src/attr/mod.rs:672-677`
+
+`MetaItemInner::lit() -> Option<&MetaItemLit>`. The accessor for `Delimited("NAME")` payloads.
+
+### `rustc_middle/src/ty/util.rs:1685-1701`
+
+`intrinsic_raw` provider. Gates on `tcx.has_attr(def_id, sym::rustc_intrinsic)` (1686) -- single-segment built-in only. **Verifies external-review Finding #1: wrong hook for tool attributes.**
+
+### `rustc_middle/src/query/mod.rs:182-186` + `2244-2248`
+
+Queries: `registered_tools(()) -> &'tcx RegisteredTools` and `intrinsic_raw(DefId) -> Option<IntrinsicDef>`.
+
+### `rustc_resolve/src/macros.rs:123-160`
+
+`registered_tools` provider. Walks `#![register_tool(NAME)]` (133); predefined tools added at 155-158. `RegisteredTools = FxIndexSet<Ident>` per `rustc_lint_defs/src/lib.rs:831`.
+
+### `rustc_resolve/src/ident.rs:691-694` + `1896-1904`
+
+Tool-prefix resolution: registered tool -> `Res::ToolMod` via `ToolPrelude`; multi-segment path rewrites to `Res::NonMacroAttr(NonMacroAttrKind::Tool)` and stops. **Unregistered tools fail at lookup** -- rustc emits an unresolved-path error. **Practical consequence: bridge does not need to re-check `tcx.registered_tools(())` for `#[rseq::*]` it sees in MIR.**
 
 ## When to consult
 

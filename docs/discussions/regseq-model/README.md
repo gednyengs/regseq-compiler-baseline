@@ -74,21 +74,58 @@ and decision log accumulate as MIR/HIR observations come in,
 not by importing the older spec. Prior decisions stand only
 when they survive re-derivation against the new evidence.
 
-### 1.3 Two-phase split
+### 1.3 Three-phase methodology
 
-A complete RegseqModel is reached through two sequential paths:
+A complete Regseq compiler + driver corpus is reached through
+three phases. The first two run sequentially; phase 3 runs in
+parallel with phase 2 from the first phase-2 stage's close
+onward.
 
-1. **Phase 1 -- device-independent (linguistic).** RegseqModel
-   specification plus the MIR/HIR -> RegseqModel construction
-   pass. Tests are synthetic linguistic snippets ("how does `?`
-   lower?"). Lives in this folder.
-2. **Phase 2 -- device pressure.** Authoring golden C for real
-   driver specs. pl011 is the first device. Lives at
-   `../manual-lowering/`. Each device stress-tests RegseqModel
-   synthesis at a holistic level.
+1. **Phase 1 -- domain-agnostic foundation.** Specifies,
+   implements, and tests the device-independent core: the full
+   `Ty` closure, the MIR-derived RegseqModel surface, the
+   bridge from rustc's `optimized_mir`, the pretty-printer,
+   plus the foundation extensions needed to make the compiler
+   observable (Q7 intrinsic-recognition mechanism + a closed
+   diagnostic-logging intrinsic vocabulary + the DomainAttr
+   sibling-table architecture on `RegseqModel`). Closes with a
+   **generic-C backend** (hosted userspace, libc, `main()`,
+   `printf`, host-platform integer-type conventions) and a
+   DSL -> IR -> C -> captured-stdout test suite running green.
+   Scope is exhaustive for the domain-agnostic surface;
+   **diagnostic logging is the sole intentional carve-out**,
+   treated as foundation observability rather than as a domain
+   extension proper. Lives in this folder.
 
-Phase-2 findings that indicate a phase-1 spec gap are escalated
-back here.
+2. **Phase 2 -- iterative domain extensions.** One stage per
+   coherent domain family (regseq-trait scaffolding +
+   `Lifecycle` + driver-struct discovery + `RegseqError`; MMIO
+   family; interrupt / ISR family; atomic family;
+   clock / reset family; ...). Each stage closes spec-side
+   under the standard merger contract (§5.5), then gets an
+   incremental implementation pass that extends the compiler
+   + the **Linux kernel backend** (separate from phase-1's
+   generic-C backend per §2's "Dual backend" rule) + the test
+   suite. Phase 2 has no fixed stage count; stages are
+   allocated lazily as the next domain family becomes
+   load-bearing. Within any single stage, spec / impl do not
+   interleave -- implementation happens *between* stages,
+   against the just-locked spec. Lives in this folder.
+
+3. **Phase 3 -- device pressure.** End-to-end driver
+   validation against a tiered device fixture corpus,
+   exercising the cumulative phase-1 + phase-2 surface:
+   Hello World QEMU toy device -> simple MMIO-only device ->
+   pl011 (MMIO + interrupt + clock) -> progressively more
+   complex. Each phase-3 milestone exercises the phase-2
+   stages that have landed by that point. Phase-3 findings
+   feed back into phase-2 stages as spec gaps or
+   implementation refinements. Lives at `../manual-lowering/`
+   (plus per-device fixture directories under
+   `tests/fixtures/`).
+
+Phase-2 and phase-3 findings that indicate a phase-1 spec gap
+are escalated back here.
 
 ---
 
@@ -124,9 +161,93 @@ convention from code or older docs.
   surfaces awkward source-spec constructs, revise the spec
   rather than work around them in the compiler.
 
+- **Spec before implementation.** Within any single stage,
+  spec and implementation do not interleave -- no per-stage
+  implementation interleaving. Reason: cross-stage spec drift
+  is the dominant risk; implementing a stage's design before
+  later stages pressure-test it bakes in shapes that may need
+  to change, and a spec finding against shipped Rust+tests is
+  a refactor where against `spec-snapshot.md` it is a
+  paragraph rewrite. Implementation passes happen *between*
+  stages, against the just-locked spec: **implementation
+  sweep #1 follows phase-1 closure** (after stage 14 locks),
+  covering stages 1-14 in one pass; **subsequent phase-2
+  stages each get an incremental implementation pass on
+  close**, extending the compiler + Linux kernel backend +
+  test suite per the "Domain extensions iterate per stage in
+  phase 2" rule below. Stage 1's existing impl (shipped
+  during the foundation-crate discovery phase before this
+  discipline was codified) is grandfathered. Impl-shaped
+  spec gaps surface through phase-3 device pressure (and
+  through the per-phase-2-stage implementation pass that
+  follows each stage's spec closure), which escalates back
+  to the relevant phase-1 / phase-2 spec when needed.
+
+- **Dual backend.** The generic-C backend (hosted userspace,
+  libc, `main()`, `printf`, host-platform integer-type
+  conventions) and the Linux kernel backend (`printk`,
+  `module_init` / `module_exit`, kernel-only APIs,
+  kernel-specific integer-type conventions) are **separate
+  codegen paths**, not one backend parameterised over an
+  OS-integration table. Integer-type lowering differs at
+  width-by-width granularity (e.g., kernel-style `u32`
+  conventions diverge from hosted `uint32_t`), OS-integration
+  boundaries are entirely distinct, and decoupling lets
+  phase-1 velocity run independent of Linux-backend churn.
+  The Linux backend *consults* the generic-C backend's
+  lowering rules as reference but does not inherit from it.
+  Future targets (Zephyr, ...) each get their own backend
+  under the same principle. Generic-C backend is phase-1
+  territory; Linux backend is per-phase-2-stage territory.
+
+- **Domain extensions iterate per stage in phase 2.** Phase 2
+  allocates one stage per coherent domain family
+  (regseq-trait scaffolding, MMIO, interrupts, atomics,
+  clock / reset, ...). Each phase-2 stage closes under the
+  standard merger contract (§5.5) with the addition of an
+  incremental implementation pass extending the compiler, the
+  Linux kernel backend, and the test suite. Phase 2 has no
+  fixed stage count; the queue grows lazily as the next
+  domain family becomes load-bearing. The original monolithic
+  "stage 14: domain-specific extensions" plan is superseded
+  by this rule -- stage 14 narrows to **phase-1 foundation
+  extensions** (the Q7 mechanism + diagnostic-logging
+  vocabulary + DomainAttr sibling-table architecture + 3
+  composer renderers + external-review Findings #1-#4); the
+  per-domain-family work that the original stage-14 plan
+  monolithically owned moves to stages 15, 16, ... per the
+  phase-2 queue. Rationale: domain extensions are tightly
+  coupled (resources + intrinsics + attributes + abstraction
+  types per family) and an open-ended surface; spec-only
+  enumeration upfront is liable to bake in shapes that break
+  under real device pressure. Per-family stages with
+  implementation + phase-3 device pressure feedback after
+  each is the safer cadence.
+
 - **Compiler-theory-first.** Solve pipeline gaps fundamentally
   via established compiler/language theory; prefer proper IR
   variants over narrow workarounds.
+
+- **Compositional behavior beats special-case flags.** When a
+  behavior derives compositionally from existing rules, do not
+  introduce a parallel flag-style marker. Variant tags and the
+  existing rule chain carry the distinction; flags duplicate
+  them and create a side-channel that must be kept in sync.
+  Examples across stages: MaybeUninit's drop suppression falls
+  out of Union no-auto-drop plus inner ManuallyDrop, no
+  `is_maybe_uninit` flag needed (stage 3); `&str` / `&[T]`
+  reference-typed const handling falls out of
+  `Aggregate([Reloc, Uint])` plus `ConstMemoryStatic`, no new
+  `Const` variant needed (stage 4); Place's structural
+  invariants -- `Deref`-first (from rustc's PostCleanup
+  phase) and `Downcast`-followed-by-`Field` (from
+  `PlaceTy::projection_ty`'s successor assertion plus
+  exhaustive cross-check that no rustc construction site
+  produces `Downcast`-as-last) -- fall out of existing
+  rustc rules, no parallel "is_box_deref" /
+  "is_synthetic_index" markers needed (stage 5). Where
+  composition does not naturally cover a case, prefer adding
+  a variant or refining a rule over introducing a flag.
 
 - **Source declares its own compiler-relevant attributes.**
   Crate-level declarations that enable tool-namespace
@@ -229,20 +350,24 @@ docs/discussions/regseq-model/
   status.md                -- top-level dashboard (lean; cross-stage signals)
   architecture.md          -- Q1-Q7 settled architectural decisions
   decisions.md             -- registry of all D-{stage}-{decision} tags (lightweight index)
-  spec.md                  -- merged top-level spec (assembled by merger at end-of-stage)
+  spec.md                  -- merged top-level spec (assembled by merger at end-of-stage; producer-side IR structure)
+  pretty-printer.md        -- pretty-printer spec (per stage-13 D-13-9; co-equal merger artifact; consumer-side rendering surface)
+  generic-c-backend.md     -- generic-C backend codegen spec (per stage-14 D-14-10; co-equal merger artifact; backend-side C-emission surface)
   discussions.md           -- merged top-level audit trail (assembled by merger)
   review-log.md            -- merged top-level review trail (assembled by merger)
   regseq-background.md     -- DSL background
   rustc-references.md      -- pinned rustc-src paths
 
   stage-N/
-    spec-snapshot.md       -- stage-N's spec contribution (canonical per-stage spec)
-    discussions.md         -- stage-N's decision audit trail
-    review-log.md          -- stage-N's review trail
-    expectations.md        -- inbound forward refs from earlier stages
-    memory.md              -- stage briefing (workflow, principles, read order)
-    status.md              -- stage current-state (locked decisions, active focus, next action)
-    prior-art/             -- per-stage primary-source research
+    spec-snapshot.md                  -- stage-N's spec contribution (canonical per-stage spec)
+    pretty-printer-snapshot.md        -- stage-N's pretty-printer contribution (present only when the stage contributes)
+    generic-c-backend-snapshot.md     -- stage-N's generic-C backend contribution (present only when the stage contributes)
+    discussions.md                    -- stage-N's decision audit trail
+    review-log.md                     -- stage-N's review trail
+    expectations.md                   -- inbound forward refs from earlier stages
+    memory.md                         -- stage briefing (workflow, principles, read order)
+    status.md                         -- stage current-state (locked decisions, active focus, next action)
+    prior-art/                        -- per-stage primary-source research
 
     sessions/              -- created only if the stage parallelizes work
       session-X/
@@ -251,9 +376,19 @@ docs/discussions/regseq-model/
         review-log.md      -- session-local review trail
 ```
 
-Top-level files (`spec.md`, `discussions.md`, `review-log.md`,
+Top-level files (`spec.md`, `pretty-printer.md`,
+`generic-c-backend.md`, `discussions.md`, `review-log.md`,
 `decisions.md`) are **merged artifacts**: produced by the
-merger at end-of-stage, not edited directly during stage work.
+merger at end-of-stage, not edited directly during stage
+work. `pretty-printer.md` is introduced by stage-13 D-13-9
+as the consumer-side rendering surface, co-equal with
+`spec.md` (producer-side IR structure); see Section 5.9
+rule 6. `generic-c-backend.md` is introduced by stage-14
+D-14-10 as the backend-side C-emission surface, also
+co-equal with `spec.md`; see Section 5.9 rule 7. Phase-2
+backend stages each get their own `<target>-backend.md`
+merger artifact under the same rule (e.g., `linux-backend.md`,
+`zephyr-backend.md`) per the §2 dual-backend principle.
 
 Per-stage `spec-snapshot.md`, `discussions.md`, `review-log.md`
 are stage-internal during stage work; the merger absorbs them
@@ -279,10 +414,38 @@ discipline that has converged in practice (notably stage-3's
    the working starting point.
 3. Read `stage-N/expectations.md` as the entry checklist
    (forward refs from earlier stages).
-4. Allocate decision tags `D-N-1, D-N-2, ...` from 1, scoped to
-   the stage. N is the stage number.
-5. Capture the stage's plan in `stage-N/memory.md` (workflow
+4. **Read local rust compiler sources** relevant to the
+   stage's concerns (paths in `rustc-references.md`) to
+   understand what shapes rustc actually offers. Read-only
+   evidence pass -- the spec is not yet being drafted; the
+   goal is to surface what choices the evidence presents so
+   the next step can name them.
+5. **Allocate decision tags `D-N-1, D-N-2, ...` from 1**,
+   scoped to the stage. These name the decisions the rustc
+   evidence has surfaced as needing answers; they are not
+   speculative. N is the stage number. In practice steps 4
+   and 5 interleave: reading rustc surfaces a question, you
+   note a candidate D-tag, you keep reading. The discrete-
+   step framing is a checkpoint ("did I name the questions
+   before drafting?"), not a strict sequence.
+6. **Perform prior-art research** per the §2 rule (primary
+   sources, not stage-0 summaries; per-project findings at
+   `stage-N/prior-art/<project>.md`), framed by the D-tags
+   from step 5. The D-tags ARE the framing -- this is the
+   mechanism by which the §2 rule "research framing
+   determines what evidence surfaces" gets enforced.
+7. Capture the stage's plan in `stage-N/memory.md` (workflow
    briefing) and `stage-N/status.md` (current-state tracker).
+   Drafted last so they are written from grounded knowledge,
+   not speculation.
+
+Steps 4 and 6 (rustc reads + prior-art) are the *kickoff*
+evidence pass, not the only one. Specific D-tags often demand
+deeper rustc reads or targeted prior-art mid-stage; that is
+expected and lands as additional `stage-N/prior-art/` entries
+or as inline citations in `discussions.md`. New D-tags may
+also be allocated during Work as evidence surfaces questions
+the kickoff pass missed.
 
 **Work.**
 1. Edit `stage-N/spec-snapshot.md` to add the stage's
@@ -414,13 +577,41 @@ Run by the merger when stage N is ready to close:
    history-preserving concatenation), so integration strips
    audit shape, organises by topic, and updates existing
    sections in place when later stages refine earlier content.
-6. **Run a Codex post-merge review pass** on the integrated
-   top-level `spec.md`. Iterate to APPROVE.
+   **Pretty-printer spec contributions go to `pretty-printer.md`
+   instead of `spec.md`** per Section 5.9 rule 6 (introduced by
+   stage-13 D-13-9). **Backend-codegen spec contributions go
+   to `generic-c-backend.md` (or the relevant phase-2
+   `<target>-backend.md`) instead of `spec.md`** per Section
+   5.9 rule 7 (introduced by stage-14 D-14-10). If stage N
+   produced any of `stage-N/pretty-printer-snapshot.md`,
+   `stage-N/generic-c-backend-snapshot.md`, or any
+   phase-2-target backend snapshot, integrate each into its
+   corresponding top-level merger artifact using the same
+   Section 5.9 integration rules; the artifacts are co-equal.
+6. **Run a Codex post-merge review pass** on every
+   co-equal merger artifact stage N touched. For most
+   stages this is just `spec.md`; for stages contributing
+   pretty-printer content (per Section 5.9 rule 6), the
+   review covers `pretty-printer.md` as well; for stages
+   contributing backend-codegen content (per Section 5.9
+   rule 7), the review also covers `generic-c-backend.md`
+   (or the relevant phase-2 `<target>-backend.md`).
+   Iterate to APPROVE per artifact.
 7. **Update `status.md`** to mark stage N closed and announce
    the next stage's entry point. Add a "Snapshot at close of
    stage N -- current spec lives in top-level `spec.md`"
    header to `stage-N/spec-snapshot.md` so it freezes as a
-   historical artifact.
+   historical artifact. If stage N produced a
+   `stage-N/pretty-printer-snapshot.md` (per §5.9 rule 6),
+   add an analogous "Snapshot at close of stage N --
+   current pretty-printer spec lives in top-level
+   `pretty-printer.md`" header to that file, freezing it the
+   same way. If stage N produced a
+   `stage-N/generic-c-backend-snapshot.md` (per §5.9 rule 7)
+   or any other backend snapshot, add the analogous
+   "Snapshot at close of stage N -- current `<target>` backend
+   spec lives in top-level `<target>-backend.md`" header,
+   freezing each backend snapshot the same way.
 
 Steps 1-2 are deterministic concat (with the append-if-exists
 rule). Step 3 is one line per decision. Step 4 is small. Step
@@ -462,7 +653,7 @@ Format:
 Project-wide registry. Full audit trail in `discussions.md`
 (top-level merged) and `stage-N/discussions.md` (per-stage).
 
-Status: [LOCKED] / [DEFERRED] / [REOPENED]
+Status: [LOCKED] / [DEFERRED] / [REOPENED] / [CLOSED-BY-ABSORPTION]
 
 ## Stage 1 (foundation, legacy F-tag form)
 - F1 [LOCKED] -- ID conventions and Idx trait
@@ -473,7 +664,8 @@ Status: [LOCKED] / [DEFERRED] / [REOPENED]
 - D1 [LOCKED] -- Ty variant scope (rigid post-mono)
   - D1.1 [LOCKED] -- Variant set (19 variants)
   ...
-- D14 [DEFERRED to stage 13] -- Renderer style for Ty
+- D14 [CLOSED-BY-ABSORPTION] -- Renderer style for Ty
+  (absorbed into D-13-1 per stage 13)
 - ...
 
 ## Stage 4+ (going forward, prefixed D-{stage}-{decision} format)
@@ -503,80 +695,173 @@ spec. It tells a reader what RegseqModel IS today, organised by
 topic. Stage closures update it via the merger contract (Section
 5.5 step 5).
 
-Five rules govern how `spec.md` evolves:
+Seven rules govern how `spec.md` and its co-equal merger
+artifacts (`pretty-printer.md` per rule 6; `generic-c-backend.md`
+and any phase-2 `<target>-backend.md` per rule 7) evolve.
+Rules 1-5 apply identically to every merger artifact; rules 6
+and 7 govern the splits between them:
 
-1. **Live, not historical.** `spec.md` carries the current state
-   only. History -- the audit trail of how decisions were made,
-   what alternatives were considered, what reasoning underpinned
-   each choice -- lives in `discussions.md`. When a later stage
-   refines an earlier stage's content, `spec.md` updates in
-   place with the refined content; it never carries "previously
-   was X, now is Y" prose.
+1. **Live, not historical.** The target merger artifact
+   (`spec.md` or `pretty-printer.md`, whichever the
+   stage's contribution belongs to) carries the current
+   state only. History -- the audit trail of how decisions
+   were made, what alternatives were considered, what
+   reasoning underpinned each choice -- lives in
+   `discussions.md`. When a later stage refines an earlier
+   stage's content, the target file updates in place with
+   the refined content; it never carries "previously was
+   X, now is Y" prose.
 
-2. **Topic-based, not stage-based.** Sections in `spec.md` are
-   organised by IR topic (the `Ty` enum, Layout, the `Item`
-   table, etc.) -- not by which stage contributed them. There
-   are no "Stage 3 contributions" wrappers. When stage N's
-   content is added, it lands in the relevant topic section,
-   merging with anything already there.
+2. **Topic-based, not stage-based.** Sections in the
+   target merger artifact are organised by topic (the
+   `Ty` enum, Layout, the `Item` table, etc. for
+   `spec.md`; master rendering style, sigil conventions,
+   per-method ownership table, etc. for
+   `pretty-printer.md`) -- not by which stage contributed
+   them. There are no "Stage 3 contributions" wrappers.
+   When stage N's content is added, it lands in the
+   relevant topic section, merging with anything already
+   there.
 
 3. **Audit shape stripped.** Per-stage `spec-snapshot.md`
-   documents each decision in audit form (Decision / Reasoning
-   / Methodology rules invoked / Prior-art evidence / Worked
-   example). When content is lifted to `spec.md`, the
-   Reasoning, Methodology rules, and Prior-art evidence
-   sections are dropped -- they live in `discussions.md`. Only
-   concrete spec content remains: type definitions, struct
-   shapes, identity rules, invariants, schema definitions,
-   bridge translation rules. Worked examples may stay (e.g.,
-   in an appendix) if they illustrate the live spec.
+   (and `pretty-printer-snapshot.md` where applicable)
+   documents each decision in audit form (Decision /
+   Reasoning / Methodology rules invoked / Prior-art
+   evidence / Worked example). When content is lifted
+   to the target merger artifact, the Reasoning,
+   Methodology rules, and Prior-art evidence sections
+   are dropped -- they live in `discussions.md`. Only
+   concrete spec content remains: type definitions,
+   struct shapes, identity rules, invariants, schema
+   definitions, bridge translation rules; for
+   `pretty-printer.md`, rendering rules, per-arm specs,
+   sigil tables, and worked-example specimens. Worked
+   examples may stay (e.g., in an appendix or §9 of
+   `pretty-printer.md`) if they illustrate the live spec.
 
-4. **No forward-looking placeholders.** `spec.md` does NOT
-   pre-allocate sections for content future stages will fill.
-   There is no "Section N: Const (placeholder for stage 4)"
-   entry. Sections appear only when their content is pinned.
+4. **No forward-looking placeholders.** The target
+   merger artifact does NOT pre-allocate sections for
+   content future stages will fill. There is no
+   "Section N: Const (placeholder for stage 4)" entry.
+   Sections appear only when their content is pinned.
    Cross-stage forward-references for content that *is*
-   already pinned (e.g., the `Ty::Array(TyId, u64)` variant
-   noting that the canonical-form rule for the length is
-   pinned in stage 4) are fine because the pinning has
-   happened; this is not the same as a stub section.
+   already pinned (e.g., the `Ty::Array(TyId, u64)`
+   variant noting that the canonical-form rule for the
+   length is pinned in stage 4) are fine because the
+   pinning has happened; this is not the same as a
+   stub section.
 
-5. **D-tag inline references avoided.** Spec text should stand
-   alone without depending on the audit trail's tagging
-   system. Where rationale matters at a load-bearing point,
-   use a `discussions.md` pointer ("see `discussions.md` D11
-   for rationale") rather than inline `(per D11)` parentheticals.
-   The reader of `spec.md` doesn't need to know which D-tag a
-   piece of spec content traces to.
+5. **D-tag inline references avoided.** Spec text in
+   either merger artifact should stand alone without
+   depending on the audit trail's tagging system. Where
+   rationale matters at a load-bearing point, use a
+   `discussions.md` pointer ("see `discussions.md` D11
+   for rationale") rather than inline `(per D11)`
+   parentheticals. The reader of `spec.md` /
+   `pretty-printer.md` doesn't need to know which D-tag
+   a piece of spec content traces to.
+
+6. **Pretty-printer spec lives in `pretty-printer.md`, not
+   `spec.md`.** Introduced by stage-13 D-13-9. The two files
+   are co-equal merger artifacts: `spec.md` covers the IR's
+   structural definitions (producer-side); `pretty-printer.md`
+   covers the rendering surface (consumer-side -- master
+   rendering style, sigil conventions, per-method ownership
+   table, per-renderer specifications, worked-example
+   specimens). Cross-references between them are explicit
+   pointers (e.g., `spec.md` §X concludes "Rendering: see
+   `pretty-printer.md` §Y"). Rules 1-5 above apply identically.
+   Stage-N spec contributions to either file integrate via the
+   merger contract at Section 5.5 step 5; future
+   renderer-related stages (e.g., stage 14's `render_const`,
+   `render_instance`, top-level `render`) inherit this split.
+
+7. **Backend-codegen spec lives in `<target>-backend.md`, not
+   `spec.md`.** Introduced by stage-14 D-14-10. Backend-codegen
+   contracts (per-`Ty` C typedef tables, fat-pointer C struct
+   shapes, `PlaceElem`/`Operand` C lvalue forms, intrinsic
+   C-emission rules, per-target call shapes for the
+   diagnostic-logging surface, worked C-lowering examples)
+   live in target-specific merger artifacts co-equal with
+   `spec.md` and `pretty-printer.md`. Phase 1 ships
+   `generic-c-backend.md` (hosted userspace, libc, host
+   integer conventions, `printf`-family emission); each
+   phase-2 backend stage inherits its own file
+   (`linux-backend.md`, `zephyr-backend.md`, ...) per the §2
+   dual-backend rule -- backends are separate codegen paths,
+   so each gets its own merger artifact rather than a single
+   parameterised one.
+
+   `spec.md` covers the IR's structural definitions and
+   IR-side invariants (producer-side: type universe, layout,
+   `Place`/`Operand` vocabulary, terminator vocabulary,
+   intrinsic recognition, validation diagnostics).
+   `<target>-backend.md` covers how the backend renders those
+   definitions in target-specific C shape (consumer-side:
+   per-`Ty` typedef tables, per-construct lowering rules,
+   per-target call shapes, worked examples). Cross-references
+   between them are explicit pointers (e.g., `spec.md` §X
+   concludes "C lowering: see `generic-c-backend.md` §Y", or
+   `generic-c-backend.md` §Y opens "IR-side definition: see
+   `spec.md` §X"). Rules 1-5 above apply identically. Stage-N
+   spec contributions to any backend artifact integrate via
+   the merger contract at Section 5.5 step 5; future
+   backend-target stages inherit this split.
+
+   The "no forward-looking placeholders" rule (rule 4) applies
+   strictly: stage-N working files do NOT carry Linux /
+   Zephyr / etc. binding contracts when those targets'
+   phase-2 stages have not yet opened. Forward-looking
+   target content is filed as inbound expectations on the
+   relevant phase-2 stage's `expectations.md`, not embedded
+   in the phase-1 `generic-c-backend.md` (or its per-stage
+   snapshot).
 
 **Update workflow at stage close (operational).**
 
-The merger reads `stage-N/spec-snapshot.md`, identifies what's
-new or refined relative to top-level `spec.md`, and integrates:
+The merger reads stage N's working files
+(`stage-N/spec-snapshot.md` plus, where applicable,
+`stage-N/pretty-printer-snapshot.md`,
+`stage-N/generic-c-backend-snapshot.md`, and any phase-2
+`stage-N/<target>-backend-snapshot.md`), identifies what's
+new or refined relative to the corresponding top-level
+merger artifact (`spec.md` / `pretty-printer.md` /
+`generic-c-backend.md` / `<target>-backend.md`), and
+integrates:
 
 - *New content* (sections covering topics not yet in
-  `spec.md`): Add new sections in topic-appropriate locations.
-  Strip audit shape during the lift.
+  the target file): Add new sections in topic-appropriate
+  locations. Strip audit shape during the lift.
 - *Refined content* (later stage refines earlier stage's
   content): Edit existing sections in place with the refined
   content. Discard the previous wording. The history of the
   refinement lives in `discussions.md` under stage N's heading
   (which references the earlier stage's tag).
-- *Forward-looking content in `stage-N/spec-snapshot.md`*
-  (notes about what stages > N will do): Drop. `spec.md` does
-  not carry forward-looking content.
+- *Forward-looking content in stage-N working files*
+  (notes about what stages > N will do): Drop. No merger
+  artifact carries forward-looking content.
 
 After integration, run the post-merge Codex review (Section
-5.5 step 6) on the updated `spec.md` to catch cross-stage
-drift.
+5.5 step 6) on every co-equal merger artifact stage N touched
+to catch cross-stage drift.
 
-**Per-stage `spec-snapshot.md` after stage close.** Each closed
+**Per-stage working files after stage close.** Each closed
 stage's `spec-snapshot.md` becomes a frozen historical
 artifact: it preserves what that stage contributed at its
 close, including the full audit-shape decision text. A header
 note at the top of each closed stage's `spec-snapshot.md`
 says: "Snapshot at close of stage N -- current spec lives in
-top-level `spec.md`."
+top-level `spec.md`." If the stage also produced a
+`pretty-printer-snapshot.md` (per rule 6), the same freeze
+treatment applies: a "Snapshot at close of stage N --
+current pretty-printer spec lives in top-level
+`pretty-printer.md`" header at the top of that file. If the
+stage produced a `generic-c-backend-snapshot.md` (per rule 7),
+or any phase-2 `<target>-backend-snapshot.md`, the same
+treatment applies: a "Snapshot at close of stage N --
+current `<target>` backend spec lives in top-level
+`<target>-backend.md`" header at the top of each backend
+snapshot, freezing it the same way.
 
 ---
 

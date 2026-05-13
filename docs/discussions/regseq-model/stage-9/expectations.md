@@ -138,3 +138,65 @@ expectations live in `stage-N/expectations.md`."
     `transform_dyn_trait_calls` rewrites to
     `(move (*@receiver.ptr_metadata).method)(...)`, an indirect
     call form).
+
+## From stage 6
+
+- [ ] **Capture Call / TailCall per-argument spans via
+  `Spanned<Operand>` at the Terminator level** (per D-6-1.3).
+
+  Stage 6 dropped the operand-internal `span` from
+  `Operand::Constant(ConstId)` (D-6-1.3 wrapper drop;
+  `stage-6/spec-snapshot.md` §20.1 docstring + §20.3
+  paragraph). For non-Call statement-level uses, the use-
+  site span is naturally carried by the containing
+  Statement's `SourceInfo` at stage 8. **For Call /
+  TailCall arguments, rustc preserves a finer-grained
+  per-argument span via `Spanned<Operand>` at the Terminator
+  level** (`rustc_middle/src/mir/syntax.rs:811-820,
+  850-857`); that span lives in the wrapper, not in the
+  Operand itself.
+
+  *Stage-9 deliverable.* When stage 9 specifies the `Call`
+  and `TailCall` Terminator variants, the argument list
+  must preserve the per-argument span as a structural field
+  alongside the inline `Operand` (per stage-6 D-6-2:
+  operands are stored inline at use sites; there is no
+  `OperandId` and no operand-level interning). Two natural
+  shapes:
+
+  (a) Inline wrapper struct, e.g.
+      `args: Box<[ArgWithSpan]>` where
+      `pub struct ArgWithSpan { operand: Operand, span: Span }`
+      -- mirrors rustc's `Spanned<Operand>` shape.
+
+  (b) Parallel slabs, e.g.
+      `args: Box<[Operand]>` plus
+      `arg_spans: Box<[Span]>` -- decouples span from
+      operand storage.
+
+  Stage 9 picks; the stage-6 spec is agnostic. Either
+  shape preserves the per-argument span without re-
+  embedding it in the Operand.
+
+  *Without this preservation*, source-location diagnostics
+  for individual call arguments would degrade to the
+  Terminator-level span (the call site as a whole),
+  losing per-argument granularity that rustc supports.
+
+  *Cross-refs.*
+  - `stage-6/spec-snapshot.md` §20.1 (Constant variant
+    docstring) + §20.3 (translation paragraph documenting
+    span recovery via Statement.source_info at stage 8 OR
+    Spanned<Operand> at the Terminator level captured by
+    stage 9).
+  - `stage-6/discussions.md` D-6-1.3 (wrapper-drop audit
+    shape; Decision + Reasoning sections explicitly cite
+    the stage-9 obligation).
+  - `stage-6/prior-art/rustc.md` §11 (Spanned<Operand>
+    flagged as stage-9 territory; not pursued in stage-6
+    prior-art pass).
+  - rustc source: `rustc_middle/src/mir/syntax.rs:811-820`
+    (`TerminatorKind::Call::args: Box<[Spanned<Operand>]>`),
+    `850-857` (TailCall args), `statement.rs:14-19`
+    (Statement.source_info as the non-Call use-site span
+    fallback).

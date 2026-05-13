@@ -28,6 +28,6 @@ Use this discussion area to:
 
 This discussion should drive:
 
-- Linux-first Phase D lowering task authoring
+- Linux-first lowering task authoring
 - any fixture-alignment or target-boundary corrections
 - later Zephyr and evaluation planning against the same concrete PL011 target

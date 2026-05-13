@@ -11,7 +11,17 @@ integrates that stage's contribution. See `README.md` Section 5.9
 for the update guidelines and Section 5.5 for the merger contract.
 
 Currently reflects: stage 1 (foundation) + stage 3 (type system)
-+ stage 4 (constants and literals) contributions.
++ stage 4 (constants and literals) + stage 5 (MIR places and
+projections) + stage 6 (operands) + stage 7 (rvalues) +
+stage 8 (statements) + stage 9 (terminators) + stage 10 (basic
+blocks) + stage 11 (MIR bodies; with stage-12 D-12-1.4 / Option B
+reframe of D-11-3 + D-11-5 absorbed in §9.4 / §14.3 / §23.6.2 /
+§25.4 / §25.5) + stage 12 (Rust Items) + stage 13 (pretty-printer
+spec split: §18 stub + §19.8 / §20.6 / §21.8 / §22.8 / §23.9 /
+§24.9 cross-references to `pretty-printer.md` per D-13-9.2;
+new §10.4 rendering pointer; §24 / §25 inline cleanup)
+contributions. The pretty-printer surface itself lives in the
+co-equal merger artifact `pretty-printer.md` per D-13-9.
 
 ---
 
@@ -56,7 +66,13 @@ Section 2:
 - Re-derive from evidence; do not import baggage.
 - Codex review for non-trivial decisions.
 - Spec is mutable.
+- Spec before implementation (phase-1 implementation deferred
+  to a single end-of-phase-1 sweep; no per-stage interleaving).
 - Compiler-theory-first.
+- Compositional behavior beats special-case flags (when a
+  behavior derives from existing rules, do not introduce a
+  parallel flag-style marker; variant tags + the existing
+  rule chain carry the distinction).
 - Source declares its own compiler-relevant attributes.
 - C semantics with information preservation (store rustc's
   resolved result, not the input).
@@ -141,7 +157,6 @@ violating input at deserialize time with a clear error.
 | `TyId`         | u32   | `model.types`          | crate-level    |
 | `ConstId`      | u32   | `model.consts`         | crate-level    |
 | `ItemId`       | u32   | `model.items`          | crate-level    |
-| `BodyId`       | u32   | `model.bodies`         | crate-level    |
 | `FnSigId`      | u32   | `model.sigs`           | crate-level    |
 | `InstanceId`   | u32   | `model.instances`      | crate-level    |
 | `LocalId`      | u32   | `Body.local_decls`     | **body-local** |
@@ -258,9 +273,18 @@ pub struct RegseqModel {
     // §9.7 (ConstInterner).
     pub types:  TyInterner,
     pub consts: ConstInterner,
-    pub sigs:   FnSigInterner,    // every `InstanceKind::Function` has an
-                                  // entry; foreign decls have `body: None`
-                                  // but still have a sig
+    pub sigs:   FnSigInterner,    // per stage-12 D-12-1.4 (Option B),
+                                  // every Function Instance carries a
+                                  // substituted FnSigId via the Instance-side
+                                  // schema (`InstanceKind::Function { fn_sig:
+                                  // FnSigId, body: Option<Body>, ... }` per
+                                  // §9.4). Foreign decls have body: None but
+                                  // still carry a sig (rustc's tcx.fn_sig is
+                                  // callable for foreign fns). Different
+                                  // substituted signatures get distinct
+                                  // FnSigIds; identical substituted signatures
+                                  // share one FnSigId via FnSigInterner's
+                                  // content-keyed identity rule per §14.4.
 
     // Source-level item alphabet. Holds the alphabet for source-
     // level traceback (DefPath, kind, attributes, span). NOT the
@@ -279,8 +303,13 @@ pub struct RegseqModel {
     // `sigs[id].inputs/output`. See §14.5.
     pub sig_c_abi_lowerings: IndexVec<FnSigId, Option<CAbiLowering>>,
 
-    // Bodies for body-carrying Instances.
-    pub bodies: IndexVec<BodyId, Body>,
+    // No separate BodyId. Per stage-12 D-12-1.4 (Option B;
+    // supersedes stage-11 D-11-5's Item-side framing), bodies
+    // live as a structural field on `InstanceKind::Function {
+    // body: Option<Body>, ... }` per §9.4. Per-monomorphization
+    // Instance carries its own substituted body. See
+    // `discussions.md` D-12-1.4 for the Option-B reframe
+    // rationale.
 
     // Primary monomorphised table; iteration target for analyses
     // and C codegen.
@@ -293,6 +322,15 @@ pub struct RegseqModel {
     // generic trait objects like `dyn Register<u32>` and
     // `dyn Register<u64>` get distinct vtable types. Zero rustc deps.
     pub vtables: HashMap<PrincipalTraitKey, ItemId>,
+
+    // Stage-14 forward expectation per stage-12 D-12-1.5.
+    // Stage 14 introduces sibling tables on `RegseqModel` keyed
+    // by `ItemId` / `InstanceId` / `FieldPath` / `Span` for
+    // structured DSL property attributes (`#[rseq::mmio(...)]`,
+    // `#[rseq::interrupt(...)]`, etc.) per stage-4
+    // spec-snapshot.md §1287-1299. Stage 12 adds NO schema for
+    // DomainAttr; the sibling-table architecture is a forward
+    // expectation. Stage 14 picks the per-property keying.
 }
 ```
 
@@ -372,9 +410,12 @@ construction.
 The bridge guarantees:
 
 1. **Tables are populated before they are referenced.** Every
-   `CrateId`, `TyId`, `ConstId`, `ItemId`, `BodyId`, `InstanceId`,
+   `CrateId`, `TyId`, `ConstId`, `ItemId`, `InstanceId`,
    `FnSigId`, `SourceFileId`, `StringId`, `VariantIdx` resolves to
-   a valid index in its table. Debug-build assertion.
+   a valid index in its table. Debug-build assertion. (No
+   `BodyId` per stage-12 D-12-1.4 / Option B (supersedes stage-11
+   D-11-5); bodies live structurally on `InstanceKind::Function`
+   per §9.4.)
 2. **`item_def_paths` and `item_synthetic_kinds` mirror `items`.**
    Both side tables have `len() == items.len()`. For source-level
    items, `item_def_paths[item_id]` is rustc's `DefPathHash` of
@@ -422,10 +463,17 @@ The bridge guarantees:
    regseq-aware dependency crates per Q6, plus all synthesised
    artefacts those mono-items require). Every `InstanceId`
    referenced anywhere in the model resolves to a valid entry.
-10. **Body presence matches kind.** Every `Instance` with `kind:
-    InstanceKind::Function { body: Some(b) }` resolves `b` to a
-    valid `Body`. `body: None` is reserved for foreign
-    declarations.
+10. **Body presence matches `InstanceKind::Function` shape.**
+    Per stage-12 D-12-1.4 (Option B; supersedes stage-11 D-11-5):
+    bodies live structurally on `InstanceKind::Function { body:
+    Option<Body>, ... }` per §9.4. Every `Instance` with
+    `kind = Function { body: Some(b), ... }` has its body via the
+    Instance-side field; `body: None` is reserved for foreign
+    declarations (`extern "C" fn` with `tcx.is_foreign_item(did)`
+    returning true) per D-12-2.1. Non-Function InstanceKinds
+    (Static / Const / Struct / Enum / Union) have no `body`
+    field at all. See `discussions.md` D-12-1.4 for the
+    Option-B reframe rationale.
 11. **Content-keyed interner uniqueness.** `types` (§12), `sigs`
     (§14.4), and `consts` (§9.7) are content-keyed: no two
     distinct IDs map to canonically-equal values. This is what
@@ -599,8 +647,12 @@ certificates.
    `items`, `item_def_paths`, `item_synthetic_kinds`, `target`,
    `build` into raw in-memory state.
 2. Parse `consts` storage, `sigs` storage,
-   `sig_c_abi_lowerings`, `types` storage, `bodies`,
-   `instances` into raw in-memory state.
+   `sig_c_abi_lowerings`, `types` storage, `instances`
+   into raw in-memory state. (Bodies live structurally
+   inside Function Instances on
+   `InstanceKind::Function { body: Option<Body>, ... }`
+   per stage-12 D-12-1.4 / Option B; no separate
+   `bodies` table.)
 3. Defer rebuild of `#[serde(skip)]` transient maps (`vtables`)
    to Phase C.
 
@@ -618,11 +670,42 @@ inner interners are validated first.
 2. Validate `source_files`: synthesised sentinel at
    `SourceFileId(0)`; line-table consistency for non-sentinel
    entries.
-3. Validate `crates`, `items` shape, `item_def_paths.len() ==
-   items.len()`, `item_synthetic_kinds.len() == items.len()`;
-   `target` well-formedness (invariant 15), including
-   `scalar_layouts` populated; `build` well-formedness
-   (invariant 17).
+3. **Items / crates / target / build / construction-invariants
+   3, 4, 6 closure** (sub-step ordering per stage-12 D-12-4).
+   Sub-steps:
+   - **(a)** Validate `crates`: stable_crate_id uniqueness
+     + sorted (invariant 5; existing).
+   - **(b)** Validate `items` shape: `item_def_paths.len() ==
+     items.len()`, `item_synthetic_kinds.len() == items.len()`
+     (invariant 2 length parity; existing).
+   - **(c)** Validate `item.def_path.crate_id.index() <
+     crates.len()` for every item (D-12-4.2 closes invariant 6).
+     Bound check; out-of-bounds is
+     `ValidationError::DefPathCrateIdOutOfBounds`. Must precede
+     (d) because (d)'s F4 sort key reads
+     `crates[item.def_path.crate_id].name`.
+   - **(d)** Validate F4 sort monotonicity over `items`
+     (D-12-4.1 closes invariant 3). Walk index-pair-wise; for
+     each adjacent pair, compute the F4 sort key per §16.1 and
+     check non-strict monotonicity (`key[i] <= key[i+1]`).
+     Out-of-order is `ValidationError::F4OutOfOrder`.
+     Adjacent items with identical sort keys are NOT a
+     violation -- F4 admits ties on identical DefPath; check
+     is `>` (strict descent), not `>=`.
+   - **(e)** Validate `crates[primary_crate].stable_crate_id ==
+     bridge_input.spec_crate_stable_id` (D-12-4.3 closes the
+     spec-crate-stable-id half of invariant 4). The
+     `validate(&self, bridge_input: &BridgeInput)` signature
+     change at stage 12 absorbs `BridgeInput` per §3.5
+     (`pub struct BridgeInput { pub spec_crate_stable_id:
+     StableCrateId }`). Mismatch is
+     `ValidationError::SpecCrateStableIdMismatch`. The other
+     half of invariant 4 (`primary_crate.index() <
+     crates.len()`) is already model-checkable per stage-1.
+   - **(f)** Validate `target` well-formedness (invariant 15;
+     existing), including `scalar_layouts` populated.
+   - **(g)** Validate `build` well-formedness (invariant 17;
+     existing).
 4. Validate `ConstInterner` type-level content — the
    type-level const phase per §9.7 "Const validation phase
    split." Validates: (a) for every type-level scalar entry
@@ -664,13 +747,54 @@ inner interners are validated first.
    `TyId` / `ItemId` / `FnSigId` / `ConstId` / `StringId` /
    `SourceFileId` / `VariantIdx` resolves.
 7. Validate `Layout` sanity per §12.5 mechanical checks.
-8. Validate `instances` and `bodies`: every `Instance.item`
-   and `Instance.kind`-payload IDs resolve; `InstanceKind`
+8. Validate `instances`: every `Instance.item` and
+   `Instance.kind`-payload IDs resolve; `InstanceKind`
    layout consistency (invariant 14); for
-   `Function { sig, body, flavor }`, the
-   `(InstanceKey)` projection is unique across all instances
-   (invariant 16-derived) and `flavor` matches the bridge's
-   F4-2 sort key (§9.3).
+   `Function { fn_sig, body, flavor, virtual_idx }` (per
+   stage-12 D-12-1.4 / Option B; supersedes stage-11
+   D-11-3 + D-11-5):
+   - `fn_sig` resolves to a valid entry in
+     `model.sigs` (§14.4 FnSigInterner).
+   - `body.is_none()` iff the parent Item's `linkage ==
+     Linkage::Foreign` (model-side biconditional). This is
+     the validation-time check; the bridge's source predicate
+     at construction is `tcx.is_foreign_item(did)` per
+     D-12-2.1, but validation does NOT call rustc -- it
+     verifies the stored `Item.linkage` and `Instance.body`
+     are consistent. `body.is_some()` for source-defined
+     functions, bridge-synthesized shims (drop glue, vtable
+     shims, closure call methods), and any other Item with
+     `linkage != Linkage::Foreign`.
+   - The `(RegseqInstanceKey)` projection is unique
+     across all instances (invariant 16-derived).
+   - `flavor` matches the bridge's F4-2 sort key (§9.3).
+   - The §9.4 construction invariant `virtual_idx.is_some()
+     iff flavor == FunctionInstanceFlavor::Virtual` holds.
+
+   NOTE: body **content** validation (Place validation per
+   §19.7's five rules; statement / terminator
+   well-formedness; basic-block edge consistency) lands at
+   stage 11's body-validation step. Stage-1 bodies are
+   empty; the body-content walk is non-vacuous only once
+   stage 11 materialises `LocalDecls` and the body's
+   basic-blocks. Place validation rules are stage-5-owned
+   (§19.7); the walk is stage-11-owned (see
+   `discussions.md` D-5-2 for the deferral rationale).
+   Under Option B, the joint validator iterates over
+   `model.instances`; for each Function Instance with
+   `body: Some(b)`, runs the body visitor against `b`.
+
+   For `InstanceKind::Static { ty, init }` (per
+   stage-12 D-12-1.2 (c) 2-field schema; mutability lives
+   on parent `ItemKind::Static`):
+   - `ty` resolves in `model.types`.
+   - `init.is_none()` iff the parent Item's `linkage ==
+     Linkage::Foreign` (model-side biconditional; matches
+     the Function `body` biconditional above per D-12-2.2).
+     Bridge's source predicate is
+     `tcx.is_foreign_item(static_did)` at construction;
+     validation reads `Item.linkage` only.
+   - When `init: Some(c)`, `c` resolves in `model.consts`.
 9. Validate value-level `Const` content sub-references per the
    §9.7 invariants (value-level const phase per §9.7 "Const
    validation phase split"):
@@ -740,9 +864,13 @@ inner interners are validated first.
      the `ConstId` for the `Const::Bytes(Vec<Byte>)` value).
      For each such Item, this sub-check first verifies the
      `ConstMemoryStatic` Static-shape invariants inline:
-     (a) the corresponding Instance has `kind: InstanceKind::Static
-     { ty: array_ty, init: Some(c), mutability: Mutability::Not }`
-     (no `init: None`); (b) `array_ty` resolves to
+     (a) the parent Item has `kind: ItemKind::Static
+     { mutability: Mutability::Not }` (mutability lives on
+     ItemKind per stage-12 D-12-1.2 (c)) and the corresponding
+     Instance has `kind: InstanceKind::Static
+     { ty: array_ty, init: Some(c) }` (no `init: None`;
+     2-field Instance-side schema per Option B);
+     (b) `array_ty` resolves to
      `Ty::Array(elem_ty, n)` with `elem_ty` resolving to
      `Ty::Uint(UintKind::U8)` (byte-array shape);
      (c) `c` resolves to a `Const::Bytes(Vec<Byte>)`; (d) `n`
@@ -878,26 +1006,33 @@ Specifically, Phase B also enforces:
 - **`VTableInstance` Items are immutable statics.** For every
   Item with `item_synthetic_kinds[id] ==
   SyntheticItemKind::VTableInstance { .. }`, validation
-  checks that the corresponding Static Instance has
-  `kind: InstanceKind::Static { mutability: Mutability::Not,
-  init: Some(_), .. }`. Vtable instances must be immutable
-  with a present initialiser; mutable or missing-init
-  vtables are model corruption.
+  checks: (a) the parent Item has `kind: ItemKind::Static
+  { mutability: Mutability::Not }` (mutability lives on
+  ItemKind per stage-12 D-12-1.2 (c)); (b) the corresponding
+  Static Instance has `kind: InstanceKind::Static { ty:
+  vtable_ty, init: Some(_) }` (Instance-side ty + init per
+  Option B and the 2-field InstanceKind::Static schema).
+  Vtable instances must be immutable (Item-side check) with
+  a present initialiser (Instance-side check); mutable or
+  missing-init vtables are model corruption.
 - **`ConstMemoryStatic` Items are immutable byte-array
   statics with `Bytes` initialiser.** For every Item with
   `item_synthetic_kinds[id] == SyntheticItemKind::ConstMemoryStatic
-  { content_hash }`, validation checks: (a) the corresponding
-  Static Instance has `kind: InstanceKind::Static { ty:
-  array_ty, init: Some(c), mutability: Mutability::Not }`
-  with a present initialiser (no `None`); (b) the `array_ty`
-  resolves to `Ty::Array(elem, n)` with `elem` resolving to
-  `Ty::Uint(UintKind::U8)` (byte-array shape); (c) the `c`
-  resolves to a `Const::Bytes(Vec<Byte>)` value (per the
-  type-erase-to-bytes discipline pinned in §9.7); (d) the
-  `n` field of the array Ty equals the resolved
-  `Const::Bytes` sequence length. Mutable, missing-init,
-  non-byte-array, or non-Bytes-init `ConstMemoryStatic`
-  Items are model corruption.
+  { content_hash }`, validation checks: (a) the parent Item
+  has `kind: ItemKind::Static { mutability: Mutability::Not }`
+  (Item-side mutability check per D-12-1.2 (c)); (b) the
+  corresponding Static Instance has `kind: InstanceKind::Static
+  { ty: array_ty, init: Some(c) }` with a present initialiser
+  (Instance-side ty + init check; mutability moved to Item
+  per Option B); (c) the `array_ty` resolves to `Ty::Array(elem,
+  n)` with `elem` resolving to `Ty::Uint(UintKind::U8)`
+  (byte-array shape); (d) the `c` resolves to a
+  `Const::Bytes(Vec<Byte>)` value (per the type-erase-to-bytes
+  discipline pinned in §9.7); (e) the `n` field of the array
+  Ty equals the resolved `Const::Bytes` sequence length.
+  Mutable (per Item-side), missing-init, non-byte-array, or
+  non-Bytes-init `ConstMemoryStatic` Items are model
+  corruption.
 - **Source-file span bounds (sentinel-aware).** For
   `SourceFile { content: Some(_), .. }`, validation checks
   every `Span { file, lo, hi }` referencing this file has
@@ -925,6 +1060,268 @@ The dependency arrows are: `consts` ← `sigs` ← `types` ←
 invalid serialised states (e.g., a duplicate `FnSigId` would
 be overlooked if `FnSigInterner` uniqueness is checked after
 `TyInterner`).
+
+### 3.4 Bridge construction-pipeline order
+
+Per stage-12 D-12-5. The bridge produces a `RegseqModel` in
+five sequential phases. Phases 1-4 establish the model-side
+state (post-sort F4-deterministic ItemIds); Phase 5
+constructs Instances and resolves cross-references. The
+contract is that downstream consumers see post-sort
+ItemIds with the F4-determinism property (§16); how the
+bridge reaches that state internally (placeholder ItemIds
+during construction, DefPathHash-keyed cross-references,
+etc.) is bridge-implementation choice.
+
+**Phase 1 -- DISCOVERY.** Bridge calls rustc's
+`collect_crate_mono_items(tcx, strategy)` once to get the
+mono-item closure: roots (`#[no_mangle]` exports, lang-item
+entries, etc.) + transitive closure through MIR mentions.
+Result: `Vec<MonoItem>` covering primary crate + all
+regseq-aware dependency crates per Q6. Cite:
+`rustc_monomorphize/src/collector.rs:1803`
+(`collect_crate_mono_items` entry point).
+
+**Phase 2 -- TRANSLATION (with interleaved synthesis).**
+Bridge walks the discovered mono-item set. For each
+MonoItem, translates rustc state into RegseqModel content.
+During translation, synthesis triggers fire and produce
+additional bridge-synthesised Items per §13:
+
+| Trigger | Synthesis | §13 reference |
+|---|---|---|
+| `Ty::Dynamic` translation | VTableType Item | §13.2 (D5) |
+| `Cast::Unsize` rvalue | VTableInstance + VTableShim Items | §13.2 (D5) |
+| `Ty::Closure` translation | ClosureCaptures Item | §13.1 (D6) |
+| Closure call site | ClosureCall Function Items | §13.1 (D6) |
+| Non-trivial drop on closure | ClosureDropGlue Function Item | §13.1 (D6) |
+| Reference-typed const | ConstMemoryStatic Item | §13.3 (D-4-3) |
+| `Drop` terminator -> drop-glue Function Item synthesis | drop-glue Function Item (the call target for the eventual Phase-5 Drop-as-Call rewrite) | stage-9 §23.4 |
+
+Note: the **Drop-as-Call collapse itself** (rewriting a
+rustc `Drop` terminator into a `Statement::Assign +
+TerminatorKind::Call` inside a Body) is not a Phase-2
+Item-synthesis trigger -- it is a Phase-5 body-construction
+step (see §25.7.1 + the "Per-phase body work in Phase 5"
+note below). Phase 2 only synthesises the drop-glue
+Function Item that the Phase-5 rewrite's Call terminator
+will target.
+
+Synthesised Items are interleaved with source-derived Items
+in the accumulating items collection. Each Item carries its
+DefPathHash (rustc's for source-derived; synthetic per §13.4
+for synthetic).
+
+Synthesis is cached during Phase 2 to make repeat triggers
+idempotent. **The Phase-2 cache cannot key on final
+`ItemId`** because final ItemIds are not assigned until
+Phase 4 (post-sort). The bridge instead uses a Phase-2
+working cache keyed by a stable Phase-2-available handle:
+
+- For vtable types: `PrincipalTraitKey ->
+  Phase2Handle` (DefPathHash of the synthesised Item, or
+  registration index, or a placeholder ItemId-shaped
+  handle -- bridge implementation choice per D-12-5.3).
+- For closure captures: `closure_did -> Phase2Handle`
+  (rustc's closure DefPathHash is stable and Phase-2-
+  available, since the closure expression has its own
+  rustc DefId).
+- For ConstMemoryStatic: `ContentHash -> Phase2Handle`.
+
+The model-side `RegseqModel.vtables: HashMap<PrincipalTraitKey,
+ItemId>` (and analogous final-form caches) is populated
+in Phase 5 after final ItemIds exist (per the §3 root
+struct comment on `vtables`). Phase 4's ItemId-assignment
+pass establishes the
+`Phase2Handle -> ItemId` mapping; Phase 5 walks the
+Phase-2 cache and re-keys to final ItemIds. Idempotent:
+revisiting the same trigger during Phase 2 yields the
+previously-synthesised Item via the Phase-2 cache.
+
+**Phase 3 -- F4 SORT.** Once all Items (source + synthetic)
+are accumulated, the bridge sorts them by the F4 comparator
+per §16.1: `(crate_name, crate_stable_id, segments)`.
+Source-derived Items use rustc's DefPath segments verbatim;
+synthesised Items use the §13.4 reserved-prefix segments.
+The two families coexist in one sort because the F4
+comparator treats `<regseq_synth>` (synthetic-domain marker)
+as an ordinary `TypeNs(StringId)` segment that sorts
+lexicographically.
+
+**Phase 4 -- ItemId ASSIGNMENT + side-table population.**
+Sorted Items get sequential `ItemId(0..items.len())`. In
+parallel:
+- `item_def_paths[ItemId]` populated with each Item's
+  DefPathHash (rustc's for source-derived; synthetic per
+  §13.4 for synthetic; with the ClosureCaptures carve-out
+  per §3.1 invariant 2).
+- `item_synthetic_kinds[ItemId]` populated with the per-Item
+  `SyntheticItemKind` tag per §13.3 (`None` for
+  source-derived).
+
+**Phase 5 -- INSTANCE construction + cross-reference
+resolution.** Bridge populates `instances` per §9.2 (one
+Instance per (Item, GenericArgs, rustc shim flavor) tuple).
+Instances are sorted by F4-2 `RegseqInstanceKey` per §16.3.
+
+During Instance construction, each Function Instance is
+populated per stage-12 D-12-1.4 (Option B):
+- `fn_sig`: substituted post-mono `FnSig` from rustc's
+  `tcx.fn_sig(did).instantiate(tcx, args)`, interned via
+  `FnSigInterner`.
+- `body`: substituted post-mono MIR body from rustc's
+  `tcx.instance_mir(InstanceKind)`. `None` if
+  `tcx.is_foreign_item(did)` (per D-12-2.1).
+- `flavor`: `FunctionInstanceFlavor` from rustc's
+  `ty::InstanceKind` discriminant per §9.3
+  `rustc_instance_kind_sort_rank`.
+- `virtual_idx`: rustc's vtable-slot index for Virtual
+  flavor; `None` otherwise (per the §9.4 biconditional).
+
+Cross-references that referenced Items by an inter-Phase
+placeholder (DefPathHash, registration index, or whatever
+the bridge implementation chose) are resolved to final
+ItemIds. `RegseqModel.vtables` (PrincipalTraitKey -> ItemId
+dedup table) populated as Phase 5 walks Items.
+
+**Per-phase body work in Phase 5 (body-content rewrites
+sequenced before validation).** Phase 5 body materialisation
+(populating `InstanceKind::Function.body: Option<Body>`)
+includes two body-content rewrites that produce the canonical
+Body shape downstream consumers see:
+
+1. **Drop-as-Call collapse** (per §25.7.1): the rustc body's
+   `TerminatorKind::Drop` terminators are rewritten in place
+   into `Statement::Assign(_t_drop_arg, Rvalue::RawPtr(Mut,
+   place)) + TerminatorKind::Call { callee:
+   Direct(drop_glue_instance_id), ... }`. The drop-glue
+   Function Item that this Call targets was synthesised in
+   Phase 2 (per the Phase-2 trigger table above) and got its
+   final ItemId in Phase 4; Phase 5 just inserts the Call
+   terminator referencing that already-final ItemId. The
+   collapse runs inside the bridge's atomic per-rustc-
+   terminator translation envelope.
+2. **Vtable-indirect rewrite** (per §25.7.2): a body-level
+   pass over the materialised Body that detects `Call`
+   terminators with virtual-flavor callees and rewrites them
+   into projection-chain Statements + an indirect Call.
+   Sequenced **after** Drop-as-Call collapse and **before**
+   the joint validation walk (§25.6).
+
+After Phase 5 body materialisation + the two rewrites, the
+joint validator (§25.6) runs over `model.instances`; for each
+Function Instance with `body: Some(b)`, it runs the body
+visitor against `b`. §25.7.3 records the full pass-scheduling
+order (Phase 5 body-materialisation -> Drop-as-Call collapse
+-> vtable-indirect rewrite -> joint validation).
+
+**Synthesis interleaving rule (D-12-5.2).** Bridge-
+synthesised Items are produced **during** Phase 2
+translation, NOT in a separate pre-pass before discovery
+or post-pass after. Synthesis triggers are
+construct-driven (`Ty::Dynamic` encountered -> vtable type
+Item; `Cast::Unsize` rvalue encountered -> vtable instance
+Item). The bridge can't pre-enumerate triggers without
+first translating; trying to pre-enumerate would
+re-implement type translation. Synthesis must complete
+before Phase 3 F4 sort.
+
+**Post-sort ItemId assignment rule (D-12-5.3).** Final
+`ItemId` values are assigned at Phase 4 (after F4 sort),
+not incrementally during Phase 2 translation. F4 + the
+build-equivalence quad (§12.4) commit to deterministic
+ItemIds across builds with the same source. Incremental
+assignment in discovery order would tie ItemIds to rustc's
+collector traversal order, which can vary with incremental
+compilation cache state. Cross-reference handling during
+construction (placeholder ItemIds + remap, vs DefPathHash
+canonical key) is bridge-implementation choice; not
+externally observable. Spec only commits to **post-sort
+F4-deterministic ItemIds** as the externally-observable
+property.
+
+### 3.5 `BridgeInput` and Instance-side helpers
+
+Per stage-12 D-12-4.3 + D-12-1.8.
+
+#### 3.5.1 `BridgeInput` struct
+
+```rust
+/// Bridge-supplied facts that are NOT stored in the model
+/// itself but are needed by validation. Currently a single
+/// field for the spec-crate-stable-id half of construction
+/// invariant 4; future stages may extend (open-extension)
+/// when new bridge-supplied facts surface.
+pub struct BridgeInput {
+    /// StableCrateId of the spec crate the bridge was invoked
+    /// on. Validation checks this matches
+    /// `crates[primary_crate].stable_crate_id`, closing
+    /// stage-1 construction invariant 4 (D-12-4.3).
+    pub spec_crate_stable_id: StableCrateId,
+}
+
+impl BridgeInput {
+    /// Test ergonomic helper: construct a `BridgeInput`
+    /// with `spec_crate_stable_id` matching the model's
+    /// `crates[primary_crate].stable_crate_id`. For tests
+    /// that don't care about invariant 4 specifically.
+    pub fn matching(model: &RegseqModel) -> Self { /* ... */ }
+}
+```
+
+The `RegseqModel::validate` signature changes from
+`validate(&self) -> Result<...>` to
+`validate(&self, bridge_input: &BridgeInput) ->
+Result<...>` per D-12-4.3.
+
+#### 3.5.2 Instance-side pull-through helpers
+
+Every Instance has `Instance.item: ItemId`; Item-level
+metadata is reachable via simple pull-through. Per stage-12
+D-12-1.8, RegseqModel exposes convenience helpers:
+
+```rust
+impl RegseqModel {
+    // Identity / source-level traceback
+    pub fn instance_def_path(&self, id: InstanceId) -> &DefPath {
+        &self.items[self.instances[id].item].def_path
+    }
+    pub fn instance_span(&self, id: InstanceId) -> Span {
+        self.items[self.instances[id].item].span
+    }
+
+    // Source-level metadata fields per D-12-1.3
+    pub fn instance_linkage(&self, id: InstanceId) -> Linkage { /* ... */ }
+    pub fn instance_link_section(&self, id: InstanceId) -> Option<StringId> { /* ... */ }
+    pub fn instance_inline_hint(&self, id: InstanceId) -> InlineHint { /* ... */ }
+    pub fn instance_is_unsafe(&self, id: InstanceId) -> bool { /* ... */ }
+    pub fn instance_is_naked(&self, id: InstanceId) -> bool { /* ... */ }
+
+    // Lang-item flags
+    pub fn instance_is_phantom_data(&self, id: InstanceId) -> bool { /* ... */ }
+    pub fn instance_is_unsafe_cell(&self, id: InstanceId) -> bool { /* ... */ }
+    pub fn instance_is_manually_drop(&self, id: InstanceId) -> bool { /* ... */ }
+
+    // Bridge-computed outcome
+    pub fn instance_opaque_handle_eligible(&self, id: InstanceId) -> bool { /* ... */ }
+
+    // Post-Option-B InstanceKind::Function pull-throughs
+    pub fn instance_fn_sig(&self, id: InstanceId) -> Option<&FnSig> { /* ... */ }
+    pub fn instance_body(&self, id: InstanceId) -> Option<&Body> { /* ... */ }
+}
+```
+
+13-helper v1 inventory. Composes with §23.6.2 `callee_fn_sig`
+helper (existing convention). The `instance_<field>()` naming
+prefixes the input domain; field names mirror the underlying
+Item field names (no synonyms).
+
+Methods-on-`RegseqModel` shape chosen over methods-on-`Instance`
+(which would clutter call sites with `&model` parameter) and
+wrapper-type `InstanceRef<'m>` (which would introduce a new
+type). The wrapper-type design can be added as a thin layer
+later if call-site ergonomics demand; methods-on-model is the
+foundation.
 
 ---
 
@@ -1180,10 +1577,16 @@ Stable across builds. Computed by the bridge from
 
 ## 8. Item
 
-`Item` is the source-level item alphabet. Generic forms live
-here for source-level traceback (DefPath, kind, attributes,
-span); generic items themselves are not emitted (Q2:
-monomorphisation is baked at the bridge).
+`Item` is the source-level item alphabet, **one Item per
+rustc DefId** (1:1 with source-level definitions). For
+generic items (e.g., `fn foo<T>(...)`), the Item carries
+the source-level traceback (DefPath, kind, attributes,
+span); per-monomorphisation data (substituted FnSig,
+substituted Body, substituted layout) lives on `Instance`
+per Q2 (monomorphisation is baked at the bridge). The
+Items table is therefore the **pre-mono source-level
+alphabet**; the Instances table is the **per-mono emission
+unit**.
 
 ### 8.0 Schema
 
@@ -1192,6 +1595,45 @@ pub struct Item {
     pub def_path: DefPath,
     pub kind:     ItemKind,
     pub span:     Span,
+
+    // Cross-variant Item-level metadata (D-12-1.3).
+    //
+    // `linkage` classifies the symbol-emission shape (default
+    // mangled, no-mangle override, foreign declaration, weak
+    // linkage). Bridge populates from the per-DefId mapping
+    // in §3.4 D-12-2.3 (rustc's is_foreign_item / NO_MANGLE /
+    // export_name / WeakAny|WeakODR / default external).
+    pub linkage:        Linkage,
+
+    // ELF section placement (e.g., ".init_array",
+    // ".driver_data"). Common in kernel drivers for
+    // auto-discovery sections. Bridge populates from rustc's
+    // `CodegenFnAttrs.link_section`.
+    pub link_section:   Option<StringId>,
+
+    // Function-relevant flags (Item-level with sensible
+    // defaults for non-fn variants per D-12-1.3 -- a `static`
+    // is never naked or inline; defaults are well-defined).
+    //
+    // `inline_hint` corresponds to `#[inline]` /
+    // `#[inline(always)]` / `#[inline(never)]` per rustc's
+    // `CodegenFnAttrs.inline: InlineAttr`. C-codegen uses
+    // these for `static inline` / `__attribute__((always_inline))`
+    // / `__attribute__((noinline))` decoration.
+    pub inline_hint:    InlineHint,
+
+    // `is_unsafe` corresponds to `unsafe fn`. Consumed by
+    // analyses (e.g., "all unsafe fn calls must be inside
+    // controlled boundaries"); not directly load-bearing for
+    // C codegen (C has no `unsafe` keyword).
+    pub is_unsafe:      bool,
+
+    // `is_naked` corresponds to `#[naked]` per rustc's
+    // `CodegenFnAttrFlags::NAKED`. C-codegen emits naked
+    // functions without prologue/epilogue (raw asm body
+    // only); load-bearing for ISR entry stubs in kernel
+    // drivers.
+    pub is_naked:       bool,
 
     // Lang-item flags (§8.2). Load-bearing for codegen
     // lowering decisions; populated by the bridge from rustc's
@@ -1221,28 +1663,99 @@ pub struct Item {
 
 pub enum ItemKind {
     Function,
-    Static,
+    Static { mutability: Mutability },
     Const,
     Struct,
     Enum,
     Union,
 }
+
+/// Symbol-emission classifier (D-12-1.3 + D-12-2.3).
+/// Closed 4-variant set covering the v1 driver-fixture
+/// surface; other rustc Linkage variants (LinkOnceAny,
+/// LinkOnceODR, Appending, Common, Internal, Private,
+/// External-when-distinct-from-default) are LLVM-specific
+/// and rejected at the bridge with
+/// `BridgeError::UnsupportedLinkage` per §17.4
+/// closed-vocabulary rule. Phase-2 device pressure can
+/// reopen.
+#[repr(u8)]
+pub enum Linkage {
+    /// Ordinary defined fn/static; mangled name.
+    Default,
+    /// `#[no_mangle]` or `#[export_name]`; symbol_name overrides.
+    NoMangle,
+    /// `extern "C" { ... }` declaration; never defined locally.
+    Foreign,
+    /// `#[linkage = "weak"]`; tentative definition.
+    Weak,
+}
+
+/// Inline hint (D-12-1.3). 4-variant closed mirror of
+/// rustc's `InlineAttr`. Defaults to `None` for non-Function
+/// ItemKind variants (where the concept doesn't apply).
+#[repr(u8)]
+pub enum InlineHint {
+    /// No `#[inline]` annotation.
+    None,
+    /// `#[inline]`.
+    Hint,
+    /// `#[inline(always)]`.
+    Always,
+    /// `#[inline(never)]`.
+    Never,
+}
 ```
 
-Per-`ItemKind` rich data lives on `Instance` (§9): function
-signatures via `FnSigId` on `InstanceKind::Function`,
-const/static values via `ConstId`, ADT layout via `TyId` on
-`InstanceKind::{Struct, Enum, Union}`. The Item itself carries
-only the source-level alphabet.
+**Per-`ItemKind` data placement: source-level alphabet on
+Item; per-monomorphisation rich data on Instance.** Items
+are pre-mono (1:1 with rustc DefIds); Instances are
+per-mono (one per (Item, GenericArgs, rustc shim flavor)
+tuple). Per-`InstanceKind` rich data per §9.4:
+- `InstanceKind::Function { fn_sig: FnSigId, body:
+  Option<Body>, flavor: FunctionInstanceFlavor, virtual_idx:
+  Option<u32> }` carries the post-mono substituted FnSig
+  + post-mono substituted Body + post-mono dispatch
+  metadata. Per stage-12 D-12-1.4 (Option B, restoring
+  symmetry with non-Function variants); supersedes
+  stage-11 D-11-3 + D-11-5's Item-side framing. See
+  `discussions.md` D-12-1.4 for the contradiction
+  Option B resolves.
+- `InstanceKind::Static { ty: TyId, init: Option<ConstId> }`
+  carries the post-mono ty and initializer; mutability
+  lives on `ItemKind::Static { mutability }` per
+  D-12-1.2 (c) (source-level keyword choice; statics
+  can't be generic so 1:1 Item:Instance always).
+- `InstanceKind::Const { ty: TyId, value: ConstId }`
+  carries the post-mono ty and const value.
+- `InstanceKind::{Struct, Enum, Union} { layout: TyId }`
+  carries the per-mono `Ty::Struct/Enum/Union` reference.
 
-**No general attribute table on `Item`.** The only
-attribute-driven recognition the current spec's translation
-needs is `#[rseq::intrinsic("NAME")]` (Q7), identified at the
-callee's `DefId` during call translation, not via per-Item
-attribute storage. Declarative property attributes
+**No general attribute table on `Item` (stage-3 scope);
+typed Item fields per stage-12; structured DSL property
+attributes per stage-14.** The 8 Item-level fields above
+(`linkage`, `link_section`, `inline_hint`, `is_unsafe`,
+`is_naked` + 3 lang-item flags + `opaque_handle_eligible`)
+are the typed Item-level metadata stage 12 commits to per
+stage-1 R5.2. Declarative DSL property attributes
 (`#[rseq::mmio(access_width = 32)]`,
-`#[rseq::interrupt(trigger_type = "...")]`, etc.) are not
-represented as a sibling table in the current spec.
+`#[rseq::interrupt(trigger_type = "...")]`, etc.) are
+**stage-14 territory**: stage 14 introduces a sibling-table
+architecture on `RegseqModel` keyed by `ItemId` /
+`InstanceId` / `FieldPath` / `Span` (the exact key kind
+chosen per property family) per stage-4 spec-snapshot.md
+§1287-1299's commitment. Stage 12 adds NO schema for
+DomainAttr; the sibling-table architecture is a forward
+expectation. The previous merged-spec wording
+"No general attribute table on `Item`" was a stage-3-scoped
+commentary that erased the stage-3-vs-stage-14 split when
+absorbed; D-12-1.5 restores the framing.
+
+The `#[rseq::intrinsic("NAME")]` operations attribute (Q7)
+remains call-site-recognized via `tcx.intrinsic_raw(did)`
++ callee-`DefId` lookup at call translation; not stored
+on Item. Stage 14 builds on this pattern for intrinsic
+dispatch tables.
 
 ### 8.1 Lifting `impl` items
 
@@ -1347,8 +1860,26 @@ newtype_index! { pub struct InstanceId {} }
   a `DefId`, so an originating Item exists for every Instance.
   For Instances whose origin is a recognised `core` lang-item
   (e.g., `drop_in_place` for drop glue), the `Item` entry is
-  metadata-only: DefPath, kind, span, attributes — captured by
-  the bridge from rustc-side metadata, with no body in `bodies`.
+  metadata-only at the Item layer: DefPath, kind, span,
+  source-level attributes per §8 (linkage, inline_hint,
+  lang-item flags, etc.) — captured by the bridge from
+  rustc-side metadata, since `core` lang-items lack a
+  source-level body in the spec crate. Per stage-12 D-12-1.4
+  (Option B; supersedes stage-11 D-11-5), any body lives on
+  the Function `Instance`'s
+  `InstanceKind::Function { body: Option<Body>, ... }`, NOT
+  on the Item. For drop-glue and similar `core` lang-items,
+  the Function Instance's body is **populated**
+  (`body: Some(b)`) at Phase 5 body construction from rustc's
+  `tcx.instance_mir(InstanceKind::DropGlue(...))` (or
+  analogous shim-body fetcher). `body: None` is reserved
+  exclusively for foreign declarations
+  (`tcx.is_foreign_item(did) == true`) per §3.1 invariant 10
+  and D-12-2.1; the metadata-only Item case is orthogonal
+  to the Instance-side body=None case (the metadata-only
+  framing describes the Item's source-level metadata
+  layer, not the per-Instance body slot). No separate
+  `bodies` table.
 - `emission_name` is the C-side identifier under which this
   instance is emitted. Bridge construction rule by `InstanceKind`:
   - `Function` / `Static` / `Const`: rustc's
@@ -1469,23 +2000,62 @@ admitting the collision.
 
 ```rust
 pub enum InstanceKind {
-    /// Function instantiation. `sig` is always present, even
-    /// for foreign declarations (`extern "C" { fn foo(); }`
-    /// where `body` is `None`). `flavor` records which rustc
-    /// `InstanceKind` variant the bridge translated from
-    /// (§9.3 `fn_shim_disambig`); stored on the model so
-    /// deserialised consumers can reconstruct stable instance
-    /// identity for shims sharing `(item, args)` without
-    /// parsing `emission_name`.
-    Function { sig: FnSigId, body: Option<BodyId>, flavor: FunctionInstanceFlavor },
+    /// Function instantiation. Per stage-12 D-12-1.4 (Option B,
+    /// restoring symmetry with non-Function variants):
+    /// post-mono substituted `fn_sig` and `body` live HERE on
+    /// `InstanceKind::Function`, NOT on the parent Item.
+    /// Supersedes stage-11 D-11-3 + D-11-5's Item-side framing.
+    /// See `discussions.md` D-12-1.4 for the contradiction
+    /// (Items are pre-mono per §16.1 F4 sort + §13.4 source
+    /// DefPathHash + §9.3 RegseqInstanceKey; stage-3 §15.1
+    /// rejects Param/Bound TyKind variants -- so a stored
+    /// FnSig must be already-substituted post-mono; the two
+    /// views were incompatible) Option B resolves.
+    ///
+    /// `fn_sig` is the substituted post-mono signature for
+    /// this monomorphization; populated even for foreign
+    /// declarations (rustc's `tcx.fn_sig(did)` is callable for
+    /// foreign fns even though MIR is unavailable). Two
+    /// monomorphizations of a generic fn `fn foo<T>(x: T) -> T`
+    /// produce two Instances with distinct `fn_sig` values
+    /// (e.g., `fn(u32) -> u32` and `fn(u64) -> u64`).
+    ///
+    /// `body` is the substituted post-mono MIR body, monomorphized
+    /// per the Instance's `generic_args`. `None` for foreign
+    /// declarations (`extern "C" { fn foo(); }` where
+    /// `tcx.is_foreign_item(did)` returns true and
+    /// `tcx.is_mir_available(did)` returns false). `Some(b)` for
+    /// source-defined fns and bridge-synthesized shims (drop
+    /// glue, vtable shims, closure call methods).
+    ///
+    /// `flavor` records which rustc `InstanceKind` variant the
+    /// bridge translated from (§9.3 `fn_shim_disambig`); stored
+    /// on the model so deserialised consumers can reconstruct
+    /// stable instance identity for shims sharing `(item, args)`
+    /// without parsing `emission_name`. `virtual_idx` stores
+    /// rustc's vtable-slot index for Virtual-flavor instances
+    /// (per `ty::InstanceKind::Virtual(_, idx)`); `Some(idx)`
+    /// exactly when `flavor == Virtual`, `None` otherwise (§9.4
+    /// construction invariant). Consumed by the stage-11
+    /// vtable-indirect rewrite pass (per §23.6.2 B-8 + the
+    /// stage-11 outbound expectation "From stage 9").
+    Function {
+        fn_sig:      FnSigId,
+        body:        Option<Body>,
+        flavor:      FunctionInstanceFlavor,
+        virtual_idx: Option<u32>,
+    },
 
-    /// Static. `mutability` distinguishes `static` (Not) from
-    /// `static mut` (Mut) — affects emitted C storage class
-    /// (`const` vs mutable) and aliasing assumptions. `init`
-    /// is `None` for foreign statics (`extern "C" { static FOO:
-    /// u32; }`) and `Some(c)` for source-defined statics with
-    /// an initial value.
-    Static { ty: TyId, init: Option<ConstId>, mutability: Mutability },
+    /// Static. `init` is `None` for foreign statics
+    /// (`extern "C" { static FOO: u32; }`) and `Some(c)` for
+    /// source-defined statics with an initial value. Mutability
+    /// lives on `ItemKind::Static { mutability }` per stage-12
+    /// D-12-1.2 (c) (source-level keyword choice; statics can't
+    /// be generic so 1:1 Item:Instance always). Supersedes
+    /// stage-9's denormalized placement of mutability on
+    /// InstanceKind. See `discussions.md` D-12-1.2 for
+    /// rationale.
+    Static { ty: TyId, init: Option<ConstId> },
 
     /// Const item.
     Const { ty: TyId, value: ConstId },
@@ -1524,9 +2094,53 @@ pub enum FunctionInstanceFlavor {
 }
 ```
 
-Each variant carries only the IDs needed to find kind-specific
-rich data in the appropriate table (`sigs`, `consts`, `types`,
-`bodies`).
+Each variant carries the post-mono per-monomorphisation rich
+data: `Function` carries `fn_sig` + `body` (per Option B
+D-12-1.4) plus dispatch metadata (`flavor`, `virtual_idx`);
+`Static` / `Const` carry `ty` + value; `Struct` / `Enum` /
+`Union` carry the per-mono `Ty::Struct/Enum/Union`
+reference. **No separate `bodies` table** -- bodies live
+structurally inside `InstanceKind::Function` per Option B.
+
+**Per-`InstanceKind::Function` accessor.** D-12-1.6 hybrid
+pattern: convenience method `as_function() ->
+Option<&FunctionInstanceData>` extracts the struct-variant
+into a named `FunctionInstanceData` struct for ergonomic
+destructuring + accessor return types.
+
+```rust
+impl InstanceKind {
+    pub fn as_function(&self) -> Option<&FunctionInstanceData> { /* ... */ }
+    pub fn as_function_mut(&mut self) -> Option<&mut FunctionInstanceData> { /* ... */ }
+}
+
+pub struct FunctionInstanceData {
+    pub fn_sig:      FnSigId,
+    pub body:        Option<Body>,
+    pub flavor:      FunctionInstanceFlavor,
+    pub virtual_idx: Option<u32>,
+}
+```
+
+Match arms remain available for exhaustive handling; the
+accessor is for the common single-variant query (e.g., the
+§23.6.2 `callee_fn_sig` helper uses this pattern).
+
+**Construction invariant: virtual_idx ↔ flavor=Virtual.** For
+`InstanceKind::Function { flavor, virtual_idx, .. }` instances,
+`virtual_idx.is_some()` iff `flavor ==
+FunctionInstanceFlavor::Virtual`. Equivalently:
+- `flavor == Virtual` requires `virtual_idx == Some(idx)` for
+  some `idx: u32` (the vtable slot index recovered from rustc's
+  `ty::InstanceKind::Virtual(_, idx)`).
+- All non-Virtual flavors require `virtual_idx == None`.
+
+`RegseqModel::validate` walks every Function Instance and
+checks this biconditional. Encountering a violation (e.g.,
+`Some(_)` with `flavor != Virtual`, or `None` with `flavor ==
+Virtual`) is a model-construction bug, not a driver-source
+error. The invariant is **projected at Direct virtual call
+sites** at §23.6.2 B-8 for stage-11 walk-pass enforcement.
 
 `FunctionInstanceFlavor` is the structured form of the
 `fn_shim_disambig: u8` rank used inside `RegseqInstanceKey`
@@ -2144,26 +2758,45 @@ targeting `GlobalAlloc::Memory(memory)`:
 3. Compute `content_hash: ContentHash` by hashing the canonical
    bytes per §13.3's `ContentHash` definition (SHA-256-truncated
    leading 16 bytes BE-loaded into `u128`).
-4. Look up `SyntheticItemKind::ConstMemoryStatic { content_hash }`
-   in `item_synthetic_kinds`. If present (a prior synth Item with
-   the same content), reuse its `ItemId`. If absent, synthesise a
-   new `Item` with:
+4. **Phase 2** (translation + synthesis interleaving per §3.4):
+   look up `content_hash` in the bridge's Phase-2 working cache
+   `ContentHash -> Phase2Handle` (the same cache shape §3.4
+   pins for synthesis triggers; stable Phase-2-available handle
+   such as DefPathHash or placeholder ItemId-shaped handle, NOT
+   final ItemId). If present (a prior synth Item with the same
+   content), reuse the Phase2Handle. If absent, register a new
+   synthetic Item shape:
    - `item.def_path` = synthesised per §13.4 const-memory-family
      segments (`["<regseq_synth>", "const_memory_static",
-     <content_hash hex>]`); `item_def_paths[item]` = the
-     synthesised `DefPathHash` per §13.4 with payload bytes
-     `content_hash.0.to_be_bytes()`.
-   - `item.kind = ItemKind::Static`.
-   - `item_synthetic_kinds[item] = SyntheticItemKind::ConstMemoryStatic
-     { content_hash }`.
-   - Plus a corresponding `Instance` with
-     `kind = InstanceKind::Static { ty: array_ty, init: Some(c), mutability: Mutability::Not }`,
-     where `array_ty` is the `TyId` for `Ty::Array(elem_ty, N)`
-     with `elem_ty` the `TyId` for `Ty::Uint(UintKind::U8)`
-     and `N = memory.bytes.len() as u64` (both resolved against
-     the `TyInterner`; created if absent), and `c` is the
-     `ConstId` for the `Const::Bytes(Vec<Byte>)` value computed
-     in step 2.
+     <content_hash hex>]`); the synthesised `DefPathHash` per
+     §13.4 with payload bytes `content_hash.0.to_be_bytes()`.
+     This DefPathHash is the natural Phase-2 stable key (final
+     ItemId is not yet assigned).
+   - `item.kind = ItemKind::Static { mutability: Mutability::Not }`
+     (mutability lives on ItemKind per stage-12 D-12-1.2 (c)).
+   - The `SyntheticItemKind::ConstMemoryStatic { content_hash }`
+     tag is recorded for later Phase-4 population of
+     `item_synthetic_kinds`.
+
+5. **Phase 4** (post-F4-sort ItemId assignment + side-table
+   population per §3.4): the Phase-2-registered synthetic Item
+   gets its final `ItemId(N)` after sorting. In parallel:
+   - `item_def_paths[ItemId(N)]` populated with the synthesised
+     `DefPathHash` from step 4.
+   - `item_synthetic_kinds[ItemId(N)]` populated with
+     `SyntheticItemKind::ConstMemoryStatic { content_hash }`.
+
+6. **Phase 5** (Instance construction per §3.4): the
+   bridge synthesises a corresponding `Instance` with:
+     `kind = InstanceKind::Static { ty: array_ty, init: Some(c) }`
+   (2-field Instance-side schema per Option B; mutability lives
+   on the parent Item),
+   where `array_ty` is the `TyId` for `Ty::Array(elem_ty, N)`
+   with `elem_ty` the `TyId` for `Ty::Uint(UintKind::U8)`
+   and `N = memory.bytes.len() as u64` (both resolved against
+   the `TyInterner`; created if absent), and `c` is the
+   `ConstId` for the `Const::Bytes(Vec<Byte>)` value computed
+   in step 2.
      The Static is **type-erased to bytes**: two allocations
      with identical bytes share the synth Item regardless of
      their original Rust element type. The wrapping
@@ -2176,7 +2809,10 @@ targeting `GlobalAlloc::Memory(memory)`:
      Static's `ty`) lives on the `Instance`, not the `Item`;
      `Item` itself carries only `def_path`, `kind`, `span`,
      flags, and `opaque_handle_eligible`.
-5. Construct the dispatch result:
+7. Construct the dispatch result (post-Phase-5; the
+   resulting `Const::Aggregate` / `Const::Reloc` value
+   references the now-final synthesised `Instance` via
+   `synth_static_inst_ref(alloc_id)`):
 
 ```text
 mir::ConstValue::Slice { data, meta }                 ->  Aggregate([
@@ -2512,6 +3148,11 @@ parameters/returns, struct/union fields, array elements, **and
 nested FnPtr declarators** (the inner FnSig's
 `sig_c_abi_lowerings` is walked at extern-declaration emission;
 unsupported scalars there reject the outer declaration too).
+
+### 10.4 Rendering
+
+See `pretty-printer.md` §6 (per-variant `render_ty`
+specifications across the closed 19-variant `Ty` enum).
 
 ---
 
@@ -3246,9 +3887,12 @@ Per closure encountered in MIR, the bridge synthesises:
   - `FnOnce`: `call_once` only.
   - `FnMut`: `call_mut` plus inherited `call_once`.
   - `Fn`: `call` plus inherited `call_mut` and `call_once`.
-  Each Function Item's signature is substituted from the
-  closure's `closure_sig_as_fn_ptr_ty`, with a per-call-kind
-  receiver shape:
+  For each call-method Function Item, the corresponding
+  Function `Instance`'s `InstanceKind::Function { fn_sig,
+  ... }` (per stage-12 D-12-1.4 / Option B; §9.4) carries
+  the substituted signature derived from the closure's
+  `closure_sig_as_fn_ptr_ty`, with a per-call-kind receiver
+  shape:
   - `Call`     → receiver `Ref(captures_struct, SharedBorrow)`
                  (i.e., `&Captures`).
   - `CallMut`  → receiver `Ref(captures_struct, UniqueBorrow)`
@@ -3257,8 +3901,9 @@ Per closure encountered in MIR, the bridge synthesises:
   These are the **type-system signatures**. A C-codegen lowering
   may choose a pointer receiver for by-value `FnOnce` for
   implementation convenience, but that is a body/codegen
-  decision and does not change the type-system signature carried
-  in `model.sigs[id]`.
+  decision and does not change the type-system signature
+  carried by the Function Instance's `fn_sig` (resolved
+  through `model.sigs[fn_sig_id]`).
 
 - **A drop-glue Function Item** iff the captures need dropping.
 
@@ -3592,12 +4237,15 @@ pub enum SyntheticItemKind {
     // canonical byte form produce identical `content_hash`,
     // hence identical synthesised `DefPathHash`, hence one
     // de-duplicated synth Item per content blob. The synthesised
-    // Static carries `ty = Ty::Array(elem_ty, N)` (where
-    // `elem_ty` is the `TyId` for `Ty::Uint(UintKind::U8)` and
-    // N is the allocation's byte length) and `Mutability::Not`;
-    // its `Instance` has `kind = InstanceKind::Static { init }`
-    // where `init` resolves to a `Const::Bytes(Vec<Byte>)`
-    // carrying the three-state byte encoding.
+    // Item carries `ItemKind::Static { mutability:
+    // Mutability::Not }` (mutability lives on ItemKind per
+    // stage-12 D-12-1.2 (c)); its `Instance` has
+    // `kind = InstanceKind::Static { ty: Ty::Array(elem_ty, N), init }`
+    // (Option-B 2-field Instance schema), where `elem_ty` is
+    // the `TyId` for `Ty::Uint(UintKind::U8)`, N is the
+    // allocation's byte length, and `init` resolves to a
+    // `Const::Bytes(Vec<Byte>)` carrying the three-state byte
+    // encoding.
     ConstMemoryStatic { content_hash: ContentHash },
 }
 
@@ -3997,6 +4645,37 @@ the same.
 - `c_variadic == true` implies `inputs.len() >= 1` — the
   rustc-accepted prefix shape requires at least one fixed
   parameter before the `...`.
+
+**FnSig placement in the IR.** `FnSig` instances live
+**Instance-side** on `InstanceKind::Function { fn_sig:
+FnSigId, body: Option<Body>, ... }` per stage-12 D-12-1.4
+(Option B). Per-monomorphization function instantiations
+each carry their substituted (post-mono) signature directly
+on the InstanceKind variant. Bodies live structurally on
+the same InstanceKind::Function variant (also per Option B).
+
+Argument types remain reachable from a Body via the §25.1
+layout convention (`Body.local_decls[1..=arg_count].ty`);
+return type via `Body.local_decls[RETURN_PLACE].ty`.
+`Ty::FnPtr(FnSigId)` references through the interner per
+§14.4 below; identity is structural over FnSig content.
+
+**Stage-11 D-11-3 + D-11-5 supersession.** Stage-11 placed
+`fn_sig` and `body` on Item under the Function ItemKind
+variant (Item-side framing), citing 4-peer convergence
+(rustc-internal, rustc_public, Charon, mrustc). Stage-12
+D-12-1.4 reopens both decisions (flip to `[REOPENED]` in
+`decisions.md` at stage-12 merger contract close): the
+4-peer evidence actually supports per-Instance body
+(rustc_public's `Instance::body() -> Option<Body>` is the
+cited pattern; Charon's `FunDecl` is post-mono under
+`--monomorphize`). The Item-side framing was incompatible
+with the rest of the spec's pre-mono Item model (§16.1
+F4 sort + §13.4 source DefPathHash + §9.3
+RegseqInstanceKey all imply Items are 1:1 with rustc DefIds
+/ pre-mono; stage-3 §15.1 rejects Param/Bound TyKind so a
+stored FnSig must be already-substituted post-mono). See
+`discussions.md` D-12-1.4 for the full reasoning.
 
 ### 14.4 `FnSigInterner`
 
@@ -4547,11 +5226,16 @@ admits rejected core types.
 
 ### 15.1 Rejections
 
-The bridge rejects the following at type or call translation. Two
-categories overall: **non-rigid `TyKind`** (should not survive
-`instantiate_mir_and_normalize_erasing_regions`; encountering one
-is a bridge bug) and **rigid but DSL-rejected** (types that
-survive normalisation but lie outside the v1 driver-DSL scope).
+The bridge rejects the following at type, call, or place
+translation. Three categories overall: **non-rigid `TyKind`**
+(should not survive
+`instantiate_mir_and_normalize_erasing_regions`; encountering
+one is a bridge bug); **rigid but DSL-rejected** (types that
+survive normalisation but lie outside the v1 driver-DSL scope);
+and **closed `PlaceElem` vocabulary rejections** (rustc
+projection variants that are absent from our `optimized_mir`
+input or gated behind unstable features and have no v1 driver
+use case; see §19.1).
 
 | Rejection                                                                 | Phase            | Reason                                                                                |
 | ------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------- |
@@ -4586,6 +5270,8 @@ survive normalisation but lie outside the v1 driver-DSL scope).
 | `Dynamic(_, _, DynKind::DynStar)`                                         | type translation | `dyn*` representation distinct from ordinary `dyn`; not in v1 scope                   |
 | Bare `Ty::Str`, `Ty::Slice`, `Ty::Dynamic` outside `Ref`/`Ptr` pointee    | type translation | construction invariant 12 (§3.1)                                                      |
 | Custom auto-traits (via `feature(auto_traits)`)                           | type translation | closed v1 set is `{Send, Sync, Unpin}`                                                |
+| `mir::PlaceElem::OpaqueCast(_)` in any `Place.projection` slot            | place translation | absent from `optimized_mir` under both solver paths (next-solver: never constructed; legacy: stripped by `PostAnalysisNormalize`); see §19.1 closed-vocabulary rule |
+| `mir::PlaceElem::UnwrapUnsafeBinder(_)` in any `Place.projection` slot    | place translation | gated behind unstable `unsafe_binders` feature; no v1 driver use case; see §19.1 closed-vocabulary rule |
 
 ---
 
@@ -5096,84 +5782,5412 @@ methodology (`README.md` §2), and the spec (this document).
 
 ---
 
-## 18. Pretty-printer scaffold
+## 18. Pretty-printer
 
-The pretty-printer is the primary serialisation (Q5). Per-type
-`Display` impls are insufficient because rendering requires
-context (the model's tables for ID resolution).
-
-```rust
-pub struct PrettyPrinter<'a> {
-    model: &'a RegseqModel,
-    // optional: indentation level, span-rendering mode, etc.
-}
-
-impl<'a> PrettyPrinter<'a> {
-    pub fn new(model: &'a RegseqModel) -> Self;
-    pub fn render(&self) -> String;
-    pub fn render_ty(&self, ty: TyId) -> String;
-    pub fn render_span(&self, span: Span) -> String;
-    pub fn render_def_path(&self, item: ItemId) -> String;
-    // ...
-}
-```
+The pretty-printer specification lives in top-level
+`pretty-printer.md`. That file is the canonical source
+for rendering style, the `PrettyPrinter` API surface,
+sigil conventions, the per-method ownership table,
+per-renderer specifications, and worked-example
+specimens. `spec.md` and `pretty-printer.md` are
+co-equal merger artifacts: `spec.md` covers the IR's
+structural definitions (producer-side); `pretty-printer.md`
+covers the rendering surface (consumer-side). For
+rationale, see top-level `discussions.md`.
 
 ### 18.1 Sigil conventions
 
-| ID             | Sigil                                                            |
-| -------------- | ---------------------------------------------------------------- |
-| `ItemId`       | `Item/N`                                                         |
-| `BodyId`       | `Body/N` (rendered as the path of the owning item when in scope) |
-| `TyId`         | rendered as the type itself (`u32`, `*const u8`, ...)            |
-| `ConstId`      | rendered as the const value                                      |
-| `LocalId`      | `_N` (zero-based; `_0` is `RETURN_PLACE`)                        |
-| `BlockId`      | `bbN`                                                            |
-| `SourceFileId` | rendered as the file path                                        |
-| `StringId`     | rendered as the resolved string                                  |
-| `Span`         | `path:line:col: line:col` (matches rustc's MIR-dump form)        |
-| `InstanceId`   | `Item::<args>` (path of the item plus generic args)              |
+See `pretty-printer.md` §3.3.
 
-### 18.2 Renderer status
+### 18.2 Renderer ownership table
 
-The interface is pinned; only `render_span` is currently
-implemented. Other renderer methods are stubs that panic with
-messages indicating they are not yet filled. **Full-model
-rendering is not yet available**; snapshot tests for the
-complete model surface are blocked on filling the remaining
-renderers. Per-method ownership:
-
-- `render_ty(TyId)` -- stage 13.
-- `render_const(ConstId)` -- stage 14. 5 of 11 `Const`
-  variants depend on `render_ty` (stage 13;
-  `ZST` / `Bytes` / `Aggregate` / `EnumValue` / `NullPtr`),
-  and `Reloc(InstanceRef)` depends additionally on
-  `render_def_path(ItemId)` (stage 12) and `render_instance`
-  (stage 14); `render_const` lands at stage 14 (the latest
-  dependency) inheriting the rendering-style decision from
-  stage 13's `render_ty`.
-- `render_def_path(ItemId)` -- stage 12 (resolves the eager
-  `Item.def_path.rendered: StringId` cached at construction
-  time).
-- `render_instance(InstanceId)` -- stage 14.
-- `render()` (top-level) -- stage 12+ (composes the per-Item
-  / per-Instance renderers above).
-
-Until then, snapshot tests covering the spec's structural
-invariants use the secondary JSON serialisation (per Q5)
-where readability is acceptable; tests that depend on
-human-readable structural output are deferred to the owning
-renderer stages per the table above (stage 13 for `render_ty`;
-stage 14 for `render_const` and `render_instance`; stage 12
-for `render_def_path(ItemId)`; stage 12+ for top-level
-`render()`).
-Calling the textual pretty-printer the "primary serialisation"
-remains accurate as a *contract direction*, not a current
-capability.
-
-The textual pretty-printer is one-way (no parser); JSON
-serialisation handles structured round-trip per Q5.
+See `pretty-printer.md` §8.
 
 ---
+
+## 19. Place and projections
+
+The `Place` and `PlaceElem` vocabulary is the lvalue surface
+of MIR -- the typed expression of "which memory location."
+The bridge fills it from rustc's `mir::Place<'tcx>` /
+`mir::PlaceElem<'tcx>`; downstream consumers (stages 6-11
+body content, codegen) read it as the `Place` slot inside
+operand / rvalue / statement / terminator payloads.
+
+### 19.1 `Place` and `PlaceElem` definitions
+
+```rust
+/// A typed lvalue: head local plus a chain of projections.
+///
+/// `Place` is body-local content: it appears inside a body's
+/// statements / terminators, not in any top-level interner
+/// table. Equality is structural over `(local, projection)`.
+pub struct Place {
+    /// The head local. Must resolve to a `LocalDecl` entry in
+    /// the enclosing body's `local_decls` (stage-11 vocabulary).
+    pub local: LocalId,
+
+    /// The projection chain, applied left-to-right. Empty for
+    /// a bare local (e.g., `Place::from(_3)`). Owned slab
+    /// (no interning); see §19.2.
+    pub projection: Box<[PlaceElem]>,
+}
+
+/// Closed projection vocabulary (6 variants in source-
+/// declaration order). The bridge raises a diagnostic if a
+/// rustc `PlaceElem<'tcx>` outside this set appears (see
+/// §15.1 rejections for `OpaqueCast` and `UnwrapUnsafeBinder`).
+pub enum PlaceElem {
+    /// Pointer load: `*head` / `*projected_value`. Subject to
+    /// the I-Deref-first invariant (§19.3).
+    Deref,
+
+    /// Field projection. The `FieldIdx` indexes into the
+    /// projected type's field list, dispatched by predecessor
+    /// `Ty` (per §11 layout vocabulary):
+    /// - `Ty::Struct{..}`: the `LayoutKind::Struct.fields`
+    ///   vector.
+    /// - `Ty::Closure(item, args)`: an identity view whose
+    ///   layout lives on a parallel `Ty::Struct(item, args, _)`
+    ///   per stage-3 D6.3. Resolve via
+    ///   `find_nominal(NominalKind::Struct, item, args)` and
+    ///   use that `Ty::Struct`'s `LayoutKind::Struct.fields`.
+    ///   (`Ty::Closure` itself does not carry an inline
+    ///   `Layout`.)
+    /// - `Ty::Union{..}`: the `LayoutKind::Union.fields`
+    ///   vector.
+    /// - `Ty::Tuple{..}`: the tuple's `fields` vector.
+    /// - `Ty::Enum{..}` after a prior `Downcast`: the active
+    ///   variant's `VariantLayout.fields` (carried under
+    ///   `LayoutKind::Enum.shape`'s
+    ///   `EnumShape::Multiple.variants` or
+    ///   `EnumShape::Single.variant` per §11.1).
+    /// The inline `TyId` is the post-narrow field type,
+    /// stored redundantly with what the layout would yield.
+    /// Cheap O(1) narrowing during the projection walk.
+    Field(FieldIdx, TyId),
+
+    /// Array / slice index by a runtime-computed value held
+    /// in a separate local. The `LocalId` payload is the
+    /// head of a separate `Place::from(local)` that produces
+    /// the index value. **Note:** `Index` carries a `LocalId`,
+    /// not an `Operand` -- so `Place` has no circular
+    /// dependency on stage-6 `Operand`.
+    Index(LocalId),
+
+    /// Constant offset into a fixed-length array or slice,
+    /// generated by slice/array patterns. The doc-level
+    /// invariant from rustc (`stage-5/prior-art/rustc.md` §3.4) is
+    /// that `from_end` is always `false` when indexing an
+    /// array (the MIR builder folds the array length into
+    /// the offset rather than emitting a from-end form).
+    /// Three combinations appear in our input:
+    /// - `ConstantIndex { from_end: false }` over an array:
+    ///   `array[offset]`.
+    /// - `ConstantIndex { from_end: false }` over a slice:
+    ///   `slice[offset]`.
+    /// - `ConstantIndex { from_end: true }` over a slice:
+    ///   `slice[len - offset]` where `len` is the slice's
+    ///   runtime length.
+    /// The cross combination (`from_end: true` over an
+    /// array) does not appear in our input and is rejected
+    /// by Place validation (§19.7).
+    ///
+    /// Worked examples (slice-pattern shapes from rustc
+    /// `syntax.rs:1232-1238`; show the per-pattern
+    /// `ConstantIndex` payload, not constraining the base
+    /// type beyond what the doc-level invariant fixes):
+    ///
+    /// ```text
+    /// [X, _, .., _, _] => offset 0, min_length 4, from_end false
+    /// [_, X, .., _, _] => offset 1, min_length 4, from_end false
+    /// [_, _, .., X, _] => offset 2, min_length 4, from_end true (slice base only)
+    /// [_, _, .., _, X] => offset 1, min_length 4, from_end true (slice base only)
+    /// ```
+    ConstantIndex { offset: u64, min_length: u64, from_end: bool },
+
+    /// Sub-slice projection. The doc-level invariant from
+    /// rustc (`stage-5/prior-art/rustc.md` §3.5) constrains
+    /// `from_end == true` iff the base is a slice;
+    /// `false` iff the base is an array. Two combinations
+    /// appear in our input:
+    /// - `Subslice { from, to, from_end: false }` over an
+    ///   array: yields `array[from..to]`.
+    /// - `Subslice { from, to, from_end: true }` over a
+    ///   slice: yields `slice[from..slice.len() - to]`.
+    /// The cross combinations (`from_end: true` over an
+    /// array; `from_end: false` over a slice) do not appear
+    /// in our input and are rejected by Place validation
+    /// (§19.7).
+    Subslice { from: u64, to: u64, from_end: bool },
+
+    /// Downcast to a specific enum variant (selecting the
+    /// active variant for the next `Field` projection).
+    /// Coroutine variants are unreachable because the
+    /// coroutine family is rejected at type translation
+    /// (§15.1). Subject to the I-Downcast-followed-by-Field
+    /// invariant (§19.3). The `VariantIdx` is the source-
+    /// order variant index (per §2.4 / §11.0; stage-3 D11
+    /// pinned the layout-side variant table); rustc's
+    /// `Option<Symbol>` variant-name slot is dropped (per
+    /// D-5-1.3 -- printing-only in rustc, recovered render-
+    /// side from the enum layout's `VariantLayout.name`
+    /// per §11.1 / §19.8).
+    Downcast(VariantIdx),
+}
+```
+
+The six variants are exhaustive: a rustc post-Cleanup
+`mir::PlaceElem<'tcx>` reaching the bridge must canonicalise
+into exactly one variant, or the bridge rejects with a
+diagnostic. There is no "Other" / "Opaque" variant. Of rustc's
+8 `ProjectionElem` variants, `OpaqueCast` is absent in our
+input under both solver paths and `UnwrapUnsafeBinder` is
+gated and rejected -- see §15.1 for the rejection rows.
+
+### 19.2 Identity and storage
+
+`Place` is body-local content; it does not participate in any
+top-level interning. There is no `PlaceId`. Equality and
+hashing are structural over `(local, projection)`.
+
+The projection chain is stored as `Box<[PlaceElem]>`. This
+matches rustc's `&'tcx List<PlaceElem<'tcx>>` slab semantics
+modulo `'tcx`-arena interning (which Q2 forbids inheriting).
+Eight bytes leaner than `Vec<PlaceElem>` (no capacity slot)
+and conveys the precise immutable-after-construction
+contract. (If end-of-phase-1 profiling confirms a typical
+projection-length pattern that motivates a small-vec
+optimisation, the swap is a mechanical impl change but
+*not* invisible to the public field type; it would land via
+a follow-up spec revision.)
+
+`Place` does not participate in the cross-build identity
+discipline (F4 / F4-2 in §16). Place equality is per-build,
+structural; `LocalId`s are body-local. This is a deliberate
+scope reduction vs. `Ty` (cross-build via `TyId` interning)
+and `Const` (cross-build via `ConstIdentityKey`); body-local
+identity is sufficient for Place's role.
+
+### 19.3 Structural invariants
+
+Two structural invariants -- both strictly tighter than the
+rustc `ProjectionElem` enum's static type, with distinct
+grounds: I-Deref-first comes from rustc's PostCleanup phase
+(a guaranteed invariant of our `MirPhase::Runtime(Optimized)`
+input); I-Downcast-followed-by-Field comes from
+`PlaceTy::projection_ty`'s successor assertion plus the H4
+exhaustive cross-check across all rustc `SetDiscriminant`
+construction sites (no site produces `Downcast`-as-last).
+
+**I-Deref-first.** If `place.projection[i]` is `Deref`, then
+`i == 0`. Compound chains like `Field.Deref` cannot occur in
+our input (rustc's PostCleanup phase forbids them; box-deref
+elaboration introduces a fresh raw-pointer temp rather than
+a non-first `Deref` projection -- the `Deref` is preserved as
+the first projection of the new place over the temp).
+
+**I-Downcast-followed-by-Field.** If `place.projection[i]` is
+`Downcast(_)`, then `i < projection.len() - 1` AND
+`projection[i+1]` is `Field(_, _)`. `Downcast` is the variant
+selector; the only legal next step is the field projection
+that reads the variant's field. `Downcast`-as-last is rejected
+(no rustc construction site produces it -- enumerated
+exhaustively across `SetDiscriminant`-style sites; see
+`discussions.md` D-5-1.6 for the audit).
+
+Both invariants are checked in §3.3 Phase B place validation
+(rule 5; see §19.7).
+
+### 19.4 Type-narrowing rules
+
+Each `PlaceElem` step derives a successor "place type" --
+the pair `(Ty, active_variant)` -- from the predecessor.
+The chain begins at the head local's `LocalDecl.ty`, with
+no active variant. The rules per `PlaceElem` variant:
+
+| Variant | Predecessor `Ty` requirement | Successor `Ty` | Active variant after step |
+|---|---|---|---|
+| `Deref` | `Ty::Ref(inner, _)` or `Ty::Ptr(inner, _)` (raw pointer) | the resolved `inner` | `None` (I-Deref-first means no prior `Downcast`) |
+| `Field(idx, fty)` | when active variant is `None`: `Ty::Struct{..}`, `Ty::Union{..}`, `Ty::Tuple{..}`, or `Ty::Closure(..)` (closure-as-struct shape; see `discussions.md` D6.3 for rationale); when active variant is `Some(v)`: `Ty::Enum{..}` (projecting into variant `v`'s fields) | `fty` (must equal the field type at `idx` in the appropriate variant's field table) | `None` (cleared) |
+| `Index(_)` | `Ty::Array(elem, _)` or `Ty::Slice(elem)` | the resolved `elem` | unchanged |
+| `ConstantIndex { from_end: false, ... }` | `Ty::Array(elem, _)` or `Ty::Slice(elem)` | the resolved `elem` | unchanged |
+| `ConstantIndex { from_end: true, ... }` | `Ty::Slice(elem)` | the resolved `elem` | unchanged |
+| `Subslice { from, to, from_end: false }` | `Ty::Array(elem, _)` | `Ty::Array(elem, to - from)` | unchanged |
+| `Subslice { from, to, from_end: true }` | `Ty::Slice(elem)` | `Ty::Slice(elem)` (unchanged) | unchanged |
+| `Downcast(idx)` | `Ty::Enum{..}` | unchanged | `Some(idx)` |
+
+`Ty::Coroutine` does not appear in this table because the
+coroutine family is rejected at type translation (§15.1);
+rustc's `Field`-on-coroutine and `Downcast`-on-coroutine
+narrowing arms therefore have no analog in our input.
+
+The active-variant interaction with `Field`: when the
+predecessor's active variant is `Some(v)`, the `Field(idx,
+fty)` step reads the `idx`-th field of variant `v`'s
+`VariantLayout.fields` (rather than the enum's general layout,
+which doesn't have a flat field list). The `fty` payload must
+equal that field's type. After consumption, the active
+variant is cleared (the post-`Field` place type has active
+variant `None`).
+
+The `Subslice` doc-level invariant from
+`stage-5/prior-art/rustc.md` §3.5 is that for `PlaceElem`s
+`from_end == true` iff the base is a slice; `false` iff the
+base is an array. Only the two combinations shown in the
+table above appear in our `optimized_mir` input. The cross
+combinations (`Subslice { from_end: true }` over an array;
+`Subslice { from_end: false }` over a slice) are rejected
+by Place validation (§19.7 rule 1) as bridge bugs. Rustc's
+narrowing function
+(`rustc_middle/src/mir/statement.rs:224-234`) handles both
+array arms (`from_end: true` and `from_end: false`) as a
+general utility -- the function is called in non-`PlaceElem`
+contexts too -- but the `PlaceElem` doc fixes the input
+shape per the invariant, so the array-with-`from_end: true`
+arm is non-normative for our spec and surfaces only as a
+diagnostic if a bridge bug emits the wrong combination.
+
+### 19.5 Bridge translation
+
+Per-variant translation from rustc `mir::PlaceElem<'tcx>` to
+Regseq `PlaceElem`:
+
+| Rustc variant | Regseq variant |
+|---|---|
+| `ProjectionElem::Deref` | `PlaceElem::Deref` |
+| `ProjectionElem::Field(FieldIdx, Ty<'tcx>)` | `PlaceElem::Field(FieldIdx, TyId)` (the `TyId` is the post-`'tcx`-erasure interner key for the field type) |
+| `ProjectionElem::Index(Local)` | `PlaceElem::Index(LocalId)` |
+| `ProjectionElem::ConstantIndex { offset, min_length, from_end }` | `PlaceElem::ConstantIndex { offset, min_length, from_end }` (verbatim) |
+| `ProjectionElem::Subslice { from, to, from_end }` | `PlaceElem::Subslice { from, to, from_end }` (verbatim) |
+| `ProjectionElem::Downcast(Option<Symbol>, VariantIdx)` | `PlaceElem::Downcast(VariantIdx)` (the `Option<Symbol>` is dropped; see `discussions.md` D-5-1.3 for rationale) |
+| `ProjectionElem::OpaqueCast(_)` | bridge-rejection (see §15.1) |
+| `ProjectionElem::UnwrapUnsafeBinder(_)` | bridge-rejection (see §15.1) |
+
+The rustc `Place::projection: &'tcx List<PlaceElem<'tcx>>` is
+materialised as the owned `Box<[PlaceElem]>` per §19.2; the
+bridge constructs the slab once per Place and the result is
+immutable.
+
+### 19.6 C-semantics lowering sketch
+
+Each `PlaceElem` maps to a C lvalue construct:
+
+| Variant | C lvalue form |
+|---|---|
+| `Deref` | unary `*p` |
+| `Field(idx, _)` | `.fname` (field name from predecessor layout's `FieldLayout.name`, dispatched per §19.8) |
+| `Index(local)` | `[local_lvalue]` (where `local_lvalue` is the C lvalue of the `LocalId` payload) |
+| `ConstantIndex { offset, ..., from_end: false }` | `[offset]` |
+| `ConstantIndex { offset, ..., from_end: true }` | `[len - offset]` (with `len` being the predecessor slice's runtime length; `from_end: true` is slice-only per §19.4) |
+| `Subslice { from, to, from_end: false }` | a slice expression with bounds `[from, to)` |
+| `Subslice { from, to, from_end: true }` | a slice expression with bounds `[from, len - to)` |
+| `Downcast(VariantIdx)` | tagged-union arm projection (form depends on the C representation chosen for tagged unions; informational at this stage) |
+
+These are sketches; the precise C-lowering is owned by the
+codegen stage. The lowering per variant is deterministic from
+the projection-chain content; no special-case flags.
+
+### 19.7 Place validation
+
+§3.3 Phase B place-validation rules. The five rule categories:
+
+1. **Type-coherence walk.** Each `PlaceElem` step's
+   predecessor-type requirement and successor-type derivation
+   is satisfied per §19.4. The walk begins at the head
+   local's `LocalDecl.ty` with active variant `None` and
+   applies the rules in projection order.
+
+2. **Head-local existence.** The head `local: LocalId`
+   resolves to a valid entry in the enclosing body's
+   `local_decls` table (stage-11 data).
+
+3. **`FieldIdx` range.** For each `Field(idx, _)`, `idx` is
+   in range for the predecessor type's field list,
+   dispatched by predecessor (per the §19.1 doc and §11
+   layout vocabulary):
+   `LayoutKind::Struct.fields.len()` for `Ty::Struct{..}`;
+   for `Ty::Closure(item, args)`, look up the parallel
+   `Ty::Struct(item, args, _)` via
+   `find_nominal(NominalKind::Struct, item, args)` and use
+   that struct's `LayoutKind::Struct.fields.len()` (closure-
+   as-struct identity-vs-layout split; see `discussions.md`
+   D6.3 for rationale);
+   `LayoutKind::Union.fields.len()` for `Ty::Union{..}`; the
+   tuple's `fields.len()` for `Ty::Tuple{..}`; the active
+   variant's `VariantLayout.fields.len()` for `Ty::Enum{..}`
+   after `Downcast`.
+
+4. **`VariantIdx` range.** For each `Downcast(idx)`, let
+   `shape` be the `EnumShape` carried in the predecessor
+   `Ty::Enum{..}`'s `layout.kind` (per §11.1, the layout's
+   inner `LayoutKind::Enum.shape`). Then `idx` is in
+   `0..variant_count(shape)`, where `variant_count`
+   dispatches on `EnumShape` (§11.1): `Empty -> 0`,
+   `Single { .. } -> 1`,
+   `Multiple { variants, .. } -> variants.len()`.
+
+5. **Structural invariants.** I-Deref-first (§19.3) and
+   I-Downcast-followed-by-Field (§19.3).
+
+**Walk implementation: deferred to stage 11.** Places live
+inside body content (operand / rvalue / statement /
+terminator payloads). Stage-1's `RegseqModel` carries empty
+bodies, so no Places are present until stage 11 materialises
+`Body` / `LocalDecls`. The §3.3 Phase B walk applying these
+rules is added as part of stage 11's body-validation step;
+once the walk lands, all 5 rules are applied in a single
+traversal of body content with no rule-specific
+infrastructure. (See `discussions.md` D-5-2 for the audit
+shape and the deferral rationale.)
+
+### 19.8 Rendering
+
+See `pretty-printer.md` §7.1.
+
+---
+
+
+## 20. Operand vocabulary
+
+The `Operand` vocabulary is the RHS-atom surface of MIR --
+the typed expression of "which value." The bridge fills it
+from rustc's `mir::Operand<'tcx>`; downstream consumers
+(stages 7-9 body content, codegen) read it as the `Operand`
+slot inside Rvalue / Statement / Terminator payloads.
+
+### 20.1 `Operand` enum definition
+
+```rust
+/// A typed RHS atom: either a load from a place, or a
+/// constant value. Body-local content; appears inside a
+/// body's rvalues / statements / terminators, not in any
+/// top-level interner table. Equality is structural.
+pub enum Operand {
+    /// Load a value from the place. Marks the place as
+    /// participating in a copy-style read; semantically
+    /// equivalent to `Move` after drop-elaboration in
+    /// optimized_mir but distinguishable for backend
+    /// lowering (e.g., debug-info annotation, copy-vs-memcpy
+    /// dispatch).
+    Copy(Place),
+
+    /// Load a value from the place. Marks the place as
+    /// participating in a move-style consumption. At
+    /// rustc's `Call` argument site this enables in-place
+    /// passing semantics; elsewhere in optimized_mir this
+    /// is operationally equivalent to `Copy`.
+    Move(Place),
+
+    /// A constant value, referenced by its `ConstId` in the
+    /// model's `ConstInterner` (§9.7). Drops rustc's
+    /// `Box<ConstOperand>` wrapper -- `user_ty` is
+    /// NLL/borrowck-only and dead in optimized_mir;
+    /// operand-level `span` is dropped (for Statement-level
+    /// uses the use-site span is naturally carried by the
+    /// containing Statement's `SourceInfo` at stage 8; for
+    /// Call / TailCall arguments where rustc preserves a
+    /// finer-grained per-argument span via
+    /// `Spanned<Operand>` at the Terminator level, the span
+    /// is captured at the Terminator's argument-list slot
+    /// in stage 9, not embedded in the Operand itself).
+    Constant(ConstId),
+}
+```
+
+The three variants are exhaustive: a rustc `mir::Operand<'tcx>`
+reaching the bridge canonicalises into exactly one variant
+(or, in the case of `RuntimeChecks`, is rewritten before
+becoming an `Operand` -- see §20.3.1). There is no `Other` /
+`Opaque` arm.
+
+Sizing:
+- `Place` ~20 bytes (`LocalId` 4 + `Box<[PlaceElem]>` 16).
+- `ConstId` 4 bytes (`NonMaxU32`).
+- Worst-case enum width ~24 bytes including discriminant.
+
+No `Box` indirection on `Constant` because `ConstId` is
+small; contrast rustc's `Box<ConstOperand>` indirection,
+which exists because `ConstOperand` carries `Span` +
+`UserTy` + `Const` inline. RegseqModel's stripped wrapper
+plus interned-`Const` storage removes the size pressure.
+
+### 20.2 Identity and storage
+
+`Operand` is body-local content; it does not participate in
+any top-level interning. There is no `OperandId`. Equality
+and hashing are structural over the variant payload.
+
+Operands are constructed inline at use sites in stages 7-9
+payloads (`Rvalue`, `Statement`, `Terminator`). The owning
+struct stores the `Operand` by value (no indirection)
+unless the parent variant chooses to box for size reasons --
+a stage-7+ choice, not stage 6's concern.
+
+Operand identity is per-build, structural, and does not
+participate in the cross-build identity discipline (F4 /
+F4-2, §16). Same scope reduction as `Place` (§19.2).
+
+### 20.3 Bridge translation
+
+Per-rustc-variant translation:
+
+| rustc form                                | RegseqModel form                                                       |
+| ----------------------------------------- | ---------------------------------------------------------------------- |
+| `mir::Operand::Copy(p)`                   | `Operand::Copy(translate_place(p))`                                    |
+| `mir::Operand::Move(p)`                   | `Operand::Move(translate_place(p))`                                    |
+| `mir::Operand::Constant(box co)`          | `Operand::Constant(intern_const(translate_const(co.const_)))`          |
+| `mir::Operand::RuntimeChecks(checks)`     | `Operand::Constant(intern_const(Const::Bool(checks.value(tcx.sess))))` -- see §20.3.1 |
+
+`Copy` and `Move` translate directly, threading
+`translate_place` from §19.5.
+
+`Constant` strips rustc's `ConstOperand` wrapper. `co.const_`
+flows through `translate_const` (the §9.7 bridge
+construction dispatch for `mir::Const<'tcx>` -> RegseqModel
+`Const`) and is interned via `ConstInterner::intern` (§9.7). The wrapper's
+operand-level `span` is dropped from the Operand itself.
+For Statement-level uses (Assign, etc.), the use-site
+source location is naturally carried by the containing
+Statement's `span` field at stage 8 (per §22.1.1's
+`Statement { kind, span }` wrapper). For Call
+arguments, rustc preserves a finer-grained per-argument
+span via `Spanned<Operand>` at the Terminator level
+(`rustc_middle::mir::syntax.rs:811-820`); stage 9
+**drops** these per-argument spans entirely (per §23.2.5
++ §23.7's `args` translation rule -- `args.iter().map(|sp|
+translate_operand(&sp.node)).collect()` strips the
+`Spanned` wrapper). Per-argument diagnostic granularity
+falls back to the Terminator-level `span`. (TailCall is
+not in the RegseqModel surface per §23.6.1 row 7.) The wrapper's
+`user_ty` is dropped (NLL/borrowck-only metadata, dead in
+`optimized_mir`).
+
+#### 20.3.1 `RuntimeChecks` lowering rule
+
+When the bridge encounters
+`mir::Operand::RuntimeChecks(checks)`, it does **not**
+preserve the variant in RegseqModel. The bridge:
+
+1. Resolves the boolean value against the bridge-host's
+   rustc session:
+   ```text
+   b = checks.value(tcx.sess)
+   ```
+   Per Q4 (`rustc_driver::Callbacks` integration), the
+   bridge runs inside a single rustc invocation per build
+   with one `Session` in scope. All `RuntimeChecks`
+   operands -- whether sourced from MIR constructed in the
+   primary spec crate or in a regseq-aware dependency
+   compiled separately under `RegseqAwareCallbacks` (Q6)
+   and consumed via `tcx.optimized_mir(def_id)` for
+   cross-crate `DefId`s -- resolve against the bridge-host
+   crate's session. This mirrors rustc's documented codegen
+   behavior: `RuntimeChecks` values are determined by the
+   *consumer's* session, not the producer's; for
+   RegseqModel the consumer is the bridge. Within one
+   build the lowering is deterministic. Different builds
+   may produce different lowered consts (e.g., a build with
+   `ub_checks=on` produces `Const::Bool(true)` where a
+   build with `ub_checks=off` produces `Const::Bool(false)`).
+   The build-equivalence quad in §12.4 / §16 (equal source,
+   equal pinned toolchain, equal `RegseqModel.target`,
+   equal bridge options) does not currently list
+   `ub_checks` / `contract_checks` / `overflow_checks` among
+   its equality dimensions, so two builds that differ only
+   on those flags satisfy the quad's equivalence but produce
+   different lowered consts at `RuntimeChecks`-derived
+   operand sites. If cross-build alignment of those
+   operand sites becomes a requirement, the appropriate
+   fix is to widen the quad in §12.4 (out of stage 6's
+   scope).
+
+   Resolution table (per `rustc_middle::mir::syntax.rs:1585-1592`):
+
+   | `RuntimeChecks` arm | session method            |
+   | ------------------- | ------------------------- |
+   | `UbChecks`          | `sess.ub_checks()`        |
+   | `ContractChecks`    | `sess.contract_checks()`  |
+   | `OverflowChecks`    | `sess.overflow_checks()`  |
+
+2. Constructs `Const::Bool(b)` (the `Bool` variant of the
+   §9.7 `Const` enum).
+
+3. Interns the `Const::Bool(b)` via `ConstInterner::intern`,
+   yielding a `ConstId`. The const-uniqueness invariant
+   (§9.7 D-4-2 byte-form schema) ensures the same boolean
+   value at multiple sites resolves to the same `ConstId`.
+
+4. Emits `Operand::Constant(ConstId)`.
+
+The IR carries no `RuntimeChecks` variant. Driver source
+that legitimately uses `cfg!(ub_checks)`,
+`core::intrinsics::contract_checks()`, or analogous
+constructs is accepted: the operand-level evidence becomes
+an `Operand::Constant(ConstId)` referencing a
+`Const::Bool(b)` whose `b` is build-pinned via the session.
+
+This is gentler than reject-on-encounter while preserving
+the closed-vocabulary discipline at the IR level. See
+`discussions.md` D-6-1.2 for the reject-vs-lower rationale,
+the option-(a) / option-(b) / option-(c) trade-off, and the
+Charon precedent for option (c).
+
+### 20.4 C-semantics lowering sketch
+
+The C backend lowers each variant as follows (pinned in
+stage 6; consumed at the C-emission stage):
+
+| Variant         | C lowering                                                  |
+| --------------- | ----------------------------------------------------------- |
+| `Copy(p)`       | C value-load from `place_to_c_expr(p)` (§19.6 lvalue surface). Backend may emit a plain assignment, a struct-copy, or `memcpy` based on size and layout policy. |
+| `Move(p)`       | Same C value-load as `Copy(p)`. The variant tag is informational at the C level; a backend that wants to specialise (e.g., emit `memcpy` for large moves while the source place becomes dead, or elide a final move into a return slot) may consult the variant. The bare load semantics are identical to `Copy`. |
+| `Constant(id)`  | C literal or compound literal materialised from `model.consts.resolve(id)`. Concrete per-`Const`-variant C lowerings (literal vs compound vs address-of for `Reloc`, etc.) are pinned at the C-emission stage; stage 6 commits only to the `Operand::Constant(ConstId)` -> Const-resolution boundary, not to the per-variant C shapes. The `Const` vocabulary itself is the §9.7 closed enum. |
+
+Because the IR has no `RuntimeChecks` variant (§20.3.1), the
+C backend never sees a session-flag query at operand site;
+it sees `Constant(ConstId)` referencing a `Const::Bool(b)`
+exactly as if the source had written the literal `true` /
+`false`.
+
+### 20.5 Operand-site invariants
+
+Stage 6 specifies one operand-site invariant, discharged by
+inheritance:
+
+**I-Operand-Place-Validity.** For `Operand::Copy(p)` and
+`Operand::Move(p)`, the place `p` must satisfy the five
+Place-validation rules in §19.7 (head-local existence,
+`FieldIdx` range, `VariantIdx` range, structural invariants
+I-Deref-first and I-Downcast-followed-by-Field, and
+type-coherence walk). Discharged by **inheritance**:
+enforcing Place validity transitively covers all
+`Operand::Copy` / `Operand::Move` slots; no operand-side
+walk is needed beyond what stage 5 + stage 11 already
+provide.
+
+**No type-`Copy` enforcement on `Operand::Copy(p)`.** Rustc
+documents the type-`Copy` invariant on `Operand::Copy` as
+required pre-drop-elaboration only and explicitly gone
+post-drop-elaboration (`rustc_middle/src/mir/syntax.rs:1312-1313`).
+RegseqModel reads `optimized_mir`, which is
+post-drop-elaboration; the rustc-side invariant has been
+discharged before the IR reaches us. The bridge does not
+re-enforce it. See `discussions.md` D-6-3 for rationale.
+
+**No type-coherence enforcement on `Operand::Constant(id)`.**
+`ConstId` carries canonical value identity through the
+`ConstInterner` (§9.7), but some `Const` variants
+(notably `ZST` and `EnumValue`) get their type from
+consumer context rather than from the `Const` payload
+itself. Operand-context type coherence -- matching the
+`Const`'s effective type at the use site against the
+operand-context-expected type -- is owned by stages 7-9.
+Stage 6 does not duplicate that check.
+
+The Place-validation walk over operand slots is non-vacuous
+only once stages 7-9 materialise operand use sites; it
+piggybacks on the §3.3 Phase B body-validation traversal
+that stage 11 owns (per D-5-2 deferral).
+
+### 20.6 Rendering
+
+See `pretty-printer.md` §7.2.
+
+---
+
+## 21. Rvalue vocabulary
+
+The `Rvalue` vocabulary is the RHS-expression surface of MIR
+-- the typed expression of "how a value is computed." The
+bridge fills it from rustc's `mir::Rvalue<'tcx>`; downstream
+consumers (stage 8 statements, stage 9 terminators --
+transitively through `StatementKind::Assign(Place, Rvalue)`;
+codegen) read it as the `Rvalue` slot inside
+`Statement::Assign` payloads.
+
+### 21.1 `Rvalue` enum definition
+
+```rust
+/// A typed RHS expression: a value-producing computation.
+/// Body-local content; appears inside a body's statements,
+/// not in any top-level interner table. Equality is
+/// structural.
+pub enum Rvalue {
+    /// Identity: yields the operand's value unchanged.
+    Use(Operand),
+
+    /// Array constructor: `[x; N]`. The `u64` count is the
+    /// post-monomorphisation array length, mirroring stage-3
+    /// `Ty::Array(elem_ty, n)` canonical form (§10.0).
+    Repeat(Operand, u64),
+
+    /// Borrow construction: `&p` / `&mut p`. The `Provenance`
+    /// discriminator reuses the §10.1 type-system enum
+    /// (`SharedBorrow` / `UniqueBorrow`); rustc's
+    /// `Region<'tcx>` slot is dropped per the region-erasure
+    /// rule of §17.1.
+    Ref(Provenance, Place),
+
+    /// Raw pointer construction: `&raw const p` / `&raw mut p`.
+    /// The `Mutability` discriminator reuses the §10.1
+    /// type-system enum (`Not` / `Mut`).
+    RawPtr(Mutability, Place),
+
+    /// `as`-style cast (or compiler-inserted coercion). The
+    /// destination `TyId` resolves through the §12 type
+    /// interner.
+    Cast(CastKind, Operand, TyId),
+
+    /// Binary arithmetic / comparison / pointer offset.
+    /// Operands inline (no `Box<(Operand, Operand)>`
+    /// indirection); see §21.2.6 for the size-budget
+    /// rationale.
+    BinaryOp(BinOp, Operand, Operand),
+
+    /// Unary operation: `!x`, `-x`, or pointer-metadata
+    /// extraction.
+    UnaryOp(UnOp, Operand),
+
+    /// Read the discriminant of an enum at the place. For
+    /// non-enum predecessor types yields zero (rustc's
+    /// documented semantics, `rustc_middle/src/mir/syntax.rs:1439-1449`).
+    Discriminant(Place),
+
+    /// Aggregate value construction (tuple / struct / enum
+    /// variant / union / closure environment / fixed-length
+    /// array literal / fat raw pointer). Operand storage is
+    /// `Box<[Operand]>` (boxed slice; matches §19.2's
+    /// `Box<[PlaceElem]>` projection-storage convention).
+    Aggregate(AggregateKind, Box<[Operand]>),
+}
+```
+
+The nine variants are exhaustive: a rustc `mir::Rvalue<'tcx>`
+reaching the bridge canonicalises into exactly one variant,
+or the bridge rejects with a diagnostic (§21.5.1). There is
+no `Other` / `Opaque` arm.
+
+Sizing (reference):
+- `Operand` ~24 bytes (§20.1).
+- `Place` ~20 bytes (§19.2).
+- `BinaryOp` flat width ~56 bytes; dominates the enum.
+- Worst-case `Rvalue` width ~64 bytes including discriminator.
+
+#### 21.1.1 Variants dropped vs rustc
+
+Of rustc's 13-variant `mir::Rvalue<'tcx>`
+(`rustc_middle/src/mir/syntax.rs:1369-1482`), four variants
+are dropped from the RegseqModel surface; each is rejected on
+encounter (§21.5.1):
+
+- `CopyForDeref(Place)` -- eliminated by the required
+  `EraseDerefTemps` runtime-lowering pass
+  (`rustc_mir_transform/src/lib.rs:658`); rustc codegen
+  `bug!()`s the variant
+  (`rustc_codegen_ssa/src/mir/rvalue.rs:712`). Cannot reach
+  optimized_mir.
+- `ShallowInitBox(Operand, Ty)` -- eliminated by the
+  required `ElaborateBoxDerefs` runtime-lowering pass
+  (`rustc_mir_transform/src/lib.rs:659`); rustc codegen
+  `bug!()`s the variant
+  (`rustc_codegen_ssa/src/mir/rvalue.rs:713`). Cannot reach
+  optimized_mir.
+- `ThreadLocalRef(DefId)` -- DSL-surface rejection: the v1
+  driver DSL targets Linux kernel modules and Zephyr drivers,
+  neither of which exposes `#[thread_local]` runtime
+  infrastructure to driver code. Source code that uses
+  `#[thread_local]` cannot produce a working driver on the
+  documented target OSes.
+- `WrapUnsafeBinder(Operand, Ty)` -- §15.1 (Type-level
+  rejection table at line 4583) rejects `Ty::UnsafeBinder`
+  at type translation; the rvalue-level rejection cascades
+  by composition (the binder type the variant wraps cannot
+  enter the IR). Additional grounds: gated behind the
+  unstable `unsafe_binders` feature; the binder type has no
+  C-shape; no v1 driver-corpus precedent (Charon and mrustc
+  both lack the analog).
+
+Closely related: rustc's `Operand::RuntimeChecks` is
+rewritten at the operand surface (§20.3.1) before reaching
+any `Rvalue` slot, so RegseqModel `Rvalue` operand positions
+never see session-flag queries.
+
+### 21.2 Per-variant payload shapes
+
+#### 21.2.1 `Use(Operand)`
+
+Yields the operand's value unchanged. Direct embed of
+stage-6 `Operand`. C-semantics: a value-load (or constant
+materialisation) of the operand at the use site.
+
+#### 21.2.2 `Repeat(Operand, u64)`
+
+Constructs an array `[x; N]` whose every element equals the
+value of `Operand`. The count `N` is a
+post-monomorphisation `u64`, mirroring stage-3's canonical
+`Ty::Array(elem_ty, n)` length (§10.0). Rustc's MIR carries
+the count as a `ty::Const<'tcx>` (the *type-system* constant
+carrier, distinct from the *value-system* `mir::Const`); the
+post-monomorphisation value is a concrete non-negative
+integer fitting in `u64`. The bridge resolves the type-const
+and stores the plain `u64`; no routing through the
+value-system `ConstInterner` (§9.7) is needed -- the
+type-system carrier already has its canonical form.
+
+#### 21.2.3 `Ref(Provenance, Place)`
+
+Constructs an immutable or mutable reference to the place.
+The `Provenance` discriminator reuses the §10.1 enum
+(`SharedBorrow` / `UniqueBorrow`), keeping the
+borrow-flavour discriminator coherent across `Ty::Ref` and
+`Rvalue::Ref`. Rustc's `Region<'tcx>` slot is dropped:
+regions are fully erased in `Ty::Ref` (§17.1), and codegen
+itself ignores the rvalue's region slot
+(`rustc_codegen_ssa/src/mir/rvalue.rs:506-511` patterns
+`(_, bk, place)` and synthesises with
+`tcx.lifetimes.re_erased`).
+
+The `BorrowKind` collapse (mapping rustc's 3-variant
+`BorrowKind` plus 3-variant `MutBorrowKind` sub-discriminator
+to `Provenance`'s 2 variants, including reject-on-encounter
+of `BorrowKind::Fake`) is described in §21.6.1.
+
+#### 21.2.4 `RawPtr(Mutability, Place)`
+
+Constructs a raw pointer to the place. The `Mutability`
+discriminator reuses the §10.1 enum (`Not` / `Mut`), keeping
+the const-vs-mut split coherent across `Ty::Ptr` and
+`Rvalue::RawPtr`. Mapping: rustc `RawPtrKind::Const` ->
+`Mutability::Not`; rustc `RawPtrKind::Mut` ->
+`Mutability::Mut`.
+
+The bridge-side collapse of `RawPtrKind::FakeForPtrMetadata`
+to `Mutability::Not` is described in §21.6.2.
+
+#### 21.2.5 `Cast(CastKind, Operand, TyId)`
+
+Performs an `as`-style cast (or a compiler-inserted
+coercion) from the source operand to the destination type.
+The closed `CastKind` is given in §21.3.3; the destination
+`TyId` resolves through the §12 type interner.
+
+The `CoercionSource` slot inside
+`mir::CastKind::PointerCoercion(_, CoercionSource)` (per
+`rustc_middle/src/mir/syntax.rs:1531-1536`) is dropped: the
+diagnostic-only `AsCast` vs `Implicit` distinction is not
+load-bearing for codegen and does not affect the C lowering.
+Source-location information is recoverable via the
+containing `Statement.source_info` at stage 8.
+
+The `hir::Safety` slot inside
+`PointerCoercion::ReifyFnPointer(Safety)` and
+`ClosureFnPointer(Safety)` is dropped: the result safety is
+already encoded in the destination `Ty::FnPtr(FnSigId)`
+through `FnSig.safety` (§14.3); carrying it again at the
+cast site is structural duplication.
+
+#### 21.2.6 `BinaryOp(BinOp, Operand, Operand)`
+
+Computes a binary operation on two operands. Storage is
+flat (operands inline, not boxed) -- a deliberate divergence
+from rustc's `Box<(Operand, Operand)>` packaging. Rustc
+boxes to keep its `Rvalue<'_>` enum at the 40-byte size
+assert (`rustc_middle/src/mir/syntax.rs:1752`); RegseqModel
+does not assert a comparable size budget at the rvalue
+surface. The flat shape is congruent with the §20 (Operand)
+constant-payload pattern of inlining when possible (which
+dropped the `Box<ConstOperand>` wrapper for similar size-
+budget reasons; see `discussions.md` D-7-1.7 for the
+size-budget analysis).
+
+The closed `BinOp` enum is given in §21.3.4; all 26 rustc
+variants are preserved verbatim.
+
+#### 21.2.7 `UnaryOp(UnOp, Operand)`
+
+Computes a unary operation on one operand. The closed `UnOp`
+enum is given in §21.3.5; all 3 rustc variants are preserved
+verbatim. `UnOp::PtrMetadata` is documented as
+Runtime-MIR-only (`rustc_middle/src/mir/syntax.rs:1609`);
+since `optimized_mir` is `MirPhase::Runtime(PostCleanup)`
+(`rustc_mir_transform/src/lib.rs:612`), the variant is
+reachable.
+
+#### 21.2.8 `Discriminant(Place)`
+
+Reads the discriminant of an enum at the place, returning an
+integer of the enum's discriminant type. For non-enum
+predecessor types the variant is well-formed and yields zero
+(rustc's documented semantics,
+`rustc_middle/src/mir/syntax.rs:1439-1449`). The bridge does
+not constrain the predecessor type beyond rustc's own rules.
+
+#### 21.2.9 `Aggregate(AggregateKind, Box<[Operand]>)`
+
+Constructs an aggregate value (tuple, struct, enum variant,
+union, closure environment, fixed-length array literal, or
+fat raw pointer). The closed `AggregateKind` is given in
+§21.3.6. Operand storage is `Box<[Operand]>` -- matching
+stage-5's `Box<[PlaceElem]>` projection storage convention
+(§19.2): boxed slice for owned, immutable-after-construction
+content. The operand vector's per-position semantics are
+dispatched by the `AggregateKind` variant; see §21.5.2 rule
+**I-Rvalue-Aggregate-Operand-Count** for the per-variant
+operand-count rules.
+
+### 21.3 Sub-enums
+
+#### 21.3.1 `Provenance` (reuse of §10.1)
+
+`Provenance { SharedBorrow, UniqueBorrow }` is the §10.1
+enum defined for the `Ty::Ref` discriminator. The same
+two-variant enum is used at `Rvalue::Ref`'s discriminator
+slot. No parallel enum is introduced at stage 7.
+
+#### 21.3.2 `Mutability` (reuse of §10.1)
+
+`Mutability { Not, Mut }` is the §10.1 enum defined for the
+`Ty::Ptr` discriminator. The same two-variant enum is used
+at `Rvalue::RawPtr`'s discriminator slot and at
+`AggregateKind::RawPtr`'s mutability slot. No parallel enum
+is introduced at stage 7.
+
+#### 21.3.3 `CastKind` and `PointerCoercion`
+
+```rust
+pub enum CastKind {
+    PointerExposeProvenance,
+    PointerWithExposedProvenance,
+    PointerCoercion(PointerCoercion),
+    IntToInt,
+    FloatToInt,
+    FloatToFloat,
+    IntToFloat,
+    PtrToPtr,
+    FnPtrToPtr,
+    Transmute,
+    Subtype,
+}
+
+pub enum PointerCoercion {
+    ReifyFnPointer,           // hir::Safety dropped (§21.2.5)
+    UnsafeFnPointer,
+    ClosureFnPointer,         // hir::Safety dropped (§21.2.5)
+    Unsize,
+}
+```
+
+11 top-level `CastKind` variants; 4-variant `PointerCoercion`
+sub-enum. Drops vs rustc:
+
+- `PointerCoercion::ArrayToPointer` and
+  `PointerCoercion::MutToConstPointer` -- both rewritten to
+  `PtrToPtr` by the required `CleanupPostBorrowck` MIR pass
+  (`rustc_mir_transform/src/cleanup_post_borrowck.rs:44-60`,
+  `is_required(): true`); cannot reach optimized_mir.
+  Rustc codegen also rejects them with a `bug!()`
+  (`rustc_codegen_ssa/src/mir/rvalue.rs:448-452` -- "is for
+  borrowck, and should never appear in codegen"). Two
+  independent grounds.
+- `CoercionSource` slot inside `PointerCoercion(_, _)` (per
+  `rustc_middle/src/mir/syntax.rs:1531-1536`) -- diagnostic-
+  only; dropped (§21.2.5).
+- `hir::Safety` slot inside `ReifyFnPointer(_)` /
+  `ClosureFnPointer(_)` -- structurally duplicated with the
+  destination `Ty::FnPtr(FnSigId)`'s `FnSig.safety`;
+  dropped (§21.2.5).
+
+`CastKind::Subtype` is *added* by the runtime-lowering
+`Subtyper` pass (`rustc_mir_transform/src/lib.rs:644`) and
+survives into optimized_mir; it is preserved.
+
+`CastKind::Transmute` is the lowering of the `mem::transmute`
+intrinsic and survives into optimized_mir; preserved.
+
+#### 21.3.4 `BinOp`
+
+```rust
+pub enum BinOp {
+    // Wrapping arithmetic
+    Add, Sub, Mul, Div, Rem,
+
+    // UB-on-overflow arithmetic (from `unchecked_*` intrinsics)
+    AddUnchecked, SubUnchecked, MulUnchecked,
+
+    // Overflow-detecting arithmetic (returns `(T, bool)`)
+    AddWithOverflow, SubWithOverflow, MulWithOverflow,
+
+    // Bitwise
+    BitXor, BitAnd, BitOr,
+
+    // Shifts (wrapping and UB-on-overflow flavours)
+    Shl, ShlUnchecked,
+    Shr, ShrUnchecked,
+
+    // Comparisons (return `bool`)
+    Eq, Lt, Le, Ne, Ge, Gt,
+
+    // Three-way comparison (returns `core::cmp::Ordering`)
+    Cmp,
+
+    // Pointer offset (`<*const T>::offset` semantics)
+    Offset,
+}
+```
+
+26 variants, preserved verbatim from
+`rustc_middle/src/mir/syntax.rs:1615-1703`. No curation. Each
+maps to a distinct C lowering (or runtime-helper call) at the
+codegen stage; the spec commits only to the variant set, not
+to per-variant C lowerings.
+
+The `XxxWithOverflow` family
+(`AddWithOverflow` / `SubWithOverflow` / `MulWithOverflow`)
+returns `(T, bool)` tuples where the bool flags overflow;
+these are emitted by overflow-check lowering and survive
+into optimized_mir
+(`rustc_middle/src/mir/syntax.rs:1426-1428`).
+
+The `XxxUnchecked` family
+(`AddUnchecked` / `SubUnchecked` / `MulUnchecked` /
+`ShlUnchecked` / `ShrUnchecked`) is the UB-on-overflow
+flavour, emitted by `unchecked_*` intrinsics; survives into
+optimized_mir.
+
+`Cmp` returns `core::cmp::Ordering` encoded as `i8`
+(`rustc_middle/src/mir/syntax.rs:1691-1700`). `Offset`
+mirrors `<*const T>::offset` semantics
+(`rustc_middle/src/mir/syntax.rs:1701-1702`).
+
+#### 21.3.5 `UnOp`
+
+```rust
+pub enum UnOp {
+    Not,           // logical inversion (`!`)
+    Neg,           // arithmetic negation (`-`)
+    PtrMetadata,   // metadata extraction from a fat pointer
+}
+```
+
+3 variants, preserved verbatim from
+`rustc_middle/src/mir/syntax.rs:1597-1611`. `PtrMetadata` is
+documented as Runtime-MIR-only
+(`rustc_middle/src/mir/syntax.rs:1609`); since `optimized_mir`
+is `MirPhase::Runtime(PostCleanup)`
+(`rustc_mir_transform/src/lib.rs:612`), the variant is
+reachable.
+
+#### 21.3.6 `AggregateKind`
+
+```rust
+pub enum AggregateKind {
+    /// Fixed-length array literal: `[a, b, c]`.
+    /// `TyId` resolves to `Ty::Array(elem_ty, n)`.
+    Array(TyId),
+
+    /// Tuple constructor: `(a, b, c)`.
+    /// `TyId` resolves to `Ty::Tuple { fields, layout }`.
+    Tuple(TyId),
+
+    /// Struct constructor: `MyStruct { field: a, ... }`.
+    /// `TyId` resolves to `Ty::Struct { item, args, layout }`.
+    Struct(TyId),
+
+    /// Enum variant constructor: `MyEnum::Variant(a)`.
+    /// `TyId` resolves to `Ty::Enum { item, args, layout }`;
+    /// `VariantIdx` selects the active variant.
+    Enum(TyId, VariantIdx),
+
+    /// Union constructor: `MyUnion { active_field: a }`.
+    /// `TyId` resolves to `Ty::Union { item, args, layout }`;
+    /// `FieldIdx` selects the active field. Unions construct
+    /// exactly one active field.
+    Union(TyId, FieldIdx),
+
+    /// Closure environment construction: `|...| { ... }`.
+    /// `TyId` resolves to `Ty::Closure(item, args)` -- the
+    /// closure-type identity view (§13.1). The captures
+    /// struct's layout view is reachable via the parallel
+    /// `find_nominal(NominalKind::Struct, item, args)`
+    /// lookup.
+    Closure(TyId),
+
+    /// Fat raw pointer construction from `(data_ptr, metadata)`.
+    /// `TyId` is the *pointee* type (mirroring rustc's
+    /// `RawPtr(Ty<'tcx>, Mutability)` shape); the constructed
+    /// rvalue is a raw pointer to that pointee with the
+    /// indicated mutability. Both operand positions are
+    /// required even for thin pointers (where metadata is
+    /// the unit value).
+    RawPtr(TyId, Mutability),
+}
+```
+
+Seven variants. Drops vs rustc's
+`rustc_middle/src/mir/syntax.rs:1538-1570`:
+
+- `Coroutine(DefId, GenericArgsRef)` and
+  `CoroutineClosure(DefId, GenericArgsRef)` -- both
+  unreachable by composition with stage-3's §15.1 rejection
+  of `Ty::Coroutine` / `Ty::CoroutineClosure` /
+  `Ty::CoroutineWitness` at type translation. With no
+  destination type available, the construction cannot be
+  expressed. Additionally, the runtime-lowering
+  `coroutine::StateTransform` pass
+  (`rustc_mir_transform/src/lib.rs:660`) rewrites coroutine
+  constructions into state-machine struct Adt constructions,
+  so the variants are also pass-discharged (per the
+  `rustc_middle/src/mir/syntax.rs:1457-1458` comment "After
+  coroutine lowering, `Coroutine` aggregate kinds are
+  disallowed too"). Two independent rejection grounds.
+- `Option<UserTypeAnnotationIndex>` slot in `Adt` --
+  NLL/borrowck-only carrier. The required `CleanupPostBorrowck`
+  pass clears the body-level annotation table
+  (`rustc_mir_transform/src/cleanup_post_borrowck.rs:81-85`,
+  `body.user_type_annotations.raw.clear()`); rustc codegen
+  ignores the slot
+  (`rustc_codegen_ssa/src/mir/rvalue.rs:670-672`). Same drop
+  pattern as §20's drop of `user_ty` from `ConstOperand`.
+- `(DefId, GenericArgsRef)` pair in `Adt` / `Closure` -- the
+  `(item, args)` pair is already carried inside the
+  destination `Ty` (per §10.0:
+  `Ty::Struct { item, args, layout }` and analogous
+  `Ty::Enum`, `Ty::Union`, `Ty::Closure`); a `TyId` resolving
+  to one of those Ty variants reaches the same information
+  through stage-3's type interner. Collapsing the pair into a
+  single `TyId` avoids structural duplication.
+- "Three-states-in-five-slots" Adt encoding -- rustc's
+  `Adt(DefId, VariantIdx, GenericArgsRef, Option<UserTypeAnnotationIndex>, Option<FieldIdx>)`
+  is split into three RegseqModel variants: `Struct(TyId)`,
+  `Enum(TyId, VariantIdx)`, and `Union(TyId, FieldIdx)`. The
+  type system enforces "active_field is Union-only" and
+  "VariantIdx is Enum-only" without a runtime invariant; no
+  representable state encodes a meaningless slot
+  combination. This split aligns with the §10.0 / §12
+  `NominalKind` taxonomy (`Struct`, `Enum`, `Union`, `FnDef`,
+  `Closure`); `FnDef` has no construction operation and
+  therefore no `AggregateKind` variant.
+
+Closure semantics: `Closure(TyId)` references the closure's
+*identity view* (`Ty::Closure(item, args)`); the captures
+struct's *layout view* is reachable via the parallel
+`find_nominal(NominalKind::Struct, item, args)` lookup
+(per §13.1; same pattern §19.7 rule 3 uses for closure-place
+field validation).
+
+`RawPtr(TyId, Mutability)`: the `TyId` is the *pointee* type
+(mirroring rustc's `RawPtr(Ty<'tcx>, Mutability)` shape per
+`rustc_middle/src/mir/syntax.rs:1556-1569`). Operand layout:
+position 0 is a thin raw pointer to the data; position 1 is
+the metadata value. Both positions are required even for
+thin pointers (where metadata is the unit value), per
+`rustc_middle/src/mir/syntax.rs:1561-1566`.
+
+### 21.4 Identity and storage
+
+`Rvalue` is body-local content; it does not participate in
+any top-level interning. There is no `RvalueId`. Equality
+and hashing are structural over the variant payload.
+
+Rvalues are constructed inline at use sites in
+`Statement::Assign(Place, Rvalue)` payloads (defined at
+the Statement vocabulary level). The owning struct stores
+the `Rvalue` by value (no indirection); any boxing at the
+parent body-content level is a parent-variant decision
+made by the owning vocabulary, not a property of the
+`Rvalue` surface itself. The `Rvalue` surface introduces
+no top-level `Box` indirection beyond what individual
+variants need internally (e.g., `Aggregate`'s
+`Box<[Operand]>`).
+
+Rvalue identity is per-build, structural, and does not
+participate in the cross-build identity discipline (F4 /
+F4-2, §16). Same scope reduction as `Place` (§19.2) and
+`Operand` (§20.2).
+
+### 21.5 Rvalue-site invariants
+
+Two parts: rejection rules (rejection-on-encounter) and
+positive invariants (well-formedness checks).
+
+#### 21.5.1 Rejection rules
+
+Constructs that cannot reach a well-formed `optimized_mir`
+input are rejected on encounter, with a diagnostic naming
+the discharging mechanism so the driver author sees a useful
+error message:
+
+| Construct | Rejection ground |
+|---|---|
+| `mir::Rvalue::CopyForDeref(_)` | Eliminated by required `EraseDerefTemps` runtime-lowering pass (listed at `rustc_mir_transform/src/lib.rs:658`; `is_required(): true` at `rustc_mir_transform/src/erase_deref_temps.rs:38`); rustc codegen `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:712`). Not in optimized_mir. |
+| `mir::Rvalue::ShallowInitBox(_, _)` | Eliminated by required `ElaborateBoxDerefs` runtime-lowering pass (listed at `rustc_mir_transform/src/lib.rs:659`; `is_required(): true` at `rustc_mir_transform/src/elaborate_box_derefs.rs:224`); rustc codegen `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:713`). Not in optimized_mir. |
+| `mir::Rvalue::ThreadLocalRef(_)` | DSL-surface rejection: `#[thread_local]` cannot produce a working driver on Linux/Zephyr targets (no TLS infrastructure exposed to driver code). |
+| `mir::Rvalue::WrapUnsafeBinder(_, _)` | §15.1 (Type-level rejection table at line 4583) rejects `Ty::UnsafeBinder` at type translation; the rvalue-level rejection cascades by composition (the binder type the variant wraps cannot enter the IR). Additional grounds: gated behind unstable `unsafe_binders` feature; binder type has no C-shape; no v1 driver-corpus precedent (Charon and mrustc both lack the analog). |
+| `mir::Rvalue::Ref(_, BorrowKind::Fake(_), _)` | NOPed by required `CleanupPostBorrowck` pass (NOP code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:33-43`; `is_required(): true` at `rustc_mir_transform/src/cleanup_post_borrowck.rs:88`). Fake assignments are statement-level Nops in optimized_mir. |
+| `mir::Rvalue::Cast(CastKind::PointerCoercion(MutToConstPointer \| ArrayToPointer, _), _, _)` | Rewritten to `CastKind::PtrToPtr` by required `CleanupPostBorrowck` (rewrite code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:44-60`; `is_required(): true` at `rustc_mir_transform/src/cleanup_post_borrowck.rs:88`); rustc codegen also `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:448-452`). Not in optimized_mir. |
+| `mir::Rvalue::Aggregate(box AggregateKind::Coroutine(_, _) \| CoroutineClosure(_, _), _)` | Type-level rejection in §15.1 (Coroutine / CoroutineClosure / CoroutineWitness rejected at type translation) plus runtime-lowering `coroutine::StateTransform` discharge (`rustc_mir_transform/src/lib.rs:660`). Two independent grounds. |
+
+These rvalue-translation-phase rejections compose with the
+§15.1 type-translation-phase rejections; the bridge applies
+both classes during MIR construction.
+
+#### 21.5.2 Positive invariants
+
+Six rules, enforced at body-level walk time (deferred to
+stage 11; see §21.5.3).
+
+**I-Rvalue-Operand-Wellformed.** Every embedded `Operand`
+satisfies the §20.5 invariants (I-Operand-Place-Validity,
+inherited from §19.7); every embedded `Place` satisfies the
+§19.7 place-validation rules (head-local existence, field /
+variant index range, structural invariants, type-coherence
+walk).
+
+**I-Rvalue-TyId-Interned.** Every `TyId` slot resolves
+through the §12 type interner: in `Cast(_, _, ty_id)`'s
+destination type slot; in every `AggregateKind::*` variant's
+TyId slot.
+
+**I-Rvalue-Aggregate-Operand-Count.** The number of operands
+in `Aggregate(kind, ops)` matches the destination type's
+structural field-count, dispatched per `AggregateKind`
+variant:
+
+| `AggregateKind` variant | Required operand count |
+|---|---|
+| `Array(ty)` | `n` where the destination type resolves to `Ty::Array(_, n)` |
+| `Tuple(ty)` | `elem_tys.len()` where the destination type resolves to `Ty::Tuple { fields: elem_tys, .. }` |
+| `Struct(ty)` | the struct's field count: `Ty::Struct { layout: l, .. }` then `l.kind` is `LayoutKind::Struct` and the count is `l.kind.fields.len()` |
+| `Enum(ty, vidx)` | the named variant's field count: dispatched via `Ty::Enum`'s `LayoutKind::Enum.shape`'s active variant's `VariantLayout.fields.len()` (per §11.1) |
+| `Union(ty, _)` | exactly 1 (unions construct exactly the active field) |
+| `Closure(ty)` | the captures-struct field count: dispatched via the parallel `Ty::Struct(item, args, _)` reached by `find_nominal(NominalKind::Struct, item, args)` (per §13.1 / §19.7 rule 3) |
+| `RawPtr(ty, _)` | exactly 2 (`(data_ptr, metadata)`; both required even for thin pointers per `rustc_middle/src/mir/syntax.rs:1561-1566`) |
+
+**I-Rvalue-Repeat-Count-Wellformed.** `Repeat(_, count)`'s
+`count: u64` is a non-negative integer (trivially true; `u64`
+is unsigned).
+
+**I-Rvalue-VariantIdx-Wellformed.** For
+`Aggregate(AggregateKind::Enum(ty_id, vidx), _)`, the
+`VariantIdx vidx` is in range
+`[0, variant_count(ty_id))`, where `variant_count`
+dispatches on the `EnumShape` carried by the resolved
+`Ty::Enum`'s layout (per §19.7 rule 4: `Empty -> 0`,
+`Single { .. } -> 1`,
+`Multiple { variants, .. } -> variants.len()`).
+
+**I-Rvalue-FieldIdx-Wellformed.** For
+`Aggregate(AggregateKind::Union(ty_id, fidx), _)`, the
+`FieldIdx fidx` is in range
+`[0, union_field_count(ty_id))`, where
+`union_field_count` reads `LayoutKind::Union.fields.len()`
+(per §11).
+
+#### 21.5.3 Walk-implementation: deferred to stage 11
+
+Rules enumerated at this stage; the walk implementation
+applying them is deferred to stage 11's body-validation
+step. Stage 11 owns the body-level walk that visits every
+`Statement::Assign(Place, Rvalue)` and applies the rules
+above in a single traversal of body content. Same split as
+§19.7's `Place` validation and §20.5's operand-site
+invariants, both of which inherit the walk via §3.3 Phase B
+body validation.
+
+#### 21.5.4 F4 / F4-2 cross-build identity: out of scope
+
+`Rvalue` is body-local content; it does not participate in
+the cross-build identity discipline (F4 / F4-2, §16). Same
+scope reduction as `Place` (§19.2) and `Operand` (§20.2).
+The F4-2 instance ordering canonicalises `(InstanceKey)`,
+not `(BodyContents)`.
+
+### 21.6 Bridge translation rules
+
+Per-rustc-variant translation. The 9 RegseqModel `Rvalue`
+variants plus the 7 reject-on-encounter rows (§21.5.1) cover
+the full 13-variant rustc surface (`mir::Rvalue<'tcx>`) and
+its sub-enum variants.
+
+#### 21.6.1 Top-level `Rvalue` variants
+
+| rustc form | RegseqModel form |
+|---|---|
+| `mir::Rvalue::Use(op)` | `Rvalue::Use(translate_operand(op))` |
+| `mir::Rvalue::Repeat(op, ty_const)` | `Rvalue::Repeat(translate_operand(op), n)` where `n: u64` is the post-mono evaluated count of `ty_const` |
+| `mir::Rvalue::Ref(_region, BorrowKind::Shared, p)` | `Rvalue::Ref(Provenance::SharedBorrow, translate_place(p))` |
+| `mir::Rvalue::Ref(_region, BorrowKind::Mut { kind: _ }, p)` | `Rvalue::Ref(Provenance::UniqueBorrow, translate_place(p))` -- the `MutBorrowKind` sub-discriminator is collapsed (codegen also collapses it via `bk.to_mutbl_lossy()`, `rustc_codegen_ssa/src/mir/rvalue.rs:506-511`) |
+| `mir::Rvalue::Ref(_region, BorrowKind::Fake(_), _)` | reject (§21.5.1) |
+| `mir::Rvalue::ThreadLocalRef(_)` | reject (§21.5.1) |
+| `mir::Rvalue::RawPtr(RawPtrKind::Const, p)` | `Rvalue::RawPtr(Mutability::Not, translate_place(p))` |
+| `mir::Rvalue::RawPtr(RawPtrKind::Mut, p)` | `Rvalue::RawPtr(Mutability::Mut, translate_place(p))` |
+| `mir::Rvalue::RawPtr(RawPtrKind::FakeForPtrMetadata, p)` | `Rvalue::RawPtr(Mutability::Not, translate_place(p))` -- bridge collapse (see §21.6.2) |
+| `mir::Rvalue::Cast(kind, op, ty)` | `Rvalue::Cast(translate_cast_kind(kind), translate_operand(op), translate(ty))` (see §21.6.3) |
+| `mir::Rvalue::BinaryOp(op, box (lhs, rhs))` | `Rvalue::BinaryOp(op, translate_operand(lhs), translate_operand(rhs))` -- `op: BinOp` translates verbatim; the `Box<(Operand, Operand)>` indirection is unwrapped at translation time |
+| `mir::Rvalue::UnaryOp(op, x)` | `Rvalue::UnaryOp(op, translate_operand(x))` -- `op: UnOp` translates verbatim |
+| `mir::Rvalue::Discriminant(p)` | `Rvalue::Discriminant(translate_place(p))` |
+| `mir::Rvalue::Aggregate(box kind, ops)` | `Rvalue::Aggregate(translate_aggregate_kind(kind), translate_operands(ops))` (see §21.6.4) |
+| `mir::Rvalue::CopyForDeref(_)` | reject (§21.5.1) |
+| `mir::Rvalue::ShallowInitBox(_, _)` | reject (§21.5.1) |
+| `mir::Rvalue::WrapUnsafeBinder(_, _)` | reject (§21.5.1) |
+
+#### 21.6.2 `RawPtrKind::FakeForPtrMetadata` collapse
+
+When the bridge encounters
+`mir::Rvalue::RawPtr(RawPtrKind::FakeForPtrMetadata, p)`, it
+does **not** preserve the variant. The collapse target is
+`Mutability::Not` (i.e., `*const`), matching rustc codegen's
+own choice: `RawPtrKind::to_mutbl_lossy()` at
+`rustc_middle/src/mir/statement.rs:994-1003` maps
+`FakeForPtrMetadata` to `Mutability::Not` ("we have no type
+corresponding to a fake borrow, so use `*const` as an
+approximation," per the inline comment at
+`rustc_middle/src/mir/statement.rs:999-1000`); rustc codegen
+applies this mapping at `rustc_codegen_ssa/src/mir/rvalue.rs:513-515`
+when synthesising the result type via `Ty::new_ptr(tcx, ty,
+kind.to_mutbl_lossy())`. The syntax.rs:189-197 doc comment
+"operationally equivalent to `RawPtrKind::Mut`, but will never
+incur a retag" describes Miri retag semantics (a borrow-stack
+abstract-machine concept); rustc's actual codegen uses the
+`to_mutbl_lossy()` mapping to `Not`. RegseqModel adopts the
+codegen target.
+
+This is also Charon's choice (Charon's `FakeForPtrMetadata`
+translates to `Shared` / read-only), peer-validating that
+read-only is the correct collapse target
+when the C/output-language has no fake-borrow representation.
+Drivers that read slice length or vtable metadata via
+`<*const [T]>::len()` / `<*const dyn Trait>::metadata()`
+generate `FakeForPtrMetadata` rvalues; the bridge collapses
+to `Mutability::Not` and produces a `*const`-typed C result,
+which is what rustc codegen would also produce. See
+`discussions.md` D-7-1.5 for the reject-vs-collapse trade-off
+and the peer comparison.
+
+#### 21.6.3 `CastKind` translation
+
+| rustc form | RegseqModel form |
+|---|---|
+| `CastKind::PointerExposeProvenance` | `CastKind::PointerExposeProvenance` |
+| `CastKind::PointerWithExposedProvenance` | `CastKind::PointerWithExposedProvenance` |
+| `CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer(_safety), _coerce_src)` | `CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer)` -- safety dropped (§21.2.5); CoercionSource dropped (§21.2.5) |
+| `CastKind::PointerCoercion(PointerCoercion::UnsafeFnPointer, _coerce_src)` | `CastKind::PointerCoercion(PointerCoercion::UnsafeFnPointer)` |
+| `CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer(_safety), _coerce_src)` | `CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer)` -- safety dropped (§21.2.5) |
+| `CastKind::PointerCoercion(PointerCoercion::Unsize, _coerce_src)` | `CastKind::PointerCoercion(PointerCoercion::Unsize)` |
+| `CastKind::PointerCoercion(PointerCoercion::MutToConstPointer, _)` | reject (§21.5.1) |
+| `CastKind::PointerCoercion(PointerCoercion::ArrayToPointer, _)` | reject (§21.5.1) |
+| `CastKind::IntToInt` | `CastKind::IntToInt` |
+| `CastKind::FloatToInt` | `CastKind::FloatToInt` |
+| `CastKind::FloatToFloat` | `CastKind::FloatToFloat` |
+| `CastKind::IntToFloat` | `CastKind::IntToFloat` |
+| `CastKind::PtrToPtr` | `CastKind::PtrToPtr` |
+| `CastKind::FnPtrToPtr` | `CastKind::FnPtrToPtr` |
+| `CastKind::Transmute` | `CastKind::Transmute` |
+| `CastKind::Subtype` | `CastKind::Subtype` |
+
+The `CoercionSource` slot inside every `PointerCoercion(_, _)`
+is discarded at translation (diagnostic-only; codegen ignores
+it; §21.2.5).
+
+The `hir::Safety` slot inside `ReifyFnPointer(_)` /
+`ClosureFnPointer(_)` is discarded at translation (the
+result safety is encoded in the destination `Ty::FnPtr`'s
+`FnSig.safety` per §14.3; §21.2.5).
+
+#### 21.6.4 `AggregateKind` translation
+
+| rustc form | RegseqModel form |
+|---|---|
+| `AggregateKind::Array(elem_ty)` | `AggregateKind::Array(intern_or_lookup(Ty::Array(translate(elem_ty), operand_count)))` -- rustc carries the *element* type (`rustc_middle/src/mir/syntax.rs:1541`); the bridge constructs the destination `Ty::Array(elem, n)` where `n` is the rvalue's operand count (rustc's `Aggregate(Array(_), ops)` carries one operand per element) and interns via §12 |
+| `AggregateKind::Tuple` | `AggregateKind::Tuple(translate(rvalue.ty(body, tcx)))` -- rustc's `Aggregate(Tuple, ops)` does not carry a type slot; the bridge obtains the destination tuple type via `rvalue.ty(body, tcx)` (rustc's MIR Rvalue type-of helper). Translation routes through stage-3 `Ty::Tuple { fields, layout }` interning where `fields = elem_tys` is the translated tuple element list and `layout` is sourced from `tcx.layout_of` per §15 (parallel to stage-3's tuple translation rule at `spec.md:4530`) |
+| `AggregateKind::Adt(did, _vidx, args, _user_ty, _afi)` with `adt_def.adt_kind() == Struct` | `AggregateKind::Struct(intern(Ty::Struct { item: translate(did), args: translate(args), layout }))` |
+| `AggregateKind::Adt(did, vidx, args, _user_ty, _afi)` with `adt_def.adt_kind() == Enum` | `AggregateKind::Enum(intern(Ty::Enum { item, args, layout }), vidx)` |
+| `AggregateKind::Adt(did, _vidx, args, _user_ty, Some(field_idx))` with `adt_def.adt_kind() == Union` | `AggregateKind::Union(intern(Ty::Union { item, args, layout }), field_idx)` |
+| `AggregateKind::Closure(did, args)` | `AggregateKind::Closure(intern(Ty::Closure(translate(did), translate(args))))` -- identity view (§13.1) |
+| `AggregateKind::Coroutine(_, _)` | reject (§21.5.1) |
+| `AggregateKind::CoroutineClosure(_, _)` | reject (§21.5.1) |
+| `AggregateKind::RawPtr(pointee_ty, mutbl)` | `AggregateKind::RawPtr(translate(pointee_ty), mutbl)` |
+
+The `_user_ty: Option<UserTypeAnnotationIndex>` slot is
+discarded (NLL/borrowck-only carrier; §21.2.9). The
+`(did, args)` pair collapses through stage-3 type interning
+to a `TyId` referencing the appropriate `Ty::Struct` /
+`Ty::Enum` / `Ty::Union` / `Ty::Closure` variant per the
+§10.0 / §15 nominal translation rules. For `Adt` the rustc
+five-slot encoding is split at translation time into the
+three RegseqModel variants `Struct` / `Enum` / `Union`
+based on `adt_def.adt_kind()`; structural slots that are
+meaningless for a given Adt kind (e.g., a non-default
+`VariantIdx` on a struct) are discarded.
+
+### 21.7 Worked examples
+
+Five representative examples illustrating the most-used
+variants and the principal translation collapses.
+
+#### 21.7.1 Binary arithmetic
+
+**Rust source:**
+```rust
+let s = a + b;       // a, b: u32
+```
+
+**rustc MIR (post-cleanup, illustrative):**
+```text
+_3 = Add(copy _1, copy _2)
+```
+
+**RegseqModel form:**
+```text
+_3 = BinaryOp(Add, Copy(_1), Copy(_2))
+```
+
+`BinaryOp` operands stored flat (no `Box<(Operand, Operand)>`
+indirection); operands are stage-6 `Operand::Copy(Place)`
+referencing stage-5 `Place { local: LocalId, projection: [] }`.
+
+#### 21.7.2 Shared borrow with field access
+
+**Rust source:**
+```rust
+let r: &u32 = &x.field;       // x: MyStruct, MyStruct.field: u32
+```
+
+**rustc MIR (post-cleanup, illustrative):**
+```text
+_3 = &_1.field
+```
+
+**RegseqModel form:**
+```text
+_3 = Ref(SharedBorrow, _1.field)
+```
+
+The `Place` payload uses stage-5's projection chain (head
+local `_1`, projection `[Field(field_idx, t_u32)]`). Rustc's
+`Region<'tcx>` slot from `Ref(Region, BorrowKind, Place)` is
+dropped (§21.2.3); the `BorrowKind::Shared` arm collapses to
+`Provenance::SharedBorrow`.
+
+#### 21.7.3 Struct construction
+
+**Rust source:**
+```rust
+let s = MyStruct { a: x, b: y };       // a, b: u32
+```
+
+**rustc MIR (post-cleanup, illustrative):**
+```text
+_3 = Aggregate(Adt(MyStruct_did, 0, args, None, None),
+               [move _1, move _2])
+```
+
+**RegseqModel form:**
+```text
+_3 = Aggregate(Struct(t_MyStruct), [Move(_1), Move(_2)])
+```
+
+`AggregateKind::Adt(_, 0, _, None, None)` with
+`adt_kind() == Struct` becomes
+`AggregateKind::Struct(t_MyStruct)`, where `t_MyStruct` is
+the interned `TyId` resolving to
+`Ty::Struct { item, args, layout }` (per §10.0). Operand
+count matches the struct's field count (rule
+**I-Rvalue-Aggregate-Operand-Count**, §21.5.2).
+
+#### 21.7.4 Enum variant construction
+
+**Rust source:**
+```rust
+let r: Option<u32> = Some(x);
+```
+
+**rustc MIR (post-cleanup, illustrative):**
+```text
+_2 = Aggregate(Adt(Option_did, 1 /* Some */, args, None, None),
+               [move _1])
+```
+
+**RegseqModel form:**
+```text
+_2 = Aggregate(Enum(t_Option_u32, vidx_Some), [Move(_1)])
+```
+
+`AggregateKind::Adt(_, vidx, _, None, None)` with
+`adt_kind() == Enum` becomes
+`AggregateKind::Enum(t_Option_u32, vidx_Some)`. The
+`VariantIdx` is preserved (rule
+**I-Rvalue-VariantIdx-Wellformed**, §21.5.2).
+
+#### 21.7.5 Cast: integer truncation
+
+**Rust source:**
+```rust
+let x: u8 = (n as u8);       // n: u32
+```
+
+**rustc MIR (post-cleanup, illustrative):**
+```text
+_2 = (copy _1) as u8 (IntToInt)
+```
+
+**RegseqModel form:**
+```text
+_2 = Cast(IntToInt, Copy(_1), t_u8)
+```
+
+`Cast(CastKind::IntToInt, _, _)` carries no
+`CoercionSource` or `hir::Safety` slots (those drops apply
+to `PointerCoercion` variants); the destination `TyId` is
+the interned `Ty::Uint(U8)`.
+
+### 21.8 Rendering
+
+See `pretty-printer.md` §7.3.
+
+---
+
+
+## 22. Statement vocabulary
+
+The `Statement` vocabulary is the sub-terminator
+instruction surface of MIR -- the typed expression of "an
+in-block side-effect that is not a control-flow transfer."
+The bridge fills it from rustc's `mir::StatementKind<'tcx>`;
+downstream consumers (stage 10 basic blocks --
+`BasicBlock.statements: Box<[Statement]>` per §24.1.2;
+stage 11 bodies; stage 14 backends) read it as the
+per-block straight-line sequence preceding the
+terminator.
+
+### 22.1 `Statement` struct and `StatementKind` enum
+
+#### 22.1.1 `Statement` wrapper struct
+
+```rust
+/// A sub-terminator instruction in a basic block, with
+/// the source location it derives from. Body-local
+/// content; lives inline inside basic-block storage,
+/// not in any top-level interner table. Equality is
+/// structural.
+pub struct Statement {
+    pub kind: StatementKind,
+    pub span: Span,
+}
+```
+
+The wrapper carries a single `Span` field (12 bytes per
+§5.3, no `SpanId` interning since stage 1 rejected span-
+deduplication). Rustc's `SourceInfo { span, scope }` is
+collapsed to span-only: the `scope` field is debuginfo-
+only (it indexes into `body.source_scopes` for DWARF
+lexical-scope display), with no C-shape meaning, and is
+dropped at the bridge translation site.
+
+Rustc's `Statement.debuginfos: StmtDebugInfos<'tcx>` field
+(per-statement DWARF instrumentation hints like
+`StmtDebugInfo::AssignRef(Local, Place)` for tracking
+reference assignments to ssa-locals, `InvalidAssign(Local)`
+for poison markers; defined at
+`rustc_middle/src/mir/statement.rs:21, 1015-1079`) is
+dropped entirely. RegseqModel does not emit DWARF; the C
+backend produces C source which gets compiled by
+clang/gcc with their own debug-info pipelines. (The
+distinct body-level `var_debug_info: Vec<VarDebugInfo>`
+field at `rustc_middle/src/mir/mod.rs:264, 1235-1257`,
+which carries user-source variable name mappings, is a
+*stage-11* `Body` design concern -- the named-local
+preservation requirement is filed as an outbound
+expectation to stage 11.)
+
+Charon's novel `comments_before: Vec<String>` field
+(Aeneas source-fidelity for formal-verification
+artefacts) has no analog in RegseqModel: the C-emission
+pipeline does not preserve source-comment fidelity for
+proof artefacts.
+
+Field order is `kind, span` (matches rustc_public's
+analog at `rustc_public/src/mir/body.rs:470-474`, the
+closest existing `'tcx`-free owned-IR mirror for our
+design space).
+
+#### 22.1.2 `StatementKind` enum definition
+
+```rust
+/// A typed sub-terminator instruction. Body-local
+/// content; appears inside `Statement.kind`.
+pub enum StatementKind {
+    /// In-place value assignment: `place := rvalue`.
+    /// Does NOT call drop on the previous LHS value
+    /// (drop is the explicit `Drop` terminator's job
+    /// at stage 9). The LHS place type and the RHS
+    /// rvalue's resulting type must be equal modulo
+    /// lifetime erasure (§22.5.2 I-Statement-Assign-
+    /// Type-Equality).
+    Assign(Place, Rvalue),
+
+    /// In-place enum tag-write: writes the discriminant
+    /// for the named variant to the place, without
+    /// touching variant payload fields. Matches rustc's
+    /// `SetDiscriminant`: tag-only mutation; payload is
+    /// independently set by separate `Assign` statements.
+    /// The target place must have type
+    /// `Ty::Enum { item, args, layout }` per §10
+    /// (§22.5.2 I-Statement-SetDiscriminant-Target);
+    /// the variant index must be in-range
+    /// (§22.5.2 I-Statement-SetDiscriminant-VariantIdx).
+    SetDiscriminant(Place, VariantIdx),
+
+    /// Non-diverging rustc-internal hint primitive: an
+    /// `Assume` (boolean hint to the optimizer that the
+    /// operand is true) or a `CopyNonOverlapping`
+    /// (inline non-overlapping byte copy without a
+    /// terminator boundary). Distinct from regseq DSL
+    /// semantic intrinsics, which flow through Calls
+    /// (per Q7) -- this variant carries only rustc's
+    /// own non-diverging primitives. See §22.3.1 for
+    /// the closed sub-enum.
+    Intrinsic(NonDivergingIntrinsic),
+}
+```
+
+The three variants are exhaustive: a rustc
+`mir::StatementKind<'tcx>` reaching the bridge after the
+required + whitelisted cleanup-pass discharge (§22.5.1)
+canonicalises into exactly one variant, or the bridge
+rejects with a diagnostic (§22.5.1 reject-on-encounter
+table). There is no `Other` / `Opaque` arm.
+
+Sizing (reference):
+- `Place` ~20 bytes (§19.2).
+- `Rvalue` worst-case ~64 bytes (§21.1, dominated by
+  `BinaryOp`).
+- `Operand` ~24 bytes (§20.1).
+- `Assign(Place, Rvalue)` flat ~84 bytes; dominates the
+  enum.
+- `Statement` worst-case ~96 bytes including span and
+  discriminator.
+
+#### 22.1.3 Variants dropped vs rustc
+
+Of rustc's 13-variant `mir::StatementKind<'tcx>`
+(`rustc_middle/src/mir/syntax.rs:311-471`), 10 distinct
+source variants do not appear in RegseqModel; each is
+rejected on encounter (§22.5.1) with a diagnostic naming
+the discharging mechanism. The dropped variants split
+into three groups by discharge mechanism:
+
+**Group 1 -- `CleanupPostBorrowck` NOPed (then swept by
+`RemovePlaceMention` or `RemoveStorageMarkers`):**
+
+- `FakeRead(_, _)` -- NOPed at
+  `rustc_mir_transform/src/cleanup_post_borrowck.rs:40`
+  (`is_required(): true` at line 89). Documented as
+  "Disallowed after drop elaboration"
+  (`rustc_middle/src/mir/syntax.rs:357`). Pure NLL
+  borrowck artefact.
+- `AscribeUserType(_, _)` -- NOPed at
+  `cleanup_post_borrowck.rs:33`. Documented as
+  "Disallowed after drop elaboration"
+  (`rustc_middle/src/mir/syntax.rs:426`). Pure user-type-
+  ascription tracking; cleared alongside
+  `body.user_type_annotations` at
+  `cleanup_post_borrowck.rs:81-85` and
+  `LocalDecl.user_ty` at `cleanup_post_borrowck.rs:83-85`.
+- `BackwardIncompatibleDropHint { .. }` -- NOPed at
+  `cleanup_post_borrowck.rs:41`. Lint-only marker
+  ("semantically equivalent to `Nop`,"
+  `rustc_middle/src/mir/syntax.rs:462-463`); rustc_public
+  drops the variant entirely
+  (`rustc_public/src/mir/body.rs:476-490` only carries
+  12 variants).
+- `Assign(_, Rvalue::Ref(_, BorrowKind::Fake, _))` --
+  whole `Assign` NOPed at
+  `cleanup_post_borrowck.rs:34`. Compositional with
+  stage-7 `Rvalue::Ref` rejection of `BorrowKind::Fake`
+  (§21.5.1 row 5).
+- `Coverage(BlockMarker | SpanMarker)` -- NOPed at
+  `cleanup_post_borrowck.rs:35-39`. Mid-pipeline coverage
+  markers used during MIR-building, not needed after
+  `InstrumentCoverage`.
+
+**Group 2 -- always-running cleanup-pass strip:**
+
+- `PlaceMention(_)` -- removed by required `RemovePlaceMention`
+  (`rustc_mir_transform/src/remove_place_mention.rs:18`;
+  `is_required(): true` at line 25; `is_enabled` returns
+  `!sess.opts.unstable_opts.mir_preserve_ub` which is
+  off by default so the pass runs). Pure `let _ =
+  PLACE;` desugar artefact.
+- `Nop` -- swept by both `RemovePlaceMention`
+  (`remove_place_mention.rs:18`) and `RemoveStorageMarkers`
+  (`remove_storage_markers.rs:20`). Only present
+  transiently after a `make_nop` call; not in
+  optimized_mir.
+- `StorageLive(_)` -- removed by `RemoveStorageMarkers`
+  (`rustc_mir_transform/src/remove_storage_markers.rs:18`).
+  The pass's `is_enabled = mir_opt_level > 0 && !sess.emit_lifetime_markers()`
+  (`remove_storage_markers.rs:10-12`) would gate it off
+  at our default `mir_opt_level=0`, BUT the bridge
+  driver flips it on via `mir_enable_passes`
+  (`crates/regseq-driver/src/callbacks.rs:27` registers
+  `("RemoveStorageMarkers", true)`). The pass-manager
+  override mechanism at
+  `rustc_mir_transform/src/pass_manager.rs:227-238`
+  consults `mir_enable_passes` first; the named-pass
+  polarity (`true` here) is respected, bypassing the
+  `is_enabled` gate. Therefore `RemoveStorageMarkers`
+  runs in our pipeline; `StorageLive` / `StorageDead`
+  do not reach optimized_mir.
+- `StorageDead(_)` -- same as `StorageLive(_)`.
+
+**Group 3 -- out-of-pipeline (build-flag-gated; never
+injected for our compilation mode):**
+
+- `Retag(_, _)` -- only emitted by `AddRetag`
+  (`rustc_mir_transform/src/add_retag.rs:85, 118, 177`)
+  which `is_enabled` requires `-Z mir-emit-retag`. The
+  bridge driver does not enable that flag; the variant
+  cannot appear.
+- `ConstEvalCounter` -- only injected by `CtfeLimit`
+  (`rustc_mir_transform/src/ctfe_limit.rs:36`) for
+  const-eval-bound bodies (`mir_for_ctfe`); driver
+  bodies are run-time bodies (`optimized_mir`) and do
+  not receive the injection.
+- `Coverage(non-marker variants)` -- only emitted by
+  `InstrumentCoverage` under `-C instrument-coverage`;
+  driver builds do not enable coverage instrumentation.
+  After the `BlockMarker | SpanMarker` arms are NOPed
+  at `CleanupPostBorrowck` (Group 1 above), the
+  remaining `Coverage(...)` content cannot appear
+  unless the user explicitly asks for instrumentation,
+  which is not part of our compilation contract.
+
+These statement-translation-phase rejections compose
+with the §15.1 type-translation-phase rejections and
+the §21.5.1 rvalue-translation-phase rejections; the
+bridge applies all classes during MIR construction.
+
+(See `discussions.md` D-8-1 / D-8-1.1 for the cluster
+audit including the cleanup-pass-discharge trace and
+the closed surface options considered.)
+
+### 22.2 Per-variant payload shapes
+
+#### 22.2.1 `Assign(Place, Rvalue)`
+
+In-place value assignment. Storage is flat (place and
+rvalue inline, not boxed) -- a deliberate divergence
+from rustc's `Box<(Place, Rvalue)>` packaging
+(`rustc_middle/src/mir/syntax.rs:341`). Rustc boxes to
+keep its `StatementKind<'_>` enum at the 16-byte size
+assert (`rustc_middle/src/mir/syntax.rs:1753`);
+RegseqModel does not assert a comparable size budget
+at the statement surface. The flat shape is congruent
+with rustc_public's `Assign(Place, Rvalue)`
+(`rustc_public/src/mir/body.rs:478`), Charon's
+`Assign(Place, Rvalue)` (per
+`stage-8/prior-art/charon.md`), mrustc's flat
+`Assign { dst, src }` (per `stage-8/prior-art/mrustc.md`),
+and stage-7's flat-`BinaryOp(BinOp, Operand, Operand)`
+pattern (flat `BinaryOp(BinOp, Operand, Operand)`).
+
+`Assign` does NOT call drop on the previous LHS value:
+"Assign statements roughly correspond to an assignment
+in Rust proper (`x = ...`) except without the
+possibility of dropping the previous value (that must
+be done separately, if at all)"
+(`rustc_middle/src/mir/syntax.rs:312-317`). Drop is the
+explicit `Drop` terminator's job at stage 9 (when stage
+9 lands; the terminator vocabulary for v1 will carry
+explicit drop-glue calls per the bridge translation
+discipline). No drop-suppression flag on the variant;
+compositional with stage-9 drop terminator placement,
+not a parallel side-channel.
+
+The well-formedness rule "Assignments in which the
+types of the place and rvalue differ are not
+well-formed" (`rustc_middle/src/mir/syntax.rs:324`)
+is enforced as positive invariant
+I-Statement-Assign-Type-Equality (§22.5.2); rustc's
+own validator pins it
+(`rustc_mir_transform/src/validate.rs:1467-1582`);
+walk-enforcement deferred to stage 11.
+
+C-semantics: `<lhs> = <rhs>;` for value assignments;
+or compound-literal initialisation when the rvalue is
+an `Aggregate`; or runtime-helper call for unsizing /
+transmute casts (per §21.2.5's `Cast` lowering). Backends select
+the C form per the rvalue's variant and types; the
+bridge does not pre-select.
+
+(See `discussions.md` D-8-1.2 for the audit.)
+
+#### 22.2.2 `SetDiscriminant(Place, VariantIdx)`
+
+In-place enum tag-write. The variant writes the
+discriminant for the named variant to the target
+place's tag location, without touching variant payload
+fields. Matches rustc's documented semantics: "Write
+the discriminant for a variant to the enum Place...
+This does not necessarily write to the entire place;
+instead, it writes to the minimum set of bytes as
+required by the layout for the type"
+(`rustc_middle/src/mir/syntax.rs:362-364`).
+
+Storage is flat tuple (no struct-with-named-fields, no
+Box on `Place`) -- mirrors stage-7's flat-tuple pattern
+for small 2-3-field payloads (§21.1's
+`Ref(Provenance, Place)`, `RawPtr(Mutability, Place)`,
+and `Aggregate(AggregateKind, Box<[Operand]>)` are
+all flat tuples). Charon's `SetDiscriminant(Place,
+VariantId)` (per `stage-8/prior-art/charon.md`) is the
+direct precedent. rustc_public's
+`SetDiscriminant { place, variant_index }`
+(`rustc_public/src/mir/body.rs:480`) uses struct-with-
+flat-place; the choice is stylistic-only and the
+RegseqModel project leans tuple per stage-7 precedent.
+
+Target type: the `Place` argument must have an enum
+type. Rustc's validator at
+`rustc_mir_transform/src/validate.rs:1551-1567` allows
+`place_ty(p).kind() ∈ { ty::Adt(..), ty::Coroutine(..),
+ty::Alias(ty::Opaque, ..) }` but RegseqModel's
+post-translation surface narrows this further:
+
+- `ty::Coroutine(..)` is rejected at stage 3 §15.1
+  (the type-translation-phase rejection table); the
+  variant cannot reach optimized_mir with a
+  coroutine-typed target.
+- `ty::Alias(ty::Opaque, ..)` is normalized away by
+  the required `PostAnalysisNormalize` pass
+  (`rustc_mir_transform/src/lib.rs:642`); opaque
+  types resolve to their underlying type before
+  optimized_mir.
+- `ty::Adt(..)` covers RegseqModel's three direct
+  Adt-shaped Ty variants `Ty::Struct{..}`,
+  `Ty::Enum{..}`, `Ty::Union{..}` per §10. Only
+  `Ty::Enum` has a discriminant to write;
+  `Ty::Struct` and `Ty::Union` have no tag location.
+
+The bridge rule: `place_ty(p) = Ty::Enum { item, args,
+layout }` per §10. Other shapes (`Ty::Struct{..}`,
+`Ty::Union{..}`, `Ty::Tuple{..}`, primitive types,
+references, raw pointers, function types, etc.) reject
+at the bridge per the I-Statement-SetDiscriminant-
+Target invariant (§22.5.2). Compositional with stage-3
+type taxonomy, not a parallel `target_kind: Enum`
+flag.
+
+The variant carries no redundant Item / Layout slot;
+the target type is fully recoverable from `place_ty(p)`
+via stage-3 / stage-5 / §10 vocabulary at render /
+codegen time (matches stage-7 Aggregate's TyId-lookup-
+via-§12-type-interner pattern).
+
+C-semantics: tag-write at the enum's C representation.
+The discriminant field location depends on the chosen
+Rust ADT layout per stage-3 §13; the tag bytes written
+come from `place_ty(p)`'s `LayoutKind::Enum.shape`'s
+`VariantLayout.tag_value: Option<u128>` for the
+named variant (per §11.1's `tag_value` table). When
+`tag_value` is `Some(v)`, codegen emits the
+`VariantLayout.tag_value` bytes at the
+`TagScalar.offset` location in the enum's C layout;
+when `tag_value` is `None` (e.g., niche-encoded
+untagged variants where the payload IS the tag, or
+single-variant enums without a tag scalar),
+`SetDiscriminant` is a codegen no-op -- the tag is
+either implicit in the data being written by
+companion `Assign` statements or absent entirely.
+This is distinct from rustc's semantic-level
+`VariantLayout.discriminant` (the value
+`Discriminant(place)` returns at stage-7 Rvalue
+level). Distinct also from full enum construction
+via `Rvalue::Aggregate(AggregateKind::Enum(...))`
+which writes both the tag and all payload fields in
+one atomic place-write; `SetDiscriminant` writes the
+tag in place over an already-constructed (or
+to-be-constructed) payload.
+
+(See `discussions.md` D-8-1.3 for the audit including
+the struct-vs-tuple precedent reasoning.)
+
+#### 22.2.3 `Intrinsic(NonDivergingIntrinsic)`
+
+Non-diverging rustc-internal hint primitive. The
+nested sub-enum `NonDivergingIntrinsic` (§22.3.1)
+carries the two arms `Assume(Operand)` (boolean hint
+to the optimizer) and `CopyNonOverlapping(...)` (inline
+non-overlapping byte copy). Rustc's design rationale
+for keeping these as Statement-level rather than as
+Calls: "this avoids adding a new block and a terminator
+for simple intrinsics"
+(`rustc_middle/src/mir/syntax.rs:448-451`).
+
+Storage is flat (no `Box` on the `NonDivergingIntrinsic`
+arm) -- divergence from rustc's `Intrinsic(Box<NonDivergingIntrinsic>)`
+(`rustc_middle/src/mir/syntax.rs:450`). Same flat-vs-
+Box reasoning as §22.2.1's `Assign`: rustc's Box
+serves the 16-byte size budget which RegseqModel does
+not inherit. rustc_public's `Intrinsic(NonDivergingIntrinsic)`
+(`rustc_public/src/mir/body.rs:487`) is the direct
+precedent.
+
+The nested-vs-fanout choice: keep the
+`NonDivergingIntrinsic` sub-enum nested (rustc /
+rustc_public precedent), rather than fan out the two
+arms into top-level Statement variants `Assume(...)` /
+`CopyNonOverlapping(...)` (a hypothetical Charon-style
+approach -- though Charon actually transforms the
+arms: `Assume` lifts to `Assert{on_failure:
+UndefinedBehavior}`; `CopyNonOverlapping` becomes its
+own dedicated boxed Statement variant -- per
+`stage-8/prior-art/charon.md`).
+
+Reasoning for nested:
+- Preserves rustc's "non-diverging hint primitive"
+  semantic grouping: both sub-variants share the
+  property of being rustc-internal hints that don't
+  return a value to a place (Assume) or do a fixed-
+  shape memory op without divergence
+  (CopyNonOverlapping). The grouping has meaning.
+- Keeps the closed Statement surface at 3 variants;
+  fanning out would expand to 4 without semantic gain.
+- Future-proofs against new `NonDivergingIntrinsic`
+  sub-variants. Rustc may add more non-diverging hint
+  intrinsics; with nested, they land as sub-enum
+  extensions; with fanout, they would land as
+  Statement-enum changes (a larger blast radius for
+  the spec).
+
+This Intrinsic variant is **distinct from regseq DSL
+semantic intrinsics**: regseq DSL surface intrinsics
+(MMIO read/write, register-bank access, etc.) flow
+through `TerminatorKind::Call` per Q7 (intrinsic
+recognition by `#[rseq::intrinsic("NAME")]` attribute);
+they do NOT appear in `Statement::Intrinsic`. The
+Statement-level `Intrinsic` variant carries only
+rustc's own `NonDivergingIntrinsic` primitives.
+
+C-semantics:
+- `Intrinsic::Assume(op)` -- backend-specific assume
+  builtin: `__builtin_assume(op)` (clang),
+  `if (!op) __builtin_unreachable()` (gcc fallback),
+  or backend choice. Driver targets are clang+gcc.
+- `Intrinsic::CopyNonOverlapping{src, dst, count}` --
+  `memcpy(dst, src, count * sizeof(T))` where T is the
+  pointee type recovered from src/dst types.
+
+(See `discussions.md` D-8-1.4 for the audit including
+the nested-vs-fanout reasoning and the lift-to-Call
+rejection.)
+
+### 22.3 Sub-enums and sub-structs
+
+#### 22.3.1 `NonDivergingIntrinsic` enum
+
+```rust
+/// The non-diverging rustc-internal hint primitives
+/// that survive into RegseqModel as Statement-level
+/// content. Closed 2-variant set; the bridge rejects
+/// any rustc `mir::NonDivergingIntrinsic<'tcx>` arm
+/// outside this set (current rustc has only the two
+/// arms; future additions land as new sub-enum
+/// variants).
+pub enum NonDivergingIntrinsic {
+    /// Boolean hint: "the operand is true." Backends
+    /// may use this to backtrack the boolean's
+    /// derivation and elide subsequent bound checks.
+    /// If the operand is false, semantics matches
+    /// `TerminatorKind::Unreachable`.
+    Assume(Operand),
+
+    /// Inline non-overlapping byte copy:
+    /// `*dst[i] := *src[i]` for `i ∈ [0, count)`.
+    /// `src` and `dst` are pointers (or references);
+    /// `count` is `usize`. The src and dst regions
+    /// must not overlap (caller obligation; not
+    /// checked by the operation).
+    CopyNonOverlapping(CopyNonOverlapping),
+}
+```
+
+The 2 variants mirror rustc's
+`mir::NonDivergingIntrinsic<'tcx>`
+(`rustc_middle/src/mir/syntax.rs:485-508`) verbatim,
+modulo the lifetime parameter erasure.
+
+#### 22.3.2 `CopyNonOverlapping` struct
+
+```rust
+/// Payload for `NonDivergingIntrinsic::CopyNonOverlapping`.
+/// Named-fields struct (NOT a tuple) -- src/dst/count
+/// are all `Operand` and order-confusable in a tuple
+/// shape; named fields prevent silent wrong-direction
+/// copy bugs at the bridge translation site and the
+/// stage-14 codegen site. This is the one place where
+/// named-fields-vs-tuple is correctness-essential
+/// (compare §22.2.2's `SetDiscriminant(Place,
+/// VariantIdx)` flat tuple where the two payload
+/// elements have distinct types and are not order-
+/// confusable).
+pub struct CopyNonOverlapping {
+    pub src: Operand,
+    pub dst: Operand,
+    pub count: Operand,
+}
+```
+
+Mirrors rustc's
+`mir::CopyNonOverlapping<'tcx> { src, dst, count }`
+(`rustc_middle/src/mir/syntax.rs:633`) and
+rustc_public's `CopyNonOverlapping`
+(`rustc_public/src/mir/body.rs:457-462`).
+
+The per-variant operand-type invariants (Assume's
+`Operand: Ty::Bool`, CopyNonOverlapping's pointer-
+pointer-usize rules) are pinned in §22.5.2's
+I-Statement-Intrinsic-* invariants.
+
+### 22.4 Identity and storage
+
+`Statement` is body-local content; it does not
+participate in any top-level interning. There is no
+`StatementId`. Equality and hashing are structural over
+the wrapper struct's `(kind, span)` pair.
+
+Statements live inline in stage-10's basic-block
+storage (`BasicBlock.statements: Box<[Statement]>`
+per §24.1.2 stage-10 D-10-1.2 lock; finalized
+single-fill payload aligning with the stage-7
+`Aggregate(Box<[Operand]>)` and stage-9
+`SwitchTargets.cases: Box<[(u128, BlockId)]>`
+internal pattern). The owning struct stores
+statements by value (no indirection); any boxing at
+the parent body-content level is a parent-variant
+decision made by the owning vocabulary, not a
+property of the `Statement` surface itself. The
+`Statement` surface introduces no top-level `Box`
+indirection.
+
+Statement identity is per-build, structural, and does
+not participate in the cross-build identity discipline
+(F4 / F4-2, §16). Same scope reduction as `Place`
+(§19.2), `Operand` (§20.2), and `Rvalue` (§21.4). The
+F4-2 instance ordering canonicalises `(InstanceKey)`,
+not `(BodyContents)`.
+
+(See `discussions.md` D-8-2 for the audit.)
+
+### 22.5 Statement-site invariants
+
+Two parts: rejection rules (rejection-on-encounter)
+and positive invariants (well-formedness checks).
+
+#### 22.5.1 Rejection rules
+
+Constructs that cannot reach a well-formed
+`optimized_mir` input under our compilation contract
+are rejected on encounter, with a diagnostic naming
+the discharging mechanism so the driver author sees
+a useful error message:
+
+| Construct | Rejection ground |
+|---|---|
+| `mir::StatementKind::FakeRead(_, _)` | NOPed by required `CleanupPostBorrowck` (NOP code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:40`; `is_required(): true` at line 89). The resulting `Nop` is then swept by required `RemovePlaceMention` (`rustc_mir_transform/src/remove_place_mention.rs:18-20`) and/or whitelisted `RemoveStorageMarkers` (`remove_storage_markers.rs:18-20`). Pure NLL borrowck artefact; "Disallowed after drop elaboration" per `rustc_middle/src/mir/syntax.rs:357`. |
+| `mir::StatementKind::AscribeUserType(_, _)` | NOPed at `cleanup_post_borrowck.rs:33`. Pure user-type-ascription tracking; "Disallowed after drop elaboration" per `rustc_middle/src/mir/syntax.rs:426`. Cleared alongside `body.user_type_annotations` and `LocalDecl.user_ty` at `cleanup_post_borrowck.rs:81-85`. |
+| `mir::StatementKind::BackwardIncompatibleDropHint { .. }` | NOPed at `cleanup_post_borrowck.rs:41`. Lint-only marker semantically equivalent to `Nop` per `rustc_middle/src/mir/syntax.rs:462-463`; rustc_public drops the variant entirely (`rustc_public/src/mir/body.rs:476-490` carries 12 variants without it). |
+| `mir::StatementKind::Coverage(BlockMarker | SpanMarker)` | NOPed at `cleanup_post_borrowck.rs:35-39`. Mid-pipeline coverage markers used during MIR-building; not needed after `InstrumentCoverage`. |
+| `mir::StatementKind::Assign(_, mir::Rvalue::Ref(_, BorrowKind::Fake(_), _))` | Whole `Assign` NOPed at `cleanup_post_borrowck.rs:34`. Compositional with §21.5.1 row 5 (rvalue-side `BorrowKind::Fake` rejection). |
+| `mir::StatementKind::PlaceMention(_)` | Removed by required `RemovePlaceMention` (`rustc_mir_transform/src/remove_place_mention.rs:18`; `is_required(): true` at line 25; `is_enabled` returns `!sess.opts.unstable_opts.mir_preserve_ub` which is off by default). Pure `let _ = PLACE;` desugar artefact. |
+| `mir::StatementKind::Nop` | Swept by required `RemovePlaceMention` (`remove_place_mention.rs:18`), whitelisted `RemoveStorageMarkers` (`remove_storage_markers.rs:20`), and whitelisted `SimplifyLocals-final` (`simplify.rs:580`; the SimplifyLocals retain filter excludes `StatementKind::Nop`). Whitelisted `RemoveZsts` (`crates/regseq-driver/src/callbacks.rs:28`) ALSO produces fresh `Nop`s by calling `statement.make_nop(true)` at `rustc_mir_transform/src/remove_zsts.rs:143`; those are then swept by `SimplifyLocals-final` later in the pipeline (`RemoveZsts` is registered in the optimization pass list at `rustc_mir_transform/src/lib.rs:728-730`; `SimplifyLocals::Final` runs further down the same pass list at `rustc_mir_transform/src/lib.rs:775`, after the post-`RemoveZsts` Nops have been emitted). Only transient inside the pipeline; not in the optimized_mir we consume. |
+| `mir::StatementKind::StorageLive(_)` | Removed by `RemoveStorageMarkers` (`rustc_mir_transform/src/remove_storage_markers.rs:18`). The pass is force-on via the bridge driver's `mir_enable_passes` whitelist (`crates/regseq-driver/src/callbacks.rs:27` registers `("RemoveStorageMarkers", true)`); the pass-manager override at `rustc_mir_transform/src/pass_manager.rs:227-238` consults `mir_enable_passes` ahead of `is_enabled`, so the `mir_opt_level > 0` gate at `remove_storage_markers.rs:10-12` is bypassed. |
+| `mir::StatementKind::StorageDead(_)` | Same as `StorageLive(_)`. |
+| `mir::StatementKind::Retag(_, _)` | Only emitted by `AddRetag` (`rustc_mir_transform/src/add_retag.rs:85, 118, 177`) which `is_enabled` requires `-Z mir-emit-retag`; the bridge driver does not enable that flag. Out-of-pipeline. |
+| `mir::StatementKind::ConstEvalCounter` | Only injected by `CtfeLimit` (`rustc_mir_transform/src/ctfe_limit.rs:36`) for const-eval-bound bodies (`mir_for_ctfe`). Driver bodies are run-time bodies (`optimized_mir`) and do not receive the injection. |
+| `mir::StatementKind::Coverage(non-marker variants)` | Only emitted by `InstrumentCoverage` under `-C instrument-coverage`. Driver builds do not enable coverage instrumentation. |
+
+These statement-translation-phase rejections compose
+with the §15.1 type-translation-phase rejections and
+the §21.5.1 rvalue-translation-phase rejections; the
+bridge applies all classes during MIR construction.
+
+#### 22.5.2 Positive invariants
+
+Eight rules. The first three (B-0a / B-0b / B-0c) are
+inherited explicitly from prior stages; the remaining
+five (B-1 -- B-5) are stage-8-introduced. All eight
+are enforced at body-level walk time (deferred to
+stage 11; see §22.5.3).
+
+**I-Statement-Place-Wellformed (B-0a).** Every embedded
+`Place` reachable through `Statement` payloads
+satisfies the §19.7 place-validation rules: head-local
+existence, field / variant-index range, structural
+invariants (I-Deref-first, I-Downcast-followed-by-
+Field), type-coherence walk. Inherited from §19.7
+(Place validation rules).
+
+**I-Statement-Rvalue-Wellformed (B-0b).** Every
+embedded `Rvalue` reachable through `Assign` payloads
+satisfies the §21.5.2 rvalue-site invariants:
+I-Rvalue-Operand-Wellformed, I-Rvalue-TyId-Interned,
+I-Rvalue-Aggregate-Operand-Count, I-Rvalue-Repeat-
+Count-Wellformed, I-Rvalue-VariantIdx-Wellformed,
+I-Rvalue-FieldIdx-Wellformed. Inherited from §21.5
+(Rvalue-site invariants).
+The §21.5.1 7-row rejection table also applies
+transitively (an `Assign(_, rejected_rvalue)` is
+rejected at the rvalue level).
+
+**I-Statement-Operand-Wellformed (B-0c).** Every
+embedded `Operand` reachable through Statement
+payloads outside an `Assign`'s `Rvalue`
+(specifically: the operand positions inside
+`Intrinsic(NonDivergingIntrinsic::Assume(op))` and
+inside `Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping{src, dst, count})`)
+satisfies the §20.5 operand-site invariant
+`I-Operand-Place-Validity` (the single rule §20.5
+defines, which transitively inherits §19.7
+place-validation rules for the `Copy` / `Move`
+arms). B-0c is distinct from B-0b: B-0b applies to
+operands embedded in rvalues (covered by §21.5.2's
+I-Rvalue-Operand-Wellformed); B-0c applies to
+operands embedded directly in Statement payloads
+without an enclosing Rvalue. The `Constant` arm of
+`Operand` carries a `ConstId` whose value-level
+identity flows through the §9.7 ConstInterner;
+operand-context type coherence for the `Constant`
+arm is owned by stages 7-9 (per §20.5's explicit
+note that "Stage 6 does not duplicate that check"),
+so B-0c does not duplicate it either.
+
+**I-Statement-Assign-Type-Equality (B-1).** For
+`Assign(p, rv)`, `place_ty(p) == rvalue_ty(rv)` modulo
+lifetime erasure. Defined by rustc's well-formedness
+rule "Assignments in which the types of the place and
+rvalue differ are not well-formed"
+(`rustc_middle/src/mir/syntax.rs:324`); pinned by
+rustc's validator
+(`rustc_mir_transform/src/validate.rs:1467-1582`).
+Type recovery uses §19's `place_ty` (the type-coherence
+walk over the head local's `LocalDecl.ty` plus the
+projection chain) and §21's `rvalue_ty` (the per-
+variant type-recovery rules).
+
+**I-Statement-SetDiscriminant-VariantIdx (B-2).** For
+`SetDiscriminant(p, vi)`, `vi < variant_count(place_ty(p))`
+where `variant_count` reads `place_ty(p)`'s
+`LayoutKind::Enum.shape` (§11.1) per the
+`EnumShape` cases:
+
+- `EnumShape::Empty -> 0`,
+- `EnumShape::Single { .. } -> 1`,
+- `EnumShape::Multiple { variants, .. } -> variants.len()`.
+
+Same bound-check shape as §19.7 rule 4 (Place
+validation for Downcast on enum types) and
+§21.5.2 I-Rvalue-VariantIdx-Wellformed for
+`Aggregate(AggregateKind::Enum(_, _), _)`.
+
+**I-Statement-SetDiscriminant-Target (B-3).** For
+`SetDiscriminant(p, _)`, `place_ty(p) = Ty::Enum {
+item, args, layout }` per §10. Other shapes
+(`Ty::Struct{..}`, `Ty::Union{..}`, `Ty::Tuple{..}`,
+primitive types, references, raw pointers, function
+types, etc.) reject at the bridge with a diagnostic
+citing the §10 `Ty` variant taxonomy. Coroutines
+were already rejected in stage 3 §15.1; opaque-alias
+types were normalized away by the required
+`PostAnalysisNormalize` pass per
+`rustc_mir_transform/src/lib.rs:642`. Compositional
+with stage-3 `Ty` taxonomy, not a parallel
+`target_kind: Enum` flag.
+
+**I-Statement-Intrinsic-Assume-Bool (B-4).** For
+`Intrinsic(NonDivergingIntrinsic::Assume(op))`,
+`operand_ty(op) == Ty::Bool`. Pinned by rustc's
+validator
+(`rustc_mir_transform/src/validate.rs:1467-1582`); the
+documentation at `rustc_middle/src/mir/syntax.rs:486-492`
+states "The operand must be a boolean."
+
+**I-Statement-Intrinsic-CopyNonOverlapping-Types
+(B-5).** For
+`Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(CopyNonOverlapping { src, dst, count }))`:
+- `operand_ty(src)` and `operand_ty(dst)` are each
+  one of the RegseqModel deref-able pointer-like
+  types: raw pointer (`Ty::Ptr(pointee_ty, _)`) or
+  reference (`Ty::Ref(pointee_ty, _)`);
+- their resolved pointee types are identical
+  (`pointee(operand_ty(src)) ==
+  pointee(operand_ty(dst))`);
+- `operand_ty(count) == Ty::Uint(UintKind::Usize)`.
+
+Pinned by rustc's validator at
+`rustc_mir_transform/src/validate.rs:1517-1549` --
+specifically the `builtin_deref(true)` check at
+`validate.rs:1521, 1531` plus the pointee-equality
+check at `validate.rs:1542` and the `usize` check at
+`validate.rs:1547`. The documentation at
+`rustc_middle/src/mir/syntax.rs:494-507` states "src
+and dest must each be a reference, pointer, or
+`Box` pointing to the same type T. count must
+evaluate to a usize."
+
+**Narrowing vs rustc's validator.** Rustc's
+`builtin_deref(true)` predicate also returns `Some`
+for `Box<T>`, but RegseqModel does NOT admit Box at
+the operand level here -- stage-3 §15.1 rejects
+`Box<T>` at type translation (`alloc` construct
+outside the no-alloc driver DSL; see `spec.md:4546`).
+A Box-typed operand cannot reach a stage-8
+`CopyNonOverlapping` site because its enclosing type
+would have been rejected upstream. RegseqModel's
+post-translation B-5 thus accepts the strict subset
+(`Ty::Ptr` and `Ty::Ref`) that survives the §15.1
+rejection cascade; in practice, driver code at
+`copy_nonoverlapping` call sites overwhelmingly
+passes raw pointers (the intrinsic signature takes
+`*const T` / `*mut T`), with references admitted
+when rustc emits them through deref coercions.
+
+#### 22.5.3 Walk-implementation: deferred to stage 11
+
+Rules enumerated at this stage; the walk implementation
+applying them is deferred to stage 11's body-validation
+step. Stage 11 owns the body-level walk that visits
+every `BasicBlock.statements[i]` and applies §22.5.1
+rejection rules + §22.5.2 positive invariants in a
+single traversal of body content. Compositional with
+the §19.7 Place walk and §21.5.3 Rvalue walk
+inheritance: a stage-11 visitor that walks Statement
+content visits Place / Rvalue invariants in the same
+pass (B-0a / B-0b implicit in walk dispatch).
+
+Same split as §19.7's `Place` validation, §20.5's
+operand-site invariants, and §21.5.3's rvalue-site
+invariants -- all of which inherit the walk via §3.3
+Phase B body validation.
+
+#### 22.5.4 F4 / F4-2 cross-build identity: out of scope
+
+`Statement` is body-local content; it does not
+participate in the cross-build identity discipline
+(F4 / F4-2, §16). Same scope reduction as `Place`
+(§19.2), `Operand` (§20.2), and `Rvalue` (§21.4). The
+F4-2 instance ordering canonicalises `(InstanceKey)`,
+not `(BodyContents)`.
+
+### 22.6 Bridge translation rules
+
+Per-rustc-variant translation. The 3 RegseqModel
+`StatementKind` variants plus the 12-row reject-on-
+encounter table (§22.5.1) cover the full 13-variant
+rustc surface (`mir::StatementKind<'tcx>`) and its
+sub-enum variants.
+
+#### 22.6.1 Top-level `StatementKind` variants
+
+| rustc form | RegseqModel form |
+|---|---|
+| `mir::StatementKind::Assign(box (p, rv))` | `StatementKind::Assign(translate_place(p), translate_rvalue(rv))` -- the `Box<(Place, Rvalue)>` indirection is unwrapped at translation time |
+| `mir::StatementKind::Assign(_, mir::Rvalue::Ref(_, BorrowKind::Fake(_), _))` | reject (§22.5.1) -- whole Assign cleanup-discharged |
+| `mir::StatementKind::SetDiscriminant { box place, variant_index }` | `StatementKind::SetDiscriminant(translate_place(*place), VariantIdx::from(variant_index))` -- the `Box<Place>` is unwrapped |
+| `mir::StatementKind::Intrinsic(box ndi)` | `StatementKind::Intrinsic(translate_non_diverging_intrinsic(*ndi))` (see §22.6.2) -- the `Box<NonDivergingIntrinsic>` is unwrapped |
+| `mir::StatementKind::FakeRead(_, _)` | reject (§22.5.1) |
+| `mir::StatementKind::AscribeUserType(_, _)` | reject (§22.5.1) |
+| `mir::StatementKind::BackwardIncompatibleDropHint { .. }` | reject (§22.5.1) |
+| `mir::StatementKind::Coverage(_)` | reject (§22.5.1; both marker and non-marker arms) |
+| `mir::StatementKind::PlaceMention(_)` | reject (§22.5.1) |
+| `mir::StatementKind::Nop` | reject (§22.5.1) |
+| `mir::StatementKind::StorageLive(_)` | reject (§22.5.1) |
+| `mir::StatementKind::StorageDead(_)` | reject (§22.5.1) |
+| `mir::StatementKind::Retag(_, _)` | reject (§22.5.1) |
+| `mir::StatementKind::ConstEvalCounter` | reject (§22.5.1) |
+
+#### 22.6.2 `NonDivergingIntrinsic` translation
+
+| rustc form | RegseqModel form |
+|---|---|
+| `mir::NonDivergingIntrinsic::Assume(op)` | `NonDivergingIntrinsic::Assume(translate_operand(op))` |
+| `mir::NonDivergingIntrinsic::CopyNonOverlapping(mir::CopyNonOverlapping { src, dst, count })` | `NonDivergingIntrinsic::CopyNonOverlapping(CopyNonOverlapping { src: translate_operand(src), dst: translate_operand(dst), count: translate_operand(count) })` |
+
+#### 22.6.3 `Statement` wrapper translation
+
+```text
+translate_statement(mir::Statement<'tcx> { source_info, kind, debuginfos })
+  -> Statement {
+       kind: translate_statement_kind(kind),
+       span: translate_span(source_info.span),
+     }
+```
+
+The `source_info.scope` slot is dropped (debuginfo-only;
+§22.1.1). The `debuginfos` field is dropped (DWARF
+emission infrastructure has no C-shape meaning;
+§22.1.1).
+
+### 22.7 Worked examples
+
+Three examples illustrating the three retained
+variants. Bodies are post-monomorphisation,
+post-cleanup-pass-discharge.
+
+#### 22.7.1 `Assign` (the central case)
+
+```rust
+fn add_one(x: u32) -> u32 {
+    let y = x + 1;
+    y
+}
+```
+
+Body (sketch):
+
+```text
+bb0: {
+    _2 = const 1_u32;                     // Assign(_2, Use(Constant(c1)))
+    _3 = Add(move _1, move _2);           // Assign(_3, BinaryOp(Add, Move(_1), Move(_2)))
+    _0 = move _3;                          // Assign(_0, Use(Move(_3)))
+    return;                                // (terminator -- stage 9)
+}
+```
+
+Three `Statement::Assign(Place, Rvalue)` instances,
+each lowering through stage-7's `Rvalue` vocabulary
+to a different shape: `Use` for the constant load and
+return-place forward; `BinaryOp` for the arithmetic.
+None of the dropped variants
+(`FakeRead`/`AscribeUserType`/`StorageLive`/etc.)
+appears.
+
+#### 22.7.2 `SetDiscriminant`
+
+```rust
+enum State { Idle, Configured, Running }
+fn advance(s: &mut State) {
+    *s = State::Configured;
+}
+```
+
+Body (sketch, post-cleanup):
+
+```text
+bb0: {
+    discriminant((*_1)) = 1;              // SetDiscriminant((*_1), VariantIdx(1))
+    return;
+}
+```
+
+A single `Statement::SetDiscriminant(place, vidx)`
+where `place` is `(*_1)` (Deref of the `&mut State`
+parameter) and `vidx` is `VariantIdx(1)` (the
+`Configured` variant). The target type is recoverable
+from `place_ty((*_1)) = Ty::Enum { item: <ItemId of
+State>, args: [], layout: <Layout of State> }`. `State`
+has 3 fieldless variants, so the variant_index is
+in-range; the bound check reads
+`Ty::Enum`'s `LayoutKind::Enum.shape ->
+EnumShape::Multiple { variants, .. } -> variants.len()
+== 3`, and `vidx == 1 < 3` holds.
+
+A reader reading the optimized_mir for this body
+verifies B-2 (`vidx < 3`), B-3 (`place_ty` is enum-
+Adt), and the §22.5.1 rejection rows do not fire
+(none of the dropped variants appears).
+
+#### 22.7.3 `Intrinsic` (both arms)
+
+```rust
+fn assume_and_copy(p: *mut u32, q: *const u32, n: usize) {
+    unsafe {
+        core::intrinsics::assume(!p.is_null());
+        core::ptr::copy_nonoverlapping(q, p, n);
+    }
+}
+```
+
+Body (sketch, post-cleanup, post-`LowerIntrinsics`):
+
+```text
+bb0: {
+    _4 = Eq(move _1, const 0_usize as *mut u32);  // computes !p.is_null() inverted
+    _5 = Not(move _4);
+    assume(move _5);                                // Intrinsic(Assume(Move(_5)))
+    copy_nonoverlapping(src: move _2, dst: move _1, count: move _3);
+                                                    // Intrinsic(CopyNonOverlapping{...})
+    return;
+}
+```
+
+Two `Statement::Intrinsic` instances:
+- `Intrinsic(NonDivergingIntrinsic::Assume(Move(_5)))`
+  where `operand_ty(Move(_5)) == Ty::Bool` (B-4
+  satisfied).
+- `Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(CopyNonOverlapping { src: Move(_2), dst: Move(_1), count: Move(_3) }))`
+  where:
+  - `operand_ty(Move(_2)) == Ty::Ptr(u32_ty_id, Mutability::Not)` (the `*const u32`),
+  - `operand_ty(Move(_1)) == Ty::Ptr(u32_ty_id, Mutability::Mut)` (the `*mut u32`),
+  - `pointee(_2) == pointee(_1) == u32_ty_id` (B-5
+    pointee-equality satisfied),
+  - `operand_ty(Move(_3)) == Ty::Uint(UintKind::Usize)`
+    (B-5 count-type satisfied).
+
+C-emission shapes (stage 14):
+- `Assume(...)` -> `__builtin_assume(_5)` (clang) or
+  `if (!_5) __builtin_unreachable()` (gcc fallback).
+- `CopyNonOverlapping{...}` -> `memcpy(_1, _2, _3 * sizeof(uint32_t))`.
+
+Note the **argument-order swap**: rustc's
+`copy_nonoverlapping(src, dst, count)` is `(_2, _1, _3)`
+in body source order; C's `memcpy(dst, src, count)`
+is `(_1, _2, _3 * sizeof T)`. The named `src` /
+`dst` fields on the `CopyNonOverlapping` payload struct
+prevent this swap from being silently confused at the
+bridge or codegen sites.
+
+### 22.8 Rendering
+
+See `pretty-printer.md` §7.4.
+
+---
+
+
+## 23. Terminator vocabulary
+
+The `Terminator` vocabulary is the **control-flow-edge
+surface** of MIR -- the typed expression of "how a basic
+block exits and where execution continues." The bridge
+fills it from rustc's `mir::TerminatorKind<'tcx>`;
+downstream consumers (stage 10 basic blocks --
+`BasicBlock.terminator: Terminator`; stage 11 bodies;
+stage 14 backends) read it as the per-block control-flow
+transfer ending each basic block.
+
+Stage 9 sits **fifth in the MIR pipeline** (stages 5-11
+form a strict bottom-up chain: places -> operands ->
+rvalues -> statements -> **terminators** -> basic blocks
+-> bodies). Stage-9 content embeds stage-1 / stage-3 /
+stage-5 / stage-6 vocabulary (no Rvalue or Statement
+embeddings at the Terminator surface).
+
+### 23.1 `Terminator` struct and `TerminatorKind` enum
+
+#### 23.1.1 `Terminator` wrapper struct
+
+```rust
+/// A control-flow transfer ending a basic block, with
+/// the source location it derives from. Body-local
+/// content; lives inline inside basic-block storage,
+/// not in any top-level interner table. Equality is
+/// structural.
+pub struct Terminator {
+    pub kind: TerminatorKind,
+    pub span: Span,
+}
+```
+
+The wrapper carries exactly one diagnostic field
+(`span`) beyond the variant payload. **Dropped from
+rustc:**
+- `source_info.scope: SourceScope` -- debuginfo-only
+  DWARF-emission index. RegseqModel does not emit
+  DWARF (per stage-1 spec rejection of debuginfo
+  storage on grounds of C-shape preservation). Same
+  drop as §22.1.1 for Statement.
+
+The `span: Span` field uses the stage-1 `Span` form
+inline (per top-level `spec.md` §5.3, which carries
+`Span` as a plain inline struct, not via a `SpanId`
+interner -- spans are not deduplicated). No new
+machinery introduced by stage 9.
+
+#### 23.1.2 `TerminatorKind` enum
+
+```rust
+/// Closed 6-variant set covering every basic-block exit
+/// in well-formed driver MIR post-pipeline. Any rustc
+/// `TerminatorKind<'tcx>` variant outside this set is
+/// either pipeline-discharged (FalseEdge, FalseUnwind,
+/// Yield, CoroutineDrop, UnwindResume, UnwindTerminate)
+/// or DSL-rejected (TailCall, InlineAsm); see §23.6.1.
+/// Drop is collapsed at the bridge to a synthetic Call
+/// per §23.4.
+pub enum TerminatorKind {
+    /// Unconditional branch. Single successor.
+    Goto(BlockId),
+
+    /// Multi-target conditional branch on an integer-
+    /// typed discriminant. The closed-form `cases` list
+    /// plus an `otherwise` block; see §23.3.2.
+    SwitchInt {
+        discr:   Operand,
+        targets: SwitchTargets,
+    },
+
+    /// Function return. The return value lives at
+    /// `LocalId::RETURN_PLACE` (`_0`); its type is
+    /// `FnSig.output()` (stage 11). No payload.
+    Return,
+
+    /// Terminating UB marker. Executing this terminator
+    /// is undefined behaviour. Emitted naturally from
+    /// `loop {}` patterns and as the output of cleanup-
+    /// pass simplifications under panic=abort.
+    Unreachable,
+
+    /// Function call. `callee` distinguishes
+    /// compile-time-resolved Direct calls from
+    /// runtime-resolved Indirect calls (function-
+    /// pointer calls and post-rewrite virtual dispatch);
+    /// see §23.3.1. `target = None` indicates a
+    /// divergent call (callee does not return; e.g.,
+    /// `panic!()`, `-> !` callee).
+    Call {
+        callee:      CallCallee,
+        args:        Box<[Operand]>,
+        destination: Place,
+        target:      Option<BlockId>,
+    },
+
+    /// Guarded conditional branch. If `cond != expected`,
+    /// the runtime invokes the panic helper with `msg`;
+    /// otherwise execution continues at `target`. Under
+    /// panic=abort, "invokes the panic helper" means
+    /// "calls a chosen abort routine and follows
+    /// `__builtin_unreachable()`."
+    Assert {
+        cond:     Operand,
+        expected: bool,
+        msg:      AssertKind,
+        target:   BlockId,
+    },
+}
+```
+
+**Cardinality 6.** Smallest closed surface that covers
+well-formed driver MIR post-pipeline. See
+`discussions.md` D-9-1.1 for the cardinality decision
+and prior-art comparison.
+
+#### 23.1.3 What's dropped from rustc's `TerminatorKind`
+
+Eight rustc variants do not appear in the RegseqModel
+surface; one is collapsed at the bridge.
+
+**Pipeline-discharged (6 rustc variants):**
+- `FalseEdge { real_target, imaginary_target }` --
+  `CleanupPostBorrowck` rewrites to
+  `Goto(real_target)` at
+  `rustc_mir_transform/src/cleanup_post_borrowck.rs:67-74`;
+  pass is `is_required: true`.
+- `FalseUnwind { real_target, unwind }` -- same pass,
+  same site at `cleanup_post_borrowck.rs:69`.
+- `Yield { ... }` -- `coroutine::StateTransform`
+  discharges; stage-3 §15.1 type-rejects coroutines
+  (double-discharged).
+- `CoroutineDrop` -- same pass + same type-rejection.
+- `UnwindResume` -- under panic=abort,
+  `AbortUnwindingCalls` rewrites unwind edges to
+  `UnwindAction::Unreachable` at
+  `rustc_mir_transform/src/abort_unwinding_calls.rs:115-121`
+  (the conditional rewrite when
+  `!call_can_unwind || !target_supports_unwinding`);
+  dead-block removal at
+  `rustc_mir_transform/src/abort_unwinding_calls.rs:137-138`.
+  Cleanup blocks become unreachable (Resume only lives
+  in cleanup blocks per
+  `rustc_middle/src/mir/syntax.rs:725-727`); SimplifyCfg
+  prunes them.
+- `UnwindTerminate(reason)` -- same panic=abort pruning
+  path.
+
+**DSL-rejected (2 rustc variants):**
+- `TailCall { func, args, fn_span }` -- rustc supports
+  under `#![feature(explicit_tail_calls)]` (unstable);
+  driver-source DSL does not include the construct.
+- `InlineAsm { ... }` -- rustc supports unconditionally;
+  no pipeline pass discharges it. DSL has explicit
+  domain-specific intrinsics (MMIO, synchronization,
+  reset, clock, etc.) for low-level operations.
+
+**Bridge-collapsed (1 rustc variant):**
+- `Drop { place, target, unwind, replace, drop, async_fut }`
+  -- bridge converts unconditionally to a synthetic
+  `Call` to drop-glue (§23.4). The variant's extras
+  (`replace` / `drop` / `async_fut`) are diagnostic-only
+  or async-coroutine-only; both subsumed (no
+  RegseqModel-side carry).
+
+The full registry with diagnostic shape and discharge
+mechanism per row lives at §23.6.1.
+
+#### 23.1.4 `Terminator.successors()` -- per-variant successor enumeration
+
+`Terminator::successors(&self) -> impl Iterator<Item = BlockId>`
+is the canonical iterator over the BlockIds reachable
+from a given Terminator's control-flow exit. The order
+is per-variant fixed and stable across builds:
+
+| Variant | Successors (in iteration order) |
+|---|---|
+| `Goto(target)` | `[target]` |
+| `SwitchInt { targets: SwitchTargets { cases, otherwise } }` | the `BlockId` of each `(_, target)` in `cases` (storage order), followed by `[otherwise]` |
+| `Return` | `[]` |
+| `Unreachable` | `[]` |
+| `Call { target: Some(t), .. }` | `[t]` |
+| `Call { target: None, .. }` | `[]` (divergent call; no successor) |
+| `Assert { target, .. }` | `[target]` |
+
+Mirrors rustc's `TerminatorKind::successors()` at
+`rustc_middle/src/mir/terminator.rs:527-568` for the
+retained variants. The order is deterministic
+per-build (no monomorphization-induced reordering).
+B-Successors-Valid (§24.6.2) ensures every yielded
+`BlockId` is in `0..body.basic_blocks.len()` and is
+walk-pre-checked at §24.4.3 step 2 before any DFS
+traversal indexes into `body.basic_blocks`.
+
+Consumers include §24.4.3 stage-11 walk-impl
+(DFS-RPO from `BlockId(0)`), §24.6.2's
+B-Successors-Valid pre-check, and `regseq-analysis`
+CFG analyses (predecessors, dominators).
+
+### 23.2 Per-variant payload shapes
+
+The per-variant payload structure of each `TerminatorKind`
+variant. All fields are flat (no `Box<...>` indirection
+on payloads except `args: Box<[Operand]>` for
+slim-pointer storage of variable-length arg lists).
+
+#### 23.2.1 `Goto(BlockId)`
+
+Single-field flat tuple. The `BlockId` resolves to a
+basic block in the enclosing body's `basic_blocks`
+table (stage-10 vocabulary). Universal across all
+prior-art projects; no payload alternatives worth
+surveying.
+
+#### 23.2.2 `SwitchInt { discr, targets }`
+
+Two named fields:
+- `discr: Operand` -- the value being tested. Per
+  §23.6.2 B-1, `discr`'s type ∈ {`Ty::Bool`, `Ty::Char`,
+  `Ty::Int(_)`, `Ty::Uint(_)`}. Enum-discriminant
+  switches reach SwitchInt only via a preceding
+  `Rvalue::Discriminant` projection (stage 7) that
+  produces an integer-typed Operand; SwitchInt itself
+  never sees an enum-typed discr.
+- `targets: SwitchTargets` -- the (value -> block)
+  mapping plus the otherwise destination. Storage shape
+  per §23.3.2.
+
+#### 23.2.3 `Return`
+
+Unit variant; no payload. The return value lives
+implicitly at `LocalId::RETURN_PLACE` (`_0` per
+stage-1's body-local ID convention). Its type is reachable
+two ways: directly as `Body.local_decls[RETURN_PLACE].ty`
+(the body-local positional convention); or via the owning
+Function Instance's signature
+`model.sigs[inst.kind.as_function().fn_sig].output()`
+per the §23.6.2 `callee_fn_sig` helper applied to the
+returning Body's owning Instance (Option B; supersedes
+stage-11 D-11-3's Item-side framing). The Terminator
+carries no operand because the return value is at `_0`
+post-`optimized_mir`.
+
+#### 23.2.4 `Unreachable`
+
+Unit variant; no payload. Terminating UB marker.
+Universal across all four prior-art projects as a unit
+variant.
+
+#### 23.2.5 `Call { callee, args, destination, target }`
+
+Four named fields:
+- `callee: CallCallee` -- per §23.3.1. `Direct(InstanceId)`
+  for compile-time-resolved calls; `Indirect(Operand)`
+  for function-pointer calls and post-stage-11-rewrite
+  virtual-dispatch calls.
+- `args: Box<[Operand]>` -- variable-length argument
+  list. `Box<[T]>` matches §21's `Aggregate` storage
+  shape (slim-pointer + length, no `Vec` overhead).
+  Per-arg spans dropped per §23.1.1's wrapper-only span
+  policy; per-arg diagnostic granularity falls
+  back to the Terminator-level `span`.
+- `destination: Place` -- where the return value is
+  written. Always present in `optimized_mir` (rustc
+  pre-allocates the destination Place post-cleanup; the
+  source-MIR `Option<Place>` shape is gone).
+- `target: Option<BlockId>` -- `Some(bb)` indicates
+  successor block on normal return; `None` indicates a
+  divergent call (callee does not return -- e.g.,
+  `panic!()`, `-> !` callee, `core::intrinsics::unreachable()`).
+
+**Dropped from rustc Call payload:**
+- `unwind: UnwindAction` -- under panic=abort, only
+  `Continue` and `Unreachable` survive at our consumption
+  point and collapse semantically (no cleanup edges).
+  Preserving the field would store a 1-bit flag with no
+  consumer.
+- `call_source: CallSource` -- 5-variant diagnostic enum
+  (`OverloadedOperator` / `MatchCmp` / `Misc` / `Use` /
+  `Normal`); rustc itself uses it only for "better error
+  messages." No C-codegen-relevant information.
+- `fn_span: Span` -- function-position span without the
+  receiver; subsumed by Terminator-level `span`.
+
+#### 23.2.6 `Assert { cond, expected, msg, target }`
+
+Four named fields:
+- `cond: Operand` -- the condition operand. Per §23.6.2
+  B-2, `cond`'s type = `Ty::Bool`.
+- `expected: bool` -- the expected value of `cond`. If
+  `cond != expected`, the runtime invokes the panic
+  helper.
+- `msg: AssertKind` -- the panic-message data per
+  §23.3.3. 8-variant subset of rustc's 11-variant
+  `AssertKind` (drops 3 coroutine-only variants).
+- `target: BlockId` -- success-path successor block.
+
+**Assert is classified as a Terminator** (not a
+Statement, per the Charon-style alternative).
+Compiler-theory framing: Assert is a 2-target
+conditional branch (success vs panic), made implicit
+under panic=abort because the panic-side is structurally
+unreachable post-`AbortUnwindingCalls`. CFG analyses see
+it uniformly with `SwitchInt` as a guarded branch
+instruction.
+
+**Dropped from rustc Assert payload:**
+- `unwind: UnwindAction` -- same rationale as Call's
+  unwind drop above.
+
+### 23.3 Sub-enums and sub-structs
+
+Three new types introduced at stage 9: `CallCallee`,
+`SwitchTargets`, `AssertKind`. None are interned (same
+inline-storage rule as §23.5).
+
+#### 23.3.1 `CallCallee`
+
+```rust
+/// Closed 2-arm classification of `Call.callee`.
+/// `Direct` carries a compile-time-resolved
+/// `InstanceId`; `Indirect` carries a runtime function-
+/// pointer Operand. Universal IR distinction across
+/// LLVM (`call` vs SSA-value), Cranelift (`call` vs
+/// `call_indirect`), Charon
+/// (`FnOperand::{Regular(FnPtr), Move(Place)}`), and
+/// mrustc (`CallTarget::{Path, Value, Intrinsic}`).
+pub enum CallCallee {
+    /// Direct call: callee resolves at compile time to
+    /// a specific InstanceKind (Item, Intrinsic, shim,
+    /// drop-glue, etc. per stage-1 InstanceKind closure).
+    /// Subject to the closure-completeness invariant
+    /// per §23.6.2 B-7.
+    Direct(InstanceId),
+
+    /// Indirect call: callee is a runtime function-
+    /// pointer value. Used for:
+    /// (a) function-pointer calls --
+    ///     `let f: fn(i32) -> i32 = some_fn; f(x)`.
+    /// (b) post-stage-11-rewrite virtual dispatch --
+    ///     vtable-loaded function pointer through the
+    ///     receiver's fat-pointer metadata field.
+    /// Subject to the operand-type-is-FnPtr invariant
+    /// per §23.6.2 B-5.
+    Indirect(Operand),
+}
+```
+
+The `Direct` / `Indirect` split serves three call shapes:
+direct calls to monomorphized functions (`Direct`),
+function-pointer calls (`Indirect(Operand)` with
+`Operand: Ty::FnPtr`), and post-stage-11-rewrite virtual
+dispatch (`Indirect(Operand)` with `Operand` carrying
+the loaded vtable function pointer). See
+`discussions.md` D-9-3 for the load-bearing rationale
+and the foreclosed `InstanceKind::Virtual` alternative.
+
+#### 23.3.2 `SwitchTargets`
+
+```rust
+/// Closed-form switch target table: explicit
+/// (case_value -> block) pairs plus a structurally
+/// separate otherwise destination. No positional
+/// "last entry is otherwise" convention; the type
+/// system enforces the otherwise field is present.
+pub struct SwitchTargets {
+    /// (case value, branch target) pairs. Empty when
+    /// the switch has no cases; the otherwise field
+    /// then carries the entire dispatch.
+    pub cases: Box<[(u128, BlockId)]>,
+
+    /// Catch-all destination when `discr` matches no
+    /// case value.
+    pub otherwise: BlockId,
+}
+```
+
+The case-value width is `u128`. Stage-1's `Operand` /
+`Const` machinery preserves integer values up to 128
+bits. The rustc `SwitchTargets.values` field uses
+`Pu128` (a packed u128 wrapper for HashStable);
+RegseqModel uses bare `u128` since we do not implement
+HashStable. See `discussions.md` D-9-6 for the
+explicit-split-vs-rustc-mirror rationale.
+
+#### 23.3.3 `AssertKind`
+
+```rust
+/// Closed 8-variant set of panic-message kinds for
+/// `Assert.msg`. Subset of rustc's 11-variant
+/// `AssertKind<O>` (drops 3 coroutine-only variants per
+/// D-9-5: `ResumedAfterReturn`, `ResumedAfterPanic`,
+/// `ResumedAfterDrop`). Coroutines are stage-3 §15.1
+/// type-rejected, so the dropped variants are
+/// structurally unreachable in well-formed
+/// RegseqModel bodies.
+pub enum AssertKind {
+    /// Index-out-of-bounds: `index >= len`. Operand
+    /// types: `len: Ty::Uint(_)` (typically usize),
+    /// `index: Ty::Uint(_)` (typically usize).
+    BoundsCheck { len: Operand, index: Operand },
+
+    /// Arithmetic overflow on a checked binary op.
+    /// `BinOp` reuses stage-7's BinOp vocabulary
+    /// (Add, Sub, Mul, Div, Rem, Shl, Shr, ...).
+    Overflow(BinOp, Operand, Operand),
+
+    /// Negation overflow: `-i128::MIN` etc.
+    OverflowNeg(Operand),
+
+    /// `x / 0`. Operand is the divisor.
+    DivisionByZero(Operand),
+
+    /// `x % 0`. Operand is the divisor.
+    RemainderByZero(Operand),
+
+    /// `*p` where p has alignment requirement R but
+    /// `(p as usize) % R != 0`. `required` is R as a
+    /// usize-typed operand; `found` is `p` as a usize.
+    MisalignedPointerDereference {
+        required: Operand,
+        found:    Operand,
+    },
+
+    /// `*p` where `p` is null. No operand carried (the
+    /// failing pointer was a null literal).
+    NullPointerDereference,
+
+    /// Construction of an enum value with a discriminant
+    /// outside the valid set. Operand is the
+    /// out-of-range discriminant value.
+    InvalidEnumConstruction(Operand),
+}
+```
+
+See `discussions.md` D-9-5 for the foreclosed
+alternatives (rustc_public's preserve-all-11; Charon's
+3-variant `AbortKind` collapse) and the type-
+rejection-cascade rationale for dropping the 3
+coroutine variants.
+
+### 23.4 Drop-as-Call collapse at the bridge
+
+The bridge converts each MIR `TerminatorKind::Drop`
+into a synthetic `TerminatorKind::Call` to the
+drop-glue `Instance` for `place_ty`. Stage-9 surface
+has **no separate `Drop` variant**. (See
+`discussions.md` D-9-2 for the C-semantics +
+closure-correctness + no-information-loss rationale.)
+
+**Bridge translation rule (5 steps):**
+
+1. **Resolve drop-glue Instance.** Compute
+   `place_ty = place.ty(local_decls, tcx)`; call
+   `Instance::resolve_drop_in_place(tcx, place_ty)` to
+   obtain the drop-glue `Instance<'tcx>`; bridge-intern
+   as a RegseqModel `InstanceId`. The resulting Regseq
+   `Instance.kind = InstanceKind::Function { flavor:
+   <F>, .. }` where `F` depends on `place_ty`:
+   - **Concrete `place_ty`** (struct, enum, tuple,
+     etc.): rustc resolves to
+     `ty::InstanceKind::DropGlue(def_id, Some(ty))`;
+     the Regseq Instance has
+     `flavor = FunctionInstanceFlavor::DropGlue` and
+     keys with `flavor = FunctionInstanceFlavor::DropGlue`
+     and `fn_shim_disambig = 10` (per §9.3
+     `rustc_instance_kind_sort_rank`) on the F4-2
+     RegseqInstanceKey.
+   - **`place_ty = Ty::Dynamic { ... }`** (`dyn Trait`):
+     rustc resolves to
+     `ty::InstanceKind::Virtual(drop_fn.def_id(), 0)`
+     per `rustc_codegen_ssa/src/mir/block.rs:640-641`;
+     the Regseq Instance has
+     `flavor = FunctionInstanceFlavor::Virtual` and
+     `virtual_idx = Some(0)` (the
+     `COMMON_VTABLE_ENTRIES_DROPINPLACE = 0` convention
+     per `rustc_middle/src/ty/vtable.rs:45-49`). The
+     vtable index is **stored on the Regseq Instance's
+     `virtual_idx` field** (per §9.4 Function variant)
+     and
+     consumed by the stage-11 vtable-indirect rewrite,
+     which handles index-0 / drop-slot virtual calls
+     uniformly with index-N / method-slot virtual
+     calls -- same `flavor=Virtual` predicate, same
+     `virtual_idx` lookup, same projection synthesis
+     and args rewrite.
+
+2. **No ZST elision at the bridge.** Always emit the
+   Call to the no-op drop-glue when
+   `!place_ty.needs_drop(...)`; let stage-14 codegen
+   peephole `Call(no_op_drop_glue)` -> `<no emission>`.
+
+3. **Synthesize the Call.**
+   ```rust
+   TerminatorKind::Call {
+       callee:      CallCallee::Direct(drop_glue_instance_id),
+       args:        Box::new([Operand::Move(<&raw mut place> temp)]),
+       destination: <fresh unit-typed temp>,
+       target:      Some(target),  // copied from rustc Drop
+   }
+   ```
+
+4. **Synthesize the `&raw mut place` operand.** The
+   bridge **appends** the Statement
+   `Statement::Assign(<fresh_local>, Rvalue::RawPtr(Mutability::Mut, place))`
+   as the **last entry** of the current basic block's
+   construction-time `Vec<Statement>` buffer
+   (finalized as `Box<[Statement]>` per §24.1.2
+   stage-10 D-10-1.2 at block-construction completion)
+   -- positioned immediately before the synthetic Call
+   terminator (and **after** all earlier statements
+   that may have mutated `place`). The Call argument
+   is `Operand::Move(<fresh_local>)`. Stage-6
+   `Operand` does NOT admit an `&raw mut place` form
+   directly (per D-6-1's 3-variant surface), so this
+   terminator-adjacent insertion is the only path. The
+   fresh `LocalId` allocation is outbound to stage 11.
+
+   *Why append, not prepend.* Earlier statements in the
+   basic block may write to `place`. The synthesised
+   `&raw mut place` must observe the latest write at
+   the moment Drop runs, which is the end of the basic
+   block (rustc's Drop is the basic-block terminator;
+   no statements follow it). Appending the synthetic
+   Assign after all earlier statements gives the
+   correct pointer value.
+
+5. **Synthesize the unit return slot.** Drop-glue
+   returns `()`. Allocate a fresh `LocalId` of type
+   `Ty::Tuple([])` for the destination. Outbound to
+   stage 11.
+
+**Implementer's references:**
+- **rustc-internal precedent (with two intentional
+  divergences).** rustc's codegen-SSA at
+  `rustc_codegen_ssa/src/mir/block.rs:599-693`
+  (`codegen_drop_terminator`) handles three cases:
+  1. **ZST drop elision** (`block.rs:606-613`): when
+     the resolved drop-glue is `DropGlue(_, None)`,
+     rustc branches directly to the target without
+     emitting a call. RegseqModel does NOT do this at
+     the bridge; ZST elision is deferred to stage-14
+     codegen peephole.
+  2. **Dynamic-drop vtable path** (`block.rs:624-657`):
+     for `ty::Dynamic` (`dyn Trait`) drops, rustc
+     loads the drop_in_place fn-pointer from the
+     vtable and dispatches indirectly via
+     `ty::InstanceKind::Virtual(drop_fn.def_id(), 0)`.
+     RegseqModel mirrors this resolution at the
+     bridge: when `place_ty = Ty::Dynamic { ... }`,
+     step 1 above produces a Regseq Instance with
+     `flavor = FunctionInstanceFlavor::Virtual` (vtable
+     index 0). The stage-11 vtable-indirect rewrite
+     then handles index-0 drop-slot virtual calls
+     uniformly with index-N method-slot virtual
+     calls -- same `flavor=Virtual` predicate, same
+     `PtrMetadata -> Deref -> Field(idx)` projection
+     synthesis, same args-rewrite (extract data
+     pointer from fat pointer). This keeps the
+     rewrite mechanism uniform across method virtual
+     calls and drop virtual calls; no separate
+     dyn-Trait-drop special case at either bridge
+     time or rewrite time.
+  3. **Concrete dispatch** (`block.rs:680-692`):
+     `helper.do_call(...)` resolves drop-glue via
+     `Instance::resolve_drop_in_place(tcx, ty)` and
+     dispatches as if the source was an explicit
+     `drop_in_place::<T>(p)` call. RegseqModel's
+     bridge mirrors this case for non-`dyn Trait`
+     types.
+
+  RegseqModel's collapse-at-bridge thus differs from
+  rustc's collapse-at-codegen on (i) ZST elision
+  policy (deferred vs done) and (ii) `dyn Trait` drop
+  handling (uniform with virtual method rewrite vs
+  special-case). Both divergences are deliberate
+  layering choices, not rustc-precedent contradictions.
+- **Charon precedent.** Charon's optional
+  `--desugar-drops` pass at
+  `charon-lib/src/transform/normalize/desugar_drops.rs:23-72`
+  is structurally identical: rewrites
+  `Drop { place, target, ... }` into a `Call` with
+  `&raw mut place` arg, fresh unit-typed return slot,
+  copied `target` / `on_unwind` block ids. RegseqModel
+  applies the same shape unconditionally at the bridge
+  instead of as an opt-in normalize pass.
+- **Charon's belt-and-braces ZST elision.** Charon's
+  `filter_trivial_drops` pass collapses no-op-destruct
+  Drops directly to `Goto`. RegseqModel defers this
+  optimization to stage-14 codegen peephole instead.
+
+### 23.5 Identity and storage
+
+Terminators are **body-local content**. Each
+`Terminator` lives inline inside the enclosing basic
+block; there is **no top-level `terminators` interner
+table** and **no `TerminatorId` index type**.
+
+The enclosing basic-block container (`BasicBlock`) is
+formally pinned at §24:
+
+```rust
+pub struct BasicBlock {
+    pub statements: Box<[Statement]>,
+    pub terminator: Terminator,
+}
+```
+
+(See §24.1 for the full struct shape, §24.1.2 for the
+`Box<[Statement]>` rationale, and §24.5 for identity
+and storage at the basic-block level.)
+
+**Equality and hashing** are `derive(PartialEq, Hash)`
+on `BasicBlock` walking through to `Terminator`'s
+structural derive, then through to embedded
+`Operand` / `Place` / `InstanceId` (per stages 5 / 6
+/ 1).
+
+See `discussions.md` D-9-7 for the
+no-interning rationale (universal precedent + no
+deduplication win + pattern-match consistency with
+stages 5-8 inline-storage rule).
+
+**F4 / F4-2 cross-build identity is OUT of scope.**
+Terminator content is per-build structural and need
+not be canonicalized across build environments. Same
+scope reduction as stages 5-8.
+
+### 23.6 Terminator-site invariants
+
+4-part registry: rejection table (Part A; cross-ref
+to §23.6.1), positive invariants (Part B; §23.6.2),
+walk-implementation deferral (Part C; §23.6.3), F4 /
+F4-2 OUT-of-scope note (Part D; per §23.5).
+
+#### 23.6.1 Rejection table (9 rows)
+
+Two-category framing:
+**pipeline-discharged** (rows 1-6) vs **DSL-only**
+(rows 7-8); plus row 9 for the bridge-collapsed Drop.
+
+| # | rustc variant | Category | Discharge mechanism | Diagnostic message |
+|---|---------------|----------|---------------------|--------------------|
+| 1 | `FalseEdge { real_target, imaginary_target }` | Pipeline-discharged | `CleanupPostBorrowck` rewrites to `Goto(real_target)` at `cleanup_post_borrowck.rs:67-74`; pass is `is_required: true`. | "internal error: borrowck FalseEdge survived CleanupPostBorrowck -- pipeline misconfiguration" |
+| 2 | `FalseUnwind { real_target, unwind }` | Pipeline-discharged | Same pass, same site at `cleanup_post_borrowck.rs:69`. | "internal error: borrowck FalseUnwind survived CleanupPostBorrowck -- pipeline misconfiguration" |
+| 3 | `Yield { value, resume, resume_arg, drop }` | Pipeline-discharged (double-discharged) | `coroutine::StateTransform` at `rustc_mir_transform/src/lib.rs:660` + stage-3 §15.1 type-rejection. | "internal error: coroutine Yield survived StateTransform; coroutine type-rejection at stage-3 §15.1 should have prevented reach" |
+| 4 | `CoroutineDrop` | Pipeline-discharged (double-discharged) | Same pass + same type-rejection. | "internal error: CoroutineDrop survived StateTransform; coroutine type-rejection at stage-3 §15.1 should have prevented reach" |
+| 5 | `UnwindResume` | Pipeline-discharged (panic=abort) | `AbortUnwindingCalls` rewrites unwind edges to `UnwindAction::Unreachable` at `abort_unwinding_calls.rs:115-121`; dead cleanup-block removal at `abort_unwinding_calls.rs:137-138`; cleanup blocks become unreachable; Resume only lives in cleanup blocks per `rustc_middle/src/mir/syntax.rs:725-727`; `SimplifyCfg::PreOptimizations` (in our cleanup-pass whitelist) prunes them. | "internal error: UnwindResume survived panic=abort cleanup-block pruning -- pipeline misconfiguration or non-abort panic strategy" |
+| 6 | `UnwindTerminate(reason)` | Pipeline-discharged (panic=abort) | Same panic=abort pruning path. | "internal error: UnwindTerminate survived panic=abort cleanup-block pruning -- pipeline misconfiguration or non-abort panic strategy" |
+| 7 | `TailCall { func, args, fn_span }` | DSL-only | rustc supports under `#![feature(explicit_tail_calls)]` (unstable). | "tail calls are not supported in Regseq driver source; the `become` expression and `#![feature(explicit_tail_calls)]` are not part of the DSL surface" |
+| 8 | `InlineAsm { ... }` | DSL-only | rustc supports unconditionally; no pipeline pass discharges it. | "inline assembly is not supported in Regseq driver source; use the domain-specific intrinsics (MMIO, synchronization, reset, clock, ...) for low-level operations" |
+| 9 | `Drop { place, target, unwind, replace, drop, async_fut }` | **Bridge-collapsed (NOT rejected)** | Per §23.4, the bridge converts Drop into a synthetic Call. This row is in the table for completeness so the implementer doesn't list Drop as "supported as-is." | n/a -- collapsed per §23.4 |
+
+Rows 1-8 emit an `unsupported_construct!`-style
+diagnostic at the bridge translation match site.
+Row 9 emits no diagnostic; it's a bridge translation
+rewrite producing a synthetic Call.
+
+**Diagnostic discipline.** rustc_public's bridge
+translator
+(`rustc_public_bridge/src/unstable/convert/stable/mir.rs:704-790`)
+surfaces the discipline distinction between
+`unreachable!()` (correctness precondition violated:
+rows 1-6 here) and `todo!()` (incomplete
+implementation: not applicable to rows 7-8 here, which
+are deliberate DSL-source rejections). RegseqModel
+bridge follows the same `unsupported_construct!`-style
+pattern stages 1, 3, 5, 6, 7, 8 use.
+
+#### 23.6.2 Positive invariants
+
+2 inherited + 9 stage-9-introduced (11 total).
+
+**Callee-signature lookup helper.** Several invariants
+below reference the callee's `FnSig`. Per stage-12
+D-12-1.4 (Option B), `FnSig` lives on
+`InstanceKind::Function` (per-mono substituted signature).
+Define:
+
+```text
+callee_fn_sig(callee_id: InstanceId) -> &FnSig :=
+    let inst = &model.instances[callee_id];
+    let fn_sig_id = inst.kind.as_function().fn_sig;     // §9.4 InstanceKind::Function {fn_sig, ...}
+    &model.sigs[fn_sig_id]                              // §14.4 FnSigInterner
+```
+
+Two-level indirection (Instance -> FnSigId -> FnSig).
+The Item indirection that stage-11's framing required is
+removed under Option B -- per-mono signature is directly
+on Instance, not via parent Item. See `discussions.md`
+D-12-1.4 for the Option-B reframe rationale (the
+contradiction between pre-mono Item model and Item-side
+post-mono FnSig storage). The B-3 / B-4 / B-6 / B-9
+invariants below use `callee_fn_sig(...)` as the
+resolution shorthand.
+
+**Inherited (2):** stage-9 Terminator embeds Place
+(Call.destination) and Operand (multiple sites);
+Statement-level and Rvalue-level invariants do not
+propagate (those constructs do not appear in
+Terminator content).
+
+- **B-0a** -- All embedded Place content satisfies
+  Place invariants per stage-5 §19.7.
+- **B-0c** -- All embedded Operand content satisfies
+  Operand invariants per stage-6 §20.5.
+
+**Stage-9-introduced (9):**
+
+- **B-1** -- `SwitchInt.discr` Operand has type
+  `∈ {Ty::Bool, Ty::Char, Ty::Int(_), Ty::Uint(_)}`.
+  Stage-3 type-taxonomy match. Enum-discriminant
+  switches reach SwitchInt only via a preceding
+  `Rvalue::Discriminant` (stage-7) projection that
+  produces an integer-typed Operand; SwitchInt itself
+  never sees an enum-typed discr.
+
+- **B-2** -- `Assert.cond` Operand has type `Ty::Bool`.
+  Stage-3 type-taxonomy match.
+
+- **B-3** -- Call destination type matches callee
+  return type **when `target: Some(_)`**. Divergent
+  calls (`target: None`, callee return type is `!`)
+  have an unread destination; B-3 does not apply.
+  **Post-rewrite invariant**: holds after the
+  stage-11 vtable-indirect rewrite has run; pre-
+  rewrite, virtual calls have receiver-type mismatch
+  by design (see B-6).
+  - (Direct, non-Virtual flavor) `destination_ty ==
+    callee_fn_sig(callee_id).output()`.
+  - (Direct, Virtual flavor pre-rewrite) `destination_ty
+    == callee_fn_sig(callee_id).output()`
+    where the fn_sig is rustc's "object-safe" virtual
+    signature (erased receiver). Rewrite preserves
+    return type.
+  - (Indirect post-rewrite) `destination_ty ==
+    operand_ty(callee_operand).output()` where
+    `operand_ty(callee_operand) = Ty::FnPtr(...)` per
+    B-5.
+
+- **B-4** -- Call args length matches callee signature
+  arity. Holds in all forms (Direct non-Virtual,
+  Direct Virtual pre-rewrite, Indirect post-rewrite);
+  the rewrite preserves arity (it changes the receiver
+  TYPE but not the arg count).
+  - (Direct) `args.len() ==
+    callee_fn_sig(callee_id).inputs().len()`.
+  - (Indirect) `args.len() == operand_ty(
+    callee_operand).inputs().len()`.
+
+- **B-5** -- Call callee is callable:
+  - (Direct) `InstanceId` resolves to an
+    `InstanceKind::Function` per top-level `spec.md`
+    §9.4. Always callable by stage-1 instance-closure
+    construction (closure verification per B-7).
+    Rustc-Virtual callees produce `Direct(<id>)` with
+    `FunctionInstanceFlavor::Virtual`; the per-arg type
+    match B-6 holds **post-rewrite** (the receiver type
+    changes from `&dyn Trait` to the erased pointer
+    after the stage-11 vtable rewrite).
+  - (Indirect) `operand_ty(callee_operand) ∈
+    {Ty::FnPtr(_)}`. NOT `Ty::FnDef` (that resolves to
+    Direct).
+  - **Closures are not direct callees in `Call.callee`
+    position.** Closure invocation `c(args)` is
+    desugared at HIR/MIR construction to a Call to the
+    closure's call method (`call_once` / `call_mut` /
+    `call`) -- a synthesised Function Item per §13.1
+    (closure family). The closure value `c` becomes
+    the first argument (receiver) of that synthesised
+    method, not the callee. Direct(InstanceId)
+    referring to a closure call method has
+    `flavor = FunctionInstanceFlavor::Item` per §9.4's
+    bridge-synthesised-Function convention.
+
+- **B-6** -- Per-arg type match. For each
+  `i ∈ 0..args.len()`, `operand_ty(args[i]) ==
+  callee_inputs[i]` where `callee_inputs` comes from
+  the same source as B-4. **Post-rewrite invariant**:
+  holds after the stage-11 vtable-indirect rewrite has
+  run. Pre-rewrite virtual calls have args[0] with
+  type `&dyn Trait` or `&mut dyn Trait` (the fat pointer
+  at the call site) while `callee_fn_sig(callee_id).
+  inputs()[0]` is `*mut ()` -- per §13.2 + §17.2.1, the
+  vtable's erased receiver type is uniformly
+  `Ty::Ptr(unit, Mutability::Mut)` regardless of the
+  source borrow flavor (the const-qualified `*const ()`
+  variant is sound only when the impl's Self contains no
+  UnsafeCell, which is not knowable at the trait-object
+  boundary; the spec pins the mutable-erased-receiver
+  rule uniformly per §13.2 vtable layout). The rewrite
+  resolves the mismatch by extracting `args[0].data`
+  and passing the data pointer in the rewritten call.
+  Stage-11 sequencing: rewrite first, validate after.
+  Catches stage-11 rewrite-pass bugs in any
+  post-rewrite shape.
+
+- **B-7** -- **Closes construction invariant 9.**
+  Every `Direct(InstanceId)` referenced from any
+  Terminator::Call resolves in `model.instances`.
+  `Indirect(Operand)` callees do not pin an InstanceId
+  and do not contribute to the closure check.
+  Load-bearing closure-correctness invariant the stage-1
+  inbound expectation pinned for stage 9.
+
+- **B-8** (Terminator-site projection of the §9.4
+  global biconditional) -- For every
+  `Call.callee = Direct(InstanceId)` in any Terminator
+  whose resolved Regseq Instance has
+  `flavor == FunctionInstanceFlavor::Virtual`, the
+  Instance must satisfy `virtual_idx.is_some()`. The
+  global biconditional `virtual_idx.is_some() iff
+  flavor == Virtual` (covering all Function instances
+  including those not appearing in any Call) lives at
+  §9.4 + §3.3 step 8 model validation. B-8 here is
+  the per-Terminator-site projection ensuring the
+  stage-11 vtable-indirect rewrite's prerequisite
+  holds at every call site whose callee will be
+  rewritten.
+
+- **B-9** (target/callee-output coherence) -- For
+  every `Call`, `target.is_none()` (the call is
+  divergent) iff the callee's return type is
+  `Ty::Never`. Equivalently:
+  - `target == Some(_)` requires callee output `!=
+    Ty::Never`.
+  - `target == None` requires callee output ==
+    `Ty::Never`.
+  Catches bridge-translation bugs that emit a
+  diverging-target Call with a non-`!`-returning
+  callee or vice versa. Same callee-output source as
+  B-3: `callee_fn_sig(callee_id).output()`
+  for Direct, `operand_ty(callee_operand).output()`
+  for Indirect.
+
+#### 23.6.3 Walk-implementation deferral
+
+The walk-pass that applies B-0a/c + B-1-B-9 to every
+Terminator in every basic block is **deferred to
+stage 11** (same pattern as §19.7 / §20.5 / §21.5.3 /
+§22.5.3). Stage 11 owns:
+
+- `Body::validate(...)` walk over all Terminators in
+  all basic blocks.
+- Visitor-trait extensions surfacing `Terminator`,
+  `CallCallee`, `SwitchTargets`, `AssertKind` at
+  body-level walks.
+- Actual `assert!` / `assert_eq!` checks for
+  B-0a/c + B-1-B-9.
+- Bridge-rejection diagnostic emission for §23.6.1 row
+  encounters (most rejection happens at the bridge
+  translation site, not at body-level walk; the walk
+  catches stage-11-rewrite-pass-induced violations of
+  the closed surface).
+
+The deferral is filed in `stage-11/expectations.md`
+"From stage 9" alongside `render_terminator` deferral
+and the body-level vtable-indirect rewrite pass.
+
+### 23.7 Bridge translation rules
+
+Per-rustc-variant rules covering the 6 retained
+variants + the 1 collapsed variant + the 8 rejected
+variants.
+
+**Goto.** Direct passthrough.
+```
+mir::TerminatorKind::Goto { target } ->
+  TerminatorKind::Goto(<bridge_block_id>)
+```
+
+**SwitchInt.** Translate `discr` via stage-6 Operand
+machinery; `targets` per the §23.3.2 explicit-split
+form.
+```
+let n = mir_targets.targets.len();
+let cases = (0..n-1).map(|i| (
+    mir_targets.values[i].into(),     // Pu128 -> u128
+    bridge_block_id(mir_targets.targets[i]),
+)).collect::<Box<[_]>>();
+let otherwise = bridge_block_id(mir_targets.targets[n-1]);
+TerminatorKind::SwitchInt {
+    discr:   translate_operand(&mir_discr),
+    targets: SwitchTargets { cases, otherwise },
+}
+```
+
+**Return / Unreachable.** Trivial passthrough.
+
+**Call.** Four-case translation rule on `Call.func`:
+
+| Rustc `Call.func` | RegseqModel `callee` |
+|--------------------|----------------------|
+| `Operand::Constant(c)` where `c.const_.ty() = Ty::FnDef(def_id, args)` resolves to a non-Virtual Instance | `Direct(<bridge-interned InstanceId>)` -- the resolved Regseq Instance has `kind = InstanceKind::Function { flavor: <non-Virtual variant>, .. }`. |
+| `Operand::Constant(c)` where the resolved rustc Instance has `InstanceKind::Virtual(_, idx)` | `Direct(<bridge-interned InstanceId>)` -- the resolved Regseq Instance has `kind = InstanceKind::Function { flavor: FunctionInstanceFlavor::Virtual, virtual_idx: Some(idx), .. }` (per §9.4). The `virtual_idx` field stores rustc's vtable-slot index from `ty::InstanceKind::Virtual(_, idx)`. The §9.4 construction invariant `virtual_idx.is_some() iff flavor == Virtual` (projected at Direct virtual call sites by §23.6.2 B-8) ensures this field is always populated for Virtual-flavor Instances. **This is the pre-rewrite shape**; stage-11's body-level rewrite walks every `Direct(InstanceId)` and rewrites those whose resolved Instance carries `FunctionInstanceFlavor::Virtual` into `Indirect(Operand)` form via vtable load synthesis at `virtual_idx.unwrap()`. The bridge does NOT reject; it preserves rustc's resolved Virtual Instance verbatim and lets stage 11 do the rewrite. |
+| `Operand::Move(p)` / `Operand::Copy(p)` where `p.ty() = Ty::FnPtr(...)` | `Indirect(Operand::Move(p))` / `Indirect(Operand::Copy(p))` |
+| Anything else | bridge-rejection (mistyped callee shape) |
+
+The remainder of the Call payload:
+- `args`: `mir_args.iter().map(|sp|
+  translate_operand(&sp.node)).collect()` -- strips
+  the `Spanned` wrapper; drops `sp.span`
+  (rustc_public-aligned at
+  `rustc_public_bridge/src/unstable/convert/stable/mir.rs:752`).
+  See `discussions.md` D-9-4 for the consumer-
+  landscape rationale and the supersession of
+  stage-6 D-6-1.3's preservation expectation.
+- `destination`: stage-5 Place machinery.
+- `target`: bridge `BlockId` interner.
+- Drop `unwind` / `call_source` / `fn_span`.
+
+**Assert.** Translate per-field:
+- `cond`: stage-6 Operand machinery.
+- `expected`: passthrough.
+- `msg`: `AssertKind` 8-variant translation (8 rustc
+  variants map one-to-one; 3 coroutine-variants emit
+  bridge-rejection per row 3/4-style discharge).
+- `target`: bridge BlockId interner.
+- Drop `unwind`.
+
+**Drop.** Per §23.4, 5-step bridge translation rule
+into a synthetic `TerminatorKind::Call`.
+
+**Rejected variants** (FalseEdge, FalseUnwind, Yield,
+CoroutineDrop, UnwindResume, UnwindTerminate, TailCall,
+InlineAsm). Bridge emits the per-row diagnostic from
+§23.6.1.
+
+### 23.8 Worked examples
+
+#### 23.8.1 Direct call with multiple args
+
+**Source:**
+```rust
+let sum = my_func(a, b);
+```
+
+**rustc `optimized_mir`:**
+```
+bb3: {
+  _5 = my_func(move _3, copy _4)
+       -> [success: bb4, unwind unreachable];
+}
+```
+
+**RegseqModel:**
+```
+bb3: {
+  // ... pre-statements
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:8,
+    kind: TerminatorKind::Call {
+      callee:      CallCallee::Direct(<my_func InstanceId>),
+      args:        [Operand::Move(_3), Operand::Copy(_4)],
+      destination: _5,
+      target:      Some(bb4),
+    }
+  }
+}
+```
+
+#### 23.8.2 Indirect call through function pointer
+
+**Source:**
+```rust
+let f: fn(i32) -> i32 = some_fn;
+let x = f(5);
+```
+
+**rustc `optimized_mir`:**
+```
+bb3: {
+  _5 = (move _f)(const 5_i32)
+       -> [success: bb4, unwind unreachable];
+}
+```
+
+**RegseqModel:**
+```
+bb3: {
+  // ... pre-statements
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:8,
+    kind: TerminatorKind::Call {
+      callee:      CallCallee::Indirect(Operand::Move(_f)),
+      args:        [Operand::Constant(<5_i32 ConstId>)],
+      destination: _5,
+      target:      Some(bb4),
+    }
+  }
+}
+```
+
+#### 23.8.3 Drop collapsed to Call
+
+**Source:**
+```rust
+{
+    let s = SomeStruct::new();
+    // ... use s
+}  // drop(s) at end of scope
+```
+
+**rustc `optimized_mir`:**
+```
+bb3: {
+  // ... earlier statements
+  drop(_4) -> [return: bb4, unwind unreachable];
+}
+```
+where `_4: SomeStruct` and `SomeStruct: Drop`.
+
+**Bridge output (per §23.4):**
+```
+bb3: {
+  // ... earlier statements
+  _tmp_drop_arg = &raw mut _4;             // pre-statement Assign(Rvalue::RawPtr(Mut, _4))
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:9,
+    kind: TerminatorKind::Call {
+      callee:      CallCallee::Direct(<drop_glue_for_SomeStruct>),
+      args:        [Operand::Move(_tmp_drop_arg)],
+      destination: _tmp_drop_ret,            // fresh, ty = ()
+      target:      Some(bb4),
+    }
+  }
+}
+bb4: {
+  // ... continuation
+}
+```
+
+#### 23.8.4 SwitchInt with otherwise branch
+
+**Source:**
+```rust
+match x {
+    0 => bb_zero(),
+    1 | 2 => bb_one_or_two(),
+    _ => bb_default(),
+}
+```
+
+**rustc `optimized_mir`:**
+```
+bb0: {
+  switchInt(_x) -> [0: bb_zero, 1: bb_one_or_two, 2: bb_one_or_two, otherwise: bb_default];
+}
+```
+
+**RegseqModel:**
+```
+bb0: {
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:5,
+    kind: TerminatorKind::SwitchInt {
+      discr:   Operand::Copy(_x),
+      targets: SwitchTargets {
+        cases: [
+          (0, bb_zero),
+          (1, bb_one_or_two),
+          (2, bb_one_or_two),
+        ],
+        otherwise: bb_default,
+      }
+    }
+  }
+}
+```
+
+#### 23.8.5 Bounds-check Assert
+
+**Source:**
+```rust
+let v = arr[i];   // bounds-checked indexing
+```
+
+**rustc `optimized_mir`:**
+```
+bb3: {
+  _3 = Len(_1);
+  _4 = Lt(copy _2, copy _3);
+  assertEq(move _4, true, "index out of bounds: ...", move _3, copy _2)
+       -> [success: bb4, unwind unreachable];
+}
+```
+
+**RegseqModel:**
+```
+bb3: {
+  _3 = Len(_1);
+  _4 = Lt(_2, _3);
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:13,
+    kind: TerminatorKind::Assert {
+      cond:     Operand::Move(_4),
+      expected: true,
+      msg:      AssertKind::BoundsCheck {
+        len:   Operand::Move(_3),
+        index: Operand::Copy(_2),
+      },
+      target:   bb4,
+    }
+  }
+}
+```
+
+#### 23.8.6 Virtual dispatch (post-stage-11 rewrite shape)
+
+**Source:**
+```rust
+fn dispatch(obj: &dyn Driver) {
+    obj.start();
+}
+```
+
+**rustc `optimized_mir`:**
+```
+bb0: {
+  _0 = <dyn Driver as Driver>::start(move _obj)
+       -> [success: bb1, unwind unreachable];
+}
+```
+where rustc resolves `<dyn Driver as Driver>::start` to
+an Instance with `InstanceKind::Virtual(start_def_id,
+method_idx)`.
+
+**RegseqModel pre-rewrite (immediately after bridge
+translation; before stage-11 rewrite):**
+```
+bb0: {
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:5,
+    kind: TerminatorKind::Call {
+      callee:      CallCallee::Direct(<id_for_virtual>),
+                   // resolved Instance has kind =
+                   //   InstanceKind::Function {
+                   //     flavor:      FunctionInstanceFlavor::Virtual,
+                   //     virtual_idx: Some(method_idx),
+                   //     ..
+                   //   }
+      args:        [Operand::Move(_obj)],   // type: &dyn Driver (fat pointer)
+      destination: _0,
+      target:      Some(bb1),
+    }
+  }
+}
+```
+Note that pre-rewrite, args[0] type is `&dyn Driver`
+while `callee_fn_sig(callee_id).inputs()[0]` is
+`*mut ()` (per §13.2 + §17.2.1, the vtable's erased
+receiver type is uniformly `Ty::Ptr(unit,
+Mutability::Mut)` regardless of source borrow flavor;
+resolved per the §23.6.2 helper through
+`inst.kind.as_function().fn_sig` under stage-12
+D-12-1.4 / Option B). B-6 (per-arg type match) is
+**violated** in this pre-rewrite shape by design;
+stage-11 sequencing runs the rewrite before the
+validate walk.
+
+**RegseqModel post-rewrite (after stage-11 vtable-
+indirect rewrite pass):**
+```
+bb0: {
+  _t1 = move _obj;                                    // fat pointer
+  _t2 = PtrMetadata(move _t1);                        // *const VtableType
+  _t3 = (*_t2).start_field;                           // fn(*mut ()) -> ()
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:5,
+    kind: TerminatorKind::Call {
+      callee:      CallCallee::Indirect(Operand::Move(_t3)),
+      args:        [Operand::Move(_obj_data)],   // *mut () extracted from fat pointer
+      destination: _0,
+      target:      Some(bb1),
+    }
+  }
+}
+```
+Post-rewrite, B-6 holds: args[0] type matches the
+indirect callee operand's `Ty::FnPtr(sig)` resolved-
+signature inputs()[0] (both `*mut ()` per §13.2 +
+§17.2.1's uniform-mutable-erased-receiver rule).
+
+Charon's `transform_dyn_trait_calls.rs:31-122` is the
+direct template for this rewrite; the body-level pass
+implementation is filed in `stage-11/expectations.md`.
+
+#### 23.8.7 Divergent call (`-> !` callee)
+
+**Source:**
+```rust
+panic!("driver failure");
+```
+
+**rustc `optimized_mir`:**
+```
+bb3: {
+  panic_str("driver failure")
+       -> unwind unreachable;
+}
+```
+(Note: divergent call has no success-path target; rustc
+encodes this as `target: None`.)
+
+**RegseqModel:**
+```
+bb3: {
+  ----- terminator -----
+  Terminator {
+    span: src.rs:42:5,
+    kind: TerminatorKind::Call {
+      callee:      CallCallee::Direct(<panic_str InstanceId>),
+      args:        [Operand::Constant(<"driver failure" ConstId>)],
+      destination: _<unused>,                // any LocalId; never read
+      target:      None,                     // divergent
+    }
+  }
+}
+```
+
+Codegen pattern: `panic_str(...); __builtin_unreachable();`.
+
+### 23.9 Rendering
+
+See `pretty-printer.md` §7.5 (top-level `render_terminator`),
+§7.6 (`render_terminator_kind`), §7.7
+(`render_call_callee`), §7.8 (`render_switch_targets`),
+§7.9 (`render_assert_kind`).
+
+
+---
+
+
+## 24. Basic-block vocabulary
+
+The `BasicBlock` vocabulary is the **per-block container
+surface** of MIR -- the structural unit binding stage-8
+`Statement` and stage-9 `Terminator` content into the
+unit of control flow. The bridge fills it from rustc's
+`mir::BasicBlockData<'tcx>` and stores the body-level
+table as `IndexVec<BlockId, BasicBlock>`; downstream
+consumers (stage 11 bodies, stage 14 backends) read it
+as the per-body collection of straight-line statement
+sequences each ending in exactly one control-flow
+transfer.
+
+Stage 10 sits **sixth in the MIR pipeline** (stages
+5-11 form a strict bottom-up chain: places -> operands
+-> rvalues -> statements -> terminators -> **basic
+blocks** -> bodies). Stage-10 content embeds stage-8
+Statement (per `BasicBlock.statements`) and stage-9
+Terminator (per `BasicBlock.terminator`) vocabulary;
+stage-10 introduces the `BlockId` body-local typed-index
+that stage-11 `Body` and stage-14 backends consume.
+
+### 24.1 `BasicBlock` struct
+
+#### 24.1.1 Struct definition
+
+```rust
+/// A basic block: zero or more straight-line statements
+/// followed by exactly one control-flow terminator.
+/// Body-local content; lives inline inside the body's
+/// basic-block table at `Body.basic_blocks` (per §24.2).
+/// Equality is structural.
+pub struct BasicBlock {
+    /// The straight-line instruction sequence preceding
+    /// the terminator. Finalized single-fill payload
+    /// per §24.1.2; consumers index by `usize` or
+    /// iterate via `&[Statement]` deref.
+    pub statements: Box<[Statement]>,
+
+    /// The control-flow transfer ending this block.
+    /// Exactly one terminator per block (no Option;
+    /// see §24.1.3).
+    pub terminator: Terminator,
+}
+```
+
+The struct carries exactly two fields. **Dropped from
+rustc's `BasicBlockData<'tcx>`:**
+
+- `is_cleanup: bool` -- the MSVC-unwind cleanup-block
+  marker. Pipeline-discharged under panic=abort by
+  stage-9's D-9-9 rows 5-6 (`AbortUnwindingCalls` +
+  `SimplifyCfg::PreOptimizations` cleanup-block
+  pruning). See §24.1.4.
+- `after_last_stmt_debuginfos: StmtDebugInfos<'tcx>` --
+  trailing-debuginfo container. Stage-8 D-8-3
+  debuginfo discharge applies symmetrically: no DWARF
+  emission target, so no debuginfo carry. See §24.1.5.
+
+**Collapsed from rustc:**
+- `terminator: Option<Terminator<'tcx>>` -- rustc's
+  Option is construction-only (per `mod.rs:1318-1324`
+  docstring); RegseqModel collapses to non-Optional at
+  the bridge boundary, encoding the post-construction
+  invariant at the type level. See §24.1.3.
+
+**No block-level metadata** (no span, no scope; spans
+live on Statement and Terminator individually). See
+§24.1.6.
+
+#### 24.1.2 `statements: Box<[Statement]>` storage
+
+The `statements` field uses `Box<[Statement]>`
+(finalized single-fill payload), not `Vec<Statement>`
+(mutable, peer-aligned).
+
+Rationale: RegseqModel's existing pattern for finalized
+payloads uses `Box<[T]>`:
+- Stage-7 `Rvalue::Aggregate(_, Box<[Operand]>)` per §21.
+- Stage-9 `SwitchTargets.cases: Box<[(u128, BlockId)]>`
+  per §23.3.2.
+
+Basic-block statements have the same lifecycle: the
+bridge fills once, consumers read; mutation is not a use
+case. `Box<[Statement]>` saves 8 bytes per block (no
+spare-capacity field) at no information loss.
+Bridge-side construction uses a working `Vec<Statement>`
+buffer, finalized via `into_boxed_slice()` at
+block-construction completion (per §24.7).
+
+Consumer ergonomics are unchanged: `Box<[T]>` derefs to
+`&[T]`, so `block.statements.iter()`,
+`block.statements.len()`, and `block.statements[i]` work
+identically to a `Vec<Statement>` field.
+
+#### 24.1.3 `terminator: Terminator` non-Optional
+
+The `terminator` field is non-Optional. rustc's
+`BasicBlockData.terminator: Option<Terminator<'tcx>>` is
+documented as None-only-during-construction
+(`rustc_middle/src/mir/mod.rs:1318-1324`); the
+`BasicBlockData::terminator()` accessor at `mod.rs:1357`
+panics on None.
+
+RegseqModel consumes post-construction MIR (the
+`optimized_mir` query result), so the construction-time
+None state is structurally inaccessible at the
+consumption boundary. RegseqModel mirrors the structural
+guarantee at the type level rather than carrying a
+runtime invariant, eliminating per-walk-site `unwrap`s.
+
+Three of four peers agree: rustc_public's `BasicBlock`
+at `body.rs:136`, Charon's `BlockData` at
+`ullbc_ast.rs:128`, and mrustc's `BasicBlock` at
+`mir.hpp:729` all store non-Optional terminators.
+
+This becomes positive invariant **B-Terminator-Some**
+(structural / type-level) in §24.6.2.
+
+#### 24.1.4 Dropped: `is_cleanup`
+
+Per stage-9 D-9-9 rows 5-6, the panic=abort discharge
+chain (`AbortUnwindingCalls` at
+`rustc_mir_transform/src/abort_unwinding_calls.rs:115-121,137-138`
++ cleanup-block pruning under panic=abort) eliminates
+all `is_cleanup=true` blocks before MIR reaches the
+bridge. The field carries no driver-relevant
+information at our consumption point; carrying it would
+be a parallel "is panic=abort" marker that violates the
+README §2 compositional rule.
+
+Defensive bridge-side rejection if encountered is row 1
+of the §24.6.1 rejection table.
+
+#### 24.1.5 Dropped: `after_last_stmt_debuginfos`
+
+Per stage-8 D-8-3 debuginfo discharge, RegseqModel emits
+no DWARF; the per-statement `debuginfos: StmtDebugInfos`
+field was dropped at stage 8. The basic-block-level
+`after_last_stmt_debuginfos: StmtDebugInfos<'tcx>` is
+the symmetric basic-block-level analog and shares the
+same disposition: silent drop at the bridge.
+
+This is **not** a defensive rejection (unlike
+`is_cleanup`); the field is silently absent in
+RegseqModel's `BasicBlock`. Listed in §24.6.1 row 3 for
+table completeness only.
+
+#### 24.1.6 No block-level metadata
+
+`BasicBlock` carries no block-level span, scope, or
+other metadata fields. rustc's `BasicBlockData` carries
+none either; spans propagate through the per-statement
+`Statement.span` (§22.1.1, stage-8 D-8-3) and
+per-terminator `Terminator.span` (§23.1.1, stage-9
+D-9-8). All four peers (rustc, rustc_public, Charon,
+mrustc) match this convention.
+
+### 24.2 Body-level basic-block container
+
+#### 24.2.1 Storage shape
+
+The body-level basic-block table is stored as a typed
+`IndexVec`:
+
+```rust
+// (Belongs to stage-11 Body struct; stage 10 specifies
+// the field's type and invariants. See §24.4 for
+// ordering invariants and §24.6 for the per-stage
+// invariants registry.)
+pub basic_blocks: IndexVec<BlockId, BasicBlock>,
+```
+
+Aligned with stage-1 §2.6's `IndexVec<I, T>` canonical
+typed-index dense storage convention (every existing
+crate-level interner table -- `model.types`,
+`model.consts`, `model.items`, `model.instances`,
+`model.sigs`, `model.strings`, `model.source_files`,
+`model.crates` -- uses `IndexVec<I, T>`). Per stage-12
+D-12-1.4 / Option B (supersedes stage-11 D-11-5), bodies
+live structurally inside Function Instances on
+`InstanceKind::Function { body: Option<Body>, ... }`
+per §9.4; no separate `model.bodies` table.
+
+#### 24.2.2 No wrapper struct
+
+The field is the bare type `IndexVec<BlockId, BasicBlock>`,
+not a wrapper struct (à la rustc's `BasicBlocks<'tcx>`).
+The only reason to wrap would be to attach methods; the
+methods rustc attaches are CFG-related (predecessors,
+reverse_postorder, dominators). Per Q1 (architectural
+crate split), those belong in `regseq-analysis`, not on
+the model type.
+
+3-of-4 peer alignment: rustc_public's `Body.blocks:
+Vec<BasicBlock>`, Charon's `Body.body: Vector<BlockId,
+BlockData>`, and mrustc's `Function.blocks:
+std::vector<BasicBlock>` all use bare storage.
+
+#### 24.2.3 No CFG cache; principled model-vs-analysis rule
+
+RegseqModel does NOT cache CFG analyses (predecessors,
+dominators, post-dominators, loop structure, liveness)
+on the body-level container. CFG analyses live in
+`regseq-analysis`, computed on demand.
+
+The principled rule:
+
+> **The model stores facts the bridge owns or rustc has
+> resolved (types, layouts, const values, instance
+> identities). The model does not store analyses
+> derivable from those facts via standard CFG/SSA
+> algorithms.**
+>
+> The single exception -- RPO ordering of
+> `basic_blocks` storage (§24.4.1) -- is justified by
+> being the layout itself, not a separate field; and by
+> being the order rustc's `ReorderBasicBlocks` already
+> produces.
+
+Rationale stack:
+1. By the time the bridge consumes the body, rustc's
+   own CFG cache (`Arc<Cache>` at
+   `rustc_middle/src/mir/basic_blocks.rs:32-37`) is
+   empty. `ReorderBasicBlocks` calls
+   `reverse_postorder()` once during the reorder, then
+   `as_mut()` immediately invalidates the cache at
+   `rustc_mir_transform/src/prettify.rs:36`. So
+   "preserve what rustc gave us" doesn't apply --
+   there is nothing free to preserve.
+2. Populating a `dominators` field would require the
+   bridge to *invoke* the computation; the work
+   doesn't disappear, only the boundary moves.
+3. Predecessors / dominators / loop structure /
+   liveness all derivable from primitive content;
+   storing them is shadow data that must be kept in
+   sync with the underlying CFG.
+4. Serde wire format hygiene (Q5): derived analyses
+   on the wire muddy the contract that primitive
+   content alone round-trips.
+5. F4/F4-2 cross-build identity surface: derived
+   analyses shouldn't participate in cross-build
+   identity; carrying them as `pub` fields would need
+   either canonicalization or carve-out.
+6. 3-of-4 peer alignment: rustc_public, Charon, mrustc
+   all decline to cache. rustc_middle's `Arc<Cache>` is
+   motivated by being inside the compiler (long-lived,
+   reused across passes); RegseqModel is consumed once
+   per session per body.
+
+#### 24.2.4 No type alias
+
+The field declaration uses the bare type
+`IndexVec<BlockId, BasicBlock>` directly (no `pub type
+BasicBlocks = IndexVec<BlockId, BasicBlock>` alias).
+The field appears in only a few places (the stage-11
+`Body` struct, analysis helper signatures); a semantic
+alias adds nothing. If a future stage / phase-2
+device-pressure surfaces real ergonomic friction,
+introduce the alias then. Per the README "Don't add
+features beyond what the task requires" rule.
+
+### 24.3 `BlockId` typed-index
+
+#### 24.3.1 `newtype_index!` application
+
+`BlockId` is introduced as a `newtype_index!` invocation
+in `crates/regseq-model/src/idx.rs`:
+
+```rust
+newtype_index! {
+    pub struct BlockId {
+        const START_BLOCK = 0;
+    }
+}
+```
+
+The macro generates u32-backed niche-encoded storage
+(via stage-1's private `NonMaxU32`), the `Idx` trait
+impl, manual `Ord`/`PartialOrd` over the logical index,
+and a `Debug` impl rendering as `BlockId(N)` (per
+stage-1 conventions). The `START_BLOCK` const is
+emitted as `pub const START_BLOCK: BlockId =
+BlockId::from_u32(0);` inside the impl, semantically
+aliasing the auto-generated `BlockId::ZERO` with
+explicit entry-block-by-IR-convention naming.
+
+This rejects rustc_public's bare `BasicBlockIdx = usize`
+alias (`rustc_public/src/mir/body.rs:40`) on stage-1
+ID-discipline grounds: no niche optimisation, no sigil
+hook, no type-safety against `LocalId` confusion.
+
+#### 24.3.2 Macro extension: const-body arm
+
+The `newtype_index!` macro at
+`crates/regseq-model/src/idx.rs:75-160` is extended with
+a const-body arm so the form above is accepted. Grammar:
+
+```
+newtype_index! {
+    pub struct $Name {
+        const NAME_1 = INT_LITERAL_1;
+        const NAME_2 = INT_LITERAL_2;
+        ...
+    }
+}
+```
+
+Each `const NAME_K = INT_LITERAL_K;` line generates
+`pub const NAME_K: $Name = $Name::from_u32(INT_LITERAL_K);`
+inside the impl. Multi-const support is included
+(zero-extra-cost) for IDs that may declare multiple
+named consts. Integer-literal-only (not general const
+expressions) -- the use cases (RETURN_PLACE = 0,
+START_BLOCK = 0) only need integer literals; per the
+README "Don't add features beyond what the task
+requires" rule.
+
+The existing empty-body arm (`pub struct $Name {}`)
+continues to work unchanged.
+
+`LocalId::RETURN_PLACE` migration to this arm is
+deferred to stage 11 (LocalId formally lands at
+stage 11 alongside `Body.local_decls`); see outbound
+expectation in stage-10 `discussions.md` §2 item 5.
+
+Direct grammar match to rustc's
+`pub struct BasicBlock { const START_BLOCK = 0; }`
+at `rustc_middle/src/mir/mod.rs:1289-1291`.
+
+#### 24.3.3 Size and niche assertions
+
+The following static assertions append to
+`crates/regseq-model/src/lib.rs`, matching the existing
+crate-level-ID pattern at lines 40-57:
+
+```rust
+const _: () = assert!(core::mem::size_of::<BlockId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<BlockId>>() == 4);
+```
+
+Both assertions are non-vacuous: `BlockId == 4` checks
+the u32 backing; `Option<BlockId> == 4` catches a
+regression where the `NonMaxU32` niche encoding silently
+breaks.
+
+#### 24.3.4 Sigil convention `bbN`
+
+The textual sigil convention for `BlockId(N)` is `bbN`
+(e.g., `BlockId(0)` -> `bb0`, `BlockId(3)` -> `bb3`).
+Universal across all four peers: rustc's
+`#[debug_format = "bb{}"]` at
+`rustc_middle/src/mir/mod.rs:1288`, rustc_public's
+manual `bb{index}` at `pretty.rs:38-88`, Charon's
+`bb{}` block-label render at
+`src/pretty/fmt_with_ctx.rs:748` (within
+`:736-756`; `:206-214` covers block-content rendering,
+not the label), mrustc's `bbN` envelope at
+`src/mir/dump.cpp:26-48`.
+
+The macro's auto-generated `Debug` impl is unchanged
+(renders `BlockId(N)`, uniform with all other typed
+IDs per stage-1 convention). The `bbN` sigil belongs
+to RegseqModel's *custom textual format* (Q5 primary
+serialization), not to Rust's `Debug`. The
+sigil-rendering helper that emits `bbN` is
+renderer-injected at the BasicBlock-rendering envelope
+in `pretty.rs`, introduced at stage 11 alongside its
+first consumer (§24.9 / D-10-K.2).
+
+### 24.4 Block-ordering invariants
+
+Two positive invariants the bridge guarantees, encoded
+structurally in the IR's storage shape and entry-block
+const:
+
+#### 24.4.1 B-RPO -- storage in reverse-postorder
+
+> `Body.basic_blocks: IndexVec<BlockId, BasicBlock>` is
+> stored in reverse-postorder of the CFG rooted at
+> `BlockId::START_BLOCK`. Iterating the storage
+> (`basic_blocks.iter_enumerated()`) yields blocks in
+> RPO; consumers may exploit this without re-deriving.
+
+Inheritance: rustc's `ReorderBasicBlocks` cleanup pass
+at `rustc_mir_transform/src/prettify.rs:14-42` reorders
+the IndexVec storage into reverse-postorder. The pass
+has `is_required: false` in rustc's pipeline but is
+force-enabled via our cleanup whitelist:
+`crates/regseq-driver/src/callbacks.rs:30` sets
+`("ReorderBasicBlocks".to_string(), true)` in
+`regseq_mir_passes()`.
+
+The invariant carries no back-edge carve-out: RPO is a
+graph-structural property; whether a given edge is
+forward (`j > i`) or back (`j <= i`) falls out of the
+topology. Consumers detecting back-edges use standard
+CFG algorithms in `regseq-analysis`.
+
+This is the single carve-out to the §24.2.3
+"model-vs-analysis line" rule: RPO is encoded *as the
+storage layout itself* (zero extra bytes; the IndexVec
+needs *some* order, and RPO is the natural one given
+`ReorderBasicBlocks` already produces it).
+
+Walk-checked at stage 11 (per §24.4.3).
+
+#### 24.4.2 B-Entry -- `START_BLOCK = BlockId(0)`
+
+> `BlockId::START_BLOCK == BlockId(0)` is the entry
+> block of every `Body`.
+
+Inheritance: rustc's `START_BLOCK = 0` const at
+`rustc_middle/src/mir/mod.rs:1290`, preserved by
+`ReorderBasicBlocks` via the explicit fixed-point at
+`rustc_mir_transform/src/prettify.rs:33`
+(`debug_assert_eq!(updater.map[START_BLOCK], START_BLOCK)`).
+
+The named const introduced at §24.3.1 carries the
+semantic meaning: `BlockId::START_BLOCK` is "the entry
+block by IR convention," not just "the const value 0".
+Pretty-printer renders `BlockId(0)` as `bb0` (see
+`pretty-printer.md` §3.3); the entry-ness is
+conventional, not a separate sigil.
+
+#### 24.4.3 Walk-implementation deferred to stage 11
+
+The walk that jointly enforces B-RPO, B-Reachable,
+B-Entry (per §24.6.2) is deferred to stage 11's
+body-walk validator alongside the other deferred walks
+(per D-5-2 Part C / D-7-3 Part C / D-8-4 Part C /
+D-9-10 Part C). Stage 11 owns the body-level walk that
+proceeds in a fixed order:
+
+1. **Pre-check B-NonEmpty.** Assert
+   `!body.basic_blocks.is_empty()`. A zero-length
+   body is rejected here before any traversal; this
+   guarantees `BlockId(0)` is a valid index for the
+   subsequent steps.
+2. **Pre-check B-Successors-Valid.** For each block
+   in `body.basic_blocks.iter_enumerated()`, for each
+   `BlockId` in `block.terminator.successors()` (per
+   §23.1.4), assert
+   `successor.index() < body.basic_blocks.len()`.
+   Performing this check **before** the DFS prevents
+   an invalid successor from causing an `IndexVec`
+   indexing panic during step 3 (rustc's traversal
+   indexes `self.basic_blocks[bb]` during visit per
+   `rustc_middle/src/mir/traversal.rs:124-134`,
+   so an out-of-range successor would otherwise
+   surface as a panic rather than a clean
+   B-Successors-Valid diagnostic).
+3. **Compute RPO from BlockId(0).** Perform a
+   depth-first traversal from `BlockId::START_BLOCK ==
+   BlockId(0)` using `Terminator.successors()` (per
+   §23.1.4 per-variant successor enumeration).
+   Record each block in post-order (visit children
+   before parent); reverse the post-order list to
+   obtain reverse-postorder. This mirrors rustc's
+   `BasicBlocks::reverse_postorder()` at
+   `rustc_middle/src/mir/basic_blocks.rs:72-78`.
+   Step 2's pre-check guarantees every traversed
+   `BlockId` is a valid index.
+4. **Assert B-Reachable.** Assert the computed RPO
+   list has `len == body.basic_blocks.len()`. If
+   shorter, some block is unreachable from
+   `BlockId(0)` -- B-Reachable violation.
+5. **Assert B-RPO.** For each `i` in
+   `0..body.basic_blocks.len()`, assert that the
+   computed RPO list at position `i` equals
+   `BlockId::from_u32(i as u32)`. If any position
+   differs, the storage order does not match the
+   CFG's RPO -- B-RPO violation.
+6. **Assert B-Entry structurally.** Step 1 has
+   already established `body.basic_blocks.len() >= 1`;
+   step 5 places `BlockId(0)` at position 0 by RPO
+   construction (since DFS started at `BlockId(0)`,
+   it is the last node post-order-visited, hence the
+   first node in the reversed list). This mirrors
+   rustc's pass-time fixed-point at
+   `rustc_mir_transform/src/prettify.rs:33`.
+
+Step 4 covers B-Reachable; step 5 covers B-RPO; step 6
+covers B-Entry. Steps 1-2 are pre-checks that prevent
+the DFS from indexing-panicking; the post-DFS
+assertions in steps 4-6 are walk-checks rather than
+vacuous claims.
+
+#### 24.4.4 No defensive fallback for non-RPO inputs
+
+The cleanup-pass whitelist is part of the
+pinned-toolchain contract (per `architecture.md` Q6 +
+`crates/regseq-driver/src/callbacks.rs:25-36`).
+Mis-configuration is a setup bug, not a runtime
+concern. Stage-11's walk validator may raise a
+diagnostic if it observes RPO violation
+post-construction, but stage-10 does not carve out a
+non-RPO handling path in the spec surface (per the
+README "no defensive fallbacks" methodology rule).
+
+### 24.5 Identity and storage
+
+Basic blocks are **body-local content**. Each
+`BasicBlock` lives inline inside the body's basic-block
+table at `Body.basic_blocks: IndexVec<BlockId,
+BasicBlock>` (per §24.2); there is **no top-level
+`basic_blocks` interner table** and **no `BasicBlockId`
+crate-level index type**.
+
+`BlockId` is the body-local index *into* a single
+body's basic-block table; it is NOT a project-level
+interner key. `BlockId(N)` references in stage-9
+Terminator content (`Goto.target`,
+`SwitchInt.targets.cases[i].1`,
+`SwitchInt.targets.otherwise`, `Call.target`,
+`Assert.target`) are interpreted relative to the
+enclosing body's basic-block table.
+
+**Equality and hashing** are `derive(PartialEq, Hash)`
+on `BasicBlock`, walking through to stage-8 Statement
+and stage-9 Terminator structural derives, then through
+to embedded Operand / Place / InstanceId / TyId /
+ConstId per stages 5-8.
+
+**F4 / F4-2 cross-build identity is OUT of scope.**
+`BasicBlock` is body-local content; it does not
+participate in cross-build identity (the F4-2 instance
+ordering canonicalises `(InstanceKey)`, not
+`(BodyContents)`). Block storage and `BlockId`
+numbering are per-build, structural, and need not be
+canonicalised across build environments. Same scope
+reduction as stages 5-9.
+
+### 24.6 Basic-block-site invariants
+
+5-part registry: rejection table (Part A; §24.6.1),
+positive invariants (Part B; §24.6.2), walk-implementation
+deferral (Part C; §24.6.3), F4/F4-2 OUT-of-scope note
+(Part D; §24.6.4), forward-looking considerations
+(Part E; §24.6.5).
+
+#### 24.6.1 Rejection table (3 rows)
+
+Two rejection categories: pipeline-discharged (defensive
+against pipeline misconfiguration) and silent-drop
+(NOT rejected; for table completeness).
+
+| # | rustc construct | Category | Discharge mechanism | Diagnostic message |
+|---|---|---|---|---|
+| 1 | `BasicBlockData.is_cleanup = true` | Pipeline-discharged (panic=abort) | Stage-9 D-9-9 rows 5-6: `AbortUnwindingCalls` rewrites unwind edges to `UnwindAction::Unreachable` at `rustc_mir_transform/src/abort_unwinding_calls.rs:115-121` + dead cleanup-block removal at `:137-138`; cleanup blocks become unreachable; `SimplifyCfg::PreOptimizations` is scheduled in rustc runtime cleanup (`rustc_mir_transform/src/lib.rs:666-680`; `is_required()` returns `false` at `simplify.rs:101-103`) and prunes them in practice. The bridge still rejects any survivor at construction. | "internal error: is_cleanup=true block survived panic=abort cleanup-block pruning -- pipeline misconfiguration or non-abort panic strategy" |
+| 2 | `BasicBlockData.terminator = None` post-construction | Defensive (rustc invariant) | Per `rustc_middle/src/mir/mod.rs:1318-1324` docstring: terminator is None *only during construction*; `BasicBlockData::terminator()` accessor at `mod.rs:1357` panics on None. RegseqModel's bridge consumes post-construction MIR. | "internal error: terminator: None survived MIR construction -- pipeline misconfiguration or post-construction state corruption" |
+| 3 | `BasicBlockData.after_last_stmt_debuginfos` non-empty | **Silent drop (NOT rejected)** | Stage-8 D-8-3 debuginfo discharge (no DWARF emission target). The field is silently dropped at the bridge. Listed for table completeness so the implementer doesn't list it as "carried." | n/a -- silent drop, no diagnostic |
+
+Rows 1-2 emit an `unsupported_construct!`-style
+diagnostic at the bridge translation match site;
+row 3 emits no diagnostic (it's a bridge translation
+silent drop).
+
+**Diagnostic discipline.** Same `unsupported_construct!`-style
+pattern used at stages 1, 3, 5, 6, 7, 8, 9. The
+post-construction None case (row 2) is structurally
+preempted by the §24.1.3 type-level non-Optional
+encoding -- the bridge's match site translating
+`BasicBlockData::terminator: Option<...>` to
+RegseqModel's non-Optional `terminator: Terminator`
+emits the diagnostic on the None arm.
+
+#### 24.6.2 Positive invariants (8)
+
+2 inherited + 6 stage-10-introduced (8 total).
+
+**Inherited (2):** stage-10 BasicBlock embeds Statement
+(via `statements: Box<[Statement]>`) and Terminator
+(via `terminator: Terminator`); stage-8 Statement-level
+and stage-9 Terminator-level invariants propagate
+transitively.
+
+- **B-0a** -- All embedded Statement content satisfies
+  Statement invariants per stage-8 §22.5.2.
+- **B-0b** -- All embedded Terminator content
+  satisfies Terminator invariants per stage-9 §23.6.2.
+
+**Stage-10-introduced (6):**
+
+- **B-RPO** -- `Body.basic_blocks` storage is in
+  reverse-postorder of the body's CFG rooted at
+  `BlockId::START_BLOCK`. Inherited from
+  `ReorderBasicBlocks` in the cleanup whitelist
+  (§24.4.1). Walk-checked at stage 11 (per §24.4.3).
+- **B-Reachable** -- All blocks in `Body.basic_blocks`
+  are reachable from `BlockId::START_BLOCK` via
+  `Terminator.successors()` traversal. **Verified by
+  the stage-11 DFS-RPO walk procedure** (§24.4.3
+  step 4, after the step-3 DFS-RPO computation: a
+  DFS from `BlockId(0)` that yields fewer blocks
+  than `body.basic_blocks.len()` flags a B-Reachable
+  violation). The spec asserts B-Reachable
+  at the bridge boundary; rustc's pipeline produces
+  reachable-only bodies in practice (the standard
+  scheduling at `rustc_mir_transform/src/lib.rs:666-680`
+  includes `SimplifyCfg::PreOptimizations` and
+  `remove_dead_blocks` at
+  `rustc_mir_transform/src/simplify.rs:79-85,349-383`
+  which prune unreachable blocks), but the spec does
+  not lean on this scheduling for soundness -- the
+  stage-11 walk is the authoritative check. Per the
+  README "no defensive fallbacks" methodology rule:
+  the walk verifies; we do not duplicate
+  rustc-pipeline assumptions in spec text.
+- **B-Entry** -- `BlockId::START_BLOCK == BlockId(0)`
+  is the entry block of every `Body` (§24.4.2).
+- **B-Terminator-Some** -- Every `BasicBlock.terminator`
+  is well-formed (no `Option::None`). Type-level
+  guarantee per §24.1.3 (non-Optional field type);
+  no runtime check needed.
+- **B-Successors-Valid** -- Every `BlockId` referenced
+  as a successor in any Terminator is `<
+  body.basic_blocks.len()`. Body-level invariant
+  (BlockId range only meaningful relative to the
+  containing body); applies to:
+  - `Terminator.kind = Goto(target)` -> `target <
+    len()`.
+  - `Terminator.kind = SwitchInt { targets: SwitchTargets
+    { cases, otherwise } }` -> every `cases[i].1 <
+    len()` and `otherwise < len()`.
+  - `Terminator.kind = Call { target: Some(t), ... }`
+    -> `t < len()`.
+  - `Terminator.kind = Assert { target, ... }` ->
+    `target < len()`.
+- **B-NonEmpty** -- Every body has at least one
+  `BasicBlock` (the entry block). Falls out of B-Entry
+  (an entry-at-BlockId(0) requires `len() >= 1`); stated
+  explicitly for walk-clarity.
+
+#### 24.6.3 Walk-implementation deferred to stage 11
+
+Rules enumerated at this stage; the walk implementation
+applying them is deferred to stage 11's body-validation
+step. Mirrors D-5-2 Part C / D-7-3 Part C / D-8-4 Part C /
+D-9-10 Part C walk-impl deferrals.
+
+**Walk ownership split.** Part A rejection rules
+(§24.6.1 rows 1-2) are **bridge-enforced at
+construction**, not stage-11-walk-enforced: rows 1-2
+inspect rustc-side fields (`is_cleanup`,
+`Option<Terminator>`) that are gone after the bridge
+finalises `BasicBlock` per §24.7. The bridge raises
+`unsupported_construct!`-style diagnostics at the match
+sites in §24.7 step 2a (`is_cleanup=true`) and 2b
+(`terminator: None`). Row 3 is silent-drop with no
+diagnostic (per §24.7 step 2c). Stage-11 walk
+**inherits the post-construction guarantee** that no
+BasicBlock can exhibit a Part-A condition --
+RegseqModel's `BasicBlock` shape (per §24.1) makes
+those conditions structurally inexpressible.
+
+Stage 11 owns the body-level walk that applies the
+**RegseqModel-visible Part B positive invariants** in
+the fixed step order detailed in §24.4.3 to ensure
+clean diagnostics:
+- **Step 1 -- B-NonEmpty pre-check**:
+  `!body.basic_blocks.is_empty()` (must precede any
+  traversal so subsequent indexing is well-defined).
+- **Step 2 -- B-Successors-Valid pre-check**:
+  per-Terminator successor-range check
+  (`successor.index() < body.basic_blocks.len()`)
+  iterated over `body.basic_blocks.iter_enumerated()`
+  before the DFS. Performing this check **before**
+  the DFS-RPO traversal prevents an invalid successor
+  from triggering an `IndexVec`-indexing panic during
+  the visit (the panic would obscure a clean
+  B-Successors-Valid diagnostic; cf. rustc's traversal
+  indexing pattern at
+  `rustc_middle/src/mir/traversal.rs:124-134`).
+- **Steps 3-6 -- B-RPO + B-Reachable + B-Entry**:
+  jointly checked via the DFS-RPO procedure
+  (single DFS from `BlockId(0)` computes RPO; length
+  comparison enforces B-Reachable; positional
+  comparison enforces B-RPO; starting-from-BlockId(0)
+  with B-NonEmpty pre-cleared makes B-Entry
+  structural).
+- **B-0a / B-0b** inherited from per-Statement /
+  per-Terminator walks already running at stage 11
+  (compositional with §22.5.3 and §23.6.3).
+- **B-Terminator-Some** structurally encoded at the
+  type level (§24.1.3); no runtime check needed.
+
+Compositional with the §22.5.3 Statement walk and
+§23.6.3 Terminator walk: a stage-11 visitor that walks
+basic-block content visits Statement and Terminator
+invariants in the same pass.
+
+#### 24.6.4 F4 / F4-2 cross-build identity OUT of scope
+
+`BasicBlock` is body-local content; doesn't participate
+in cross-build identity (the F4-2 instance ordering
+canonicalises `(InstanceKey)`, not `(BodyContents)`).
+Block storage and `BlockId` numbering are per-build,
+structural, and need not be canonicalised across build
+environments. Same scope reduction as stages 5-9.
+
+#### 24.6.5 Future considerations (not stage-10 invariants)
+
+Stage 10 enforces reachability (B-Reachable, §24.6.2)
+and inherits density from `IndexVec<I, T>`'s stage-1
+§2.6 canonical-storage construction (no gaps possible).
+This subsection records forward-looking concerns that
+are NOT stage-10 invariants but may become spec
+concerns at later stages:
+
+- **Per-instance const-folding of type-dependent
+  branches.** rustc's codegen-side
+  `mono_reachable_reverse_postorder`
+  (`rustc_codegen_ssa/src/mir/mod.rs:250`) filters
+  blocks made unreachable by per-instance const-eval
+  of branches like `if T::IS_FOO { ... }`. RegseqModel's
+  bridge does NOT apply this filter; the per-instance
+  Body's `basic_blocks` reflects the generic-body
+  CFG (post-`SimplifyCfg`, post-`ReorderBasicBlocks`),
+  with per-instance const-folding deferred to stage-14
+  codegen or to a hypothetical stage-11 simplification
+  pass. If a future stage adds bridge-side per-instance
+  const-folding, that stage owns the policy (prune at
+  transform-time vs. carry with per-instance
+  reachability filtering at consumption); stage 10
+  does not pre-empt it.
+
+This is a forward-looking note, not a stage-10 spec
+weakening. B-Reachable holds at the bridge output as
+established in §24.6.2.
+
+### 24.7 Bridge translation rules
+
+The bridge translates rustc's
+`mir::BasicBlocks<'tcx>` and per-block
+`mir::BasicBlockData<'tcx>` into RegseqModel's
+`IndexVec<BlockId, BasicBlock>`. Per-body procedure:
+
+1. **Allocate `IndexVec<BlockId, BasicBlock>`**
+   with `body.basic_blocks.len()` capacity (rustc's
+   `body.basic_blocks` is post-`ReorderBasicBlocks`
+   so already in RPO).
+2. **For each rustc `(BasicBlock, BasicBlockData)` pair
+   in `body.basic_blocks.iter_enumerated()`:**
+   a. **Reject if `data.is_cleanup == true`** (§24.6.1
+      row 1; pipeline-misconfiguration diagnostic).
+   b. **Reject if `data.terminator == None`** (§24.6.1
+      row 2; post-construction-corruption diagnostic).
+      *Implementation note:* the match destructuring
+      `Option<Terminator>` already separates the Some
+      and None arms; row 2's diagnostic emits on the
+      None arm.
+   c. **Silently drop `data.after_last_stmt_debuginfos`**
+      (§24.6.1 row 3; no diagnostic).
+   d. **Translate `data.statements: Vec<Statement<'tcx>>`**
+      to a working `Vec<RegseqStatement>` via stage-8
+      §22.6 bridge translation rules (per-Statement),
+      then `.into_boxed_slice()` to materialize
+      `Box<[Statement]>` (§24.1.2).
+   e. **Translate `data.terminator: Terminator<'tcx>`**
+      (already known to be `Some(_)` after step b) to
+      `RegseqTerminator` via stage-9 §23.7 bridge
+      translation rules (including stage-9 D-9-2
+      Drop-as-Call collapse; D-9-9 rejection table
+      enforcement).
+   f. **Construct `BasicBlock { statements, terminator }`**
+      (§24.1) and `IndexVec::push` it. The pushed
+      `BlockId` matches rustc's source `BasicBlock`
+      index because both IndexVecs are post-RPO.
+3. **Post-loop assertions** (debug-only; per §24.4.4
+   no-defensive-fallback rule):
+   a. `result.len() == body.basic_blocks.len()`.
+   b. `result[BlockId::START_BLOCK]` corresponds to
+      rustc's `START_BLOCK = BasicBlock::from_u32(0)`
+      (per `prettify.rs:33` fixed-point).
+
+The bridge produces no separate predecessors /
+dominators / RPO cache (per §24.2.3); analyses live in
+`regseq-analysis`.
+
+**Compositional with stage-9 D-9-2 Drop-as-Call
+collapse.** The §23.4 Drop-as-Call collapse procedure
+(steps 1-7) inserts a synthetic `&raw mut place`
+Statement into the construction-time `Vec<Statement>`
+buffer (per stage-9 §23.4 step 4); the working buffer
+is then finalized to `Box<[Statement]>` in step 2d
+above. The collapse procedure operates on the working
+buffer, not on the finalized `Box<[Statement]>`.
+
+### 24.8 Worked example
+
+A trivial 2-block well-formed body illustrating the
+stage-10 surface (statement and terminator content
+abbreviated; see stages 8 / 9 for full per-construct
+detail):
+
+```
+Body for `fn check(x: u32) -> bool { x > 0 }` after
+`ReorderBasicBlocks` and standard cleanup-pipeline
+pruning:
+
+basic_blocks: IndexVec<BlockId, BasicBlock> = [
+    // BlockId(0) = START_BLOCK
+    BasicBlock {
+        statements: Box::from([
+            Statement { kind: Assign(_2, BinaryOp(Gt, _1, Constant(c_0))), span: _ },
+        ]),
+        terminator: Terminator { kind: Goto(BlockId(1)), span: _ },
+    },
+    // BlockId(1)
+    BasicBlock {
+        statements: Box::from([
+            Statement { kind: Assign(_0, Use(Move(_2))), span: _ },
+        ]),
+        terminator: Terminator { kind: Return, span: _ },
+    },
+]
+```
+
+A would-be "panic=abort overflow path" block that
+might appear in pre-cleanup MIR is **absent** from
+this body: standard rustc pipeline scheduling
+(`SimplifyCfg::PreOptimizations` +
+`remove_dead_blocks`) prunes blocks unreachable from
+`BlockId(0)` before the bridge consumes the body.
+Per B-Reachable (§24.6.2), every block in the
+finalized `basic_blocks` is reachable from
+`BlockId::START_BLOCK`.
+
+Note the storage order is RPO (BlockId(0) -> BlockId(1)
+along the success path); B-Entry holds (BlockId(0) is
+START_BLOCK); B-Terminator-Some holds structurally
+(every basic block has a `Terminator` not
+`Option<Terminator>`); B-Successors-Valid holds
+(every successor BlockId is `< 2`); B-Reachable
+holds (both blocks reachable from BlockId(0));
+B-NonEmpty holds (`len() == 2`).
+
+The pretty-printer rendering (per `pretty-printer.md`
+§7.10) would emit:
+
+```
+bb0: {
+    _2 = Gt(_1, const 0u32);
+    goto -> bb1;
+}
+
+bb1: {
+    _0 = move _2;
+    return;
+}
+```
+
+### 24.9 Rendering
+
+See `pretty-printer.md` §7.10.
+
+---
+
+
+## 25. Body-level vocabulary
+
+The function-level container that binds the stage-10
+basic-block table and per-local declarations into a unit
+of MIR. The function signature is **not** carried on Body;
+per stage-12 D-12-1.4 (Option B; supersedes stage-11
+D-11-3), the signature lives **Instance-side** on
+`InstanceKind::Function { fn_sig, ... }` per §9.4.
+Argument types are reachable through
+`local_decls[1..=arg_count]` and return type via
+`local_decls[RETURN_PLACE]` per the §25.1 layout
+convention. Stage 11
+sits seventh in the MIR pipeline (places -> operands ->
+rvalues -> statements -> terminators -> basic blocks ->
+**bodies**) and is the convergence point of the body-level
+walks deferred from stages 5/8/9/10 plus the body-level
+transformation passes deferred from stages 3/9.
+
+Stage 11 is the **body-level integration stage**: it pins
+how all earlier stages' content composes inside one
+function-level unit, the bridge-side construction +
+post-construction transformation passes that produce the
+canonical body, and the joint visitor that validates it.
+Body-level rendering lives in `pretty-printer.md` §3 +
+§7 (see §25.11).
+
+### 25.1 `Body` struct
+
+```rust
+pub struct Body {
+    pub basic_blocks: IndexVec<BlockId, BasicBlock>,
+    pub local_decls: IndexVec<LocalId, LocalDecl>,
+    pub arg_count: usize,
+    pub span: Span,
+}
+```
+
+Cardinality: 4 fields. `basic_blocks` is inherited from
+§24 (stage-10 D-10-2: bare `IndexVec<BlockId, BasicBlock>`
+storage in reverse-postorder with `START_BLOCK = BlockId(0)`).
+`local_decls`, `arg_count`, and `span` are stage-11 contributions.
+
+**Layout convention** for `local_decls`:
+```
+local_decls[0]                  -> RETURN_PLACE (the return slot)
+local_decls[1..=arg_count]      -> argument locals (positional)
+local_decls[arg_count+1..]      -> internal temporaries (compiler-introduced
+                                   + bridge-introduced + rewrite-pass-introduced)
+```
+
+Mirrors rustc + rustc_public + Charon. Helper methods
+(implementation-side, not part of the spec interface):
+- `Body::return_local() -> LocalId` returns `LocalId::RETURN_PLACE`.
+- `Body::arg_locals() -> impl Iterator<Item = LocalId>` yields `1..=arg_count`.
+- `Body::inner_locals() -> impl Iterator<Item = LocalId>` yields `arg_count+1..local_decls.len()`.
+
+`span: Span` is a whole-body diagnostic location used by
+body-level diagnostics (e.g., "body of fn foo at file:line
+has unreachable basic_blocks"). Per-construct diagnostics
+(per-LocalDecl, per-Statement, per-Terminator) carry their
+own spans.
+
+**No `Locals` substructure.** rustc + rustc_public use
+flat `local_decls` + `arg_count`; Charon collapses into a
+`Locals { arg_count, locals }` substructure. RegseqModel
+takes the flat form: simpler shape; substructure-encapsulation
+benefits accrue from methods on Body directly without an
+additional struct layer; consistent with rustc + rustc_public
+discipline.
+
+**No body-level `fn_sig` field.** Per stage-12 D-12-1.4
+(Option B; supersedes stage-11 D-11-3), function signatures
+live **Instance-side** on `InstanceKind::Function { fn_sig,
+... }`. See §25.4 + `discussions.md` D-12-1.4.
+
+**No body-level `item: ItemId` back-pointer.** Per stage-12
+D-12-1.4 (Option B; supersedes stage-11 D-11-5), bodies
+live structurally on `InstanceKind::Function { body:
+Option<Body>, ... }`; walkers reach Body via the parent
+Instance. §25.5 records the Instance-side linkage shape.
+
+**No `var_debug_info` body-level vector.** Consumed at bridge
+construction time to populate per-`LocalDecl.debug_name`
+(§25.2). Symmetric with `rustc_codegen_ssa`'s own
+`per_local_var_debug_info` partition for codegen consumption.
+
+**Rejection table (rustc Body fields not carried into RegseqModel):**
+
+| rustc field                                         | Drop rationale                                                                                                                                                                  |
+| --------------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------------------------------ |
+| `phase: MirPhase`                                   | post-mono consumption; phase is fixed as `optimized_mir`; not informational.                                                                                                    |
+| `pass_count: usize`                                 | rustc-pipeline bookkeeping; opaque post-bridge.                                                                                                                                 |
+| `source: MirSource`                                 | Body-vs-Instance linkage held Instance-side per §25.5 (Option B); no body-side back-pointer.                                                                                    |
+| `source_scopes: IndexVec<SourceScope, ...>`         | DWARF-emission only; aligned with stage-1 debuginfo rejection + stage-8 D-8-3 (no DWARF emission target).                                                                       |
+| `coroutine: Option<Box<CoroutineInfo>>`             | coroutines DSL-rejected (§15.1; stage-7 D-7-1.7).                                                                                                                                |
+| `user_type_annotations: ...`                        | borrowck artifact; pre-`optimized_mir` consumption; not visible at our stage.                                                                                                   |
+| `spread_arg: Option<Local>`                         | rust-call ABI marker; D15 locks abi to `{Rust, C}`; closures lower with explicit arg lists per §13.1; no spread.                                                                |
+| `var_debug_info: Vec<VarDebugInfo>`                 | consumed at construction time; lifted into per-`LocalDecl.debug_name` per §25.2 + stage-8 D-8-3.                                                                                  |
+| `required_consts: Option<Vec<ConstOperand>>`        | collector-discharged; rustc itself notes "the MirUsedCollector already did that" at codegen consumption.                                                                       |
+| `mentioned_items: Option<Vec<Spanned<...>>>`        | collector-only metadata.                                                                                                                                                         |
+| `is_polymorphic: bool`                              | post-mono is by definition fully concrete.                                                                                                                                       |
+| `injection_phase: Option<MirPhase>`                 | `rustc_custom_mir` only; not driver-relevant.                                                                                                                                    |
+| `tainted_by_errors: Option<ErrorGuaranteed>`        | driver-level error gating; we reject upstream rather than carry tainted state.                                                                                                  |
+| `coverage_info_hi`, `function_coverage_info`        | `-Cinstrument-coverage` only; not driver-relevant.                                                                                                                              |
+
+The 17->4 collapse is mechanical from RegseqModel's binding
+constraints (post-mono, no DWARF, no borrowck, no coroutines,
+no instrumentation, no collector residue, C-shape codegen).
+
+### 25.2 `LocalDecl` struct
+
+```rust
+pub struct LocalDecl {
+    pub ty: TyId,
+    pub mutability: Mutability,
+    pub span: Span,
+    pub debug_name: Option<StringId>,
+}
+```
+
+Cardinality: 4 fields.
+
+| Field         | Type                  | Carries                                                                                                                       |
+| ------------- | --------------------- | ----------------------------------------------------------------------------------------------------------------------------- |
+| `ty`          | `TyId`                | the local's type (interned via §12).                                                                                           |
+| `mutability`  | `Mutability`          | `Not` / `Mut` per stage-3 D11; preserves rustc's mutability marker for IR-dump readability + optional codegen `const` qualifier. |
+| `span`        | `Span`                | per-LocalDecl declaration location (`Span::dummy()` for synthetic locals introduced by bridge collapse / post-construction passes). |
+| `debug_name`  | `Option<StringId>`    | source-level variable name (`Some("temp")`) or `None` for compiler-synthesized rustc temps + bridge-introduced synthetic locals. Lifted from rustc's body-level `var_debug_info` at bridge construction time. |
+
+**Named-local lift.** Per stage-8 D-8-3, the bridge translates
+each `VarDebugInfo` entry whose `value = VarDebugInfoContents::Place(p)`
+with empty projection into a per-`LocalDecl.debug_name` for `p.local`
+(via stage-1's `StringInterner`). Composite / non-Place /
+non-empty-projection entries are bridge-rejected (they encode
+debugger expressions RegseqModel doesn't use).
+
+Charon's `Local.name` is direct positive precedent. rustc_public
+keeps `var_debug_info` body-level (no per-LocalDecl name); mrustc
+explicitly rejected the lift (commented-out `local_names`).
+RegseqModel's lift is a deliberate divergence justified by C-shape
+ergonomics: per-local lookup at render time + codegen
+identifier-emission time without secondary scan.
+
+**Synthetic locals.** Bridge-introduced (Drop-as-Call
+`_t_drop_arg`/`_t_drop_ret` per §25.7.1) and rewrite-pass-introduced
+(vtable-rewrite `_t_recv`/`_t_meta`/`_t_fn`/`_t_data`/`_t_raw` per
+§25.7.2) all carry `debug_name = None`. Their identity in the
+IR is purely positional (LocalId).
+
+**Rejection table (rustc LocalDecl fields not carried):**
+
+| rustc field                                            | Drop rationale                                                                                                                                                                                  |
+| ------------------------------------------------------ | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `local_info: ClearCrossCrate<Box<LocalInfo>>`          | 9-variant `LocalInfo` enum is almost entirely diagnostic / borrowck (`User(BindingForm)`, `StaticRef`, `ConstRef`, `AggregateTemp`, `BlockTailTemp`, `IfThenRescopeTemp`, `DerefTemp`, `FakeBorrow`, `Boring`); the consumer-relevant `is-user-variable` distinction is discharged at construction (`debug_name=Some` <-> user variable; `debug_name=None` <-> compiler/synthetic). |
+| `user_ty: Option<Box<UserTypeProjections>>`            | borrowck artifact; pre-`optimized_mir` consumption.                                                                                                                                              |
+| `source_info.scope: SourceScope`                       | DWARF-emission only; aligned with stage-8 D-8-3 debuginfo rejection (`StmtDebugInfos` removed).                                                                                                 |
+
+Note: rustc's `source_info: SourceInfo { span, scope }`
+flattens to RegseqModel's `span: Span` field (the `scope`
+half is dropped per the rejection table).
+
+### 25.3 `LocalId` typed-index
+
+```rust
+newtype_index! {
+    pub struct LocalId {
+        const RETURN_PLACE = 0;
+    }
+}
+```
+
+Located in `crates/regseq-model/src/idx.rs` alongside the other
+domain ID newtypes per stage-1 ID conventions. Symmetric with
+stage-10 `BlockId::START_BLOCK = 0` (D-10-3.2's const-body
+macro-arm extension).
+
+**Sigil convention.** Textual rendering: `LocalId(N) -> _N`
+(e.g., `_0` for `RETURN_PLACE`, `_1` for first argument, ...,
+`_<arg_count+1..>` for temporaries). Rendering site **deferred
+to stage 13 per D-11-K**.
+
+**Layout convention.** Reach back to §25.1 (`local_decls[0]` is
+RETURN_PLACE; `local_decls[1..=arg_count]` are args; rest are
+temps).
+
+**Size + niche assertions** (appended to
+`crates/regseq-model/src/lib.rs` alongside stage-10's `BlockId`
+assertions; spec-side pin only at stage 11; impl lands at
+end-of-phase-1 sweep):
+
+```rust
+const _: () = assert!(size_of::<LocalId>() == 4);
+const _: () = assert!(size_of::<Option<LocalId>>() == 4);
+```
+
+**Why typed (not bare alias).** rustc + Charon use proper typed
+newtype indexes; rustc_public's `pub type Local = usize` and
+mrustc's `unsigned int` typedef are weaker discipline (no niche;
+no sigil; no type-safety against `BlockId` confusion). RegseqModel
+inherits the rustc + Charon discipline per stage-1 ID conventions.
+
+### 25.4 `FnSig` location
+
+**Body has NO `fn_sig` field.** Per stage-12 D-12-1.4
+(Option B), `FnSig` lives **Instance-side** on
+`InstanceKind::Function { fn_sig: FnSigId, body:
+Option<Body>, ... }` per §9.4. Per-monomorphization
+function instantiations each carry their substituted
+(post-mono) signature directly on the InstanceKind variant.
+
+**Stage-11 D-11-3 supersession.** Stage 11 originally
+placed FnSig as a structural field of `Item.kind =
+Function`, citing 4-peer convergence (rustc-internal,
+rustc_public, Charon, mrustc). Stage 12 D-12-1.4 reopens
+this decision: the cited 4-peer evidence actually supports
+**per-Instance** body / signature placement (rustc_public's
+`Instance::body() -> Option<Body>` is the cited pattern;
+Charon's `FunDecl` is post-mono under `--monomorphize`).
+The Item-side framing was incompatible with the rest of
+the spec's pre-mono Item model (§16.1 F4 sort + §13.4
+source DefPathHash + §9.3 RegseqInstanceKey all imply
+Items are 1:1 with rustc DefIds / pre-mono; stage-3 §15.1
+rejects `Param/Bound/Placeholder/Infer/Alias` TyKind
+variants -- so a stored FnSig must be already-substituted
+post-mono). Stage 12 restores symmetry by moving FnSig +
+Body to InstanceKind. Stage-11 D-11-3 + D-11-5 flip to
+`[REOPENED]` in `decisions.md` at stage-12 merger contract
+close per D-12-1.7. See `discussions.md` D-12-1.4 for full
+rationale.
+
+**Signature data reachable through `Body.local_decls`.** Argument
+types: `Body.local_decls[1..=arg_count].ty` (positional convention).
+Return type: `Body.local_decls[RETURN_PLACE].ty` (= `local_decls[0].ty`).
+Mirrors rustc's `Body::return_ty()` reading
+`local_decls[RETURN_PLACE].ty` directly + rustc_public's positional
+helpers.
+
+**Full FnSig** (with `abi` + `c_variadic` + `safety` per §14's
+canonical schema) is reachable via the parent Instance:
+`inst.kind = Function { fn_sig: FnSigId, ... }` resolved
+through `model.sigs[fn_sig]` per §14.4 FnSigInterner identity
+rule. Foreign declarations (`extern "C" { fn foo(); }`) still
+have signatures via the same `InstanceKind::Function.fn_sig`
+field; rustc's `tcx.fn_sig(did)` is callable for foreign fns.
+
+§14's canonical FnSig schema (5 fields: `inputs`, `output`,
+`abi`, `c_variadic`, `safety`) is independent of placement; the
+schema definition stands. Stage-12 D-12-1.4's contribution is
+the placement reframe (Instance-side per Option B; not
+Item-side as stage-11 framed) and the per-Instance
+substitution semantics for generic functions.
+
+Stage-1's "`sigs` side-table" framing (`HashMap<InstanceId, FnSig>`)
+remains rejected: side-tables fail Q2 (eager translation,
+fully-owned IR; no side-channel lookups). The Instance-side
+structural field on `InstanceKind::Function` IS the eager
+owned representation.
+
+### 25.5 Body-vs-Item linkage
+
+**No `BodyId` allocation.** RegseqModel does not introduce a
+separate ID type for bodies. Per stage-12 D-12-1.4 (Option B),
+bodies live as a structural field on `InstanceKind::Function
+{ ..., body: Option<Body>, ... }` per §9.4 -- one body per
+Instance, not per Item.
+
+**Stage-11 D-11-5 supersession.** Stage 11 originally placed
+bodies as a structural field on `Item.body: Option<Body>`
+under the Item-side framing. Stage 12 D-12-1.4 reopens: bodies
+are per-monomorphization (each Instance has its own
+substituted body), so they belong on InstanceKind, not Item.
+The stage-11 D-11-5 framing's "one body per Item" assumption
+was incompatible with generic functions (which produce
+multiple Instances per Item, each needing its own substituted
+body). Stage-11 D-11-5 flips to `[REOPENED]` in
+`decisions.md` at stage-12 merger contract close.
+
+**Walk direction.** Walkers reach `Body` via Instance. The
+joint validator (§25.6) iterates over `model.instances`; for
+each Instance whose kind is `Function { body: Some(b), ... }`,
+runs the body visitor. No `BodyId -> Instance` lookup table
+needed.
+
+**`Option<Body>` accommodates absence (per D-12-2.1):**
+- Foreign declarations (`extern "C" fn` with `tcx.is_foreign_item(did)`
+  returning true) -> `body = None`. The `fn_sig` field is
+  populated regardless (rustc's `tcx.fn_sig(did)` is callable
+  for foreign fns).
+- Non-Function InstanceKinds (Static, Const, Struct, Enum,
+  Union) -> the variant doesn't have a `body` field at all
+  (variant-specific shape per §9.4).
+
+**Multi-peer evidence under Option B.** Two peers
+**directly establish** the per-Instance body pattern that
+RegseqModel adopts under Option B:
+- **rustc-internal** fetches bodies via
+  `tcx.instance_mir(InstanceKind)` per `rustc_middle/src/
+  ty/mod.rs:1671`. Each Instance dispatches to its own
+  monomorphized body (post-mono substitution applied).
+  This is per-Instance, not per-DefId: a generic
+  `fn foo<T>` with two monomorphizations
+  (`Instance::Item(foo, [u32])` and
+  `Instance::Item(foo, [u64])`) fetches **two distinct
+  bodies** through `instance_mir`. Per
+  `prior-art/rustc.md:11-24` (rustc_hir's source-side
+  `ItemKind::Fn { body: BodyId, ... }` is the HIR-layer
+  binding from DefId to a single source-level BodyId;
+  the post-mono dispatch happens at the Instance layer
+  via `instance_mir`).
+- **rustc_public** provides per-Instance body via
+  `Instance::body() -> Option<Body>` at primary source
+  `rustc_public/src/mir/mono.rs:53-55`, structurally
+  separate from `CrateItem`'s methods. This is the cited
+  4-peer-convergence pattern stage-11 D-11-5 referenced:
+  `Instance::body()` (per-Instance), NOT
+  `CrateItem::body()` (per-DefId). Per
+  `prior-art/rustc_public.md` "Per-Instance body access"
+  paragraph (the dedicated note added during stage-12
+  R2-correction pass to record this evidence directly).
+
+**Two peers don't take a position:**
+- **Charon** with `--monomorphize` produces one
+  `FunDecl` per (DefId, GenericArgs) -- after Charon's
+  monomorphization pass, there's no separation between
+  "Item" and "Instance"; FunDecls ARE per-mono. Charon's
+  `FunDecl.body: Result<Body, Opaque>` at
+  `prior-art/charon.md:23-25` is therefore per-FunDecl
+  (which equals per-Instance under monomorphize mode).
+  This supports per-mono body placement but does not
+  directly distinguish Item-side vs Instance-side
+  because Charon doesn't carry the same Item/Instance
+  split RegseqModel has.
+- **mrustc** carries Function structures with linkage
+  metadata at `prior-art/mrustc.md:20-30`; primary
+  source for body-storage placement (per-Function vs
+  per-mono) was not directly verifiable from the
+  prior-art file. mrustc is primarily Rust-to-C++; its
+  monomorphization-vs-storage discipline isn't a direct
+  RegseqModel analog.
+
+**Conclusion.** rustc-internal's `instance_mir` and
+rustc_public's `Instance::body()` are the load-bearing
+peer evidence; Charon's `--monomorphize` mode is
+supportive; mrustc is informational only. The Option B
+reframe rests on the rustc-internal + rustc_public
+pattern, which directly establishes per-Instance body
+placement.
+
+Composes with Q3 (single-level IR; bodies are content of
+Instances) and Q2 (eager translation; `Option<Body>` is owned
+content, not a query).
+
+### 25.6 Joint validation walk
+
+The body-level validation walk is implemented as a visitor
+pattern with override hooks. Validation is a model concern (the
+IR knows how to validate itself); CFG analyses (predecessors,
+dominators, RPO iteration) live in `regseq-analysis` per the
+stage-10 model-vs-analysis line (§24.2.3).
+
+#### 25.6.1 Visitor trait
+
+Located at `crates/regseq-model/src/visit.rs`. 10 `visit_X` /
+`super_X` hook pairs:
+
+```rust
+pub trait Visitor {
+    fn visit_body(&mut self, body: &Body) { self.super_body(body) }
+    fn super_body(&mut self, body: &Body) { /* default recursion */ }
+
+    fn visit_basic_block(&mut self, bb: &BasicBlock) { self.super_basic_block(bb) }
+    fn super_basic_block(&mut self, bb: &BasicBlock) { /* default recursion */ }
+
+    fn visit_local_decl(&mut self, decl: &LocalDecl) { self.super_local_decl(decl) }
+    fn super_local_decl(&mut self, decl: &LocalDecl) { /* default recursion */ }
+
+    fn visit_statement(&mut self, stmt: &Statement) { self.super_statement(stmt) }
+    fn super_statement(&mut self, stmt: &Statement) { /* default recursion */ }
+
+    fn visit_terminator(&mut self, term: &Terminator) { self.super_terminator(term) }
+    fn super_terminator(&mut self, term: &Terminator) { /* default recursion */ }
+
+    fn visit_place(&mut self, place: &Place) { self.super_place(place) }
+    fn super_place(&mut self, place: &Place) { /* default recursion */ }
+
+    fn visit_rvalue(&mut self, rvalue: &Rvalue) { self.super_rvalue(rvalue) }
+    fn super_rvalue(&mut self, rvalue: &Rvalue) { /* default recursion */ }
+
+    fn visit_operand(&mut self, op: &Operand) { self.super_operand(op) }
+    fn super_operand(&mut self, op: &Operand) { /* default recursion */ }
+
+    fn visit_ty(&mut self, ty: TyId) { self.super_ty(ty) }
+    fn super_ty(&mut self, ty: TyId) { /* default recursion */ }
+
+    fn visit_call_callee(&mut self, callee: &CallCallee) { self.super_call_callee(callee) }
+    fn super_call_callee(&mut self, callee: &CallCallee) { /* default recursion */ }
+}
+```
+
+**Discipline.** Mirrors rustc_public's `make_mir_visitor!` macro
+template:
+- Exhaustive destructuring in `super_X` defaults: no `..`, no
+  catch-all `_` arms. Adding a variant becomes a compile-time
+  TODO; new variants are forced into explicit hook coverage.
+- `super_X` recurses into child constructs, calling `visit_Y`
+  for each child.
+- Implementors override only the hooks they need; defaults
+  handle traversal.
+
+**Mutability discipline.** Read-only `Visitor` trait at stage 11
+(`&mut self` for the visitor accumulator + `&Body` for the data).
+A `MutVisitor` variant for transformation passes (`&mut self` +
+`&mut Body`) is a phase-1 implementation extension, not specified
+in detail at stage 11 -- the body-level transformation passes
+per §25.7 do direct mutation rather than a generic mutation
+visitor (their rewrite logic is too specific to benefit from a
+generic trait; mrustc's `MIR_Cleanup_Virtualize` does direct
+mutation).
+
+#### 25.6.2 Body-level walk procedure (§24.4.3 absorption)
+
+The `visit_body` hook implements the §24.4.3 6-step DFS-RPO
+procedure deferred from stage-10 D-10-5 Part C:
+
+```text
+visit_body(body):
+    // Step 1 (B-NonEmpty pre-check).
+    if body.basic_blocks.is_empty():
+        emit_error(B_NonEmpty); return
+
+    // Step 2 (B-Successors-Valid pre-check; guards subsequent indexing).
+    for bb in body.basic_blocks:
+        for succ in bb.terminator.successors():       // §23.1.4 helper
+            if succ.as_u32() >= body.basic_blocks.len():
+                emit_error(B_Successors_Valid); return
+
+    // Steps 3-5 (DFS-RPO traversal + B-Reachable + B-RPO).
+    let rpo = dfs_rpo_from(BlockId::START_BLOCK, body)  // §24.4.3 helper
+    if rpo.len() != body.basic_blocks.len():
+        emit_error(B_Reachable)
+    for (i, bb_id) in rpo.iter().enumerate():
+        if bb_id != BlockId::from_u32(i as u32):
+            emit_error(B_RPO); break
+
+    // Step 6 (B-Entry implicit from step-3 starting point + step-1 pre-check).
+
+    // Per-construct walks.
+    super_body(body)  // recurses into local_decls + each basic_block
+```
+
+Pre-checks (steps 1-2) GUARD the indexing in the DFS-RPO
+traversal: an empty body or out-of-range successor would panic
+otherwise.
+
+#### 25.6.3 Construction invariants 1 + 9 fold-in
+
+Stage-1's deferred construction invariants 1 (TyId closure for
+body-side IDs) and 9 (`Direct(InstanceId)` closure for callees;
+stage-9 D-9-10 B-7) **fold into the joint visitor** rather than
+running as separate pre-passes:
+
+- **Invariant 1.** `visit_local_decl` checks `LocalDecl.ty in
+  model.types`. `visit_ty` (recursing into structural TyId
+  references in `Place::Field(idx, TyId)`,
+  `Rvalue::Aggregate(AggregateKind::Struct(TyId), ...)`, etc.)
+  checks each TyId.
+- **Invariant 9.** `visit_terminator`'s Call arm checks
+  `CallCallee::Direct(InstanceId)` membership in `model.instances`.
+
+Reasoning: closure invariants are simple membership tests. A
+separate pre-pass would re-walk the body for one tiny check per
+local/ty/Call. mrustc's `TU_MATCH` inline-fold is supporting
+precedent (one walk applies multiple checks per match arm).
+rustc's `non_ssa_locals` pre-walk is precedent for "pre-walk
+classifies; main walk consumes" but rustc's case populates a
+sidecar map; our case is check-and-error with no sidecar needed.
+
+#### 25.6.4 Walk-implementation absorption summary
+
+The 5 deferred walk-implementations all close at stage-11's
+joint visitor:
+
+| Source                                | Stage-11 hook                            | Invariants applied          |
+| ------------------------------------- | ---------------------------------------- | --------------------------- |
+| D-5-2 Place validation walk           | `visit_place`                            | §19.7's 5 rule categories   |
+| §20.5 Operand-site invariants         | `visit_operand`                          | §20.5 invariants            |
+| D-7-3 Rvalue walk                     | `visit_rvalue`                           | §21.5 invariants            |
+| D-8-4 Part C Statement walk           | `visit_statement`                        | §22.5 B-1..B-5              |
+| D-9-10 Part C Terminator walk         | `visit_terminator`                       | §23.6 B-1..B-9              |
+| D-10-5 Part C Body walk (§24.4.3)     | `visit_body` (pre-checks per §25.6.2)    | B-NonEmpty + B-Successors-Valid + B-Reachable + B-RPO + B-Entry |
+
+Plus construction invariants 1 + 9 fold-in per §25.6.3.
+
+### 25.7 Body-level transformation passes
+
+Two passes operate on Body content with **hybrid timing**, both
+landing in Phase 5 of the §3.4 5-phase pipeline (after Phase 4
+ItemId assignment):
+- One runs at **bridge body-construction time** (Phase 5
+  body-materialisation sub-step; per-rustc-terminator
+  translation envelope; forced by the locked vocabulary). See
+  §25.7.1.
+- One runs as a **post-body-construction pass** over the
+  fully-materialised Body (Phase 5 intra-body-pass sub-step;
+  sequenced after body materialisation, before joint
+  validation). See §25.7.2.
+
+The §3.4 Phase 5 "Per-phase body work" subsection is the
+authoritative pass-scheduling reference; this section spells
+out each pass's mechanics.
+
+#### 25.7.1 Drop-as-Call collapse (Phase 5 body construction)
+
+**Forced timing.** Stage-9 D-9-1.1 rejected the `Drop` variant
+from `TerminatorKind`. The bridge MUST translate
+`mir::TerminatorKind::Drop` at body-construction time (Phase 5
+body-materialisation sub-step per §3.4) -- there is no Drop
+variant in RegseqModel's vocabulary to defer. The drop-glue
+Function Item that the resulting Call terminator targets was
+synthesised in Phase 2 (per §3.4 Phase 2 trigger table) and
+got its final ItemId in Phase 4; Phase 5 just inserts the
+Call terminator referencing the already-final ItemId.
+
+**Procedure** (per stage-9 §23.4 step 4):
+
+For each `mir::TerminatorKind::Drop { place, target, .. }`:
+
+1. Allocate fresh `_t_drop_arg: LocalDecl { ty: Ty::Ptr(place_ty,
+   Mutability::Mut), mutability: Mutability::Mut, span: Span::dummy(),
+   debug_name: None }` via `Body::push_synthetic_local(ptr_to_place_ty)`.
+2. Allocate fresh `_t_drop_ret: LocalDecl { ty: Ty::Tuple([]), ... }`
+   via `Body::push_synthetic_local(unit_ty)`.
+3. Append `Statement::Assign(Place::from(_t_drop_arg),
+   Rvalue::RawPtr(Mutability::Mut, place))` to the current
+   basic block's statements list (immediately before the
+   synthesized Call terminator -- after all earlier statements
+   that may have mutated `place`).
+4. Emit `TerminatorKind::Call { callee: CallCallee::Direct(
+   drop_glue_instance_id), args: [Operand::Move(Place::from(_t_drop_arg))],
+   destination: Place::from(_t_drop_ret), target: Some(target) }`.
+
+The drop-glue Instance has `InstanceKind::Function { fn_sig,
+body, flavor: FunctionInstanceFlavor::DropGlue, virtual_idx:
+None }` (concrete drops) or `InstanceKind::Function { fn_sig,
+body, flavor: FunctionInstanceFlavor::Virtual, virtual_idx:
+Some(0) }` (dyn-Trait drops; `FunctionInstanceFlavor::Virtual`
+is the unit-variant flavor tag, `virtual_idx` is the separate
+`InstanceKind::Function` field; `0` is the
+COMMON_VTABLE_ENTRIES_DROPINPLACE slot per rustc's
+`ty/vtable.rs:45-49`). The `fn_sig` and `body` fields are
+populated per §9.4 / Option B (D-12-1.4): `fn_sig` is the
+substituted drop-glue signature (typically `fn(*mut SelfTy)
+-> ()` for concrete drops, `fn(*mut ()) -> ()` for the
+erased-receiver Virtual case); `body` is the synthesized
+drop-in-place body (or fetched via rustc's
+`tcx.instance_mir(InstanceKind::DropGlue(...))` for concrete
+drops).
+
+**Invariant timing.** Drop-as-Call collapse runs inside the
+bridge's atomic per-rustc-terminator translation envelope. The
+constructed Body has no `Drop` terminators; only the synthesized
+`Call` terminators with drop-glue callees. Stage-9's §23.6
+invariants (B-3 Call destination type matches callee return
+type, etc.) hold post-collapse.
+
+#### 25.7.2 Vtable-indirect rewrite (post-construction)
+
+**Indicated timing.** A body-level pass running over the
+fully-constructed Bodies of Function Instances. Per §3.4's
+5-phase pipeline, Items (including stage-12 vtable type Items)
+are F4-sorted and assigned final ItemIds at Phase 4; Function
+Instances and their Bodies are constructed at Phase 5. The
+vtable-indirect rewrite is therefore an **intra-Phase-5** pass
+that runs over Bodies *after* they are materialized
+(Phase 5 sub-step) but *before* the joint validation walk
+(§25.6 sub-step). At rewrite time, the Item table is fully
+populated (Phase 4 complete) and the rewriter resolves
+virtual-call targets to vtable function-pointer slots whose
+underlying Items already have final ItemIds.
+
+A bridge-time (Phase 2) rewrite would require Item synthesis
+to be coupled with body translation -- contradicting §3.4's
+Phase 2/4/5 separation (Items synthesized + cached during
+Phase 2 via Phase2Handles; ItemIds finalized at Phase 4;
+Bodies materialized at Phase 5). Post-construction
+intra-Phase-5 timing matches Q2 (eager translation produces
+fully-owned IR; passes mutate fully-owned IR) cleanly.
+Charon's `transform_dyn_trait_calls` (`transform_dyn_trait_calls.rs:31-122`,
+registered in `INITIAL_CLEANUP_PASSES` at `mod.rs:104, 111`) and
+mrustc's `MIR_Cleanup_Virtualize` (`cleanup.cpp:548-684`) both
+run post-body-construction. rustc's codegen-time direct dispatch
+(via `Instance::Virtual` + `tcx.vtable_entries`) is structurally
+inadmissible for C-emission under Q2 (no `'tcx` post-bridge).
+
+**Procedure** (per stage-9 expectations.md §23.3):
+
+For each `BasicBlock.terminator` of kind `TerminatorKind::Call`
+where `callee = CallCallee::Direct(instance_id)` and the resolved
+Instance has `kind: InstanceKind::Function { flavor:
+FunctionInstanceFlavor::Virtual, virtual_idx: Some(idx), .. }`:
+
+1. **Receiver materialization.** Match `args[0]` and produce
+   `_t_recv: LocalId` typed same as `args[0]`:
+   - If `args[0] = Operand::Copy(p)` or `Operand::Move(p)`:
+     insert `Statement::Assign(_t_recv, Rvalue::Use(args[0].clone()))`.
+   - If `args[0] = Operand::Constant(_)`: synthesize via
+     `Statement::Assign(_t_recv, Rvalue::Use(args[0]))` (rare;
+     well-formed only via stage-12 vtable instance synthesis).
+   `_t_recv` has type `Ty::Ref(dyn_ty, _)` or `Ty::Ptr(dyn_ty, _)`.
+
+2. **Source normalization** (Ref receivers only). For
+   `_t_recv: Ty::Ref(dyn_ty, _)`, synthesize a raw-pointer
+   intermediate via `Statement::Assign(_t_raw, Rvalue::RawPtr(<mut>,
+   Place { local: _t_recv, projection: [Deref] }))` -- the `&raw
+   const *_t_recv` (or `&raw mut *_t_recv` for `&mut dyn Trait`)
+   form. `_t_raw` has type `Ty::Ptr(dyn_ty, Mutability::Not)` (or
+   `Mut`). For `_t_recv: Ty::Ptr(dyn_ty, _)` (raw-pointer receivers,
+   e.g. dyn-Trait drops per §23.4 where args[0] is the synthetic
+   `&raw mut place`), this step is skipped.
+
+3. **Metadata extraction.** Synthesize `Statement::Assign(_t_meta,
+   Rvalue::UnaryOp(UnOp::PtrMetadata, Operand::Copy(Place::from(_t_recv))))`.
+   `_t_meta` has type `Ty::Ptr(<vtable_struct_TyId>, Mutability::Not)`
+   where `<vtable_struct_TyId>` is `dyn_ty.vtable_ty` (from
+   stage-3 D5).
+
+4. **Function pointer load.** Synthesize `Statement::Assign(_t_fn,
+   Rvalue::Use(Operand::Copy(Place { local: _t_meta, projection:
+   [Deref, Field(virtual_idx, fn_ptr_ty)] })))`. The `Field`
+   projection at `virtual_idx` reads the vtable's
+   function-pointer-typed slot. `_t_fn` has function-pointer type
+   matching the loaded slot.
+
+5. **Data pointer extraction.** Synthesize `Statement::Assign(_t_data,
+   Rvalue::Cast(CastKind::PtrToPtr, <_t_raw_or_recv_operand>,
+   Ty::Ptr(unit_ty, <mut>)))`. The source operand is
+   `Operand::Move(Place::from(_t_raw))` for the reference-receiver
+   case (after step 2 normalization) or `Operand::Copy(Place::from(_t_recv))`
+   for the raw-pointer-receiver case. The destination type is
+   `Ty::Ptr(Ty::Tuple([]), <mut>)`.
+
+6. **Call rewrite.** Replace `Call.callee` from
+   `CallCallee::Direct(virtual_instance_id)` to
+   `CallCallee::Indirect(Operand::Move(Place::from(_t_fn)))`.
+   Replace `Call.args[0]` with `Operand::Move(Place::from(_t_data))`
+   (matches the erased-receiver fn_sig at the loaded vtable slot).
+   Other args (`args[1..]`), destination, target unchanged.
+
+The 4-5 fresh locals (4 for raw-pointer receivers; 5 for
+reference receivers including source-normalization) all allocate
+via `Body::push_synthetic_local`.
+
+**Cross-stage friction with stage-5 D-5-1.** Charon's compact
+in-place projection-chain rewrite at line 119 of
+`transform_dyn_trait_calls.rs`:
+```
+call.func = FnOperand::Move(method_field_place)
+```
+with `method_field_place = (*receiver.ptr_metadata).method`
+uses a `PtrMetadata` PlaceElem variant in Charon's projection
+vocabulary. **Stage-5 D-5-1 locked a 6-variant `PlaceElem` set
+that does NOT include `PtrMetadata`**: Deref / Field / Index /
+ConstantIndex / Subslice / Downcast.
+
+Without `PtrMetadata` as a PlaceElem, RegseqModel cannot inline
+the metadata extraction into a Place projection chain. The
+metadata MUST be extracted as a separate `Rvalue::UnaryOp(UnOp::PtrMetadata,
+...)` Statement. The chain expands to 4-5 fresh locals (Step 3
++ Step 4 + Step 5 + Step 1 + optional Step 2) vs Charon's
+0-fresh-locals form.
+
+The verbosity is **forced by stage-5's locked vocabulary**, not
+a stage-11 design choice. Reopening D-5-1 to add `PtrMetadata`
+as a PlaceElem variant is out of stage-11 scope (would cascade
+through stage-5's projection-typing rules + walk + invariants
++ the §19.4 type-narrowing table). `UnOp::PtrMetadata` is in
+stage-7 D-7-1.6's locked `UnaryOp` enum -- that's how the
+metadata extraction happens via Rvalue rather than via Place.
+
+**Invariant timing.** Stage-9 §23.6.2 invariants B-3 (Call
+destination type = callee return type), B-4 (Call args length =
+callee arity), B-6 (per-arg type match) hold POST-rewrite. Pre-rewrite,
+`args[0]` type does not match `callee_fn_sig(callee_id).inputs()[0]`
+for Virtual-flavor Calls (args[0] is `&dyn Trait` or `*mut dyn Trait`;
+`callee_fn_sig(...).inputs()[0]` is `*mut ()` per §13.2 +
+§17.2.1's uniform-mutable-erased-receiver rule, resolved per
+the §23.6.2 helper through `inst.kind.as_function().fn_sig`
+under stage-12 D-12-1.4 / Option B). The rewrite resolves the
+mismatch by extracting the data pointer.
+
+**Pass scheduling.** Vtable-rewrite runs **before** the joint
+validation walk (§25.6) -- §23.6.2 B-3/B-4/B-6 invariants assume
+post-rewrite shape. Running validation pre-rewrite would emit
+spurious B-3/B-4/B-6 errors at every Virtual-flavor Call site.
+
+#### 25.7.3 Pass scheduling
+
+The body-validation pipeline within §3.4 Phase 5
+(after Phase 4 ItemId assignment is complete):
+
+```text
+[1] Phase 5 body materialisation / bridge body construction
+    (after Phase 4 ItemId assignment)
+    - rustc Body -> RegseqModel Body (atomic per-rustc-terminator translation)
+    - Drop-as-Call collapse INSIDE this step (§25.7.1)
+    - Calls to dyn-Trait methods land as Direct(InstanceId)
+      where Instance has flavor=Virtual + virtual_idx=Some(idx)
+   |
+   v
+[2] Vtable-indirect rewrite pass (§25.7.2)
+    - Phase 5 intra-body pass over the materialised Body
+    - Walks every BasicBlock.terminator
+    - For each Direct(virtual)-callee Call: 6-step rewrite
+      (5 synthesis steps + Call rewrite at step 6)
+    - Produces Calls with CallCallee::Indirect(Operand)
+   |
+   v
+[3] Joint validation walk (§25.6 visitor)
+    - Phase 5 final sub-step
+    - Pre-checks + DFS-RPO traversal (§25.6.2)
+    - Per-construct invariants (§25.6.4)
+    - Construction invariants 1 + 9 fold-in (§25.6.3)
+```
+
+All three steps run in Phase 5 (per §3.4 "Per-phase body work
+in Phase 5"). Step 2 must precede step 3. Step 1's Drop-as-Call
+collapse is sequenced WITH step 1 (atomic per-rustc-terminator).
+
+### 25.8 LocalDecls allocation API
+
+```rust
+impl Body {
+    /// Append `decl` to local_decls; return the freshly-allocated LocalId.
+    /// Allocation is positional: LocalId equals the previous local_decls.len().
+    pub fn push_local(&mut self, decl: LocalDecl) -> LocalId;
+
+    /// Convenience helper for synthetic locals (bridge-introduced
+    /// + rewrite-pass-introduced). Defaults to `Mutability::Mut`,
+    /// `Span::dummy()`, `debug_name: None`. Returns the freshly-
+    /// allocated LocalId.
+    pub fn push_synthetic_local(&mut self, ty: TyId) -> LocalId;
+}
+```
+
+**Single API; no Builder pattern.** Body is mutable directly
+during both bridge construction and post-construction passes
+(§25.7.2 vtable-rewrite). A `BodyBuilder` intermediate would not
+simplify -- post-construction passes mutate Body anyway; either
+Body is mutable always (Builder is redundant) or Body is
+immutable post-construction (passes can't mutate, blocking
+§25.7.2). The Charon pattern (`Locals::new_var` + a
+`BodyTransformCtx` trait) and the mrustc pattern
+(`MirBuilder::new_temporary` / `MirMutator::new_temporary`
+split) both add a layer that doesn't pay off given RegseqModel's
+locked LocalDecl shape (4 fields per §25.2; no rich helpers
+needed).
+
+**No buffering pattern.** mrustc's `MirMutator` pending-statements
+buffer exists because their rewrite walks DURING basic-block
+iteration (mid-iteration mutation safety). RegseqModel's §25.7.2
+rewrite walks `basic_blocks_iter()` and rewrites each block as
+a unit (extends `block.statements` then replaces `block.terminator`
+atomically per block); no mid-iteration mutation. Drop-as-Call
+at bridge time is similarly atomic per rustc terminator.
+
+**No auto-`StorageLive`.** Charon's `Locals::new_var` auto-emits
+a `StorageLive` statement upon allocation. RegseqModel D-8-1
+dropped `StorageLive` from `StatementKind` (storage markers
+were `RemoveStorageMarkers`-discharged); the auto-emit pattern
+does not transfer.
+
+**Consumers:**
+
+| Site                                   | Allocation pattern                                                                                                  |
+| -------------------------------------- | ------------------------------------------------------------------------------------------------------------------- |
+| Bridge per-rustc-local population      | `body.push_local(LocalDecl { ty, mutability, span, debug_name })` with full LocalDecl from rustc's body data         |
+| Bridge Drop-as-Call collapse (§25.7.1) | `body.push_synthetic_local(ptr_to_place_ty)` for `_t_drop_arg`; `body.push_synthetic_local(unit_ty)` for `_t_drop_ret` |
+| Vtable-rewrite pass (§25.7.2)          | 4-5 calls to `body.push_synthetic_local(ty)` per virtual-call site (`_t_recv`, `_t_meta`, `_t_fn`, `_t_data`, optionally `_t_raw`) |
+
+### 25.9 Per-stage invariants registry
+
+#### 25.9.1 Part A: Rejection table (already covered)
+
+Body-side rejection table is in §25.1 (~14 rustc Body fields
+dropped). LocalDecl-side rejection table is in §25.2 (3 rustc
+LocalDecl fields dropped). All rejections are bridge-side at
+construction; the constructed Body never carries the dropped
+fields.
+
+#### 25.9.2 Part B: Positive invariants
+
+| Tag         | Statement                                                                                          | Walk-enforcement site                          |
+| ----------- | -------------------------------------------------------------------------------------------------- | ---------------------------------------------- |
+| B-Body-1    | `local_decls.len() > arg_count` (RETURN_PLACE always present, args follow, temps after)           | `visit_body` pre-check                         |
+| B-Body-2    | `arg_count` matches the function signature's input count from `InstanceKind::Function { fn_sig }` (per Option B; stage-12 D-12-1.4) | cross-Instance walk (stage-12 owns; phase-1 impl) |
+| B-Body-3    | All `LocalDecl.ty` resolve in `model.types` (construction invariant 1, body-side)                  | `visit_local_decl` (§25.6.3)                   |
+| B-Body-4    | All `Direct(InstanceId)` callees resolve in `model.instances` (construction invariant 9, B-7 close) | `visit_terminator::Call` (§25.6.3)             |
+| B-Body-5    | basic_blocks ordering inherits §24.4 (B-RPO + B-Reachable + B-Entry per §25.6.2 procedure)          | `visit_body` DFS-RPO traversal                 |
+| B-Body-6    | Inherited: §19.7 Place validation (B-0a)                                                           | `visit_place`                                  |
+| B-Body-7    | Inherited: §20.5 Operand-site invariants                                                           | `visit_operand`                                |
+| B-Body-8    | Inherited: §21.5 Rvalue-site invariants                                                            | `visit_rvalue`                                 |
+| B-Body-9    | Inherited: §22.5 Statement-site invariants (B-1..B-5)                                              | `visit_statement`                              |
+| B-Body-10   | Inherited: §23.6 Terminator-site invariants (B-1..B-9)                                             | `visit_terminator` (B-7 also covered by B-Body-4) |
+
+**Inheritance discipline.** B-Body-6 through B-Body-10 are
+per-construct invariants pinned by earlier stages; the joint
+visitor enforces them at the appropriate hooks but the rule
+statements live in their owning stages' sections (§19.7, §20.5,
+§21.5, §22.5, §23.6). Stage-11 spec does not duplicate the
+rules.
+
+#### 25.9.3 Part C: Walk-implementation absorption (already covered)
+
+The 5 deferred walk-implementations (D-5-2 / D-7-3 / D-8-4 /
+D-9-10 / D-10-5) close at stage-11's joint visitor per §25.6.4.
+Construction invariants 1 + 9 fold-in per §25.6.3.
+
+#### 25.9.4 Part D: F4 / F4-2 cross-build identity scope
+
+Body content is per-build. `LocalId` and `BlockId` numberings
+are body-local and need not canonicalise across builds. The
+Instance-side `RegseqInstanceKey` (§9.3 + stage 12 D-12-1.4)
+is what canonicalises across builds; stage-11 body content
+composes downstream. **F4 / F4-2 OUT of stage-11 scope** (same
+as stages 5-10).
+
+#### 25.9.5 Part E: Forward-looking notes
+
+Walk-implementation invariants beyond §25.6 (e.g., type-coherence
+of post-rewrite Calls per §23.6.2 holding only post-rewrite per
+§25.7.2 pass scheduling) are pinned. Phase-1 implementation
+sequences the rewrite pass before validation per §25.7.3.
+
+### 25.10 C lowering
+
+Each `Body` lowers to a C function. The function signature is
+determined by the owning Instance's
+`InstanceKind::Function.fn_sig` (per §25.4 + stage-12
+D-12-1.4 / Option B). Body content lowers as follows:
+
+```c
+/* signature from InstanceKind::Function.fn_sig */
+ret_ty fn_name(arg_ty1 arg1, ..., arg_tyN argN) {
+    /* parameter locals from local_decls[1..=arg_count] are
+       the formal arguments; codegen emits them in the C
+       signature, not as additional declarations. */
+
+    /* internal locals from local_decls[arg_count+1..]: */
+    local_ty_<N1> _N1;   /* or named per debug_name when Some */
+    local_ty_<N2> _N2;
+    ...
+
+    /* basic blocks from body.basic_blocks (in RPO storage order): */
+    bb_0: { stmt_0; ... ; terminator_0; }
+    bb_1: { stmt_1; ... ; terminator_1; }
+    ...
+}
+```
+
+Identifier emission policy (named locals via `debug_name=Some`
+vs synthetic `_N` form for `debug_name=None`) is a stage-13 +
+stage-14 concern. Stage 11 fixes the data the C function
+consumes; stage 13 owns the textual rendering decisions; stage
+14 owns C codegen.
+
+### 25.11 Cross-references
+
+**Inbound** (closed by stage 11):
+
+- Stage 1 `LocalId` definition (§25.3) + `Body` placeholder
+  expansion (§25.1) + `FnSig` placement (§25.4; lives
+  Instance-side per stage-12 D-12-1.4 Option B; supersedes
+  stage-11 D-11-3 Item-side framing) + niche optimization
+  (§25.3) + construction invariant 1 extension (§25.6.3).
+- Stage 1 `Option<LocalId>` size assertions (§25.3).
+- Stage 3 D5 body-level dyn-Trait dispatch rewriting pass
+  (§25.7.2).
+- Stage 5 D-5-2 Place validation walk (§25.6 absorption).
+- Stage 7 D-7-3 Rvalue walk (§25.6 absorption).
+- Stage 8 D-8-3 named-local preservation (§25.2 `debug_name`)
+  + D-8-4 Part C Statement walk (§25.6 absorption).
+- Stage 9 D-9-2 Drop-as-Call bridge concerns + fresh LocalIds
+  API (§25.7.1 + §25.8) + D-9-3 (b) post-rewrite Call shape +
+  D-9-10 Part C Terminator walk (§25.6 absorption) + B-7
+  closure (§25.6.3 invariant 9).
+- Stage 10 D-10-5 Part C Body walk (§25.6.2 absorption) +
+  body-level basic-block table integration (§25.1
+  `basic_blocks` field) + `LocalId::RETURN_PLACE` migration
+  (§25.3 const-body declaration).
+
+**Outbound** (filed at stage-11 merger contract close;
+stage-11 D-11-3 + D-11-5's Item-side framing was reopened
+at stage-12 D-12-1.4 / Option B; the stage-12 spec carries
+the post-Option-B Instance-side placement):
+
+- **Stage 12 expectations (post-Option-B).** FnSig and Body
+  live on `InstanceKind::Function` per stage-12 D-12-1.4
+  (supersedes stage-11 D-11-3's Item-side framing for
+  fn_sig and stage-11 D-11-5's `Item.body` framing).
+  Stage-11 spec edits land at stage-12 merger close: §25.4
+  (FnSig location reframe), §25.5 (Body-vs-Instance linkage
+  reframe), §23.6.2 (callee_fn_sig drops Item indirection),
+  §9.4 (InstanceKind::Function gains fn_sig + body), §3.1
+  invariant 10 (Body presence reword). Joins the existing
+  stage-3 D5 + stage-9 D-9-3 (b) outbound bundle for
+  vtable Item synthesis machinery.
+- **Stage 13 expectations.** Categorical rendering bundle per
+  D-11-K (§18.2 row retargeting in place at merger -- rows
+  remain in §18.2 with new stage-13 ownership; rendering for
+  body-level content all retargeted from per-stage K-tags to
+  stage-13). 12-item bundle: 9 public renderers
+  (`render_place`, `render_operand`, `render_rvalue`,
+  `render_statement`, `render_terminator`, `render_call_callee`,
+  `render_switch_targets`, `render_assert_kind`,
+  `render_basic_block`), plus 1 internal helper
+  (`render_terminator_kind`), plus 2 sigil rendering wirings
+  (`_N` for `LocalId`, `bbN` for `BlockId`). Predecessor
+  K-tag attribution preserved.
+
+**Renderer reference.** All body-level rendering for §25
+content lives in `pretty-printer.md` §3 (Body envelope) +
+§7 (per-renderer specs). §25 contains no rendering
+specification; renderer signatures, sigil rendering wiring,
+and per-method ownership rows are stage-13-owned and
+absorbed into `pretty-printer.md`.
+
+(See `discussions.md` for the per-D-tag audit shape and the
+stage-11 outbound bundles.)
+
+---
+
 
 ## Appendix A: Worked C-lowering examples
 

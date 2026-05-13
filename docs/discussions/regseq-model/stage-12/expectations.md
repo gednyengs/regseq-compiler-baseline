@@ -354,6 +354,79 @@ expectations live in `stage-N/expectations.md`."
   - `stage-3/prior-art/mrustc.md` F (closures-as-structs, fat
     pointers).
 
+## From stage 5
+
+(No stage-12 deliverables incoming from stage 5.)
+
+The originally-filed `render_place` deferral was retargeted
+from stage 12 to stage 11 on the D-5-2 + D-5-K combined Codex
+review R1 (BLOCK finding `d5k-name-source-and-target`). It
+was subsequently retargeted again from stage 11 to **stage
+13** under stage-11 D-11-K's categorical rendering deferral
+(see `../stage-11/discussions.md` D-11-K). Field and variant
+names live in §11 layout schema's `FieldLayout.name` /
+`VariantLayout.name` (already pinned at stage 3), reachable
+at render time via the head local's `LocalDecl.ty`; `Item`
+carries `def_path` / `kind` / `span` / flags /
+`opaque_handle_eligible`, not field/variant name tables, so
+stage 12 is not actually a `render_place`
+dependency. The retargeted expectation now lives in
+`stage-11/expectations.md` "From stage 5" alongside D-5-2's
+Place-validation-walk expectation.
+
+## From stage 9
+
+**Filed 2026-05-05 at stage-9 Phase A close.**
+
+- **[Stage-9 callee-shape disposition]
+  Possibly extend `DefPathData` for synthetic vtable
+  scopes (originally filed as stage-1 inbound to stage 9
+  in `../stage-9/expectations.md`).** Stage-9 D-9-3
+  resolved to candidate **(b)** -- widen `Call.callee`
+  to `CallCallee::{Direct(InstanceId), Indirect(Operand)}`
+  -- and uses the current spec's
+  `InstanceKind::Function.flavor: FunctionInstanceFlavor`
+  field (with `Virtual` variant per top-level `spec.md`
+  §9.4; the `flavor` field is canonical in the current
+  spec, post-stage-1 revision) for the bridge's
+  emit-then-rewrite mechanism.
+  Stage 9 introduces no new InstanceKind variant and
+  therefore no Virtual-shim-scope DefPathData
+  variant.
+
+  **Stage-12's separate DefPathData encoding choice
+  for vtable type Items and vtable instance Items**
+  (per "From stage 3" Sections A and B above --
+  "overload an existing variant, or add a new
+  `DefPathData::VTableType` variant per stage-1's
+  anticipated revision procedure at
+  `stage-1/spec-snapshot.md:919-927`") **remains a
+  stage-12 decision**; stage 9 does not close it. The
+  stage-12 deliverable still owns the per-Item
+  encoding choice.
+
+  *Cross-refs.*
+  - `../stage-9/expectations.md` "From stage 1"
+    (original "Possibly extend `DefPathData`" inbound
+    expectation -- now closed).
+  - `../stage-9/discussions.md` D-9-3 (callee-shape
+    audit; (b) decision rationale).
+  - "From stage 3" Sections A.1 and B (this file --
+    stage-12 still owns the DefPathData encoding choice
+    for synthetic vtable Items).
+
+- **Vtable shim Function Item synthesis (cross-ref to
+  stage-3 inbound).** Stage-9 D-9-3 (b) commits to the
+  body-level rewriting model: stage-11's pass produces
+  the `Indirect(Operand)` Call shape by synthesizing
+  vtable function-pointer loads in IR. The Operand the
+  Indirect arm carries points at a vtable field whose
+  type matches the **erased-receiver** vtable shim
+  Function Items synthesised at stage 12 (per "From
+  stage 3" Sections A.2 and C above). No additional
+  stage-12 deliverable beyond what's already filed; this
+  entry is informational.
+
 ## From stage 4
 
 - **[CLOSED by D-4-3]** **`SyntheticItemKind::ConstMemoryStatic`
@@ -377,3 +450,77 @@ expectations live in `stage-N/expectations.md`."
   (`ConstMemoryStatic` dedup sub-bullet);
   `stage-4/discussions.md` D-4-3 parent + D-4-3.1 through
   D-4-3.10; `stage-4/review-log.md` D-4-3 rounds.
+
+---
+
+## From stage 11
+
+Filed at stage-11 merger contract close (2026-05-05; per
+README §5.5 step 7). Two structural items per D-11-3 +
+D-11-5; one invariant-closure item per D-11-6.1 (B-7).
+
+### `Item.kind = Function { fn_sig, body, ... }` schema expansion (D-11-3 + D-11-5)
+
+Stage-11 D-11-3 reframed FnSig placement to Item-side
+(supersedes stage-1 inbound's Body-side framing).
+Stage-11 D-11-5 placed Body as a structural field of
+Item (no separate `BodyId` allocation). Both place
+function-defining content on a single Item per
+`Item.kind = Function { ... }` per stage-12 schema.
+
+**Stage-12 deliverable.** Expand the `ItemKind` enum's
+`Function` variant to carry both:
+
+```rust
+ItemKind::Function {
+    fn_sig: FnSigId,    // §14.3 5-field schema (inputs, output,
+                        //   abi, c_variadic, safety) preserved unchanged;
+                        //   stage-11 D-11-3 reframes placement only.
+    body: Option<Body>, // None for foreign declarations
+                        //   (extern "C" fn with no body); Some for
+                        //   source-defined fns + bridge-synthesised
+                        //   shims (drop glue, vtable shims).
+    // ... other Function-relevant Item fields per stage-12 design ...
+}
+```
+
+Stage-11 spec assumes `Item.kind.as_function() ->
+&FunctionData` accessor or analogous extraction (the
+§23.6.2 `callee_fn_sig` helper uses
+`item.kind.as_function().fn_sig`). Stage 12 picks the
+exact accessor shape; the structural content (fn_sig +
+body + flavor-relevant metadata) is what stage-11
+relies on.
+
+**Cross-refs.**
+- `../stage-11/spec-snapshot.md` §25.4 (FnSig location);
+  §25.5 (Body-vs-Item linkage); §23.6.2 (`callee_fn_sig`
+  helper).
+- `../stage-11/discussions.md` D-11-3 + D-11-5 audit
+  shape.
+- `../decisions.md` `### Stage 11 (MIR bodies)` D-11-3 +
+  D-11-5 entries.
+
+### Construction invariant 9 closure (D-11-6.1 B-7)
+
+Stage-11 D-11-6.1 fold-in pins the joint-validation
+visitor's `visit_terminator::Call` arm to verify every
+`CallCallee::Direct(InstanceId)` resolves in
+`model.instances`. The verification is stage-11-owned
+(visitor at `crates/regseq-model/src/visit.rs`); stage
+12 owns `model.instances` integrity (one-to-one with
+Items; populated by collector; exhausted by validator).
+
+**Stage-12 deliverable.** Confirm `model.instances`
+integrity invariant per stage-1 D-9 closure-completeness
+when `ItemKind` finalises. No additional schema work
+required at stage 12 beyond the existing
+`model.instances` table; the closure check happens at
+the joint-validation pass (stage-11-owned).
+
+**Cross-refs.**
+- `../stage-11/spec-snapshot.md` §25.6.3 (construction
+  invariant fold-in).
+- `../stage-11/discussions.md` D-11-6.1 audit shape.
+- `../decisions.md` `### Stage 11 (MIR bodies)` D-11-6.1
+  entry.
