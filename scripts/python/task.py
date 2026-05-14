@@ -17,6 +17,7 @@ Usage:
 import argparse
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -697,7 +698,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     data = load_tasks()
     tasks = all_tasks(data)
 
-    counts = {"pending": 0, "in_progress": 0, "done": 0, "failed": 0}
+    counts = {"pending": 0, "in_progress": 0, "done": 0, "failed": 0, "archived": 0}
     for t in tasks:
         counts[t["status"]] = counts.get(t["status"], 0) + 1
 
@@ -708,6 +709,7 @@ def cmd_status(args: argparse.Namespace) -> None:
     print(f"  In Progress: {counts['in_progress']}")
     print(f"  Pending:     {counts['pending']}")
     print(f"  Failed:      {counts['failed']}")
+    print(f"  Archived:    {counts['archived']}")
 
     if total > 0:
         pct = (counts["done"] / total) * 100
@@ -718,11 +720,30 @@ def cmd_list(args: argparse.Namespace) -> None:
     data = load_tasks()
     status_map = task_status_map(data)
 
+    def passes_filters(task: dict) -> bool:
+        if args.status and task["status"] != args.status:
+            return False
+        if args.phase and task.get("phase") != args.phase:
+            return False
+        return True
+
+    if args.json:
+        for group in data["groups"]:
+            for t in group["tasks"]:
+                if passes_filters(t):
+                    print(json.dumps(t))
+        return
+
+    if args.quiet:
+        for group in data["groups"]:
+            for t in group["tasks"]:
+                if passes_filters(t):
+                    print(t["id"])
+        return
+
     print("TASK_LIST:")
     for group in data["groups"]:
-        tasks = group["tasks"]
-        if args.status:
-            tasks = [t for t in tasks if t["status"] == args.status]
+        tasks = [t for t in group["tasks"] if passes_filters(t)]
         if not tasks:
             continue
 
@@ -731,6 +752,202 @@ def cmd_list(args: argparse.Namespace) -> None:
             met = deps_met(t, status_map)
             blocked_marker = " (BLOCKED)" if t["status"] == "pending" and not met else ""
             print(f"    {t['id']:30s} {t['status']:12s} {t['name']}{blocked_marker}")
+
+
+def natural_sort_key(s: str) -> tuple:
+    """Sort key that handles numeric and dotted-numeric strings naturally.
+
+    "1" < "2" < "10" < "Appendix"; "1.1" < "1.2" < "1.10".
+    """
+    parts = []
+    for piece in re.split(r"(\d+)", s):
+        if piece.isdigit():
+            parts.append((0, int(piece), ""))
+        elif piece:
+            parts.append((1, 0, piece))
+    return tuple(parts) if parts else ((1, 0, ""),)
+
+
+def extract_anchors(spec_path: Path, include_subsections: bool = False) -> list[str]:
+    """Return ordered anchor slugs from a markdown spec file.
+
+    Anchor slug = first whitespace-delimited token of the heading text,
+    with trailing `.` stripped. Examples:
+    - "## 19. Place and projections" -> "19"
+    - "### 1.1 What Regseq is" -> "1.1"
+    - "## Appendix A: Bridge-rejection examples" -> "Appendix"
+    """
+    anchors: list[str] = []
+    seen: set[str] = set()
+    for raw in spec_path.read_text().splitlines():
+        if raw.startswith("## ") or (include_subsections and raw.startswith("### ")):
+            text = raw.lstrip("#").strip()
+            if not text:
+                continue
+            first = text.split(None, 1)[0].rstrip(".")
+            if first and first not in seen:
+                anchors.append(first)
+                seen.add(first)
+    return anchors
+
+
+def cmd_ready_leaves(args: argparse.Namespace) -> None:
+    """Print every pending task whose `depends_on` are all done, one ID per line."""
+    data = load_tasks()
+    status_map = task_status_map(data)
+
+    leaves = []
+    for t in all_tasks(data):
+        if t["status"] != "pending":
+            continue
+        if args.phase and t.get("phase") != args.phase:
+            continue
+        if deps_met(t, status_map):
+            leaves.append(t["id"])
+    for tid in sorted(leaves):
+        print(tid)
+
+
+def cmd_phase_status(args: argparse.Namespace) -> None:
+    """PASS iff every phase-tagged task is done AND every dep is done."""
+    data = load_tasks()
+    status_map = task_status_map(data)
+
+    phase_tasks = [t for t in all_tasks(data) if t.get("phase") == args.phase]
+    if not phase_tasks:
+        print(f"UNKNOWN_PHASE: No tasks tagged with phase `{args.phase}`")
+        sys.exit(2)
+
+    not_done = [t for t in phase_tasks if t["status"] != "done"]
+    blockers = []
+    phase_ids = {t["id"] for t in phase_tasks}
+    for t in phase_tasks:
+        for dep_id in t.get("depends_on", []):
+            if status_map.get(dep_id) != "done":
+                blockers.append((t["id"], dep_id, status_map.get(dep_id, "unknown")))
+
+    counts: dict[str, int] = {}
+    for t in phase_tasks:
+        counts[t["status"]] = counts.get(t["status"], 0) + 1
+
+    print(f"PHASE: {args.phase}")
+    print(f"TOTAL: {len(phase_tasks)}")
+    for st in sorted(counts):
+        print(f"  {st}: {counts[st]}")
+
+    if not_done or blockers:
+        print("VERDICT: FAIL")
+        if not_done:
+            print("TASKS_NOT_DONE:")
+            for t in not_done:
+                print(f"  - {t['id']} [{t['status']}]")
+        if blockers:
+            print("EXTERNAL_DEP_BLOCKERS:")
+            for tid, dep_id, dep_status in blockers:
+                # only flag external blockers (deps not in this phase)
+                if dep_id not in phase_ids:
+                    print(f"  - {tid} depends on {dep_id} [{dep_status}]")
+        sys.exit(1)
+
+    print("VERDICT: PASS")
+    sys.exit(0)
+
+
+def cmd_graph(args: argparse.Namespace) -> None:
+    """Emit dependency DAG as mermaid (default) or dot."""
+    data = load_tasks()
+
+    filtered_ids: set[str] = set()
+    for t in all_tasks(data):
+        if args.phase and t.get("phase") != args.phase:
+            continue
+        if args.status and t["status"] != args.status:
+            continue
+        filtered_ids.add(t["id"])
+
+    if args.format == "mermaid":
+        print("flowchart LR")
+        print("  classDef done fill:#cfc,stroke:#3a3")
+        print("  classDef archived fill:#eee,stroke:#888")
+        print("  classDef pending fill:#fff,stroke:#777")
+        print("  classDef in_progress fill:#ffe,stroke:#aa0")
+        print("  classDef failed fill:#fcc,stroke:#a33")
+        for t in all_tasks(data):
+            if t["id"] not in filtered_ids:
+                continue
+            for dep_id in t.get("depends_on", []):
+                if dep_id in filtered_ids:
+                    print(f"  {dep_id} --> {t['id']}")
+        by_status: dict[str, list[str]] = {}
+        for t in all_tasks(data):
+            if t["id"] not in filtered_ids:
+                continue
+            by_status.setdefault(t["status"], []).append(t["id"])
+        for st, ids in by_status.items():
+            print(f"  class {','.join(ids)} {st}")
+    elif args.format == "dot":
+        print("digraph tasks {")
+        print('  rankdir=LR;')
+        for t in all_tasks(data):
+            if t["id"] not in filtered_ids:
+                continue
+            for dep_id in t.get("depends_on", []):
+                if dep_id in filtered_ids:
+                    print(f'  "{dep_id}" -> "{t["id"]}";')
+        print("}")
+
+
+def cmd_spec_coverage(args: argparse.Namespace) -> None:
+    """Coverage report against a spec file: covered / uncovered / drift."""
+    spec_path = Path(args.spec_file)
+    if not spec_path.exists():
+        print(f"ERROR: Spec file not found: {args.spec_file}", file=sys.stderr)
+        sys.exit(1)
+    anchors = extract_anchors(spec_path, args.include_subsections)
+    anchor_set = set(anchors)
+
+    data = load_tasks()
+    basename = spec_path.name
+
+    refs: set[str] = set()
+    for t in all_tasks(data):
+        if args.include_status == "done" and t["status"] != "done":
+            continue
+        if args.include_status == "pending" and t["status"] != "pending":
+            continue
+        for ref in t.get("spec_refs", []):
+            if "#" not in ref:
+                continue
+            left, anchor = ref.split("#", 1)
+            ref_basename = left.rsplit("/", 1)[-1] if "/" in left else left
+            if ref_basename == basename:
+                refs.add(anchor)
+
+    covered = anchor_set & refs
+    uncovered = anchor_set - refs
+    drift = refs - anchor_set
+
+    print(f"SPEC_FILE: {args.spec_file}")
+    print(f"ANCHORS: {len(anchor_set)}")
+    print(f"COVERED: {len(covered)}")
+    for a in sorted(covered, key=natural_sort_key):
+        print(f"  - {a}")
+    print(f"UNCOVERED: {len(uncovered)}")
+    for a in sorted(uncovered, key=natural_sort_key):
+        print(f"  - {a}")
+    print(f"DRIFT: {len(drift)}")
+    for a in sorted(drift):
+        print(f"  - {a}")
+
+
+def cmd_read_spec_refs(args: argparse.Namespace) -> None:
+    """Print anchor slugs of a markdown spec file, one per line."""
+    spec_path = Path(args.spec_file)
+    if not spec_path.exists():
+        print(f"ERROR: Spec file not found: {args.spec_file}", file=sys.stderr)
+        sys.exit(1)
+    for a in extract_anchors(spec_path, args.include_subsections):
+        print(a)
 
 
 def cmd_blocked(args: argparse.Namespace) -> None:
@@ -858,6 +1075,20 @@ def cmd_doctor(args: argparse.Namespace) -> None:
         print("  FAIL: clippy: not found. Run `rustup component add clippy`")
         ok = False
 
+    # Check locked phase-1 spec files exist and are non-empty
+    locked_specs = [
+        REPO_ROOT / "docs/discussions/regseq-model/spec.md",
+        REPO_ROOT / "docs/discussions/regseq-model/pretty-printer.md",
+        REPO_ROOT / "docs/discussions/regseq-model/generic-c-backend.md",
+    ]
+    for spec_path in locked_specs:
+        rel = spec_path.relative_to(REPO_ROOT)
+        if spec_path.exists() and spec_path.stat().st_size > 0:
+            print(f"  OK: locked spec: {rel} ({spec_path.stat().st_size} bytes)")
+        else:
+            print(f"  FAIL: locked spec: {rel} missing or empty")
+            ok = False
+
     if ok:
         print("DOCTOR: All checks passed.")
     else:
@@ -955,8 +1186,75 @@ def main() -> None:
     subparsers.add_parser("status", help="Show status summary")
 
     list_parser = subparsers.add_parser("list", help="List tasks")
-    list_parser.add_argument("--status", choices=["pending", "in_progress", "done", "failed"],
-                             help="Filter by status")
+    list_parser.add_argument(
+        "--status",
+        choices=["pending", "in_progress", "done", "failed", "archived"],
+        help="Filter by status",
+    )
+    list_parser.add_argument("--phase", help="Filter by phase tag")
+    list_parser.add_argument(
+        "--json",
+        action="store_true",
+        help="Emit one JSON object per task on stdout, newline-separated",
+    )
+    list_parser.add_argument(
+        "--quiet",
+        action="store_true",
+        help="Emit only task IDs, one per line (no group headers)",
+    )
+
+    ready_leaves_parser = subparsers.add_parser(
+        "ready-leaves",
+        help="Pending tasks whose dependencies are all done (sorted)",
+    )
+    ready_leaves_parser.add_argument("--phase", help="Filter by phase tag")
+
+    phase_status_parser = subparsers.add_parser(
+        "phase-status",
+        help="PASS/FAIL report for a phase tag",
+    )
+    phase_status_parser.add_argument("phase", help="Phase tag (e.g. 1a, 1b)")
+
+    graph_parser = subparsers.add_parser("graph", help="Emit dependency DAG")
+    graph_parser.add_argument(
+        "--format",
+        choices=["mermaid", "dot"],
+        default="mermaid",
+    )
+    graph_parser.add_argument("--phase", help="Filter by phase tag")
+    graph_parser.add_argument(
+        "--status",
+        choices=["pending", "in_progress", "done", "failed", "archived"],
+        help="Filter by status",
+    )
+
+    spec_coverage_parser = subparsers.add_parser(
+        "spec-coverage",
+        help="Coverage report for a spec file vs. tasks' spec_refs",
+    )
+    spec_coverage_parser.add_argument("spec_file", help="Path to spec markdown file")
+    spec_coverage_parser.add_argument(
+        "--include-subsections",
+        action="store_true",
+        help="Also collect `###` headings as anchors",
+    )
+    spec_coverage_parser.add_argument(
+        "--include-status",
+        choices=["done", "pending", "all"],
+        default="all",
+        help="Restrict spec_refs to tasks with this status (default: all)",
+    )
+
+    read_spec_refs_parser = subparsers.add_parser(
+        "read-spec-refs",
+        help="Print anchor slugs from a markdown spec file (one per line)",
+    )
+    read_spec_refs_parser.add_argument("spec_file")
+    read_spec_refs_parser.add_argument(
+        "--include-subsections",
+        action="store_true",
+        help="Also collect `###` headings as anchors",
+    )
 
     subparsers.add_parser("blocked", help="Show blocked tasks")
 
@@ -977,6 +1275,11 @@ def main() -> None:
         "archive": cmd_archive,
         "status": cmd_status,
         "list": cmd_list,
+        "ready-leaves": cmd_ready_leaves,
+        "phase-status": cmd_phase_status,
+        "graph": cmd_graph,
+        "spec-coverage": cmd_spec_coverage,
+        "read-spec-refs": cmd_read_spec_refs,
         "blocked": cmd_blocked,
         "doctor": cmd_doctor,
     }
