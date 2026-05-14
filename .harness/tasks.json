@@ -1,4 +1,5 @@
 {
+  "schema_version": 2,
   "groups": [
     {
       "id": "regseq-config",
@@ -11,7 +12,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-config-02",
@@ -22,7 +33,17 @@
             "regseq-config-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -37,7 +58,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "cargo-regseq-02",
@@ -49,7 +80,17 @@
             "regseq-config-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "cargo-regseq-03",
@@ -60,7 +101,17 @@
             "cargo-regseq-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "cargo-regseq-04",
@@ -72,7 +123,17 @@
             "cargo-regseq-03"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "cargo-regseq-05",
@@ -83,7 +144,17 @@
             "cargo-regseq-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -98,7 +169,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-02",
@@ -109,7 +190,17 @@
             "regseq-driver-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-03",
@@ -121,7 +212,17 @@
             "regseq-config-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-04",
@@ -133,7 +234,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-05",
@@ -144,7 +255,17 @@
             "regseq-driver-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-06",
@@ -159,7 +280,17 @@
             "regseq-macros-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-07",
@@ -171,7 +302,17 @@
             "regseq-facade-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-08",
@@ -183,7 +324,17 @@
             "regseq-facade-08"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-09",
@@ -196,7 +347,17 @@
             "regseq-macros-03"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-10",
@@ -209,7 +370,17 @@
             "regseq-facade-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-11",
@@ -221,7 +392,17 @@
             "regseq-facade-11"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-12",
@@ -233,7 +414,17 @@
             "regseq-facade-12"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-13",
@@ -245,7 +436,17 @@
             "regseq-facade-13"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-14",
@@ -257,7 +458,17 @@
             "regseq-facade-14"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-15",
@@ -270,7 +481,17 @@
             "regseq-facade-15"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-16",
@@ -283,7 +504,17 @@
             "regseq-facade-16"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-17",
@@ -295,7 +526,17 @@
             "regseq-facade-17"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-18",
@@ -307,7 +548,17 @@
             "regseq-facade-18"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-19",
@@ -319,7 +570,17 @@
             "regseq-model-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-20",
@@ -331,7 +592,17 @@
             "regseq-facade-19"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-21",
@@ -342,7 +613,17 @@
             "regseq-driver-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-22",
@@ -354,7 +635,17 @@
             "regseq-driver-20"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-23",
@@ -367,7 +658,17 @@
             "regseq-linux-backend-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-24",
@@ -379,7 +680,17 @@
             "regseq-driver-22"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-25",
@@ -388,7 +699,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:46:11Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-26",
@@ -401,7 +722,17 @@
             "regseq-facade-23"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:12:56Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-27",
@@ -412,7 +743,17 @@
             "regseq-driver-26"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:12:25Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-28",
@@ -423,7 +764,17 @@
             "regseq-driver-26"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T23:16:35Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-29",
@@ -434,7 +785,17 @@
             "regseq-driver-26"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:53:33Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-30",
@@ -445,7 +806,17 @@
             "regseq-driver-26"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:12:29Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-31",
@@ -456,7 +827,17 @@
             "regseq-driver-26"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:13:01Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-32",
@@ -471,7 +852,17 @@
             "regseq-driver-31"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:13:06Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-33",
@@ -482,7 +873,17 @@
             "regseq-driver-32"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:13:12Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-34",
@@ -493,7 +894,17 @@
             "regseq-driver-33"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:13:16Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-driver-35",
@@ -504,7 +915,17 @@
             "track-a-validation-12"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:54:52Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -519,7 +940,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -534,7 +965,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-02",
@@ -545,7 +986,17 @@
             "regseq-model-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-03",
@@ -556,7 +1007,17 @@
             "regseq-model-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-04",
@@ -567,7 +1028,17 @@
             "regseq-model-03"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-05",
@@ -579,7 +1050,17 @@
             "regseq-driver-19"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-06",
@@ -591,7 +1072,17 @@
             "regseq-driver-19"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-07",
@@ -604,7 +1095,17 @@
             "track-a-pl011-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-08",
@@ -616,7 +1117,17 @@
             "regseq-model-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-09",
@@ -627,7 +1138,17 @@
             "regseq-model-08"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-10",
@@ -639,7 +1160,17 @@
             "regseq-model-09"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-11",
@@ -650,7 +1181,17 @@
             "regseq-driver-21"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-12",
@@ -662,7 +1203,17 @@
             "track-a-validation-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-13",
@@ -674,7 +1225,17 @@
             "regseq-model-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-14",
@@ -686,7 +1247,17 @@
             "regseq-model-13"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-20",
@@ -695,7 +1266,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:44:21Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-21",
@@ -706,7 +1287,17 @@
             "regseq-model-20"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:28:32Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-22",
@@ -717,7 +1308,17 @@
             "regseq-model-21"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:44:29Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-23",
@@ -726,7 +1327,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:44:34Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-24",
@@ -738,7 +1349,17 @@
             "regseq-model-21"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:52:48Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-25",
@@ -749,7 +1370,17 @@
             "regseq-model-21"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:38:06Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-26",
@@ -761,7 +1392,17 @@
             "regseq-model-25"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:38:20Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-27",
@@ -774,7 +1415,17 @@
             "regseq-model-22"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:53:04Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-28",
@@ -786,7 +1437,17 @@
             "regseq-model-25"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:38:51Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-29",
@@ -799,7 +1460,17 @@
             "regseq-model-27"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:53:25Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-30",
@@ -811,7 +1482,17 @@
             "regseq-model-29"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:53:48Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-31",
@@ -822,7 +1503,17 @@
             "regseq-model-27"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:49:48Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-32",
@@ -835,7 +1526,17 @@
             "regseq-model-25"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:50:07Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-33",
@@ -846,7 +1547,17 @@
             "regseq-model-21"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:50:27Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-34",
@@ -858,7 +1569,17 @@
             "regseq-model-25"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:50:36Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-35",
@@ -870,7 +1591,17 @@
             "regseq-model-32"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:12:33Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-36",
@@ -883,7 +1614,17 @@
             "regseq-model-25"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:51:22Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-37",
@@ -894,7 +1635,17 @@
             "regseq-model-36"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:51:36Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-38",
@@ -906,7 +1657,17 @@
             "regseq-model-34"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:12:36Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-39",
@@ -924,7 +1685,17 @@
             "regseq-model-38"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T15:52:10Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-40",
@@ -935,7 +1706,17 @@
             "regseq-model-39"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T16:12:49Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-41",
@@ -948,7 +1729,17 @@
             "regseq-driver-34"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-18T02:09:20Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-42",
@@ -959,7 +1750,17 @@
             "regseq-model-41"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-18T02:09:31Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-43",
@@ -970,7 +1771,17 @@
             "regseq-model-42"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-18T02:09:50Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-44",
@@ -981,7 +1792,17 @@
             "regseq-model-43"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:33:54Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-45",
@@ -993,7 +1814,17 @@
             "regseq-driver-27"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-18T02:10:00Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-46",
@@ -1004,7 +1835,17 @@
             "regseq-model-45"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:35:25Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-47",
@@ -1017,7 +1858,17 @@
             "regseq-driver-32"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:36:09Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-48",
@@ -1029,7 +1880,17 @@
             "regseq-driver-29"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:36:42Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-49",
@@ -1041,7 +1902,17 @@
             "regseq-facade-24"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:37:15Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-50",
@@ -1052,7 +1923,17 @@
             "regseq-model-45"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:37:55Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-51",
@@ -1065,7 +1946,17 @@
             "regseq-model-48"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:38:54Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-52",
@@ -1077,7 +1968,17 @@
             "regseq-driver-30"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-18T02:10:15Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-53",
@@ -1088,7 +1989,17 @@
             "regseq-model-45"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-17T07:39:52Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-54",
@@ -1108,7 +2019,17 @@
             "regseq-model-53"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-18T02:10:34Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-55",
@@ -1119,7 +2040,17 @@
             "regseq-model-54"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-19T22:06:06Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-56",
@@ -1130,7 +2061,17 @@
             "regseq-model-55"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-19T21:59:50Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-57",
@@ -1142,7 +2083,17 @@
             "regseq-model-56"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-19T21:59:58Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-58",
@@ -1153,7 +2104,17 @@
             "regseq-model-55"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-19T21:59:20Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-59",
@@ -1166,7 +2127,17 @@
             "regseq-model-58"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-19T22:05:48Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-60",
@@ -1178,7 +2149,17 @@
             "regseq-model-59"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-19T21:59:30Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-61",
@@ -1189,7 +2170,17 @@
             "regseq-model-60"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:28:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-62",
@@ -1200,7 +2191,17 @@
             "regseq-model-60"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:28:53Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-63",
@@ -1211,7 +2212,17 @@
             "regseq-lowering-11"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:32:56Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-model-64",
@@ -1220,7 +2231,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-23T02:44:08Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1235,7 +2256,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-macros-02",
@@ -1247,7 +2278,17 @@
             "regseq-facade-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-macros-03",
@@ -1259,7 +2300,17 @@
             "regseq-facade-06"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-macros-04",
@@ -1271,7 +2322,17 @@
             "regseq-facade-23"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:46:32Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1290,7 +2351,17 @@
             "regseq-model-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-analysis-02",
@@ -1302,7 +2373,17 @@
             "regseq-model-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-analysis-03",
@@ -1315,7 +2396,17 @@
             "track-a-validation-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-analysis-04",
@@ -1327,7 +2418,17 @@
             "regseq-model-12"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-analysis-05",
@@ -1339,7 +2440,17 @@
             "regseq-model-13"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-analysis-06",
@@ -1351,7 +2462,17 @@
             "regseq-model-62"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:38:06Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1370,7 +2491,17 @@
             "regseq-model-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-backends-02",
@@ -1386,7 +2517,17 @@
             "regseq-lowering-12"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:52:54Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-backends-03",
@@ -1397,7 +2538,17 @@
             "regseq-model-60"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:32:07Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1414,7 +2565,17 @@
             "regseq-macros-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-02",
@@ -1425,7 +2586,17 @@
             "regseq-facade-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-03",
@@ -1436,7 +2607,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-04",
@@ -1447,7 +2628,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-05",
@@ -1458,7 +2649,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-06",
@@ -1469,7 +2670,17 @@
             "regseq-facade-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-07",
@@ -1480,7 +2691,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-08",
@@ -1491,7 +2712,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-09",
@@ -1502,7 +2733,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-10",
@@ -1513,7 +2754,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-11",
@@ -1524,7 +2775,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-12",
@@ -1535,7 +2796,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-13",
@@ -1546,7 +2817,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-14",
@@ -1557,7 +2838,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-15",
@@ -1569,7 +2860,17 @@
             "regseq-facade-06"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-16",
@@ -1580,7 +2881,17 @@
             "regseq-facade-06"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-17",
@@ -1591,7 +2902,17 @@
             "regseq-facade-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-18",
@@ -1602,7 +2923,17 @@
             "regseq-facade-11"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-19",
@@ -1613,7 +2944,17 @@
             "regseq-facade-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-20",
@@ -1622,7 +2963,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:29:25Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-21",
@@ -1633,7 +2984,17 @@
             "regseq-facade-20"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:29:38Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-22",
@@ -1642,7 +3003,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:44:50Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-23",
@@ -1653,7 +3024,17 @@
             "regseq-facade-22"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:45:22Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-facade-24",
@@ -1662,7 +3043,17 @@
           "status": "done",
           "depends_on": [],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-15T23:46:06Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1681,7 +3072,17 @@
             "track-a-validation-09"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-02",
@@ -1693,7 +3094,17 @@
             "track-a-validation-06"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-03",
@@ -1704,7 +3115,17 @@
             "regseq-lowering-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-04",
@@ -1716,7 +3137,17 @@
             "regseq-analysis-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-05",
@@ -1728,7 +3159,17 @@
             "regseq-model-14"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-06",
@@ -1740,7 +3181,17 @@
             "regseq-driver-24"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-07",
@@ -1752,7 +3203,17 @@
             "track-a-validation-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-08",
@@ -1763,7 +3224,17 @@
             "regseq-lowering-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-09",
@@ -1774,7 +3245,17 @@
             "regseq-lowering-08"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-10",
@@ -1785,7 +3266,17 @@
             "regseq-model-61"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:32:47Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-11",
@@ -1796,7 +3287,17 @@
             "track-a-validation-13"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:32:51Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-lowering-12",
@@ -1808,7 +3309,17 @@
             "regseq-model-60"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-21T22:30:28Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1825,7 +3336,17 @@
             "regseq-lowering-02"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-02",
@@ -1838,7 +3359,17 @@
             "track-a-validation-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-03",
@@ -1849,7 +3380,17 @@
             "regseq-lowering-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:32:13Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-04",
@@ -1862,7 +3403,17 @@
             "regseq-linux-backend-03"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-21T22:38:03Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-05",
@@ -1878,7 +3429,17 @@
             "regseq-linux-backend-08"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-22T01:41:42Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-06",
@@ -1890,7 +3451,17 @@
             "regseq-lowering-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-21T22:26:25Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-07",
@@ -1901,7 +3472,17 @@
             "regseq-linux-backend-03"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-21T22:26:38Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "regseq-linux-backend-08",
@@ -1914,7 +3495,17 @@
             "regseq-linux-backend-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-22T01:32:36Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -1937,7 +3528,17 @@
             "regseq-model-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-pl011-02",
@@ -1949,7 +3550,17 @@
             "regseq-driver-06"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-pl011-03",
@@ -1962,7 +3573,17 @@
             "regseq-driver-17"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-pl011-04",
@@ -1974,7 +3595,17 @@
             "regseq-driver-19"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-pl011-05",
@@ -1987,7 +3618,17 @@
             "regseq-driver-20"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-pl011-06",
@@ -1998,7 +3639,17 @@
             "regseq-macros-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:54:04Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-pl011-07",
@@ -2010,7 +3661,17 @@
             "regseq-facade-23"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-16T05:54:11Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -2033,7 +3694,17 @@
             "regseq-model-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-02",
@@ -2044,7 +3715,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-03",
@@ -2056,7 +3737,17 @@
             "track-a-validation-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-04",
@@ -2069,7 +3760,17 @@
             "track-a-pl011-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-05",
@@ -2081,7 +3782,17 @@
             "track-a-pl011-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-06",
@@ -2093,7 +3804,17 @@
             "track-a-validation-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-07",
@@ -2104,7 +3825,17 @@
             "pl011-linux-validation-11"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-08",
@@ -2115,7 +3846,17 @@
             "track-a-validation-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-09",
@@ -2126,7 +3867,17 @@
             "regseq-analysis-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-10",
@@ -2137,7 +3888,17 @@
             "regseq-lowering-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "pl011-linux-validation-11",
@@ -2149,7 +3910,17 @@
             "regseq-driver-23"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-11",
@@ -2160,7 +3931,17 @@
             "regseq-model-60"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:30:24Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-12",
@@ -2172,7 +3953,17 @@
             "regseq-linux-backend-05"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:54:30Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-13",
@@ -2183,7 +3974,17 @@
             "regseq-driver-35"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-20T20:38:22Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "track-a-validation-14",
@@ -2197,7 +3998,17 @@
             "regseq-lowering-11"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-21T22:28:51Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -2215,7 +4026,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-02",
@@ -2227,7 +4048,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-03",
@@ -2239,7 +4070,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-04",
@@ -2251,7 +4092,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-05",
@@ -2263,7 +4114,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-06",
@@ -2275,7 +4136,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-07",
@@ -2287,7 +4158,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-08",
@@ -2299,7 +4180,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-09",
@@ -2311,7 +4202,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-10",
@@ -2323,7 +4224,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-11",
@@ -2335,7 +4246,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "source-to-extraction-12",
@@ -2347,7 +4268,17 @@
             "track-a-pl011-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -2364,7 +4295,17 @@
             "source-to-extraction-01"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-03",
@@ -2375,7 +4316,17 @@
             "source-to-extraction-03"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-04",
@@ -2386,7 +4337,17 @@
             "source-to-extraction-04"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-06",
@@ -2397,7 +4358,17 @@
             "source-to-extraction-06"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-07",
@@ -2408,7 +4379,17 @@
             "source-to-extraction-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-08",
@@ -2419,7 +4400,17 @@
             "source-to-extraction-08"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-10",
@@ -2430,7 +4421,17 @@
             "source-to-extraction-10"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         },
         {
           "id": "extraction-remediation-11",
@@ -2441,7 +4442,17 @@
             "source-to-extraction-11"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -2462,7 +4473,17 @@
             "extraction-remediation-07"
           ],
           "artifacts": [],
-          "fail_reason": null
+          "fail_reason": null,
+          "phase": null,
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-04-09T17:38:18Z",
+              "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

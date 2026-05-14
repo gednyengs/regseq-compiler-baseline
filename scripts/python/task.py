@@ -34,7 +34,21 @@ TAIL_LINES = 50
 
 def load_tasks() -> dict:
     with open(TASKS_FILE) as f:
-        return json.load(f)
+        data = json.load(f)
+    schema_version = data.get("schema_version", 1)
+    if schema_version == 1:
+        print(
+            "warning: .harness/tasks.json is at schema_version 1; "
+            "run scripts/python/migrate_tasks_v1_to_v2.py to migrate to v2",
+            file=sys.stderr,
+        )
+    elif schema_version != 2:
+        print(
+            f"warning: .harness/tasks.json schema_version is {schema_version}; "
+            "expected 1 or 2",
+            file=sys.stderr,
+        )
+    return data
 
 
 def save_tasks(data: dict) -> None:
