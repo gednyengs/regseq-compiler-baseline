@@ -21,10 +21,9 @@ Current active workspace members:
 Active implementation stream notes:
 - inert `#[rseq::...]` tool attributes are registered by `regseq-driver`, not provided by `regseq-macros`
 - `regseq-backends` remains a single crate for now, even though Linux and Zephyr are separate harness task groups
-- The implementation follows the RegseqModel execution plan at `docs/discussions/models/regseq-model/execution-plan.md`
-- The old architecture (DeclarationModel/BindingModel/JoinedArtifact, expression-tree IR) is being replaced by a unified RegseqModel with CFG-based IR
+- The implementation follows the locked phase-1 spec at `docs/discussions/regseq-model/` -- producer side `spec.md`, textual-consumer side `pretty-printer.md`, codegen-consumer side `generic-c-backend.md`; methodology at `README.md`. Phase-1 implementation is split into phase-1a (RegseqModel + pretty-print) followed by phase-1b (generic-C codegen) per README §1.3.
 - Register access intrinsics are methods on `Mmio<T>`, not on ReadOnly/WriteOnly/ReadWrite wrappers
-- Old harness tasks and batch briefs are archived at `.harness/archive/`
+- Pre-refactor harness state is archived under `.harness/archive/<date>-old-architecture/` (snapshots, batch briefs, manifest)
 
 ## Coding Conventions
 

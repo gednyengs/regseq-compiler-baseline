@@ -34,7 +34,7 @@ items:
   - id: regseqmodel-phase-0
     phase: "0"
     title: Foundation types -- identity scheme, type system, operators
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on: []
     target_harness_groups:
       - regseq-model
@@ -60,7 +60,7 @@ items:
   - id: regseqmodel-phase-1
     phase: "1"
     title: CFG-based IR types -- Place, Operand, Rvalue, Statement, Terminator, Body
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-0
     target_harness_groups:
@@ -91,7 +91,7 @@ items:
   - id: regseqmodel-phase-2
     phase: "2"
     title: Unified RegseqModel structure -- Module tree, driver struct, type defs
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-0
       - regseqmodel-phase-1
@@ -127,7 +127,7 @@ items:
   - id: regseqmodel-phase-3a
     phase: "3"
     title: Facade attribute annotations and ErrorKind removal
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on: []
     target_harness_groups:
       - regseq-facade
@@ -150,7 +150,7 @@ items:
   - id: regseqmodel-phase-3b
     phase: "3"
     title: Register access surface restructure and register_block! macro
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on: []
     target_harness_groups:
       - regseq-facade
@@ -180,7 +180,7 @@ items:
   - id: regseqmodel-phase-3c
     phase: "3"
     title: ordered! macro migration and compiler config
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on: []
     target_harness_groups:
       - regseq-facade
@@ -207,7 +207,7 @@ items:
   - id: regseqmodel-phase-3d
     phase: "3"
     title: PL011 fixture comprehensive update
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-3b
     target_harness_groups:
@@ -234,7 +234,7 @@ items:
   - id: regseqmodel-phase-4
     phase: "4"
     title: Extraction pipeline updates -- attribute registries, new surfaces, tests
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-3a
       - regseqmodel-phase-3b
@@ -274,7 +274,7 @@ items:
   - id: regseqmodel-phase-5
     phase: "5"
     title: MIR-to-Regseq-IR construction pass
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-1
       - regseqmodel-phase-2
@@ -316,7 +316,7 @@ items:
   - id: regseqmodel-phase-6
     phase: "6"
     title: RegseqModel normalization, platform join, and legality verification
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-5
     target_harness_groups:
@@ -347,7 +347,7 @@ items:
   - id: regseqmodel-phase-7
     phase: "7"
     title: Consumer migration to RegseqModel + CFG emission (absorbs 8.1, 9.1)
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-6
     target_harness_groups:
@@ -410,7 +410,7 @@ items:
   - id: device-generality-cleanup
     phase: "post-7"
     title: Device-class generality cleanup (post-phase-7 residual)
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-7
     target_harness_groups:
@@ -458,7 +458,7 @@ items:
   - id: regseqmodel-phase-8
     phase: "8"
     title: Backend C emission from CFG-based IR
-    status: ready_to_elaborate
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-7
     target_harness_groups:
@@ -488,7 +488,7 @@ items:
   - id: regseqmodel-phase-9
     phase: "9"
     title: Old module cleanup and final golden files
-    status: not_ready
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - regseqmodel-phase-8
     target_harness_groups:
@@ -510,7 +510,7 @@ items:
   - id: pl011-fixture-cleanup
     phase: "post-7"
     title: PL011 fixture cleanup (rename drift + four-issue fix + golden regeneration)
-    status: ready_to_elaborate
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on:
       - user-data-init-path-a
     target_harness_groups:
@@ -558,7 +558,7 @@ items:
   - id: user-data-init-path-a
     phase: "post-7"
     title: User-data initialization Path A (zero-init whitelist + Option tier)
-    status: tasked
+    status: archived  # superseded by phase-1a/1b plan in locked spec
     depends_on: []
     target_harness_groups:
       - regseq-model

@@ -910,13 +910,13 @@
           "id": "regseq-driver-35",
           "name": "emit_driver.rs pipeline cutover to normalize + populate_bindings",
           "spec": ".harness/tasks/regseq-driver/35-emit-driver-pipeline-cutover.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "track-a-validation-12"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -924,6 +924,11 @@
               "ts": "2026-04-20T20:54:52Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         }
@@ -2207,13 +2212,13 @@
           "id": "regseq-model-63",
           "name": "Delete old model modules + Phase-7 tracker gate",
           "spec": ".harness/tasks/regseq-model/63-delete-old-model-modules-and-tracker-gate.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-lowering-11"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -2221,6 +2226,11 @@
               "ts": "2026-04-20T20:32:56Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -2507,7 +2517,7 @@
           "id": "regseq-backends-02",
           "name": "Linux emission contract + PL011 construct exemplars",
           "spec": ".harness/tasks/regseq-backends/02-emission-contract-and-exemplars.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-model-60",
             "regseq-model-64",
@@ -2518,7 +2528,7 @@
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -2526,6 +2536,11 @@
               "ts": "2026-04-20T20:52:54Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3282,13 +3297,13 @@
           "id": "regseq-lowering-11",
           "name": "Delete dead lowering submodules + legacy lowering entry",
           "spec": ".harness/tasks/regseq-lowering/11-delete-dead-lowering-submodules.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "track-a-validation-13"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3296,6 +3311,11 @@
               "ts": "2026-04-20T20:32:51Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3396,7 +3416,7 @@
           "id": "regseq-linux-backend-04",
           "name": "Retarget emit_semantic to CFG via new C AST",
           "spec": ".harness/tasks/regseq-linux-backend/04-emit-semantic-cfg-rewrite.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-backends-02",
             "regseq-backends-03",
@@ -3404,7 +3424,7 @@
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3412,6 +3432,11 @@
               "ts": "2026-04-21T22:38:03Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3419,7 +3444,7 @@
           "id": "regseq-linux-backend-05",
           "name": "Retarget emit_module to CFG; delete emit_behavior",
           "spec": ".harness/tasks/regseq-linux-backend/05-emit-module-cfg-rewrite-and-emit-behavior-delete.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-backends-02",
             "regseq-linux-backend-03",
@@ -3430,7 +3455,7 @@
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3438,6 +3463,11 @@
               "ts": "2026-04-22T01:41:42Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3820,13 +3850,13 @@
           "id": "track-a-validation-07",
           "name": "PL011 Linux generated build and second-UART smoke proof",
           "spec": ".harness/tasks/track-a-validation/07-pl011-linux-generated-build-and-second-uart-smoke-proof.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "pl011-linux-validation-11"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3834,6 +3864,11 @@
               "ts": "2026-04-09T17:38:18Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3841,13 +3876,13 @@
           "id": "track-a-validation-08",
           "name": "PL011 second-UART hot-path functional comparison scaffold",
           "spec": ".harness/tasks/track-a-validation/08-pl011-second-uart-hot-path-functional-comparison-scaffold.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "track-a-validation-07"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3855,6 +3890,11 @@
               "ts": "2026-04-09T17:38:18Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3904,14 +3944,13 @@
           "id": "pl011-linux-validation-11",
           "name": "Generated PL011 Linux module host-build proof",
           "spec": ".harness/tasks/track-a-validation/11-pl011-linux-module-host-build-proof.md",
-          "status": "in_progress",
+          "status": "archived",
           "depends_on": [
             "regseq-linux-backend-02",
             "regseq-driver-23"
           ],
           "artifacts": [],
-          "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3919,6 +3958,11 @@
               "ts": "2026-04-09T17:38:18Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3926,13 +3970,13 @@
           "id": "track-a-validation-11",
           "name": "QEMU boot + probe harness (productized eval baseline)",
           "spec": ".harness/tasks/track-a-validation/11-qemu-boot-probe-harness.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-model-60"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3940,6 +3984,11 @@
               "ts": "2026-04-20T20:30:24Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3947,14 +3996,14 @@
           "id": "track-a-validation-12",
           "name": "PL011 normalized-reference blessing gate",
           "spec": ".harness/tasks/track-a-validation/12-pl011-reference-blessing-gate.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "track-a-validation-11",
             "regseq-linux-backend-05"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3962,6 +4011,11 @@
               "ts": "2026-04-20T20:54:30Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3969,13 +4023,13 @@
           "id": "track-a-validation-13",
           "name": "E2E rewrites + CFG structural invariants (Test B)",
           "spec": ".harness/tasks/track-a-validation/13-e2e-rewrites-and-cfg-invariants.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-driver-35"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -3983,6 +4037,11 @@
               "ts": "2026-04-20T20:38:22Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         },
@@ -3990,7 +4049,7 @@
           "id": "track-a-validation-14",
           "name": "Multi-resource fixture gate",
           "spec": ".harness/tasks/track-a-validation/14-multi-resource-fixture-gate.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-linux-backend-06",
             "regseq-linux-backend-07",
@@ -3999,7 +4058,7 @@
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": null,
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -4007,6 +4066,11 @@
               "ts": "2026-04-21T22:28:51Z",
               "event": "migrated_in_place",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T19:46:47Z",
+              "event": "archived",
+              "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
         }
