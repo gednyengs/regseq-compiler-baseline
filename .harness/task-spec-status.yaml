@@ -16,6 +16,7 @@ status_definitions:
   in_elaboration: A task-spec batch is currently being drafted or reviewed.
   tasked: The corresponding harness task specs have been created.
   blocked: The task-spec batch cannot yet be authored due to an external decision or missing input.
+  archived: The batch's executable tasks have been retired in favor of a superseding plan; do not select an archived batch for elaboration.
 
 note: >
   This tracker replaces the old architecture tracker (archived at

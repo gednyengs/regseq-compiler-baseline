@@ -9,6 +9,9 @@ You are a worker agent for the Regseq compiler project.
 3. Run `uv run python scripts/python/task.py next-step` to determine the next action.
 4. If the next action is an executable task:
    - Run `uv run python scripts/python/task.py start <id>` to claim your task.
+   - If `start` prints `INBOUND_EXPECTATIONS: <path>`, read that file
+     first; it contains forward refs from earlier tasks that you must
+     address in this task.
    - Run `uv run python scripts/python/task.py show <id>` to see the task spec path and input context.
    - Read the task spec markdown file.
    - Read all files listed in the Input Context section.
@@ -35,6 +38,15 @@ You are a worker agent for the Regseq compiler project.
 11. Iterate until all tests pass.
 
 ## Review
+
+The harness uses three review tiers, named *after* but **not the
+same as** README §5.6's spec-side tiers (`docs/discussions/
+regseq-model/README.md`). The spec-side tiers operate on spec
+authoring (per-session / cross-session / top-level post-merge);
+the harness-side tiers below operate on implementation against the
+locked spec. Do not conflate them.
+
+### Task Review (per-task, mandatory)
 
 12. Once tests pass, request a Codex review of your implementation by
     invoking `scripts/python/codex_runner.py` via the Bash tool. Do NOT
@@ -100,6 +112,26 @@ You are a worker agent for the Regseq compiler project.
 14. Iterate (fix -> `codex_runner.py` review) until Codex returns
     VERDICT: APPROVED. Do not skip this step.
 
+### Batch Review (per-batch cross-task, optional)
+
+Invoked when a brief's `Review Tiers` section flags Batch Review for
+a coherent multi-task feature. Use the same `codex_runner.py` pattern
+as Task Review, with the `Files to audit` list expanded across all
+tasks in the batch and the focus shifted to inter-task consistency
+(shared types, invariants, integration shape). Not numbered into the
+cold-session bootstrap flow; opt-in per-batch when the brief calls
+for it.
+
+### Phase-Close Review (per-phase, mandatory at phase boundary)
+
+Triggered by `uv run python scripts/python/task.py phase-status
+<phase>` returning PASS. File a phase-closure brief using
+`.harness/spec-batches/PHASE_CLOSURE_BRIEF_TEMPLATE.md`. Phase-Close
+Review covers the cumulative phase impl artifact (Rust code, test
+output, `spec_refs` coverage against the locked spec), not spec
+content -- it is distinct from README §5.6's Tier 3, which is the
+top-level post-merge review of `spec.md` on the spec-authoring side.
+
 ## Finishing
 
 15. Run `cargo fmt` to format code, then `cargo test --workspace` to check
@@ -126,7 +158,7 @@ You are a worker agent for the Regseq compiler project.
 ## Rules
 
 - Follow all conventions in `.harness/config.md`.
-- Do not modify `.harness/tasks.json` directly. Use `uv run python scripts/python/task.py` commands.
+- Do not modify `.harness/tasks.json` directly. Use `uv run python scripts/python/task.py` commands: `add-task` to create a new task, `update-task-spec` to bump a task's `spec_version` after editing its spec markdown, `archive` to retire a task, plus the existing `start` / `done` / `fail` / `reset` for status transitions.
 - Do not use `.harness/task-spec-status.yaml` to track implementation execution status; it is only for harness task-spec authoring progress.
 - Do not modify other crates unless your task spec explicitly allows it.
 - If you encounter a problem outside your task's scope, note it in the fail

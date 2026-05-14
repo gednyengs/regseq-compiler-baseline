@@ -44,6 +44,7 @@ Valid statuses are:
 - `in_elaboration`: a worker is currently drafting or revising the batch
 - `tasked`: the harness task specs for this batch already exist
 - `blocked`: the batch cannot yet be authored due to an external decision or missing input
+- `archived`: the batch's executable tasks have been retired in favor of a superseding plan; do not select an archived batch for elaboration
 
 ## How to Use a Tracker Item
 
@@ -123,9 +124,12 @@ When elaborating a tracker batch into harness tasks:
 10. Carry forward caution notes for any accepted-with-caution constructs.
 11. Do not invent DSL primitives or backend behavior not justified by the cited
     authority or compiler-collateral sources.
-12. After the task spec files are fully written, update `tasks.json`.
-13. After the task spec files are fully written and `tasks.json` is updated,
-    update `task-spec-status.yaml` following the Update Rules below.
+12. After the task spec files are fully written, register each via
+    `uv run python scripts/python/task.py add-task` (this is the only
+    supported write path; direct edits to `.harness/tasks.json` are
+    forbidden per `SESSION.md`).
+13. After every new task is registered via `add-task`, update
+    `task-spec-status.yaml` following the Update Rules below.
 
 The batch brief is the primary bounded context artifact for task-spec
 authoring. A cold session should not need to infer the work from the YAML
@@ -149,6 +153,16 @@ If a batch cannot proceed:
 
 - mark it `blocked`
 - record the reason in the YAML item before ending the session
+
+## Phase closure
+
+When `uv run python scripts/python/task.py phase-status <phase>`
+returns PASS for a phase tag (every task with that phase is `done`
+and all their dependencies are done), file a phase-closure brief
+using `.harness/spec-batches/PHASE_CLOSURE_BRIEF_TEMPLATE.md` and
+run a Phase-Close Review per `SESSION.md`. Phase-Close Review is
+the mandatory final tier of the harness-side review discipline; it
+catches cross-task drift that per-task review cannot.
 
 ## Non-Rules
 
