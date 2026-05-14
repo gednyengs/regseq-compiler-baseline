@@ -238,10 +238,13 @@ def cmd_show(args: argparse.Namespace) -> None:
     print(f"PHASE: {task.get('phase')}")
     print(f"SPEC: {task['spec']}")
     print(f"SPEC_VERSION: {task.get('spec_version', 1)}")
-    if task.get("spec_refs"):
+    spec_refs = task.get("spec_refs", [])
+    if spec_refs:
         print("SPEC_REFS:")
-        for ref in task["spec_refs"]:
+        for ref in spec_refs:
             print(f"  - {ref}")
+    else:
+        print("SPEC_REFS: []")
     if task.get("depends_on"):
         status_map = task_status_map(data)
         deps = ", ".join(f"{d} [{status_map.get(d, 'unknown')}]" for d in task["depends_on"])
@@ -547,7 +550,7 @@ def cmd_reset(args: argparse.Namespace) -> None:
         sys.exit(1)
 
     task["status"] = "pending"
-    task.pop("fail_reason", None)
+    task["fail_reason"] = None
     save_tasks(data)
     print(f"RESET: {args.id}")
     print(f"FROM: {current}")
@@ -567,6 +570,12 @@ def validate_spec_path(spec_str: str, group_id: str) -> str | None:
         return f"rule 1: path must start with `{expected_prefix}` (got `{spec_str}`)"
     if not spec_str.endswith(".md"):
         return f"rule 2: path must end with `.md` (got `{spec_str}`)"
+    normalized = os.path.normpath(spec_str)
+    if not normalized.startswith(expected_prefix):
+        return (
+            f"rule 1b: normalized path escapes `{expected_prefix}` "
+            f"(path traversal; got normalized `{normalized}`)"
+        )
     full = REPO_ROOT / spec_str
     if not full.exists():
         return f"rule 4: file does not exist on disk (`{full}`)"

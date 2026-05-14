@@ -19,14 +19,16 @@ status_definitions:
   archived: The batch's executable tasks have been retired in favor of a superseding plan; do not select an archived batch for elaboration.
 
 note: >
-  This tracker replaces the old architecture tracker (archived at
-  .harness/archive/task-spec-status.yaml.old-architecture). All phases
-  below correspond to the execution plan at
-  docs/discussions/models/regseq-model/execution-plan.md.
-
-  Infrastructure tasks from the old architecture (cargo-regseq 01-05,
-  regseq-config 01-02, regseq-diagnostics 01, regseq-driver 01-03) are
-  already done in tasks.json and are not re-tracked here.
+  All items below were archived during the 2026-05-14 harness refactor
+  (see .harness/archive/2026-05-14-old-architecture/MANIFEST.md for the
+  audit trail; the original tracker is preserved at
+  task-spec-status.yaml.snapshot in the same directory). The items are
+  kept here as a historical record of the pre-refactor planning surface
+  and should not be selected for elaboration. Future phase-1a / phase-1b
+  tracker items will be appended below per
+  .harness/spec-batches/BRIEF_TEMPLATE.md against the locked phase-1
+  spec at docs/discussions/regseq-model/ (the producer / textual-consumer
+  / codegen-consumer co-equal trio per README §1.3).
 
 items:
   # ---- Phase 0 + 1 + 2: New model and IR types (regseq-model) ----

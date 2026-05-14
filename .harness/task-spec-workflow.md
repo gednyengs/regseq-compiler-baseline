@@ -76,12 +76,16 @@ When `next-step` returns `BRIEF_AUTHORING_BATCH`:
 4. Read the relevant sections of `docs/plans/asplos-implementation-plan.md`.
 5. Create the missing brief at the path shown in `EXPECTED_BRIEF`.
 
-Every brief must contain exactly these sections:
+Every brief must contain exactly these sections (per
+`.harness/spec-batches/BRIEF_TEMPLATE.md`):
 
 - `Description`
 - `Input Context`
 - `Output Specification`
 - `Implementation Notes`
+- `Spec References`
+- `Phase`
+- `Review Tiers`
 - `Non-Goals`
 - `Acceptance Criteria`
 - `Update Instructions`

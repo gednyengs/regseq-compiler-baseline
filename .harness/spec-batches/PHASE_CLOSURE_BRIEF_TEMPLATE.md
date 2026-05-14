@@ -1,11 +1,12 @@
 # Phase Closure Brief: <phase-tag>
 
-Impl-side companion to README §5.5's spec merger contract. Filed when
+Impl-side phase closure brief, filed when
 `uv run python scripts/python/task.py phase-status <phase>` returns
-PASS. Phase-1 implementation runs against the locked phase-1 spec; it
-produces no spec content to merge, so this template is deliberately
-slimmer than the §5.5 7-step protocol -- the spec-side contract does
-not apply to impl closure.
+PASS for a phase tag. Companion to but not a mirror of README §5.5
+(which integrates spec-side artifacts at stage close); phase-1
+implementation runs against the locked phase-1 spec and produces no
+spec content to integrate, so this template is deliberately slimmer
+than the spec-side closure protocol.
 
 Five sections; each must be filled before the phase is declared
 closed.

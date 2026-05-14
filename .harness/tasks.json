@@ -3950,6 +3950,7 @@
             "regseq-driver-23"
           ],
           "artifacts": [],
+          "fail_reason": null,
           "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
