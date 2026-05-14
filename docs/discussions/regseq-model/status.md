@@ -1,6 +1,76 @@
 # Status
 
-Last updated: 2026-05-13. **STAGE 14 CLOSED
+Last updated: 2026-05-14. **PHASE-1
+IMPLEMENTATION SPLIT INTO 1a + 1b
+(2026-05-14).** Phase-1 implementation is now
+internally organised as two sequential
+sub-phase passes against the already-locked
+phase-1 spec (unchanged). The prior "one
+monolithic implementation sweep" framing is
+superseded; README §1.3 (phase-1 paragraph) and
+§2 "Spec before implementation" rule both
+updated in the same change.
+
+- **Phase-1a -- RegseqModel + pretty-print.**
+  The bridge from rustc's `optimized_mir` to
+  RegseqModel (per Q1/Q4) plus the textual
+  rendering surface (per Q5 + the locked
+  `pretty-printer.md`). Implemented in
+  `crates/regseq-model` + `crates/regseq-driver`
+  (Q1 two-crate split).
+
+- **Phase-1b -- generic-C codegen.** The
+  generic-C backend (hosted userspace, libc,
+  `main()`, `printf`, host-platform integer
+  conventions) per the locked
+  `generic-c-backend.md` spec, plus the
+  DSL -> IR -> C -> captured-stdout phase-1
+  test suite. Runs on top of phase-1a's stable
+  IR substrate.
+
+**Why the split.** It mirrors the spec's own
+co-equal merger-artifact structure (`spec.md`
+producer side / `pretty-printer.md` textual-
+consumer side / `generic-c-backend.md` codegen-
+consumer side), isolates bridge bugs from
+codegen bugs by construction, and lets the
+pretty-printer stand on its own as a closeable
+milestone consistent with Q5's nomination of
+the pretty-printer as the primary serialization
+surface. The "spec before implementation"
+discipline is unchanged -- both sub-phases
+implement against the already-locked phase-1
+spec; what changes is how phase-1 implementation
+is organised (two sequential passes, not one).
+
+**No D-tag allocated** -- this is a methodology
+amendment to README §2's "Spec before
+implementation" rule (and the §1.3 phase-1
+paragraph), not a stage-internal decision or a
+new architectural commitment. The README §2 rule
+itself originally landed as an amendment without
+a D-tag; this refinement rides the same channel.
+No `decisions.md` entry.
+
+**Spec status**: unchanged. Phase-1 spec remains
+closed; the three co-equal merger artifacts
+(`spec.md`, `pretty-printer.md`,
+`generic-c-backend.md`) plus the history-bearing
+artifacts (`discussions.md`, `review-log.md`,
+`decisions.md`) sit as merged at stage-14 close.
+
+**Test strategy**: not locked in this entry; to
+be decided at phase-1a open.
+
+**Next concrete action**: open phase-1a. After
+phase-1a closes, phase-1b opens. After phase-1b
+closes, phase 2 opens with **Stage 15: regseq-
+trait scaffolding + Lifecycle + driver-struct
+discovery + RegseqError** per the phase-2 queue
+declared in README §1.3 + §2 "Domain extensions
+iterate per stage in phase 2".
+
+Previous: 2026-05-13. **STAGE 14 CLOSED
 (2026-05-13).** The 7-step merger contract (README
 §5.5) has executed end-to-end:
 

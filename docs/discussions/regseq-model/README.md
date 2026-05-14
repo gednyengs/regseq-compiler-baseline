@@ -92,6 +92,21 @@ onward.
    **generic-C backend** (hosted userspace, libc, `main()`,
    `printf`, host-platform integer-type conventions) and a
    DSL -> IR -> C -> captured-stdout test suite running green.
+   Phase-1 implementation is internally split into two
+   sequential sub-phases against the already-locked phase-1
+   spec: **phase-1a (RegseqModel + pretty-print)** -- the
+   bridge from `optimized_mir` to RegseqModel plus the
+   textual rendering surface -- followed by **phase-1b
+   (generic-C codegen)** -- the generic-C backend running on
+   top of the phase-1a IR substrate, gated by the DSL -> IR
+   -> C -> captured-stdout test suite. The split mirrors the
+   spec's own co-equal merger-artifact structure (`spec.md`
+   producer side / `pretty-printer.md` textual-consumer side
+   / `generic-c-backend.md` codegen-consumer side), isolates
+   bridge bugs from codegen bugs by construction, and lets
+   the pretty-printer stand on its own as a closeable
+   milestone consistent with Q5's nomination of the
+   pretty-printer as the primary serialization surface.
    Scope is exhaustive for the domain-agnostic surface;
    **diagnostic logging is the sole intentional carve-out**,
    treated as foundation observability rather than as a domain
@@ -169,19 +184,27 @@ convention from code or older docs.
   to change, and a spec finding against shipped Rust+tests is
   a refactor where against `spec-snapshot.md` it is a
   paragraph rewrite. Implementation passes happen *between*
-  stages, against the just-locked spec: **implementation
-  sweep #1 follows phase-1 closure** (after stage 14 locks),
-  covering stages 1-14 in one pass; **subsequent phase-2
-  stages each get an incremental implementation pass on
-  close**, extending the compiler + Linux kernel backend +
-  test suite per the "Domain extensions iterate per stage in
-  phase 2" rule below. Stage 1's existing impl (shipped
-  during the foundation-crate discovery phase before this
-  discipline was codified) is grandfathered. Impl-shaped
-  spec gaps surface through phase-3 device pressure (and
-  through the per-phase-2-stage implementation pass that
-  follows each stage's spec closure), which escalates back
-  to the relevant phase-1 / phase-2 spec when needed.
+  stages, against the just-locked spec: **phase-1
+  implementation follows phase-1 closure** (after stage 14
+  locks), covering stages 1-14 against the locked phase-1
+  spec and internally split into two sequential sub-phases --
+  **phase-1a (RegseqModel + pretty-print)** followed by
+  **phase-1b (generic-C codegen)** -- mirroring the spec's
+  own co-equal merger-artifact structure (`spec.md` /
+  `pretty-printer.md` / `generic-c-backend.md`) so that
+  bridge bugs and codegen bugs stay attribution-disjoint and
+  the pretty-printer stands on its own as a closeable
+  milestone consistent with Q5; **subsequent phase-2 stages
+  each get an incremental implementation pass on close**,
+  extending the compiler + Linux kernel backend + test suite
+  per the "Domain extensions iterate per stage in phase 2"
+  rule below. Stage 1's existing impl (shipped during the
+  foundation-crate discovery phase before this discipline
+  was codified) is grandfathered. Impl-shaped spec gaps
+  surface through phase-3 device pressure (and through the
+  per-phase-2-stage implementation pass that follows each
+  stage's spec closure), which escalates back to the
+  relevant phase-1 / phase-2 spec when needed.
 
 - **Dual backend.** The generic-C backend (hosted userspace,
   libc, `main()`, `printf`, host-platform integer-type
