@@ -931,6 +931,290 @@
               "reason": "old-spec; superseded by phase-1a/1b plan in locked spec"
             }
           ]
+        },
+        {
+          "id": "regseq-driver-36",
+          "name": "P1a-BR-01: Bridge construction-pipeline scaffold (Phases 1+3+4)",
+          "spec": ".harness/tasks/regseq-driver/36-bridge-pipeline-scaffold.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-65",
+            "regseq-model-71",
+            "regseq-model-72",
+            "regseq-model-73",
+            "regseq-model-74",
+            "regseq-model-84"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-37",
+          "name": "P1a-BR-02: TyKind translation + special-ADT + \u00a715.1 rejections + Appendix A.1",
+          "spec": ".harness/tasks/regseq-driver/37-tykind-translation-and-rejections.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-36",
+            "regseq-model-66",
+            "regseq-model-67",
+            "regseq-model-68"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#15",
+            "spec.md#17",
+            "spec.md#Appendix"
+          ],
+          "spec_version": 3,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T23:48:33Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review fix: trace severity / Ty::Phantom / \u00a715.1 expansion / \u00a726.8 expansion"
+            },
+            {
+              "ts": "2026-05-14T23:52:57Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "Codex round-2 fix: \u00a715.1 non-rigid TyKind add Alias + Error"
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-38",
+          "name": "P1a-BR-03a: Const bridge + reference-typed const + ConstMemoryStatic synthesis",
+          "spec": ".harness/tasks/regseq-driver/38-const-bridge-and-const-memory-static-synthesis.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-37",
+            "regseq-model-69",
+            "regseq-model-73"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#9",
+            "spec.md#3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-39",
+          "name": "P1a-BR-03b: FnSig + CAbi bridge",
+          "spec": ".harness/tasks/regseq-driver/39-fnsig-and-cabi-bridge.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-37",
+            "regseq-model-70"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#14"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-40",
+          "name": "P1a-BR-04: Closure + vtable + drop-glue Item synthesis",
+          "spec": ".harness/tasks/regseq-driver/40-closure-vtable-drop-glue-synthesis.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-37",
+            "regseq-model-72",
+            "regseq-model-73"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#13",
+            "spec.md#3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-41",
+          "name": "P1a-BR-05: Place + Operand + Rvalue + Statement bridge translation",
+          "spec": ".harness/tasks/regseq-driver/41-place-operand-rvalue-statement-bridge.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-38",
+            "regseq-driver-39",
+            "regseq-model-76",
+            "regseq-model-77",
+            "regseq-model-78",
+            "regseq-model-79"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#19",
+            "spec.md#20",
+            "spec.md#21",
+            "spec.md#22"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-42",
+          "name": "P1a-BR-06: Terminator + Drop-as-Call collapse + basic-block bridge",
+          "spec": ".harness/tasks/regseq-driver/42-terminator-and-drop-as-call-bridge.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-41",
+            "regseq-driver-40",
+            "regseq-model-80",
+            "regseq-model-81"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#23",
+            "spec.md#24",
+            "spec.md#25"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-43",
+          "name": "P1a-BR-07: Body materialisation + vtable-indirect rewrite + joint validation",
+          "spec": ".harness/tasks/regseq-driver/43-body-materialisation-and-vtable-indirect.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-42",
+            "regseq-driver-40",
+            "regseq-model-82",
+            "regseq-model-83"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#25"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-44",
+          "name": "P1a-BR-08a: Diagnostic-logging recognition + attribute population",
+          "spec": ".harness/tasks/regseq-driver/44-diag-logging-recognition.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-43",
+            "regseq-model-74"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#26"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:08Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-45",
+          "name": "P1a-BR-08b: DiagLogPeel + format-template grammar + validation diagnostics",
+          "spec": ".harness/tasks/regseq-driver/45-diag-log-peel-and-format-grammar.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-44"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#25",
+            "spec.md#26"
+          ],
+          "spec_version": 2,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:08Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T23:48:33Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review fix: trace severity / Ty::Phantom / \u00a715.1 expansion / \u00a726.8 expansion"
+            }
+          ]
         }
       ]
     },
@@ -2249,6 +2533,797 @@
             {
               "ts": "2026-04-23T02:44:08Z",
               "event": "migrated_in_place",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-65",
+          "name": "P1a-DS-01: Root RegseqModel + foundation conformance",
+          "spec": ".harness/tasks/regseq-model/65-root-regseq-model-and-foundation.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#2",
+            "spec.md#3",
+            "spec.md#4",
+            "spec.md#5",
+            "spec.md#6",
+            "spec.md#7"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-66",
+          "name": "P1a-DS-02: Ty enum + auxiliary closed enums + helpers",
+          "spec": ".harness/tasks/regseq-model/66-ty-enum-and-helpers.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-65"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#10",
+            "spec.md#17"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-67",
+          "name": "P1a-DS-03: Layout",
+          "spec": ".harness/tasks/regseq-model/67-layout.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-66"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#11"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-68",
+          "name": "P1a-DS-04: TyInterner + ArgsKey + GenericArgs",
+          "spec": ".harness/tasks/regseq-model/68-ty-interner-and-args-key.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-66",
+            "regseq-model-67"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#12"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-69",
+          "name": "P1a-DS-05: Const vocabulary",
+          "spec": ".harness/tasks/regseq-model/69-const-vocabulary.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-68"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-70",
+          "name": "P1a-DS-06: FnAbi + FnSig + CAbiLowering",
+          "spec": ".harness/tasks/regseq-model/70-fnsig-and-cabi-lowering.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-68"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#14"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-71",
+          "name": "P1a-DS-07: Item + ItemKind + flags",
+          "spec": ".harness/tasks/regseq-model/71-item-and-itemkind.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-68"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#8"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-72",
+          "name": "P1a-DS-08a: Closure-family synthesised Items",
+          "spec": ".harness/tasks/regseq-model/72-closure-family-synthesised-items.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-71"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#13"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-73",
+          "name": "P1a-DS-08b: VTable-family + SyntheticItemKind + DefPath/Hash",
+          "spec": ".harness/tasks/regseq-model/73-vtable-family-and-synthetic-keys.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-71"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#13"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-74",
+          "name": "P1a-DS-09: DomainAttr sibling tables",
+          "spec": ".harness/tasks/regseq-model/74-domain-attr-tables.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-71"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-75",
+          "name": "P1a-DS-10: Instance + InstanceKind + InstanceId",
+          "spec": ".harness/tasks/regseq-model/75-instance-and-instance-kind.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-68",
+            "regseq-model-69",
+            "regseq-model-70",
+            "regseq-model-71"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-76",
+          "name": "P1a-DS-11: Place + PlaceElem + structural invariants",
+          "spec": ".harness/tasks/regseq-model/76-place-and-projection.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-66",
+            "regseq-model-67"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#19"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-77",
+          "name": "P1a-DS-12a: Operand + LiteralValue",
+          "spec": ".harness/tasks/regseq-model/77-operand-and-literal-value.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-76",
+            "regseq-model-69"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#20"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-78",
+          "name": "P1a-DS-12b: Rvalue + sub-enums",
+          "spec": ".harness/tasks/regseq-model/78-rvalue-and-sub-enums.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-77",
+            "regseq-model-69"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#21"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-79",
+          "name": "P1a-DS-13a: Statement + StatementKind + NonDivergingIntrinsic",
+          "spec": ".harness/tasks/regseq-model/79-statement-and-non-diverging-intrinsic.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-78"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#22"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-80",
+          "name": "P1a-DS-13b: Terminator + TerminatorKind + sub-enums",
+          "spec": ".harness/tasks/regseq-model/80-terminator-and-sub-enums.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-79"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#23"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-81",
+          "name": "P1a-DS-14a: BasicBlock + BlockId + ordering invariants",
+          "spec": ".harness/tasks/regseq-model/81-basic-block.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-80"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#24"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-82",
+          "name": "P1a-DS-14b: Body + LocalDecl + LocalId + APIs + walk hooks",
+          "spec": ".harness/tasks/regseq-model/82-body-and-local-decl.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-81"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#25"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-83",
+          "name": "P1a-VAL-01: Place validator + type-coherence walk",
+          "spec": ".harness/tasks/regseq-model/83-place-validator.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-76",
+            "regseq-model-82"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#19"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-84",
+          "name": "P1a-VAL-02: ID referential integrity + sort + DefPath + spans + Phase C vtables",
+          "spec": ".harness/tasks/regseq-model/84-id-referential-integrity-validator.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-65",
+            "regseq-model-66",
+            "regseq-model-67",
+            "regseq-model-68",
+            "regseq-model-69",
+            "regseq-model-70",
+            "regseq-model-71",
+            "regseq-model-72",
+            "regseq-model-73",
+            "regseq-model-74",
+            "regseq-model-75"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#16"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-85",
+          "name": "P1a-VAL-03: Layout + invariants 14/19/20 + \u00a73.3 surfaces",
+          "spec": ".harness/tasks/regseq-model/85-layout-and-section-3-3-validator.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-67",
+            "regseq-model-71",
+            "regseq-model-72",
+            "regseq-model-73",
+            "regseq-model-75"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#11",
+            "spec.md#14"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-86",
+          "name": "P1a-PP-01: render_item + attribute block + \u00a74 Item-header span gating",
+          "spec": ".harness/tasks/regseq-model/86-render-item.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-71"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#4",
+            "pretty-printer.md#5",
+            "pretty-printer.md#2",
+            "pretty-printer.md#8",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-87",
+          "name": "P1a-PP-02: render_ty + render_generic_args helper",
+          "spec": ".harness/tasks/regseq-model/87-render-ty.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-66",
+            "regseq-model-68",
+            "regseq-model-72",
+            "regseq-model-73"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#6",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-88",
+          "name": "P1a-PP-03: Body-level renderers + \u00a74 body-level span gating",
+          "spec": ".harness/tasks/regseq-model/88-render-body-level.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-87",
+            "regseq-model-76",
+            "regseq-model-77",
+            "regseq-model-78",
+            "regseq-model-79",
+            "regseq-model-80",
+            "regseq-model-81",
+            "regseq-model-82"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#7",
+            "pretty-printer.md#4",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-89",
+          "name": "P1a-PP-04a: render_const for scalar/simple variants",
+          "spec": ".harness/tasks/regseq-model/89-render-const-scalar.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-87",
+            "regseq-model-88",
+            "regseq-model-69"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#10",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-90",
+          "name": "P1a-PP-04b: render_const for aggregate/recursion variants",
+          "spec": ".harness/tasks/regseq-model/90-render-const-aggregate.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-89"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#10",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-91",
+          "name": "P1a-PP-05a: render_instance for Function/Static/Const variants + \u00a73 envelope",
+          "spec": ".harness/tasks/regseq-model/91-render-instance-function-static-const.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-86",
+            "regseq-model-90",
+            "regseq-model-74",
+            "regseq-model-75"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#10",
+            "pretty-printer.md#3",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-92",
+          "name": "P1a-PP-05b: render_instance for ADT-definition + attribute-stream composition",
+          "spec": ".harness/tasks/regseq-model/92-render-instance-adt-and-attribute-streams.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-91",
+            "regseq-model-74",
+            "regseq-model-75"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#10",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-93",
+          "name": "P1a-PP-06: top-level render + PrettyPrintOptions + \u00a74 propagation",
+          "spec": ".harness/tasks/regseq-model/93-render-top-level-and-pretty-print-options.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-92"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#10",
+            "pretty-printer.md#4",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:07Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-94",
+          "name": "P1a-E2E-02: Diagnostic-logging end-to-end fixture",
+          "spec": ".harness/tasks/regseq-model/94-e2e-diagnostic-logging.md",
+          "status": "pending",
+          "depends_on": [
+            "test-ir-fixtures-01",
+            "regseq-driver-44",
+            "regseq-driver-45"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#26",
+            "spec.md#3"
+          ],
+          "spec_version": 3,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:08Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T23:48:33Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review fix: trace severity / Ty::Phantom / \u00a715.1 expansion / \u00a726.8 expansion"
+            },
+            {
+              "ts": "2026-05-14T23:52:56Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "Codex round-2 fix: clean stale 5-severity references"
+            }
+          ]
+        },
+        {
+          "id": "regseq-model-95",
+          "name": "P1a-E2E-03: Synthesis end-to-end fixture (vtable + closure)",
+          "spec": ".harness/tasks/regseq-model/95-e2e-synthesis-vtable-and-closure.md",
+          "status": "pending",
+          "depends_on": [
+            "test-ir-fixtures-01",
+            "regseq-driver-40",
+            "regseq-driver-43"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#13",
+            "spec.md#25"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:08Z",
+              "event": "added",
               "spec_version": 1
             }
           ]
@@ -4556,6 +5631,53 @@
       "id": "track-a-eval",
       "name": "evaluation packaging",
       "tasks": []
+    },
+    {
+      "id": "test-ir-fixtures",
+      "name": "test-ir-fixtures shared bridge fixtures (workspace member)",
+      "tasks": [
+        {
+          "id": "test-ir-fixtures-01",
+          "name": "P1a-TS-01-E2E-01: test-ir-fixtures crate scaffold + no-op smoke",
+          "spec": ".harness/tasks/test-ir-fixtures/01-scaffold-and-no-op-smoke.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-36",
+            "regseq-driver-37",
+            "regseq-driver-38",
+            "regseq-driver-39",
+            "regseq-driver-40",
+            "regseq-driver-41",
+            "regseq-driver-42",
+            "regseq-driver-43",
+            "regseq-driver-44",
+            "regseq-driver-45",
+            "regseq-model-93"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#25",
+            "pretty-printer.md#10"
+          ],
+          "spec_version": 2,
+          "history": [
+            {
+              "ts": "2026-05-14T23:39:08Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-14T23:48:33Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review fix: trace severity / Ty::Phantom / \u00a715.1 expansion / \u00a726.8 expansion"
+            }
+          ]
+        }
+      ]
     }
   ]
 }

@@ -587,3 +587,103 @@ items:
         entries).
     generated_task_ids:
       - regseq-model-64
+
+  # ---- Phase 1a: RegseqModel + pretty-print implementation (locked phase-1 spec) ----
+
+  - id: regseqmodel-phase-1a
+    phase: "1a"
+    title: RegseqModel + pretty-print implementation -- producer-side IR + bridge + textual consumer
+    status: tasked
+    depends_on: []
+    target_harness_groups:
+      - regseq-model
+      - regseq-driver
+      - test-ir-fixtures
+    source_refs:
+      - docs/discussions/regseq-model/spec.md
+      - docs/discussions/regseq-model/pretty-printer.md
+      - docs/discussions/regseq-model/README.md
+    summary: >
+      Implement the producer-side RegseqModel data shapes, the bridge from
+      rustc's optimized_mir, the textual consumer surface (pretty-printer.md
+      all 11 sections), and the diagnostic-logging intrinsic vocabulary at
+      the IR-shape level. Phase-1a is the first of two sub-phases that
+      together implement the locked phase-1 spec; phase-1b owns
+      generic-c-backend.md.
+    brief: .harness/spec-batches/regseqmodel-phase-1a.md
+    spec_authoring_notes:
+      - 42-task decomposition across 5 axes (18 data-shape / 3 validator /
+        10 bridge / 8 pretty-printer / 3 test-support+E2E)
+      - Approved by user 2026-05-14 after Codex right-sizing iteration
+      - Brief v2 incorporates Codex coverage + right-sizing review
+      - Each task spec carries a Test Plan kind chosen from
+        unit-in-src / integration-in-tests / test-support-crate
+      - test-ir-fixtures workspace member added; group must be added
+        to tasks.json by hand before task.py add-task can register
+        P1a-TS-01-E2E-01
+    generated_task_ids:
+      - regseq-model-65
+      - regseq-model-66
+      - regseq-model-67
+      - regseq-model-68
+      - regseq-model-69
+      - regseq-model-70
+      - regseq-model-71
+      - regseq-model-72
+      - regseq-model-73
+      - regseq-model-74
+      - regseq-model-75
+      - regseq-model-76
+      - regseq-model-77
+      - regseq-model-78
+      - regseq-model-79
+      - regseq-model-80
+      - regseq-model-81
+      - regseq-model-82
+      - regseq-model-83
+      - regseq-model-84
+      - regseq-model-85
+      - regseq-model-86
+      - regseq-model-87
+      - regseq-model-88
+      - regseq-model-89
+      - regseq-model-90
+      - regseq-model-91
+      - regseq-model-92
+      - regseq-model-93
+      - regseq-model-94
+      - regseq-model-95
+      - regseq-driver-36
+      - regseq-driver-37
+      - regseq-driver-38
+      - regseq-driver-39
+      - regseq-driver-40
+      - regseq-driver-41
+      - regseq-driver-42
+      - regseq-driver-43
+      - regseq-driver-44
+      - regseq-driver-45
+      - test-ir-fixtures-01
+
+  - id: regseqmodel-phase-1b
+    phase: "1b"
+    title: Generic-C codegen on top of phase-1a IR substrate
+    status: ready_to_elaborate
+    depends_on:
+      - regseqmodel-phase-1a
+    target_harness_groups:
+      - regseq-backends
+    source_refs:
+      - docs/discussions/regseq-model/generic-c-backend.md
+      - docs/discussions/regseq-model/spec.md
+    summary: >
+      Implement the generic-C backend (hosted userspace, libc, main(),
+      printf, host-platform integer-type conventions) per the locked
+      generic-c-backend.md spec, plus the DSL -> IR -> C ->
+      captured-stdout phase-1 test suite. Runs on top of phase-1a's
+      stable IR substrate. Closes phase-1.
+    spec_authoring_notes:
+      - Authored after phase-1a is tasked; promoted from not_ready
+        to ready_to_elaborate at that point
+      - Test plan adds a fourth tier: captured-stdout vs golden
+    generated_task_ids: []
