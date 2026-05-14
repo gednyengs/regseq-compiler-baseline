@@ -1,6 +1,777 @@
 # Status
 
-Last updated: 2026-05-13. **D-14-2 cluster LOCKED at
+Last updated: 2026-05-13. **STAGE 14 CLOSED
+(2026-05-13).** The 7-step merger contract (README
+§5.5) has executed end-to-end:
+
+- **Step 1 + 2**: `stage-14/discussions.md` +
+  `stage-14/review-log.md` appended to top-level
+  artifacts under `## Stage 14` headers.
+- **Step 3**: All stage-14 D-tags (D-14-1 through
+  D-14-10 + the no-D-tag `core::ffi::c_void`
+  cluster) registered in `decisions.md` under a new
+  `## Stage 14` section.
+- **Step 4**: Five-decision REOPEN queue flipped in
+  `decisions.md`:
+  - **D-9-9** [REOPENED] (revised in stage 14
+    D-14-7: `#[naked]` Item-translation row added
+    at §15.1, sibling to §23.6.1 row 8).
+  - **D-9-10** [REOPENED] (revised in stage 14
+    D-14-2.5: B-4 and B-6 carved out for
+    `IntrinsicKind::Log(_)` callees).
+  - **D-12-1.3** [REOPENED] (revised in stage 14
+    D-14-7: `is_naked` field removed).
+  - **D-13-4.3** [REOPENED] (revised in stage 14
+    D-14-7: `#[naked]` row removed; §5.6 row-order
+    recap renumbered).
+  - **D-13-6** [REOPENED] (revised in stage 14
+    D-14-4.9: `render_operand` + `render_rvalue`
+    signatures extended with `expected_ty: TyId`;
+    `render_generic_args` extended with
+    `item: ItemId`).
+- **Step 5**: The three stage-14 snapshots lifted
+  to top-level merger artifacts:
+  - `stage-14/spec-snapshot.md` -> `spec.md`
+    (13046 lines).
+  - `stage-14/pretty-printer-snapshot.md` ->
+    `pretty-printer.md` (4438 lines).
+  - `stage-14/generic-c-backend-snapshot.md` ->
+    `generic-c-backend.md` (new top-level file, 755
+    lines, per D-14-10 carve-out + README §5.9
+    rule 7).
+- **Step 6**: Post-merge tier-3 Codex review on
+  all four merger artifacts closed at R15 APPROVE /
+  Lockability:yes / Close-out:YES after a 15-round
+  trajectory (1B+18M+0N; 19 findings closed). The
+  R1 BLOCK was a wrong terminator vocabulary in
+  `generic-c-backend.md` §7; R2-R14 closed
+  cross-reference accuracy, terminology hygiene,
+  registry-vs-spec consistency, and co-equal-
+  artifact framing drift. See top-level
+  `review-log.md` `## Stage 14 / Post-merge tier-3
+  review` for the round-by-round trail.
+- **Step 7**: This status update + the three
+  stage-14 snapshots are frozen with "Snapshot at
+  close of stage 14" headers.
+
+**Phase 1 spec closure status**: stage 14 was the
+final phase-1 stage. All eleven stage-14 cluster
+surfaces locked at Phase B APPROVE during stage-14
+work + cross-cluster review + merger post-merge
+review. **Phase 1 spec is now closed.** Eleven
+clusters delivered:
+1. **D-14-1 + D-14-3** -- Q7 intrinsic recognition
+   + DomainAttr sibling-table architecture.
+2. **D-14-2** -- Diagnostic-logging intrinsic
+   vocabulary.
+3. **D-14-10** -- Generic-C backend codegen
+   carve-out (new co-equal merger artifact
+   `generic-c-backend.md`).
+4. **D-14-4** -- `render_const` composer renderer
+   (12 sub-decisions).
+5. **D-14-5** -- `render_instance` composer
+   renderer (8 sub-decisions, 19 specimens).
+6. **D-14-6** -- Top-level `render` composer
+   (6 sub-decisions, 5 specimens).
+7. **D-14-7** -- `#[naked]` rejection (Finding #2;
+   9 sub-decisions; 3 REOPENs).
+8. **D-14-8** -- Stale `emission_name` forward-
+   pointer retarget (Finding #3).
+9. **D-14-9** -- Specimen 70 split (Finding #4).
+10. **`core::ffi::c_void` rejection enforcement
+    cluster** (no D-tag; inherits stage-3 D16 +
+    D1.4).
+
+**Next major project step**: **Phase-1
+implementation sweep #1** per README §2's "Spec
+before implementation" amendment. The sweep
+implements all phase-1 spec content (stages 1-14)
+against the locked spec in one pass, extending the
+compiler workspace (`crates/regseq-model` + the
+bridge in `crates/regseq-driver` per Q1/Q4) +
+generic-C backend (hosted userspace, libc,
+`main()`, `printf`, host-platform integer
+conventions) + DSL -> IR -> C -> captured-stdout
+phase-1 test suite. After implementation sweep #1
+closes, phase 2 opens with **Stage 15: regseq-
+trait scaffolding + Lifecycle + driver-struct
+discovery + RegseqError** per the phase-2 queue
+declared in README §1.3 + §2 "Domain extensions
+iterate per stage in phase 2".
+
+Previous: 2026-05-13. **`core::ffi::c_void`
+rejection enforcement cluster LOCKED at per-stage
+Phase B R3 APPROVE / Lockability:yes / Close-out:YES
+(2026-05-13).** 3-round Phase B trajectory closed
+(2026-05-13): R1 MINOR 3 findings (0B+2M+1N;
+Coroutine family double-classification in the new
+§15.1 enforcement paragraph + stale line-number
+citations at six audit + tracker sites + dangling
+"Phase B." fragment at the audit closure check) ->
+R2 MINOR 1 finding (0B+1M+0N; missed stale line
+number at `stage-14/memory.md`) -> R3 APPROVE 0
+findings. **Total: 4 findings closed across R1-R2
+(0B+3M+1N; 3 rounds)**. All findings were spec-text
+consistency at the audit + tracker + spec-
+introduction text surfaces, not architectural
+reframings. Lockability:yes sustained across R1-R3
+(no BLOCK findings). All Phase A content unchanged
+through Phase B; the structural directive (two new
+§15.1 introduction paragraphs naming the §15.0 gate
++ defining the opaque-struct pattern) is intact.
+**Phase 1 spec closure status**: this cluster closes
+the **fourth and final stage-14 spec surface** (the
+inherited stage-3 D16 + D1.4 expectation). **All
+stage-14 clusters are now LOCKED at Phase B**:
+- Foundation extensions (D-14-1 / D-14-2 / D-14-3)
+- Generic-C backend carve-out (D-14-10)
+- Composer-renderer trio (D-14-4 / D-14-5 / D-14-6)
+- External-review Finding surgical fixes (D-14-7 /
+  D-14-8 / D-14-9)
+- `core::ffi::c_void` enforcement (no D-tag)
+
+**No D-tag allocated** for this cluster -- stage-3
+D16 already covers the decision-level commitment to
+reject c_void in v1; stage-3 D1.4 already
+recommends the opaque-struct pattern. **No D-tag
+flip** -- stage-3 D16 and D1.4 are unchanged.
+**Cross-stage friction**: none new. The five-
+decision merger-time flip queue remains unchanged
+at D-9-10 (D-14-2.5) + D-13-6 (D-14-4.9) + D-12-1.3
++ D-9-9 + D-13-4.3 (D-14-7.9). **Next concrete
+action**: run the per-stage cross-cluster Codex
+review on the full
+`stage-14/spec-snapshot.md` +
+`stage-14/pretty-printer-snapshot.md` per README
+§5.5 step 6 + §5.6 Tier-2 discipline (anticipated
+2-4 rounds; catches inter-cluster drift across the
+entire stage-14 spec surface before merger). After
+the cross-cluster review closes at APPROVE, hand
+off to merger per the §5.5 7-step contract (flips
+the five-decision queue to `[REOPENED]` in
+`decisions.md`; integrates stage-14 snapshots into
+top-level `spec.md` + `pretty-printer.md` +
+`generic-c-backend.md`; freezes stage-14 snapshots
+with "Snapshot at close of stage 14" headers;
+updates this file to mark stage 14 closed and
+announce phase-1 implementation sweep #1 as the
+next major project step).
+Pure spec hygiene cluster landing the enforcement
+narrative at `stage-14/spec-snapshot.md` §15.1
+introduction. Phase A drafting verified that the
+c_void row already exists in the §15.1 rejection
+table, the
+§15.0 Special-ADT dispatch-ordering rule already
+gates the rejection algorithmically, and Appendix
+A.1 already walks the
+`*mut c_void` -> `*mut OpaqueCtx` rewrite end-to-
+end. **One applied edit**: two new paragraphs added
+to the §15.1 introduction (after the four-category
+narrative paragraph, before the rejection table) -
+- an "**Enforcement model**" paragraph naming the
+§15.0 dispatch-ordering gate as the algorithmic
+enforcement for special-ADT rejections at the
+"type translation" phase (enumerating which §15.1
+rows the gate intercepts and noting that non-ADT
+type-translation rejections + Item-attribute +
+`PlaceElem` rows are enforced at their owning
+sections' check points), and an "**Opaque-struct
+pattern**" paragraph defining the pattern inline
+(`#[repr(C)]` ZST struct with a single private
+zero-length-array field; admitted via the ordinary
+`Ty::Struct` path; lowers to incomplete-struct
+pointer at the C-ABI boundary per §14.5 + §8.0
+invariant 19; Appendix A.1 walks the end-to-end
+rewrite). **No D-tag allocated** -- stage-3 D16
+already covers the decision-level commitment to
+reject c_void in v1; stage-3 D1.4 already
+recommends the opaque-struct pattern. **No D-tag
+flip** -- stage-3 D16 and D1.4 are unchanged. **No
+sub-decisions allocated**. **Methodology rules
+invoked**: README §5.9 rule 5 (no D-tag inline
+references in spec text) + README §2 "C semantics
+with information preservation" + README §2
+"Forward expectations live in
+`stage-N/expectations.md`". **Cross-stage
+friction**: none new from this cluster. The five-
+decision merger-time flip queue remains unchanged
+at D-9-10 (D-14-2.5) + D-13-6 (D-14-4.9) + D-12-1.3
++ D-9-9 + D-13-4.3 (D-14-7.9). **Phase 1 spec
+closure status**: this cluster closes the **fourth
+and final stage-14 spec surface** (after D-14-7 /
+Finding #2, D-14-8 / Finding #3, D-14-9 / Finding
+#4 + the composer-renderer trio D-14-4 / D-14-5 /
+D-14-6 + the foundation extensions D-14-1 / D-14-2
+/ D-14-3 + the generic-C backend carve-out
+D-14-10). After Phase B closes, the per-stage
+cross-cluster Codex review on the full
+`stage-14/spec-snapshot.md` +
+`stage-14/pretty-printer-snapshot.md` runs
+(anticipated 2-4 rounds), then hand-off to merger
+per §5.5 7-step contract (flips the five-decision
+queue to `[REOPENED]` in `decisions.md`; integrates
+stage-14 snapshots into top-level `spec.md` +
+`pretty-printer.md` + `generic-c-backend.md`;
+freezes stage-14 snapshots with "Snapshot at close
+of stage 14" headers; updates this file to mark
+stage 14 closed and announce phase-1
+implementation sweep #1 as the next major project
+step). **Next concrete action**: kick off Phase B
+R1 Codex close-out review verifying the new §15.1
+introduction paragraphs land cleanly + the
+references to §15.0 / §14.5 / §8.0 / Appendix A.1
+all resolve to the current spec text. R1
+anticipated at 0-2 findings APPROVE / Close-out:YES
+(directive is single-section spec hygiene; no
+sub-decisions; no cascade pattern expected --
+matches D-14-8 / D-14-9 shortest-trajectory shape).
+
+Previous: 2026-05-13. **D-14-9 cluster LOCKED at
+per-stage Phase B R2 APPROVE / Lockability:yes /
+Close-out:YES (2026-05-13).** 2-round Phase B
+trajectory closed (2026-05-13): R1 MINOR 2 findings
+(0B+1M+1N; stale "three clusters" preamble wording
+in `discussions.md` + audit overstatement of how
+Specimen 70b differs from Specimen 73) -> R2
+APPROVE 0 findings. **Total: 2 findings closed
+across R1 (0B+1M+1N)**. Both findings were spec-
+text consistency at the audit + preamble surfaces,
+not architectural reframings. Lockability:yes
+sustained across R1-R2 (no BLOCK findings). **No
+cascade pattern** -- the two specimen edits had no
+recap surfaces to drift; D-14-9's 2-round
+trajectory matches D-14-8's shortest-trajectory
+shape. **Phase 1 spec closure status**: D-14-9
+closes the **third surgical-fix cluster** of stage
+14 (external-review Finding #4; after D-14-7 /
+Finding #2 and D-14-8 / Finding #3). Pure pretty-
+printer-spec hygiene cluster landing the Finding
+#4 split at `stage-14/pretty-printer-snapshot.md`
+§9.9. **Two applied edits**: (i) Specimen 70 input
+downshifts `opaque_handle_eligible: true` to
+`false` and the output drops the `#[opaque_handle]`
+line, leaving a clean Function attribute-stress
+specimen; the D-14-7 cross-finding parenthetical
+forward-pointing to D-14-9 is removed since the
+fix has now landed. (ii) new Specimen 70b carrying
+`kind: ItemKind::Struct, def_path: <pl011::Handle>,
+opaque_handle_eligible: true` renders
+`#[opaque_handle]` above `struct pl011::Handle`,
+preserving coverage of the bridge-outcome rendering
+on the only `ItemKind` that can carry the flag per
+`spec-snapshot.md` §8.0 invariant 19. Specimen
+count drifts ~75 -> ~76 via the 70b suffix;
+gap-free 70 -> 70b -> 71 sequence acceptable per
+D-13-7.2's policy-bucket-exception spirit. **No
+sub-decisions allocated** -- the directive is
+fully prescribed by `stage-14/expectations.md`
+Finding #4. **No D-tag flip on D-13-7** -- D-13-7's
+decision text is not revised. **Methodology rules
+invoked**: README §5.9 rule 6 (`pretty-printer.md`
+ownership of consumer-side rendering spec) +
+D-13-7 + D-13-7.2 (specimen-coverage rubric +
+policy-bucket-exception numbering) + §8.0
+invariant 19 (Struct-only opaque-handle
+eligibility) + README §2 "Forward expectations
+live in `stage-N/expectations.md`". **Cross-stage
+friction**: none new from D-14-9. The five-decision
+merger-time flip queue remains unchanged at D-9-10
+(D-14-2.5) + D-13-6 (D-14-4.9) + D-12-1.3 + D-9-9 +
+D-13-4.3 (D-14-7.9). Active focus advances to the
+remaining stage-14 work -- **`core::ffi::c_void`
+rejection enforcement** (no new D-tag; stage-3 D16
+already specifies). After that cluster locks, the
+per-stage cross-cluster Codex review on the full
+`spec-snapshot.md` + `pretty-printer-snapshot.md`
+runs (anticipated 2-4 rounds), then hand-off to
+merger per §5.5 7-step contract (flips D-9-10 +
+D-13-6 + D-12-1.3 + D-9-9 + D-13-4.3 to
+`[REOPENED]` in `decisions.md`).
+
+Previous: 2026-05-13. **D-14-8 cluster LOCKED at
+per-stage Phase B R2 APPROVE / Lockability:yes /
+Close-out:YES (2026-05-13).** 2-round Phase B
+trajectory closed (2026-05-13): R1 MINOR 2 findings
+(0B+2M+0N; tracker line-number wording at three
+surfaces + placeholder `D-9-?` in audit cross-stage
+friction section) -> R2 APPROVE 0 findings. **Total:
+2 findings closed across R1 (0B+2M+0N)**. Both
+findings were spec-text consistency at the audit +
+tracker surfaces, not architectural reframings.
+Lockability:yes sustained across R1-R2 (no BLOCK
+findings). **No cascade pattern** -- the
+single-paragraph edit had no recap surfaces to
+drift; D-14-8's 2-round trajectory is the shortest
+in stage 14 so far (matches Phase A trackers'
+anticipation that the prescribed directive + one-
+paragraph edit + no sub-decisions would close in
+1-2 rounds). **Phase 1 spec closure status**:
+D-14-8 closes the **second surgical-fix cluster**
+of stage 14 (external-review Finding #3; after
+D-14-7 / Finding #2). Pure spec hygiene cluster
+landing the Finding #3 retarget at
+`stage-14/spec-snapshot.md` §9.2 paragraph 3 (the
+closing clause of the `Struct / Enum / Union`
+`emission_name` bridge-construction-rule bullet,
+now committing phase-1 to determinism + uniqueness
+only and forwarding the full normative C-identifier
+construction algorithm to the C-backend spec's
+responsibility as out of phase-1 scope). **Cross-stage
+friction**: none new from D-14-8.
+
+Previous: 2026-05-13. **D-14-7 cluster LOCKED at
+per-stage Phase B R6 APPROVE / Lockability:yes /
+Close-out:YES (2026-05-13).** 6-round Phase B
+trajectory closed (2026-05-13): R1 MINOR 3 findings
+(0B+3M+0N; §8.0 field-count off-by-one + D-14-7
+audit-section pre-lock header label + Q5 evidence
+ALLOW_LIST `test`/`ignore`/`should_panic`
+inconsistency) -> R2 MINOR 1 finding (0B+1M+0N;
+recap-text-duplication tail across §3 status summary
++ memory.md) -> R3 MINOR 1 finding (0B+1M+0N; four
+lagging surfaces at R1 trajectory) -> R4 MINOR 1
+finding (0B+1M+0N; same surfaces shifted one round)
+-> R5 MINOR 1 finding (0B+1M+0N; same shift forward;
+**cascade-breaking fix applied** by bumping the four
+surfaces to the full R5 trajectory at once including
+R5 itself) -> R6 APPROVE 0 findings. **Total: 7
+distinct findings closed across R1-R5
+(0B+7M+0N)**. All 9 D-14-7 sub-decisions remain
+LOCKED at Phase A unchanged -- Phase B revisions
+were spec-text consistency (3 R1 findings + 4 rounds
+of recap-text-duplication cascade), not
+architectural reframings. Lockability:yes sustained
+across R1-R6 (no BLOCK findings). **No new stage-13
+/ stage-12 / stage-9 D-tag REOPENs introduced** by
+any R1-R5 fix; the three D-14-7.9 REOPENs
+(D-12-1.3, D-9-9, D-13-4.3) unchanged.
+**Phase 1 spec closure status**: D-14-7 closes the
+first surgical-fix cluster of stage 14 (external-
+review Finding #2). The composer-renderer trio
+(D-14-4 / D-14-5 / D-14-6) plus the first surgical
+fix (D-14-7) are now fully specified. Spec
+contributions: `spec-snapshot.md` §3.5.2 + §3.6.6 +
+§8.0 + §15.1 edits; `pretty-printer-snapshot.md`
+§5.1 + §5.2 + §5.3 + §5.6 + §9.9 edits;
+`stage-14/prior-art/rustc-naked.md` (6 Q-tags) +
+`rustc-references.md` "`#[naked]` handling" section
+(5 file:line landmarks). **Cross-stage friction**:
+three new REOPENs from D-14-7 (D-12-1.3, D-9-9,
+D-13-4.3) join the pending merger-time flips from
+prior clusters (D-9-10 from D-14-2.5, D-13-6 from
+D-14-4.9). The five-decision merger-time flip queue
+will land at stage-14 merger close per §5.5 step 4.
+
+Previous: 2026-05-13. **D-14-7 cluster LOCKED at
+per-stage Phase A (9/9 sub-decisions).** Phase A
+drafting session (2026-05-13) closed the
+external-review Finding #2 surface (`#[naked]`
+rejection in v1) with 9 sub-decisions D-14-7.1
+through D-14-7.9: **D-14-7.1 (load-bearing)** reject
+at Item translation; diagnostic names `#[naked]` and
+recommends future phase-2 stage-17
+`#[rseq::interrupt(...)]` deferral path; **D-14-7.2**
+recognition API
+`tcx.codegen_fn_attrs(did).flags.contains(CodegenFnAttrFlags::NAKED)`
+during stage-12 D-12-5 Phase 2 Translation+Synthesis;
+**D-14-7.3** rejection-table placement at
+`spec-snapshot.md` §15.1 with new "Item translation"
+phase row + §15.1 header note extended to four
+categories (Item-attribute DSL rejections joins
+non-rigid `TyKind` / rigid DSL-rejected / closed
+`PlaceElem` vocabulary rejections); **D-14-7.4 +
+D-14-7.5** `Item.is_naked` field + `instance_is_naked`
+helper deletions at §8.0 + §3.5.2 (14-helper
+inventory downshifts to 13); **D-14-7.6**
+pretty-printer per-flag table edits at §5.3 + §5.6
+row-order recap + §5.1 atomic-shape example + §5.2
+default-suppression narrative; **D-14-7.7** specimen
+alignment at §9.9 (Specimens 69 + 70 + 75 input
+shapes drop `is_naked`; Specimen 70 output drops
+`#[naked]` rendered line; cross-finding parenthetical
+references D-14-9 / Finding #4); **D-14-7.8** §3.6.6
+paragraph 3 finalisation from pre-lock D-14-7-
+territory wording to Stage-14-D-14-7 locked-state
+wording; **D-14-7.9** cross-stage friction outcome:
+three new REOPENs at merger close (D-12-1.3 + D-9-9
++ D-13-4.3) with the documented annotations per
+`expectations.md` Finding #2. **Step 4 rustc
+evidence pass landed** at
+`stage-14/prior-art/rustc-naked.md` (6 Q-tags Q1-Q6
+covering attribute parsing / source-of-truth flag /
+body-shape contract / codegen-side dispatch /
+attribute-target restrictions / structural overlap
+with stage-9 D-9-9 row 8) +
+`rustc-references.md` "`#[naked]` handling" section
+(5 file:line landmarks). Spec contributions:
+`spec-snapshot.md` §3.5.2 + §3.6.6 + §8.0 + §15.1
+edits; `pretty-printer-snapshot.md` §5.1 + §5.2 +
+§5.3 + §5.6 + §9.9 edits. **Cross-stage friction**:
+three new REOPENs from D-14-7 (D-12-1.3, D-9-9,
+D-13-4.3) join the pending merger-time flips from
+prior clusters (D-9-10 from D-14-2.5, D-13-6 from
+D-14-4.9). **Codex Phase B trajectory (in progress)**:
+R1 MINOR / Lockability:yes / Close-out:NO 3 findings
+(0B+3M+0N; §8.0 field-count off-by-one + D-14-7
+audit section pre-lock header label + Q5 evidence
+ALLOW_LIST inconsistency; all closed) -> R2 MINOR /
+Lockability:yes / Close-out:NO 1 finding (0B+1M+0N;
+recap-text-duplication tail -- §3 status summary +
+`memory.md` cluster-status sentence; all closed) ->
+R3 MINOR / Lockability:yes / Close-out:NO 1 finding
+(0B+1M+0N; four lagging surfaces at R1 trajectory;
+all closed) -> R4 MINOR / Lockability:yes /
+Close-out:NO 1 finding (0B+1M+0N; same four
+surfaces shifted one round -- R3 bumped to R2-
+trajectory wording lagged canonical R3; all closed)
+-> R5 MINOR / Lockability:yes / Close-out:NO 1
+finding (0B+1M+0N; same shift forward -- R4 bumped
+to R3-trajectory wording lagged canonical R4;
+**cascade-breaking fix applied -- the four lagging
+surfaces bumped to the full R5 trajectory at once
+including R5 itself + "Phase B R6 close-out
+pending" rather than stopping at R4**; all closed).
+Cluster crossed Lockability:yes at R1 (no BLOCK
+findings; architectural picture stable since R1).
+**Phase 1 spec closure status**: D-14-7 closes the
+first surgical-fix cluster (external-review Finding
+#2). The remaining stage-14 work is two more
+surgical-fix clusters (D-14-8 stale-forward-pointer
+retarget per Finding #3; D-14-9 Specimen 70 split
+per Finding #4) and `core::ffi::c_void` rejection
+enforcement; after those clusters lock, the per-
+stage cross-cluster Codex review on the full
+`spec-snapshot.md` + `pretty-printer-snapshot.md`
+runs (anticipated 2-4 rounds), then hand-off to
+merger per §5.5 7-step contract. **Next concrete
+action**: kick off D-14-7 Phase B R6 close-out
+Codex review verifying R5 fixes land cleanly. R6
+anticipated at 0 findings APPROVE / Close-out:YES
+(the cascade-breaking fix synchronises the four
+lagging surfaces with the canonical R5 trajectory;
+D-14-6's R6 closed at zero findings under the same
+pattern).
+
+Previous: 2026-05-13. **D-14-6 cluster LOCKED at
+per-stage Phase B R6 APPROVE / Lockability:yes /
+Close-out:YES (2026-05-13).** 6-round Phase B
+trajectory closed (2026-05-13): R1 BLOCK 6 findings
+(2B+4M+0N) -> R2 MINOR / Lockability:yes 3 findings
+(0B+3M+0N; recap-text-duplication cascade) -> R3
+MINOR / Lockability:yes 1 finding (0B+1M+0N; residual
+pre-lock planning text) -> R4 MINOR / Lockability:yes
+2 findings (0B+2M+0N; §10.3.7 worked-example drift +
+stale Next-action sentence) -> R5 MINOR /
+Lockability:yes 2 findings (0B+2M+0N; audit
+worked-example body envelope blank line + recap
+surfaces lagging R4 trajectory) -> R6 APPROVE 0
+findings. **Total: 14 distinct findings closed
+across R1-R5 (2B+12M+0N).** All 6 D-14-6 sub-decisions
+remain LOCKED at Phase A unchanged -- Phase B revisions
+were spec-text consistency (recap-text-duplication
+cascade), not architectural reframings. **No stage-13
+D-tag REOPENs introduced** by any R1-R5 fix (D-14-6.6
+zero-REOPEN claim holds across the entire trajectory).
+**Phase 1 spec closure status**: D-14-6 closes the
+third and final composer-renderer cluster per
+stage-13 D-13-4.6. The composer trio (`render_const`
+/ `render_instance` / `render`) is now fully
+specified. Spec contributions:
+`pretty-printer-snapshot.md` §10.3 (7 subsections
+§10.3.1-§10.3.7) + §9.12 specimens 129-133 (5
+specimens) + §1.3 + §8 finalisations +
+`stage-14/prior-art/rustc-render.md` (6 Q-tags) +
+`rustc-references.md` Top-level render section
+(4 file:line landmarks).
+
+Previous: 2026-05-13. **D-14-6 cluster Phase A
+LOCKED (6/6 sub-decisions) + Phase B R5 MINOR /
+Lockability:yes / Close-out:NO (2026-05-13).**
+Top-level `render(&self) -> String` composer renderer
+-- the third and final composer-renderer cluster per
+stage-13 D-13-4.6 (`render_const` D-14-4 done;
+`render_instance` D-14-5 done; top-level `render`
+D-14-6 in Phase B). All 6 sub-decisions LOCKED at
+Phase A: **D-14-6.1** API signature
+`render(&self) -> String` zero-argument (no `single`
+filter, no write-sink form); **D-14-6.2 (load-bearing)**
+iteration order walking
+`model.instances.iter_enumerated()` in canonical F4-2
+order per `spec.md` §16.3 (no render-time re-sort;
+F4-2 already groups by `regseq_instance_kind_rank`
+per §9.3); **D-14-6.3** per-Instance separator --
+top-level composer emits `"\n\n"` between consecutive
+`render_instance(id)` outputs (which end at `}` or
+`;` with no trailing newline per the §9.11 specimen
+contract), no leading or trailing separator (first-flag
+pattern adapted from rustc's `write_mir_pretty` at
+`pretty.rs:328-335`); **D-14-6.4** file-level envelope
+-- no header / no trailer / no metadata wrapper, output
+starts at first rendered byte of first
+`render_instance` output (Stream-1 + Stream-2 attribute
+block per §10.2.7 when non-empty, otherwise the
+kind-keyword line) and ends at last rendered byte (`}`
+or `;`) with no trailing newline injected; **D-14-6.5**
+empty-model case -- empty `String` `""` identity (loop
+never runs, no separator emitted); **D-14-6.6**
+cross-stage friction outcome -- zero new stage-13
+D-tag REOPENs (the §9.11 specimens already established
+the no-trailing-newline contract; D-14-5's
+`render_instance` signature unchanged). **Codex Phase
+B trajectory (in progress)**: R1 BLOCK 6 findings
+(2B+4M+0N; all closed -- separator algorithm
+re-architected to make composer own `"\n\n"` bytes;
+envelope wording corrected to acknowledge attribute-
+block first line vs keyword line; D-tag wording strip;
+hex Uint -> decimal in worked examples; codegen
+ordering qualification; const-items mis-classified as
+empty-`mir_keys` example) -> R2 MINOR /
+Lockability:yes / Close-out:NO 3 findings (0B+3M+0N;
+recap-text-duplication cascade across D-14-6.1 sketch
++ D-14-6.3 audit narrative + prior-art Q3/Q4 reasoning
++ D-14-6.4 audit + cluster opening D-14-6.2
+sub-decision allocation + stage-14/status.md +
+top-level status.md) -> R3 MINOR / Lockability:yes /
+Close-out:NO 1 finding (0B+1M+0N; residual pre-lock
+planning text in `discussions.md` D-14-6 cluster
+opening Question paragraph + `memory.md` D-14-6 agenda;
+both rewritten to post-lock state) -> R4 MINOR /
+Lockability:yes / Close-out:NO 2 findings (0B+2M+0N;
+§10.3.7 worked-example output trailer claimed implicit
+trailing `\n` contradicting §10.3.4 + missing
+function-body blank line; `stage-14/status.md` Next
+action trajectory sentence stale at R2) -> R5 MINOR /
+Lockability:yes / Close-out:NO 2 findings (0B+2M+0N;
+D-14-6.3 + D-14-6.4 audit worked examples in
+`discussions.md` still missing function-body envelope
+blank line that R4 added to canonical §10.3.7; three
+recap surfaces lagged behind R4 trajectory).
+**Cross-stage friction**: none new from D-14-6
+R1+R2+R3+R4+R5 (D-14-6.6 zero-REOPEN claim holds). Pending merger-time flips unchanged: D-9-10
+(D-14-2.5), D-13-6 (D-14-4.9), plus D-12-1.3 / D-9-9 /
+D-13-4.3 (D-14-7 when locked). Spec contributions:
+new `pretty-printer-snapshot.md` §10.3 (7 subsections
+§10.3.1-§10.3.7) + §9.12 specimens 129-133 (5
+specimens covering empty / single-Instance / multi-
+Instance mixed rank / same-rank-group / full per-rank
+spectrum) + §1.3 composer listing + §8 ownership-table
+row finalisations + new `stage-14/prior-art/rustc-
+render.md` (6 Q-tags Q1-Q6) + `rustc-references.md`
+new Top-level render section (4 file:line landmarks).
+Active focus advances to **D-14-6 Phase B R6 close-out
+Codex review** -- verifying R5 fixes land cleanly +
+final close-out check; on R6 APPROVE / Close-out:YES,
+the cluster closes Phase B and D-14-6 finalises as
+the final composer-renderer cluster. See
+`stage-14/status.md` "Next action" for the detailed
+R6 plan.
+
+Previous: 2026-05-13. **D-14-5 cluster LOCKED at
+per-stage Phase B R4 APPROVE / Lockability:yes /
+Close-out:YES (2026-05-13).**
+`render_instance(InstanceId) -> String` composer
+renderer per-variant specs for the closed 6-variant
+`InstanceKind` enum -- the second of stage 14's
+three composer-renderer clusters per stage-13
+D-13-4.6 (`render_const` D-14-4 done; `render_instance`
+D-14-5 just done; top-level `render` D-14-6 next).
+All 8 sub-decisions (D-14-5.1 through D-14-5.8)
+LOCKED in a single Phase A drafting session
+(2026-05-13): **D-14-5.1** (load-bearing single-arg
+API `render_instance(InstanceId) -> String`;
+`InstanceKind` embeds enough per-variant context so
+no pair-form needed; mirrors rustc_public
+`Instance::emit_mir(self, w)` precedent);
+**D-14-5.2** (load-bearing Function variant envelope
+across 5 aspects: attribute block via §10.2.7 +
+keyword decoration `[unsafe ][extern "ABI" ]fn` +
+arg-list grammar including `c_variadic` trailing
+`, ...` + always-render `-> <ret>` + body-vs-
+declaration trailer on `body: Option<Body>`);
+**D-14-5.3** (Static variant
+`[<attrs>]static [mut ]PATH: <ty>[ = <render_const(init, ty)>];`
+with mutability from `ItemKind::Static`, `init=None`
+foreign-declaration trailer per Q5 evidence);
+**D-14-5.4** (Const variant
+`[<attrs>]const PATH: <ty> = <render_const(value, ty)>;`
+with `value` always populated per stage-12 D-12-2);
+**D-14-5.5** (load-bearing ADT variants Struct /
+Enum / Union -- Option B full-definition body from
+§11 Layout chosen over Option A header-only per
+prior-art Q7 evidence; three-case dispatch on
+`(fields.len(), first-field-name-pattern per §3.4)`
++ `EnumShape` Empty / Single / Multiple dispatch +
+per-variant ctor forms unit / tuple / named-field;
+v1 deferrals: `#[repr(...)]` decoration not
+rendered, enum variant discriminant values not
+rendered, field offsets / pack not surfaced,
+empty-struct-form three-way disambiguation
+collapses to unit `struct Foo;`); **D-14-5.6**
+(attribute block composition rule -- two-stream
+interleaving: Stream 1 (Item-flag, §5.3 table-row
+order via the §5.6 shared helper) precedes Stream 2
+(`domain_attrs.item_attrs[item]` Vec-index order
+per §3.6.2 D-14-3.3); per-`AttrData::Intrinsic`
+render table for stage-14 vocabulary
+(`Intrinsic(IntrinsicKind::Log(LogLevel))` ->
+`#[rseq::intrinsic("log-<sev>")]` with dash-form
+NAME); phase-2 stages append per-family render
+rules); **D-14-5.7** (load-bearing layering
+boundary -- composer-from-scratch locked:
+`render_instance` does NOT call `render_item`;
+shared internal helper `render_item_attribute_block(item:
+ItemId) -> String` factored from §5.3 / §5.5 keeps
+both renderers' Stream 1 attribute streams
+byte-identical without API coupling);
+**D-14-5.8** (cross-stage friction outcome --
+**zero new stage-13 D-tag REOPENs from D-14-5
+drafting**; helper factor-out is additive spec
+text within §5, not a table modification; pending
+merger-time flips from prior clusters unchanged).
+**Codex Phase B review closed at R4 APPROVE with
+Lockability:yes / Close-out:YES (4 rounds; 13
+distinct findings closed: 4 BLOCK + 7 MINOR + 2
+NIT; 5 R1/R2/R3 continuations + 8 fresh -- the
+recap-text-duplication pattern matching D-14-4 with
+audit-narrative + sigil-table + forward-pointer
+spots surfacing across rounds)**. **Cross-stage
+friction**: none new from D-14-5; pending merger-
+time flips unchanged: D-9-10 (D-14-2.5), D-13-6
+(D-14-4.9), plus D-12-1.3 / D-9-9 / D-13-4.3 (when
+D-14-7 locks). Spec contributions:
+`pretty-printer-snapshot.md` §1.3 composer listing
+finalised + §3.3 sigil row finalised + §5.6 new
+shared helper subsection + §8 ownership table rows
+finalised (`render_instance`, `render_item`, new
+`render_item_attribute_block` row) + §10.2 intro +
+§10.2.1-§10.2.7 per-variant + attribute-composition
+subsections + §11 cross-reference retargeted +
+§9.11 specimens 110-128 (19 specimens);
+`spec-snapshot.md` §9.4 Consumer-side-rendering
+cross-reference paragraph (mirrors §9.7 Const
+pointer added at D-14-4). Active focus advances to
+**D-14-6** (`render(&self) -> String` top-level
+composer renderer; iterates `model.instances` in
+Q2 codegen-keyed order, composes per-Instance via
+the now-locked `render_instance`) -- the third and
+final composer-renderer cluster per stage-13
+D-13-4.6. See `stage-14/status.md` "Next action"
+for the detailed D-14-6 scope.
+
+Previous: 2026-05-13. **D-14-4 cluster LOCKED at
+per-stage Phase B (2026-05-13).** `render_const(ConstId,
+TyId) -> String` composer renderer per-arm specs for the
+closed 11-variant `Const` enum -- the first of stage 14's
+three composer-renderer clusters per stage-13 D-13-4.6.
+All 12 sub-decisions (D-14-4.1 through D-14-4.12)
+LOCKED in a single Phase A drafting session:
+**D-14-4.1** (load-bearing pair-form API signature
+`render_const(ConstId, TyId) -> String`; consumer-context
+TyId required for type-context-dependent arms; mirrors
+rustc's `pretty_print_const_value_tcx(tcx, ct, ty, fmt)`
+at `rustc_middle/src/mir/pretty.rs:1851`); **D-14-4.2**
+(scalar variants Bool / Char / Int / Uint / Float with
+rustc-mirrored underscore-decimal convention --
+`42_i32`, `42_u32`, `1.5f32`, `'a'` -- + decimal /
+char / finite-float precision rules); **D-14-4.10**
+(Int / Uint sentinel collapsing: 18-entry
+rustc-mirrored sentinel set -- `i8::MIN` through
+`isize::MAX` for signed; `u8::MAX` through
+`usize::MAX` for unsigned; `Isize`/`Usize`
+target-pointer-width-independent); **D-14-4.11**
+(integer hex form admission: decimal-only for v1;
+future-extension boundary recorded but not
+pre-allocated); **D-14-4.12** (Float non-finite
+rustc-mirrored underscore-broken form `inf_f<width>`
+/ `-inf_f<width>` / `NaN_f<width>`; NaN bit-pattern
+collapsing; negative zero is finite); **D-14-4.3**
+(ZST per-arm exhaustive consumer-Ty dispatch across 7
+categories of ZST Ty; composite-ZST cases recurse on
+the unique `Const::ZST` canonical-form ConstId per
+§9.7; cannot-occur cases panic; **RegseqModel-richer
+than rustc** for most ZST consumer Tys where rustc
+falls back to debug); **D-14-4.7** (NullPtr per-arm
+rustc-mirrored typed-cast form `0x0 as
+<render_ty(consumer_ty)>` across 5 admissible
+thin-pointer consumer Ty kinds; fat-pointer consumer
+Tys cannot occur per the bridge's single-scalar
+dispatch); **D-14-4.8** (Reloc per-arm dispatch on
+resolved Instance kind + `item_synthetic_kinds`;
+Function `Ty::FnDef` bare path / Function
+`Ty::FnPtr` typed-cast / Static typed-cast /
+ConstMemoryStatic `b"..."` byte-string special case
+rustc-mirrored); **D-14-4.4** (Aggregate per-arm
+consumer-Ty dispatch on Array / Tuple / Struct
+structural + `&str` / `&[u8]` fat-pointer special
+cases per `mir/pretty.rs:1874-1888`); **D-14-4.5**
+(EnumValue per-arm `EnumShape::Single`/`Multiple`
+variant dispatch with unit / tuple / named-field
+ctor forms per §3.4); **D-14-4.6** (Bytes per-arm
+all-uninit shortcut + `*b"..."` byte-array case +
+**RegseqModel-richer structural fallback**
+`bytes![<byte_0>, ...]` with per-byte three-state
+forms); **D-14-4.9 (load-bearing): operand-callsite
+wiring with three-signature D-13-6 REOPEN cascade**
+-- `render_operand(&Operand, &Body) -> String` ->
+`render_operand(&Operand, &Body, expected_ty: TyId)`,
+`render_rvalue(&Rvalue, &Body) -> String` ->
+`render_rvalue(&Rvalue, &Body, expected_ty: TyId)`,
+`render_generic_args(&GenericArgs) -> String` ->
+`render_generic_args(&GenericArgs, item: ItemId)` --
+plus a small bridge-side invariant added at
+`spec-snapshot.md` §9.7 (auxiliary `Ty::Ptr(pointee,
+Not)` + `Ty::Uint(Usize)` interned in `model.types`
+when producing `Aggregate([Reloc, Uint])` for
+fat-pointer consumer Tys per `spec.md` §10's
+closed-Ty + all-interned-TyId invariant).
+Spec contributions: new
+`pretty-printer-snapshot.md` §10 Composer renderers
+(§10.1 `render_const` intro + §10.1.1 - §10.1.8
+subsections), §7.2 / §7.3 / §6.7 signature extensions
++ §7.4 / §7.6 / §7.7 / §7.9 caller derivation
+columns + §6.4 ADT callsite updates + §8 ownership
+table updates for all three revised signatures + §11
+Cross-references (renumbered from §10) + new §9.10
+specimens (34 specimens 76-109 covering all locked
+arms) + §9 specimen revisions to underscore-decimal
+form; `spec-snapshot.md` §9.7 bridge-interning
+invariant paragraph addition; `rustc-references.md`
+new "Const rendering (MIR pretty-printer)" section
+with 8 file:line landmarks. **Codex Phase B review
+closed at R4 APPROVE with Lockability:yes /
+Close-out:YES (4 rounds; 11 distinct findings closed:
+3 BLOCK + 4 MINOR + 2 NIT + 2 regression-continuations
+of R1.3 the longest-tail finding)**. **Cross-stage
+friction**: **D-13-6 REOPENED** by D-14-4.9
+three-signature cascade (annotation "revised in
+stage 14 D-14-4.9: `render_operand` and
+`render_rvalue` signatures extended with
+`expected_ty: TyId`; `render_generic_args` signature
+extended with `item: ItemId`"); D-9-10 REOPEN
+unchanged from D-14-2.5. Active focus advances to
+**D-14-5** (`render_instance(InstanceId) -> String`
+composer renderer) -- the second of the three
+composer-renderer clusters per D-13-4.6. See
+`stage-14/status.md` "Next action" for the detailed
+D-14-5 scope.
+
+Previous: 2026-05-13. **D-14-10 cluster LOCKED at
+per-stage Phase B (Pass B R3 MINOR; 2026-05-13).**
+Generic-C backend codegen carve-out -- relocates the
+phase-1 generic-C backend lowering rules (previously
+mixed into `spec-snapshot.md`) into a new dedicated
+companion file `generic-c-backend-snapshot.md`,
+keeping the IR-side spec focused on the producer
+surface. 7 sub-decisions (D-14-10.1 through D-14-10.7
+per `stage-14/discussions.md`) cover the relocation
+contract. Cross-stage friction: none. Inbound
+expectations filed to `stage-15` (Linux logging
+binding), `stage-16` (MMIO worked-example +
+generic-C backend MMIO lowering), `stage-17`
+(atomic-acquire worked-example + generic-C backend
+atomic lowering).
+
+Previous: 2026-05-13. **D-14-2 cluster LOCKED at
 per-stage Phase B (2026-05-13).** Diagnostic-logging
 vocabulary + bridge contract -- the sole phase-1 domain
 extension carve-out -- is now closed at the spec side.

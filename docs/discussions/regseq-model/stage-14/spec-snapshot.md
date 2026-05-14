@@ -1,5 +1,9 @@
 # RegseqModel Specification
 
+> **Snapshot at close of stage 14 (2026-05-13).** This file is
+> frozen as a historical artifact preserving the stage-14
+> contribution. The current spec lives in top-level `spec.md`.
+
 Live snapshot of the RegseqModel spec — what RegseqModel IS today,
 organised by topic. History (audit trail of decisions, alternatives
 considered, reasoning) lives in `discussions.md`. Per-stage
@@ -1346,12 +1350,16 @@ impl RegseqModel {
         self.items[self.instances[id].item].span
     }
 
-    // Source-level metadata fields per D-12-1.3
+    // Source-level metadata fields per D-12-1.3 (as
+    // revised by stage-14 D-14-7: the `is_naked` field
+    // and its `instance_is_naked` pull-through were
+    // dropped when `#[naked]` was moved to v1 rejection at
+    // Item translation; no helper survives for an
+    // unrepresentable Item shape).
     pub fn instance_linkage(&self, id: InstanceId) -> Linkage { /* ... */ }
     pub fn instance_link_section(&self, id: InstanceId) -> Option<StringId> { /* ... */ }
     pub fn instance_inline_hint(&self, id: InstanceId) -> InlineHint { /* ... */ }
     pub fn instance_is_unsafe(&self, id: InstanceId) -> bool { /* ... */ }
-    pub fn instance_is_naked(&self, id: InstanceId) -> bool { /* ... */ }
 
     // Lang-item flags
     pub fn instance_is_phantom_data(&self, id: InstanceId) -> bool { /* ... */ }
@@ -1382,8 +1390,11 @@ impl RegseqModel {
 }
 ```
 
-14-helper v1 baseline inventory (13 from stage-12 D-12-1.8
-+ 1 domain-attribute pull-through from stage-14 D-14-1.6).
+13-helper v1 baseline inventory (12 from stage-12 D-12-1.8
+as revised by stage-14 D-14-7 -- the original 13-helper
+list dropped `instance_is_naked` alongside the `is_naked`
+field deletion at §8.0 -- plus 1 domain-attribute pull-
+through from stage-14 D-14-1.6).
 Composes with §23.6.2 `callee_fn_sig` helper (existing
 convention). The `instance_<field>()` naming prefixes the
 input domain; field names mirror the underlying Item field
@@ -1783,13 +1794,15 @@ Consequences:
    Rust attributes or language built-ins -- none from
    `#[rseq::*]`.
 
-3. **External-review Finding #2 (`#[naked]` rejection in
-   v1; D-14-7 territory) is consistent with this rule.**
-   `#[naked]` is a Rust attribute (not `#[rseq::*]`); its
-   typed-Item-field representation was on the
-   typed-fields side; the rejection removes the field
-   from D-12-1.3 without migrating it to
-   `DomainAttrTables`.
+3. **Stage-14 D-14-7 (`#[naked]` rejection in v1) is
+   consistent with this rule.** `#[naked]` is a Rust
+   attribute (not `#[rseq::*]`); its typed-Item-field
+   representation was on the typed-fields side; the
+   rejection removed the original `is_naked` field from
+   D-12-1.3 (per §8.0 schema, as revised) without
+   migrating it to `DomainAttrTables`. The Item-
+   translation rejection row lives at §15.1; no
+   `AttrData::Naked` variant exists.
 
 #### 3.6.7 Per-family target-table mapping
 
@@ -1817,8 +1830,11 @@ stages own the actual commitments at their merger close):
 #### 3.6.8 Cross-references
 
 - §3.5.2 -- Instance-side pull-through helpers; stage 14
-  introduces the 14th helper `instance_intrinsic(...)`.
-  Phase-2 stages append per-family pull-through helpers.
+  introduces `instance_intrinsic(...)` as the 13th helper
+  (12 surviving stage-12 D-12-1.8 helpers after D-14-7's
+  `instance_is_naked` deletion + the new
+  `instance_intrinsic` from D-14-1.6). Phase-2 stages
+  append per-family pull-through helpers.
 - §3.3 step 10 -- Phase B validation walk for
   `domain_attrs`.
 - §8.0 (Item schema) -- the `#[rseq::intrinsic(...)]`
@@ -2126,7 +2142,8 @@ pub struct Item {
 
     // Function-relevant flags (Item-level with sensible
     // defaults for non-fn variants per D-12-1.3 -- a `static`
-    // is never naked or inline; defaults are well-defined).
+    // has no inline hint and is never `unsafe fn`; defaults
+    // are well-defined).
     //
     // `inline_hint` corresponds to `#[inline]` /
     // `#[inline(always)]` / `#[inline(never)]` per rustc's
@@ -2141,12 +2158,17 @@ pub struct Item {
     // C codegen (C has no `unsafe` keyword).
     pub is_unsafe:      bool,
 
-    // `is_naked` corresponds to `#[naked]` per rustc's
-    // `CodegenFnAttrFlags::NAKED`. C-codegen emits naked
-    // functions without prologue/epilogue (raw asm body
-    // only); load-bearing for ISR entry stubs in kernel
-    // drivers.
-    pub is_naked:       bool,
+    // No `is_naked` field. Per stage-14 D-14-7, `#[naked]`
+    // is rejected at Item translation (§15.1 Item-
+    // translation rejection row); a `#[naked]` Item's body
+    // is structurally a single `TerminatorKind::InlineAsm`
+    // terminator which stage-9 D-9-9 already rejects at
+    // §23.6.1, leaving no representable IR shape for naked
+    // functions in v1. Future revision under driver
+    // pressure may add ISR-stub synthesis through the
+    // `#[rseq::interrupt(...)]` domain extension; until
+    // then, the typed-fields side carries no naked entry
+    // and `Item` admits no parallel `is_naked` marker.
 
     // Lang-item flags (§8.2). Load-bearing for codegen
     // lowering decisions; populated by the bridge from rustc's
@@ -2246,12 +2268,20 @@ tuple). Per-`InstanceKind` rich data per §9.4:
   carries the per-mono `Ty::Struct/Enum/Union` reference.
 
 **No general attribute table on `Item` (stage-3 scope);
-typed Item fields per stage-12; structured DSL property
-attributes per stage-14.** The 8 Item-level fields above
-(`linkage`, `link_section`, `inline_hint`, `is_unsafe`,
-`is_naked` + 3 lang-item flags + `opaque_handle_eligible`)
-are the typed Item-level metadata stage 12 commits to per
-stage-1 R5.2. Declarative DSL property attributes
+typed Item fields per stage-12 as revised by stage-14;
+structured DSL property attributes per stage-14.** The 7
+typed source-level metadata fields above (`linkage`,
+`link_section`, `inline_hint`, `is_unsafe` + 3 lang-item
+flags) plus the bridge-computed `opaque_handle_eligible`
+outcome (which derives from layout + use-site analysis,
+not from a Rust attribute) are the typed Item-level
+metadata stage 12 committed to per stage-1 R5.2, as
+revised by stage-14 D-14-7 (dropping the original
+`is_naked` field when `#[naked]` was moved to v1 rejection
+at Item translation; see §15.1 Item-translation rejection
+row). The original D-12-1.3 framing carried 8 typed
+source-level fields (the 7 above plus `is_naked`); D-14-7
+trims that surface to 7. Declarative DSL property attributes
 (`#[rseq::mmio(access_width = 32)]`,
 `#[rseq::interrupt(trigger_type = "...")]`, etc.) are
 **stage-14 territory (now locked at §3.6)**: stage 14
@@ -2425,8 +2455,13 @@ newtype_index! { pub struct InstanceId {} }
   - `Struct` / `Enum` / `Union`: bridge-constructed name derived
     deterministically from the rendered `DefPath` plus the
     canonical `ArgsKey` (§12.3), encoded into a C-identifier-safe
-    form. Type-definition instances have no rustc symbol; the
-    construction rule is pinned in stage 13 (codegen).
+    form. Type-definition instances have no rustc symbol;
+    phase-1 commits to determinism + uniqueness only; the full
+    normative algorithm (escaping for C keywords / non-ASCII /
+    leading digits / double underscores, hash-suffix collision-
+    resistance scheme, length cap and maximum-name fallback) is
+    the C-backend spec's responsibility and is out of phase-1
+    scope.
   Uniqueness across `instances` is guaranteed by construction.
   Custom naming strategies that walk `(item.def_path, generic_args)`
   must include `InstanceId` or `emission_name` as a disambiguating
@@ -2638,6 +2673,20 @@ D-12-1.4) plus dispatch metadata (`flavor`, `virtual_idx`);
 `Union` carry the per-mono `Ty::Struct/Enum/Union`
 reference. **No separate `bodies` table** -- bodies live
 structurally inside `InstanceKind::Function` per Option B.
+
+**Consumer-side rendering.** Per stage-14 D-14-5,
+the `render_instance(InstanceId) -> String` composer
+renderer dispatches per `InstanceKind` variant. Definition-site
+rendering (full-body form for `Struct` / `Enum` /
+`Union` per D-14-5.5 Option B; locals + basic-blocks
+envelope for `Function` per D-14-5.2; single-line
+value composer for `Static` / `Const` per
+D-14-5.3 / D-14-5.4) lives in `pretty-printer.md`
+§10.2 with per-variant subsections (§10.2.1 -
+§10.2.6). The use-site path-only form for ADT
+references inside other types (`Ty::Struct.item`
+contexts, function-signature arg types, etc.) lives
+at `pretty-printer.md` §6.4 unchanged.
 
 **Per-`InstanceKind::Function` accessor.** D-12-1.6 hybrid
 pattern: convenience method `as_function() ->
@@ -3365,6 +3414,24 @@ mir::ConstValue::Indirect { alloc_id, offset = 0 }    ->  Reloc(synth_static_ins
 (`Static`); `def_path_hash`: the `DefPathHash` synthesised
 per §13.4 with `content_hash.0.to_be_bytes()` payload;
 `args_key: ArgsKey::EMPTY`; `fn_shim_disambig: 0`.
+
+**Bridge interning invariant for fat-pointer auxiliary
+types** (per stage-14 D-14-4.9, R1-revised). When the
+bridge produces a `Const::Aggregate([Reloc, Uint])`
+value for a fat-pointer consumer Ty -- the `Slice {
+data, meta }` dispatch above + the analogous `Ref(_,
+dyn Trait)` synthesis paths -- it MUST ensure both
+`Ty::Ptr(pointee, Mutability::Not)` (the data pointer
+type, for the consumer's pointee) and
+`Ty::Uint(UintKind::Usize)` (the metadata type) are
+present in `model.types` (interning them via
+`TyInterner` if absent). This invariant exists so the
+rendering surface can resolve per-child Tys for the
+fat-pointer fallback case via `TyInterner` lookup
+without constructing non-interned TyIds; the closed-Ty
++ all-interned-TyId invariant from §10 is preserved.
+Bridge validation at §3.3 Phase B step 6 (`TyInterner`
+identity uniqueness) covers the resulting entries.
 
 **Pointee type at the use site.** For both Slice and
 Indirect-thin dispatch, the synthesised Static is type-erased
@@ -4576,8 +4643,9 @@ For trait objects (`Ty::Dynamic`), the bridge synthesises:
   - **Method shim and drop shim ABI is `FnAbi::C` uniformly.**
     All bridge-synthesised vtable shim Function Items (method
     shims and the drop-in-place shim) use `FnAbi::C`,
-    matching the vacant-slot canonical signature and the C
-    examples in Appendix A.6. Their erased signatures are
+    matching the vacant-slot canonical signature; C-side
+    worked examples for vtable-shim lowering live in
+    `generic-c-backend.md` (per D-14-10 carve-out). Their erased signatures are
     checked with `CAbiPositionAdmissible` (§14.5) **after**
     receiver erasure to `*mut ()`. A trait whose dispatchable
     method's signature (with the source receiver replaced by
@@ -5799,9 +5867,9 @@ set *before* generic struct/enum/union translation:
 2. **DSL-rejected ADTs**: `Box` (via
    `adt_def.is_box()` / `IS_BOX`), `core::ffi::c_void` (via
    `tcx.is_lang_item(LangItem::CVoid)`),
-   `core::sync::atomic::Atomic*` (via canonical-name match),
-   `Pat`, `UnsafeBinder`, `Foreign`, `Coroutine` family — see
-   §15.1 rejection table for the full set.
+   `core::sync::atomic::Atomic*` (via canonical-name match) —
+   see §15.1 rejection table for the full set of ADT-backed
+   DSL-rejected types.
 3. **Generic Adt translation** runs only if no special rule
    above applies, dispatching on the rustc `AdtDef::adt_kind()`
    to one of:
@@ -5813,18 +5881,69 @@ This ordering is normative: implementation must check the
 special set first, otherwise generic translation accidentally
 admits rejected core types.
 
+**Non-ADT TyKind rejections.** `Pat`, `UnsafeBinder`,
+`Foreign`, and the `Coroutine` family (`Coroutine`,
+`CoroutineClosure`, `CoroutineWitness`) are not
+`TyKind::Adt` variants — they are independent top-level
+`TyKind` variants. The bridge rejects them at the
+top-level `TyKind` match-arm dispatch, before the
+`TyKind::Adt` arm runs. The §15.1 rejection table
+enumerates them alongside the ADT-backed rejections; the
+enforcement gate for these is the top-level TyKind match
+exhaustiveness, not the special-ADT dispatch ordering.
+
 ### 15.1 Rejections
 
-The bridge rejects the following at type, call, or place
-translation. Three categories overall: **non-rigid `TyKind`**
-(should not survive
+The bridge rejects the following at type, Item, call, or
+place translation. Four categories overall: **non-rigid
+`TyKind`** (should not survive
 `instantiate_mir_and_normalize_erasing_regions`; encountering
 one is a bridge bug); **rigid but DSL-rejected** (types that
 survive normalisation but lie outside the v1 driver-DSL scope);
+**Item-attribute DSL rejections** (source-level attributes
+whose codegen consequence has no representable v1 IR shape);
 and **closed `PlaceElem` vocabulary rejections** (rustc
 projection variants that are absent from our `optimized_mir`
 input or gated behind unstable features and have no v1 driver
 use case; see §19.1).
+
+**Enforcement model.** ADT-backed rejections in the
+"type translation" phase (`core::ffi::c_void`, `Box`,
+the `core::sync::atomic::Atomic*` types) are enforced
+algorithmically by the §15.0 special-ADT dispatch-
+ordering rule: the closed special-ADT check runs
+unconditionally before generic struct / enum / union
+translation, so no path through
+`TyKind::Adt(adt_def, args)` can bypass the rejection.
+The ordering rule is normative per §15.0; the rows
+below are the enumeration of which ADTs the gate
+intercepts. Non-ADT `TyKind` rejections in the
+table (`Pat`, `UnsafeBinder`, `Foreign`, the
+`Coroutine` family) are enforced at the top-level
+`TyKind` match-arm dispatch per the §15.0
+"Non-ADT TyKind rejections" paragraph (the bridge
+rejects them before the `TyKind::Adt` arm runs).
+Other type-translation rejections (e.g., HRTB-related
+rows per §17.1, C-ABI admissibility rows per §14.5)
+are enforced by their owning section's check points
+and the bridge's §3.4 construction-pipeline ordering.
+The Item-attribute and `PlaceElem` rows are enforced
+at the Item-walk and Place-projection-walk phases per
+their respective sections.
+
+**Opaque-struct pattern.** Where a row above
+recommends the **opaque-struct pattern** (`Foreign(_)`
+and `core::ffi::c_void` rows), the pattern is a
+`#[repr(C)]` ZST struct with a single private
+zero-length-array field, e.g., `#[repr(C)] struct
+OpaqueCtx { _private: [u8; 0] }`. The bridge admits
+such a struct via the ordinary `Ty::Struct` path
+(no special-ADT-rejection rule), and downstream uses
+naturally lower to an incomplete-struct pointer at
+the C-ABI boundary per §14.5 + §8.0 invariant 19
+opaque-handle eligibility. Appendix A.1 walks the
+`*mut c_void` -> `*mut OpaqueCtx` rewrite end-to-end
+including the diagnostic shape the bridge emits.
 
 | Rejection                                                                 | Phase            | Reason                                                                                |
 | ------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------- |
@@ -5839,6 +5958,7 @@ use case; see §19.1).
 | `core::sync::atomic::Atomic*::*()` methods + `core::intrinsics::atomic_*` | call translation | use `#[rseq::intrinsic("atomic_*")]`                                                  |
 | `core::sync::atomic::{fence, compiler_fence}`                             | call translation | outside the v1 admitted intrinsic vocabulary; drivers requiring explicit ordering barriers between MMIO and normal memory are out of v1 scope |
 | `core::ptr::{read,write}_volatile`                                        | call translation | use `#[rseq::intrinsic("mmio_*")]`                                                    |
+| `#[naked]` on a function Item                                             | Item translation | recognised via `tcx.codegen_fn_attrs(did).flags.contains(CodegenFnAttrFlags::NAKED)`; a `#[naked]` function's MIR body is structurally a single `TerminatorKind::InlineAsm` terminator (already rejected at §23.6.1 row 8 by stage-9 D-9-9), so no representable v1 IR body shape exists. Diagnostic recommends deferring to a future ISR-stub synthesis path via the `#[rseq::interrupt(...)]` domain extension (phase-2 stage 17), which will synthesise a C/asm wrapper around an ordinary Rust handler body. |
 | `extern "C" { unwind: true }` and other `ExternAbi` variants              | type translation | only `Rust` and `C` accepted (§14)                                                    |
 | `FnAbi::C` `FnSig` with non-C-ABI-admissible parameter or return type     | type translation | C ABI admissibility predicate (§14.5); `BridgeError::UnsupportedCAbiType`              |
 | `Ref`/`Ptr` to unsized pointee (`Str`, `Slice(_)`, `Dynamic{..}`) at `FnAbi::C` parameter/return | type translation | wide-pointer aggregate not idiomatic at extern "C" boundary; pass data + length/vtable as separate parameters (§14.5) |
@@ -7110,8 +7230,9 @@ encounter (§21.5.1):
   `#[thread_local]` cannot produce a working driver on the
   documented target OSes.
 - `WrapUnsafeBinder(Operand, Ty)` -- §15.1 (Type-level
-  rejection table at line 4583) rejects `Ty::UnsafeBinder`
-  at type translation; the rvalue-level rejection cascades
+  rejection table's `UnsafeBinder` row) rejects
+  `Ty::UnsafeBinder` at type translation; the rvalue-level
+  rejection cascades
   by composition (the binder type the variant wraps cannot
   enter the IR). Additional grounds: gated behind the
   unstable `unsafe_binders` feature; the binder type has no
@@ -7533,7 +7654,7 @@ error message:
 | `mir::Rvalue::CopyForDeref(_)` | Eliminated by required `EraseDerefTemps` runtime-lowering pass (listed at `rustc_mir_transform/src/lib.rs:658`; `is_required(): true` at `rustc_mir_transform/src/erase_deref_temps.rs:38`); rustc codegen `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:712`). Not in optimized_mir. |
 | `mir::Rvalue::ShallowInitBox(_, _)` | Eliminated by required `ElaborateBoxDerefs` runtime-lowering pass (listed at `rustc_mir_transform/src/lib.rs:659`; `is_required(): true` at `rustc_mir_transform/src/elaborate_box_derefs.rs:224`); rustc codegen `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:713`). Not in optimized_mir. |
 | `mir::Rvalue::ThreadLocalRef(_)` | DSL-surface rejection: `#[thread_local]` cannot produce a working driver on Linux/Zephyr targets (no TLS infrastructure exposed to driver code). |
-| `mir::Rvalue::WrapUnsafeBinder(_, _)` | §15.1 (Type-level rejection table at line 4583) rejects `Ty::UnsafeBinder` at type translation; the rvalue-level rejection cascades by composition (the binder type the variant wraps cannot enter the IR). Additional grounds: gated behind unstable `unsafe_binders` feature; binder type has no C-shape; no v1 driver-corpus precedent (Charon and mrustc both lack the analog). |
+| `mir::Rvalue::WrapUnsafeBinder(_, _)` | §15.1 (Type-level rejection table's `UnsafeBinder` row) rejects `Ty::UnsafeBinder` at type translation; the rvalue-level rejection cascades by composition (the binder type the variant wraps cannot enter the IR). Additional grounds: gated behind unstable `unsafe_binders` feature; binder type has no C-shape; no v1 driver-corpus precedent (Charon and mrustc both lack the analog). |
 | `mir::Rvalue::Ref(_, BorrowKind::Fake(_), _)` | NOPed by required `CleanupPostBorrowck` pass (NOP code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:33-43`; `is_required(): true` at `rustc_mir_transform/src/cleanup_post_borrowck.rs:88`). Fake assignments are statement-level Nops in optimized_mir. |
 | `mir::Rvalue::Cast(CastKind::PointerCoercion(MutToConstPointer \| ArrayToPointer, _), _, _)` | Rewritten to `CastKind::PtrToPtr` by required `CleanupPostBorrowck` (rewrite code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:44-60`; `is_required(): true` at `rustc_mir_transform/src/cleanup_post_borrowck.rs:88`); rustc codegen also `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:448-452`). Not in optimized_mir. |
 | `mir::Rvalue::Aggregate(box AggregateKind::Coroutine(_, _) \| CoroutineClosure(_, _), _)` | Type-level rejection in §15.1 (Coroutine / CoroutineClosure / CoroutineWitness rejected at type translation) plus runtime-lowering `coroutine::StateTransform` discharge (`rustc_mir_transform/src/lib.rs:660`). Two independent grounds. |

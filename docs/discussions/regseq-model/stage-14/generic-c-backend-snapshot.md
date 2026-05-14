@@ -1,5 +1,10 @@
 # Stage 14 generic-C backend spec snapshot
 
+> **Snapshot at close of stage 14 (2026-05-13).** This file is
+> frozen as a historical artifact preserving the stage-14
+> contribution. The current generic-C backend spec lives in
+> top-level `generic-c-backend.md`.
+
 Stage-14 working snapshot for the new `generic-c-backend.md`
 top-level merger artifact introduced by **D-14-10** (generic-C
 backend codegen carve-out). Co-equal with `spec-snapshot.md`
@@ -27,8 +32,8 @@ This file specifies how RegseqModel constructs lower to C in
 the **generic-C backend** (phase-1 implementation territory:
 hosted userspace, libc, `printf`, `main()`, host-platform
 integer conventions). The Linux kernel backend, Zephyr backend,
-etc. each get their own merger artifact under the §2
-dual-backend rule.
+etc. each get their own merger artifact under the project
+`README.md` §2 "Dual backend" rule.
 
 **Scope boundary with `spec.md` and `pretty-printer.md`:**
 
@@ -43,8 +48,8 @@ dual-backend rule.
   for the generic-C target. The output is C source code
   consumable by a host C toolchain (clang / gcc).
 
-Per the §2 "dual backend" rule, this backend is **not**
-parameterised over an OS-integration table. The Linux backend
+Per the project `README.md` §2 "Dual backend" rule, this
+backend is **not** parameterised over an OS-integration table. The Linux backend
 will *consult* the rules here as reference but maintain its
 own separate file. Integer-type lowering, OS-integration
 boundaries, and per-target call shapes differ enough that a
@@ -299,8 +304,10 @@ terminator surfaces with the phase-1 implementation sweep
 (post stage-14 close) and lands in this file alongside the
 implementation. Backends consuming the IR before that sweep
 can derive each terminator's C emission directly from the
-IR-side construct (per the §2 "store the result, not the
-input" principle).
+IR-side construct (per the project `README.md` §2
+"C semantics with information preservation" principle --
+"store the result, not the input"; see also `spec.md`
+§17.3).
 
 ---
 

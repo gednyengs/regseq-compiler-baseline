@@ -152,6 +152,82 @@ The IEEE-754 decoded float-display primitives consumed by `pretty_print_const_sc
 
 `pretty_aggregate` -- stable-IR aggregate rendering (for `Rvalue::Aggregate`, not Const, but the dispatch shape is informative). Forms: `Array` -> `[ ... ]`, `Tuple` -> `( ... )`, `Adt::Enum` -> `<def.trimmed_name()>::<variant.name()>(...)`, `Adt::Struct` -> `<variant.name()>(...)`. No 1-tuple trailing-comma treatment (StableMIR FIXME).
 
+## Instance rendering (MIR pretty-printer body envelope + per-MonoItem dispatch)
+
+Surfaced by the stage-14 D-14-5 evidence pass. Landmarks for `render_instance(InstanceId) -> String` per-variant specs across the closed 6-variant `InstanceKind` enum. Full per-question writeup at `stage-14/prior-art/rustc-instance.md`.
+
+### `rustc_middle/src/mir/pretty.rs:317-369`
+
+`write_mir_pretty(tcx, single, w)` -- top-level entry; walks `dump_mir_def_ids(tcx, single) = tcx.mir_keys(())` (body-bearing items only -- foreign items are absent). Inserts blank-line separators between items. Per-DefId: trivial-const fast path renders `const PATH: TY = const VAL;` one-liner; otherwise `tcx.instance_mir(InstanceKind::Item(did))` -> `MirWriter::write_mir_fn`. `is_const_fn` renders optimized_mir + ctfe_mir back-to-back.
+
+### `rustc_middle/src/mir/pretty.rs:384-399`
+
+`MirWriter::write_mir_fn(body, w)` -- per-body envelope. Calls `write_mir_intro` (sig + `{` + scope tree + coverage info), then per-block `write_basic_block`, then closing `}`, then `write_allocations`. This is the canonical body envelope shape RegseqModel's `pretty-printer-snapshot.md` §3.1 mirrors.
+
+### `rustc_middle/src/mir/pretty.rs:539-572`
+
+`write_mir_intro(tcx, body, w, options)` -- the `<sig> {` opener + scope-tree block (var_debug_info + let-decls + nested scopes via `write_scope_tree:403-521`) + coverage info. Closes with a blank line before the first block. Locals indexed `1..=arg_count` are skipped at the scope-tree level (they're rendered in the sig instead).
+
+### `rustc_middle/src/mir/pretty.rs:612-674`
+
+`write_mir_sig(tcx, body, w)` -- the signature emitter. Dispatches on `DefKind`: `Const | AssocConst` -> `const ` prefix; `Static { mutability: Not }` -> `static ` prefix; `Static { mutability: Mut }` -> `static mut ` prefix; promoteds -> `const ` prefix; `Fn | AssocFn | Ctor | SyntheticCoroutineBody` or `is_closure_like` -> `fn ` prefix; `AnonConst | InlineConst | GlobalAsm` -> no prefix. For function-like: `fn PATH(_1: ArgTy, ...) -> RetTy`. For static / const: `static [mut ]PATH: TY =` or `const PATH: TY =`. **Does NOT emit `unsafe` / `extern "ABI"` keywords on the signature line** -- rustc's MIR pretty-printer omits Safety + FnAbi decoration entirely. The keyword block is `<visibility> [const ] [async ] [unsafe ] [extern "ABI" ] fn` in Rust source grammar, but `write_mir_sig` emits just `fn`.
+
+### `rustc_codegen_ssa/src/mono_item.rs:29-87`
+
+`MonoItemExt::define` + `predefine` -- per-MonoItem dispatch at codegen. Three variants: `MonoItem::Fn(instance)` -> `base::codegen_instance` (the `codegen_mir` path) or `naked_asm::codegen_naked_asm` for `CodegenFnAttrFlags::NAKED`; `MonoItem::Static(def_id)` -> `cx.codegen_static`; `MonoItem::GlobalAsm(item_id)` -> `base::codegen_global_asm`. Predefine pass declares symbols (skipping naked Fns + GlobalAsm). **RegseqModel's `InstanceKind` is a 6-variant superset** of this 3-variant dispatch: it adds Struct / Enum / Union as Instances because RegseqModel emits C typedefs; rustc/LLVM emit nominal types implicitly at use sites. ADT-variant rendering has no rustc precedent.
+
+### `rustc_public/src/mir/mono.rs:14` + `:178-180`
+
+`pub enum MonoItem { Fn(Instance), Static(StaticDef), GlobalAsm(Opaque) }` (line 14). `Instance::emit_mir(self, w)` at lines 178-180: `if let Some(body) = self.body() { body.dump(w, &self.name()) } else { Ok(()) }`. **Body-bearing-only: foreign instances emit nothing**. RegseqModel cannot mirror this -- foreign declarations are emission units and must render as `[...]fn PATH(args) -> Ret;` declaration form.
+
+### `rustc_public/src/mir/pretty.rs:38-88`
+
+`function_body(writer, body, name)` -- stable-IR body envelope. Header `fn name(args) -> Ret {`; locals decl block `let mut _N: T;` / `let _N: T;` (skips arg locals); `debug NAME => _N;` lines; per-block `bbN: { stmts; terminator }`. **Caller passes `name`** -- the body doesn't know its identifier. The composer (RegseqModel's `render_instance`) supplies the path. Always uses `fn` keyword (no `static` / `const` envelope path because rustc_public's `Static` variant has no `body()`).
+
+## Top-level render (MIR pretty-printer batch entry + iteration order)
+
+Surfaced by the stage-14 D-14-6 evidence pass. Landmarks for the top-level `render(&self) -> String` composer renderer per stage-13 D-13-4.6. Full per-question writeup at `stage-14/prior-art/rustc-render.md`.
+
+### `rustc_middle/src/mir/pretty.rs:317-369`
+
+`write_mir_pretty(tcx, single, w)` -- top-level batch entry. Shape: 3-line WARNING + HINT comment header + `for def_id in dump_mir_def_ids(tcx, single)` loop with **first-flag-guarded blank-line separator between items** (no leading blank before first item; no trailing blank after last item). Per-DefId dispatch is trivial-const fast path OR `write_mir_fn(body, w)` (covered above). `single: Option<DefId>` parameter filters to one body; `None` means walk all `mir_keys`. **RegseqModel's `render(&self)` is the no-filter analog** -- single-Instance dispatch is already covered by D-14-5's `render_instance(InstanceId)`.
+
+### `rustc_mir_transform/src/lib.rs:328-359`
+
+`fn mir_keys(tcx) -> FxIndexSet<LocalDefId>` -- collects body-owners from `tcx.hir_body_owners()` (HIR-walk source order), filters out `GlobalAsm`, appends coroutine-by-move bodies + tuple-struct ctors at the end. `FxIndexSet` preserves insertion order. **Iteration order is HIR-walk source-declaration order, NOT content-keyed sort.** RegseqModel's `model.instances` is strictly more deterministic: F4-2 sorted by `RegseqInstanceKey` per `spec.md` §16.3, with rank-grouping baked in (Functions before Statics before Consts before Structs/Enums/Unions per §9.3 `regseq_instance_kind_rank`). `render(&self)` walks `instances.iter_enumerated()` in native order; no re-sort.
+
+### `rustc_middle/src/mir/mono.rs:508-574`
+
+`MonoItem::items_in_deterministic_order` -- codegen-time per-CGU sort with **two modes** gated on `tcx.sess.opts.unstable_opts.codegen_source_order` (`mono.rs:553`). **Default**: `items.sort_by_cached_key(|&(i, _)| i.symbol_name(tcx))` at `mono.rs:571` -- symbol-name only. **`-Z codegen-source-order`**: `(Option<Span>, SymbolName)` `ItemSortKey` at `mono.rs:514-550` -- span first, symbol-name tiebreak. Per-CGU, not per-crate. **Supporting evidence for D-14-6.2's iteration-order choice**, not load-bearing -- rustc's own consensus is "sort upstream; don't re-sort at every consumer," with the upstream sort key varying by mode.
+
+### `rustc_public/src/mir/pretty.rs` (entire file)
+
+**NO top-level batch renderer.** Stable-IR has `function_body` (per-body envelope, above) + `Instance::emit_mir(&self, w)` at `mono.rs:178-180` (per-Instance); no analog of `write_mir_pretty`. Stable-IR consumers write their own iteration loop over `crate.collect_mono_items()`. **Confirms RegseqModel's `render(&self)` top-level composer is genuinely RegseqModel-new at the stable-public-IR tier**, mirroring D-14-5's ADT-variant rendering finding (no rustc precedent for nominal-type rendering at the Instance level either).
+
+## `#[naked]` handling
+
+Surfaced by the stage-14 D-14-7 evidence pass. Landmarks for the `#[naked]` rejection at Item-translation per external-review Finding #2. Full per-question writeup at `stage-14/prior-art/rustc-naked.md`.
+
+### `rustc_attr_parsing/src/attributes/codegen_attrs.rs:221-333`
+
+`NakedParser` -- attribute parser for `#[naked]`. Single-segment `sym::naked` (no tool prefix); template `Word` (no arguments); allowed targets `Fn` + `Method(Inherent|Trait{body:true}|TraitImpl)`. Emits `AttributeKind::Naked(Span)` at line 332. `finalize(...)` runs the ALLOW_LIST cross-attribute compatibility pass at lines 261-293; tool attributes (`#[rseq::*]`) pass the allow check unconditionally at line 300. **rustc enforces target-kind + attribute-combination legality before the bridge observes the result.**
+
+### `rustc_middle/src/middle/codegen_fn_attrs.rs:167`
+
+`CodegenFnAttrFlags::NAKED = 1 << 2` -- the source-of-truth flag bit. Folded from `AttributeKind::Naked(_)` at `rustc_codegen_ssa/src/codegen_attrs.rs:82`. **Bridge codepath: `tcx.codegen_fn_attrs(did).flags.contains(CodegenFnAttrFlags::NAKED)` is the canonical per-DefId lookup.** Same source-of-truth bit rustc's own codegen consults at `rustc_codegen_ssa/src/mono_item.rs:46`.
+
+### `rustc_middle/src/middle/codegen_fn_attrs.rs:14-28`
+
+`codegen_instance_attrs(self, instance_kind) -> Cow<'tcx, CodegenFnAttrs>` -- strips the NAKED flag for non-Item `InstanceKind`s (ReifyShim, ClosureOnceShim, FnPtrShim, etc.). Confirms `#[naked]` is strictly source-level per-Item; shim-derived Instances never carry it. Recognition point is therefore Item-level (per-DefId), not Instance-level -- aligned with stage-12 D-12-5 Phase 2 (Translation+Synthesis) Item-walk.
+
+### `rustc_codegen_ssa/src/mir/naked_asm.rs:30-41`
+
+`codegen_naked_asm` asserts the MIR body's `START_BLOCK` terminator is `TerminatorKind::InlineAsm` (single-block + InlineAsm-terminator-only body shape). The `bug!("#[naked] functions should always terminate with an asm! block")` path at line 40 is the upstream contract -- rustc enforces this body shape at HIR-lowering / parsing. **Structural overlap with stage-9 D-9-9 row 8** (`TerminatorKind::InlineAsm` rejection at §23.6.1): a `#[naked]` Item that survived Item translation would fail at body translation when the bridge walks the terminator. Item-translation rejection is preferable for diagnostic clarity, fail-fast, and spec-vocabulary discoverability.
+
+### `rustc_codegen_ssa/src/mono_item.rs:44-51` + `:74-82`
+
+Codegen-side dispatch: `MonoItem::Fn(instance)` with `CodegenFnAttrFlags::NAKED` set dispatches to `naked_asm::codegen_naked_asm` (define pass) and is skipped by `predefine_fn` (predefine pass) -- "the function becomes a global assembly block, not a defined symbol." `rustc_middle/src/mir/mono.rs:154-159` forces `InstantiationMode::GloballyShared` for naked Fns. `rustc_codegen_ssa/src/codegen_attrs.rs:327-329` overrides any `#[inline]` to `InlineAttr::Never` when NAKED is set. **Confirms `#[naked]` is structurally a top-level asm block at codegen, not a callable function** -- RegseqModel's v1 rejection forecloses this whole codegen-shape divergence.
+
 ## Rejection points
 
 | Construct | File:line | What rustc does |

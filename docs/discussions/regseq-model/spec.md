@@ -19,9 +19,18 @@ reframe of D-11-3 + D-11-5 absorbed in §9.4 / §14.3 / §23.6.2 /
 §25.4 / §25.5) + stage 12 (Rust Items) + stage 13 (pretty-printer
 spec split: §18 stub + §19.8 / §20.6 / §21.8 / §22.8 / §23.9 /
 §24.9 cross-references to `pretty-printer.md` per D-13-9.2;
-new §10.4 rendering pointer; §24 / §25 inline cleanup)
-contributions. The pretty-printer surface itself lives in the
-co-equal merger artifact `pretty-printer.md` per D-13-9.
+new §10.4 rendering pointer; §24 / §25 inline cleanup) +
+stage 14 (phase-1 foundation extensions: Q7 intrinsic
+recognition + storage; diagnostic-logging vocabulary;
+DomainAttr sibling-table architecture; composer renderers
+`render_const` / `render_instance` / top-level `render`;
+external-review Findings #1-#4; `core::ffi::c_void`
+rejection-enforcement narrative at §15.1; generic-C backend
+codegen carve-out per D-14-10) contributions. The
+pretty-printer surface itself lives in the co-equal merger
+artifact `pretty-printer.md` per D-13-9; the generic-C
+backend codegen surface lives in the co-equal merger
+artifact `generic-c-backend.md` per D-14-10.
 
 ---
 
@@ -323,14 +332,19 @@ pub struct RegseqModel {
     // `dyn Register<u64>` get distinct vtable types. Zero rustc deps.
     pub vtables: HashMap<PrincipalTraitKey, ItemId>,
 
-    // Stage-14 forward expectation per stage-12 D-12-1.5.
-    // Stage 14 introduces sibling tables on `RegseqModel` keyed
-    // by `ItemId` / `InstanceId` / `FieldPath` / `Span` for
-    // structured DSL property attributes (`#[rseq::mmio(...)]`,
-    // `#[rseq::interrupt(...)]`, etc.) per stage-4
-    // spec-snapshot.md §1287-1299. Stage 12 adds NO schema for
-    // DomainAttr; the sibling-table architecture is a forward
-    // expectation. Stage 14 picks the per-property keying.
+    // Domain attribute sibling tables per stage-14 D-14-3
+    // (architecture) + D-14-1 (intrinsic recognition + storage).
+    // Hosts structured DSL property attributes derived from the
+    // `#[rseq::*]` tool namespace. Three sibling tables keyed by
+    // `ItemId` / `FieldPath` / `Span` -- `instance_attrs` was
+    // considered (per stage-4's original 4-key-kind enumeration)
+    // but dropped per D-14-3.1 because Instance access to Item-
+    // level metadata goes through the §3.5.2 pull-through pattern
+    // (stage-12 D-12-1.8). See §3.6 for the full architecture
+    // (the `AttrData` discriminated union, recognition codepath,
+    // population rules, validation invariants, attribute-
+    // namespace storage rule, per-family target-table mapping).
+    pub domain_attrs: DomainAttrTables,
 }
 ```
 
@@ -892,6 +906,49 @@ inner interners are validated first.
      recomputes `Const::Bytes` canonical bytes for each synth
      Static's `init`), so it runs after acyclicity and after
      the value-level recomputation pass.*
+10. Validate `domain_attrs` per §3.6 (stage-14 D-14-1 +
+    D-14-3). Four checks per sibling table (`item_attrs`,
+    `field_attrs`, `span_attrs`):
+    - **Top-level well-formedness.**
+      `domain_attrs.item_attrs.len() == model.items.len()`
+      (the `IndexVec` backbone covers exactly the assigned
+      ItemId range; Phase 4 initialises this per §3.4).
+      Every `FieldPath` key in `domain_attrs.field_attrs`
+      satisfies: the embedded `ItemId` resolves to an Item
+      whose `kind` is `Struct` / `Enum` / `Union`; the
+      `VariantIdx` is in-bounds for the parent ADT's
+      variant set (`0` for `Struct` / `Union`; in-range
+      per `EnumShape.variants` for `Enum`); the `FieldIdx`
+      is in-bounds for the indicated variant's
+      `VariantLayout.fields`. Every `Span` key in
+      `domain_attrs.span_attrs` is a structurally valid
+      `Span` (per §5.3) and inherits the existing
+      sentinel-aware **Source-file span bounds** rule
+      enforced earlier in Phase B (this same §3.3 section):
+      for `SourceFile { content: Some(_), .. }`, the key
+      must satisfy `lo <= hi <= content.len()` with `lo`
+      and `hi` at valid UTF-8 byte boundaries; for
+      `SourceFile { content: None, .. }` (the synthesised
+      sentinel or upstream-crate sources), the key is
+      accepted as-is and would resolve to `None` via
+      `Span::slice` per §5.4 if consumed.
+    - **Nested ID well-formedness.** Every nested ID
+      inside an `AttrData` payload (`ItemId`, `FnSigId`,
+      `StringId`, embedded `FieldPath` components, etc.,
+      depending on the per-family payload type) resolves
+      against the relevant model table.
+    - **Per-family duplicate invariants.** Stage-14
+      commits **I-DomainAttr-Intrinsic-Singleton**: for any
+      `ItemId id`, the set
+      `domain_attrs.item_attrs[id].iter()
+      .filter(|a| matches!(a, AttrData::Intrinsic(_)))`
+      has cardinality at most 1. Phase-2 stages specify
+      analogous per-family invariants for their `AttrData`
+      variants at their merger close.
+    - **`Vec<AttrData>` ordering.** Bridge-walk-order
+      deterministic per D-14-3.3; the validator verifies
+      structural consistency only and does NOT re-derive or
+      re-sort entries.
 
 **Phase B (continued) — invariant enforcement beyond reachability.**
 
@@ -1158,6 +1215,13 @@ parallel:
 - `item_synthetic_kinds[ItemId]` populated with the per-Item
   `SyntheticItemKind` tag per §13.3 (`None` for
   source-derived).
+- `domain_attrs.item_attrs` initialised to length
+  `model.items.len()` (each slot starts as an empty
+  `Vec<AttrData>`); per-family Phase-2 caches keyed by
+  `DefPathHash` (and analogous handles for `field_attrs`
+  / `span_attrs`) get re-keyed and inserted in this same
+  pass (per stage-14 D-14-1.7; see §3.6.4 for the
+  Phase-2-recognition → Phase-4-materialization protocol).
 
 **Phase 5 -- INSTANCE construction + cross-reference
 resolution.** Bridge populates `instances` per §9.2 (one
@@ -1208,12 +1272,13 @@ Body shape downstream consumers see:
    Sequenced **after** Drop-as-Call collapse and **before**
    the joint validation walk (§25.6).
 
-After Phase 5 body materialisation + the two rewrites, the
-joint validator (§25.6) runs over `model.instances`; for each
-Function Instance with `body: Some(b)`, it runs the body
-visitor against `b`. §25.7.3 records the full pass-scheduling
-order (Phase 5 body-materialisation -> Drop-as-Call collapse
--> vtable-indirect rewrite -> joint validation).
+After Phase 5 body materialisation + the body-level passes,
+the joint validator (§25.6) runs over `model.instances`; for
+each Function Instance with `body: Some(b)`, it runs the body
+visitor against `b`. §25.7.4 records the full pass-scheduling
+order (Phase 5 body-materialisation with Drop-as-Call collapse
+and DiagLogPeel both interleaved per-terminator ->
+vtable-indirect rewrite -> joint validation).
 
 **Synthesis interleaving rule (D-12-5.2).** Bridge-
 synthesised Items are produced **during** Phase 2
@@ -1290,12 +1355,16 @@ impl RegseqModel {
         self.items[self.instances[id].item].span
     }
 
-    // Source-level metadata fields per D-12-1.3
+    // Source-level metadata fields per D-12-1.3 (as
+    // revised by stage-14 D-14-7: the `is_naked` field
+    // and its `instance_is_naked` pull-through were
+    // dropped when `#[naked]` was moved to v1 rejection at
+    // Item translation; no helper survives for an
+    // unrepresentable Item shape).
     pub fn instance_linkage(&self, id: InstanceId) -> Linkage { /* ... */ }
     pub fn instance_link_section(&self, id: InstanceId) -> Option<StringId> { /* ... */ }
     pub fn instance_inline_hint(&self, id: InstanceId) -> InlineHint { /* ... */ }
     pub fn instance_is_unsafe(&self, id: InstanceId) -> bool { /* ... */ }
-    pub fn instance_is_naked(&self, id: InstanceId) -> bool { /* ... */ }
 
     // Lang-item flags
     pub fn instance_is_phantom_data(&self, id: InstanceId) -> bool { /* ... */ }
@@ -1308,13 +1377,37 @@ impl RegseqModel {
     // Post-Option-B InstanceKind::Function pull-throughs
     pub fn instance_fn_sig(&self, id: InstanceId) -> Option<&FnSig> { /* ... */ }
     pub fn instance_body(&self, id: InstanceId) -> Option<&Body> { /* ... */ }
+
+    // Domain-attribute pull-through per stage-14 D-14-1.6.
+    // Walks `domain_attrs.item_attrs[item]` for the requested
+    // family variant. Stage 14 introduces the intrinsic helper;
+    // phase-2 stages append per-family helpers as their
+    // `AttrData` variants land per §3.6 D-14-3.6 target-table
+    // mapping.
+    pub fn instance_intrinsic(&self, id: InstanceId) -> Option<&IntrinsicKind> {
+        let item_id = self.instances[id].item;
+        self.domain_attrs.item_attrs[item_id]
+            .iter()
+            .find_map(|attr| match attr {
+                AttrData::Intrinsic(k) => Some(k),
+            })
+    }
 }
 ```
 
-13-helper v1 inventory. Composes with §23.6.2 `callee_fn_sig`
-helper (existing convention). The `instance_<field>()` naming
-prefixes the input domain; field names mirror the underlying
-Item field names (no synonyms).
+13-helper v1 baseline inventory (12 from stage-12 D-12-1.8
+as revised by stage-14 D-14-7 -- the original 13-helper
+list dropped `instance_is_naked` alongside the `is_naked`
+field deletion at §8.0 -- plus 1 domain-attribute pull-
+through from stage-14 D-14-1.6).
+Composes with §23.6.2 `callee_fn_sig` helper (existing
+convention). The `instance_<field>()` naming prefixes the
+input domain; field names mirror the underlying Item field
+names (no synonyms). Phase-2 stages append per-family
+domain-attribute pull-through helpers (e.g.,
+`field_mmio_attr` at stage 16, `instance_interrupt` at
+stage 17, ...) as their `AttrData` variants land, per the
+§3.6 D-14-3.6 target-table mapping.
 
 Methods-on-`RegseqModel` shape chosen over methods-on-`Instance`
 (which would clutter call sites with `&model` parameter) and
@@ -1322,6 +1415,447 @@ wrapper-type `InstanceRef<'m>` (which would introduce a new
 type). The wrapper-type design can be added as a thin layer
 later if call-site ergonomics demand; methods-on-model is the
 foundation.
+
+### 3.6 Domain attribute tables
+
+Sibling tables on `RegseqModel` for structured DSL property
+attributes derived from the `#[rseq::*]` tool namespace.
+Architecture locked at stage 14 (D-14-3); the intrinsic
+table is the first concrete occupant (D-14-1.6). Phase-2
+stages append `AttrData` variants and commit per-family
+target-table mappings as their domain extensions land.
+
+#### 3.6.1 `DomainAttrTables`
+
+```rust
+pub struct DomainAttrTables {
+    pub item_attrs:  IndexVec<ItemId, Vec<AttrData>>,
+    pub field_attrs: HashMap<FieldPath, Vec<AttrData>>,
+    pub span_attrs:  HashMap<Span, Vec<AttrData>>,
+}
+
+pub struct FieldPath {
+    pub item:    ItemId,      // parent ADT Item (Struct / Enum / Union)
+    pub variant: VariantIdx,  // 0 for Struct / Union; per-variant for Enum
+    pub field:   FieldIdx,    // field index within the variant
+}
+```
+
+Three sibling tables, one per source-level entity key kind:
+
+- **`item_attrs`** -- attributes attached to source-level
+  Items (functions, statics, consts, structs, enums,
+  unions). Indexed by `ItemId`; sparse via empty `Vec`.
+  Stage 14's `AttrData::Intrinsic` lives here.
+- **`field_attrs`** -- attributes attached to fields of
+  ADT Items. Indexed by `FieldPath` (the
+  `(ItemId, VariantIdx, FieldIdx)` triple). Sparse via
+  absence in the `HashMap`. First v1 occupant arrives at
+  stage 16 (`AttrData::Mmio` for `#[rseq::mmio(...)]` on
+  register-bank fields).
+- **`span_attrs`** -- attributes attached to source-code
+  Spans, for future use cases (diagnostic annotations,
+  lint-style markers, etc.). Indexed by `Span`; sparse via
+  absence. No v1 occupants; reserved per the stage-4
+  §1287-1299 forward-pointer's `Span` key-kind commitment.
+
+**No `instance_attrs` table.** Instance access to Item-level
+domain attributes goes through the §3.5.2 pull-through
+pattern (`self.items[self.instances[id].item]` + the
+per-family `instance_<family>` helper). Per-Instance state
+that genuinely depends on monomorphization context lives
+inline in `InstanceKind` (precedent: `virtual_idx` on
+`InstanceKind::Function` per §9.4), not in a sibling table.
+If a future need surfaces for per-Instance bridge-computed
+domain attributes, "Spec is mutable" applies; v1 commits to
+three tables. See `discussions.md` D-14-3.1 for the
+rationale.
+
+#### 3.6.2 `AttrData`
+
+```rust
+pub enum AttrData {
+    Intrinsic(IntrinsicKind),        // discriminant 0; stage 14
+    // phase-2 stages append at discriminant 1, 2, 3, ...:
+    //   Mmio(MmioAttr)              -- stage 16
+    //   Interrupt(InterruptAttr)    -- stage 17
+    //   Atomic(AtomicAttr)          -- stage 18
+}
+```
+
+`AttrData` is a **closed, append-only** discriminated union.
+The variant ordering is normative: stage 14 fixes
+`Intrinsic` at discriminant 0; phase-2 stages append new
+variants at the end. Existing discriminants remain immutable
+so serialized RegseqModels stay stable across stage closures
+-- the same append-only discipline applied to
+`regseq_instance_kind_rank` (stage-1 R5.1 / R5.2) and to
+the primitive-scalar discriminants (§10).
+
+A single sibling-table entry (`item_attrs[id]`,
+`field_attrs[path]`, or `span_attrs[sp]`) is a
+`Vec<AttrData>`: multiple domain attributes may attach to
+the same key (e.g., an Item that is both an intrinsic and
+has some future domain marker). Per-family duplicate
+invariants are validator-enforced; see §3.6.5.
+
+`Vec<AttrData>` ordering is bridge-walk-order deterministic
+(D-14-3.3). The order is established in Phase 2 (recognition
+into the per-family working caches per §3.6.4) and
+materialised verbatim into the final sibling tables in
+Phase 4: for each key (`ItemId`, `FieldPath`, `Span`) the
+Phase-4 materialisation pass walks the per-family caches in
+their deterministic Phase-2 encounter order and pushes
+`AttrData` entries onto the destination `Vec` in that same
+order. The combined ordering inherits its determinism from
+upstream stage-12 D-12-5's Phase-2 walk-order commitment.
+
+#### 3.6.3 `IntrinsicKind`
+
+```rust
+pub enum IntrinsicKind {
+    Log(LogLevel),                  // discriminant 0; stage 14
+    // phase-2 stages append at discriminant 1, 2, 3, ...:
+    //   Mmio(MmioOp)                -- stage 16
+    //   Interrupt(InterruptOp)      -- stage 17
+    //   Atomic(AtomicOp)            -- stage 18
+}
+
+pub enum LogLevel { Debug, Info, Warn, Error }
+```
+
+Closed, append-only enum following the **category +
+sub-discriminant** pattern: one variant per domain family;
+each variant carries a per-family sub-enum of operations.
+Each `IntrinsicKind` variant corresponds 1:1 to a fixed
+attribute-NAME string. Stage 14 ships the diagnostic-logging
+family only; phase-2 stages own their respective sub-enums
+(`MmioOp`, `InterruptOp`, `AtomicOp`, ...) and append at
+their merger close.
+
+The closed-vocabulary lookup function maps the
+attribute-NAME `Symbol` to the resolved `IntrinsicKind`:
+
+```rust
+impl IntrinsicKind {
+    pub fn from_name(name: Symbol) -> Option<Self> {
+        match name.as_str() {
+            "log-debug" => Some(IntrinsicKind::Log(LogLevel::Debug)),
+            "log-info"  => Some(IntrinsicKind::Log(LogLevel::Info)),
+            "log-warn"  => Some(IntrinsicKind::Log(LogLevel::Warn)),
+            "log-error" => Some(IntrinsicKind::Log(LogLevel::Error)),
+            // phase-2 stages append per-family arms here.
+            _ => None,
+        }
+    }
+}
+```
+
+Intrinsic NAMEs use **dash form** (`log-debug` /
+`log-info` / `log-warn` / `log-error`); the Rust-side
+function items that carry the `#[rseq::intrinsic("...")]`
+attribute use **underscore form** (`log_debug` /
+`log_info` / `log_warn` / `log_error`). The form
+divergence is intentional: NAMEs are taxonomic
+identifiers that may include domain-family hyphenation
+(`mmio-read32`, `atomic-load-acquire`, ...); Rust
+function names follow Rust's identifier convention.
+See §26.2 for the locked `LogLevel` + NAME table and
+the full vocabulary contract.
+
+#### 3.6.4 Recognition and population
+
+The bridge populates `domain_attrs` across **two phases**
+of stage-12 D-12-5's canonical construction pipeline.
+Recognition (walking rustc attributes) happens in Phase 2;
+final-table materialization waits for Phase 4 because
+`DomainAttrTables.item_attrs` is keyed by **final**
+`ItemId`s, which are assigned only after the Phase-3 F4
+sort. This mirrors the established pattern §3.4 documents
+for `vtables` and the other side-tables.
+
+**Phase 2 -- Recognition into a working cache.**
+
+During the Phase-2 Item-translation walk, the bridge runs
+the per-family attribute-recognition helper against each
+discovered entity's source-level handle (`DefId` for
+Items; `(parent_def_path_hash, VariantIdx, FieldIdx)` for
+fields; the raw `Span` for span-keyed attributes). Results
+are stored in per-family Phase-2 working caches keyed by
+stable Phase-2-available handles -- never by final
+`ItemId`. The exact handle shape per family is bridge-
+implementation choice per D-12-5.3.
+
+**Operational-intrinsic recognition** (the stage-14
+codepath; D-14-1.1 + D-14-1.3 + D-14-1.4):
+
+```rust
+fn recognize_intrinsic_attr(tcx: TyCtxt<'tcx>, did: DefId)
+    -> Result<Option<IntrinsicKind>, BridgeError>
+{
+    let attrs: Vec<&Attribute> = tcx
+        .get_attrs_by_path(did, &[sym::rseq, sym::intrinsic])
+        .collect();
+
+    match attrs.len() {
+        0 => Ok(None),
+        1 => {
+            let list = attrs[0].meta_item_list()
+                .ok_or(BridgeError::IntrinsicAttrNotDelimited)?;
+            if list.len() != 1 {
+                return Err(BridgeError::IntrinsicAttrWrongArgCount);
+            }
+            let lit = list[0].lit()
+                .ok_or(BridgeError::IntrinsicAttrNotALiteral)?;
+            let name = match lit.kind {
+                LitKind::Str(sym, _) => sym,
+                _ => return Err(BridgeError::IntrinsicAttrNonStringLiteral),
+            };
+            IntrinsicKind::from_name(name)
+                .map(Some)
+                .ok_or(BridgeError::IntrinsicAttrUnknownName(name))
+        }
+        _ => Err(BridgeError::IntrinsicAttrMultiple),
+    }
+}
+```
+
+Recognized intrinsics enter a Phase-2 working cache keyed
+by `DefPathHash` (rustc's stable per-Item identity carrier;
+available at Phase 2 via `tcx.def_path_hash(did)`):
+
+```rust
+// Phase-2 working cache, lives in the bridge construction
+// state, not in `RegseqModel`:
+intrinsic_cache: HashMap<DefPathHash, IntrinsicKind>
+```
+
+The cache is idempotent: re-encountering the same
+`DefPathHash` during translation (which would happen for
+generic instantiations of the same source Item) yields the
+previously-cached `IntrinsicKind`.
+
+**Phase 4 -- Materialization into `domain_attrs`.**
+
+Phase 4 assigns final `ItemId`s in F4-sorted order
+(§3.4 D-12-5.3) and, in the same pass, populates
+`RegseqModel`'s side-tables: `item_def_paths[id]`,
+`item_synthetic_kinds[id]`, and -- per stage-14 D-14-1.7
+-- `domain_attrs.item_attrs[id]`. For each Item being
+assigned its final `ItemId`:
+
+```rust
+// Inside Phase 4's per-Item population pass, after
+// item_def_paths[id] has been written:
+let dph = model.item_def_paths[id];
+if let Some(&kind) = intrinsic_cache.get(&dph) {
+    model.domain_attrs.item_attrs[id].push(AttrData::Intrinsic(kind));
+}
+```
+
+Phase 4 also sizes the sibling-table backbone:
+- `domain_attrs.item_attrs` is initialised to
+  `IndexVec::from_elem(Vec::new(), model.items.len())`
+  before the per-Item pass begins. Items with no
+  domain-attribute occupants keep the empty `Vec`.
+- `domain_attrs.field_attrs` and `domain_attrs.span_attrs`
+  start empty; per-family Phase-2 caches keyed by
+  `(parent_def_path_hash, VariantIdx, FieldIdx)` /
+  `Span` get re-keyed (where needed) and inserted in
+  Phase 4 alongside `item_attrs`.
+
+`field_attrs` keys require an `ItemId` (the `FieldPath`
+struct embeds the parent ADT's `ItemId`), so the re-key
+step looks up the parent's final `ItemId` via the
+`DefPathHash -> ItemId` mapping that Phase 4 produces.
+`span_attrs` keys are independent of ItemId and can be
+inserted verbatim from the Phase-2 cache.
+
+Phase-2 stages introduce analogous per-family
+`recognize_<family>_attr` helpers walking different tail
+segments (`&[sym::rseq, sym::mmio]`, `&[sym::rseq,
+sym::interrupt]`, etc.) and producing the appropriate
+per-family payload type. The recognition primitive
+(`get_attrs_by_path` + the `meta_item_list -> .lit() ->
+LitKind::Str` extraction chain) is shared; the per-family
+parsing of the inner payload differs. Each family's
+Phase-2 cache is materialized into the appropriate
+sibling table at Phase 4 per the §3.6.7 target-table
+mapping.
+
+**Notes on the recognition codepath.**
+
+- `tcx.get_attrs_by_path` is rustc's canonical
+  multi-segment tool-namespace attribute walker
+  (`rustc_middle/src/ty/mod.rs:1728-1739`). Tool attributes
+  always land in `Attribute::Unparsed`
+  (`rustc_hir/src/hir.rs:1265-1267`), the arm
+  `path_matches` (`rustc_hir/src/hir.rs:1351-1356`)
+  compares against.
+- `tcx.intrinsic_raw` is NOT the right hook: it gates on
+  `tcx.has_attr(def_id, sym::rustc_intrinsic)`
+  (`rustc_middle/src/ty/util.rs:1685-1701`) and matches
+  rustc-internal compiler intrinsics only -- never
+  tool-namespace attributes.
+- The bridge does NOT verify
+  `tcx.registered_tools(())` contains `sym::rseq` before
+  walking attributes. rustc's name-resolution machinery
+  enforces the `#![register_tool(rseq)]` registration
+  (`rustc_resolve/src/ident.rs:691-694`); any tool-attribute
+  that survives to MIR has already passed.
+- Malformed-payload validation is wholly the bridge's
+  responsibility. rustc has no schema for custom
+  tool-attribute payloads (the attribute is `Unparsed`
+  precisely because of this). The single check "exactly
+  one inner item, and it's `Lit` with `LitKind::Str`"
+  covers all four malformed shapes uniformly: empty args
+  (`#[rseq::intrinsic]`), eq-style (`#[rseq::intrinsic =
+  "NAME"]`), non-string literal (`#[rseq::intrinsic(42)]`),
+  multi-arg (`#[rseq::intrinsic("NAME", extra)]`).
+
+#### 3.6.5 Validation invariants
+
+`RegseqModel::validate` (Phase B; see §3.3 step 10) walks
+`domain_attrs` and enforces:
+
+- **Top-level table / key well-formedness.**
+  `domain_attrs.item_attrs.len() == model.items.len()`
+  (the `IndexVec` backbone covers exactly the assigned
+  ItemId range, established by Phase 4 per §3.4). Every
+  `FieldPath` key in `field_attrs` resolves: its embedded
+  `ItemId` points to an ADT Item (`kind` is
+  `Struct` / `Enum` / `Union`); its `VariantIdx` is
+  in-bounds for that ADT's variant set; its `FieldIdx` is
+  in-bounds for the indicated variant's
+  `VariantLayout.fields`. Every `Span` key in `span_attrs`
+  is a structurally valid `Span` (per §5.3) and inherits
+  the existing sentinel-aware **Source-file span bounds**
+  rule enforced in Phase B (§3.3): for
+  `SourceFile { content: Some(_), .. }`, the key satisfies
+  `lo <= hi <= content.len()` with `lo` and `hi` at valid
+  UTF-8 byte boundaries; for
+  `SourceFile { content: None, .. }` (the synthesised
+  sentinel or upstream-crate sources), the key is accepted
+  as-is and would resolve to `None` via `Span::slice` per
+  §5.4 if consumed.
+
+- **Nested ID well-formedness.** Every nested ID inside
+  an `AttrData` payload (`ItemId`, `FnSigId`, `StringId`,
+  embedded `FieldPath` components, etc., depending on the
+  per-family payload type) resolves against the relevant
+  model table.
+
+- **Per-family duplicate invariants** (`I-DomainAttr-*`).
+  Stage 14 commits:
+
+  > **I-DomainAttr-Intrinsic-Singleton.** For any `ItemId
+  > id`, the set
+  > `domain_attrs.item_attrs[id].iter()
+  > .filter(|attr| matches!(attr, AttrData::Intrinsic(_)))`
+  > has cardinality at most 1. An Item is either an
+  > intrinsic or it isn't; multiple `AttrData::Intrinsic`
+  > entries on the same Item are a bridge bug.
+
+  Phase-2 stages specify analogous per-family invariants
+  for their `AttrData` variants at their merger close
+  (e.g., stage 16 may commit
+  `I-DomainAttr-Mmio-Singleton` per `FieldPath`).
+
+- **`Vec<AttrData>` ordering.** The validator does NOT
+  re-derive or re-sort `Vec<AttrData>` entries. Ordering
+  is bridge-walk-order deterministic per D-14-3.3,
+  inherited from upstream stage-12 D-12-5 Phase 2 walk-
+  order determinism.
+
+#### 3.6.6 Attribute-namespace storage rule
+
+Binding rule for where attribute-derived metadata lands in
+the model. **This rule is normative for stage 14 and all
+phase-2 stages**: per-family attribute design decisions
+follow the namespace, not the family's semantics.
+
+| Source attribute namespace                                                                                | Storage                                              |
+| --------------------------------------------------------------------------------------------------------- | ---------------------------------------------------- |
+| `#[rseq::*]` tool-namespace custom attributes                                                             | `DomainAttrTables` sibling-table `AttrData` entry    |
+| Recognized Rust attributes (`#[inline]`, `#[link_section]`, `#[no_mangle]`, ...) and language built-ins (lang-items) | Typed Item field per D-12-1.3                        |
+
+Consequences:
+
+1. **For phase-2 stage authors.** When introducing a new
+   domain family, the per-family attribute payload
+   (`MmioAttr`, `InterruptAttr`, etc.) is always a
+   sibling-table `AttrData` variant -- never a typed Item
+   field. The choice is settled by the namespace, not by
+   the family's semantics.
+
+2. **For future Rust-attribute admissions.** If v1 later
+   admits, e.g., `#[cold]` or `#[target_feature(...)]`, the
+   metadata lands as a new typed Item field per D-12-1.3
+   -- never in `DomainAttrTables`. Retroactive consistency
+   check: the existing typed-Item-field surface
+   (`linkage`, `link_section`, `inline_hint`, `is_unsafe`,
+   plus lang-item flags `is_phantom_data` /
+   `is_unsafe_cell` / `is_manually_drop`) all derive from
+   Rust attributes or language built-ins -- none from
+   `#[rseq::*]`.
+
+3. **Stage-14 D-14-7 (`#[naked]` rejection in v1) is
+   consistent with this rule.** `#[naked]` is a Rust
+   attribute (not `#[rseq::*]`); its typed-Item-field
+   representation was on the typed-fields side; the
+   rejection removed the original `is_naked` field from
+   D-12-1.3 (per §8.0 schema, as revised) without
+   migrating it to `DomainAttrTables`. The Item-
+   translation rejection row lives at §15.1; no
+   `AttrData::Naked` variant exists.
+
+#### 3.6.7 Per-family target-table mapping
+
+Each phase-2 stage's spec section MUST name which sibling
+table (`item_attrs`, `field_attrs`, `span_attrs`) its
+`AttrData` variant populates. The mapping is part of the
+per-family attribute spec; consumers query the appropriate
+sibling table by knowing the family's mapping.
+
+**Stage 14 commits the first mapping:**
+
+| AttrData variant          | Target sibling table | Source attribute                                       |
+| ------------------------- | -------------------- | ------------------------------------------------------ |
+| `Intrinsic(IntrinsicKind)` | `item_attrs`         | `#[rseq::intrinsic("NAME")]` on a function Item        |
+
+**Anticipated phase-2 entries** (not binding; phase-2
+stages own the actual commitments at their merger close):
+
+| AttrData variant          | Target sibling table | Source attribute                                          |
+| ------------------------- | -------------------- | --------------------------------------------------------- |
+| `Mmio(MmioAttr)` (stage 16) | `field_attrs`      | `#[rseq::mmio(...)]` on register-bank fields              |
+| `Interrupt(InterruptAttr)` (stage 17) | `item_attrs` | `#[rseq::interrupt(...)]` on handler function Items   |
+| `Atomic(AtomicAttr)` (stage 18) | (TBD by stage 18) | `#[rseq::*]` markup on atomic-resource fields / items  |
+
+#### 3.6.8 Cross-references
+
+- §3.5.2 -- Instance-side pull-through helpers; stage 14
+  introduces `instance_intrinsic(...)` as the 13th helper
+  (12 surviving stage-12 D-12-1.8 helpers after D-14-7's
+  `instance_is_naked` deletion + the new
+  `instance_intrinsic` from D-14-1.6). Phase-2 stages
+  append per-family pull-through helpers.
+- §3.3 step 10 -- Phase B validation walk for
+  `domain_attrs`.
+- §8.0 (Item schema) -- the `#[rseq::intrinsic(...)]`
+  recognition note in §8.0 references this section as the
+  storage home; the §8.0 paragraph was corrected from the
+  original "`tcx.intrinsic_raw(did)` + not stored on Item"
+  forward-pointer text per external-review Finding #1.
+- `discussions.md` D-14-1 + D-14-3 -- the audit-shape
+  rationale for the architecture, with all alternatives
+  considered and rejected (per-family typed tables,
+  `Option<AttrData>` slots, instance_attrs key kind,
+  IntrinsicInfo wrapper struct, etc.).
+- `prior-art/rustc.md` Q1-Q4 -- rustc-source evidence
+  for the recognition codepath, intrinsic_raw verification,
+  register_tool handling, and attribute-payload parsing
+  chain.
 
 ---
 
@@ -1613,7 +2147,8 @@ pub struct Item {
 
     // Function-relevant flags (Item-level with sensible
     // defaults for non-fn variants per D-12-1.3 -- a `static`
-    // is never naked or inline; defaults are well-defined).
+    // has no inline hint and is never `unsafe fn`; defaults
+    // are well-defined).
     //
     // `inline_hint` corresponds to `#[inline]` /
     // `#[inline(always)]` / `#[inline(never)]` per rustc's
@@ -1628,12 +2163,17 @@ pub struct Item {
     // C codegen (C has no `unsafe` keyword).
     pub is_unsafe:      bool,
 
-    // `is_naked` corresponds to `#[naked]` per rustc's
-    // `CodegenFnAttrFlags::NAKED`. C-codegen emits naked
-    // functions without prologue/epilogue (raw asm body
-    // only); load-bearing for ISR entry stubs in kernel
-    // drivers.
-    pub is_naked:       bool,
+    // No `is_naked` field. Per stage-14 D-14-7, `#[naked]`
+    // is rejected at Item translation (§15.1 Item-
+    // translation rejection row); a `#[naked]` Item's body
+    // is structurally a single `TerminatorKind::InlineAsm`
+    // terminator which stage-9 D-9-9 already rejects at
+    // §23.6.1, leaving no representable IR shape for naked
+    // functions in v1. Future revision under driver
+    // pressure may add ISR-stub synthesis through the
+    // `#[rseq::interrupt(...)]` domain extension; until
+    // then, the typed-fields side carries no naked entry
+    // and `Item` admits no parallel `is_naked` marker.
 
     // Lang-item flags (§8.2). Load-bearing for codegen
     // lowering decisions; populated by the bridge from rustc's
@@ -1649,9 +2189,10 @@ pub struct Item {
     // its (unique) monomorphic `Ty::Struct.layout` is ZST
     // (`size: 0, align: 1`), and every reachable use of that
     // monomorphic `TyId` across the model is behind `Ref` /
-    // `Ptr`. False otherwise (most Items). When `true`, codegen
-    // MAY emit the Item as a C incomplete struct declaration;
-    // when `false`, codegen MUST emit a complete declaration.
+    // `Ptr`. False otherwise (most Items). When `true`, the
+    // Item is admissible for the opaque-handle lowering
+    // convention (emission form per backend); when `false`,
+    // it requires a complete representation in codegen.
     // Generic opaque-handle candidates (`Handle<T>`-style) are
     // rejected at the bridge with `BridgeError::GenericOpaqueHandle`
     // — opaque-handle eligibility is per-monomorphization in
@@ -1732,30 +2273,61 @@ tuple). Per-`InstanceKind` rich data per §9.4:
   carries the per-mono `Ty::Struct/Enum/Union` reference.
 
 **No general attribute table on `Item` (stage-3 scope);
-typed Item fields per stage-12; structured DSL property
-attributes per stage-14.** The 8 Item-level fields above
-(`linkage`, `link_section`, `inline_hint`, `is_unsafe`,
-`is_naked` + 3 lang-item flags + `opaque_handle_eligible`)
-are the typed Item-level metadata stage 12 commits to per
-stage-1 R5.2. Declarative DSL property attributes
+typed Item fields per stage-12 as revised by stage-14;
+structured DSL property attributes per stage-14.** The 7
+typed source-level metadata fields above (`linkage`,
+`link_section`, `inline_hint`, `is_unsafe` + 3 lang-item
+flags) plus the bridge-computed `opaque_handle_eligible`
+outcome (which derives from layout + use-site analysis,
+not from a Rust attribute) are the typed Item-level
+metadata stage 12 committed to per stage-1 R5.2, as
+revised by stage-14 D-14-7 (dropping the original
+`is_naked` field when `#[naked]` was moved to v1 rejection
+at Item translation; see §15.1 Item-translation rejection
+row). The original D-12-1.3 framing carried 8 typed
+source-level fields (the 7 above plus `is_naked`); D-14-7
+trims that surface to 7. Declarative DSL property attributes
 (`#[rseq::mmio(access_width = 32)]`,
 `#[rseq::interrupt(trigger_type = "...")]`, etc.) are
-**stage-14 territory**: stage 14 introduces a sibling-table
-architecture on `RegseqModel` keyed by `ItemId` /
-`InstanceId` / `FieldPath` / `Span` (the exact key kind
-chosen per property family) per stage-4 spec-snapshot.md
-§1287-1299's commitment. Stage 12 adds NO schema for
-DomainAttr; the sibling-table architecture is a forward
-expectation. The previous merged-spec wording
-"No general attribute table on `Item`" was a stage-3-scoped
-commentary that erased the stage-3-vs-stage-14 split when
-absorbed; D-12-1.5 restores the framing.
+**stage-14 territory (now locked at §3.6)**: stage 14
+introduces a sibling-table architecture on `RegseqModel`
+keyed by `ItemId` / `FieldPath` / `Span` (three sibling
+tables in `DomainAttrTables`; per D-14-3.1,
+`instance_attrs` was dropped from stage-4 §1287-1299's
+original 4-key-kind enumeration because Instance access
+to Item-level metadata goes through the §3.5.2
+pull-through pattern locked at stage-12 D-12-1.8). See
+§3.6 for the full architecture (the `DomainAttrTables`
+struct, `AttrData` discriminated union, recognition +
+materialisation protocol, validation invariants,
+attribute-namespace storage rule per D-14-3.5, and the
+per-family target-table mapping per D-14-3.6). Stage 12
+added NO schema for DomainAttr; the architecture was a
+forward expectation that stage 14 has now resolved. The
+previous merged-spec wording "No general attribute table
+on `Item`" was a stage-3-scoped commentary that erased
+the stage-3-vs-stage-14 split when absorbed; D-12-1.5
+restores the framing.
 
 The `#[rseq::intrinsic("NAME")]` operations attribute (Q7)
-remains call-site-recognized via `tcx.intrinsic_raw(did)`
-+ callee-`DefId` lookup at call translation; not stored
-on Item. Stage 14 builds on this pattern for intrinsic
-dispatch tables.
+is recognized per stage-14 D-14-1: the bridge walks
+callee attributes via
+`tcx.get_attrs_by_path(did, &[sym::rseq, sym::intrinsic])`
+(rustc's tool-namespace machinery; `tcx.intrinsic_raw` is
+rustc-internal-only and does NOT match tool attributes).
+The resolved intrinsic identity lives on `RegseqModel` as
+an `AttrData::Intrinsic(IntrinsicKind)` entry in
+`domain_attrs.item_attrs[item_id]` per the unified
+domain-attribute storage architecture (§3.6 -- the
+`AttrData` discriminated union, `IntrinsicKind`
+closed-vocabulary enum, recognition pseudocode, population
+rules, validation invariants, attribute-namespace storage
+rule, per-family target-table mapping). Per Q2's
+eager-translation rule, `'tcx` does not survive past the
+bridge call; downstream codegen reads the resolved
+identity directly from `model.domain_attrs.item_attrs`
+(or via the §3.5.2 pull-through helper
+`instance_intrinsic`).
 
 ### 8.1 Lifting `impl` items
 
@@ -1888,8 +2460,13 @@ newtype_index! { pub struct InstanceId {} }
   - `Struct` / `Enum` / `Union`: bridge-constructed name derived
     deterministically from the rendered `DefPath` plus the
     canonical `ArgsKey` (§12.3), encoded into a C-identifier-safe
-    form. Type-definition instances have no rustc symbol; the
-    construction rule is pinned in stage 13 (codegen).
+    form. Type-definition instances have no rustc symbol;
+    phase-1 commits to determinism + uniqueness only; the full
+    normative algorithm (escaping for C keywords / non-ASCII /
+    leading digits / double underscores, hash-suffix collision-
+    resistance scheme, length cap and maximum-name fallback) is
+    the C-backend spec's responsibility and is out of phase-1
+    scope.
   Uniqueness across `instances` is guaranteed by construction.
   Custom naming strategies that walk `(item.def_path, generic_args)`
   must include `InstanceId` or `emission_name` as a disambiguating
@@ -2101,6 +2678,20 @@ D-12-1.4) plus dispatch metadata (`flavor`, `virtual_idx`);
 `Union` carry the per-mono `Ty::Struct/Enum/Union`
 reference. **No separate `bodies` table** -- bodies live
 structurally inside `InstanceKind::Function` per Option B.
+
+**Consumer-side rendering.** Per stage-14 D-14-5,
+the `render_instance(InstanceId) -> String` composer
+renderer dispatches per `InstanceKind` variant. Definition-site
+rendering (full-body form for `Struct` / `Enum` /
+`Union` per D-14-5.5 Option B; locals + basic-blocks
+envelope for `Function` per D-14-5.2; single-line
+value composer for `Static` / `Const` per
+D-14-5.3 / D-14-5.4) lives in `pretty-printer.md`
+§10.2 with per-variant subsections (§10.2.1 -
+§10.2.6). The use-site path-only form for ADT
+references inside other types (`Ty::Struct.item`
+contexts, function-signature arg types, etc.) lives
+at `pretty-printer.md` §6.4 unchanged.
 
 **Per-`InstanceKind::Function` accessor.** D-12-1.6 hybrid
 pattern: convenience method `as_function() ->
@@ -2340,10 +2931,10 @@ pub enum Const {
     /// Structured aggregate: struct / tuple / array literals
     /// where rustc's const-eval produced a `ValTree::Branch`
     /// shape. Field-aligned children, each interned for
-    /// sharing. C codegen lowers as a compound literal at use
-    /// site; does NOT take program-image storage on its own
+    /// sharing. Does NOT take program-image storage on its own
     /// (contrast with vtable-instance Static synthesis,
-    /// §13.2).
+    /// §13.2); per-target use-site rendering is
+    /// backend-codegen content.
     Aggregate(Vec<ConstId>),
 
     /// Enum value: explicit variant index plus payload children.
@@ -2829,6 +3420,24 @@ mir::ConstValue::Indirect { alloc_id, offset = 0 }    ->  Reloc(synth_static_ins
 per §13.4 with `content_hash.0.to_be_bytes()` payload;
 `args_key: ArgsKey::EMPTY`; `fn_shim_disambig: 0`.
 
+**Bridge interning invariant for fat-pointer auxiliary
+types** (per stage-14 D-14-4.9, R1-revised). When the
+bridge produces a `Const::Aggregate([Reloc, Uint])`
+value for a fat-pointer consumer Ty -- the `Slice {
+data, meta }` dispatch above + the analogous `Ref(_,
+dyn Trait)` synthesis paths -- it MUST ensure both
+`Ty::Ptr(pointee, Mutability::Not)` (the data pointer
+type, for the consumer's pointee) and
+`Ty::Uint(UintKind::Usize)` (the metadata type) are
+present in `model.types` (interning them via
+`TyInterner` if absent). This invariant exists so the
+rendering surface can resolve per-child Tys for the
+fat-pointer fallback case via `TyInterner` lookup
+without constructing non-interned TyIds; the closed-Ty
++ all-interned-TyId invariant from §10 is preserved.
+Bridge validation at §3.3 Phase B step 6 (`TyInterner`
+identity uniqueness) covers the resulting entries.
+
 **Pointee type at the use site.** For both Slice and
 Indirect-thin dispatch, the synthesised Static is type-erased
 to a byte-array `Ty::Array(elem_ty, N)` whose `elem_ty`
@@ -2973,27 +3582,57 @@ The `Ty` enum is **closed** at 19 variants. Every variant is a
 Domain extensions extend `InstanceKind` / `Item` flags / tags on
 existing nodes — never `Ty` itself (Q3 single-level IR rule).
 
-| Variant                                                      | Carries                                           | Layout?          | Identity bucket                                      | C-side intent                                                                                                                                              |
-| ------------------------------------------------------------ | ------------------------------------------------- | ---------------- | ---------------------------------------------------- | ---------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `Bool`                                                       | —                                                 | —                | structural                                           | `_Bool` / `uint8_t`                                                                                                                                        |
-| `Char`                                                       | —                                                 | —                | structural                                           | `uint32_t` (Unicode scalar value)                                                                                                                          |
-| `Int(IntKind)`                                               | `I8`/`I16`/`I32`/`I64`/`I128`/`Isize`             | —                | structural                                           | `intN_t` / `intptr_t`                                                                                                                                      |
-| `Uint(UintKind)`                                             | `U8`/`U16`/`U32`/`U64`/`U128`/`Usize`             | —                | structural                                           | `uintN_t` / `size_t`                                                                                                                                       |
-| `Float(FloatKind)`                                           | `F16`/`F32`/`F64`/`F128`                          | —                | structural                                           | `float` / `double` / `_Float16` / `_Float128`                                                                                                              |
-| `Str`                                                        | marker                                            | no (unsized)     | structural                                           | only behind `Ref`/`Ptr`; fat pointer                                                                                                                       |
-| `Never`                                                      | marker                                            | no (uninhabited) | structural                                           | `void` + `__attribute__((noreturn))` in fn-return; accepted as `Ref`/`Ptr` pointee (codegen may reject); divergent-expression positions elided (see §10.2) |
-| `Array(TyId, u64)`                                           | element type + length                             | —                | structural                                           | C array `T[N]` in field/local context only; rejected at `FnAbi::C` parameter/return per §14.5 (C arrays decay to pointers in those positions)              |
-| `Slice(TyId)`                                                | element type                                      | no (unsized)     | structural                                           | only behind `Ref`/`Ptr`; fat pointer                                                                                                                       |
-| `Ref(TyId, Provenance)`                                      | pointee + borrow flavor                           | —                | structural                                           | `T*` / `const T*` / `T* restrict`                                                                                                                          |
-| `Ptr(TyId, Mutability)`                                      | pointee + `Not`/`Mut`                             | —                | structural                                           | `T*` / `const T*` (raw)                                                                                                                                    |
-| `FnDef(ItemId, GenericArgs)`                                 | callable item + post-mono args                    | —                | **nominal**                                          | ZST — function identity                                                                                                                                    |
-| `FnPtr(FnSigId)`                                             | sig handle (carries `FnAbi`, etc.)                | —                | structural (FnSig content expanded by canonicalizer) | C function pointer `T (*)(args)`                                                                                                                           |
-| `Dynamic { auto_traits, vtable_ty }`                         | sorted `AutoTrait` set + vtable's `TyId`          | —                | structural                                           | only behind `Ref`/`Ptr`; fat pointer (codegen-emitted)                                                                                                     |
-| `Closure(ItemId, GenericArgs)`                               | synthesised captures-struct Item + post-mono args | —                | **nominal**                                          | identity view; layout via parallel `Ty::Struct`                                                                                                            |
-| `Tuple { fields: Vec<TyId>, layout: Layout }`                | element types + resolved layout                   | **inline**       | structural-with-layout-excluded                      | anonymous C struct (synthetic field names `_0`, `_1`, ...) for non-empty tuples; the **empty tuple** `Ty::Tuple { fields: [] }` is Rust unit `()` — ZST with `size: 0, align: 1`, lowered to C `void` in function return position (per §14.5) and treated as a value-less marker elsewhere |
-| `Struct { item: ItemId, args: GenericArgs, layout: Layout }` | item + args + resolved layout                     | **inline**       | **nominal**                                          | C `struct`                                                                                                                                                 |
-| `Enum { item: ItemId, args: GenericArgs, layout: Layout }`   | item + args + resolved layout                     | **inline**       | **nominal**                                          | tagged C struct or niche-encoded                                                                                                                           |
-| `Union { item: ItemId, args: GenericArgs, layout: Layout }`  | item + args + resolved layout                     | **inline**       | **nominal**                                          | C `union`                                                                                                                                                  |
+| Variant                                                      | Carries                                           | Layout?          | Identity bucket                                      |
+| ------------------------------------------------------------ | ------------------------------------------------- | ---------------- | ---------------------------------------------------- |
+| `Bool`                                                       | —                                                 | —                | structural                                           |
+| `Char`                                                       | —                                                 | —                | structural                                           |
+| `Int(IntKind)`                                               | `I8`/`I16`/`I32`/`I64`/`I128`/`Isize`             | —                | structural                                           |
+| `Uint(UintKind)`                                             | `U8`/`U16`/`U32`/`U64`/`U128`/`Usize`             | —                | structural                                           |
+| `Float(FloatKind)`                                           | `F16`/`F32`/`F64`/`F128`                          | —                | structural                                           |
+| `Str`                                                        | marker                                            | no (unsized)     | structural                                           |
+| `Never`                                                      | marker                                            | no (uninhabited) | structural                                           |
+| `Array(TyId, u64)`                                           | element type + length                             | —                | structural                                           |
+| `Slice(TyId)`                                                | element type                                      | no (unsized)     | structural                                           |
+| `Ref(TyId, Provenance)`                                      | pointee + borrow flavor                           | —                | structural                                           |
+| `Ptr(TyId, Mutability)`                                      | pointee + `Not`/`Mut`                             | —                | structural                                           |
+| `FnDef(ItemId, GenericArgs)`                                 | callable item + post-mono args                    | ZST              | **nominal**                                          |
+| `FnPtr(FnSigId)`                                             | sig handle (carries `FnAbi`, etc.)                | —                | structural (FnSig content expanded by canonicalizer) |
+| `Dynamic { auto_traits, vtable_ty }`                         | sorted `AutoTrait` set + vtable's `TyId`          | no (unsized)     | structural                                           |
+| `Closure(ItemId, GenericArgs)`                               | synthesised captures-struct Item + post-mono args | via parallel `Ty::Struct` | **nominal**                                  |
+| `Tuple { fields: Vec<TyId>, layout: Layout }`                | element types + resolved layout                   | **inline**       | structural-with-layout-excluded                      |
+| `Struct { item: ItemId, args: GenericArgs, layout: Layout }` | item + args + resolved layout                     | **inline**       | **nominal**                                          |
+| `Enum { item: ItemId, args: GenericArgs, layout: Layout }`   | item + args + resolved layout                     | **inline**       | **nominal**                                          |
+| `Union { item: ItemId, args: GenericArgs, layout: Layout }`  | item + args + resolved layout                     | **inline**       | **nominal**                                          |
+
+Per-variant C lowerings (per-target rendering of each variant
+as a C type or value) are backend-codegen content; see
+`generic-c-backend.md` §2 for the generic-C target.
+
+Variant-level invariants not already captured above or
+documented elsewhere in §10 / §17:
+
+- **`FnDef` is a ZST** carrying function identity; no value
+  representation is emitted.
+- **`Closure` carries identity-view semantics**; its layout is
+  derived from a parallel synthetic `Ty::Struct` (the
+  captures-struct Item), so the layout column reads "via
+  parallel `Ty::Struct`" rather than `inline`.
+- **The empty tuple `Ty::Tuple { fields: [] }` is Rust `()`**
+  -- a ZST with `size: 0, align: 1` that serves as the unit /
+  value-less marker (per §14.5 it is the only ZST admitted at
+  `FnAbi::C` return position; backend renders per its
+  unit-return convention -- see `generic-c-backend.md` §2).
+- **`Str` / `Slice(_)` / `Dynamic{..}` are unsized** and never
+  appear inline -- they always sit behind `Ref`/`Ptr` (fat
+  pointers; see §17 for the IR-side fat-pointer-aggregate
+  shape).
+- **`Never` is accepted as a `Ref`/`Ptr` pointee** (codegen
+  MAY reject); divergent-expression positions are elided per
+  §10.2.
+- **`Array(t, n)`** is rejected at `FnAbi::C` parameter/return
+  positions per §14.5 (C arrays decay to pointers in those
+  positions; the IR rejects the mismatch rather than silently
+  decay).
 
 ### 10.0 `Ty` enum and primitive scalar enums (Rust shapes)
 
@@ -3117,10 +3756,12 @@ shape on demand.
 `Ty::Never` is the uninhabited type `!`. It carries no `Layout`.
 It is accepted at type level in three positions:
 
-- **Function-return type** (`fn diverge() -> !`): codegen emits
-  `void` plus `__attribute__((noreturn))`.
+- **Function-return type** (`fn diverge() -> !`): accepted at
+  the type level for divergent functions; backend renders the
+  noreturn function per its emission convention (see
+  `generic-c-backend.md` §2 for the generic-C rendering).
 - **Divergent-expression type**: positions are unreachable by
-  construction and codegen elides them.
+  construction; codegen elides them.
 - **Pointee inside `Ty::Ref(...)` / `Ty::Ptr(...)`** (`&!`,
   `*const !`, `*mut !`): accepted at type level (the type is
   well-formed); codegen may reject when emitted, since
@@ -3391,14 +4032,19 @@ wrapping-range semantics for `valid_range`). Bit width per
 natural integer width; `Ptr`/`Ref` is `target.pointer_width`.
 Validation rejects out-of-range stored values.
 
-**Codegen rule for invalid-bit-pattern niche storage.** When
-`TagScalar.scalar_ty` is `Bool` or `Char`, niche encoding may
-write bit patterns outside the *logical value set* (e.g.,
+**Storage-lvalue rule for invalid-bit-pattern niche storage.**
+When `TagScalar.scalar_ty` is `Bool` or `Char`, niche encoding
+may write bit patterns outside the *logical value set* (e.g.,
 `Option<bool>` uses byte values `2..=255` as `None` niche;
-C `_Bool` would normalise these to `0` or `1` on assignment).
-For tag/niche read and write paths, codegen emits the storage
-lvalue as an **unsigned integer of the scalar's storage
-width** — `uint8_t` for `Bool`, `uint32_t` for `Char` — not
+target-level "smart" scalar types like C `_Bool` may normalise
+these to `0` or `1` on assignment, which would corrupt the
+niche). The bridge records this niche-storage requirement: for
+tag/niche read and write paths, the storage lvalue is treated
+as an **unsigned-integer cell of the scalar's storage width**
+— width-equivalent to the value type but without the
+value-set normalisation. Per-target C type rendering of this
+storage lvalue is backend-codegen content; see
+`generic-c-backend.md` §2 + §4 for the generic-C target. Not
 as the logical C type (`_Bool` / Unicode scalar). The
 *logical* type remains `Bool` / `Char` in the IR for type-
 identity and structural purposes; only the *storage emission*
@@ -3958,26 +4604,32 @@ For trait objects (`Ty::Dynamic`), the bridge synthesises:
   order: drop-glue ptr field + size + align + per-method
   fn-ptr fields + supertrait vtable ptrs + Vacant slots for
   non-dispatchable methods.
-  - **Erased receiver type is uniformly `*mut ErasedPointee`**,
+  - **Erased receiver type is uniformly
+    `Ty::Ptr(ErasedPointee, Mutability::Mut)`** in the IR,
     regardless of the source borrow flavor (where
     `ErasedPointee` is defined below). Shared `&self` methods
     on impls whose `Self` contains `UnsafeCell` legitimately
-    mutate through `&self` — emitting `*const ErasedPointee`
-    for the shared receiver would be C undefined behaviour on
-    the actual write. The Rust borrow flavor is preserved at
-    the type-system level (the source `Ref(t, SharedBorrow)`
-    is still visible), but the C-level erased dispatch surface
-    drops the `const` qualifier to be sound across all impls.
-    See §17.2.1 "Trait-object dispatch carve-out."
+    mutate through `&self`; a shared-receiver erasure
+    (`Ty::Ptr(_, Mutability::Not)`) would not be sound across
+    all admissible impls. The Rust borrow flavor is preserved
+    at the type-system level (the source `Ref(t, SharedBorrow)`
+    is still visible in the source Ty), but the erased
+    dispatch surface uniformly carries `Mutability::Mut` to be
+    sound across all impls. Per-target rendering of this
+    erased receiver in C is backend-codegen content; see
+    §17.2.3 "Trait-object dispatch carve-out" for the IR-side
+    rule and `generic-c-backend.md` §3.3 for the generic-C
+    target's rendering.
   - **Canonical erased pointee.** The erased receiver and
     trait-object `data` field reference the canonical erased
     unit type: `Ty::Tuple { fields: vec![], layout:
-    UNIT_LAYOUT }` (§11). When this exact pointer-to-unit
-    pattern occurs in vtable-erased positions, codegen emits
-    `void *` (per the §17.2.1 trait-object dispatch carve-out)
-    rather than a typed pointer to an empty synthetic struct.
-    This avoids reintroducing `core::ffi::c_void` (rejected
-    per §15.1) while giving the bridge a stable `Ty` to point to.
+    UNIT_LAYOUT }` (§11). This canonical IR-side anchor avoids
+    reintroducing `core::ffi::c_void` (rejected per §15.1)
+    while giving the bridge a stable `Ty` to point to.
+    Per-target rendering of the erased pointee (e.g., the
+    generic-C target's unqualified void-pointer convention)
+    is backend-codegen content; see `generic-c-backend.md`
+    §3.3.
   - **Vacant slot canonical type.** Vacant vtable slots are
     explicit placeholder fn-pointer fields with a fixed null
     initialiser, NOT omitted. Each vacant slot's field type is
@@ -3996,8 +4648,9 @@ For trait objects (`Ty::Dynamic`), the bridge synthesises:
   - **Method shim and drop shim ABI is `FnAbi::C` uniformly.**
     All bridge-synthesised vtable shim Function Items (method
     shims and the drop-in-place shim) use `FnAbi::C`,
-    matching the vacant-slot canonical signature and the C
-    examples in Appendix A.6. Their erased signatures are
+    matching the vacant-slot canonical signature; C-side
+    worked examples for vtable-shim lowering live in
+    `generic-c-backend.md` (per D-14-10 carve-out). Their erased signatures are
     checked with `CAbiPositionAdmissible` (§14.5) **after**
     receiver erasure to `*mut ()`. A trait whose dispatchable
     method's signature (with the source receiver replaced by
@@ -4631,11 +5284,12 @@ the same.
   { fn_sig_id_or_callee_def_id, input_idx }` — this is an
   explicit DSL-scope rejection (with a real diagnostic), not
   a bridge internal bug. `output` MAY be `Ty::Never` (divergent
-  functions are well-formed and lower to `__attribute__((noreturn))
-  void`).
+  functions are well-formed at the IR level; per-target
+  noreturn rendering is backend-codegen content).
 - **Unit return.** `output` MAY be `Ty::Tuple { fields: [] }`
-  (Rust unit `()`); this is the standard no-value return shape
-  and lowers to C `void` at `FnAbi::C` boundaries (§14.5).
+  (Rust unit `()`); this is the standard no-value return
+  shape at `FnAbi::C` boundaries (§14.5); per-target rendering
+  per backend.
 
 **`c_variadic` construction invariants.**
 
@@ -4811,10 +5465,14 @@ distinct in the IR:
   `sig_c_abi_lowerings[id] = Some(CAbiLowering { inputs:
   [Direct], output: Direct })`.
 
-Both lowerings emit identical C function signatures
-(`uint32_t f(uint32_t)`), but the FnSigs are distinct in the
-model — preserving the type-identity contract for
+Both lowerings produce identical post-`CAbiLowering` C-ABI
+surfaces (the `Handle` chain unfolds to the same scalar shape
+as the direct `u32` signature), but the FnSigs remain distinct
+in the model — preserving the type-identity contract for
 rustc-distinct types (see `discussions.md` D15 for rationale).
+The per-target C-type rendering of the lowered surface is
+backend-codegen content; see `generic-c-backend.md` §2 for the
+generic-C target.
 
 **`CAbiLowering` is sibling-only metadata.** Per the §14.3
 convention, diagnostic / sibling data does not affect FnSig
@@ -4925,9 +5583,10 @@ in `sig_c_abi_lowerings`. Shape rules:
   `FnAbi::Rust` function pointers crossing a C boundary lose
   the call contract and are rejected. **Exception:**
   `FnPtr(sig)` where `model.sigs[sig].output == Ty::Never` is
-  rejected at C boundaries in v1 — top-level `extern "C" fn()
-  -> !` lowers to `__attribute__((noreturn)) void`, but nested
-  noreturn function-pointer declarators have platform-specific
+  rejected at C boundaries in v1 — top-level divergent
+  `extern "C" fn() -> !` is admissible (per the §14.5 return
+  rule), but nested noreturn function-pointer declarators
+  have platform-specific
   C syntax and placement rules. Reject at the boundary; defer
   to a future revision if a real driver use case surfaces.
 - `Struct { item, args, .. }` and `Union { item, args, .. }`
@@ -4991,7 +5650,8 @@ in `sig_c_abi_lowerings`. Shape rules:
 - `Dynamic { .. }`, `Str`, `Slice` (bare) — invalid outside
   `Ref`/`Ptr` per construction invariant 12.
 - `Never` as a parameter — pointless. Accepted as the return
-  slot (`fn() -> !` lowers to `__attribute__((noreturn)) void`).
+  slot (`fn() -> !` is admissible at the IR level; per-target
+  noreturn rendering per backend).
 - `Struct`/`Enum`/`Union` whose rustc `adt_def.repr()` is
   default `Rust` — no canonical C ABI.
 - `FnPtr(sig)` whose `model.sigs[sig].abi == FnAbi::Rust`.
@@ -5130,9 +5790,11 @@ Generic opaque-handle candidates (`Handle<T>`-style) are
 requires a global reachability analysis at bridge construction;
 the outcome is stored on the Item so codegen and validation
 can read it directly. When `opaque_handle_eligible == true`,
-codegen emits the incomplete-struct form; when false, the
-bridge has already rejected any incompatible use site at type
-translation, so codegen emits a complete declaration.
+the Item is admissible for the opaque-handle lowering
+convention (per-target emission form lives in the backend
+artifact); when false, the bridge has already rejected any
+incompatible use site at type translation, so codegen has a
+complete representation to work from.
 
 **Model-checkable non-generic criterion.** A non-generic Item
 is one for which there exists exactly one `Ty::Struct { item:
@@ -5179,6 +5841,8 @@ satisfying the build-equivalence quad produce identical
 
 ## 15. Bridge translation rules
 
+### 15.0 TyKind translation table + special-ADT dispatch
+
 What the bridge does for each rustc `TyKind` after
 `instantiate_mir_and_normalize_erasing_regions`:
 
@@ -5210,9 +5874,9 @@ set *before* generic struct/enum/union translation:
 2. **DSL-rejected ADTs**: `Box` (via
    `adt_def.is_box()` / `IS_BOX`), `core::ffi::c_void` (via
    `tcx.is_lang_item(LangItem::CVoid)`),
-   `core::sync::atomic::Atomic*` (via canonical-name match),
-   `Pat`, `UnsafeBinder`, `Foreign`, `Coroutine` family — see
-   §15.1 rejection table for the full set.
+   `core::sync::atomic::Atomic*` (via canonical-name match) —
+   see §15.1 rejection table for the full set of ADT-backed
+   DSL-rejected types.
 3. **Generic Adt translation** runs only if no special rule
    above applies, dispatching on the rustc `AdtDef::adt_kind()`
    to one of:
@@ -5224,18 +5888,69 @@ This ordering is normative: implementation must check the
 special set first, otherwise generic translation accidentally
 admits rejected core types.
 
+**Non-ADT TyKind rejections.** `Pat`, `UnsafeBinder`,
+`Foreign`, and the `Coroutine` family (`Coroutine`,
+`CoroutineClosure`, `CoroutineWitness`) are not
+`TyKind::Adt` variants — they are independent top-level
+`TyKind` variants. The bridge rejects them at the
+top-level `TyKind` match-arm dispatch, before the
+`TyKind::Adt` arm runs. The §15.1 rejection table
+enumerates them alongside the ADT-backed rejections; the
+enforcement gate for these is the top-level TyKind match
+exhaustiveness, not the special-ADT dispatch ordering.
+
 ### 15.1 Rejections
 
-The bridge rejects the following at type, call, or place
-translation. Three categories overall: **non-rigid `TyKind`**
-(should not survive
+The bridge rejects the following at type, Item, call, or
+place translation. Four categories overall: **non-rigid
+`TyKind`** (should not survive
 `instantiate_mir_and_normalize_erasing_regions`; encountering
 one is a bridge bug); **rigid but DSL-rejected** (types that
 survive normalisation but lie outside the v1 driver-DSL scope);
+**Item-attribute DSL rejections** (source-level attributes
+whose codegen consequence has no representable v1 IR shape);
 and **closed `PlaceElem` vocabulary rejections** (rustc
 projection variants that are absent from our `optimized_mir`
 input or gated behind unstable features and have no v1 driver
 use case; see §19.1).
+
+**Enforcement model.** ADT-backed rejections in the
+"type translation" phase (`core::ffi::c_void`, `Box`,
+the `core::sync::atomic::Atomic*` types) are enforced
+algorithmically by the §15.0 special-ADT dispatch-
+ordering rule: the closed special-ADT check runs
+unconditionally before generic struct / enum / union
+translation, so no path through
+`TyKind::Adt(adt_def, args)` can bypass the rejection.
+The ordering rule is normative per §15.0; the rows
+below are the enumeration of which ADTs the gate
+intercepts. Non-ADT `TyKind` rejections in the
+table (`Pat`, `UnsafeBinder`, `Foreign`, the
+`Coroutine` family) are enforced at the top-level
+`TyKind` match-arm dispatch per the §15.0
+"Non-ADT TyKind rejections" paragraph (the bridge
+rejects them before the `TyKind::Adt` arm runs).
+Other type-translation rejections (e.g., HRTB-related
+rows per §17.1, C-ABI admissibility rows per §14.5)
+are enforced by their owning section's check points
+and the bridge's §3.4 construction-pipeline ordering.
+The Item-attribute and `PlaceElem` rows are enforced
+at the Item-walk and Place-projection-walk phases per
+their respective sections.
+
+**Opaque-struct pattern.** Where a row above
+recommends the **opaque-struct pattern** (`Foreign(_)`
+and `core::ffi::c_void` rows), the pattern is a
+`#[repr(C)]` ZST struct with a single private
+zero-length-array field, e.g., `#[repr(C)] struct
+OpaqueCtx { _private: [u8; 0] }`. The bridge admits
+such a struct via the ordinary `Ty::Struct` path
+(no special-ADT-rejection rule), and downstream uses
+naturally lower to an incomplete-struct pointer at
+the C-ABI boundary per §14.5 + §8.0 invariant 19
+opaque-handle eligibility. Appendix A.1 walks the
+`*mut c_void` -> `*mut OpaqueCtx` rewrite end-to-end
+including the diagnostic shape the bridge emits.
 
 | Rejection                                                                 | Phase            | Reason                                                                                |
 | ------------------------------------------------------------------------- | ---------------- | ------------------------------------------------------------------------------------- |
@@ -5250,6 +5965,7 @@ use case; see §19.1).
 | `core::sync::atomic::Atomic*::*()` methods + `core::intrinsics::atomic_*` | call translation | use `#[rseq::intrinsic("atomic_*")]`                                                  |
 | `core::sync::atomic::{fence, compiler_fence}`                             | call translation | outside the v1 admitted intrinsic vocabulary; drivers requiring explicit ordering barriers between MMIO and normal memory are out of v1 scope |
 | `core::ptr::{read,write}_volatile`                                        | call translation | use `#[rseq::intrinsic("mmio_*")]`                                                    |
+| `#[naked]` on a function Item                                             | Item translation | recognised via `tcx.codegen_fn_attrs(did).flags.contains(CodegenFnAttrFlags::NAKED)`; a `#[naked]` function's MIR body is structurally a single `TerminatorKind::InlineAsm` terminator (already rejected at §23.6.1 row 8 by stage-9 D-9-9), so no representable v1 IR body shape exists. Diagnostic recommends deferring to a future ISR-stub synthesis path via the `#[rseq::interrupt(...)]` domain extension (phase-2 stage 17), which will synthesise a C/asm wrapper around an ordinary Rust handler body. |
 | `extern "C" { unwind: true }` and other `ExternAbi` variants              | type translation | only `Rust` and `C` accepted (§14)                                                    |
 | `FnAbi::C` `FnSig` with non-C-ABI-admissible parameter or return type     | type translation | C ABI admissibility predicate (§14.5); `BridgeError::UnsupportedCAbiType`              |
 | `Ref`/`Ptr` to unsized pointee (`Str`, `Slice(_)`, `Dynamic{..}`) at `FnAbi::C` parameter/return | type translation | wide-pointer aggregate not idiomatic at extern "C" boundary; pass data + length/vtable as separate parameters (§14.5) |
@@ -5639,75 +6355,110 @@ Termination: `TyInterner` is acyclic at the value level
 which the rule terminates on). Implementations memoise via a
 visited `HashSet<TyId>` for cost.
 
-C-qualification rule (codegen) — applies when the pointee `t` is
-**sized**:
+Mutability rule for **sized** pointees (IR-side; backend
+rendering follows):
 
-- `Ref(t, SharedBorrow)` lowers to `const T*` if
-  `!contains_unsafe_cell(t)`, else `T*`.
-- `Ref(t, UniqueBorrow)` lowers to `T*` (mutable borrow already
-  drops `const`; `restrict` is a separate per-context decision).
-- `Ptr(t, Mutability::Not)` lowers to `const T*` (raw pointers
-  do not consult `is_unsafe_cell`; raw-pointer framing).
-- `Ptr(t, Mutability::Mut)` lowers to `T*`.
+- `Ref(t, SharedBorrow)` carries shared (immutable)
+  mutability if `!contains_unsafe_cell(t)`; otherwise the
+  mutability discriminant is dropped per the UnsafeCell rule
+  (§17.2.1 recursive interior-mutability detection).
+- `Ref(t, UniqueBorrow)` carries unique (mutable) mutability.
+- `Ptr(t, Mutability::Not)` carries shared (immutable)
+  mutability (raw pointers do not consult `is_unsafe_cell`;
+  raw-pointer framing).
+- `Ptr(t, Mutability::Mut)` carries unique (mutable)
+  mutability.
 
-#### Wide-pointee carve-out
+Per-target C-type rendering of these mutability discriminants
+(e.g., the generic-C target emitting `const T*` / `T*` /
+optional `restrict` per its convention) is backend-codegen
+content; see `generic-c-backend.md` §3.1.
+
+#### 17.2.2 Wide-pointee carve-out
 
 When the pointee `t` is **unsized** — `Ty::Str`, `Ty::Slice(_)`,
-or `Ty::Dynamic{..}` — the rules above do **not** apply. The
-`Ref`/`Ptr` value lowers as a fat-pointer aggregate (two-slot
-struct), not as `T*`. The qualification applies to the
-aggregate's `data` field per the table below; the second slot
-(`len` for slice/str, `vtable` for dyn) is independent.
+or `Ty::Dynamic{..}` — the sized-pointee rules above do **not**
+apply. The `Ref`/`Ptr` value lowers as a **fat-pointer
+aggregate** (two-slot struct), not as a thin pointer. The
+abstract slot composition:
 
-| Pointee + borrow                       | `data` field type                                                                                                                                              | Second slot                          |
-| -------------------------------------- | -------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------ |
-| `Ref(Str, SharedBorrow)`               | `const uint8_t *`                                                                                                                                              | `len` — target-width unsigned        |
-| `Ref(Str, UniqueBorrow)`               | `uint8_t *`                                                                                                                                                    | `len` — target-width unsigned        |
-| `Ptr(Str, Mutability::Not)`            | `const uint8_t *`                                                                                                                                              | `len` — target-width unsigned        |
-| `Ptr(Str, Mutability::Mut)`            | `uint8_t *`                                                                                                                                                    | `len` — target-width unsigned        |
-| `Ref(Slice(T), SharedBorrow)`          | `const T*` if `!contains_unsafe_cell(T)`, else `T*`                                                                                                            | `len` — target-width unsigned        |
-| `Ref(Slice(T), UniqueBorrow)`          | `T*`                                                                                                                                                           | `len` — target-width unsigned        |
-| `Ptr(Slice(T), Mutability::Not)`       | `const T*`                                                                                                                                                     | `len` — target-width unsigned        |
-| `Ptr(Slice(T), Mutability::Mut)`       | `T*`                                                                                                                                                           | `len` — target-width unsigned        |
-| `Ref(Dynamic{..}, _)` or `Ptr(Dynamic{..}, _)` | `void *` (unqualified) — see "Trait-object dispatch carve-out" below                                                                                          | `vtable` — `const VTable *`          |
+- **`data` slot** (slot[0]): a thin pointer to the element
+  type (`u8` for `Str`, `T` for `Slice(T)`, erased for
+  `Dynamic{..}`). The source mutability / `Provenance` rule
+  applies to this slot per the table below, with the
+  trait-object carve-out (§17.2.3 below) erasing the
+  mutability discriminant for `Dynamic{..}` pointees.
+- **second slot** (slot[1]): `len` (target-width unsigned
+  scalar) for `Str` and `Slice(_)`; `vtable` (immutable
+  vtable handle) for `Dynamic{..}`.
 
-The literal C struct typedef shapes (`struct rust_str`,
-`struct rust_slice_T`, `struct trait_obj_Trait`) are codegen
-contract; this section pins the *qualification and slot count*
-the codegen must respect. See Appendix A.2 for worked examples.
+The data-slot mutability is independent of the second slot.
 
-**C boundary rejection.** The fat-pointer lowering rules above
-apply to **Rust-internal** uses (Rust-ABI function calls,
-value-context locals, struct fields). At `FnAbi::C`
-parameter/return positions, `Ref`/`Ptr` to unsized pointees are
-**rejected** by the C ABI admissibility predicate (§14.5).
-Driver code crossing extern "C" passes the data pointer and
-length / vtable pointer as separate parameters; the wide-
-pointer aggregate is not idiomatic at the C boundary.
+| Pointee + borrow                              | `data` slot mutability                                | Second slot |
+| --------------------------------------------- | ----------------------------------------------------- | ----------- |
+| `Ref(Str, SharedBorrow)`                      | shared (immutable)                                    | length      |
+| `Ref(Str, UniqueBorrow)`                      | unique (mutable)                                      | length      |
+| `Ptr(Str, Mutability::Not)`                   | shared (immutable)                                    | length      |
+| `Ptr(Str, Mutability::Mut)`                   | unique (mutable)                                      | length      |
+| `Ref(Slice(T), SharedBorrow)`                 | shared if `!contains_unsafe_cell(T)`, else mutable    | length      |
+| `Ref(Slice(T), UniqueBorrow)`                 | unique (mutable)                                      | length      |
+| `Ptr(Slice(T), Mutability::Not)`              | shared (immutable)                                    | length      |
+| `Ptr(Slice(T), Mutability::Mut)`              | unique (mutable)                                      | length      |
+| `Ref(Dynamic{..}, _)` / `Ptr(Dynamic{..}, _)` | erased (mutability not carried; see §17.2.3)          | vtable      |
 
-#### Trait-object dispatch carve-out
+This section pins the abstract **qualification (data-slot
+mutability bit under the §17.1 / §17.2.3 erasure rules)** and
+**slot count** of each fat-pointer flavor. Per-target C
+typedef shapes (e.g., `struct rust_str`, `struct
+rust_slice_T`, `struct trait_obj_Trait` for the generic-C
+target) are backend-codegen content; see
+`generic-c-backend.md` §3 for the generic-C target's
+fat-pointer C struct table and worked examples.
+
+**C boundary rejection.** The fat-pointer lowering rules
+above apply to **Rust-internal** uses (Rust-ABI function
+calls, value-context locals, struct fields). At `FnAbi::C`
+parameter/return positions, `Ref`/`Ptr` to unsized pointees
+are **rejected** by the C ABI admissibility predicate
+(§14.5). Driver code crossing extern "C" passes the data
+pointer and length / vtable pointer as separate parameters;
+the fat-pointer aggregate is not admissible at the C
+boundary.
+
+#### 17.2.3 Trait-object dispatch carve-out
 
 For `Ref(Dynamic{..}, _)` and `Ptr(Dynamic{..}, _)`, the
-fat-pointer's `data` field is **unqualified `void *`**
-regardless of the source borrow's `Provenance` or `Mutability`.
+fat-pointer's **`data` slot has its mutability discriminant
+erased**: the IR drops the source `Provenance` / `Mutability`
+distinction at the dyn boundary uniformly across all source
+borrow flavors.
 
-Reason: trait-object dispatch erases the concrete `Self` type.
-The vtable shim's receiver is uniformly `*mut ()` (§13.2),
-because shared `&self` methods on impls whose `Self` contains
-`UnsafeCell` may legitimately mutate through the shared
-reference — promising C `const` through type-erased dispatch
-would be C undefined behaviour for those impls. The
+Reason: trait-object dispatch erases the concrete `Self`
+type. The vtable shim's receiver is uniformly `*mut ()`
+(§13.2), because shared `&self` methods on impls whose
+`Self` contains `UnsafeCell` may legitimately mutate through
+the shared reference — preserving a source-side
+immutability discriminant through type-erased dispatch
+would be unsound for those impls. The
 `contains_unsafe_cell` predicate (above) cannot be evaluated
-on `Dynamic{..}` (the concrete `Self` is not in the type), so
-the only sound rule is to drop `const` uniformly at the
-trait-object boundary.
+on `Dynamic{..}` (the concrete `Self` is not in the type),
+so the only sound rule is to drop the mutability
+discriminant uniformly at the trait-object boundary.
 
-The Rust borrow flavor is preserved at the type-system level
-(the source `Ref(Dynamic{..}, SharedBorrow)` is still visible
-in the IR); what's dropped is the C-level `const` promise on
-the *erased data pointer*. The vtable pointer slot itself
-remains `const VTable *` — vtable instances are immutable
-statics.
+The Rust borrow flavor remains visible at the IR's
+type-system level — the source `Ref(Dynamic{..},
+SharedBorrow)` is still distinguishable from
+`Ref(Dynamic{..}, UniqueBorrow)` in the `Ty` term — but the
+**`data` slot's mutability bit is dropped** in the
+fat-pointer aggregate (§17.1 wide-pointee table). The
+vtable slot carries an immutable vtable handle uniformly
+across all source borrow flavors; vtable instances are
+immutable statics, and this immutability is a property of
+vtable identity, not a per-borrow discriminant.
+
+Per-target rendering of the erased `data` slot is
+backend-codegen content; see `generic-c-backend.md` §3.3 for
+the generic-C target.
 
 ### 17.3 C-shape over Rust-shape
 
@@ -5789,11 +6540,15 @@ The pretty-printer specification lives in top-level
 for rendering style, the `PrettyPrinter` API surface,
 sigil conventions, the per-method ownership table,
 per-renderer specifications, and worked-example
-specimens. `spec.md` and `pretty-printer.md` are
-co-equal merger artifacts: `spec.md` covers the IR's
-structural definitions (producer-side); `pretty-printer.md`
-covers the rendering surface (consumer-side). For
-rationale, see top-level `discussions.md`.
+specimens. `spec.md`, `pretty-printer.md`, and
+`generic-c-backend.md` are co-equal merger artifacts
+per README §5.9 rules 6 + 7: `spec.md` covers the IR's
+structural definitions (producer-side);
+`pretty-printer.md` covers the rendering surface
+(consumer-side); `generic-c-backend.md` covers the
+backend-side C-emission surface (the phase-1
+generic-C target per D-14-10). For rationale, see
+top-level `discussions.md`.
 
 ### 18.1 Sigil conventions
 
@@ -6069,24 +6824,13 @@ materialised as the owned `Box<[PlaceElem]>` per §19.2; the
 bridge constructs the slab once per Place and the result is
 immutable.
 
-### 19.6 C-semantics lowering sketch
+### 19.6 C lowering
 
-Each `PlaceElem` maps to a C lvalue construct:
-
-| Variant | C lvalue form |
-|---|---|
-| `Deref` | unary `*p` |
-| `Field(idx, _)` | `.fname` (field name from predecessor layout's `FieldLayout.name`, dispatched per §19.8) |
-| `Index(local)` | `[local_lvalue]` (where `local_lvalue` is the C lvalue of the `LocalId` payload) |
-| `ConstantIndex { offset, ..., from_end: false }` | `[offset]` |
-| `ConstantIndex { offset, ..., from_end: true }` | `[len - offset]` (with `len` being the predecessor slice's runtime length; `from_end: true` is slice-only per §19.4) |
-| `Subslice { from, to, from_end: false }` | a slice expression with bounds `[from, to)` |
-| `Subslice { from, to, from_end: true }` | a slice expression with bounds `[from, len - to)` |
-| `Downcast(VariantIdx)` | tagged-union arm projection (form depends on the C representation chosen for tagged unions; informational at this stage) |
-
-These are sketches; the precise C-lowering is owned by the
-codegen stage. The lowering per variant is deterministic from
-the projection-chain content; no special-case flags.
+Per-`PlaceElem` C lvalue forms are backend-codegen content;
+see `generic-c-backend.md` §4 for the generic-C target's
+table. The lowering is deterministic from the projection-chain
+content with no special-case flags (composition rule per the
+§2 compositional-behavior principle).
 
 ### 19.7 Place validation
 
@@ -6333,22 +7077,19 @@ the closed-vocabulary discipline at the IR level. See
 the option-(a) / option-(b) / option-(c) trade-off, and the
 Charon precedent for option (c).
 
-### 20.4 C-semantics lowering sketch
+### 20.4 C lowering
 
-The C backend lowers each variant as follows (pinned in
-stage 6; consumed at the C-emission stage):
-
-| Variant         | C lowering                                                  |
-| --------------- | ----------------------------------------------------------- |
-| `Copy(p)`       | C value-load from `place_to_c_expr(p)` (§19.6 lvalue surface). Backend may emit a plain assignment, a struct-copy, or `memcpy` based on size and layout policy. |
-| `Move(p)`       | Same C value-load as `Copy(p)`. The variant tag is informational at the C level; a backend that wants to specialise (e.g., emit `memcpy` for large moves while the source place becomes dead, or elide a final move into a return slot) may consult the variant. The bare load semantics are identical to `Copy`. |
-| `Constant(id)`  | C literal or compound literal materialised from `model.consts.resolve(id)`. Concrete per-`Const`-variant C lowerings (literal vs compound vs address-of for `Reloc`, etc.) are pinned at the C-emission stage; stage 6 commits only to the `Operand::Constant(ConstId)` -> Const-resolution boundary, not to the per-variant C shapes. The `Const` vocabulary itself is the §9.7 closed enum. |
-
-Because the IR has no `RuntimeChecks` variant (§20.3.1), the
-C backend never sees a session-flag query at operand site;
-it sees `Constant(ConstId)` referencing a `Const::Bool(b)`
-exactly as if the source had written the literal `true` /
-`false`.
+Per-`Operand`-variant C lowerings are backend-codegen content;
+see `generic-c-backend.md` §5 for the generic-C target. The
+IR-side commitment at this section is the
+`Operand::Constant(ConstId) -> Const-resolution` boundary --
+the operand carries an interner key, the backend resolves it
+through `model.consts` per the closed `Const` vocabulary at
+§9.7. Because the IR has no `RuntimeChecks` variant (§20.3.1),
+no backend ever sees a session-flag query at an operand site;
+operands referencing build-pinned booleans appear as
+`Constant(ConstId)` referencing a `Const::Bool(b)` exactly as
+if the source had written the literal `true` / `false`.
 
 ### 20.5 Operand-site invariants
 
@@ -6500,8 +7241,9 @@ encounter (§21.5.1):
   `#[thread_local]` cannot produce a working driver on the
   documented target OSes.
 - `WrapUnsafeBinder(Operand, Ty)` -- §15.1 (Type-level
-  rejection table at line 4583) rejects `Ty::UnsafeBinder`
-  at type translation; the rvalue-level rejection cascades
+  rejection table's `UnsafeBinder` row) rejects
+  `Ty::UnsafeBinder` at type translation; the rvalue-level
+  rejection cascades
   by composition (the binder type the variant wraps cannot
   enter the IR). Additional grounds: gated behind the
   unstable `unsafe_binders` feature; the binder type has no
@@ -6923,7 +7665,7 @@ error message:
 | `mir::Rvalue::CopyForDeref(_)` | Eliminated by required `EraseDerefTemps` runtime-lowering pass (listed at `rustc_mir_transform/src/lib.rs:658`; `is_required(): true` at `rustc_mir_transform/src/erase_deref_temps.rs:38`); rustc codegen `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:712`). Not in optimized_mir. |
 | `mir::Rvalue::ShallowInitBox(_, _)` | Eliminated by required `ElaborateBoxDerefs` runtime-lowering pass (listed at `rustc_mir_transform/src/lib.rs:659`; `is_required(): true` at `rustc_mir_transform/src/elaborate_box_derefs.rs:224`); rustc codegen `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:713`). Not in optimized_mir. |
 | `mir::Rvalue::ThreadLocalRef(_)` | DSL-surface rejection: `#[thread_local]` cannot produce a working driver on Linux/Zephyr targets (no TLS infrastructure exposed to driver code). |
-| `mir::Rvalue::WrapUnsafeBinder(_, _)` | §15.1 (Type-level rejection table at line 4583) rejects `Ty::UnsafeBinder` at type translation; the rvalue-level rejection cascades by composition (the binder type the variant wraps cannot enter the IR). Additional grounds: gated behind unstable `unsafe_binders` feature; binder type has no C-shape; no v1 driver-corpus precedent (Charon and mrustc both lack the analog). |
+| `mir::Rvalue::WrapUnsafeBinder(_, _)` | §15.1 (Type-level rejection table's `UnsafeBinder` row) rejects `Ty::UnsafeBinder` at type translation; the rvalue-level rejection cascades by composition (the binder type the variant wraps cannot enter the IR). Additional grounds: gated behind unstable `unsafe_binders` feature; binder type has no C-shape; no v1 driver-corpus precedent (Charon and mrustc both lack the analog). |
 | `mir::Rvalue::Ref(_, BorrowKind::Fake(_), _)` | NOPed by required `CleanupPostBorrowck` pass (NOP code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:33-43`; `is_required(): true` at `rustc_mir_transform/src/cleanup_post_borrowck.rs:88`). Fake assignments are statement-level Nops in optimized_mir. |
 | `mir::Rvalue::Cast(CastKind::PointerCoercion(MutToConstPointer \| ArrayToPointer, _), _, _)` | Rewritten to `CastKind::PtrToPtr` by required `CleanupPostBorrowck` (rewrite code at `rustc_mir_transform/src/cleanup_post_borrowck.rs:44-60`; `is_required(): true` at `rustc_mir_transform/src/cleanup_post_borrowck.rs:88`); rustc codegen also `bug!()`s (`rustc_codegen_ssa/src/mir/rvalue.rs:448-452`). Not in optimized_mir. |
 | `mir::Rvalue::Aggregate(box AggregateKind::Coroutine(_, _) \| CoroutineClosure(_, _), _)` | Type-level rejection in §15.1 (Coroutine / CoroutineClosure / CoroutineWitness rejected at type translation) plus runtime-lowering `coroutine::StateTransform` discharge (`rustc_mir_transform/src/lib.rs:660`). Two independent grounds. |
@@ -7671,14 +8413,13 @@ they do NOT appear in `Statement::Intrinsic`. The
 Statement-level `Intrinsic` variant carries only
 rustc's own `NonDivergingIntrinsic` primitives.
 
-C-semantics:
-- `Intrinsic::Assume(op)` -- backend-specific assume
-  builtin: `__builtin_assume(op)` (clang),
-  `if (!op) __builtin_unreachable()` (gcc fallback),
-  or backend choice. Driver targets are clang+gcc.
-- `Intrinsic::CopyNonOverlapping{src, dst, count}` --
-  `memcpy(dst, src, count * sizeof(T))` where T is the
-  pointee type recovered from src/dst types.
+C-emission of `Statement::Intrinsic` variants
+(`NonDivergingIntrinsic::Assume` -- backend-specific assume
+builtin; `NonDivergingIntrinsic::CopyNonOverlapping{src, dst,
+count}` -- `memcpy`-family emission with the IR-side `src` /
+`dst` field naming preserved so backends consume by name) is
+backend-codegen content; see `generic-c-backend.md` §6 for
+the generic-C target.
 
 (See `discussions.md` D-8-1.4 for the audit including
 the nested-vs-fanout reasoning and the lift-to-Call
@@ -8136,18 +8877,16 @@ Two `Statement::Intrinsic` instances:
   - `operand_ty(Move(_3)) == Ty::Uint(UintKind::Usize)`
     (B-5 count-type satisfied).
 
-C-emission shapes (stage 14):
-- `Assume(...)` -> `__builtin_assume(_5)` (clang) or
-  `if (!_5) __builtin_unreachable()` (gcc fallback).
-- `CopyNonOverlapping{...}` -> `memcpy(_1, _2, _3 * sizeof(uint32_t))`.
-
-Note the **argument-order swap**: rustc's
-`copy_nonoverlapping(src, dst, count)` is `(_2, _1, _3)`
-in body source order; C's `memcpy(dst, src, count)`
-is `(_1, _2, _3 * sizeof T)`. The named `src` /
-`dst` fields on the `CopyNonOverlapping` payload struct
-prevent this swap from being silently confused at the
-bridge or codegen sites.
+C-emission shapes for the generic-C target are backend-codegen
+content; see `generic-c-backend.md` §6 for the generic-C
+target's `Assume` and `CopyNonOverlapping` lowerings,
+including the argument-order swap between rustc's
+`copy_nonoverlapping(src, dst, count)` and C's `memcpy(dst,
+src, count * sizeof T)`. The named `src` / `dst` fields on
+the `CopyNonOverlapping` payload struct (IR-side) preserve
+rustc's argument naming so backends consume by name; the
+positional swap between Rust and C signatures cannot
+silently confuse construction or consumption sites.
 
 ### 22.8 Rendering
 
@@ -8907,6 +9646,27 @@ Terminator content).
   - (Indirect) `args.len() == operand_ty(
     callee_operand).inputs().len()`.
 
+  **Exception: diagnostic-logging intrinsic callees
+  (I-DiagLog-CallArity).** When `callee =
+  CallCallee::Direct(id)` and
+  `model.instance_intrinsic(id) ==
+  Some(IntrinsicKind::Log(_))` (per the §3.5.2
+  pull-through helper), the post-DiagLogPeel Call shape
+  is `[fmt_literal, expr_1, ..., expr_N]` (1 fmt
+  literal + N peeled argument operands per §26.6), and
+  the declared callee signature is `fn(&'static str,
+  &[LogArg<'_>])` (2 inputs). The arity-match rule
+  reframes to: `args.len() == 1 + N` where N is the
+  number of `{}` placeholders in the format template at
+  the call site (D-14-2.7 D1 enforces template/arg
+  arity parity). The declared 2-arg callee signature
+  does not apply; the desugared shape is the invariant.
+  Indirect callees
+  (`CallCallee::Indirect(Operand)`) cannot satisfy the
+  log-intrinsic predicate: `IntrinsicKind` is keyed by
+  Instance identity, and indirect callees do not pin
+  an InstanceId. See §26.6 for the canonical statement.
+
 - **B-5** -- Call callee is callable:
   - (Direct) `InstanceId` resolves to an
     `InstanceKind::Function` per top-level `spec.md`
@@ -8940,7 +9700,7 @@ Terminator content).
   run. Pre-rewrite virtual calls have args[0] with
   type `&dyn Trait` or `&mut dyn Trait` (the fat pointer
   at the call site) while `callee_fn_sig(callee_id).
-  inputs()[0]` is `*mut ()` -- per §13.2 + §17.2.1, the
+  inputs()[0]` is `*mut ()` -- per §13.2 + §17.2.3, the
   vtable's erased receiver type is uniformly
   `Ty::Ptr(unit, Mutability::Mut)` regardless of the
   source borrow flavor (the const-qualified `*const ()`
@@ -8953,6 +9713,62 @@ Terminator content).
   Stage-11 sequencing: rewrite first, validate after.
   Catches stage-11 rewrite-pass bugs in any
   post-rewrite shape.
+
+  **Exception: diagnostic-logging intrinsic callees
+  (I-DiagLog-CallArity).** When `callee =
+  CallCallee::Direct(id)` and
+  `model.instance_intrinsic(id) ==
+  Some(IntrinsicKind::Log(_))` (per the §3.5.2
+  pull-through helper), per-arg type match against the
+  declared callee signature does not apply (declared
+  signature is `fn(&'static str, &[LogArg<'_>])` -- 2
+  inputs -- while the post-DiagLogPeel Call carries
+  1 + N args per the B-4 exception). The peeled
+  shape's type invariants are:
+  - `args[0]` has type `Ty::Ref(Ty::Str,
+    Provenance::SharedBorrow)` -- the `&'static str`
+    format template. **Literal-ness** of `args[0]` is
+    validated at DiagLogPeel synthesis time (§25.7.3
+    step 1) against the rustc MIR Constant shape **before**
+    Regseq const lowering -- post-lowering, the `Const`
+    shape is `Const::Aggregate([Reloc(<static>),
+    Uint(Usize, len)])` per §9.7 reference-typed
+    const handling, and this byte-form does not by
+    itself distinguish a direct literal from any other
+    `&'static str` Constant value. The D6 diagnostic
+    (§26.8) fires from the DiagLogPeel-time check,
+    not from a post-RegseqModel re-derivation.
+  - `args[i]` for `i ∈ 1..args.len()` has type `T_i`
+    where `T_i` is one of the **value-typed** admissible
+    operand shapes: an integer-width `Ty::Uint(UintTy::U8..U64)`
+    or `Ty::Int(IntTy::I8..I64)`, `Ty::Bool`, or
+    `Ty::Ref(Ty::Str, _)`. **Reference-companion source
+    types** (`&u32`, `&mut u32`, `&bool`, etc., where the
+    inner type is value-typed) are admissible source-level
+    inputs per §26.4's `From<&T>` / `From<&mut T>` impls,
+    but DiagLogPeel synthesises a load before the flat Call
+    (§25.7.3 step 2), so the IR Call's args carry the loaded
+    value-typed Operand -- never the reference-companion
+    Operand. The `usize` / `isize` platform-width aliases
+    route through their `#[cfg(target_pointer_width = ...)]`
+    impls to `Ty::Uint(UintTy::U64)` / `Ty::Uint(UintTy::U32)`
+    / `Ty::Int(IntTy::I64)` / `Ty::Int(IntTy::I32)` per
+    target pointer width; the IR Call carries the matching
+    fixed-width integer `Ty`, not `Ty::Uint(UintTy::Usize)`
+    / `Ty::Int(IntTy::Isize)`. Reject types not admissible
+    per the `From` matrix per D-14-2.7 D4.
+  - Per-position template/operand compatibility
+    (e.g., hex modifier requires integer-width
+    operand) per D-14-2.7 D2; the placeholder modifier
+    parsed from `args[0]`'s template content selects
+    the per-position constraint.
+
+  Indirect callees (`CallCallee::Indirect(Operand)`)
+  cannot satisfy the log-intrinsic predicate per the
+  B-4 exception's same rationale.
+
+  See §26.6 for the canonical statement and §26.8 for
+  the validation diagnostics.
 
 - **B-7** -- **Closes construction invariant 9.**
   Every `Direct(InstanceId)` referenced from any
@@ -9313,7 +10129,7 @@ bb0: {
 ```
 Note that pre-rewrite, args[0] type is `&dyn Driver`
 while `callee_fn_sig(callee_id).inputs()[0]` is
-`*mut ()` (per §13.2 + §17.2.1, the vtable's erased
+`*mut ()` (per §13.2 + §17.2.3, the vtable's erased
 receiver type is uniformly `Ty::Ptr(unit,
 Mutability::Mut)` regardless of source borrow flavor;
 resolved per the §23.6.2 helper through
@@ -9345,7 +10161,7 @@ bb0: {
 Post-rewrite, B-6 holds: args[0] type matches the
 indirect callee operand's `Ty::FnPtr(sig)` resolved-
 signature inputs()[0] (both `*mut ()` per §13.2 +
-§17.2.1's uniform-mutable-erased-receiver rule).
+§17.2.3's uniform-mutable-erased-receiver rule).
 
 Charon's `transform_dyn_trait_calls.rs:31-122` is the
 direct template for this rewrite; the body-level pass
@@ -10752,17 +11568,18 @@ Plus construction invariants 1 + 9 fold-in per §25.6.3.
 
 ### 25.7 Body-level transformation passes
 
-Two passes operate on Body content with **hybrid timing**, both
-landing in Phase 5 of the §3.4 5-phase pipeline (after Phase 4
-ItemId assignment):
-- One runs at **bridge body-construction time** (Phase 5
+Three passes operate on Body content with **hybrid timing**,
+all landing in Phase 5 of the §3.4 5-phase pipeline (after
+Phase 4 ItemId assignment):
+- Two run at **bridge body-construction time** (Phase 5
   body-materialisation sub-step; per-rustc-terminator
-  translation envelope; forced by the locked vocabulary). See
-  §25.7.1.
+  translation envelope; forced by the locked vocabulary):
+  Drop-as-Call collapse (§25.7.1) and DiagLogPeel
+  (§25.7.3).
 - One runs as a **post-body-construction pass** over the
   fully-materialised Body (Phase 5 intra-body-pass sub-step;
   sequenced after body materialisation, before joint
-  validation). See §25.7.2.
+  validation): the vtable-indirect rewrite (§25.7.2).
 
 The §3.4 Phase 5 "Per-phase body work" subsection is the
 authoritative pass-scheduling reference; this section spells
@@ -10942,7 +11759,7 @@ callee arity), B-6 (per-arg type match) hold POST-rewrite. Pre-rewrite,
 `args[0]` type does not match `callee_fn_sig(callee_id).inputs()[0]`
 for Virtual-flavor Calls (args[0] is `&dyn Trait` or `*mut dyn Trait`;
 `callee_fn_sig(...).inputs()[0]` is `*mut ()` per §13.2 +
-§17.2.1's uniform-mutable-erased-receiver rule, resolved per
+§17.2.3's uniform-mutable-erased-receiver rule, resolved per
 the §23.6.2 helper through `inst.kind.as_function().fn_sig`
 under stage-12 D-12-1.4 / Option B). The rewrite resolves the
 mismatch by extracting the data pointer.
@@ -10952,7 +11769,339 @@ validation walk (§25.6) -- §23.6.2 B-3/B-4/B-6 invariants assume
 post-rewrite shape. Running validation pre-rewrite would emit
 spurious B-3/B-4/B-6 errors at every Virtual-flavor Call site.
 
-#### 25.7.3 Pass scheduling
+#### 25.7.3 DiagLogPeel (Phase 5 body construction)
+
+**Forced timing.** Diagnostic-logging calls in source-level
+Rust expand (through the `regseq::log::<sev>!` macro family
+per §26.5) to MIR Call sites of canonical shape:
+
+```text
+Call {
+  callee: Direct(<InstanceId of regseq::log::intrinsics::log_<sev>>),
+  args: [Operand::Constant(<&'static str literal>),
+         Operand::Move(<slice-aggregate of LogArg::from(<expr_i>) calls>)],
+  destination: <unit place>,
+  target: Some(<next bb>),
+  unwind: <unchanged>,
+}
+```
+
+The bridge MUST peel this shape at body-construction time and
+synthesise the desugared flat-arg Call form -- the IR carries
+the peeled shape, not the slice-aggregate. The peel discharges
+the `I-DiagLog-CallArity` invariant captured at §23.6.2 B-4
+and B-6 exceptions; it composes with §3.4 Phase 5's
+per-rustc-terminator translation envelope (same pattern as
+§25.7.1 Drop-as-Call collapse).
+
+**Trigger.** For each `mir::TerminatorKind::Call { func, args,
+destination, target, unwind, .. }` being translated, after
+resolving `func` to a RegseqModel InstanceId and looking up the
+callee's `domain_attrs.item_attrs` entry: if the entry contains
+`AttrData::Intrinsic(IntrinsicKind::Log(level))`, run
+DiagLogPeel; otherwise translate as a regular Call.
+
+**Procedure.** For a Call recognised as a Log intrinsic:
+
+1. **Canonical-shape assertion** (performed against the
+   **rustc MIR** shape before Regseq const lowering, so that
+   D6 literal identity is checkable at this point -- after
+   lowering, an `&'static str` literal and an `&'static str`
+   const-reference value both serialise to
+   `Const::Aggregate([Reloc(<static>), Uint(Usize, len)])`
+   per §9.7 and are no longer distinguishable). Assert the
+   MIR Call has exactly two args. Assert `args[0]` is a
+   Constant whose type is `&'static str` and whose value is a
+   **string literal** (rustc carries this at the MIR level as
+   a `Const::Slice` over interned string bytes per the const
+   machinery; the literal-ness check rejects MIR Constants
+   sourced from `const`-bindings, `static` references, or
+   other non-literal `&'static str` values that satisfy the
+   type but not the form). Failing the literal-ness check
+   emits **D6** (§26.8) as an author-facing diagnostic with
+   the original Rust call-site span. Assert `args[1]`
+   resolves to an `Rvalue::Aggregate(AggregateKind::Array(_),
+   inner)` whose element type is `LogArg<'_>` and whose
+   element count is `N` (zero or more). Each inner element
+   resolves to a `Call` to `<LogArg<'_> as
+   From<T_i>>::from(<expr_i>)` where `T_i` is one of the
+   admissible source types per §26.4. Shape mismatches other
+   than D6 (e.g., wrong arity, non-aggregate second arg,
+   wrong inner-element type) are **bridge-internal
+   invariant violations**: panic with a `bug!`-style
+   diagnostic citing the offending MIR shape. These are not
+   author-facing -- the only path to reach a Log-intrinsic
+   callee is through the macro per §26.5, and the macro
+   pins the shape. The literal-ness check (D6) is the one
+   author-facing diagnostic at this step because authors can
+   structurally produce a non-literal `&'static str` even
+   through the macro (e.g., a future macro revision that
+   passes a `const`-bound expression; the current
+   `$fmt:literal` matcher rejects this at the macro level
+   as defense in depth per §26.5, but the bridge-side check
+   defends against the structural escape).
+
+2. **Peel each `LogArg::from(<expr_i>)`, normalising
+   reference-companion impls to value loads.** The
+   recognised inner-Call signature is `From::from(<expr_i>)
+   -> LogArg<'_>`. The peel reads `<expr_i>` directly off
+   the inner Call's args and recovers its RegseqModel `Ty`.
+   For the **by-value** `From<T>` impls (where `T` is one of
+   the value-typed scalars `u8..u64` / `i8..i64` / `bool` /
+   `usize` / `isize` per §26.4) and the **by-value
+   `From<&'a str>`** impl, the recovered Operand and `Ty`
+   are used directly as the flat-Call argument; the variant
+   tag is implicit in `T_i`'s shape and is not stored
+   (per the transient-fingerprint rule -- §26.6).
+
+   For the **reference-companion** impls `From<&T>` /
+   `From<&mut T>` (where `T` is a value-typed scalar per
+   §26.4), the bridge synthesises a load before the flat
+   Call.
+
+   **Source-Place extraction.** The recovered `<expr_i>` is
+   one of:
+   - `Operand::Copy(p_ref)` where `p_ref: Place` has type
+     `Ty::Ref(T_value_id, _)`. Take `p_ref` as the source
+     reference Place.
+   - `Operand::Move(p_ref)` where `p_ref: Place` has type
+     `Ty::Ref(T_value_id, _)`. Take `p_ref` as the source
+     reference Place.
+   - `Operand::Constant(_)` -- bridge-internal invariant
+     violation (references are not Constants in normal
+     post-cleanup MIR; the macro expansion path that
+     produces a reference-companion `From::from(&x)` call
+     always materialises the reference as a local via
+     `Statement::Assign(_t_ref, Rvalue::Ref(...))` before
+     the inner Call). Panic with a `bug!`-style diagnostic.
+
+   **Load synthesis.** Construct the deref source Place by
+   extending the projection chain by one `PlaceElem::Deref`:
+
+   ```text
+   deref_source = Place {
+     local:      p_ref.local,
+     projection: [p_ref.projection..., PlaceElem::Deref],
+   }
+   ```
+
+   `deref_source` has type `T_value` (the pointee of
+   `Ty::Ref(T_value_id, _)`) and is well-formed under
+   §19.7 Place validation (the trailing `Deref`
+   composes with the projection-typing rule for
+   reference-typed bases; see §19.4 type-narrowing
+   table).
+
+   Allocate a fresh value-typed local `_tmp_i` via
+   `Body::push_synthetic_local(T_value_id)` per §25.8 (the
+   helper defaults to `Mutability::Mut`, `Span::dummy()`,
+   `debug_name: None`). Append the load Statement to the
+   current basic block's statements list (immediately before
+   the synthesised flat Call):
+
+   ```text
+   Statement::Assign(
+     Place::from(_tmp_i),
+     Rvalue::Use(Operand::Copy(deref_source)),
+   )
+   ```
+
+   `Operand::Copy` is correct for all admissible
+   reference-companion source types: the pointee `T` is one
+   of `u8..u64` / `i8..i64` / `bool`, all of which are
+   `Copy` Rust-side. (`Operand::Move` would also be sound
+   but produces unnecessary move-out semantics on a
+   `Copy`-typed scalar; `Operand::Copy` matches the bridge's
+   convention for scalar loads.)
+
+   Finally, substitute `Operand::Move(Place::from(_tmp_i))`
+   of type `T_value` (NOT `&T` / `&mut T`) as the flat
+   Call's `args[i+1]`.
+
+   The `&str` companions (`From<&'a str>`) are NOT
+   reference-companions in the normalisation sense -- they
+   are the by-value impl for the `Ty::Ref(Ty::Str, _)`
+   admissible type; no load is synthesised because the
+   value-typed admissible variant for `&str` IS the
+   reference shape (the carrier's `Str(&'a str)` variant
+   stores the reference directly).
+
+   The IR Call's `args[1..args.len()]` therefore carry
+   uniformly value-typed Operands: integer-width or `bool`
+   values for the numeric / boolean carrier variants, and
+   `Ty::Ref(Ty::Str, _)` Operands for the `Str` carrier.
+   No reference-companion-typed Operand appears in the
+   peeled Call. This single-peel normalisation discipline
+   ensures the §26.9 backend specifier table covers every
+   admissible operand shape without per-target
+   reference-deref logic.
+
+3. **Drop the slice aggregate.** The `Rvalue::Aggregate` that
+   built the `[LogArg<'_>; N]` array (or the `&[LogArg<'_>]`
+   slice reference) does NOT survive into RegseqModel. Any
+   `LocalId`s that the original MIR introduced solely to
+   materialise the slice (intermediate temporaries holding
+   `LogArg<'_>` values, the array itself, the slice
+   reference) are not translated; their definitions are
+   skipped.
+
+4. **Synthesise the flat-arg Call.** Emit a single
+   `TerminatorKind::Call`:
+
+   ```text
+   Call {
+     callee: Direct(<InstanceId of log_<sev>>),
+     args: [Operand::Constant(<&'static str literal>),
+            <expr_1>, ..., <expr_N>],
+     destination: <unit place from original>,
+     target: <unchanged>,
+     unwind: <unchanged>,
+   }
+   ```
+
+   `args.len() == 1 + N`. The `LogArg<'_>` type and the
+   `&[LogArg<'_>]` slice type do not appear anywhere in the
+   resulting Body.
+
+5. **Produce the call-site fingerprint** for §26.8
+   validation: `{ severity: level, fmt_template: <&'static
+   str content of args[0]>, arg_tys: [T_1, ..., T_N],
+   span: <original Call's span> }`. The fingerprint is
+   **transient** -- consumed by validation immediately and
+   not stored on `RegseqModel`. Both `severity` (re-derivable
+   via `domain_attrs.item_attrs[callee_item_id]`) and
+   `arg_tys` (re-derivable via the flat-arg Call's
+   `operand_ty(args[i])`) are reachable from the IR without
+   a side table. See §26.6 for the canonical statement of
+   transient-fingerprint discipline.
+
+**Per-position validation.** §26.8 (D-14-2.7) defines the
+bridge-side diagnostics D1-D4 + D6 + D7 + D8 that run on the
+fingerprint produced at step 5 (D5 is deferred to phase-2
+stage 17; see §26.10). Validation runs immediately after
+DiagLogPeel synthesis, still within Phase 5 body
+materialisation. Author-facing diagnostics use the preserved
+original Rust call-site span. D1-D4 + D6 + D7 are
+target-independent (template/arg arity, modifier set,
+admissible argument types, literal-ness, trailing newline).
+**D8 is target-aware**: it evaluates the post-DiagLogPeel
+`&str` operand count in args[1..] against the selected
+binding target's declared `max_str_args_per_call`. The bound
+is declared per-backend (see `generic-c-backend.md` §8.4 for
+the generic-C target; phase-2 targets per their respective
+`<target>-backend.md` artifacts). The bridge validation pass
+receives the binding-target identity as part of its
+operational context (via the build's target-selection flag
+or equivalent) and evaluates D8 against the target's
+declared bound.
+
+**Invariant timing.** §23.6.2 B-4 and B-6 exceptions (the
+`I-DiagLog-CallArity` carve-out) apply to the peeled Call.
+The joint validation walk (§25.6) at Phase 5 final sub-step
+treats Log-intrinsic Calls per the exception clauses.
+
+**Worked example (by-value args).**
+
+```rust
+// Author source (speed: u32, retries: u32, both passed by value):
+regseq::log::warn!("link up at {} Mbps after {} retries", speed, retries);
+
+// Post-macro-expansion MIR shape (pre-DiagLogPeel):
+Call {
+  callee: Direct(<log_warn>),
+  args: [
+    Constant("link up at {} Mbps after {} retries"),
+    Move(_t_slice_ref),   // &[LogArg<'_>; 2] produced by:
+                          //   _t_arr = [LogArg::from(speed), LogArg::from(retries)]
+                          //   _t_slice_ref = &_t_arr
+  ],
+  destination: _t_unit, target: Some(bb_next),
+}
+
+// Post-DiagLogPeel RegseqModel Call:
+Call {
+  callee: Direct(<log_warn>),
+  args: [
+    Operand::Constant("link up at {} Mbps after {} retries"),
+    <expr for `speed`>,    // Ty::Uint(U32); From<u32> impl, no load synthesised
+    <expr for `retries`>,  // Ty::Uint(U32); From<u32> impl, no load synthesised
+  ],
+  destination: _t_unit, target: Some(bb_next),
+}
+```
+
+The intermediate locals (`_t_arr`, `_t_slice_ref`, and any
+per-arg `LogArg::from` temporaries) are not present in the
+resulting Body.
+
+**Worked example (reference-companion args; demonstrates
+step-2 load synthesis).**
+
+```rust
+// Author source (head: u32, tail: u32; author passes references):
+let head: u32 = self.rx_ring.head();
+let tail: u32 = self.rx_ring.tail();
+regseq::log::debug!("rx ring head={} tail={}", &head, &tail);
+
+// Post-macro-expansion MIR shape (pre-DiagLogPeel) -- the macro
+// expansion materialises each reference as a local before passing
+// it into LogArg::from:
+//   _t_ref_head = &head                                // Ty::Ref(u32, _)
+//   _t_ref_tail = &tail                                // Ty::Ref(u32, _)
+//   _t_arr = [LogArg::from(Move(_t_ref_head)),
+//             LogArg::from(Move(_t_ref_tail))]
+//   _t_slice_ref = &_t_arr
+//   <Call to log_debug with the slice>
+
+// Step-2 recovered Operand for each inner LogArg::from call:
+//   <expr_1> = Operand::Move(Place { local: _t_ref_head,
+//                                     projection: [] })   // Ty::Ref(u32, _)
+//   <expr_2> = Operand::Move(Place { local: _t_ref_tail,
+//                                     projection: [] })   // Ty::Ref(u32, _)
+//
+// Step-2 source-Place extraction (per the Operand::Move arm of the
+// source-Place extraction rule above) gives:
+//   p_ref_1 = Place { local: _t_ref_head, projection: [] }
+//   p_ref_2 = Place { local: _t_ref_tail, projection: [] }
+//
+// Step-2 deref-source construction (extending the projection chain
+// by one PlaceElem::Deref):
+//   deref_source_1 = Place { local: _t_ref_head,
+//                            projection: [PlaceElem::Deref] }  // Ty::Uint(U32)
+//   deref_source_2 = Place { local: _t_ref_tail,
+//                            projection: [PlaceElem::Deref] }  // Ty::Uint(U32)
+//
+// Step-2 load synthesis (one fresh value-typed local per
+// reference-companion arg, allocated via
+// Body::push_synthetic_local(u32_ty)):
+
+Statement::Assign(Place::from(_t_head_val),
+  Rvalue::Use(Operand::Copy(deref_source_1)))   // _t_head_val: Ty::Uint(U32)
+Statement::Assign(Place::from(_t_tail_val),
+  Rvalue::Use(Operand::Copy(deref_source_2)))   // _t_tail_val: Ty::Uint(U32)
+
+// Flat-arg Call carries the value-typed loads, NOT the references:
+Call {
+  callee: Direct(<log_debug>),
+  args: [
+    Operand::Constant("rx ring head={} tail={}"),
+    Operand::Move(Place::from(_t_head_val)),   // Ty::Uint(U32)
+    Operand::Move(Place::from(_t_tail_val)),   // Ty::Uint(U32)
+  ],
+  destination: _t_unit, target: Some(bb_next),
+}
+```
+
+`_t_head_val` and `_t_tail_val` are fresh synthetic
+LocalDecls allocated via `Body::push_synthetic_local(u32_ty)`.
+The IR carries value-typed `Ty::Uint(U32)` Operands at
+args[1..3]; the `&u32` reference Operands the macro
+expansion originally produced do not appear. The §26.9
+backend specifier table dispatches on `Ty::Uint(U32)` ->
+`%u` uniformly for both this case and the by-value example
+above.
+
+#### 25.7.4 Pass scheduling
 
 The body-validation pipeline within §3.4 Phase 5
 (after Phase 4 ItemId assignment is complete):
@@ -10962,6 +12111,8 @@ The body-validation pipeline within §3.4 Phase 5
     (after Phase 4 ItemId assignment)
     - rustc Body -> RegseqModel Body (atomic per-rustc-terminator translation)
     - Drop-as-Call collapse INSIDE this step (§25.7.1)
+    - DiagLogPeel INSIDE this step (§25.7.3) for Calls whose
+      callee carries IntrinsicKind::Log(_) in domain_attrs
     - Calls to dyn-Trait methods land as Direct(InstanceId)
       where Instance has flavor=Virtual + virtual_idx=Some(idx)
    |
@@ -10977,13 +12128,21 @@ The body-validation pipeline within §3.4 Phase 5
 [3] Joint validation walk (§25.6 visitor)
     - Phase 5 final sub-step
     - Pre-checks + DFS-RPO traversal (§25.6.2)
-    - Per-construct invariants (§25.6.4)
+    - Per-construct invariants (§25.6.4) -- §23.6.2 B-4 and
+      B-6 apply the I-DiagLog-CallArity exception for Calls
+      whose callee carries IntrinsicKind::Log(_)
     - Construction invariants 1 + 9 fold-in (§25.6.3)
 ```
 
 All three steps run in Phase 5 (per §3.4 "Per-phase body work
-in Phase 5"). Step 2 must precede step 3. Step 1's Drop-as-Call
-collapse is sequenced WITH step 1 (atomic per-rustc-terminator).
+in Phase 5"). Step 2 must precede step 3. Step 1's two
+body-construction-time passes (Drop-as-Call collapse and
+DiagLogPeel) are both sequenced WITH step 1 (atomic
+per-rustc-terminator). They are independent: a single
+rustc Terminator is at most one of `Drop` (handled by
+Drop-as-Call) or `Call` (potentially handled by DiagLogPeel
+if the callee carries `IntrinsicKind::Log(_)`); no rustc
+Terminator is both.
 
 ### 25.8 LocalDecls allocation API
 
@@ -11035,6 +12194,7 @@ does not transfer.
 | Bridge per-rustc-local population      | `body.push_local(LocalDecl { ty, mutability, span, debug_name })` with full LocalDecl from rustc's body data         |
 | Bridge Drop-as-Call collapse (§25.7.1) | `body.push_synthetic_local(ptr_to_place_ty)` for `_t_drop_arg`; `body.push_synthetic_local(unit_ty)` for `_t_drop_ret` |
 | Vtable-rewrite pass (§25.7.2)          | 4-5 calls to `body.push_synthetic_local(ty)` per virtual-call site (`_t_recv`, `_t_meta`, `_t_fn`, `_t_data`, optionally `_t_raw`) |
+| Bridge DiagLogPeel (§25.7.3)           | One `body.push_synthetic_local(T_value_id)` per reference-companion log argument (`From<&T>` / `From<&mut T>` impls; one fresh value-typed local per argument that needs load synthesis). By-value `From<T>` and `From<&'a str>` impls allocate no synthetic locals. |
 
 ### 25.9 Per-stage invariants registry
 
@@ -11088,39 +12248,20 @@ as stages 5-10).
 Walk-implementation invariants beyond §25.6 (e.g., type-coherence
 of post-rewrite Calls per §23.6.2 holding only post-rewrite per
 §25.7.2 pass scheduling) are pinned. Phase-1 implementation
-sequences the rewrite pass before validation per §25.7.3.
+sequences the rewrite pass before validation per §25.7.4.
 
 ### 25.10 C lowering
 
-Each `Body` lowers to a C function. The function signature is
-determined by the owning Instance's
-`InstanceKind::Function.fn_sig` (per §25.4 + stage-12
-D-12-1.4 / Option B). Body content lowers as follows:
-
-```c
-/* signature from InstanceKind::Function.fn_sig */
-ret_ty fn_name(arg_ty1 arg1, ..., arg_tyN argN) {
-    /* parameter locals from local_decls[1..=arg_count] are
-       the formal arguments; codegen emits them in the C
-       signature, not as additional declarations. */
-
-    /* internal locals from local_decls[arg_count+1..]: */
-    local_ty_<N1> _N1;   /* or named per debug_name when Some */
-    local_ty_<N2> _N2;
-    ...
-
-    /* basic blocks from body.basic_blocks (in RPO storage order): */
-    bb_0: { stmt_0; ... ; terminator_0; }
-    bb_1: { stmt_1; ... ; terminator_1; }
-    ...
-}
-```
-
-Identifier emission policy (named locals via `debug_name=Some`
-vs synthetic `_N` form for `debug_name=None`) is a stage-13 +
-stage-14 concern. Stage 11 fixes the data the C function
-consumes; stage 13 owns the textual rendering decisions; stage
-14 owns C codegen.
+Body-to-C function lowering (signature template from
+`InstanceKind::Function.fn_sig`, local-decl emission policy,
+label-per-basic-block envelope, identifier emission for named
+vs synthetic locals) is backend-codegen content; see
+`generic-c-backend.md` §7 for the generic-C target. The
+IR-side commitment at this section is the data shape the
+backend consumes: signature from `InstanceKind::Function.fn_sig`
+(per §25.4), parameter locals at `local_decls[1..=arg_count]`,
+internal locals at `local_decls[arg_count+1..]`, basic blocks
+ordered per `body.basic_blocks` storage order (RPO).
 
 ### 25.11 Cross-references
 
@@ -11189,368 +12330,702 @@ stage-11 outbound bundles.)
 ---
 
 
-## Appendix A: Worked C-lowering examples
+## 26. Diagnostic logging (intrinsic family)
 
-These examples illustrate the live spec.
+Diagnostic logging is the **sole phase-1 domain extension**
+per `../README.md` §1.3 (the foundation-observability
+carve-out). All other domain families (MMIO, interrupt,
+atomic, clock, reset, ...) move to phase-2 stages 15+.
+Stage 14 owns the full diagnostic-logging surface end-to-end:
+author macros, post-expansion intrinsic contract, bridge
+translation rules, validation, and the per-target backend
+lowering record.
 
-### A.1 Reference and pointer types
+This section is the canonical home for that surface. §3.6.3
+defines the `IntrinsicKind::Log(LogLevel)` storage variant
+and the dash-form NAME mapping; §25.7.3 defines the
+DiagLogPeel body-level pass; §23.6.2 B-4 and B-6 exceptions
+state the `I-DiagLog-CallArity` invariant. This section
+pulls those references together and adds the
+diagnostic-logging-specific content (author macros, `LogArg`
+carrier, format-template grammar, validation diagnostics,
+backend lowering record, deferrals).
 
-**Rust:**
+### 26.1 Overview
+
+Authors emit operator-attention diagnostics via four
+severity-named declarative macros at `regseq::log::<sev>!`:
+
 ```rust
-let a: &u32        = ...;   // shared borrow
-let b: &mut u32    = ...;   // unique borrow
-let c: *const u32  = ...;   // raw const
-let d: *mut u32    = ...;   // raw mut
+regseq::log::error!("device {} init failed at offset 0x{:08x}", name, off);
+regseq::log::warn!( "frame counter wrapped after {} ticks", count);
+regseq::log::info!( "link up at {} Mbps", speed_mbps);
+regseq::log::debug!("rx ring head={} tail={}", head, tail);
 ```
 
-**Translated (post-bridge):**
-```text
-a: Ty::Ref(t_u32, Provenance::SharedBorrow)
-b: Ty::Ref(t_u32, Provenance::UniqueBorrow)
-c: Ty::Ptr(t_u32, Mutability::Not)
-d: Ty::Ptr(t_u32, Mutability::Mut)
-```
+The compiler captures each call as a structured logging
+intent (severity + format template + typed argument carrier)
+and lowers the call directly into the target backend's native
+severity-tagged emitter via Pipeline A (post-DiagLogPeel
+flat-arg Call per §26.6; backends consume the peeled operands
+element-by-element). Per-target emitter shapes (e.g., the
+generic-C target's `printf` with leading severity tag) are
+backend-codegen content; see `generic-c-backend.md` §8 for
+the generic-C target's binding and the phase-2
+`<target>-backend.md` artifacts for each subsequent target.
+Emission suppression in the deployed artifact is delegated
+to the target's native filter; the DSL provides no gating
+axis of its own (per the construct contract; see §26.10).
 
-**C:**
-```c
-const uint32_t *a;            // SharedBorrow
-uint32_t       *b;            // UniqueBorrow (codegen MAY add `restrict` in declaration contexts)
-const uint32_t *c;            // raw const
-uint32_t       *d;            // raw mut
-```
+**Pipeline A guarantee.** The `LogArg` argument carrier,
+the slice that the macro constructs to pass it, and the
+`regseq::log::intrinsics::log_<sev>` function itself do
+NOT appear in the generated target code. The bridge peels
+the carrier at body-construction time (§25.7.3
+DiagLogPeel); the backend emits a direct call to the
+target's native printf-family emitter. This guarantee is
+load-bearing for the zero-runtime-cost-on-emit contract.
+The DiagLogPeel pass exists for this guarantee.
 
-### A.2 Fat-pointer types: `&str`, `&[T]`, `&dyn Trait`
+**Construct posture.** The construct is intrinsic-heavy.
+There is no trait, no callback surface, and no typed Rust
+resource on the author surface. The only Rust types
+introduced (`LogArg`) are macro-internal and not
+author-named.
 
-**Rust:**
+### 26.2 Severity vocabulary + intrinsic NAME mapping
+
+The `LogLevel` enum is the closed 4-tuple:
+
 ```rust
-let s: &str = "hello";
-let xs: &[u32] = &[1, 2, 3];
-let d: &dyn Driver = &my_driver;
+pub enum LogLevel { Debug, Info, Warn, Error }
 ```
 
-**C:**
-```c
-typedef struct rust_str { const uint8_t *data; size_t len; } rust_str_t;
+No `Trace`. No `Critical`. Per-level intrinsics (four
+distinct callees), not a single intrinsic parameterised by
+a level operand: per-level matches both the source taxonomy
+(refined-construct.md P1 outcome) and the natural Backend
+lowering pattern (each target binds severity at compile
+time, not via a runtime branch).
 
-typedef struct rust_slice_u32 {
-    const uint32_t *data;
-    size_t len;
-} rust_slice_u32_t;
+Intrinsic NAME mapping (the `&str` that appears inside
+`#[rseq::intrinsic("...")]` on the facade-side stubs;
+dash form per the NAME-form rule in §3.6.3):
 
-typedef struct trait_obj_Driver {
-    void *data;                          /* unqualified per §17.2.1 trait-object dispatch carve-out */
-    const Driver_VTable *vtable;
-} trait_obj_Driver_t;
+| `LogLevel` variant | Macro path             | Function name (Rust) | Intrinsic NAME |
+|--------------------|------------------------|----------------------|----------------|
+| `Debug`            | `regseq::log::debug!`  | `log_debug`          | `log-debug`    |
+| `Info`             | `regseq::log::info!`   | `log_info`           | `log-info`     |
+| `Warn`             | `regseq::log::warn!`   | `log_warn`           | `log-warn`     |
+| `Error`            | `regseq::log::error!`  | `log_error`          | `log-error`    |
 
-static const uint8_t __str_lit_0[] = { 'h', 'e', 'l', 'l', 'o' };  // no NUL
-static const rust_str_t HELLO = { __str_lit_0, 5 };
-```
+The `IntrinsicKind::from_name` lookup at §3.6.3 is
+authoritative for the NAME -> `IntrinsicKind::Log(LogLevel)`
+mapping. Unknown NAMEs are rejected at Phase-2 recognition
+per the Q7 closed-vocabulary rule.
 
-### A.3 Niche-encoded enum: `Option<&u32>`
+### 26.3 Intrinsic function shape
 
-**Rust:**
+The four facade-side stub functions are the bridge's
+recognition targets. Identical shape across severities;
+shown for `error`:
+
 ```rust
-let p: Option<&u32> = ...;   // 8 bytes; niche-encoded (None = 0, Some(p) = p)
+#[inline(never)]
+#[rseq::intrinsic("log-error")]
+pub fn log_error(fmt: &'static str, args: &[LogArg<'_>]) {
+    unimplemented!()
+}
 ```
 
-**C:**
-```c
-typedef struct Option_ref_u32 {
-    const uint32_t *p;   // 0 = None; nonzero = Some(p)
-} Option_ref_u32_t;
-```
+**Required attributes** (load-bearing for the recognition
+contract):
 
-### A.4 UnsafeCell aliasing
+- `#[inline(never)]` -- blocks rustc's MIR inliner and
+  LLVM's later inliner from collapsing the call site
+  before the bridge sees it. The MIR inliner is the
+  primary concern: it runs as a MIR optimisation pass
+  before the bridge invokes its translation; without
+  `#[inline(never)]` rustc can inline the
+  `unimplemented!()`-bodied function and erase the call
+  site DiagLogPeel needs to pattern-match against.
+- `#[rseq::intrinsic("log-<sev>")]` -- declares the stable
+  intrinsic NAME the bridge keys on per Q7 + D-14-1. The
+  attribute's NAME-payload validation chain is recorded
+  at §3.6.4 (Phase 2 recognition; the parse-then-lookup
+  helper `IntrinsicKind::from_name` is authoritative).
 
-**Rust:**
+**Signature.** Exactly two parameters: a `&'static str`
+format template + a `&[LogArg<'_>]` slice. Return type
+is `()`.
+
+**Body.** `unimplemented!()` by design. The bridge replaces
+the call before the body executes. A runtime panic from
+`unimplemented!()` reaching execution signals that the
+Regseq pass did not run on this build -- a build-pipeline
+misconfiguration, not a soundness bug.
+
+**Location.** `regseq::log::intrinsics::log_<sev>` in a
+`#[doc(hidden)] pub mod intrinsics` submodule of
+`regseq::log`. The submodule (and the `LogArg` type per
+§26.4) is hidden from rustdoc and from the author surface;
+only the macro expansion references the path.
+
+**Item-level metadata in RegseqModel.** After bridge
+recognition, each `log_<sev>` Instance carries
+`AttrData::Intrinsic(IntrinsicKind::Log(<level>))` in
+`model.domain_attrs.item_attrs[item_id]` per §3.6.6 + the
+two-phase population at §3.6.4. Consumer-side access via
+`model.instance_intrinsic(instance_id)` per §3.5.2.
+
+### 26.4 `LogArg` argument carrier
+
+The closed Regseq-owned argument carrier. Variant tags pin
+the admissible argument-type set:
+
 ```rust
-let x: &UnsafeCell<u32> = ...;
+pub enum LogArg<'a> {
+    U8(u8),   U16(u16), U32(u32), U64(u64),
+    I8(i8),   I16(i16), I32(i32), I64(i64),
+    Bool(bool),
+    Str(&'a str),
+}
 ```
 
-The `is_unsafe_cell` flag on the `UnsafeCell<u32>` `Item`
-triggers `const`-drop on enclosing shared references.
+Ten variants. Width-explicit (one variant per native
+width). The lifetime parameter `'a` is the borrow lifetime
+of `&str` arguments; for value-typed variants the lifetime
+is decoupled from the carrier.
 
-**C:**
-```c
-uint32_t *x;   // NOT const, despite the source-side &T
-```
+**`From` impl set (closed).** Each admissible source type
+has a dedicated `From` impl (no marker-trait coverage; per
+admissible type so the unimplemented-trait error message
+points at the author argument expression). For each `T` in
+`{u8, u16, u32, u64, i8, i16, i32, i64, bool}`:
 
-### A.5 Packed struct
-
-**Rust:**
 ```rust
-#[repr(packed)]
-struct Frame {
-    kind: u8,
-    addr: u32,
-}
+impl<'a> From<T>      for LogArg<'a> { /* lifts to LogArg::<Variant>(v)  */ }
+impl<'a> From<&T>     for LogArg<'a> { /* lifts to LogArg::<Variant>(*v) */ }
+impl<'a> From<&mut T> for LogArg<'a> { /* lifts to LogArg::<Variant>(*v) */ }
 ```
 
-**Layout:** `pack: Some(1)`, `size: 5`, `align: 1`.
+For `&'a str`:
 
-**C:**
-```c
-struct Frame {
-    uint8_t  kind;
-    uint32_t addr;
-} __attribute__((packed));
-```
-
-### A.6 `&dyn Driver` lowering
-
-**Rust:**
 ```rust
-fn process(d: &dyn Driver) -> u32 { d.read() }
+impl<'a> From<&'a str> for LogArg<'a> { fn from(v: &'a str) -> Self { LogArg::Str(v) } }
 ```
 
-**C:**
-```c
-/* Vtable type: erased-receiver fn-pointer fields. Per §13.2,
-   all receiver pointers are uniformly `*mut ()` (`void *`)
-   regardless of the source borrow flavor — see the
-   trait-object dispatch carve-out in §17.2.1 for the
-   UnsafeCell soundness rationale. */
-typedef struct Driver_VTable {
-    void (*drop_in_place)(void *self);
-    size_t size;
-    size_t align;
-    uint32_t (*read)(void *self);
-} Driver_VTable_t;
+Platform-width aliases route via `#[cfg(target_pointer_width
+= ...)]`:
 
-/* Trait object: data field is unqualified `void *` per the
-   trait-object dispatch carve-out (§17.2.1). The Rust
-   SharedBorrow flavor is preserved at the type-system level
-   but the C-level `const` is dropped at the erased boundary. */
-typedef struct trait_obj_Driver {
-    void *data;
-    const Driver_VTable_t *vtable;
-} trait_obj_Driver_t;
-
-/* Method shim (§13.2). */
-static uint32_t Driver_read__shim_PL011(void *self) {
-    return PL011_read((PL011_t *)self);
-}
-
-/* Drop-in-place shim (§13.2). */
-static void Driver__drop_shim_PL011(void *self) {
-    PL011_drop_in_place((PL011_t *)self);
-}
-
-/* Vtable instance: both drop slot and method slot use shims. */
-extern const Driver_VTable_t __vtable_PL011_for_Driver;
-const Driver_VTable_t __vtable_PL011_for_Driver = {
-    .drop_in_place = Driver__drop_shim_PL011,
-    .size          = sizeof(PL011_t),
-    .align         = _Alignof(PL011_t),
-    .read          = Driver_read__shim_PL011,
-};
-
-uint32_t process(trait_obj_Driver_t d) {
-    return d.vtable->read(d.data);
-}
-```
-
-### A.7 Closure lowering
-
-**Rust:**
 ```rust
-struct Token { handle: u32 }
-impl Drop for Token {
-    fn drop(&mut self) { /* release the handle; details elided */ }
-}
-impl Token {
-    fn into_handle(self) -> u32 {
-        let h = self.handle;
-        core::mem::forget(self);
-        h
-    }
-}
-
-fn make_consumer(t: Token) -> impl FnOnce() -> u32 {
-    move || t.into_handle()
-}
-
-let c = make_consumer(Token { handle: 42 });
-let value = c();
+#[cfg(target_pointer_width = "64")]
+impl<'a> From<usize>      for LogArg<'a> { /* -> LogArg::U64(v as u64) */ }
+#[cfg(target_pointer_width = "64")]
+impl<'a> From<&usize>     for LogArg<'a> { /* -> LogArg::U64(*v as u64) */ }
+#[cfg(target_pointer_width = "64")]
+impl<'a> From<&mut usize> for LogArg<'a> { /* -> LogArg::U64(*v as u64) */ }
+// equivalent triplet under target_pointer_width = "32" routing to LogArg::U32.
+// equivalent triplets for isize routing to LogArg::I64 / LogArg::I32.
 ```
 
-**C:**
-```c
-typedef struct Token { uint32_t handle; } Token_t;
+**One level of indirection only.** `&&T`, `&mut &T`, and
+higher-arity indirections have no impls; authors
+dereference explicitly.
 
-void Token_drop(Token_t *self) {
-    /* release the handle */
-}
+**Reference-companion impls are macro-side ergonomics
+only.** `From<&T>` and `From<&mut T>` exist so authors can
+write `info!("{}", &x)` (or `info!("{}", &mut y)`) without
+explicit `*x` derefs. The reference companions do NOT
+introduce a reference-typed `LogArg` carrier variant. The
+`From<&T>` / `From<&mut T>` impl bodies dereference the
+input (`LogArg::<Variant>(*v)`); semantically the reference
+is consumed to produce a value-typed `LogArg` variant. The
+**bridge mirrors this discipline at the IR level**:
+DiagLogPeel (§25.7.3 step 2) synthesises a load before the
+flat Call when it recognises a reference-companion `From`
+impl. The IR Call's args therefore carry value-typed
+Operands uniformly; reference-companion Operands never
+survive into RegseqModel. The §26.9 backend specifier table
+consequently covers only value-typed admissible shapes
+(`Ty::Uint(U8..U64)`, `Ty::Int(I8..I64)`, `Ty::Bool`,
+`Ty::Ref(Ty::Str, _)`); no `Ty::Ref(<value type>, _)`
+specifier row is needed because no such operand reaches
+the backend.
 
-uint32_t Token_into_handle(Token_t self) {
-    uint32_t h = self.handle;
-    /* core::mem::forget suppresses Drop; no Token_drop call here. */
-    return h;
-}
+The `From<&'a str>` impl is NOT a reference-companion in
+this sense -- it is the **by-value** impl for the
+`Ty::Ref(Ty::Str, _)` admissible type (the `Str` carrier
+variant stores the reference directly because `&str` IS
+the value-shape for the carrier; there is no inner type
+to dereference into). DiagLogPeel does not synthesise a
+load for `From<&'a str>`.
 
-typedef struct closure_make_consumer_0 {
-    Token_t t;
-} closure_make_consumer_0_t;
+**Deliberately rejected source types** (each surfaces D4
+per §26.8 at the macro expansion site). The list below
+names commonly-tried specific types; the **catch-all rule**
+follows the named list and closes the set.
 
-uint32_t closure_make_consumer_0__call_once(closure_make_consumer_0_t self) {
-    return Token_into_handle(self.t);
-}
+- `u128`, `i128` -- not portably supported across target
+  printf-family emitters.
+- `f32`, `f64` -- floats restricted in kernel context on
+  multiple targets; outside the carrier scope.
+- `*const T`, `*mut T` -- the DSL does not expose raw
+  pointers; address formatting goes through hex-formatting
+  an integer-typed address.
+- `c_char` as a distinct type -- aliases to `i8` or `u8`
+  per platform; authors lift through the integer impls.
+- `&T` and `&mut T` for `T` outside the supported
+  value-typed set -- no auto-coercion of struct references
+  to an address variant.
+- `Option<T>`, `Result<T, E>` -- authors unwrap or extract
+  before passing.
+- `&[T]`, `Vec<T>`, `String`, `CString` -- out of v1
+  scope; per-element or null-terminated formatting needs a
+  separate policy.
+- `Ty::FnDef(_)`, `Ty::FnPtr(_)`, `Ty::Closure(_)` --
+  function items, function pointers, and closure values
+  are not loggable. Pointer-formatted function addresses
+  go through hex-formatting an integer-typed address (the
+  same rule as `*const T`).
+- Tuple values (`(T1, T2, ...)`), array values
+  (`[T; N]`), and slice values (`[T]`) -- aggregates have
+  no native printf-family representation; authors
+  destructure and pass elements individually.
+- Interior-mutability wrappers and other ADT wrappers
+  whose concrete `Ty` after monomorphisation is not in
+  the admissible value-typed set: `core::cell::Cell<T>`,
+  `core::cell::RefCell<T>`, `core::sync::atomic::AtomicU*` /
+  `AtomicI*`, `core::mem::MaybeUninit<T>`, and similar.
+  Authors `load` / `get` / unwrap the inner value before
+  passing.
+- Opaque `impl Trait` whose concrete monomorphised type
+  is not in the admissible set.
+- Custom structs and enums -- out of v1 scope; would
+  re-introduce trait-driven formatting (`Display` /
+  `Debug`) which the construct contract excludes.
 
-void closure_make_consumer_0__drop(closure_make_consumer_0_t *self) {
-    Token_drop(&self->t);
-}
+**Catch-all closure rule.** The admissible set is closed
+**by the `From` impl set** (the impls enumerated above).
+Any source-Rust value whose monomorphised `Ty` lacks a
+matching `From<...> for LogArg<'a>` impl is rejected by
+D4 -- whether or not it appears on the named-rejected
+list above. The named list above is a documentation aid,
+not an exhaustive enumeration; the `From` matrix is the
+authoritative closure. For an arbitrary
+post-monomorphisation `Ty`, admissibility is decided by
+membership in the matching value or one-level-reference
+shape (`Ty::Uint(UintTy::U8..U64)`, `Ty::Int(IntTy::I8..I64)`,
+`Ty::Bool`, `Ty::Ref(Ty::Str, _)`, and the `&T` /
+`&mut T` companions per the impl matrix above; plus
+`usize` / `isize` via the cfg-routed impls); all other
+`Ty` shapes fall outside the matrix and surface D4.
 
-closure_make_consumer_0_t make_consumer(Token_t t) {
-    return (closure_make_consumer_0_t){ .t = t };
-}
+**Carrier survival.** `LogArg` does NOT survive into
+RegseqModel after the bridge runs. The DiagLogPeel pass
+(§25.7.3) peels every `LogArg::from(<expr_i>)` wrapper at
+body-construction time, drops the slice aggregate, and
+synthesises the flat-arg Call shape. The
+`I-DiagLog-CallArity` invariant (§23.6.2 B-4 and B-6
+exceptions) describes the post-peel shape.
 
-closure_make_consumer_0_t c = make_consumer((Token_t){ .handle = 42 });
-uint32_t value = closure_make_consumer_0__call_once(c);
-```
+**Visibility.** `LogArg` lives at
+`regseq::log::intrinsics::LogArg` and is `#[doc(hidden)]`
+(via the parent `intrinsics` module). Author code never
+names it; only the macro expansion references it. D4
+diagnostics (§26.8) report against the original author
+argument expression, not the `LogArg::from(...)` wrapper.
 
-### A.8 MMIO read via intrinsic
+### 26.5 Author macros + post-expansion shape
 
-**Rust:**
+The four severity-named macros are declarative
+(`macro_rules!`; no proc-macro crate). Each is marked
+`#[macro_export]` at definition; re-exported at
+`regseq::log::<sev>!` for the canonical author path.
+Identical shape across severities; shown for `error`:
+
 ```rust
-#[repr(C)]
-struct UartFlagsReg(u32);
-
-#[rseq::intrinsic("mmio_read")]
-fn mmio_read_u32(base: *mut u8, offset: usize) -> u32 {
-    todo!("facade stub: lowered by the compiler backend")
-}
-
-fn poll_busy(base: *mut u8) -> bool {
-    let flags = mmio_read_u32(base, 0x18);
-    (flags & (1 << 5)) != 0
+#[macro_export]
+macro_rules! error {
+    ($fmt:literal $(, $arg:expr)* $(,)?) => {
+        $crate::log::intrinsics::log_error(
+            $fmt,
+            &[ $( $crate::log::intrinsics::LogArg::from($arg) ),* ],
+        )
+    };
 }
 ```
 
-**C (Linux target):**
-```c
-bool poll_busy(uint8_t *base) {
-    uint32_t flags = readl((volatile void __iomem *)(base + 0x18));
-    return (flags & (1u << 5)) != 0;
-}
-```
+The expansion contract pins three properties the bridge
+keys on:
 
-The volatility lives on the intrinsic `InstanceId`'s codegen, not
-as an IR-level flag.
+1. **Callee is one of the four `log_<sev>` Instances.** No
+   other callee can match the bridge's
+   `IntrinsicKind::Log(_)` recognition.
+2. **First arg is a `&'static str` literal.** The
+   `$fmt:literal` matcher enforces this at the macro level
+   (rejecting `const TPL: &str = "..."; warn!(TPL, x)`
+   ergonomically; D-14-2.7 D6 captures the structural
+   invariant for the bridge side).
+3. **Second arg is a slice literal of `LogArg::from(<expr>)`
+   calls.** Exactly one `From::from` wrapper per author
+   argument; no nested expressions. The carrier slice is
+   the surface DiagLogPeel peels.
 
-### A.9 `Atomic<u32>` with acquire-load (Linux target)
+**Argument-evaluation contract.** Arguments are evaluated
+at the call site unconditionally. The macro expands to a
+direct call; there is no lazy-evaluation gate behind a
+level check. Authors must avoid placing expensive
+computations or side-effecting expressions inside log calls
+on hot paths. Target-aware codegen-level elision (preserving
+each target's native laziness mechanism, e.g., Linux's
+`pr_debug` dynamic-debug branch wrapping args in `if`) is
+deferred to a future revision per §26.10; the current
+phase-1 contract carries no laziness.
 
-**C:**
-```c
-/* NO `const` on the parameter, because Atomic_u32_t transitively contains
-   UnsafeCell<u32> and the `is_unsafe_cell` flag drops `const`. */
-static inline uint32_t read_count(Atomic_u32_t *counter) {
-    return smp_load_acquire(&counter->value);
-}
-```
+**Future-macro discipline.** A future revision that breaks
+the expansion shape MUST update this section's contract and
+DiagLogPeel's canonical-shape assertion (§25.7.3 step 1).
+The shape is part of the contract, not just an
+implementation detail.
 
-`smp_load_acquire` rather than `atomic_read_acquire` because
-`atomic_read_acquire` takes `const atomic_t *` (an opaque
-struct), and type-punning a `const uint32_t *` to that is not
-valid in general.
+### 26.6 Bridge translation contract
 
-### A.10 `repr(u32)` enum with user-assigned tags
+The bridge translates source-level diagnostic-logging calls
+into a desugared flat-arg Call shape that the backend
+lowers directly to a target-native printf-family emit. The
+mechanism is the DiagLogPeel pass at §25.7.3; this section
+states the contract and the named invariant.
 
-**Rust:**
-```rust
-#[repr(u32)]
-pub enum Status {
-    Idle   = 0,
-    Active = 1,
-    Error  = 0xFF,
-    Reset  = 0xDEAD,
-}
+**Translation rule (Option A).** For any MIR `Call` whose
+callee resolves to a RegseqModel Instance whose
+`domain_attrs.item_attrs` entry contains
+`AttrData::Intrinsic(IntrinsicKind::Log(level))`, the
+bridge peels the canonical `&'static str` + slice shape
+into a flat-arg Call shape. The `LogArg::from(...)`
+wrappers, the slice aggregate, and the `LogArg` type do
+NOT appear in RegseqModel. Procedure: §25.7.3.
 
-fn priority(s: Status) -> u32 {
-    match s {
-        Status::Idle   => 0,
-        Status::Active => 1,
-        Status::Error  => 100,
-        Status::Reset  => 200,
-    }
-}
-```
+**Resulting Call shape (`I-DiagLog-CallArity`).** Named
+invariant for cross-stage citation:
 
-**Layout:** `EnumShape::Multiple` with `TagEncoding::Direct`,
-`tag.scalar_ty: Uint(U32)`,
-`valid_range: WrappingRange { start: 0, end: 0xDEAD }`. Each
-`VariantLayout` carries `discriminant` (semantic) and
-`tag_value: Some(discriminant)` (Direct encoding writes the
-discriminant verbatim).
+> A Call whose callee `cc = CallCallee::Direct(id)`
+> satisfies `model.instance_intrinsic(id) ==
+> Some(IntrinsicKind::Log(_))` has args
+> `[Operand::Constant(<&'static str literal>),
+> <value_operand_1>, ..., <value_operand_N>]` where
+> `N >= 0` is the number of `{}` placeholders in the
+> literal. `args.len() == 1 + N`. Each
+> `<value_operand_i>` has a **value-typed** RegseqModel
+> `Ty` per the admissible set: `Ty::Uint(UintTy::U8..U64)`,
+> `Ty::Int(IntTy::I8..I64)`, `Ty::Bool`, or
+> `Ty::Ref(Ty::Str, _)`. Reference-companion source-Rust
+> types (`&u32`, `&mut bool`, etc.) are normalised by
+> DiagLogPeel (§25.7.3 step 2) before reaching the flat
+> Call; they do not survive into RegseqModel. The
+> declared callee signature `fn(&'static str,
+> &[LogArg<'_>])` (two inputs) does not constrain
+> `args.len()` at the call site; the desugared shape is
+> the load-bearing invariant. Indirect callees
+> (`CallCallee::Indirect(Operand)`) cannot satisfy the
+> predicate (IntrinsicKind is keyed by Instance identity).
 
-**C:**
-```c
-typedef struct Status {
-    uint32_t tag;
-} Status_t;
+§23.6.2 B-4 and B-6 exception clauses cite
+`I-DiagLog-CallArity` as the operative invariant for
+Log-intrinsic callees.
 
-#define STATUS_IDLE   0u
-#define STATUS_ACTIVE 1u
-#define STATUS_ERROR  0xFFu
-#define STATUS_RESET  0xDEADu
+**Transient fingerprint discipline.** DiagLogPeel produces
+a call-site fingerprint at step 5 (severity + fmt template
++ per-arg `Ty` + span) consumed immediately by validation
+(§26.8) and discarded. The fingerprint is NOT stored on
+`RegseqModel`. Backend lowering re-derives the same
+information from the IR:
+- Severity: `model.instance_intrinsic(callee_instance_id)`
+  per §3.5.2 -> `IntrinsicKind::Log(level)`.
+- Per-arg `Ty`: `operand_ty(args[i])` for
+  `i >= 1` per the standard operand-type rules.
 
-uint32_t priority(Status_t s) {
-    switch (s.tag) {
-        case STATUS_IDLE:   return 0;
-        case STATUS_ACTIVE: return 1;
-        case STATUS_ERROR:  return 100;
-        case STATUS_RESET:  return 200;
-    }
-}
+A side table keyed by call-site identity (e.g., a new
+sibling on `DomainAttrTables`) would duplicate information
+the regular IR carries -- per the composition-over-flags
+rule, no side table is introduced. (Were a future revision
+to need information the IR cannot carry -- e.g., a
+modifier-set selection per call site beyond what the
+template literal carries -- the question reopens.)
 
-// SetDiscriminant(Status::Error) -> place->tag = STATUS_ERROR;
-//   codegen reads VariantLayout.tag_value = Some(0xFF) and emits
-//   0xFF as the tag value, NOT 2 (variant index).
-```
+**Composition with concurrent passes.** DiagLogPeel runs
+inside Phase 5 body materialisation per §25.7.4, alongside
+Drop-as-Call collapse. The two are mutually exclusive
+per-rustc-Terminator: a rustc Terminator is at most one of
+`Drop` (handled by Drop-as-Call) or `Call` to a
+Log-intrinsic callee (handled by DiagLogPeel); no
+Terminator is both.
 
-### A.11 Niche-encoded `Option<&u32>` with discriminant fields
+### 26.7 Format template grammar
 
-**Rust:**
-```rust
-fn f(x: Option<&u32>) -> u32 {
-    match x {
-        Some(p) => *p,
-        None    => 0,
-    }
-}
-```
+The Regseq format template is a restricted printf-style
+subset, owned by Regseq (not `core::fmt`). Stage-14 surface:
 
-**Layout:** `EnumShape::Multiple` with `TagEncoding::Niche {
-untagged_variant: Some, niche_variants: None..=None,
-niche_start: 0 }`.
+**Template form.** `&'static str` literal at the macro call
+site. Structurally enforced by the macro's `$fmt:literal`
+matcher (rejects const-reference indirection like
+`const TPL: &str = "..."; info!(TPL, x)`); D-14-2.7 D6 also
+asserts this at the bridge to defend against future
+macro-mediated escape hatches.
 
-| Variant | `discriminant` | `tag_value` |
-| ------- | -------------- | ----------- |
-| `None`  | `0`            | `Some(0)`   |
-| `Some`  | `1`            | **`None`**  |
+**Placeholders.** `{}` only -- no named arguments, no
+positional indexes (`{0}`, `{1}`, ...), no dynamic
+precision (`{:.*}` with a precision-arg), no
+`Display`/`Debug` formatter identification (`{:?}` etc.).
 
-`tag_value: None` for `Some` because `Some` is the untagged
-variant — the inner pointer's bit pattern IS the tag.
+**Closed modifier subset (stage-14 v1).** Each `{}` may
+carry one of the following modifiers; the leading set is:
 
-**C:**
-```c
-typedef struct Option_ref_u32 {
-    const uint32_t *p;   // 0 = None; nonzero = Some(p)
-} Option_ref_u32_t;
+| Modifier  | Meaning                              | Compatible LogArg variants |
+|-----------|--------------------------------------|----------------------------|
+| (none)    | default `{}`                         | any                        |
+| `:x`      | lowercase hex                        | integer-width (U8..U64, I8..I64) |
+| `:X`      | uppercase hex                        | integer-width              |
+| `:#x`     | lowercase hex with `0x` prefix       | integer-width              |
+| `:#X`     | uppercase hex with `0x` prefix       | integer-width              |
+| `:08x`    | zero-padded 8-wide lowercase hex     | integer-width              |
+| `:#010x`  | zero-padded 10-wide lowercase hex with `0x` prefix | integer-width |
 
-uint32_t f(Option_ref_u32_t x) {
-    if (x.p == NULL) return 0;        // None
-    return *x.p;                      // Some
-}
+The `:p` modifier (raw-pointer formatting in stock Rust)
+is NOT in the subset -- the DSL exposes no raw pointers;
+address formatting goes through hex-formatting an
+integer-typed address.
 
-// SetDiscriminant(Option::None) -> place->p = (const uint32_t *)0;
-//   /* tag_value = Some(0) */
-// SetDiscriminant(Option::Some) -> /* no-op */
-//   /* tag_value = None: untagged variant; payload IS the tag. */
-// Construction of Option::Some(p) -> place->p = p;
-//   /* Separate MIR field-write statement, NOT a SetDiscriminant. */
-```
+The subset is **closed at the leading set above for v1**.
+Wider modifier coverage (other widths, decimal padding,
+alignment specifiers, ...) belongs in the experiments track
+at `docs/discussions/logging-and-printing/` and may extend
+the subset in a future revision; no automatic
+backwards-compatibility commitment binds future extensions
+to the v1 set.
 
-### A.12 Rejected `*mut c_void` usage
+**Escape sequences.** `{{` and `}}` are literal `{` and `}`
+in the rendered output. They are NOT placeholders: the
+compiler treats them as literal text (no entry in
+`placeholder_kinds`, no contribution to `placeholder_count`,
+no per-position validation pair).
+
+**Trailing newline forbidden.** Templates MUST NOT end with
+`\n`, `\r`, or `\r\n`. Backend lowering appends the
+target-appropriate terminator (per the backend's emitter
+contract); a trailing newline in the template would produce
+a double terminator on every target. Embedded newlines mid-template are permitted and
+render as visible line breaks in the output; multi-line
+emissions from a single call are a supported pattern.
+D-14-2.7 D7 enforces.
+
+**Empty template legal.** `regseq::log::info!("connected")`
+is well-formed: 0 placeholders + 0 arguments.
+
+### 26.8 Bridge-side validation diagnostics
+
+The bridge validates each call-site fingerprint produced by
+DiagLogPeel (§25.7.3 step 5) against the format-template
+grammar (§26.7) and the `LogArg`-admissible argument-type
+set (§26.4). A `RegseqError`-shaped diagnostic emits per
+failure. All diagnostics use the original Rust call-site
+span; D-14-2.7's diagnostic-quality requirement (below)
+binds the author-facing error to the offending
+author-source expression, not to bridge-internal machinery.
+
+**Bridge-emitted diagnostics:**
+
+| #  | Rule                                                                                       | Trigger                                  |
+|----|--------------------------------------------------------------------------------------------|------------------------------------------|
+| D1 | `placeholder_count == argument_count` (template-arg arity parity)                          | post-DiagLogPeel fingerprint validation  |
+| D2 | Per-position modifier compatible with operand `Ty` (e.g., hex modifier requires integer-width operand) per §26.7 modifier table | post-DiagLogPeel fingerprint validation |
+| D3 | Every modifier in template is a member of the closed Regseq subset (§26.7)                | post-DiagLogPeel fingerprint validation  |
+| D4 | Every operand's source-Rust `Ty` is admissible per §26.4's `From`-closed set; rejection list per §26.4 | macro expansion + bridge fingerprint validation (defense in depth) |
+| D6 | `args[0]` resolves to a string literal at the **MIR shape** (pre-Regseq-const-lowering); not an indirect const reference, not a runtime expression, not a non-string literal. Checked at DiagLogPeel step 1 (§25.7.3) because post-Regseq-const-lowering both literal and const-reference forms serialise to `Const::Aggregate([Reloc, Uint])` (§9.7) and are no longer distinguishable. | DiagLogPeel step 1 (pre-lowering) |
+| D7 | Template does NOT end in `\n`, `\r`, or `\r\n`                                              | post-DiagLogPeel fingerprint validation  |
+| D8 | `&str` operand count in args[1..] <= **selected binding target's** declared `max_str_args_per_call` (the bound is backend-declared per-target -- see `generic-c-backend.md` §8.4 for the generic-C target; phase-2 targets declare in their respective `<target>-backend.md` artifacts; counts ALL `Ty::Ref(Ty::Str, _)` operands without provenance distinction; args[0] format template excluded). Bounds per-call stack use against the per-`%s`-site temporary-buffer allocation. Evaluated once per (call site, target) pair: a single build is one target; cross-target validation (when a future stage adds multi-target build) repeats D8 per target. | post-DiagLogPeel fingerprint validation against the build's selected target |
+
+**D5 deferred.** The atomic-context analysis ("Call site is
+reachable from an atomic context for which the target offers
+no compatible emitter at the chosen severity") depends on
+the call-site context fact owned by the interrupt construct.
+**Deferred to phase-2 stage 17 (interrupt / ISR family).**
+Filed as an inbound expectation on
+`stage-17/expectations.md`. Phase-1 implementations of the
+diagnostic-logging pipeline operate as if every call site is
+atomic-safe (the generic-C target has no atomic context to
+worry about; the Linux backend at phase-2 stage 15 emits
+without atomic-context guarding until stage 17 lands).
+
+**Diagnostic-message quality requirement (binding on impl).**
+D4's author-facing message MUST report against the original
+author argument expression (e.g., "value of type `MyStruct`
+cannot be passed to `regseq::log::info!`; only the primitive
+carrier types are accepted") rather than against the
+bridge-synthesised `LogArg::from(...)` wrapper (which is
+gone after DiagLogPeel anyway). Implementations may use
+`#[diagnostic::on_unimplemented]` on the `From` impls,
+custom proc-macro diagnostics, or equivalent
+Rust-toolchain affordances to preserve the author-side
+span; the exact error-message text is not part of the
+construct contract, but the span-preservation requirement
+IS part of the contract.
+
+### 26.9 Backend lowering contract
+
+Per-target lowering tables (per-`LogLevel` C call shape,
+per-arg C format specifier, `&str` NUL-termination strategy,
+`max_str_args_per_call` declaration) are backend-codegen
+content and live in the per-target backend merger artifact
+(see README §5.9 rule 7). Stage 14 specs the **generic-C
+binding** -- the phase-1 implementation territory: hosted
+userspace, libc, `printf` -- at `generic-c-backend.md` §8.
+
+Forward-looking content for phase-2 targets (Linux kernel
+`pr_*` / `dev_*` family, Linux `max_str_args_per_call`
+declaration, Zephyr / FreeBSD / Windows / macOS bindings) is
+not embedded here per the "no forward-looking placeholders"
+rule (README §5.9 rule 4). Each phase-2 backend stage owns
+its own target's contract, re-derived against the pinned
+toolchain and target evidence available at that stage.
+Linux-binding inbound expectation filed on
+`stage-15/expectations.md`.
+
+**Pipeline A uniformity.** All targets apply the same
+DiagLogPeel-output IR shape (the flat-arg Call per §26.6).
+The per-target lowering reads the peeled operands and emits
+the target's printf-family call; no target reconstructs the
+`LogArg` slice. Because DiagLogPeel removes `LogArg` and
+the carrier slice from RegseqModel entirely (§25.7.3), a
+backend that observed a `LogArg`-variant-tag runtime
+dispatch shape would have had to **reconstruct the
+pre-DiagLogPeel carrier** -- this is explicitly forbidden:
+backends MUST NOT reconstruct a `LogArg` slice and MUST
+NOT lower any pre-DiagLogPeel carrier shape. The
+zero-runtime-cost-on-emit guarantee rests on this rule.
+This uniformity rule is IR-side and binding on every
+backend artifact (current and future).
+
+### 26.10 Deferrals and scope boundaries
+
+**Deferred to phase-2 stage 15 (regseq-trait scaffolding +
+Lifecycle + driver-struct discovery + RegseqError):**
+
+- **`register_log_module`** -- compiler-emitted glue at
+  driver-module entry that registers the driver's log
+  module with the target's logging facility. Per-target
+  binding: `pr_fmt` setup on Linux, `LOG_MODULE_REGISTER`
+  on Zephyr, device-class log binding on FreeBSD,
+  `WPP_INIT_TRACING` on Windows, `os_log` subsystem /
+  category binding on macOS. Stage-15 owns because the
+  driver-identity / lifecycle hook this composes with is
+  stage-15 territory. Not part of the author surface.
+- **Device-context joining** -- compiler-injected device
+  handle that surfaces in the lowered call (e.g., `dev_err(dev,
+  ...)` on Linux instead of `pr_err(...)`). Required for
+  Linux's `dev_*` family; irrelevant for the generic-C
+  target (hosted userspace, no device handle). The
+  bridge-side mechanism that joins device-identity at
+  call-site lowering is stage-15 territory (driver-struct
+  discovery surfaces the device handle).
+
+**Deferred to phase-2 stage 17 (interrupt / ISR family):**
+
+- **Atomic-context analysis (§26.8 D5)** -- the call-site
+  context fact "this `emit_diagnostic` call is reachable
+  from an atomic context" depends on the interrupt
+  construct's call-site context analysis, which is
+  stage-17 territory.
+
+**Deferred to a future revision (not phase-2-scheduled):**
+
+- **Target-aware codegen-level elision for `debug!`** --
+  preserving each target's native laziness mechanism
+  (Linux `pr_debug` dynamic-debug branch, Zephyr
+  compile-time `LOG_LEVEL` elision, Windows WPP flag
+  filtering, macOS unified-logging level filtering). The
+  phase-1 contract evaluates arguments at the call site
+  unconditionally. A proper resolution would let the
+  per-target lowering emit each target's native lazy form;
+  deferred so the design can account for the per-target
+  mechanism uniformly rather than papering over with a
+  DSL-level toggle.
+- **Wider format-template modifier coverage** -- the
+  closed leading subset at §26.7 is v1; extensions belong
+  in the experiments track at
+  `docs/discussions/logging-and-printing/`.
+- **Per-target `&str` null-termination strategy choice**
+  -- each binding backend pins its own materialisation
+  strategy at implementation-sweep time. **Generic-C is
+  pinned in `generic-c-backend.md` §8.3** (static-literal
+  direct emission + temporary stack-buffer fallback for
+  non-static `&str`). Linux backend (phase-2 stage 15) pins
+  null-termination at its implementation sweep in
+  `linux-backend.md`; future targets pin theirs when their
+  backend artifacts open.
+  The deferred axis is the **inter-target** comparison
+  / common-helper extraction; not the per-target binding
+  obligation itself.
+
+**Explicitly out of scope:**
+
+- **DSL-level emission gating.** No `debug_logging` toggle.
+  No DSL flag for runtime / compile-time emission
+  suppression. Emission suppression is delegated to the
+  target's native filter (per the construct contract).
+- **`emit_structured_event`** (Track-B extension from the
+  taxonomy work) -- not represented in phase-1.
+- **Function-style stable logging API** -- preserve macro
+  form; no `regseq::log::error_fn(...)` callable surface.
+- **Driver-passed device handle on author surface.**
+  Device context is joined implicitly per stage-15 (see
+  above); authors never pass a device handle to
+  `regseq::log::*!` macros.
+
+### 26.11 Cross-references
+
+- §3.6 -- domain attribute tables (where
+  `IntrinsicKind::Log(LogLevel)` is stored).
+- §3.6.3 -- `IntrinsicKind` enum + dash-form NAME mapping.
+- §3.6.4 -- two-phase recognition + materialisation.
+- §3.6.5 -- per-family validation invariants
+  (`I-DomainAttr-Intrinsic-Singleton` constrains
+  `IntrinsicKind::Log(_)`).
+- §3.6.6 -- attribute-namespace storage rule
+  (`#[rseq::intrinsic("log-<sev>")]` -> DomainAttr).
+- §3.5.2 -- `model.instance_intrinsic(instance_id)`
+  pull-through helper.
+- §23.6.2 B-4 + B-6 -- `I-DiagLog-CallArity` exception
+  clauses.
+- §25.7.3 -- DiagLogPeel pass mechanics.
+- §25.7.4 -- pass scheduling diagram.
+
+**Rendering.** Diagnostic-logging calls render as standard
+`Call` terminators per the body-level rendering rules in
+`pretty-printer.md`. The post-DiagLogPeel flat-arg shape
+renders naturally: the callee path identifies the
+log-intrinsic Instance, and the args render
+element-by-element. No special-case rendering rule.
+
+---
+
+
+## Appendix A: Bridge-rejection examples
+
+C-lowering worked examples (reference + pointer types,
+fat-pointer types, niche-encoded enums, `UnsafeCell` aliasing,
+packed structs, `&dyn Trait` lowering, closures, `repr(u32)`
+enum, niche-encoded `Option<&u32>`) live in
+`generic-c-backend.md` §9 per README §5.9 rule 7. Linux-target
+worked examples (MMIO read intrinsic, atomic acquire-load)
+re-derive in phase-2 stages 16 / 17 against the Linux backend
+spec; the dropped examples are filed as inbound expectations
+on `stage-16/expectations.md` and `stage-17/expectations.md`.
+
+This appendix retains only IR-side bridge-rejection examples
+that illustrate spec-level rejection rules, not C codegen.
+
+### A.1 Rejected `*mut c_void` usage
 
 **Driver source (rejected counter-example):**
 ```rust
@@ -11579,7 +13054,8 @@ fn register_callback(cb: extern "C" fn(*mut OpaqueCtx), ctx: *mut OpaqueCtx) {
 }
 ```
 
-The opaque-struct pattern is structurally an `Adt` (an ordinary
-`Ty::Struct`) and lowers to a forward-declared struct pointer
-(`struct OpaqueCtx *`), a valid opaque-handle shape on both
-Linux and Zephyr targets.
+The opaque-struct pattern is structurally an `Adt` (an
+ordinary `Ty::Struct`). Backend C-lowering for the rewrite is
+backend-codegen content; the generic-C target's rendering of
+opaque-handle struct pointers lives in `generic-c-backend.md`
+(per-`Ty` table at §2).

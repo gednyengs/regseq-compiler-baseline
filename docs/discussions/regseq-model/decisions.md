@@ -317,16 +317,18 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
   - **D-4-3.10** [LOCKED] — Stage-12 outbound flipped to
     `[CLOSED by D-4-3]`.
 
-- **D-4-K** [DEFERRED to stage 14] — `pretty.rs::render_const`
-  renderer-style decision deferred to stage 14 (extending the
-  D14 → stage-13 precedent for `render_ty` one stage further
-  because `render_const`'s dependency chain is longer:
+- **D-4-K** [CLOSED-BY-ABSORPTION] — `pretty.rs::render_const`
+  renderer-style decision was deferred to stage 14 (extending
+  the D14 → stage-13 precedent for `render_ty` one stage
+  further because `render_const`'s dependency chain is longer:
   5 of 11 variants depend on `render_ty` (stage 13);
   `Reloc(InstanceRef)` additionally depends on
   `render_def_path(ItemId)` (stage 12) and `render_instance`
-  (stage 14)). Stage 14 is the latest dependency. Outbound
-  expectation in `stage-14/expectations.md` "From stage 4."
-  No specific rendering style pre-committed by stage 4.
+  (stage 14)). Stage 14 D-14-4 locked the
+  `render_const(ConstId, TyId) -> String` composer renderer
+  + 12 sub-decisions covering the per-arm specs for the closed
+  11-variant `Const` enum; D-4-K closes by absorption into
+  D-14-4.
 
 ### Stage 5 (MIR places and projections)
 
@@ -741,8 +743,13 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
   panic=abort the surviving values carry no
   driver-relevant information).
 
-- **D-9-9** [LOCKED] -- 9-row rejection table
-  (8 rejected + 1 collapsed via D-9-2). Two-category
+- **D-9-9** [REOPENED] -- 9-row rejection table
+  (8 rejected + 1 collapsed via D-9-2). (revised in
+  stage 14 D-14-7: rejection vocabulary extended
+  with `#[naked]` Item-translation row at §15.1,
+  sibling to InlineAsm terminator-translation row
+  at §23.6.1; §23.6.1 9-row table itself stays at
+  9 rows; §15.1 table grows by one row.) Two-category
   framing:
   - **Pipeline-discharged (rows 1-6):** FalseEdge,
     FalseUnwind, Yield, CoroutineDrop, UnwindResume,
@@ -755,8 +762,14 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
   - **Bridge-collapsed (row 9):** Drop per D-9-2.
   Walk-pass enforcement deferred to stage 11.
 
-- **D-9-10** [LOCKED] -- 4-part invariants registry.
-  Part A: rejection table cross-ref (D-9-9). Part B:
+- **D-9-10** [REOPENED] -- 4-part invariants registry.
+  (revised in stage 14 D-14-2.5: B-4 and B-6 carved
+  out for `IntrinsicKind::Log(_)` callees per the
+  `I-DiagLog-CallArity` invariant -- bridge
+  translation contract for the diagnostic-logging
+  intrinsic vocabulary admits flat-arg shape after
+  DiagLogPeel.) Part A: rejection table cross-ref
+  (D-9-9). Part B:
   2 inherited (B-0a Place, B-0c Operand) + 9
   stage-9-introduced positive invariants (11 total)
   (B-1 SwitchInt discr type; B-2 Assert cond bool;
@@ -1019,10 +1032,10 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
 
 ### Stage 12 (Rust Items)
 
-- **D-12-1** [LOCKED] -- Item schema + ItemKind shape: 6-variant flat ItemKind; per-mono data on InstanceKind (Option B reframe); Item-level typed metadata per stage-1 R5.2 (linkage, link_section, inline_hint, is_unsafe, is_naked + lang-item flags + opaque_handle_eligible).
+- **D-12-1** [LOCKED] -- Item schema + ItemKind shape: 6-variant flat ItemKind; per-mono data on InstanceKind (Option B reframe); Item-level typed metadata per stage-1 R5.2 (linkage, link_section, inline_hint, is_unsafe + lang-item flags + opaque_handle_eligible; `is_naked` removed by stage-14 D-14-7 -- v1 rejects `#[naked]` at Item translation).
   - **D-12-1.1** [LOCKED] -- Cardinality: closed 6-variant flat `{ Function, Static, Const, Struct, Enum, Union }`. Aligns with rustc-internal first-class ADT representation.
   - **D-12-1.2** [LOCKED] -- `ItemKind::Static { mutability: Mutability }`; Const/Struct/Enum/Union stay unit. Mutability moves from InstanceKind::Static to ItemKind::Static (option c) per stage-1 intent.
-  - **D-12-1.3** [LOCKED] -- Item-level typed fields: `linkage: Linkage` (closed 4-variant), `link_section: Option<StringId>`, `inline_hint: InlineHint` (closed 4-variant), `is_unsafe: bool`, `is_naked: bool`. Visibility omitted in v1.
+  - **D-12-1.3** [REOPENED] -- Item-level typed fields: `linkage: Linkage` (closed 4-variant), `link_section: Option<StringId>`, `inline_hint: InlineHint` (closed 4-variant), `is_unsafe: bool`, `is_naked: bool`. Visibility omitted in v1. (revised in stage 14 D-14-7: `is_naked` field removed; v1 rejects `#[naked]`-attributed Items at Item translation.)
   - **D-12-1.4** [LOCKED] -- **Option B reframe**: `InstanceKind::Function { fn_sig: FnSigId, body: Option<Body>, flavor, virtual_idx }`. Restores symmetry across all 6 InstanceKind variants. Reopens stage-11 D-11-3 + D-11-5.
   - **D-12-1.5** [LOCKED] -- DomainAttr forward-pointer commentary only at §8.0 + §3; no stage-12 schema. Stage-14 owns property vocabulary on RegseqModel sibling tables per stage-4 §1287-1299.
   - **D-12-1.6** [LOCKED] -- Hybrid accessor: `InstanceKind::as_function() -> Option<&FunctionInstanceData>` + match-arm-readable; named `FunctionInstanceData` struct.
@@ -1086,7 +1099,7 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
 - **D-13-4** [LOCKED] -- Item-level rendering shape: Rust-source `#[...]` attribute syntax, default-suppression, per-flag/per-ItemKind tables, multi-line layout, building-block-vs-composer architectural division.
   - **D-13-4.1** [LOCKED] -- Attribute syntax = Rust-source `#[...]` form.
   - **D-13-4.2** [LOCKED] -- Default-suppression for all default/false-valued fields.
-  - **D-13-4.3** [LOCKED] -- Per-flag rendering table: source-faithful where rustc has the attribute (`#[no_mangle]`, `#[inline(always)]`, `#[link_section = "..."]`, `#[lang = "..."]`, `#[naked]`, `unsafe` keyword on `fn`); `#[opaque_handle]` for the bridge-outcome flag.
+  - **D-13-4.3** [REOPENED] -- Per-flag rendering table: source-faithful where rustc has the attribute (`#[no_mangle]`, `#[inline(always)]`, `#[link_section = "..."]`, `#[lang = "..."]`, `#[naked]`, `unsafe` keyword on `fn`); `#[opaque_handle]` for the bridge-outcome flag. (revised in stage 14 D-14-7: `#[naked]` row removed -- v1 rejects `#[naked]`-attributed Items at Item translation; §5.6 row-order recap renumbered.)
   - **D-13-4.4** [LOCKED] -- Per-ItemKind kind-keyword + DefPath: `[unsafe ]fn`, `static [mut ]`, `const`, `struct`, `enum`, `union`.
   - **D-13-4.5** [LOCKED] -- Layout: always multi-line when ≥1 attribute renders, one-line bare `kind $path` otherwise.
   - **D-13-4.6** [LOCKED] -- Building-block-vs-composer architectural division: stage 13 owns NEW BUILDING BLOCKS (`render_ty`, `render_item`, body-level renderers); stage 14 owns COMPOSERS (`render_const`, `render_instance`, top-level `render`). Inherited building blocks: `render_def_path` (stage 12 per D-12-6), `render_def_path_value` + `render_span` (stage 1, shipped). `render_item` stays a public stage-13 API entry per D-12-K.1.
@@ -1099,7 +1112,7 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
   - **D-13-5.5** [LOCKED] -- Forward-call to stage-14 `render_const` for `GenericArg::Const` arms.
   - **D-13-5.6** [LOCKED] -- GenericArgs structural verification (verified at R1 against spec.md §9.1).
 
-- **D-13-6** [LOCKED] -- Body-level renderer per-arm specifications across 9 public renderers + 1 internal helper.
+- **D-13-6** [REOPENED] -- Body-level renderer per-arm specifications across 9 public renderers + 1 internal helper. (revised in stage 14 D-14-4.9: `render_operand` and `render_rvalue` signatures extended with `expected_ty: TyId`; `render_generic_args` signature extended with `item: ItemId`. Operand-callsite wiring threads consumer-context Ty through to the pair-form `render_const(id, expected_ty)` per D-14-4.1; the per-arm specs unchanged otherwise.)
   - **D-13-6.1** [LOCKED] -- `render_place` = rustc pre/post-wrap projection chain preserving operator precedence; field/variant name resolution via place_ty walk through layout.kind; FieldLayout.name + VariantLayout.name non-optional StringId per §11.
   - **D-13-6.2** [LOCKED] -- `render_operand` = bare `<render_const>` for `Constant` (rustc-converged).
   - **D-13-6.3** [LOCKED] -- `render_rvalue` = 9-variant table + AggregateKind 7-variant sub-table; CastKind ambiguous-only annotation (§7.3.1); RawPtr aggregate two-operand form per §21.3.6.
@@ -1122,3 +1135,73 @@ yet); `^- F` for stage-1 F-tags; `^- D[0-9]` for stage-3 D-tags.
   - **D-13-9.4** [LOCKED] -- pretty-printer.md initial 10-section structure (Mission / Master style / Body envelope+sigils / Span-debuginfo modes / Item-level shape / render_ty / Body-level rendering / Ownership table / Worked-example specimens / Cross-references).
   - **D-13-9.5** [LOCKED] -- Working surface = stage-13/pretty-printer-snapshot.md for the new top-level file's draft + minimal in-place edits to existing spec-snapshot.md for cross-references.
   - **D-13-9.6** [LOCKED] -- D-13-8 closes by absorption.
+
+## Stage 14 (Phase-1 foundation extensions)
+
+- **D-14-1** [LOCKED] -- Q7 intrinsic recognition mechanism + storage. Recognition via `tcx.get_attrs_by_path(did, &[sym::rseq, sym::intrinsic])` (multi-segment tool-attribute walker); resolved `IntrinsicKind` stored on `RegseqModel.domain_attrs` (the DomainAttr sibling-table architecture per D-14-3) under the `item_attrs: IndexVec<ItemId, Vec<AttrData>>` table as `AttrData::Intrinsic(IntrinsicKind)` entries per Q2 eager-translation; closed vocabulary; unknown rejected. Folds external-review Finding #1 (corrected `intrinsic_raw` mis-attribution + the "not stored on Item" framing).
+  - **D-14-1.1** [LOCKED] -- Recognition codepath (`tcx.get_attrs_by_path`).
+  - **D-14-1.2** [LOCKED] -- `register_tool(rseq)` validation: declaration is source-author-side per README §2 "Source declares its own compiler-relevant attributes"; bridge does not inject.
+  - **D-14-1.3** [LOCKED] -- NAME parsing: `Attribute::value_str()` extraction; closed-set validation against the `IntrinsicKind` enum.
+  - **D-14-1.4** [LOCKED] -- `IntrinsicKind` closed enum, diagnostic-logging entries only at stage 14; phase-2 stages 15-19+ append per-domain entries.
+  - **D-14-1.5** [LOCKED] -- Storage shape: resolved `IntrinsicKind` lifts into the unified DomainAttr architecture (D-14-3) rather than a separate per-Item field — entries land in `RegseqModel.domain_attrs.item_attrs: IndexVec<ItemId, Vec<AttrData>>` as `AttrData::Intrinsic(IntrinsicKind)` variants (resolved kind only; no `source_item` redundant with IndexVec key; no `name: StringId` needed since `kind` is sufficient).
+  - **D-14-1.6** [LOCKED] -- Instance-side pull-through helper `instance_intrinsic(&self, id: InstanceId) -> Option<&IntrinsicKind>` added to §3.5.2 (13th helper post-D-14-7 deletion of `instance_is_naked`); returns the borrowed `AttrData::Intrinsic` payload via the DomainAttr `domain_attrs.item_attrs` lookup.
+  - **D-14-1.7** [LOCKED] -- Population timing: stage-12 D-12-5 Phase 2 Translation+Synthesis, attached to the Item discovery walk.
+  - **D-14-1.8** [LOCKED] -- Spec home: new `RegseqModel` field declared in §3 + new §3.6 covering DomainAttr architecture (shared with D-14-3).
+
+- **D-14-2** [LOCKED] -- Diagnostic-logging intrinsic vocabulary + bridge contract.
+  - **D-14-2.1** [LOCKED] -- Per-level intrinsics (`log_debug`, `log_info`, `log_warn`, `log_error`) rather than single intrinsic with a level operand: IR-side dispatch on `InstanceId` without operand inspection; backends are free to consolidate at the C-emission layer (the generic-C backend uses a single `printf` emitter with the severity rendered as a leading bracketed format-string tag per `generic-c-backend.md` §8.1).
+  - **D-14-2.2** [LOCKED] -- Argument shape: variadic `&str` + value-args (`i32`, `u32`, `i64`, `u64`, `usize`, `isize`, `&str`); format-string convention is rustc-`format_args!`-style.
+  - **D-14-2.3** [LOCKED] -- Vocabulary admission via `IntrinsicKind::Log(LogLevel)` variant.
+  - **D-14-2.4** [LOCKED] -- Backend lowering contract: generic-C lowers to `printf("[<LEVEL>] " <fmt> "\n", <args>...)` (single emitter, stdout, severity rendered as a leading bracketed tag); Linux backend lowers to `printk(...)` (phase-2 stage 15+ per the `stage-15/expectations.md` inbound binding).
+  - **D-14-2.5** [LOCKED] -- DiagLogPeel bridge translation contract: at Call-translation phase, peel the `format_args!` macro-expanded `&[ArgumentV1]` slice argument into the flat-arg shape the diagnostic-logging C lowering admits. **REOPENS D-9-10** (B-4 and B-6 invariants carved out for `IntrinsicKind::Log(_)` callees per `I-DiagLog-CallArity`).
+  - **D-14-2.6 through D-14-2.9** [LOCKED] -- Macro-vs-direct DSL surface, format-string parsing constraints, lookup table population, validator hook integration.
+
+- **D-14-3** [LOCKED] -- DomainAttr sibling-table architecture.
+  - **D-14-3.0** [LOCKED] -- Operational-intrinsic + declarative-property surfaces share one DomainAttr architecture (unified, not parallel): single sibling-table machinery dispatched by `AttrData` variant.
+  - **D-14-3.1** [LOCKED] -- Key-kind set: `ItemId` (intrinsics + per-Item DSL attributes), `FieldPath` (per-field MMIO/atomic attributes), `Span` (call-site MMIO/atomic markers); `InstanceId` not used (Item-side pull-through covers all Instance-level access).
+  - **D-14-3.2** [LOCKED] -- Storage shape: `DomainAttrTables { item_attrs: IndexVec<ItemId, Vec<AttrData>>, field_attrs: HashMap<FieldPath, Vec<AttrData>>, span_attrs: HashMap<Span, Vec<AttrData>> }` -- each sibling-table entry holds a `Vec<AttrData>` to allow multiple domain attributes per key; per-family duplicate invariants handled by validation.
+  - **D-14-3.3** [LOCKED] -- One sibling table per key kind with a polymorphic `AttrData` payload (rather than per-family-x-key-kind tables): three tables on `DomainAttrTables` (`item_attrs`, `field_attrs`, `span_attrs`); each carries `Vec<AttrData>` so multiple domain attributes can attach to a single key; phase-2 stages append new `AttrData` variants per family.
+  - **D-14-3.4** [LOCKED] -- Population timing: stage-12 D-12-5 Phase 2 Translation+Synthesis. Validation contract: referenced-key existence, no-duplicate entries, per-family attribute-shape checks.
+
+- **D-14-4** [LOCKED] -- `render_const(ConstId, TyId) -> String` composer renderer per-arm specs.
+  - **D-14-4.1** [LOCKED] -- API signature: pair-form `(ConstId, TyId)`.
+  - **D-14-4.2 / D-14-4.10 / D-14-4.11 / D-14-4.12** [LOCKED] -- Scalar variants: underscore-decimal convention + sentinel collapsing (T::MIN / T::MAX) + decimal-only + non-finite forms (NaN, infinity).
+  - **D-14-4.3 / D-14-4.7 / D-14-4.8** [LOCKED] -- ZST + NullPtr + Reloc per-arm dispatches.
+  - **D-14-4.4 / D-14-4.5 / D-14-4.6** [LOCKED] -- Aggregate (Array/Tuple/Struct) + EnumValue per-variant + Bytes (uninit / byte-array / structural fallback) multi-arm dispatches.
+  - **D-14-4.9** [LOCKED] -- Type-context threading via `expected_ty: TyId` parameter on `render_operand` and `render_rvalue`; `item: ItemId` parameter on `render_generic_args`. **REOPENS D-13-6** for the body-level renderer signature extensions.
+
+- **D-14-5** [LOCKED] -- `render_instance(InstanceId) -> String` composer renderer per-variant specs.
+  - **D-14-5.1** [LOCKED] -- API signature: single-argument (`InstanceKind` carries enough context).
+  - **D-14-5.2** [LOCKED] -- Function variant envelope + body-vs-declaration dispatch.
+  - **D-14-5.3 / D-14-5.4** [LOCKED] -- Static / Const variant forms.
+  - **D-14-5.5** [LOCKED] -- ADT variants (Struct/Enum/Union) Option B (full definition body from §11 Layout); EnumShape dispatch.
+  - **D-14-5.6** [LOCKED] -- DomainAttr attribute weaving: two-stream Stream-1 (Item-flag) + Stream-2 (`domain_attrs.item_attrs`) interleaving in canonical order.
+  - **D-14-5.7** [LOCKED] -- Layering boundary: composer-from-scratch (no `render_item` wrapper); §5.6 shared per-flag helper.
+  - **D-14-5.8** [LOCKED] -- Cross-stage friction outcome: zero new stage-13 D-tag REOPENs.
+
+- **D-14-6** [LOCKED] -- Top-level `render(&self) -> String` composer.
+  - **D-14-6.1** [LOCKED] -- API signature: zero-argument.
+  - **D-14-6.2** [LOCKED] -- Iteration over `model.instances.iter_enumerated()` in canonical F4-2 order per `spec.md` §16.3.
+  - **D-14-6.3** [LOCKED] -- Per-Instance separator `"\n\n"`; first-flag pattern; no leading/trailing separator.
+  - **D-14-6.4** [LOCKED] -- File-level envelope: no header/trailer/wrapper; no trailing newline.
+  - **D-14-6.5** [LOCKED] -- Empty-model case: empty `String` `""`.
+  - **D-14-6.6** [LOCKED] -- Cross-stage friction outcome: zero new stage-13 D-tag REOPENs.
+
+- **D-14-7** [LOCKED] -- `#[naked]` rejection in v1 (external-review Finding #2).
+  - **D-14-7.1** [LOCKED] -- Reject `#[naked]` at Item translation; diagnostic recommends phase-2 stage-17 `#[rseq::interrupt(...)]` deferral path.
+  - **D-14-7.2** [LOCKED] -- Recognition API: `tcx.codegen_fn_attrs(did).flags.contains(CodegenFnAttrFlags::NAKED)` during stage-12 D-12-5 Phase 2.
+  - **D-14-7.3** [LOCKED] -- Rejection-table placement: new "Item translation" phase row at §15.1; sibling to stage-9 D-9-9 §23.6.1 row 8.
+  - **D-14-7.4 + D-14-7.5** [LOCKED] -- `Item.is_naked: bool` field + `instance_is_naked` helper deletions.
+  - **D-14-7.6** [LOCKED] -- Pretty-printer per-flag table edits (§5.3 + §5.6 + §5.1 + §5.2).
+  - **D-14-7.7** [LOCKED] -- Specimen alignment at §9.9 (Specimens 69 + 70 + 75).
+  - **D-14-7.8** [LOCKED] -- §3.6.6 paragraph 3 finalisation.
+  - **D-14-7.9** [LOCKED] -- Cross-stage friction outcome: three REOPENs at merger close (**REOPENS D-12-1.3** + **D-9-9** + **D-13-4.3**).
+
+- **D-14-8** [LOCKED] -- Stale `emission_name` forward-pointer retarget (external-review Finding #3). §9.2 paragraph 3's `Struct / Enum / Union` `emission_name` bullet retargets the stale "stage 13 (codegen)" forward pointer to "phase-1 commits to determinism + uniqueness only; the full normative algorithm ... is the C-backend spec's responsibility and is out of phase-1 scope." Pure spec hygiene; no sub-decisions; no D-tag flip.
+
+- **D-14-9** [LOCKED] -- Specimen 70 split (external-review Finding #4). Pretty-printer §9.9 Specimen 70 downshifts `opaque_handle_eligible: true` to `false` (Function ItemKind structurally ineligible per §8.0 invariant 19); new Specimen 70b carries `opaque_handle_eligible: true` on a non-generic ZST `repr(C)` Struct. Pure pretty-printer-spec hygiene; no sub-decisions; no D-tag flip on D-13-7.
+
+- **D-14-10** [LOCKED] -- Generic-C backend codegen carve-out: separate co-equal merger artifact `generic-c-backend.md` per README §5.9 rule 7 (companion to `spec.md` + `pretty-printer.md`). Phase-1 backend artifact covers hosted userspace, libc, `printf`, `main()`, host-platform integer conventions; intrinsic C-emission contracts for the diagnostic-logging surface; per-`Ty` C typedef tables.
+  - **D-14-10.1 through D-14-10.7** [LOCKED] -- Carve-out scope + §5.9 rule 7 amendment + initial 9-section structure for `generic-c-backend.md` (`## 1`-`## 9`).
+
+- **`core::ffi::c_void` rejection enforcement** [LOCKED, no D-tag] -- Stage-3 D16 already specifies the rejection at the decision level; stage 14 adds the §15.1 introduction enforcement-narrative paragraph (naming §15.0 dispatch-ordering gate as the algorithmic enforcement for ADT-backed special-ADT rejections; non-Adt TyKind rejections enforced at top-level TyKind match-arm dispatch) plus an inline opaque-struct-pattern definition (`#[repr(C)]` ZST struct with single private zero-length-array field). No D-tag allocated; no D-tag flip.
