@@ -3,8 +3,10 @@
 The harness coordinates implementation work on the Regseq compiler: a
 two-layer scaffolding that separates batch-level planning from
 single-task execution, with a CLI (`task.py`) that mediates every
-state mutation and a small set of templates that constrain how new
-work is authored.
+mutation of `tasks.json` and a small set of templates that constrain
+how new work is authored. The planning tracker
+(`task-spec-status.yaml`) is hand-edited per the rules in
+`task-spec-workflow.md`; the CLI does not mediate tracker writes.
 
 This README is the conceptual entry point. Detailed mechanics live in
 the files this README points at; this file's job is to give a fresh
@@ -52,8 +54,19 @@ decomposed into executable task specs via `task.py add-task`.
 | Has Test Plan? | No -- defers to task specs | Yes |
 | Has Quality Gate? | No | Yes |
 | Decomposition guidance? | Yes ("split by file", etc.) | No -- already split |
-| Review unit | Phase-Close Review at batch close | Task Review per task |
-| Lifecycle | `not_ready` -> `ready_to_elaborate` -> `in_elaboration` -> `tasked` -> `archived` | `pending` -> `in_progress` -> `done` / `failed` / `archived` |
+| Review unit | Batch Review (opt-in per brief); collective Phase-Close Review at phase boundary | Task Review per task |
+| Lifecycle | `not_ready` -> `ready_to_elaborate` -> `in_elaboration` -> `tasked` -> `archived`; `blocked` is a stop state reachable from any non-terminal | `pending` -> `in_progress` -> `done` / `failed` / `archived` |
+
+### A note on review-tier names
+
+The harness uses three review tiers named **Task Review**, **Batch
+Review**, and **Phase-Close Review**. These names are *after* but
+**not the same as** the spec-side tiers in
+`docs/discussions/regseq-model/README.md` §5.6 (per-session /
+cross-session / top-level post-merge). The spec-side tiers operate
+on spec authoring; the harness-side tiers operate on implementation
+against the locked spec. Do not conflate them. SESSION.md's Review
+section is the canonical reference for the harness-side tiers.
 
 ---
 
@@ -168,8 +181,11 @@ directly.
 
 ### Task spec markdown structure
 
-Every task spec at `tasks/<group>/<NN-name>.md` contains these 8
-sections in this order:
+The canonical task spec at `tasks/<group>/<NN-name>.md` contains
+these 8 sections in this order; new phase-1a/1b task specs should
+follow this shape. (The 189 historical done examples are not
+uniformly 8-section -- some omit Non-Goals, Review, or Quality
+Gate. Treat the canonical shape as the forward-going contract.)
 
 1. **Description** -- 1-2 paragraphs: what the task implements at a
    high level.
@@ -195,18 +211,25 @@ sections in this order:
    `SESSION.md` Review section). The four-block `codex_runner.py`
    prompt template is reproduced here so the worker can pipe it
    directly.
-7. **Quality Gate** -- exact shell commands the worker must run
-   before claiming `done`:
+7. **Quality Gate** -- per-task dev-time check commands that mirror
+   what `task.py done` will verify at completion; workers run them
+   during development to anticipate the verification pass without
+   invoking the full `done` flow:
    ```
    cargo test -p <crate>
    cargo fmt --all -- --check
    cargo clippy -p <crate> -- -D warnings
    ```
+   **The authoritative gate is `task.py done`**, which runs cleanup
+   plus workspace-wide test/fmt/clippy per `SESSION.md` Testing
+   Requirements. Quality Gate commands in the spec are informational
+   guidance, not a separate gate.
 8. **Acceptance Criteria** -- concrete completion conditions:
    files created, tests pass, Codex review APPROVED.
 
 Pointers: `SESSION.md` (execution flow and Review tier details),
-`tasks/<group>/<NN-name>.md` files (189 archived examples).
+`tasks/<group>/<NN-name>.md` files (189 done examples retained as
+historical reference).
 
 ---
 
@@ -244,9 +267,11 @@ heading anchors and reports gaps or drift.
 
 ## CLI surface (`scripts/python/task.py`)
 
-Every state mutation routes through the CLI; direct edits to
-`tasks.json` or `task-spec-status.yaml` are forbidden. Run `uv run
-python scripts/python/task.py <cmd> --help` for flag-level details.
+Every mutation of `tasks.json` (execution state) routes through the
+CLI; direct edits to `tasks.json` are forbidden. The planning tracker
+(`task-spec-status.yaml`) is hand-edited per the rules in
+`task-spec-workflow.md` and has no CLI mediator. Run `uv run python
+scripts/python/task.py <cmd> --help` for flag-level details.
 
 **Query / orientation:**
 
