@@ -55,6 +55,46 @@ Include:
 
 If the batch exists to author task specs, say so clearly.
 
+## Spec References
+
+Required list of `<spec-file>#<anchor>` references for the batch as a
+whole. Downstream tasks inherit a subset of these in their own
+`spec_refs` arrays via `task.py add-task --spec-refs`. Use
+`uv run python scripts/python/task.py read-spec-refs <spec-file>` to
+emit the canonical anchor slugs for piping in.
+
+Example:
+
+- `regseq-model/spec.md#19`
+- `regseq-model/spec.md#20`
+- `regseq-model/pretty-printer.md#5`
+
+## Phase
+
+Required single phase tag for the batch (e.g. `1a`, `1b`, or a
+phase-2 family tag such as `2-mmio`). Every executable task that
+this batch elaborates inherits this phase tag via
+`task.py add-task --phase`.
+
+## Review Tiers
+
+Required table naming which harness-side review tiers apply at batch
+close. Task Review and Phase-Close Review are mandatory; Batch
+Review is opt-in for coherent multi-task features. For phase-1b
+batches whose closure depends on the cumulative
+DSL -> IR -> C -> captured-stdout suite running green, add a fourth
+row naming that suite gate.
+
+| Tier | Scope | Trigger | Mandatory? |
+| ---- | ----- | ------- | ---------- |
+| Task Review | Per-task | After task tests pass | Yes |
+| Batch Review | Per-batch cross-task | After all batch tasks done | Optional; set when batch is a coherent feature |
+| Phase-Close Review | Per-phase | `phase-status <p>` returns PASS | Yes at phase boundary |
+
+For Phase-Close Review semantics see `.harness/SESSION.md` (Review
+section) and the disambiguation against README §5.6's spec-side
+tiers.
+
 ## Non-Goals
 
 List the work that is explicitly out of scope for this batch.
