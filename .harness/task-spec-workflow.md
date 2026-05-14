@@ -18,16 +18,15 @@ tasks are available.
 
 Every cold worker session should follow this order:
 
-1. Read `.harness/config.md`.
-2. Read `.harness/SESSION.md`.
-3. Run `uv run python scripts/python/task.py doctor`.
-4. Run `uv run python scripts/python/task.py next-step`.
-5. If the next action is an executable task, do that task and ignore this document.
-6. If the next action is `TASK_SPEC_BATCH`, read `.harness/task-spec-status.yaml`.
-7. Find the item whose `TRACKER_ID` matches the `next-step` output.
-8. Read the brief file printed by `next-step`.
-9. Use that brief to author the next harness task spec or task batch.
-10. If the next action is `BRIEF_AUTHORING_BATCH`, create the missing brief first using `.harness/spec-batches/BRIEF_TEMPLATE.md`, then continue with the normal task-spec flow in a later fresh session or after updating the tracker.
+1. Read `.harness/SESSION.md`.
+2. Run `uv run python scripts/python/task.py doctor`.
+3. Run `uv run python scripts/python/task.py next-step`.
+4. If the next action is an executable task, do that task and ignore this document.
+5. If the next action is `TASK_SPEC_BATCH`, read `.harness/task-spec-status.yaml`.
+6. Find the item whose `TRACKER_ID` matches the `next-step` output.
+7. Read the brief file printed by `next-step`.
+8. Use that brief to author the next harness task spec or task batch.
+9. If the next action is `BRIEF_AUTHORING_BATCH`, create the missing brief first using `.harness/spec-batches/BRIEF_TEMPLATE.md`, then continue with the normal task-spec flow in a later fresh session or after updating the tracker.
 
 If there is no item with status `ready_to_elaborate`, stop and report the
 state rather than guessing the next batch.

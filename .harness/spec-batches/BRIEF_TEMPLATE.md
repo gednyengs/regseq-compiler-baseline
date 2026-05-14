@@ -16,7 +16,6 @@ Keep the batch bounded to one tracker item.
 
 Read before starting:
 
-- `.harness/config.md`
 - `.harness/SESSION.md`
 - `.harness/task-spec-workflow.md`
 - `.harness/task-spec-status.yaml`
