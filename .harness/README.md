@@ -45,17 +45,17 @@ other:
 brief is authored and reviewed first; once approved, it gets
 decomposed into executable task specs via `task.py add-task`.
 
-| Aspect | Brief | Task spec |
-|--------|-------|-----------|
-| Scope | Batch of N coherent tasks | One isolated task |
-| Tracked in | `task-spec-status.yaml` (planning) | `tasks.json` (execution) |
-| Markdown lives at | `spec-batches/<id>.md` | `tasks/<group>/<NN-name>.md` |
-| Defines public API? | No -- defers to task specs | Yes |
-| Has Test Plan? | No -- defers to task specs | Yes |
-| Has Quality Gate? | No | Yes |
-| Decomposition guidance? | Yes ("split by file", etc.) | No -- already split |
-| Review unit | Batch Review (opt-in per brief); collective Phase-Close Review at phase boundary | Task Review per task |
-| Lifecycle | `not_ready` -> `ready_to_elaborate` -> `in_elaboration` -> `tasked` -> `archived`; `blocked` is a stop state reachable from any non-terminal | `pending` -> `in_progress` -> `done` / `failed` / `archived` |
+| Aspect                  | Brief                                                                                                                                        | Task spec                                                    |
+| ----------------------- | -------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------ |
+| Scope                   | Batch of N coherent tasks                                                                                                                    | One isolated task                                            |
+| Tracked in              | `task-spec-status.yaml` (planning)                                                                                                           | `tasks.json` (execution)                                     |
+| Markdown lives at       | `spec-batches/<id>.md`                                                                                                                       | `tasks/<group>/<NN-name>.md`                                 |
+| Defines public API?     | No -- defers to task specs                                                                                                                   | Yes                                                          |
+| Has Test Plan?          | No -- defers to task specs                                                                                                                   | Yes                                                          |
+| Has Quality Gate?       | No                                                                                                                                           | Yes                                                          |
+| Decomposition guidance? | Yes ("split by file", etc.)                                                                                                                  | No -- already split                                          |
+| Review unit             | Batch Review (opt-in per brief); collective Phase-Close Review at phase boundary                                                             | Task Review per task                                         |
+| Lifecycle               | `not_ready` -> `ready_to_elaborate` -> `in_elaboration` -> `tasked` -> `archived`; `blocked` is a stop state reachable from any non-terminal | `pending` -> `in_progress` -> `done` / `failed` / `archived` |
 
 ### A note on review-tier names
 
@@ -386,16 +386,3 @@ tasks):
    `archive/<date>-old-architecture/MANIFEST.md` (pre-refactor
    history).
 
----
-
-## What this README is NOT
-
-- **Not the binding methodology.** Project-wide binding rules live
-  at `docs/discussions/regseq-model/README.md` §2 and §5. The
-  harness implements that discipline; it does not revise it.
-- **Not the CLI manual.** `task.py <cmd> --help` is authoritative
-  for flag-level detail.
-- **Not the spec.** Implementation targets the locked phase-1 spec
-  at `docs/discussions/regseq-model/{spec,pretty-printer,generic-c-backend}.md`.
-- **Not append-only.** Update in place when the harness architecture
-  changes.
