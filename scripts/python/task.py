@@ -234,7 +234,13 @@ def cmd_show(args: argparse.Namespace) -> None:
     print(f"NAME: {task['name']}")
     print(f"GROUP: {group['name']}")
     print(f"STATUS: {task['status']}")
+    print(f"PHASE: {task.get('phase')}")
     print(f"SPEC: {task['spec']}")
+    print(f"SPEC_VERSION: {task.get('spec_version', 1)}")
+    if task.get("spec_refs"):
+        print("SPEC_REFS:")
+        for ref in task["spec_refs"]:
+            print(f"  - {ref}")
     if task.get("depends_on"):
         status_map = task_status_map(data)
         deps = ", ".join(f"{d} [{status_map.get(d, 'unknown')}]" for d in task["depends_on"])
@@ -243,6 +249,11 @@ def cmd_show(args: argparse.Namespace) -> None:
         print(f"ARTIFACTS: {', '.join(task['artifacts'])}")
     if task.get("fail_reason"):
         print(f"FAIL_REASON: {task['fail_reason']}")
+    history = task.get("history", [])
+    if history:
+        print("HISTORY (last 3):")
+        for entry in history[-3:]:
+            print(f"  - {entry}")
     print(f"ACTION: Read {task['spec']} for the full task specification.")
 
 
@@ -275,6 +286,10 @@ def cmd_start(args: argparse.Namespace) -> None:
     print(f"STARTED: {args.id}")
     print(f"STATUS: in_progress")
     print(f"ACTION: Read {task['spec']} for your task specification.")
+
+    expectations_path = REPO_ROOT / ".harness" / "expectations" / f"{args.id}.md"
+    if expectations_path.exists():
+        print(f"INBOUND_EXPECTATIONS: {expectations_path.relative_to(REPO_ROOT)}")
 
 
 def workspace_has_members() -> bool:
@@ -541,6 +556,143 @@ def cmd_reset(args: argparse.Namespace) -> None:
     print("ACTION: Task is now available for reassignment.")
 
 
+LOCKED_SPEC_BASENAMES = {"spec.md", "pretty-printer.md", "generic-c-backend.md"}
+
+
+def validate_spec_path(spec_str: str, group_id: str) -> str | None:
+    """Return None if `spec_str` passes add-task spec validation, else a failure reason."""
+    expected_prefix = f".harness/tasks/{group_id}/"
+    if not spec_str.startswith(expected_prefix):
+        return f"rule 1: path must start with `{expected_prefix}` (got `{spec_str}`)"
+    if not spec_str.endswith(".md"):
+        return f"rule 2: path must end with `.md` (got `{spec_str}`)"
+    full = REPO_ROOT / spec_str
+    if not full.exists():
+        return f"rule 4: file does not exist on disk (`{full}`)"
+    if full.is_symlink() or not full.is_file():
+        return "rule 3: path must resolve to a regular file (not symlink, device, or directory)"
+    return None
+
+
+def validate_spec_ref(ref: str) -> str | None:
+    """Return None if `ref` is a well-shaped spec reference, else a failure reason."""
+    if "#" not in ref:
+        return f"spec ref `{ref}` missing `#` separator"
+    left = ref.split("#", 1)[0]
+    basename = left.rsplit("/", 1)[-1] if "/" in left else left
+    if basename not in LOCKED_SPEC_BASENAMES:
+        return f"spec ref `{ref}` basename `{basename}` not in locked set {sorted(LOCKED_SPEC_BASENAMES)}"
+    return None
+
+
+def cmd_add_task(args: argparse.Namespace) -> None:
+    """Canonical write path for new tasks. Refuses duplicate IDs and invalid inputs."""
+    data = load_tasks()
+
+    if find_task(data, args.id) is not None:
+        print(f"ERROR: Task ID `{args.id}` already exists.")
+        sys.exit(1)
+
+    group = next((g for g in data["groups"] if g["id"] == args.group), None)
+    if group is None:
+        print(f"ERROR: Group `{args.group}` not found.")
+        sys.exit(1)
+
+    err = validate_spec_path(args.spec, args.group)
+    if err:
+        print(f"ERROR: Invalid --spec: {err}")
+        sys.exit(1)
+
+    for dep_id in args.depends_on or []:
+        if find_task(data, dep_id) is None:
+            print(f"ERROR: Dependency `{dep_id}` does not exist.")
+            sys.exit(1)
+
+    for ref in args.spec_refs or []:
+        err = validate_spec_ref(ref)
+        if err:
+            print(f"ERROR: Invalid --spec-refs: {err}")
+            sys.exit(1)
+
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    new_task = {
+        "id": args.id,
+        "name": args.name,
+        "spec": args.spec,
+        "status": "pending",
+        "depends_on": list(args.depends_on or []),
+        "artifacts": [],
+        "fail_reason": None,
+        "phase": args.phase,
+        "spec_refs": list(args.spec_refs or []),
+        "spec_version": 1,
+        "history": [{"ts": now, "event": "added", "spec_version": 1}],
+    }
+    group["tasks"].append(new_task)
+    save_tasks(data)
+    print(f"ADDED: {args.id}")
+    print(f"GROUP: {args.group}")
+    print(f"PHASE: {args.phase}")
+    print(f"SPEC: {args.spec}")
+    print("SPEC_VERSION: 1")
+
+
+def cmd_update_task_spec(args: argparse.Namespace) -> None:
+    """Bump a task's spec_version and append a history entry. Allowed regardless of status."""
+    data = load_tasks()
+    result = find_task(data, args.id)
+    if result is None:
+        print(f"ERROR: Task `{args.id}` not found.")
+        sys.exit(1)
+    _, task = result
+    task["spec_version"] = task.get("spec_version", 1) + 1
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    entry = {"ts": now, "event": "spec_edited", "spec_version": task["spec_version"]}
+    if args.reason:
+        entry["reason"] = args.reason
+    task.setdefault("history", []).append(entry)
+    save_tasks(data)
+    print(f"UPDATED: {args.id}")
+    print(f"SPEC_VERSION: {task['spec_version']}")
+    if args.reason:
+        print(f"REASON: {args.reason}")
+
+
+def cmd_archive(args: argparse.Namespace) -> None:
+    """Flip status to archived; set phase=archived atomically. Refuses already-archived or done tasks."""
+    data = load_tasks()
+    now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    targets = []
+    for tid in args.ids:
+        result = find_task(data, tid)
+        if result is None:
+            print(f"ERROR: Task `{tid}` not found.")
+            sys.exit(1)
+        _, task = result
+        if task["status"] == "archived":
+            print(f"ERROR: Task `{tid}` is already archived.")
+            sys.exit(1)
+        if task["status"] == "done":
+            print(f"ERROR: Task `{tid}` is done; use `reset --force` first to revive, then archive.")
+            sys.exit(1)
+        targets.append(task)
+
+    for task in targets:
+        task["status"] = "archived"
+        task["phase"] = "archived"
+        task.setdefault("history", []).append({
+            "ts": now,
+            "event": "archived",
+            "reason": args.reason,
+        })
+    save_tasks(data)
+    print(f"ARCHIVED: {len(targets)} task(s)")
+    for tid in args.ids:
+        print(f"  - {tid}")
+    print(f"REASON: {args.reason}")
+
+
 def cmd_status(args: argparse.Namespace) -> None:
     data = load_tasks()
     tasks = all_tasks(data)
@@ -749,6 +901,57 @@ def main() -> None:
         help="Permit resetting a task whose current status is `done`",
     )
 
+    add_task_parser = subparsers.add_parser(
+        "add-task",
+        help="Add a new task (canonical write path; direct tasks.json edits forbidden)",
+    )
+    add_task_parser.add_argument("--id", required=True, help="Task ID (must be unique)")
+    add_task_parser.add_argument("--name", required=True, help="Task display name")
+    add_task_parser.add_argument(
+        "--spec",
+        required=True,
+        help="Path to task spec markdown (must be under .harness/tasks/<group>/)",
+    )
+    add_task_parser.add_argument("--group", required=True, help="Group ID the task belongs to")
+    add_task_parser.add_argument(
+        "--depends-on",
+        nargs="*",
+        default=[],
+        help="Task IDs this depends on (all must already exist)",
+    )
+    add_task_parser.add_argument(
+        "--spec-refs",
+        nargs="*",
+        default=[],
+        help="Spec references in `<spec-file>#<anchor>` shape",
+    )
+    add_task_parser.add_argument(
+        "--phase",
+        default=None,
+        help="Phase tag (e.g. `1a`, `1b`, or a phase-2 family tag)",
+    )
+
+    update_spec_parser = subparsers.add_parser(
+        "update-task-spec",
+        help="Bump a task's spec_version after editing its spec markdown",
+    )
+    update_spec_parser.add_argument("id", help="Task ID")
+    update_spec_parser.add_argument(
+        "--reason",
+        help="Optional reason recorded in the history entry",
+    )
+
+    archive_parser = subparsers.add_parser(
+        "archive",
+        help="Flip task(s) to archived status; sets phase=archived atomically",
+    )
+    archive_parser.add_argument("ids", nargs="+", help="One or more task IDs to archive")
+    archive_parser.add_argument(
+        "--reason",
+        required=True,
+        help="Why these tasks are being archived (recorded in history)",
+    )
+
     subparsers.add_parser("status", help="Show status summary")
 
     list_parser = subparsers.add_parser("list", help="List tasks")
@@ -769,6 +972,9 @@ def main() -> None:
         "done": cmd_done,
         "fail": cmd_fail,
         "reset": cmd_reset,
+        "add-task": cmd_add_task,
+        "update-task-spec": cmd_update_task_spec,
+        "archive": cmd_archive,
         "status": cmd_status,
         "list": cmd_list,
         "blocked": cmd_blocked,
