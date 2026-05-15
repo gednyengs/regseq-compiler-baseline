@@ -107,7 +107,7 @@ fn translate_non_diverging_intrinsic<'tcx>(
     }
 }
 
-fn translate_span(cx: &mut BridgeCtxt<'_>, span: rustc_span::Span) -> Span {
+pub(crate) fn translate_span(cx: &mut BridgeCtxt<'_>, span: rustc_span::Span) -> Span {
     if span.is_dummy() {
         return Span::dummy();
     }

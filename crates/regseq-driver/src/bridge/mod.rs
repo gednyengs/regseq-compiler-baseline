@@ -235,6 +235,10 @@ pub enum DslRejectionKind {
     Rvalue,
     /// A MIR statement is outside the Regseq body vocabulary.
     Statement,
+    /// A MIR terminator is outside the Regseq body vocabulary.
+    Terminator,
+    /// A MIR basic block is outside the Regseq body vocabulary.
+    BasicBlock,
 }
 
 /// Non-rigid `TyKind` family rejected after normalization.

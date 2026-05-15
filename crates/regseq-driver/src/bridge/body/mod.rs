@@ -2,15 +2,19 @@
 
 use rustc_middle::mir;
 
+pub mod basic_block;
 pub mod operand;
 pub mod place;
 pub mod rvalue;
 pub mod statement;
+pub mod terminator;
 
+pub use basic_block::translate_basic_block;
 pub use operand::{lower_runtime_check_operand, translate_operand};
 pub use place::translate_place;
 pub use rvalue::translate_rvalue;
 pub use statement::translate_statement;
+pub use terminator::translate_terminator;
 
 /// Per-body translation context shared by Place, Operand, Rvalue, and Statement translation.
 pub struct BodyCtxt<'tcx> {

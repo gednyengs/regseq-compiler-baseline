@@ -123,7 +123,7 @@ fn translate_pointer_coercion(
     }
 }
 
-fn translate_bin_op(op: mir::BinOp) -> Result<BinOp, BridgeError> {
+pub(crate) fn translate_bin_op(op: mir::BinOp) -> Result<BinOp, BridgeError> {
     Ok(match op {
         mir::BinOp::Add => BinOp::Add,
         mir::BinOp::Sub => BinOp::Sub,
