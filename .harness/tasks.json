@@ -1004,7 +1004,7 @@
           "id": "regseq-driver-38",
           "name": "P1a-BR-03a: Const bridge + reference-typed const + ConstMemoryStatic synthesis",
           "spec": ".harness/tasks/regseq-driver/38-const-bridge-and-const-memory-static-synthesis.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-37",
             "regseq-model-69",

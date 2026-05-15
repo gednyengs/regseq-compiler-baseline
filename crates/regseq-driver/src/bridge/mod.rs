@@ -10,11 +10,13 @@ use thiserror::Error;
 use regseq_model::{DefPathHash, Item, RegseqModel, StableCrateId, SyntheticItemKind};
 
 mod assign;
+pub mod const_;
 mod discovery;
 mod handles;
 mod sort;
 pub mod ty;
 
+pub use const_::ConstMemoryStaticHandle;
 pub use handles::{HandleTable, ItemHandle};
 
 /// Inputs the bridge consumes from the rustc host.
@@ -58,6 +60,8 @@ pub struct BridgeCtxt<'tcx> {
     pub handles: HandleTable,
     /// Item payloads accumulated before F4 sort and final assignment.
     pub pending_items: Vec<PendingItem>,
+    /// Phase-2 cache for bridge-synthesised ConstMemoryStatic items.
+    pub const_memory_static_cache: Vec<ConstMemoryStaticHandle>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -72,6 +76,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             model,
             handles: HandleTable::new(),
             pending_items: Vec::new(),
+            const_memory_static_cache: Vec::new(),
         }
     }
 }
@@ -157,6 +162,12 @@ pub enum BridgeError {
         /// Rendered rustc type.
         ty_repr: String,
     },
+    /// A const shape is outside the current bridge task's translation surface.
+    #[error("unsupported const: {const_repr}")]
+    UnsupportedConst {
+        /// Rendered rustc const.
+        const_repr: String,
+    },
     /// Generic opaque handles are rejected before model construction.
     #[error("generic opaque handle is unsupported: {0}")]
     GenericOpaqueHandle(String),
@@ -223,7 +234,8 @@ fn translate_with_interleaved_synthesis(_ctxt: &mut BridgeCtxt<'_>) -> Result<()
 }
 
 fn construct_instances_and_resolve_cross_references(
-    _ctxt: &mut BridgeCtxt<'_>,
+    ctxt: &mut BridgeCtxt<'_>,
 ) -> Result<(), BridgeError> {
+    const_::construct_const_memory_static_instances(ctxt)?;
     Ok(())
 }
