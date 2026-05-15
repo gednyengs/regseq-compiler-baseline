@@ -5,17 +5,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{ConstId, FnSigId, TyId};
+use crate::ids::{ConstId, FnSigId};
 use crate::index_vec::IndexVec;
-
-/// Forward-declared `Ty`.
-// FORWARD: P1a-DS-02
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Ty {}
-
-/// Forward-declared type interner.
-// FORWARD: P1a-DS-04
-pub type TyInterner = IndexVec<TyId, Ty>;
 
 /// Forward-declared `Const`.
 // FORWARD: P1a-DS-05
@@ -102,7 +93,6 @@ mod tests {
 
     #[test]
     fn forward_value_stubs_construct() {
-        assert_eq!(Ty::default(), Ty {});
         assert_eq!(Const::default(), Const {});
         assert_eq!(Item::default(), Item {});
         assert_eq!(FnSig::default(), FnSig {});
@@ -111,10 +101,8 @@ mod tests {
 
     #[test]
     fn forward_interner_aliases_construct() {
-        let types: TyInterner = IndexVec::new();
         let consts: ConstInterner = IndexVec::new();
         let sigs: FnSigInterner = IndexVec::new();
-        assert!(types.is_empty());
         assert!(consts.is_empty());
         assert!(sigs.is_empty());
     }

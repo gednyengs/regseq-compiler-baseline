@@ -15,7 +15,7 @@
 use crate::{
     Body, BridgeInput, ConstId, CrateId, CrateInfo, FnSigId, GenericArg, Instance, InstanceId,
     InstanceKind, InvariantId, InvariantViolation, ItemId, RegseqModel, SourceFileId, Span,
-    StableCrateId, StringId, TyId,
+    StableCrateId, StringId, Ty, TyId,
 };
 
 // ------------------------------------------------------------------
@@ -135,7 +135,7 @@ fn populated_model_passes_validate() {
     assert_ne!(dep_id, m.primary_crate);
 
     // Populate placeholder tables so InstanceKind references resolve.
-    let ty = m.types.push(Default::default());
+    let ty = m.types.push(Ty::Bool);
     let init = m.consts.push(Default::default());
     let sig = m.sigs.push(Default::default());
 
@@ -169,7 +169,7 @@ fn populated_model_passes_validate() {
         local_hash: 0xF00D,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let static_ty = m.types.push(Default::default());
+    let static_ty = m.types.push(Ty::Bool);
     let static_init = m.consts.push(Default::default());
     m.instances.push(Instance {
         item: item2,
@@ -683,7 +683,7 @@ fn invariant_1_dangling_const_id_in_static_init() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let ty = m.types.push(Default::default());
+    let ty = m.types.push(Ty::Bool);
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -749,7 +749,7 @@ fn invariant_1_dangling_const_id_in_const_kind_value() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let ty = m.types.push(Default::default());
+    let ty = m.types.push(Ty::Bool);
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -789,7 +789,7 @@ fn empty_model_round_trips_through_json() {
 #[test]
 fn populated_model_round_trips_through_json() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA));
-    let _ = m.types.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let _ = m.consts.push(Default::default());
     let sig = m.sigs.push(Default::default());
     let item = m.items.push(Default::default());

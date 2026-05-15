@@ -14,12 +14,13 @@ use crate::index_vec::IndexVec;
 use crate::instance::{GenericArg, Instance, InstanceKind};
 use crate::placeholders::{
     Body, CAbiLowering, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind, Item,
-    Linkage, PrincipalTraitKey, SyntheticItemKind, TyInterner,
+    Linkage, PrincipalTraitKey, SyntheticItemKind,
 };
 use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
 use crate::target::{default_scalar_layouts, Endian, TargetInfo};
+use crate::ty::TyInterner;
 
 /// The owned root struct returned by the bridge for one rustc
 /// compilation.
@@ -455,6 +456,16 @@ impl RegseqModel {
     /// Returns whether an instance's item is `UnsafeCell`.
     pub fn instance_is_unsafe_cell(&self, _id: InstanceId) -> bool {
         todo!("P1a-DS-07 adds Item.is_unsafe_cell")
+    }
+
+    /// Returns true when `ty` structurally contains an `UnsafeCell`.
+    ///
+    /// The real recursion depends on `TyInterner::find_nominal` and
+    /// `Item.is_unsafe_cell`, which land in later P1a tasks. This
+    /// signature is pinned here with tests ignored until those
+    /// dependencies are available.
+    pub fn contains_unsafe_cell(&self, _ty: TyId) -> bool {
+        todo!("P1a-DS-04 and P1a-DS-07 add find_nominal and Item.is_unsafe_cell")
     }
 
     /// Returns whether an instance's item is `ManuallyDrop`.

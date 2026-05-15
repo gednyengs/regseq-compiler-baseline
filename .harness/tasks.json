@@ -2567,7 +2567,7 @@
           "id": "regseq-model-66",
           "name": "P1a-DS-02: Ty enum + auxiliary closed enums + helpers",
           "spec": ".harness/tasks/regseq-model/66-ty-enum-and-helpers.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-65"
           ],

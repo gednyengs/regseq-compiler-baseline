@@ -21,6 +21,7 @@ mod pretty;
 mod source;
 mod string_interner;
 mod target;
+mod ty;
 
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
@@ -42,14 +43,16 @@ pub use instance::{
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
 pub use placeholders::{
     Body, CAbiLowering, Const, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind,
-    Item, Linkage, PrincipalTraitKey, SyntheticItemKind, Ty, TyInterner,
+    Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
 };
 pub use pretty::PrettyPrinter;
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
-pub use target::{
-    default_scalar_layouts, Endian, FloatKind, IntKind, ScalarLayouts, SizeAlign, TargetInfo,
-    UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,
+pub use target::{default_scalar_layouts, Endian, ScalarLayouts, SizeAlign, TargetInfo};
+pub use ty::{
+    AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Layout, Mutability,
+    Provenance, Safety, Ty, TyInterner, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT,
+    UINT_KIND_COUNT,
 };
 
 const _: () = assert!(core::mem::size_of::<CrateId>() == 4);
