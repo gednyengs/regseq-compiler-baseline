@@ -1165,7 +1165,7 @@
           "id": "regseq-driver-44",
           "name": "P1a-BR-08a: Diagnostic-logging recognition + attribute population",
           "spec": ".harness/tasks/regseq-driver/44-diag-logging-recognition.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-43",
             "regseq-model-74"

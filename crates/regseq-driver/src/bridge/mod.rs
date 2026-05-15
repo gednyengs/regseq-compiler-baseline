@@ -10,12 +10,14 @@ use thiserror::Error;
 
 use regseq_model::{
     args_key_for_generic_args, canonical_ty_bytes, DefPathHash, GenericArg, Item,
-    PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, TyId,
+    PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, Ty,
+    TyId,
 };
 
 mod assign;
 pub mod body;
 pub mod const_;
+pub mod diag_log;
 mod discovery;
 pub mod fnsig;
 mod handles;
@@ -78,6 +80,8 @@ pub struct BridgeCtxt<'tcx> {
     pub vtable_synth_cache: HashMap<synth::VTableSynthKey, VTableSynthHandles>,
     /// Phase-2 cache for bridge-synthesised drop-glue items.
     pub drop_glue_synth_cache: HashMap<TyId, ItemHandle>,
+    /// Phase-2 cache for diagnostic-logging intrinsic callees.
+    pub diag_log_intrinsics: HashMap<DefPathHash, regseq_model::IntrinsicKind>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -97,6 +101,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             vtable_type_synth_cache: HashMap::new(),
             vtable_synth_cache: HashMap::new(),
             drop_glue_synth_cache: HashMap::new(),
+            diag_log_intrinsics: HashMap::new(),
         }
     }
 }
@@ -385,6 +390,22 @@ fn scan_terminator_for_synthesis<'tcx>(
     if let TerminatorKind::Call { func, args, .. } = terminator {
         scan_call_ty_for_vtable(ctxt, func.ty(local_decls, ctxt.input.tcx))?;
         scan_operand_move_for_drop_glue(ctxt, local_decls, func)?;
+        if let rustc_middle::mir::Operand::Constant(constant) = func {
+            if let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() {
+                if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, *def_id).is_some() {
+                    let model_ty = ty::translate_ty(ctxt, constant.const_.ty())?;
+                    if let Ty::FnDef(callee_item, _) = ctxt.model.types.resolve(model_ty).clone() {
+                        let callee_def_path = ctxt.model.items[callee_item].def_path.clone();
+                        diag_log::recognise_log_intrinsic_def_id(
+                            ctxt,
+                            ItemHandle::from_u32(callee_item.as_u32()),
+                            &callee_def_path,
+                            *def_id,
+                        )?;
+                    }
+                }
+            }
+        }
         for arg in args.iter() {
             scan_call_ty_for_vtable(ctxt, arg.node.ty(local_decls, ctxt.input.tcx))?;
             scan_operand_move_for_drop_glue(ctxt, local_decls, &arg.node)?;
