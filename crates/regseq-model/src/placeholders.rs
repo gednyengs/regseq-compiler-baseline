@@ -6,20 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 pub use crate::item::{InlineHint, Item, Linkage};
-
-/// Forward-declared source item synthetic-kind tag.
-// FORWARD: P1a-DS-08b
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum SyntheticItemKind {
-    /// Source-derived item.
-    #[default]
-    None,
-    /// Bridge-synthesized vtable type item.
-    VTableType {
-        /// Principal trait key for the vtable type.
-        principal: PrincipalTraitKey,
-    },
-}
+pub use crate::synthetic::SyntheticItemKind;
 
 /// Forward-declared principal trait identity.
 // FORWARD: P1a-DS-08b

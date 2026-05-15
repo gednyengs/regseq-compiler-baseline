@@ -2707,7 +2707,7 @@
           "id": "regseq-model-72",
           "name": "P1a-DS-08a: Closure-family synthesised Items",
           "spec": ".harness/tasks/regseq-model/72-closure-family-synthesised-items.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-71"
           ],
