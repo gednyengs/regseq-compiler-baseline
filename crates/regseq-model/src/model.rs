@@ -1118,6 +1118,7 @@ impl RegseqModel {
                 | SyntheticItemKind::ClosureCaptures { .. }
                 | SyntheticItemKind::ClosureCall { .. }
                 | SyntheticItemKind::ClosureDropGlue { .. }
+                | SyntheticItemKind::DropGlue { .. }
                 | SyntheticItemKind::VTableType { .. }
                 | SyntheticItemKind::VTableInstance { .. }
                 | SyntheticItemKind::VTableMethodShim { .. }

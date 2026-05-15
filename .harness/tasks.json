@@ -1054,7 +1054,7 @@
           "id": "regseq-driver-40",
           "name": "P1a-BR-04: Closure + vtable + drop-glue Item synthesis",
           "spec": ".harness/tasks/regseq-driver/40-closure-vtable-drop-glue-synthesis.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-37",
             "regseq-model-72",

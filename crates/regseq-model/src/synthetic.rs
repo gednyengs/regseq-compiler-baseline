@@ -72,6 +72,12 @@ pub enum SyntheticItemKind {
         closure: DefPathHash,
     },
 
+    /// Bridge-synthesised drop-glue function item for a concrete type.
+    DropGlue {
+        /// Canonical self type key for the dropped type.
+        self_ty: ArgsKey,
+    },
+
     /// Bridge-synthesised vtable type item.
     ///
     /// Identity is the full principal trait key and is independent of

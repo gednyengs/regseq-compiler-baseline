@@ -2,12 +2,16 @@
 
 use std::sync::{Arc, Mutex};
 
-use rustc_middle::mir::mono::MonoItem;
-use rustc_middle::ty::TyCtxt;
-use rustc_span::def_id::LOCAL_CRATE;
+use rustc_middle::mir::{mono::MonoItem, CastKind, Rvalue, StatementKind, TerminatorKind};
+use rustc_middle::ty::{TyCtxt, TyKind};
+use rustc_span::def_id::{DefId, LOCAL_CRATE};
+use std::collections::HashMap;
 use thiserror::Error;
 
-use regseq_model::{DefPathHash, Item, RegseqModel, StableCrateId, SyntheticItemKind};
+use regseq_model::{
+    args_key_for_generic_args, canonical_ty_bytes, DefPathHash, GenericArg, Item,
+    PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, TyId,
+};
 
 mod assign;
 pub mod const_;
@@ -15,10 +19,12 @@ mod discovery;
 pub mod fnsig;
 mod handles;
 mod sort;
+pub mod synth;
 pub mod ty;
 
 pub use const_::ConstMemoryStaticHandle;
 pub use handles::{HandleTable, ItemHandle};
+pub use synth::{ClosureSynthHandles, VTableSynthHandles};
 
 /// Inputs the bridge consumes from the rustc host.
 pub struct BridgeInput<'tcx> {
@@ -63,6 +69,14 @@ pub struct BridgeCtxt<'tcx> {
     pub pending_items: Vec<PendingItem>,
     /// Phase-2 cache for bridge-synthesised ConstMemoryStatic items.
     pub const_memory_static_cache: Vec<ConstMemoryStaticHandle>,
+    /// Phase-2 cache for bridge-synthesised closure-family items.
+    pub closure_synth_cache: Vec<ClosureSynthHandles>,
+    /// Phase-2 cache for bridge-synthesised vtable type items.
+    pub vtable_type_synth_cache: HashMap<PrincipalTraitKey, ItemHandle>,
+    /// Phase-2 cache for bridge-synthesised vtable-family items.
+    pub vtable_synth_cache: HashMap<synth::VTableSynthKey, VTableSynthHandles>,
+    /// Phase-2 cache for bridge-synthesised drop-glue items.
+    pub drop_glue_synth_cache: HashMap<TyId, ItemHandle>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -78,6 +92,10 @@ impl<'tcx> BridgeCtxt<'tcx> {
             handles: HandleTable::new(),
             pending_items: Vec::new(),
             const_memory_static_cache: Vec::new(),
+            closure_synth_cache: Vec::new(),
+            vtable_type_synth_cache: HashMap::new(),
+            vtable_synth_cache: HashMap::new(),
+            drop_glue_synth_cache: HashMap::new(),
         }
     }
 }
@@ -248,13 +266,334 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
     Ok(ctxt.model)
 }
 
-fn translate_with_interleaved_synthesis(_ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    let discovered_mono_items = ctxt
+        .input
+        .discovered_mono_items
+        .lock()
+        .map_err(|_| BridgeError::Phase1("discovery set lock poisoned".to_string()))?
+        .clone();
+    for mono_item in discovered_mono_items {
+        let MonoItem::Fn(instance) = mono_item else {
+            continue;
+        };
+        let Some(local_def_id) = instance.def_id().as_local() else {
+            continue;
+        };
+        let body = ctxt.input.tcx.optimized_mir(local_def_id);
+        for local in &body.local_decls {
+            scan_ty_for_synthesis(ctxt, local.ty)?;
+        }
+        for block in body.basic_blocks.iter() {
+            for statement in &block.statements {
+                scan_statement_for_synthesis(ctxt, &body.local_decls, &statement.kind)?;
+            }
+            if let Some(terminator) = &block.terminator {
+                scan_terminator_for_synthesis(ctxt, &body.local_decls, &terminator.kind)?;
+            }
+        }
+    }
     Ok(())
+}
+
+fn scan_ty_for_synthesis<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> Result<(), BridgeError> {
+    match ty.kind() {
+        TyKind::Closure(def_id, args) => {
+            synth::closure::synthesise_closure_for_def_id(ctxt, *def_id, args.as_closure())?;
+        }
+        TyKind::Dynamic(predicates, _) => {
+            if let Some(principal_ref) = predicates
+                .principal()
+                .map(|principal| principal.skip_binder())
+            {
+                let projection_bindings = projection_bindings_key(ctxt, predicates);
+                let principal = principal_trait_key(ctxt, principal_ref, projection_bindings);
+                synth::vtable::synthesise_vtable_type(ctxt, principal);
+            }
+        }
+        TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => {
+            scan_ty_for_synthesis(ctxt, *pointee)?;
+        }
+        TyKind::Array(elem, _) | TyKind::Slice(elem) => {
+            scan_ty_for_synthesis(ctxt, *elem)?;
+        }
+        TyKind::Tuple(fields) => {
+            for field in fields.iter() {
+                scan_ty_for_synthesis(ctxt, field)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+fn scan_statement_for_synthesis<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    local_decls: &rustc_middle::mir::LocalDecls<'tcx>,
+    statement: &StatementKind<'tcx>,
+) -> Result<(), BridgeError> {
+    let StatementKind::Assign(assignment) = statement else {
+        return Ok(());
+    };
+    let (_, rvalue) = &**assignment;
+    scan_rvalue_moves_for_drop_glue(ctxt, local_decls, rvalue)?;
+    let Rvalue::Cast(
+        CastKind::PointerCoercion(rustc_middle::ty::adjustment::PointerCoercion::Unsize, _),
+        operand,
+        target_ty,
+    ) = rvalue
+    else {
+        return Ok(());
+    };
+
+    let Some(principal_ref) = dynamic_principal_ref(*target_ty) else {
+        return Ok(());
+    };
+    let source_ty = concrete_impl_ty(operand.ty(local_decls, ctxt.input.tcx));
+    let Ok(impl_ty) = ty::translate_ty(ctxt, source_ty) else {
+        return Ok(());
+    };
+    let projection_bindings = dynamic_projection_bindings_key(ctxt, *target_ty);
+    let principal = principal_trait_key(ctxt, principal_ref, projection_bindings);
+    let method_shims = method_shims_for_vtable(ctxt, source_ty, principal_ref);
+    synth::vtable::synthesise_vtable_with_method_shims(ctxt, principal, impl_ty, method_shims)?;
+    Ok(())
+}
+
+fn scan_terminator_for_synthesis<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    local_decls: &rustc_middle::mir::LocalDecls<'tcx>,
+    terminator: &TerminatorKind<'tcx>,
+) -> Result<(), BridgeError> {
+    if let TerminatorKind::Call { func, args, .. } = terminator {
+        scan_call_ty_for_vtable(ctxt, func.ty(local_decls, ctxt.input.tcx))?;
+        scan_operand_move_for_drop_glue(ctxt, local_decls, func)?;
+        for arg in args.iter() {
+            scan_call_ty_for_vtable(ctxt, arg.node.ty(local_decls, ctxt.input.tcx))?;
+            scan_operand_move_for_drop_glue(ctxt, local_decls, &arg.node)?;
+        }
+    }
+
+    if let TerminatorKind::Drop { place, .. } = terminator {
+        let drop_ty = place.ty(local_decls, ctxt.input.tcx).ty;
+        if !drop_ty.needs_drop(
+            ctxt.input.tcx,
+            rustc_middle::ty::TypingEnv::fully_monomorphized(),
+        ) {
+            return Ok(());
+        }
+        if let Ok(model_ty) = ty::translate_ty(ctxt, drop_ty) {
+            synth::synthesise_drop_glue(ctxt, model_ty)?;
+        }
+    }
+    Ok(())
+}
+
+fn scan_call_ty_for_vtable<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> Result<(), BridgeError> {
+    scan_ty_for_synthesis(ctxt, ty)?;
+    let Some(principal_ref) = dynamic_principal_ref(ty) else {
+        return Ok(());
+    };
+    let projection_bindings = dynamic_projection_bindings_key(ctxt, ty);
+    let principal = principal_trait_key(ctxt, principal_ref, projection_bindings);
+    let impl_ty = ctxt.model.types.intern(regseq_model::Ty::Tuple {
+        fields: Vec::new(),
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    synth::synthesise_vtable(ctxt, principal, impl_ty)?;
+    Ok(())
+}
+
+fn scan_rvalue_moves_for_drop_glue<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    local_decls: &rustc_middle::mir::LocalDecls<'tcx>,
+    rvalue: &Rvalue<'tcx>,
+) -> Result<(), BridgeError> {
+    match rvalue {
+        Rvalue::Use(operand)
+        | Rvalue::Repeat(operand, _)
+        | Rvalue::Cast(_, operand, _)
+        | Rvalue::UnaryOp(_, operand) => {
+            scan_operand_move_for_drop_glue(ctxt, local_decls, operand)
+        }
+        Rvalue::BinaryOp(_, operands) => {
+            scan_operand_move_for_drop_glue(ctxt, local_decls, &operands.0)?;
+            scan_operand_move_for_drop_glue(ctxt, local_decls, &operands.1)
+        }
+        Rvalue::Aggregate(_, operands) => {
+            for operand in operands.iter() {
+                scan_operand_move_for_drop_glue(ctxt, local_decls, operand)?;
+            }
+            Ok(())
+        }
+        _ => Ok(()),
+    }
+}
+
+fn scan_operand_move_for_drop_glue<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    local_decls: &rustc_middle::mir::LocalDecls<'tcx>,
+    operand: &rustc_middle::mir::Operand<'tcx>,
+) -> Result<(), BridgeError> {
+    let rustc_middle::mir::Operand::Move(place) = operand else {
+        return Ok(());
+    };
+    let move_ty = place.ty(local_decls, ctxt.input.tcx).ty;
+    if !move_ty.needs_drop(
+        ctxt.input.tcx,
+        rustc_middle::ty::TypingEnv::fully_monomorphized(),
+    ) {
+        return Ok(());
+    }
+    if let Ok(model_ty) = ty::translate_ty(ctxt, move_ty) {
+        synth::synthesise_drop_glue(ctxt, model_ty)?;
+    }
+    Ok(())
+}
+
+fn dynamic_principal_ref<'tcx>(
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> Option<rustc_middle::ty::ExistentialTraitRef<'tcx>> {
+    match ty.kind() {
+        TyKind::Dynamic(predicates, _) => Some(predicates.principal()?.skip_binder()),
+        TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => dynamic_principal_ref(*pointee),
+        _ => None,
+    }
+}
+
+fn concrete_impl_ty<'tcx>(ty: rustc_middle::ty::Ty<'tcx>) -> rustc_middle::ty::Ty<'tcx> {
+    match ty.kind() {
+        TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => *pointee,
+        _ => ty,
+    }
+}
+
+fn principal_trait_key<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    principal: rustc_middle::ty::ExistentialTraitRef<'tcx>,
+    projection_bindings: ProjectionBindingsKey,
+) -> PrincipalTraitKey {
+    let trait_args = principal
+        .args
+        .iter()
+        .filter_map(|arg| match arg.kind() {
+            rustc_middle::ty::GenericArgKind::Type(ty) => {
+                ty::translate_ty(ctxt, ty).ok().map(GenericArg::Type)
+            }
+            rustc_middle::ty::GenericArgKind::Const(_)
+            | rustc_middle::ty::GenericArgKind::Lifetime(_) => None,
+        })
+        .collect::<Vec<_>>();
+    PrincipalTraitKey {
+        trait_path: def_path_hash(ctxt.input.tcx, principal.def_id),
+        trait_args: args_key_for_generic_args(&ctxt.model, &trait_args),
+        projection_bindings,
+    }
+}
+
+fn dynamic_projection_bindings_key<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> ProjectionBindingsKey {
+    match ty.kind() {
+        TyKind::Dynamic(predicates, _) => projection_bindings_key(ctxt, predicates),
+        TyKind::Ref(_, pointee, _) | TyKind::RawPtr(pointee, _) => {
+            dynamic_projection_bindings_key(ctxt, *pointee)
+        }
+        _ => ProjectionBindingsKey(0),
+    }
+}
+
+fn projection_bindings_key<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    predicates: &'tcx rustc_middle::ty::List<
+        rustc_middle::ty::Binder<'tcx, rustc_middle::ty::ExistentialPredicate<'tcx>>,
+    >,
+) -> ProjectionBindingsKey {
+    use sha2::{Digest, Sha256};
+
+    let mut entries = Vec::new();
+    for predicate in predicates.iter() {
+        let rustc_middle::ty::ExistentialPredicate::Projection(projection) =
+            predicate.skip_binder()
+        else {
+            continue;
+        };
+        let hash = def_path_hash(ctxt.input.tcx, projection.def_id);
+        let mut entry = Vec::new();
+        encode_def_path_hash(&mut entry, hash);
+        match projection.term.kind() {
+            rustc_middle::ty::TermKind::Ty(ty) => {
+                entry.push(0);
+                if let Ok(ty) = ty::translate_ty(ctxt, ty) {
+                    entry.extend_from_slice(&canonical_ty_bytes(&ctxt.model, ty));
+                }
+            }
+            rustc_middle::ty::TermKind::Const(konst) => {
+                entry.push(1);
+                entry.extend_from_slice(format!("{:?}", konst.kind()).as_bytes());
+            }
+        }
+        entries.push((hash, entry));
+    }
+    entries.sort_by_key(|(hash, _)| (hash.stable_crate_id, hash.local_hash));
+
+    let mut bytes = Vec::new();
+    bytes.extend_from_slice(&(entries.len() as u32).to_le_bytes());
+    for (_, entry) in entries {
+        bytes.extend_from_slice(&entry);
+    }
+    let digest = Sha256::digest(&bytes);
+    let mut head = [0u8; 16];
+    head.copy_from_slice(&digest[..16]);
+    ProjectionBindingsKey(u128::from_be_bytes(head))
+}
+
+fn encode_def_path_hash(bytes: &mut Vec<u8>, hash: DefPathHash) {
+    bytes.extend_from_slice(&hash.stable_crate_id.0.to_le_bytes());
+    bytes.extend_from_slice(&hash.local_hash.to_le_bytes());
+}
+
+fn method_shims_for_vtable<'tcx>(
+    ctxt: &mut BridgeCtxt<'tcx>,
+    source_ty: rustc_middle::ty::Ty<'tcx>,
+    principal: rustc_middle::ty::ExistentialTraitRef<'tcx>,
+) -> Vec<(u32, Option<DefPathHash>)> {
+    let trait_ref = principal.with_self_ty(ctxt.input.tcx, source_ty);
+    let trait_ref = ctxt.input.tcx.erase_and_anonymize_regions(trait_ref);
+    ctxt.input
+        .tcx
+        .vtable_entries(trait_ref)
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, entry)| match entry {
+            rustc_middle::ty::VtblEntry::Method(instance) => Some((
+                idx as u32,
+                Some(def_path_hash(ctxt.input.tcx, instance.def_id())),
+            )),
+            _ => None,
+        })
+        .collect()
+}
+
+fn def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> DefPathHash {
+    let hash = tcx.def_path_hash(def_id);
+    DefPathHash {
+        stable_crate_id: StableCrateId(hash.stable_crate_id().as_u64()),
+        local_hash: hash.local_hash().as_u64(),
+    }
 }
 
 fn construct_instances_and_resolve_cross_references(
     ctxt: &mut BridgeCtxt<'_>,
 ) -> Result<(), BridgeError> {
+    synth::rekey_synthesis_in_phase5(ctxt)?;
     const_::construct_const_memory_static_instances(ctxt)?;
     Ok(())
 }

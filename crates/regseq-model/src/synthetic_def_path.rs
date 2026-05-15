@@ -33,6 +33,10 @@ pub fn synthetic_def_path_segments(
             texts.push(def_path_hash_hex(*closure));
             texts.push("drop_glue".to_owned());
         }
+        SyntheticItemKind::DropGlue { self_ty } => {
+            texts.push("drop_glue".to_owned());
+            texts.push(args_key_hex(*self_ty));
+        }
         SyntheticItemKind::VTableType { principal } => {
             push_principal_segments(&mut texts, "vtable_ty", principal);
         }
@@ -93,6 +97,9 @@ pub fn synthetic_def_path_hash(kind: &SyntheticItemKind) -> DefPathHash {
         SyntheticItemKind::ClosureDropGlue { closure } => {
             push_def_path_hash_bytes(&mut bytes, *closure);
         }
+        SyntheticItemKind::DropGlue { self_ty } => {
+            push_args_key_bytes(&mut bytes, *self_ty);
+        }
         SyntheticItemKind::VTableType { principal } => {
             push_principal_bytes(&mut bytes, principal);
         }
@@ -143,11 +150,12 @@ fn synthetic_kind_tag(kind: &SyntheticItemKind) -> u8 {
         SyntheticItemKind::ClosureCaptures { .. } => 1,
         SyntheticItemKind::ClosureCall { .. } => 2,
         SyntheticItemKind::ClosureDropGlue { .. } => 3,
-        SyntheticItemKind::VTableType { .. } => 4,
-        SyntheticItemKind::VTableInstance { .. } => 5,
-        SyntheticItemKind::VTableMethodShim { .. } => 6,
-        SyntheticItemKind::VTableDropShim { .. } => 7,
-        SyntheticItemKind::ConstMemoryStatic { .. } => 8,
+        SyntheticItemKind::DropGlue { .. } => 4,
+        SyntheticItemKind::VTableType { .. } => 5,
+        SyntheticItemKind::VTableInstance { .. } => 6,
+        SyntheticItemKind::VTableMethodShim { .. } => 7,
+        SyntheticItemKind::VTableDropShim { .. } => 8,
+        SyntheticItemKind::ConstMemoryStatic { .. } => 9,
     }
 }
 
