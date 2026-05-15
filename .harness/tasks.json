@@ -2874,7 +2874,7 @@
           "id": "regseq-model-79",
           "name": "P1a-DS-13a: Statement + StatementKind + NonDivergingIntrinsic",
           "spec": ".harness/tasks/regseq-model/79-statement-and-non-diverging-intrinsic.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-78"
           ],

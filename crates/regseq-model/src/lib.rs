@@ -31,6 +31,7 @@ mod placeholders;
 mod pretty;
 pub mod rvalue;
 mod source;
+mod statement;
 mod string_interner;
 mod synthetic;
 mod synthetic_def_path;
@@ -77,6 +78,7 @@ pub use placeholders::Body;
 pub use pretty::PrettyPrinter;
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use source::{Position, SourceFile, Span};
+pub use statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};
 pub use string_interner::StringInterner;
 pub use synthetic::{
     ClosureCallKind, ContentHash, PrincipalTraitKey, ProjectionBindingsKey, SyntheticItemKind,
