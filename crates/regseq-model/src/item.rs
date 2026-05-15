@@ -92,13 +92,23 @@ pub struct Item {
 
 /// Closed source-level item kind.
 ///
-/// `impl` blocks are source scopes, not emittable units. Inherent and
-/// trait methods lift to top-level function items, associated
-/// constants lift to const items, associated types and trait
-/// declarations are erased after substitution, trait impl methods keep
-/// only their path traceback, and default trait method bodies are
-/// owned by the trait definition path. There are no `Impl`, `Trait`,
-/// or `AssocType` item kinds.
+/// `impl` blocks are source scopes, not emittable units. Their
+/// contents lift to top-level items as follows:
+///
+/// - Inherent impl methods lift to top-level function items.
+/// - Trait impl methods lift to top-level function items. For
+///   dynamic dispatch only, vtables are synthesised as static
+///   instances.
+/// - Associated constants lift to top-level const items.
+/// - Associated types are erased; uses are substituted at
+///   monomorphisation.
+/// - Trait declarations are erased: static dispatch resolves to
+///   the implementing function's instance, and dynamic dispatch
+///   goes through a vtable.
+/// - Default trait method bodies are owned by the trait and live
+///   at the trait's definition path.
+///
+/// There are no `Impl`, `Trait`, or `AssocType` item kinds.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum ItemKind {
     /// Function item.
