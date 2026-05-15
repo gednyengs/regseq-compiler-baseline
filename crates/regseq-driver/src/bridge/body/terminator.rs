@@ -1,13 +1,18 @@
 //! MIR `Terminator` bridge translation.
 
 use regseq_model::{
-    AssertKind, BlockId, CallCallee, InstanceId, LocalId, Operand, Place, SwitchTargets,
-    Terminator, TerminatorKind,
+    AssertKind, BlockId, CallCallee, FnAbi, FnSig, FunctionInstanceData, FunctionInstanceFlavor,
+    Instance, InstanceId, InstanceKind, ItemId, Mutability, Operand, Place, Rvalue, Safety, Span,
+    Statement, StatementKind, SwitchTargets, Terminator, TerminatorKind, Ty, TyId, UNIT_LAYOUT,
 };
 use rustc_middle::mir;
 use rustc_middle::ty;
 
-use crate::bridge::{synth, ty::translate_ty, BridgeCtxt, BridgeError, DslRejectionKind};
+use crate::bridge::{
+    synth,
+    ty::{intern_function_item_for_def_id, translate_ty},
+    BridgeCtxt, BridgeError, DslRejectionKind,
+};
 
 use super::{
     operand::translate_operand, place::translate_place, rvalue::translate_bin_op,
@@ -17,10 +22,14 @@ use super::{
 /// Translate a rustc `mir::Terminator` into a
 /// `regseq_model::Terminator`. Per spec.md section 23.7. Rustc
 /// `Drop` collapses into `Call` per spec.md sections 23.4 and
-/// 25.7.1.
+/// 25.7.1. The `statements` parameter is the caller's statement
+/// accumulator; the Drop-as-Call collapse appends a synthetic
+/// `&raw mut place` Assign to this vector before constructing the
+/// Call terminator (spec.md section 23.4 step 4).
 pub fn translate_terminator<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
     term: rustc_middle::mir::Terminator<'tcx>,
 ) -> Result<regseq_model::Terminator, BridgeError> {
     let span = translate_span(cx, term.source_info.span);
@@ -61,7 +70,7 @@ pub fn translate_terminator<'tcx>(
             target: block_id(target),
         },
         mir::TerminatorKind::Drop { place, target, .. } => {
-            translate_drop_as_call(cx, body_cx, place, target)?
+            translate_drop_as_call(cx, body_cx, statements, place, target, span)?
         }
         mir::TerminatorKind::FalseEdge { .. } => {
             return rejected_terminator(
@@ -125,15 +134,24 @@ fn translate_switch_targets(targets: mir::SwitchTargets) -> SwitchTargets {
 
 fn translate_call_callee<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     func: &mir::Operand<'tcx>,
 ) -> Result<CallCallee, BridgeError> {
     let func_ty = body_cx
         .local_decls()
         .map(|local_decls| func.ty(local_decls, cx.input.tcx));
     if let mir::Operand::Constant(constant) = func {
-        if let ty::TyKind::FnDef(def_id, _) = constant.const_.ty().kind() {
-            return Ok(CallCallee::Direct(instance_id_for_def_path(cx, *def_id)));
+        if let ty::TyKind::FnDef(def_id, args) = constant.const_.ty().kind() {
+            // Intern the callee's Function Item without going through
+            // `translate_ty(Ty::FnDef(..))`, which would re-trigger the
+            // substantive-HRTB rejection on a trait method's
+            // `for<'a> fn(..)` binder even though Direct callee
+            // resolution only needs the post-region-erasure identity
+            // of the callee (spec.md section 23.7).
+            let item = intern_function_item_for_def_id(cx, *def_id);
+            let instance_id =
+                resolve_function_instance_for_direct_callee(cx, item, *def_id, args)?;
+            return Ok(CallCallee::Direct(instance_id));
         }
     }
     if matches!(func_ty.map(|ty| ty.kind()), Some(ty::TyKind::FnPtr(..))) {
@@ -148,32 +166,198 @@ fn translate_call_callee<'tcx>(
 
 fn translate_drop_as_call<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
     place: mir::Place<'tcx>,
     target: mir::BasicBlock,
+    span: Span,
 ) -> Result<TerminatorKind, BridgeError> {
     let Some(local_decls) = body_cx.local_decls() else {
         return rejected_terminator("Drop terminator without body local declarations");
     };
     let place_ty = place.ty(local_decls, cx.input.tcx).ty;
-    let model_ty = translate_ty(cx, place_ty)?;
-    let handle = if let Some(handle) = cx.drop_glue_synth_cache.get(&model_ty) {
+    let model_place_ty = translate_ty(cx, place_ty)?;
+    let glue_handle = if let Some(handle) = cx.drop_glue_synth_cache.get(&model_place_ty) {
         *handle
     } else {
-        synth::synthesise_drop_glue(cx, model_ty)?
+        synth::synthesise_drop_glue(cx, model_place_ty)?
     };
-    let place = translate_place(cx, body_cx, place)?;
+    let model_place = translate_place(cx, body_cx, place)?;
+
+    // Synthesise the `*mut PlaceTy` and unit-typed locals on the
+    // model body so the Drop-as-Call prelude reflects the spec's
+    // §23.4 step 4-5 shape. Callers that exercise
+    // `translate_terminator` outside `materialise_function_body` must
+    // provide a model body via `BodyCtxt::new_with_model_body`.
+    let raw_mut_ty = cx
+        .model
+        .types
+        .intern(Ty::Ptr(model_place_ty, Mutability::Mut));
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let Some(model_body) = body_cx.model_body_mut() else {
+        return Err(BridgeError::Phase5(
+            "Drop-as-Call collapse requires a model body for synthetic-local allocation (spec.md section 25.7.1)".to_string(),
+        ));
+    };
+    let raw_local = model_body.push_synthetic_local(raw_mut_ty);
+    let return_local = model_body.push_synthetic_local(unit_ty);
+
+    statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::from(raw_local),
+            Rvalue::RawPtr(Mutability::Mut, model_place),
+        ),
+        span,
+    });
+
+    let callee_instance = resolve_function_instance_for_drop_glue(cx, glue_handle)?;
     Ok(TerminatorKind::Call {
-        callee: CallCallee::Direct(InstanceId::from_u32(handle.as_u32())),
-        args: Box::new([Operand::Move(place)]),
-        destination: Place::from(LocalId::RETURN_PLACE),
+        callee: CallCallee::Direct(callee_instance),
+        args: Box::new([Operand::Move(Place::from(raw_local))]),
+        destination: Place::from(return_local),
         target: Some(block_id(target)),
     })
 }
 
+fn resolve_function_instance_for_direct_callee<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    item: ItemId,
+    def_id: rustc_span::def_id::DefId,
+    args: &'tcx ty::List<ty::GenericArg<'tcx>>,
+) -> Result<InstanceId, BridgeError> {
+    if let Some(instance) = cx.function_instance_for_item.get(&item) {
+        return Ok(*instance);
+    }
+    // Phase 5 may encounter a Function Item that the Phase-4
+    // Function-Instance pass did not pre-create (for example, an
+    // Item interned by `intern_function_item_for_def_id` during body
+    // translation). Translate the rustc `fn_sig` directly from
+    // `def_id` with the call-site generic arguments so the Instance
+    // carries the spec-mandated arity for
+    // `validate_body_terminator_invariants`.
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let (inputs, output) =
+        translate_fn_sig_from_def_id(cx, def_id, args).unwrap_or_else(|| (Vec::new(), unit_ty));
+    let sig = FnSig {
+        inputs,
+        output,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    };
+    let sig_id = cx.model.sigs.intern(sig);
+    while cx.model.sig_c_abi_lowerings.len() < cx.model.sigs.len() {
+        cx.model.sig_c_abi_lowerings.push(None);
+    }
+    let emission_name = cx.model.items[item].def_path.rendered;
+    let instance_id = cx.model.instances.push(Instance {
+        item,
+        generic_args: Vec::new(),
+        emission_name,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig_id,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    cx.function_instance_for_item.insert(item, instance_id);
+    Ok(instance_id)
+}
+
+fn translate_fn_sig_from_def_id<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    def_id: rustc_span::def_id::DefId,
+    args: &'tcx ty::List<ty::GenericArg<'tcx>>,
+) -> Option<(Vec<TyId>, TyId)> {
+    let tcx = cx.input.tcx;
+    let poly_sig = tcx.fn_sig(def_id).instantiate(tcx, args);
+    let sig = poly_sig.skip_binder();
+    let mut inputs = Vec::with_capacity(sig.inputs().len());
+    for input in sig.inputs() {
+        let erased = tcx.erase_and_anonymize_regions(*input);
+        inputs.push(translate_ty(cx, erased).ok()?);
+    }
+    let erased_output = tcx.erase_and_anonymize_regions(sig.output());
+    let output = translate_ty(cx, erased_output).ok()?;
+    Some((inputs, output))
+}
+
+fn resolve_function_instance_for_drop_glue(
+    cx: &mut BridgeCtxt<'_>,
+    handle: crate::bridge::ItemHandle,
+) -> Result<InstanceId, BridgeError> {
+    let item_id = cx.handles.resolve(handle).ok_or_else(|| {
+        BridgeError::Phase4(format!(
+            "drop-glue handle {} was not assigned an ItemId",
+            handle.as_u32()
+        ))
+    })?;
+    if let Some(instance) = cx.function_instance_for_item.get(&item_id) {
+        return Ok(*instance);
+    }
+    let instance_id = push_drop_glue_function_instance(cx, item_id);
+    cx.function_instance_for_item.insert(item_id, instance_id);
+    Ok(instance_id)
+}
+
+fn push_drop_glue_function_instance(cx: &mut BridgeCtxt<'_>, item: ItemId) -> InstanceId {
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let drop_target_ty = drop_glue_target_ty(cx, item).unwrap_or(unit_ty);
+    let ptr_ty = cx
+        .model
+        .types
+        .intern(Ty::Ptr(drop_target_ty, Mutability::Mut));
+    let sig = FnSig {
+        inputs: vec![ptr_ty],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    };
+    let sig_id = cx.model.sigs.intern(sig);
+    while cx.model.sig_c_abi_lowerings.len() < cx.model.sigs.len() {
+        cx.model.sig_c_abi_lowerings.push(None);
+    }
+    let emission_name = cx.model.items[item].def_path.rendered;
+    cx.model.instances.push(Instance {
+        item,
+        generic_args: vec![regseq_model::GenericArg::Type(drop_target_ty)],
+        emission_name,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig_id,
+            body: None,
+            flavor: FunctionInstanceFlavor::DropGlue,
+            virtual_idx: None,
+        }),
+    })
+}
+
+fn drop_glue_target_ty(cx: &BridgeCtxt<'_>, item: ItemId) -> Option<TyId> {
+    cx.drop_glue_synth_cache
+        .iter()
+        .find_map(|(ty, handle)| {
+            cx.handles
+                .resolve(*handle)
+                .filter(|resolved| *resolved == item)
+                .map(|_| *ty)
+        })
+}
+
 fn translate_assert_kind<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     msg: mir::AssertKind<mir::Operand<'tcx>>,
 ) -> Result<AssertKind, BridgeError> {
     Ok(match msg {
@@ -211,11 +395,6 @@ fn translate_assert_kind<'tcx>(
             return rejected_terminator("coroutine assert kind survived coroutine rejection");
         }
     })
-}
-
-fn instance_id_for_def_path(cx: &BridgeCtxt<'_>, def_id: rustc_span::def_id::DefId) -> InstanceId {
-    let hash = cx.input.tcx.def_path_hash(def_id).local_hash().as_u64();
-    InstanceId::from_u32(hash as u32)
 }
 
 fn rejected_terminator<T>(construct: impl Into<String>) -> Result<T, BridgeError> {

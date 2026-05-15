@@ -269,10 +269,13 @@ fn vtable_synthesis_dedups_on_principal_and_rekeys_mapping() {
         assert_eq!(cx.vtable_synth_cache.len(), 1);
         // The public `synthesise_vtable` entry has no rustc handle to
         // consult `tcx.vtable_entries`, so it produces only the three
-        // family items: VTableType, VTableInstance, VTableDropShim.
-        // Method shims are added only by the rustc-aware call site in
-        // `bridge::scan_statement_for_synthesis`.
-        assert_eq!(cx.pending_items.len(), 3);
+        // family items: VTableType (eager-pushed to `model.items`),
+        // VTableInstance, VTableDropShim (both pending). Method shims
+        // are added only by the rustc-aware call site in
+        // `bridge::scan_statement_for_synthesis`. VTableType is eager
+        // so `Ty::Dynamic.vtable_ty` can resolve its `ItemId` at
+        // Phase 2 (spec.md section 13 vtable_ty reference rule).
+        assert_eq!(cx.pending_items.len(), 2);
         assert!(first.method_shims.is_empty());
 
         assign_pending(cx);
@@ -319,8 +322,13 @@ fn vtable_type_dedups_on_principal_across_impl_tys() {
 
         assert_eq!(cx.vtable_type_synth_cache.len(), 1);
         assert_eq!(cx.vtable_synth_cache.len(), 2);
+        // VTableType is eager-pushed to `model.item_synthetic_kinds` so
+        // `Ty::Dynamic.vtable_ty` can resolve its `ItemId` at Phase 2;
+        // the dedup invariant is checked there instead of in
+        // `pending_items`.
         assert_eq!(
-            synthetic_kinds(cx)
+            cx.model
+                .item_synthetic_kinds
                 .iter()
                 .filter(|kind| matches!(kind, SyntheticItemKind::VTableType { .. }))
                 .count(),

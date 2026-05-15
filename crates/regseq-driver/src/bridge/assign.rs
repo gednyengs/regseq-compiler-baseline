@@ -3,7 +3,7 @@
 use super::{BridgeCtxt, BridgeError};
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
-pub(crate) fn assign_item_ids_and_populate_sidetables(
+pub fn assign_item_ids_and_populate_sidetables(
     ctxt: &mut BridgeCtxt<'_>,
 ) -> Result<(), BridgeError> {
     assign_pending_items(&mut ctxt.model, &mut ctxt.handles, &mut ctxt.pending_items);

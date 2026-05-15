@@ -17,7 +17,13 @@ pub(crate) fn synthesise_vtable_type(
     if let Some(handle) = cx.vtable_type_synth_cache.get(&principal) {
         return *handle;
     }
-    let handle = push_pending_synthetic_item(
+    // Push eagerly: `Ty::Dynamic.vtable_ty` in `bridge/ty.rs` needs the
+    // vtable type Item's `ItemId` at Phase 2, before Phase 4 handle
+    // resolution would otherwise occur. The eager path mirrors
+    // `bridge/ty.rs::intern_item` for source-derived items: pushed
+    // directly to `model.items`, with the handle bound up-front so
+    // `rekey_synthesis_in_phase5` resolves it without a pending entry.
+    let handle = push_eager_synthetic_item(
         cx,
         ItemKind::Struct,
         SyntheticItemKind::VTableType {
@@ -26,6 +32,40 @@ pub(crate) fn synthesise_vtable_type(
         None,
     );
     cx.vtable_type_synth_cache.insert(principal, handle);
+    handle
+}
+
+/// Push a synthetic Item eagerly to `model.items`, bind its handle to
+/// the assigned `ItemId`, and skip the `pending_items` pipeline so the
+/// Item is immediately addressable for content-keyed type interning
+/// (e.g., `Ty::Dynamic.vtable_ty` and `Ty::Struct { item, .. }` views).
+pub(crate) fn push_eager_synthetic_item(
+    cx: &mut BridgeCtxt<'_>,
+    kind: ItemKind,
+    synthetic_kind: SyntheticItemKind,
+    def_path_hash_override: Option<DefPathHash>,
+) -> ItemHandle {
+    let handle = cx.handles.fresh_handle();
+    let (def_path, def_path_hash) =
+        synthetic_def_path(cx, &synthetic_kind, def_path_hash_override);
+    let item = Item {
+        def_path,
+        kind,
+        span: Span::dummy(),
+        linkage: Linkage::Default,
+        link_section: None,
+        inline_hint: InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    };
+    let item_id = cx.model.items.push(item);
+    cx.model.item_def_paths.push(def_path_hash);
+    cx.model.item_synthetic_kinds.push(synthetic_kind);
+    cx.model.domain_attrs.item_attrs.push(Vec::new());
+    cx.handles.bind_final_item_id(handle, item_id);
     handle
 }
 

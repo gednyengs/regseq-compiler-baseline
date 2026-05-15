@@ -8,10 +8,14 @@ use super::{statement::translate_statement, terminator::translate_terminator, Bo
 
 /// Translate a rustc `mir::BasicBlockData` into a
 /// `regseq_model::BasicBlock`. Per spec.md section 24.7. Iterates
-/// statements then translates the block terminator.
+/// statements, then translates the block terminator with a mutable
+/// reference to the statement vector so terminator-side rewrites
+/// (notably the Drop-as-Call collapse in spec.md section 23.4) can
+/// append the spec-mandated `&raw mut place` synthetic Assign before
+/// the Call terminator.
 pub fn translate_basic_block<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     bb: &rustc_middle::mir::BasicBlockData<'tcx>,
 ) -> Result<regseq_model::BasicBlock, BridgeError> {
     if bb.is_cleanup {
@@ -24,16 +28,15 @@ pub fn translate_basic_block<'tcx>(
             "internal error: terminator: None survived MIR construction -- pipeline misconfiguration or post-construction state corruption",
         );
     };
-    let statements = bb
+    let mut statements = bb
         .statements
         .iter()
         .cloned()
         .filter_map(|stmt| translate_statement(cx, body_cx, stmt).transpose())
-        .collect::<Result<Vec<_>, _>>()?
-        .into_boxed_slice();
-    let terminator = translate_terminator(cx, body_cx, terminator)?;
+        .collect::<Result<Vec<_>, _>>()?;
+    let terminator = translate_terminator(cx, body_cx, &mut statements, terminator)?;
     Ok(BasicBlock {
-        statements,
+        statements: statements.into_boxed_slice(),
         terminator,
     })
 }

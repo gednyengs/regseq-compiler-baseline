@@ -84,6 +84,15 @@ pub struct RegseqModel {
     #[serde(skip)]
     pub vtables: HashMap<PrincipalTraitKey, ItemId>,
 
+    /// Bridge-side map from `Ty::Closure` to the parallel `Ty::Struct`
+    /// view of its captures field-by-field. Per spec.md section 13.1
+    /// (lines 4573-4587): a closure has two `Ty` entries sharing one
+    /// `Item`; this map gives downstream consumers a direct lookup
+    /// alongside `find_nominal(NominalKind::Struct, item, args)`.
+    /// Skipped from serde and rebuilt by the bridge.
+    #[serde(skip)]
+    pub closure_captures_struct_ty: HashMap<TyId, TyId>,
+
     /// Domain attribute sibling tables.
     pub domain_attrs: DomainAttrTables,
 }
@@ -128,6 +137,10 @@ const INSTANCE_KIND_CONST_VALUE: &str = "InstanceKind::Const.value (ConstId)";
 const INSTANCE_KIND_STRUCT_LAYOUT: &str = "InstanceKind::Struct.layout (TyId)";
 const INSTANCE_KIND_ENUM_LAYOUT: &str = "InstanceKind::Enum.layout (TyId)";
 const INSTANCE_KIND_UNION_LAYOUT: &str = "InstanceKind::Union.layout (TyId)";
+const BODY_LOCAL_DECL_TY: &str = "Body LocalDecl.ty (TyId)";
+const BODY_PLACE_FIELD_TY: &str = "Body PlaceElem::Field stamped field type (TyId)";
+const BODY_RVALUE_CAST_TY: &str = "Body Rvalue::Cast target type (TyId)";
+const BODY_RVALUE_AGGREGATE_TY: &str = "Body Rvalue::Aggregate carrier type (TyId)";
 
 /// One construction-invariant violation.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -678,6 +691,7 @@ impl RegseqModel {
             sig_c_abi_lowerings: IndexVec::new(),
             instances: IndexVec::new(),
             vtables: HashMap::new(),
+            closure_captures_struct_ty: HashMap::new(),
             domain_attrs: DomainAttrTables::default(),
         }
     }
@@ -767,6 +781,7 @@ impl RegseqModel {
             if let InstanceKind::Function(data) = &instance.kind {
                 if let Some(body) = data.body.as_ref() {
                     let owner = InstanceId::from_u32(idx as u32);
+                    self.validate_body_ty_closure(owner, body)?;
                     validate_body_places(self, body).map_err(|error| {
                         InvariantViolation::PlaceWalk {
                             instance: owner,
@@ -1377,9 +1392,204 @@ impl RegseqModel {
         Ok(())
     }
 
+    /// Walks every `TyId` reachable from `body` and asserts it resolves
+    /// in `self.types`. Covers `LocalDecl.ty`, `PlaceElem::Field`'s
+    /// stamped field type, `Rvalue::Cast`'s target type, and the
+    /// `AggregateKind` carrier types per spec.md section 25.6.3
+    /// construction invariant 1.
+    ///
+    /// Called from the workspace-level `validate()` per-instance walk
+    /// and from the bridge's Phase-5 `joint_validation_walk` so both
+    /// entry points apply the same closure check to the same body.
+    pub fn validate_body_ty_closure(
+        &self,
+        _owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        use crate::operand::Operand;
+        use crate::place::{Place, PlaceElem};
+        use crate::rvalue::{AggregateKind, Rvalue};
+        use crate::statement::{CopyNonOverlapping, NonDivergingIntrinsic, StatementKind};
+
+        for decl in body.local_decls.iter() {
+            self.check_ty_id(decl.ty, BODY_LOCAL_DECL_TY)?;
+        }
+
+        let check_place = |this: &Self, place: &Place| -> Result<(), InvariantViolation> {
+            for elem in place.projection.iter() {
+                if let PlaceElem::Field(_, ty) = elem {
+                    this.check_ty_id(*ty, BODY_PLACE_FIELD_TY)?;
+                }
+            }
+            Ok(())
+        };
+
+        let check_operand = |this: &Self, op: &Operand| -> Result<(), InvariantViolation> {
+            match op {
+                Operand::Copy(p) | Operand::Move(p) => check_place(this, p),
+                Operand::Constant(_) => Ok(()),
+            }
+        };
+
+        let check_rvalue = |this: &Self, rvalue: &Rvalue| -> Result<(), InvariantViolation> {
+            match rvalue {
+                Rvalue::Use(op) => check_operand(this, op),
+                Rvalue::Repeat(op, _) => check_operand(this, op),
+                Rvalue::Ref(_, p) => check_place(this, p),
+                Rvalue::RawPtr(_, p) => check_place(this, p),
+                Rvalue::Cast(_, op, ty) => {
+                    this.check_ty_id(*ty, BODY_RVALUE_CAST_TY)?;
+                    check_operand(this, op)
+                }
+                Rvalue::BinaryOp(_, l, r) => {
+                    check_operand(this, l)?;
+                    check_operand(this, r)
+                }
+                Rvalue::UnaryOp(_, op) => check_operand(this, op),
+                Rvalue::Discriminant(p) => check_place(this, p),
+                Rvalue::Aggregate(kind, operands) => {
+                    match kind {
+                        AggregateKind::Array(ty)
+                        | AggregateKind::Tuple(ty)
+                        | AggregateKind::Struct(ty)
+                        | AggregateKind::Enum(ty, _)
+                        | AggregateKind::Union(ty, _)
+                        | AggregateKind::Closure(ty) => {
+                            this.check_ty_id(*ty, BODY_RVALUE_AGGREGATE_TY)?;
+                        }
+                        AggregateKind::RawPtr(pointee, _) => {
+                            this.check_ty_id(*pointee, BODY_RVALUE_AGGREGATE_TY)?;
+                        }
+                    }
+                    for op in operands.iter() {
+                        check_operand(this, op)?;
+                    }
+                    Ok(())
+                }
+            }
+        };
+
+        for block in body.basic_blocks.iter() {
+            for stmt in block.statements.iter() {
+                match &stmt.kind {
+                    StatementKind::Assign(place, rvalue) => {
+                        check_place(self, place)?;
+                        check_rvalue(self, rvalue)?;
+                    }
+                    StatementKind::SetDiscriminant(place, _) => {
+                        check_place(self, place)?;
+                    }
+                    StatementKind::Intrinsic(NonDivergingIntrinsic::Assume(op)) => {
+                        check_operand(self, op)?;
+                    }
+                    StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(
+                        CopyNonOverlapping { src, dst, count },
+                    )) => {
+                        check_operand(self, src)?;
+                        check_operand(self, dst)?;
+                        check_operand(self, count)?;
+                    }
+                }
+            }
+            self.check_terminator_ty_closure(&block.terminator, &check_place, &check_operand)?;
+        }
+        Ok(())
+    }
+
+    fn check_terminator_ty_closure(
+        &self,
+        term: &crate::terminator::Terminator,
+        check_place: &impl Fn(&Self, &crate::place::Place) -> Result<(), InvariantViolation>,
+        check_operand: &impl Fn(&Self, &crate::operand::Operand) -> Result<(), InvariantViolation>,
+    ) -> Result<(), InvariantViolation> {
+        use crate::terminator::{AssertKind, TerminatorKind};
+
+        match &term.kind {
+            TerminatorKind::Goto(_)
+            | TerminatorKind::Return
+            | TerminatorKind::Unreachable => Ok(()),
+            TerminatorKind::SwitchInt { discr, .. } => check_operand(self, discr),
+            TerminatorKind::Call {
+                callee,
+                args,
+                destination,
+                target: _,
+            } => {
+                match callee {
+                    CallCallee::Direct(_) => {}
+                    CallCallee::Indirect(op) => check_operand(self, op)?,
+                }
+                for arg in args.iter() {
+                    check_operand(self, arg)?;
+                }
+                check_place(self, destination)
+            }
+            TerminatorKind::Assert { cond, msg, .. } => {
+                check_operand(self, cond)?;
+                match msg {
+                    AssertKind::BoundsCheck { len, index } => {
+                        check_operand(self, len)?;
+                        check_operand(self, index)?;
+                    }
+                    AssertKind::Overflow(_, l, r) => {
+                        check_operand(self, l)?;
+                        check_operand(self, r)?;
+                    }
+                    AssertKind::OverflowNeg(op)
+                    | AssertKind::DivisionByZero(op)
+                    | AssertKind::RemainderByZero(op)
+                    | AssertKind::InvalidEnumConstruction(op) => {
+                        check_operand(self, op)?;
+                    }
+                    AssertKind::MisalignedPointerDereference { required, found } => {
+                        check_operand(self, required)?;
+                        check_operand(self, found)?;
+                    }
+                    AssertKind::NullPointerDereference => {}
+                }
+                Ok(())
+            }
+        }
+    }
+
+    /// Walks every `CallCallee::Direct` in `body` and asserts the
+    /// referenced `InstanceId` resolves in `self.instances` per
+    /// spec.md section 25.6.3 construction invariant 9. Mirrors the
+    /// per-callee check folded into
+    /// `validate_body_terminator_invariants` so the bridge's
+    /// Phase-5 joint validation walk can run it as a discrete step.
+    pub fn validate_body_direct_callees(
+        &self,
+        owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        for (block_idx, block) in body.basic_blocks.iter().enumerate() {
+            let block_id = BlockId::from_u32(block_idx as u32);
+            if let TerminatorKind::Call {
+                callee: CallCallee::Direct(id),
+                ..
+            } = &block.terminator.kind
+            {
+                if id.index() >= self.instances.len() {
+                    return Err(InvariantViolation::DirectCalleeOutOfRange {
+                        owner,
+                        block: block_id,
+                        callee: *id,
+                        instances_len: self.instances.len(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
     /// Walks statements in `body` and enforces section 22.5.2
     /// invariants B-1 through B-5. First-error-wins in walk order.
-    fn validate_body_statement_invariants(
+    ///
+    /// Called from the workspace-level `validate()` per-instance walk
+    /// and from the bridge's Phase-5 `joint_validation_walk` so both
+    /// entry points apply the same spec invariants to the same body.
+    pub fn validate_body_statement_invariants(
         &self,
         owner: InstanceId,
         body: &Body,
@@ -1522,7 +1732,11 @@ impl RegseqModel {
     /// invariants B-1, B-2, B-3, B-4, B-5, plus B-9 callee
     /// resolution (`DirectCalleeOutOfRange`). First-error-wins in
     /// walk order.
-    fn validate_body_terminator_invariants(
+    ///
+    /// Called from the workspace-level `validate()` per-instance walk
+    /// and from the bridge's Phase-5 `joint_validation_walk` so both
+    /// entry points apply the same spec invariants to the same body.
+    pub fn validate_body_terminator_invariants(
         &self,
         owner: InstanceId,
         body: &Body,

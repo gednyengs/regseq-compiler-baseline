@@ -142,7 +142,7 @@ fn translate_erased_ty<'tcx>(
                     ty_repr: ty.to_string(),
                 });
             }
-            let vtable_ty = synthesize_dynamic_vtable_ty(cx, &ty.to_string());
+            let vtable_ty = resolve_dynamic_vtable_ty(cx, predicates)?;
             Ty::Dynamic {
                 auto_traits,
                 vtable_ty,
@@ -258,6 +258,16 @@ enum SpecialAdt {
     PhantomData,
     UnsafeCell,
     ManuallyDrop,
+}
+
+/// Intern a Function-kind Item for a rustc `DefId`. Skips the
+/// substantive-HRTB rejection that `translate_ty` enforces on
+/// `Ty::FnDef`, which matters for callee resolution in terminator
+/// translation where the FnDef carries `for<'a> ...` binders that
+/// would otherwise be rejected even though the call itself is
+/// admissible after region erasure (spec.md section 23.7).
+pub fn intern_function_item_for_def_id(cx: &mut BridgeCtxt<'_>, def_id: DefId) -> ItemId {
+    intern_item(cx, def_id, ItemKind::Function, SpecialAdt::None)
 }
 
 fn intern_item(
@@ -496,48 +506,93 @@ fn dynamic_has_principal_trait<'tcx>(
     predicates.principal().is_some()
 }
 
-fn synthesize_dynamic_vtable_ty(cx: &mut BridgeCtxt<'_>, rendered: &str) -> TyId {
-    let name = format!("vtable::{rendered}");
-    let item_id = synthesize_item(cx, &name, ItemKind::Struct);
-    let layout = placeholder_nominal_layout(cx);
-    cx.model.types.intern(Ty::Struct {
+/// Resolve the `vtable_ty` field for a `Ty::Dynamic` to a
+/// `Ty::Struct` backed by a `SyntheticItemKind::VTableType { principal }`
+/// Item. Per spec.md section 13 (lines 4593-4606 for vtable type
+/// shape; 4861 for the `Ty::Dynamic.vtable_ty` reference rule).
+///
+/// Phase 2 needs the vtable type's `ItemId` immediately to construct
+/// `Ty::Struct`; the vtable-type synthesis cache `synthesise_vtable_type`
+/// assigns the `ItemId` eagerly (rather than going through the
+/// `pending_items` pipeline) so this entry point can return a fully
+/// resolved `Ty::Struct` TyId.
+///
+/// HYPOTHESIS (#14): the layout is a coarse approximation -- one
+/// pointer-width slot per `tcx.own_existential_vtable_entries` entry
+/// plus the three common-vtable-entry header slots. Per spec.md
+/// section 13.2 "Synthetic vtable layout algorithm" lines 4683-4710,
+/// the exact field sequence and offsets are computed by the bridge at
+/// vtable-instance Phase 5 init synthesis where the precise
+/// `tcx.vtable_entries` order is available. The Phase-2 layout here
+/// satisfies the type-interner identity requirement (nominal identity
+/// ignores `Layout` per spec section 12.1) and gives downstream
+/// consumers a sensible size/align (pointer-width per slot). The
+/// precise per-slot init relocations still come from
+/// `bridge/mod.rs::vtable_entries_and_init_meta` for the
+/// VTableInstance Static.
+fn resolve_dynamic_vtable_ty<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    predicates: &'tcx ty::List<ty::Binder<'tcx, ty::ExistentialPredicate<'tcx>>>,
+) -> Result<TyId, BridgeError> {
+    let principal_ref = predicates
+        .principal()
+        .expect("dynamic_has_principal_trait already enforced presence")
+        .skip_binder();
+    let projection_bindings = super::projection_bindings_key(cx, predicates);
+    let principal = super::principal_trait_key(cx, principal_ref, projection_bindings);
+
+    let handle = super::synth::vtable::synthesise_vtable_type(cx, principal);
+    let item_id =
+        cx.handles
+            .resolve(handle)
+            .ok_or_else(|| BridgeError::UnsupportedTy {
+                ty_repr: format!(
+                    "vtable type item handle {} was not bound eagerly",
+                    handle.as_u32()
+                ),
+            })?;
+    let layout = dynamic_vtable_layout(cx, principal_ref);
+    Ok(cx.model.types.intern(Ty::Struct {
         item: item_id,
         args: Vec::new(),
         layout,
-    })
+    }))
 }
 
-fn synthesize_item(cx: &mut BridgeCtxt<'_>, rendered: &str, kind: ItemKind) -> ItemId {
-    let rendered_id = cx.model.strings.intern(rendered);
-    let leaf_id = cx.model.strings.intern(rendered);
-    let item = Item {
-        def_path: DefPath {
-            crate_id: cx.model.primary_crate,
-            segments: vec![DefPathSegment {
-                data: DefPathData::TypeNs(leaf_id),
-                disambiguator: 0,
-            }],
-            rendered: rendered_id,
-        },
-        kind,
-        span: Span::dummy(),
-        linkage: Linkage::Default,
-        link_section: None,
-        inline_hint: InlineHint::None,
-        is_unsafe: false,
-        is_phantom_data: false,
-        is_unsafe_cell: false,
-        is_manually_drop: false,
-        opaque_handle_eligible: false,
-    };
-    let item_id = cx.model.items.push(item);
-    cx.model.item_def_paths.push(DefPathHash {
-        stable_crate_id: StableCrateId(0),
-        local_hash: item_id.as_u32() as u64,
-    });
-    cx.model.item_synthetic_kinds.push(SyntheticItemKind::None);
-    cx.model.domain_attrs.item_attrs.push(Vec::new());
-    item_id
+fn dynamic_vtable_layout<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    principal: ty::ExistentialTraitRef<'tcx>,
+) -> Layout {
+    let ptr_size = cx.input.tcx.data_layout.pointer_size().bytes();
+    let ptr_align = cx.input.tcx.data_layout.pointer_align().abi.bytes();
+    // Three common-vtable header slots (drop_in_place, size, align) plus
+    // the trait's own method-vtable entries. Supertrait pointers are
+    // not counted here; per spec.md section 13.2 the precise slot
+    // sequence is reconstructed at vtable-instance init synthesis.
+    let common_slots: u64 = 3;
+    let own_slots: u64 = cx
+        .input
+        .tcx
+        .own_existential_vtable_entries(principal.def_id)
+        .len() as u64;
+    let slot_count = common_slots + own_slots;
+    let total_bytes = ptr_size.saturating_mul(slot_count);
+    let empty = cx.model.strings.intern("");
+    let mut fields = Vec::with_capacity(slot_count as usize);
+    for idx in 0..slot_count {
+        fields.push(FieldLayout {
+            name: empty,
+            ty: TyId::ZERO,
+            offset: ptr_size.saturating_mul(idx),
+        });
+    }
+    Layout {
+        size: total_bytes,
+        align: ptr_align,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields },
+    }
 }
 
 fn tuple_layout<'tcx>(
@@ -614,23 +669,6 @@ fn nominal_layout<'tcx>(
         uninhabited: rustc_layout.uninhabited,
         kind,
     })
-}
-
-fn placeholder_nominal_layout(cx: &mut BridgeCtxt<'_>) -> Layout {
-    let empty = cx.model.strings.intern("");
-    Layout {
-        size: 0,
-        align: 1,
-        pack: None,
-        uninhabited: false,
-        kind: LayoutKind::Struct {
-            fields: vec![FieldLayout {
-                name: empty,
-                ty: TyId::ZERO,
-                offset: 0,
-            }],
-        },
-    }
 }
 
 fn has_substantive_hrtb(rendered: &str) -> bool {

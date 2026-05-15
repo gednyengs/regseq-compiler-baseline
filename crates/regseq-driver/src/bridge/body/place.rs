@@ -11,7 +11,7 @@ use super::BodyCtxt;
 /// spec.md section 19.5.
 pub fn translate_place<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    _body_cx: &mut BodyCtxt<'tcx>,
+    _body_cx: &mut BodyCtxt<'tcx, '_>,
     place: mir::Place<'tcx>,
 ) -> Result<Place, BridgeError> {
     let local = LocalId::from_u32(place.local.as_u32());

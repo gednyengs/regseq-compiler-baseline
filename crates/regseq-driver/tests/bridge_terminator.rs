@@ -13,7 +13,9 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::body::{translate_basic_block, translate_terminator, BodyCtxt};
 use regseq_driver::bridge::{BridgeCtxt, BridgeError, BridgeInput, DslRejectionKind};
-use regseq_model::{CallCallee, SyntheticItemKind, Terminator, TerminatorKind};
+use regseq_model::{
+    Body, CallCallee, IndexVec, Span, Statement, SyntheticItemKind, Terminator, TerminatorKind,
+};
 use rustc_hir::def_id::{LocalDefId, LocalModDefId};
 use rustc_middle::mir;
 use rustc_middle::ty::TyCtxt;
@@ -146,17 +148,30 @@ fn find_fn_def_id(tcx: TyCtxt<'_>, name: &str) -> LocalDefId {
     panic!("function `{name}` not found");
 }
 
+fn empty_model_body() -> Body {
+    Body {
+        basic_blocks: IndexVec::new(),
+        local_decls: IndexVec::new(),
+        arg_count: 0,
+        span: Span::dummy(),
+    }
+}
+
 fn translate_fn_terminators<'tcx>(
     tcx: TyCtxt<'tcx>,
     cx: &mut BridgeCtxt<'tcx>,
     name: &str,
 ) -> Vec<Terminator> {
     let body = tcx.optimized_mir(find_fn_def_id(tcx, name).to_def_id());
-    let mut body_cx = BodyCtxt::new(&body.local_decls);
+    let mut model_body = empty_model_body();
+    let mut body_cx = BodyCtxt::new_with_model_body(&body.local_decls, &mut model_body);
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.clone())
-        .map(|term| translate_terminator(cx, &mut body_cx, term).unwrap())
+        .map(|term| {
+            let mut statements: Vec<Statement> = Vec::new();
+            translate_terminator(cx, &mut body_cx, &mut statements, term).unwrap()
+        })
         .collect()
 }
 
@@ -166,12 +181,34 @@ fn rustc_drop_translations<'tcx>(
     name: &str,
 ) -> Vec<Terminator> {
     let body = tcx.optimized_mir(find_fn_def_id(tcx, name).to_def_id());
-    let mut body_cx = BodyCtxt::new(&body.local_decls);
+    // Run F4 sort + ItemId assignment so the drop-glue handles
+    // produced inside `translate_terminator` resolve through
+    // `cx.handles` against final ItemIds. Without this the Direct
+    // callee resolution in `translate_drop_as_call` errors out
+    // because handles are still Phase-2 placeholders.
+    for block in body.basic_blocks.iter() {
+        if let Some(term) = block.terminator.clone() {
+            if let mir::TerminatorKind::Drop { place, .. } = term.kind {
+                let drop_ty = place.ty(&body.local_decls, tcx).ty;
+                if let Ok(ty_id) = regseq_driver::bridge::ty::translate_ty(cx, drop_ty) {
+                    let _ = regseq_driver::bridge::synth::synthesise_drop_glue(cx, ty_id);
+                }
+            }
+        }
+    }
+    regseq_driver::bridge::sort::f4_sort(&cx.model, &mut cx.pending_items).unwrap();
+    regseq_driver::bridge::assign::assign_item_ids_and_populate_sidetables(cx).unwrap();
+
+    let mut model_body = empty_model_body();
+    let mut body_cx = BodyCtxt::new_with_model_body(&body.local_decls, &mut model_body);
     body.basic_blocks
         .iter()
         .filter_map(|block| block.terminator.clone())
         .filter(|term| matches!(term.kind, mir::TerminatorKind::Drop { .. }))
-        .map(|term| translate_terminator(cx, &mut body_cx, term).unwrap())
+        .map(|term| {
+            let mut statements: Vec<Statement> = Vec::new();
+            translate_terminator(cx, &mut body_cx, &mut statements, term).unwrap()
+        })
         .collect()
 }
 
@@ -223,12 +260,15 @@ fn translates_unreachable_and_rejects_false_edge() {
     with_bridge("bridge_terminator_reject", source, |tcx, cx| {
         let body = tcx.optimized_mir(find_fn_def_id(tcx, "f").to_def_id());
         let source_info = body.basic_blocks[mir::START_BLOCK].terminator().source_info;
-        let mut body_cx = BodyCtxt::new(&body.local_decls);
+        let mut model_body = empty_model_body();
+        let mut body_cx = BodyCtxt::new_with_model_body(&body.local_decls, &mut model_body);
         let unreachable = mir::Terminator {
             source_info,
             kind: mir::TerminatorKind::Unreachable,
         };
-        let translated = translate_terminator(cx, &mut body_cx, unreachable).unwrap();
+        let mut statements: Vec<Statement> = Vec::new();
+        let translated =
+            translate_terminator(cx, &mut body_cx, &mut statements, unreachable).unwrap();
         assert!(matches!(translated.kind, TerminatorKind::Unreachable));
 
         let false_edge = mir::Terminator {
@@ -238,7 +278,8 @@ fn translates_unreachable_and_rejects_false_edge() {
                 imaginary_target: mir::BasicBlock::from_u32(0),
             },
         };
-        let err = translate_terminator(cx, &mut body_cx, false_edge)
+        let mut statements: Vec<Statement> = Vec::new();
+        let err = translate_terminator(cx, &mut body_cx, &mut statements, false_edge)
             .expect_err("FalseEdge should reject");
         assert!(matches!(
             err,
@@ -281,10 +322,14 @@ pub fn two_drops() {
             panic!("drop should collapse to a direct call with a normal target");
         };
         assert_eq!(args.len(), 1);
+        // After F4 sort and ItemId assignment the drop-glue synthetic
+        // kind lives on `model.item_synthetic_kinds`, not on
+        // `pending_items` (which has been drained).
         assert!(cx
-            .pending_items
+            .model
+            .item_synthetic_kinds
             .iter()
-            .any(|item| matches!(item.synthetic_kind, SyntheticItemKind::DropGlue { .. })));
+            .any(|kind| matches!(kind, SyntheticItemKind::DropGlue { .. })));
 
         let two = rustc_drop_translations(tcx, cx, "two_drops");
         assert!(two.len() >= 2);
@@ -308,7 +353,8 @@ fn translates_basic_block_statements_and_terminator() {
 
     with_bridge("bridge_basic_block", source, |tcx, cx| {
         let body = tcx.optimized_mir(find_fn_def_id(tcx, "f").to_def_id());
-        let mut body_cx = BodyCtxt::new(&body.local_decls);
+        let mut model_body = empty_model_body();
+        let mut body_cx = BodyCtxt::new_with_model_body(&body.local_decls, &mut model_body);
         let block = translate_basic_block(cx, &mut body_cx, &body.basic_blocks[mir::START_BLOCK])
             .expect("basic block should translate");
 
