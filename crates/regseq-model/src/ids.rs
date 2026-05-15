@@ -261,12 +261,15 @@ impl<'de> serde::Deserialize<'de> for InstanceId {
 
 newtype_index! {
     /// Identifies a local in a MIR body.
-    pub struct LocalId {}
-}
-
-impl LocalId {
-    /// Return-place local. Equal to `LocalId::ZERO`.
-    pub const RETURN_PLACE: LocalId = LocalId::ZERO;
+    ///
+    /// Body-local index into `Body.local_decls`. The pretty-printer
+    /// renders this ID with the `_N` sigil convention, including `_0`
+    /// for `RETURN_PLACE`; `Debug` remains the uniform
+    /// `LocalId(N)` typed-ID format (spec.md section 25.3).
+    pub struct LocalId {
+        /// Return-place local. Equal to `LocalId::ZERO`.
+        const RETURN_PLACE = 0;
+    }
 }
 
 impl serde::Serialize for LocalId {

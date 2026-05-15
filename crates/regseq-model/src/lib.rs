@@ -8,6 +8,7 @@
 
 mod args_key;
 mod basic_block;
+mod body;
 mod bridge_input;
 mod build;
 mod cabi;
@@ -28,7 +29,6 @@ mod layout;
 mod model;
 pub mod operand;
 mod place;
-mod placeholders;
 mod pretty;
 pub mod rvalue;
 mod source;
@@ -40,12 +40,14 @@ mod target;
 mod terminator;
 mod ty;
 mod ty_interner;
+mod visit;
 
 pub use args_key::{
     args_key_for_generic_args, canonical_args_bytes, canonical_ty_bytes, ArgsKey, GenericArg,
     GenericArgs,
 };
 pub use basic_block::BasicBlock;
+pub use body::{Body, LocalDecl};
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
 pub use cabi::{CAbiLowering, CAbiShape, SubstReason};
@@ -77,7 +79,6 @@ pub use layout::{
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
 pub use operand::{LiteralValue, Operand};
 pub use place::{Place, PlaceElem};
-pub use placeholders::Body;
 pub use pretty::PrettyPrinter;
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use source::{Position, SourceFile, Span};
@@ -94,6 +95,7 @@ pub use ty::{
     Safety, Ty, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,
 };
 pub use ty_interner::{NominalKind, TyInterner};
+pub use visit::{BodyValidationError, Visitor};
 
 const _: () = assert!(core::mem::size_of::<CrateId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<CrateId>>() == 4);

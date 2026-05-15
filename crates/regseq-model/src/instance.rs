@@ -15,8 +15,8 @@
 use serde::{Deserialize, Serialize};
 
 use crate::args_key::{ArgsKey, GenericArgs};
+use crate::body::Body;
 use crate::ids::{ConstId, FnSigId, ItemId, StringId, TyId};
-use crate::placeholders::Body;
 use crate::source::Span;
 
 /// Data carried by a function instance.

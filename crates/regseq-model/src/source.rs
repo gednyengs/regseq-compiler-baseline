@@ -124,6 +124,19 @@ pub struct Span {
 }
 
 impl Span {
+    /// Returns the bridge-synthesized dummy span.
+    ///
+    /// Synthetic MIR locals introduced by bridge collapse or
+    /// post-construction rewrites use this location when no source
+    /// declaration exists (spec.md section 25.2).
+    pub const fn dummy() -> Self {
+        Self {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        }
+    }
+
     /// Position of `lo` in the indexed `SourceFile`.
     pub fn start(&self, files: &IndexVec<SourceFileId, SourceFile>) -> Position {
         files[self.file].position(self.lo)

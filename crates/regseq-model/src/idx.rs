@@ -89,6 +89,7 @@ macro_rules! newtype_index {
         $(#[$attr:meta])*
         $vis:vis struct $name:ident {
             $(
+                $(#[$const_attr:meta])*
                 const $const_name:ident = $const_value:literal;
             )*
         }
@@ -98,6 +99,7 @@ macro_rules! newtype_index {
             $(#[$attr])*
             $vis struct $name {
                 $(
+                    $(#[$const_attr])*
                     const $const_name = $const_value;
                 )*
             }
@@ -109,6 +111,7 @@ macro_rules! newtype_index {
         $(#[$attr:meta])*
         $vis:vis struct $name:ident {
             $(
+                $(#[$const_attr:meta])*
                 const $const_name:ident = $const_value:literal;
             )*
         }
@@ -125,6 +128,7 @@ macro_rules! newtype_index {
             pub const MAX: Self = Self::from_u32(Self::MAX_AS_U32);
             pub const ZERO: Self = Self::from_u32(0);
             $(
+                $(#[$const_attr])*
                 pub const $const_name: $name = $name::from_u32($const_value);
             )*
 

@@ -2943,7 +2943,7 @@
           "id": "regseq-model-82",
           "name": "P1a-DS-14b: Body + LocalDecl + LocalId + APIs + walk hooks",
           "spec": ".harness/tasks/regseq-model/82-body-and-local-decl.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-81"
           ],

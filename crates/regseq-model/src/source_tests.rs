@@ -152,6 +152,18 @@ fn line_text_returns_none_when_content_absent() {
 // ---------------------------------------------------------------
 
 #[test]
+fn span_dummy_uses_synthesized_zero_width_location() {
+    assert_eq!(
+        Span::dummy(),
+        Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0
+        }
+    );
+}
+
+#[test]
 fn span_start_and_end_resolve_via_files() {
     let files = make_files("abc\ndef\nghi");
     let span = Span {
