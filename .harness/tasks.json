@@ -2920,7 +2920,7 @@
           "id": "regseq-model-81",
           "name": "P1a-DS-14a: BasicBlock + BlockId + ordering invariants",
           "spec": ".harness/tasks/regseq-model/81-basic-block.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-80"
           ],

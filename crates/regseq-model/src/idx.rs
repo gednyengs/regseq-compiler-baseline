@@ -77,6 +77,42 @@ macro_rules! newtype_index {
         $(#[$attr:meta])*
         $vis:vis struct $name:ident {}
     ) => {
+        $crate::idx::newtype_index! {
+            @define
+            $(#[$attr])*
+            $vis struct $name {
+            }
+        }
+    };
+
+    (
+        $(#[$attr:meta])*
+        $vis:vis struct $name:ident {
+            $(
+                const $const_name:ident = $const_value:literal;
+            )*
+        }
+    ) => {
+        $crate::idx::newtype_index! {
+            @define
+            $(#[$attr])*
+            $vis struct $name {
+                $(
+                    const $const_name = $const_value;
+                )*
+            }
+        }
+    };
+
+    (
+        @define
+        $(#[$attr:meta])*
+        $vis:vis struct $name:ident {
+            $(
+                const $const_name:ident = $const_value:literal;
+            )*
+        }
+    ) => {
         $(#[$attr])*
         #[repr(transparent)]
         #[derive(Copy, Clone, PartialEq, Eq, Hash)]
@@ -88,6 +124,9 @@ macro_rules! newtype_index {
             pub const MAX_AS_U32: u32 = $crate::idx::NonMaxU32::MAX_VALUE;
             pub const MAX: Self = Self::from_u32(Self::MAX_AS_U32);
             pub const ZERO: Self = Self::from_u32(0);
+            $(
+                pub const $const_name: $name = $name::from_u32($const_value);
+            )*
 
             #[inline]
             pub const fn from_u32(idx: u32) -> Self {
@@ -160,3 +199,51 @@ macro_rules! newtype_index {
 }
 
 pub(crate) use newtype_index;
+
+#[cfg(test)]
+mod tests {
+    newtype_index! {
+        pub struct FixtureId {
+            const FIRST = 5;
+        }
+    }
+
+    newtype_index! {
+        pub struct MultiFixtureId {
+            const A = 0;
+            const B = 3;
+        }
+    }
+
+    newtype_index! {
+        pub struct EmptyFixtureId {}
+    }
+
+    #[test]
+    fn const_body_arm_supports_single_const() {
+        assert_eq!(FixtureId::FIRST, FixtureId::from_u32(5));
+        assert_eq!(FixtureId::ZERO, FixtureId::from_u32(0));
+        assert_eq!(FixtureId::MAX, FixtureId::from_u32(FixtureId::MAX_AS_U32));
+    }
+
+    #[test]
+    fn const_body_arm_supports_multiple_consts() {
+        assert_eq!(MultiFixtureId::A, MultiFixtureId::from_u32(0));
+        assert_eq!(MultiFixtureId::B, MultiFixtureId::from_u32(3));
+        assert_eq!(MultiFixtureId::ZERO, MultiFixtureId::from_u32(0));
+        assert_eq!(
+            MultiFixtureId::MAX,
+            MultiFixtureId::from_u32(MultiFixtureId::MAX_AS_U32)
+        );
+    }
+
+    #[test]
+    fn empty_body_arm_still_constructs_ids() {
+        assert_eq!(EmptyFixtureId::from_u32(9).index(), 9);
+        assert_eq!(EmptyFixtureId::ZERO, EmptyFixtureId::from_u32(0));
+        assert_eq!(
+            EmptyFixtureId::MAX,
+            EmptyFixtureId::from_u32(EmptyFixtureId::MAX_AS_U32)
+        );
+    }
+}

@@ -290,12 +290,13 @@ impl<'de> serde::Deserialize<'de> for LocalId {
 
 newtype_index! {
     /// Identifies a basic block in a MIR body.
-    pub struct BlockId {}
-}
-
-impl BlockId {
-    /// Entry basic block. Equal to `BlockId::ZERO`.
-    pub const START_BLOCK: BlockId = BlockId::ZERO;
+    ///
+    /// Body-local index into `Body.basic_blocks`. The pretty-printer
+    /// renders this ID with the `bbN` sigil convention; `Debug`
+    /// remains the uniform `BlockId(N)` typed-ID format.
+    pub struct BlockId {
+        const START_BLOCK = 0;
+    }
 }
 
 impl serde::Serialize for BlockId {

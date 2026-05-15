@@ -7,6 +7,7 @@
 //! off.
 
 mod args_key;
+mod basic_block;
 mod bridge_input;
 mod build;
 mod cabi;
@@ -44,6 +45,7 @@ pub use args_key::{
     args_key_for_generic_args, canonical_args_bytes, canonical_ty_bytes, ArgsKey, GenericArg,
     GenericArgs,
 };
+pub use basic_block::BasicBlock;
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
 pub use cabi::{CAbiLowering, CAbiShape, SubstReason};
