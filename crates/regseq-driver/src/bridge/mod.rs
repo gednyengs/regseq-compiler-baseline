@@ -14,6 +14,7 @@ use regseq_model::{
 };
 
 mod assign;
+pub mod body;
 pub mod const_;
 mod discovery;
 pub mod fnsig;
@@ -228,6 +229,12 @@ pub enum DslRejectionKind {
     CVoid,
     /// `core::sync::atomic::Atomic*` must use the Regseq atomic DSL.
     Atomic,
+    /// A MIR place projection is outside the Regseq body vocabulary.
+    PlaceProjection,
+    /// A MIR rvalue is outside the Regseq body vocabulary.
+    Rvalue,
+    /// A MIR statement is outside the Regseq body vocabulary.
+    Statement,
 }
 
 /// Non-rigid `TyKind` family rejected after normalization.
@@ -445,10 +452,12 @@ fn scan_operand_move_for_drop_glue<'tcx>(
         return Ok(());
     };
     let move_ty = place.ty(local_decls, ctxt.input.tcx).ty;
-    if !move_ty.needs_drop(
-        ctxt.input.tcx,
-        rustc_middle::ty::TypingEnv::fully_monomorphized(),
-    ) {
+    let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
+    if ctxt
+        .input
+        .tcx
+        .type_is_copy_modulo_regions(typing_env, move_ty)
+    {
         return Ok(());
     }
     if let Ok(model_ty) = ty::translate_ty(ctxt, move_ty) {

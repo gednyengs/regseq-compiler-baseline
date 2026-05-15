@@ -1080,7 +1080,7 @@
           "id": "regseq-driver-41",
           "name": "P1a-BR-05: Place + Operand + Rvalue + Statement bridge translation",
           "spec": ".harness/tasks/regseq-driver/41-place-operand-rvalue-statement-bridge.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-38",
             "regseq-driver-39",
