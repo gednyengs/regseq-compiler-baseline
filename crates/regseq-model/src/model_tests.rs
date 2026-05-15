@@ -13,10 +13,20 @@
 //!   noted via comments at their corresponding test sites.
 
 use crate::{
-    Body, BridgeInput, ConstId, CrateId, CrateInfo, FnSigId, GenericArg, Instance, InstanceId,
-    InstanceKind, InvariantId, InvariantViolation, ItemId, RegseqModel, SourceFileId, Span,
-    StableCrateId, StringId, Ty, TyId,
+    Body, BridgeInput, ConstId, CrateId, CrateInfo, FnAbi, FnSig, FnSigId, GenericArg, Instance,
+    InstanceId, InstanceKind, InvariantId, InvariantViolation, ItemId, RegseqModel, Safety,
+    SourceFileId, Span, StableCrateId, StringId, Ty, TyId,
 };
+
+fn default_sig() -> FnSig {
+    FnSig {
+        inputs: vec![],
+        output: TyId::ZERO,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    }
+}
 
 // ------------------------------------------------------------------
 // Constructor: empty model contract.
@@ -66,7 +76,7 @@ fn with_primary_leaves_other_tables_empty() {
     assert!(m.items.is_empty());
     assert!(m.item_def_paths.is_empty());
     assert!(m.item_synthetic_kinds.is_empty());
-    assert!(m.sigs.is_empty());
+    assert_eq!(m.sigs.len(), 0);
     assert!(m.sig_c_abi_lowerings.is_empty());
     assert!(m.instances.is_empty());
     assert!(m.vtables.is_empty());
@@ -102,7 +112,7 @@ fn root_struct_exposes_spec_field_set() {
     assert_eq!(source_files.len(), 1);
     assert!(types.is_empty());
     assert!(consts.is_empty());
-    assert!(sigs.is_empty());
+    assert_eq!(sigs.len(), 0);
     assert!(items.is_empty());
     assert!(item_def_paths.is_empty());
     assert!(item_synthetic_kinds.is_empty());
@@ -136,8 +146,8 @@ fn populated_model_passes_validate() {
 
     // Populate placeholder tables so InstanceKind references resolve.
     let ty = m.types.push(Ty::Bool);
-    let init = m.consts.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let init = m.consts.push(crate::Const::ZST);
+    let sig = m.sigs.intern(default_sig());
 
     let item = m.items.push(Default::default());
     m.item_def_paths.push(crate::DefPathHash {
@@ -170,7 +180,7 @@ fn populated_model_passes_validate() {
     });
     m.item_synthetic_kinds.push(Default::default());
     let static_ty = m.types.push(Ty::Bool);
-    let static_init = m.consts.push(Default::default());
+    let static_init = m.consts.push(crate::Const::ZST);
     m.instances.push(Instance {
         item: item2,
         generic_args: vec![],
@@ -198,7 +208,7 @@ fn function_with_body_none_validates_when_sig_resolves() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -356,7 +366,7 @@ fn invariant_2_item_synthetic_kinds_length_mismatch() {
 #[test]
 fn invariant_1_dangling_item_id_in_instance() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         // No items pushed; ItemId(0) is dangling.
         item: ItemId::from_u32(0),
@@ -409,7 +419,7 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -439,7 +449,7 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Type(TyId::from_u32(5))],
@@ -469,7 +479,7 @@ fn invariant_1_dangling_const_id_in_generic_args() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Const(ConstId::from_u32(7))],
@@ -531,7 +541,7 @@ fn invariant_10_inline_body_in_function_kind_validates() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -653,7 +663,7 @@ fn invariant_1_dangling_string_id_in_instance_symbol_name() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -790,8 +800,8 @@ fn empty_model_round_trips_through_json() {
 fn populated_model_round_trips_through_json() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA));
     let _ = m.types.push(Ty::Bool);
-    let _ = m.consts.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let _ = m.consts.push(crate::Const::ZST);
+    let sig = m.sigs.intern(default_sig());
     let item = m.items.push(Default::default());
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
@@ -930,7 +940,7 @@ fn helper_fixture() -> (RegseqModel, InstanceId) {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
-    let sig = m.sigs.push(Default::default());
+    let sig = m.sigs.intern(default_sig());
     let id = m.instances.push(Instance {
         item,
         generic_args: vec![],

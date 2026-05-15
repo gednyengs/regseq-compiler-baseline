@@ -9,13 +9,19 @@
 mod args_key;
 mod bridge_input;
 mod build;
+mod cabi;
+mod const_interner;
+mod const_value;
 mod crate_info;
 mod def_path;
 mod domain_attr;
+mod fn_sig;
+mod fn_sig_interner;
 mod ids;
 mod idx;
 mod index_vec;
 mod instance;
+mod instance_ref;
 mod layout;
 mod model;
 mod placeholders;
@@ -32,11 +38,16 @@ pub use args_key::{
 };
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
+pub use cabi::{CAbiLowering, CAbiShape, SubstReason};
+pub use const_interner::ConstInterner;
+pub use const_value::{canonical_const_bytes, Byte, Const};
 pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
 pub use domain_attr::DomainAttrTables;
+pub use fn_sig::{canonical_fn_sig, FnSig};
+pub use fn_sig_interner::FnSigInterner;
 pub use ids::{
     BlockId, ConstId, CrateId, FnSigId, InstanceId, ItemId, LocalId, SourceFileId, StringId, TyId,
     VariantIdx,
@@ -47,14 +58,14 @@ pub use instance::{
     regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
     RustcInstanceKindTag,
 };
+pub use instance_ref::InstanceRef;
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
 pub use placeholders::{
-    Body, CAbiLowering, Const, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind,
-    Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
+    Body, InlineHint, IntrinsicKind, Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
 };
 pub use pretty::PrettyPrinter;
 pub use source::{Position, SourceFile, Span};

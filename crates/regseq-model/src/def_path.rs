@@ -121,7 +121,7 @@ pub struct DefPath {
 /// `tcx.def_path_hash(def_id)` (the `StableCrateId` half plus the
 /// 64-bit local hash). Stored in the side table
 /// `RegseqModel.item_def_paths` per F4.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct DefPathHash {
     pub stable_crate_id: StableCrateId,
     pub local_hash: u64,

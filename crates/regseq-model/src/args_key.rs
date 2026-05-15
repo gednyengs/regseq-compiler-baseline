@@ -10,9 +10,15 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::const_interner::ConstInterner;
+use crate::def_path::DefPathHash;
+use crate::fn_sig::encode_fn_sig_with_tables;
+use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{ConstId, TyId};
+use crate::index_vec::IndexVec;
 use crate::model::RegseqModel;
 use crate::ty::Ty;
+use crate::ty_interner::TyInterner;
 
 /// One generic argument substituted into a monomorphized item.
 ///
@@ -77,17 +83,67 @@ fn encode_args(model: &RegseqModel, args: &GenericArgs, out: &mut Vec<u8>) {
                 out.push(0);
                 encode_ty(model, ty, out);
             }
-            GenericArg::Const(_) => {
+            GenericArg::Const(c) => {
                 out.push(1);
-                // FORWARD: P1a-DS-05: canonical Const bytes.
-                todo!("FORWARD: P1a-DS-05: canonical Const bytes")
+                crate::const_value::encode_const_id(model, c, out);
             }
         }
     }
 }
 
 fn encode_ty(model: &RegseqModel, ty: TyId, out: &mut Vec<u8>) {
-    match &model.types[ty] {
+    encode_ty_with_tables(
+        &model.types,
+        &model.sigs,
+        Some(&model.consts),
+        &model.item_def_paths,
+        ty,
+        out,
+    );
+}
+
+fn encode_args_with_tables(
+    types: &TyInterner,
+    sigs: &FnSigInterner,
+    consts: Option<&ConstInterner>,
+    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    args: &GenericArgs,
+    out: &mut Vec<u8>,
+) {
+    push_u32(out, args.len());
+    for arg in args {
+        match *arg {
+            GenericArg::Type(ty) => {
+                out.push(0);
+                encode_ty_with_tables(types, sigs, consts, item_def_paths, ty, out);
+            }
+            GenericArg::Const(c) => {
+                out.push(1);
+                let Some(consts) = consts else {
+                    panic!("const generic args require a const table in type canonicalization");
+                };
+                crate::const_value::encode_const_id_with_tables(
+                    consts,
+                    types,
+                    sigs,
+                    item_def_paths,
+                    c,
+                    out,
+                );
+            }
+        }
+    }
+}
+
+pub(crate) fn encode_ty_with_tables(
+    types: &TyInterner,
+    sigs: &FnSigInterner,
+    consts: Option<&ConstInterner>,
+    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    ty: TyId,
+    out: &mut Vec<u8>,
+) {
+    match &types[ty] {
         Ty::Bool => out.push(0),
         Ty::Char => out.push(1),
         Ty::Int(kind) => {
@@ -106,32 +162,31 @@ fn encode_ty(model: &RegseqModel, ty: TyId, out: &mut Vec<u8>) {
         Ty::Never => out.push(6),
         Ty::Array(elem, len) => {
             out.push(7);
-            encode_ty(model, *elem, out);
+            encode_ty_with_tables(types, sigs, consts, item_def_paths, *elem, out);
             out.extend_from_slice(&len.to_le_bytes());
         }
         Ty::Slice(elem) => {
             out.push(8);
-            encode_ty(model, *elem, out);
+            encode_ty_with_tables(types, sigs, consts, item_def_paths, *elem, out);
         }
         Ty::Ref(pointee, provenance) => {
             out.push(9);
-            encode_ty(model, *pointee, out);
+            encode_ty_with_tables(types, sigs, consts, item_def_paths, *pointee, out);
             out.push((*provenance).into());
         }
         Ty::Ptr(pointee, mutability) => {
             out.push(10);
-            encode_ty(model, *pointee, out);
+            encode_ty_with_tables(types, sigs, consts, item_def_paths, *pointee, out);
             out.push((*mutability).into());
         }
         Ty::FnDef(item, args) => {
             out.push(11);
-            encode_item_def_path_hash(model, *item, out);
-            encode_args(model, args, out);
+            encode_item_def_path_hash(item_def_paths, *item, out);
+            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
         }
-        Ty::FnPtr(_) => {
+        Ty::FnPtr(sig) => {
             out.push(12);
-            // FORWARD: P1a-DS-06: canonical FnSig bytes.
-            todo!("FORWARD: P1a-DS-06: canonical FnSig bytes")
+            encode_fn_sig_with_tables(sigs.resolve(*sig), types, sigs, consts, item_def_paths, out);
         }
         Ty::Dynamic {
             auto_traits,
@@ -142,40 +197,44 @@ fn encode_ty(model: &RegseqModel, ty: TyId, out: &mut Vec<u8>) {
             sorted.sort_unstable();
             push_u32(out, sorted.len());
             out.extend_from_slice(&sorted);
-            encode_ty(model, *vtable_ty, out);
+            encode_ty_with_tables(types, sigs, consts, item_def_paths, *vtable_ty, out);
         }
         Ty::Closure(item, args) => {
             out.push(14);
-            encode_item_def_path_hash(model, *item, out);
-            encode_args(model, args, out);
+            encode_item_def_path_hash(item_def_paths, *item, out);
+            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
         }
         Ty::Tuple { fields, .. } => {
             out.push(15);
             push_u32(out, fields.len());
             for field in fields {
-                encode_ty(model, *field, out);
+                encode_ty_with_tables(types, sigs, consts, item_def_paths, *field, out);
             }
         }
         Ty::Struct { item, args, .. } => {
             out.push(16);
-            encode_item_def_path_hash(model, *item, out);
-            encode_args(model, args, out);
+            encode_item_def_path_hash(item_def_paths, *item, out);
+            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
         }
         Ty::Enum { item, args, .. } => {
             out.push(17);
-            encode_item_def_path_hash(model, *item, out);
-            encode_args(model, args, out);
+            encode_item_def_path_hash(item_def_paths, *item, out);
+            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
         }
         Ty::Union { item, args, .. } => {
             out.push(18);
-            encode_item_def_path_hash(model, *item, out);
-            encode_args(model, args, out);
+            encode_item_def_path_hash(item_def_paths, *item, out);
+            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
         }
     }
 }
 
-fn encode_item_def_path_hash(model: &RegseqModel, item: crate::ItemId, out: &mut Vec<u8>) {
-    let hash = model.item_def_paths[item];
+fn encode_item_def_path_hash(
+    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    item: crate::ItemId,
+    out: &mut Vec<u8>,
+) {
+    let hash = item_def_paths[item];
     out.extend_from_slice(&hash.stable_crate_id.0.to_le_bytes());
     out.extend_from_slice(&hash.local_hash.to_le_bytes());
 }
@@ -196,9 +255,10 @@ fn _generic_arg_exhaustiveness(a: &GenericArg) {
 mod tests {
     use super::*;
     use crate::def_path::DefPathHash;
-    use crate::ids::{ConstId, FnSigId, ItemId};
+    use crate::ids::{ConstId, ItemId};
     use crate::layout::{FieldLayout, Layout, LayoutKind};
-    use crate::ty::{AutoTrait, FloatKind, IntKind, Mutability, Provenance};
+    use crate::ty::{AutoTrait, FloatKind, FnAbi, IntKind, Mutability, Provenance, Safety};
+    use crate::FnSig;
     use crate::{StableCrateId, StringId};
 
     use std::collections::HashSet;
@@ -288,12 +348,14 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "IGNORE-UNTIL: P1a-DS-05"]
     fn generic_const_arg_encodes_const_payload() {
-        // IGNORE-UNTIL: P1a-DS-05
-        let model = RegseqModel::with_primary("primary", StableCrateId(1));
-        let args = vec![GenericArg::Const(ConstId::from_u32(0))];
-        let _ = canonical_args_bytes(&model, &args);
+        let mut model = RegseqModel::with_primary("primary", StableCrateId(1));
+        let c = model.consts.intern(crate::Const::Bool(true));
+        let args = vec![GenericArg::Const(c)];
+        assert_eq!(
+            canonical_args_bytes(&model, &args),
+            vec![1, 0, 0, 0, 1, 0, 1]
+        );
     }
 
     #[test]
@@ -395,12 +457,44 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "IGNORE-UNTIL: P1a-DS-06"]
-    fn fn_ptr_canonical_bytes_wait_for_fn_sig_interner() {
-        // IGNORE-UNTIL: P1a-DS-06
+    fn fn_ptr_canonical_bytes_expand_fn_sig_content() {
         let mut model = RegseqModel::with_primary("primary", StableCrateId(1));
-        let fn_ptr = model.types.intern(Ty::FnPtr(FnSigId::from_u32(0)));
-        let _ = canonical_ty_bytes(&model, fn_ptr);
+        let bool_ty = model.types.intern(Ty::Bool);
+        let sig = model.sigs.intern(FnSig {
+            inputs: vec![bool_ty],
+            output: bool_ty,
+            abi: FnAbi::C,
+            c_variadic: false,
+            safety: Safety::Unsafe,
+        });
+        let fn_ptr = model.types.intern(Ty::FnPtr(sig));
+
+        assert_eq!(
+            canonical_ty_bytes(&model, fn_ptr),
+            vec![12, 1, 0, 0, 0, 0, 0, 1, 0, 1]
+        );
+    }
+
+    #[test]
+    fn fn_ptr_canonical_bytes_expand_const_generic_type_content() {
+        let mut model = model_with_def_path();
+        let c = model.consts.intern(crate::Const::Bool(true));
+        let fn_def = model
+            .types
+            .intern(Ty::FnDef(item(0), vec![GenericArg::Const(c)]));
+        let sig = model.sigs.intern(FnSig {
+            inputs: vec![],
+            output: fn_def,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        let fn_ptr = model.types.intern(Ty::FnPtr(sig));
+
+        let mut expected = vec![12, 0, 0, 0, 0, 11];
+        expected.extend_from_slice(&hash_bytes());
+        expected.extend_from_slice(&[1, 0, 0, 0, 1, 0, 1, 0, 0, 0]);
+        assert_eq!(canonical_ty_bytes(&model, fn_ptr), expected);
     }
 
     #[test]

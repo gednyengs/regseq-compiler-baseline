@@ -2638,7 +2638,7 @@
           "id": "regseq-model-69",
           "name": "P1a-DS-05: Const vocabulary",
           "spec": ".harness/tasks/regseq-model/69-const-vocabulary.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-model-68"
           ],
@@ -2661,7 +2661,7 @@
           "id": "regseq-model-70",
           "name": "P1a-DS-06: FnAbi + FnSig + CAbiLowering",
           "spec": ".harness/tasks/regseq-model/70-fnsig-and-cabi-lowering.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-68"
           ],

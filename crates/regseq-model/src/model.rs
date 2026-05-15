@@ -7,15 +7,18 @@ use serde::{Deserialize, Serialize};
 use crate::args_key::GenericArg;
 use crate::bridge_input::BridgeInput;
 use crate::build::BuildInfo;
+use crate::cabi::CAbiLowering;
+use crate::const_interner::ConstInterner;
 use crate::crate_info::{CrateInfo, StableCrateId};
 use crate::def_path::{DefPath, DefPathHash};
 use crate::domain_attr::DomainAttrTables;
+use crate::fn_sig::FnSig;
+use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
 use crate::index_vec::IndexVec;
 use crate::instance::{Instance, InstanceKind};
 use crate::placeholders::{
-    Body, CAbiLowering, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind, Item,
-    Linkage, PrincipalTraitKey, SyntheticItemKind,
+    Body, InlineHint, IntrinsicKind, Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
 };
 use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
@@ -353,8 +356,8 @@ impl RegseqModel {
             strings,
             source_files,
             types: TyInterner::new(),
-            consts: IndexVec::new(),
-            sigs: IndexVec::new(),
+            consts: ConstInterner::new(),
+            sigs: FnSigInterner::new(),
             items: IndexVec::new(),
             item_def_paths: IndexVec::new(),
             item_synthetic_kinds: IndexVec::new(),
@@ -558,7 +561,7 @@ impl RegseqModel {
     /// Returns the function signature for function instances.
     pub fn instance_fn_sig(&self, id: InstanceId) -> Option<&FnSig> {
         match self.instances[id].kind {
-            InstanceKind::Function { sig, .. } => Some(&self.sigs[sig]),
+            InstanceKind::Function { sig, .. } => Some(self.sigs.resolve(sig)),
             _ => None,
         }
     }
