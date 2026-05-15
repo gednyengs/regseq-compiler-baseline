@@ -2730,7 +2730,7 @@
           "id": "regseq-model-73",
           "name": "P1a-DS-08b: VTable-family + SyntheticItemKind + DefPath/Hash",
           "spec": ".harness/tasks/regseq-model/73-vtable-family-and-synthetic-keys.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-71"
           ],

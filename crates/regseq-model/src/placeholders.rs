@@ -6,12 +6,7 @@
 use serde::{Deserialize, Serialize};
 
 pub use crate::item::{InlineHint, Item, Linkage};
-pub use crate::synthetic::SyntheticItemKind;
-
-/// Forward-declared principal trait identity.
-// FORWARD: P1a-DS-08b
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct PrincipalTraitKey {}
+pub use crate::synthetic::{PrincipalTraitKey, SyntheticItemKind};
 
 /// Forward-declared intrinsic classification.
 // FORWARD: P1a-DS-09
@@ -38,7 +33,14 @@ mod tests {
 
     #[test]
     fn synthetic_item_kind_and_principal_key_construct() {
-        let principal = PrincipalTraitKey::default();
+        let principal = PrincipalTraitKey {
+            trait_path: crate::DefPathHash {
+                stable_crate_id: crate::StableCrateId(1),
+                local_hash: 2,
+            },
+            trait_args: crate::ArgsKey::EMPTY,
+            projection_bindings: crate::ProjectionBindingsKey(0),
+        };
         let kind = SyntheticItemKind::VTableType { principal };
         assert!(matches!(kind, SyntheticItemKind::VTableType { .. }));
     }

@@ -873,8 +873,17 @@ fn populated_model_round_trips_through_json() {
 #[test]
 fn vtables_are_skipped_during_json_round_trip() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA));
-    m.vtables
-        .insert(crate::PrincipalTraitKey::default(), ItemId::ZERO);
+    m.vtables.insert(
+        crate::PrincipalTraitKey {
+            trait_path: crate::DefPathHash {
+                stable_crate_id: StableCrateId(1),
+                local_hash: 2,
+            },
+            trait_args: crate::ArgsKey::EMPTY,
+            projection_bindings: crate::ProjectionBindingsKey(0),
+        },
+        ItemId::ZERO,
+    );
 
     let value = serde_json::to_value(&m).unwrap();
     assert!(value.get("vtables").is_none());

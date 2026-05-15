@@ -30,6 +30,7 @@ mod pretty;
 mod source;
 mod string_interner;
 mod synthetic;
+mod synthetic_def_path;
 mod target;
 mod ty;
 mod ty_interner;
@@ -67,11 +68,14 @@ pub use layout::{
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
-pub use placeholders::{Body, IntrinsicKind, PrincipalTraitKey};
+pub use placeholders::{Body, IntrinsicKind};
 pub use pretty::PrettyPrinter;
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
-pub use synthetic::{ClosureCallKind, SyntheticItemKind};
+pub use synthetic::{
+    ClosureCallKind, ContentHash, PrincipalTraitKey, ProjectionBindingsKey, SyntheticItemKind,
+};
+pub use synthetic_def_path::{synthetic_def_path_hash, synthetic_def_path_segments};
 pub use target::{default_scalar_layouts, Endian, ScalarLayouts, SizeAlign, TargetInfo};
 pub use ty::{
     AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Mutability, Provenance,

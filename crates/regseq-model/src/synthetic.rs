@@ -5,8 +5,41 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::args_key::ArgsKey;
 use crate::def_path::DefPathHash;
-use crate::placeholders::PrincipalTraitKey;
+
+/// Full identity for a trait object principal at the vtable boundary.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PrincipalTraitKey {
+    /// Rustc `DefPathHash` for the trait `DefId`.
+    ///
+    /// The trait declaration need not correspond to an `ItemId` in
+    /// `RegseqModel.items`; trait declarations are erased from the
+    /// source-level item alphabet.
+    pub trait_path: DefPathHash,
+    /// Canonical generic arguments to the trait itself.
+    pub trait_args: ArgsKey,
+    /// Named associated item equality payload for the trait object.
+    pub projection_bindings: ProjectionBindingsKey,
+}
+
+/// Stable 128-bit content fingerprint for projection bindings.
+///
+/// This is not a proof of equality. The model stores only the
+/// truncated hash, not the canonical projection-binding bytes, and
+/// treats truncated SHA-256 collision as outside the v1 threat model.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ProjectionBindingsKey(pub u128);
+
+/// Stable 128-bit content fingerprint for anonymous const memory.
+///
+/// This is not a proof of equality. The model stores only the
+/// truncated hash, not the canonical allocation bytes, and treats
+/// truncated SHA-256 collision as outside the v1 threat model.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(transparent)]
+pub struct ContentHash(pub u128);
 
 /// Source or synthesised item classification.
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -41,12 +74,45 @@ pub enum SyntheticItemKind {
 
     /// Bridge-synthesised vtable type item.
     ///
-    /// The full vtable family lands in the following task; this
-    /// placeholder variant remains so existing root-model tests keep
-    /// compiling until the complete key surface replaces it.
+    /// Identity is the full principal trait key and is independent of
+    /// the crate or site that first triggered synthesis.
     VTableType {
         /// Principal trait key for the vtable type.
         principal: PrincipalTraitKey,
+    },
+
+    /// Bridge-synthesised vtable instance static item.
+    VTableInstance {
+        /// Principal trait key for the vtable instance.
+        principal: PrincipalTraitKey,
+        /// Canonical self type key for the concrete implementation.
+        self_ty: ArgsKey,
+    },
+
+    /// Bridge-synthesised vtable method shim function item.
+    VTableMethodShim {
+        /// Principal trait key for the method shim.
+        principal: PrincipalTraitKey,
+        /// Canonical self type key for the concrete implementation.
+        self_ty: ArgsKey,
+        /// Slot index in rustc's `tcx.vtable_entries` sequence.
+        vtable_entry_index: u32,
+        /// Rustc `DefPathHash` of the source trait method.
+        method_def_path: DefPathHash,
+    },
+
+    /// Bridge-synthesised vtable drop-in-place shim function item.
+    VTableDropShim {
+        /// Principal trait key for the drop shim.
+        principal: PrincipalTraitKey,
+        /// Canonical self type key for the concrete implementation.
+        self_ty: ArgsKey,
+    },
+
+    /// Bridge-synthesised immutable static for anonymous const memory.
+    ConstMemoryStatic {
+        /// Canonical content fingerprint for the memory allocation.
+        content_hash: ContentHash,
     },
 }
 
@@ -70,11 +136,35 @@ mod tests {
     use super::*;
     use crate::crate_info::StableCrateId;
 
-    fn closure_hash() -> DefPathHash {
+    fn def_hash(stable_crate_id: u64, local_hash: u64) -> DefPathHash {
         DefPathHash {
-            stable_crate_id: StableCrateId(0xC105),
-            local_hash: 0xA11CE,
+            stable_crate_id: StableCrateId(stable_crate_id),
+            local_hash,
         }
+    }
+
+    fn closure_hash() -> DefPathHash {
+        def_hash(0xC105, 0xA11CE)
+    }
+
+    fn principal_with_path(local_hash: u64) -> PrincipalTraitKey {
+        PrincipalTraitKey {
+            trait_path: def_hash(0x711A17, local_hash),
+            trait_args: ArgsKey(0x1111_2222_3333_4444_5555_6666_7777_8888),
+            projection_bindings: ProjectionBindingsKey(0x9999_aaaa_bbbb_cccc_dddd_eeee_ffff_0000),
+        }
+    }
+
+    fn principal() -> PrincipalTraitKey {
+        principal_with_path(0x7A17)
+    }
+
+    fn self_ty() -> ArgsKey {
+        ArgsKey(0x1234_5678_9abc_def0_0102_0304_0506_0708)
+    }
+
+    fn content_hash(value: u128) -> ContentHash {
+        ContentHash(value)
     }
 
     fn hash_of<T: Hash>(value: &T) -> u64 {
@@ -238,5 +328,232 @@ mod tests {
         assert_eq!(rank(ClosureCallKind::Call), 0);
         assert_eq!(rank(ClosureCallKind::CallMut), 1);
         assert_eq!(rank(ClosureCallKind::CallOnce), 2);
+    }
+
+    #[test]
+    fn none_constructs_and_clones() {
+        let kind = SyntheticItemKind::None;
+        assert_eq!(kind.clone(), kind);
+    }
+
+    #[test]
+    fn vtable_type_uses_full_principal_identity() {
+        let first = SyntheticItemKind::VTableType {
+            principal: principal(),
+        };
+        let same = SyntheticItemKind::VTableType {
+            principal: principal(),
+        };
+        let different = SyntheticItemKind::VTableType {
+            principal: principal_with_path(0x7A18),
+        };
+
+        assert_eq!(first, same);
+        assert_ne!(first, different);
+    }
+
+    #[test]
+    fn vtable_instance_is_distinct_from_vtable_type() {
+        let principal = principal();
+        let ty = SyntheticItemKind::VTableType {
+            principal: principal.clone(),
+        };
+        let instance = SyntheticItemKind::VTableInstance {
+            principal,
+            self_ty: self_ty(),
+        };
+
+        assert_ne!(ty, instance);
+    }
+
+    #[test]
+    fn vtable_method_shim_identity_includes_entry_index() {
+        let first = SyntheticItemKind::VTableMethodShim {
+            principal: principal(),
+            self_ty: self_ty(),
+            vtable_entry_index: 4,
+            method_def_path: def_hash(0xCA11, 0xA),
+        };
+        let second = SyntheticItemKind::VTableMethodShim {
+            principal: principal(),
+            self_ty: self_ty(),
+            vtable_entry_index: 5,
+            method_def_path: def_hash(0xCA11, 0xA),
+        };
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn vtable_drop_shim_is_distinct_from_vtable_instance() {
+        let principal = principal();
+        let instance = SyntheticItemKind::VTableInstance {
+            principal: principal.clone(),
+            self_ty: self_ty(),
+        };
+        let drop_shim = SyntheticItemKind::VTableDropShim {
+            principal,
+            self_ty: self_ty(),
+        };
+
+        assert_ne!(drop_shim, instance);
+    }
+
+    #[test]
+    fn const_memory_static_identity_uses_content_hash() {
+        let first = SyntheticItemKind::ConstMemoryStatic {
+            content_hash: content_hash(0xdead_beef_dead_beef_dead_beef_dead_beef),
+        };
+        let second = SyntheticItemKind::ConstMemoryStatic {
+            content_hash: content_hash(0xdead_beef_dead_beef_dead_beef_dead_beee),
+        };
+
+        assert_ne!(first, second);
+    }
+
+    #[test]
+    fn all_synthetic_item_kind_variants_are_pairwise_distinct() {
+        let principal = principal();
+        let variants = [
+            SyntheticItemKind::None,
+            SyntheticItemKind::ClosureCaptures {
+                closure: closure_hash(),
+            },
+            SyntheticItemKind::ClosureCall {
+                closure: closure_hash(),
+                call_kind: ClosureCallKind::Call,
+            },
+            SyntheticItemKind::ClosureDropGlue {
+                closure: closure_hash(),
+            },
+            SyntheticItemKind::VTableType {
+                principal: principal.clone(),
+            },
+            SyntheticItemKind::VTableInstance {
+                principal: principal.clone(),
+                self_ty: self_ty(),
+            },
+            SyntheticItemKind::VTableMethodShim {
+                principal: principal.clone(),
+                self_ty: self_ty(),
+                vtable_entry_index: 4,
+                method_def_path: def_hash(0xCA11, 0xA),
+            },
+            SyntheticItemKind::VTableDropShim {
+                principal,
+                self_ty: self_ty(),
+            },
+            SyntheticItemKind::ConstMemoryStatic {
+                content_hash: content_hash(0xCAFE),
+            },
+        ];
+
+        for (idx, left) in variants.iter().enumerate() {
+            for right in variants.iter().skip(idx + 1) {
+                assert_ne!(left, right);
+            }
+        }
+    }
+
+    #[test]
+    fn principal_trait_key_equality_and_hash_use_all_fields() {
+        let base = principal();
+        let same = principal();
+        assert_eq!(base, same);
+        assert_eq!(hash_of(&base), hash_of(&same));
+
+        let different_path = principal_with_path(0x7A18);
+        let different_args = PrincipalTraitKey {
+            trait_args: ArgsKey(1),
+            ..principal()
+        };
+        let different_bindings = PrincipalTraitKey {
+            projection_bindings: ProjectionBindingsKey(1),
+            ..principal()
+        };
+
+        assert_ne!(base, different_path);
+        assert_ne!(base, different_args);
+        assert_ne!(base, different_bindings);
+    }
+
+    #[test]
+    fn projection_bindings_key_round_trips_raw_value() {
+        let key = ProjectionBindingsKey(0x1234);
+        assert_eq!(key.0, 0x1234);
+        assert_eq!(key.clone(), key);
+    }
+
+    #[test]
+    fn content_hash_round_trips_raw_value() {
+        let hash = ContentHash(0x5678);
+        assert_eq!(hash.0, 0x5678);
+        assert_eq!(hash.clone(), hash);
+    }
+
+    #[test]
+    fn every_synthetic_item_kind_variant_round_trips_through_serde() {
+        let principal = principal();
+        let variants = [
+            SyntheticItemKind::None,
+            SyntheticItemKind::ClosureCaptures {
+                closure: closure_hash(),
+            },
+            SyntheticItemKind::ClosureCall {
+                closure: closure_hash(),
+                call_kind: ClosureCallKind::CallMut,
+            },
+            SyntheticItemKind::ClosureDropGlue {
+                closure: closure_hash(),
+            },
+            SyntheticItemKind::VTableType {
+                principal: principal.clone(),
+            },
+            SyntheticItemKind::VTableInstance {
+                principal: principal.clone(),
+                self_ty: self_ty(),
+            },
+            SyntheticItemKind::VTableMethodShim {
+                principal: principal.clone(),
+                self_ty: self_ty(),
+                vtable_entry_index: 4,
+                method_def_path: def_hash(0xCA11, 0xA),
+            },
+            SyntheticItemKind::VTableDropShim {
+                principal,
+                self_ty: self_ty(),
+            },
+            SyntheticItemKind::ConstMemoryStatic {
+                content_hash: content_hash(0xCAFE),
+            },
+        ];
+
+        for variant in variants {
+            let json = serde_json::to_string(&variant).unwrap();
+            assert_eq!(
+                serde_json::from_str::<SyntheticItemKind>(&json).unwrap(),
+                variant
+            );
+        }
+    }
+
+    #[test]
+    fn synthetic_key_types_round_trip_through_serde() {
+        let key = principal();
+        let bindings = ProjectionBindingsKey(0x42);
+        let content = ContentHash(0x43);
+
+        let json = serde_json::to_string(&key).unwrap();
+        assert_eq!(
+            serde_json::from_str::<PrincipalTraitKey>(&json).unwrap(),
+            key
+        );
+        let json = serde_json::to_string(&bindings).unwrap();
+        assert_eq!(
+            serde_json::from_str::<ProjectionBindingsKey>(&json).unwrap(),
+            bindings
+        );
+        let json = serde_json::to_string(&content).unwrap();
+        assert_eq!(serde_json::from_str::<ContentHash>(&json).unwrap(), content);
     }
 }
