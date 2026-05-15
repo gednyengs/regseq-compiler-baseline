@@ -19,8 +19,8 @@ use crate::placeholders::{
 use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
-use crate::target::{default_scalar_layouts, Endian, TargetInfo};
-use crate::ty::TyInterner;
+use crate::target::{default_scalar_layouts, Endian, SizeAlign, TargetInfo};
+use crate::ty::{FloatKind, IntKind, Ty, TyInterner, UintKind};
 
 /// The owned root struct returned by the bridge for one rustc
 /// compilation.
@@ -468,6 +468,81 @@ impl RegseqModel {
         todo!("P1a-DS-04 and P1a-DS-07 add find_nominal and Item.is_unsafe_cell")
     }
 
+    /// Returns the ABI size and alignment for a sized type.
+    ///
+    /// Panics if `ty` resolves to a bare unsized marker (`Str`,
+    /// `Slice`, or `Dynamic`), if a closure's parallel capture
+    /// struct is absent, if array stride arithmetic overflows, or if
+    /// an array size exceeds the target pointer-width `usize::MAX`.
+    pub fn size_align_of(&self, ty: TyId) -> SizeAlign {
+        match &self.types[ty] {
+            Ty::Struct { layout, .. }
+            | Ty::Enum { layout, .. }
+            | Ty::Union { layout, .. }
+            | Ty::Tuple { layout, .. } => SizeAlign {
+                size: layout.size,
+                align: layout.align,
+            },
+            Ty::Array(elem, len) => {
+                let elem_layout = self.size_align_of(*elem);
+                let stride = round_up_to_multiple(elem_layout.size, elem_layout.align);
+                let size = stride
+                    .checked_mul(*len)
+                    .expect("array layout size overflows u64");
+                let max_usize = target_usize_max(self.target.pointer_width);
+                assert!(
+                    size <= max_usize,
+                    "array layout size exceeds target usize::MAX"
+                );
+                SizeAlign {
+                    size,
+                    align: elem_layout.align,
+                }
+            }
+            Ty::Ref(pointee, _) | Ty::Ptr(pointee, _) => {
+                if self.is_unsized_marker(*pointee) {
+                    SizeAlign {
+                        size: self
+                            .target
+                            .scalar_layouts
+                            .data_ptr
+                            .size
+                            .checked_mul(2)
+                            .expect("fat pointer size overflows u64"),
+                        align: self.target.scalar_layouts.data_ptr.align,
+                    }
+                } else {
+                    self.target.scalar_layouts.data_ptr
+                }
+            }
+            Ty::FnPtr(_) => self.target.scalar_layouts.fn_ptr,
+            Ty::FnDef(_, _) | Ty::Never => SizeAlign { size: 0, align: 1 },
+            Ty::Closure(item, args) => self
+                .types
+                .iter()
+                .find_map(|candidate| match candidate {
+                    Ty::Struct {
+                        item: struct_item,
+                        args: struct_args,
+                        layout,
+                    } if struct_item == item && struct_args == args => Some(SizeAlign {
+                        size: layout.size,
+                        align: layout.align,
+                    }),
+                    _ => None,
+                })
+                .expect("closure capture struct layout not found"),
+            Ty::Bool => self.target.scalar_layouts.bool_,
+            Ty::Char => self.target.scalar_layouts.char_,
+            Ty::Int(kind) => self.target.scalar_layouts.int[int_kind_index(*kind)],
+            Ty::Uint(kind) => self.target.scalar_layouts.uint[uint_kind_index(*kind)],
+            Ty::Float(kind) => self.target.scalar_layouts.float[float_kind_index(*kind)],
+            Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. } => {
+                panic!("unsized marker queried directly")
+            }
+        }
+    }
+
     /// Returns whether an instance's item is `ManuallyDrop`.
     pub fn instance_is_manually_drop(&self, _id: InstanceId) -> bool {
         todo!("P1a-DS-07 adds Item.is_manually_drop")
@@ -652,5 +727,42 @@ impl RegseqModel {
             });
         }
         Ok(())
+    }
+
+    fn is_unsized_marker(&self, ty: TyId) -> bool {
+        matches!(self.types[ty], Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. })
+    }
+}
+
+fn int_kind_index(kind: IntKind) -> usize {
+    kind as usize
+}
+
+fn uint_kind_index(kind: UintKind) -> usize {
+    kind as usize
+}
+
+fn float_kind_index(kind: FloatKind) -> usize {
+    kind as usize
+}
+
+fn round_up_to_multiple(value: u64, boundary: u64) -> u64 {
+    assert!(boundary != 0, "array element alignment must be nonzero");
+    let remainder = value % boundary;
+    if remainder == 0 {
+        value
+    } else {
+        value
+            .checked_add(boundary - remainder)
+            .expect("array stride overflows u64")
+    }
+}
+
+fn target_usize_max(pointer_width: u8) -> u64 {
+    assert!(pointer_width <= 64, "target pointer width exceeds 64 bits");
+    if pointer_width == 64 {
+        u64::MAX
+    } else {
+        (1u64 << pointer_width) - 1
     }
 }

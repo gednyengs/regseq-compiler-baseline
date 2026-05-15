@@ -10,6 +10,7 @@ use serde::{Deserialize, Serialize};
 use crate::ids::{FnSigId, ItemId, TyId};
 use crate::index_vec::IndexVec;
 use crate::instance::GenericArgs;
+use crate::layout::Layout;
 
 /// Number of signed integer primitive kinds.
 pub const INT_KIND_COUNT: usize = 6;
@@ -217,24 +218,6 @@ pub enum FnAbi {
 
 impl_closed_u8_enum!(FnAbi, Rust = 0, C = 1);
 
-/// Forward-declared layout placeholder for P1a-DS-03.
-///
-/// The real `Layout` schema lands with the layout task. This
-/// placeholder exists only so the closed `Ty` shape can carry a
-/// layout value today and so full-value equality can observe layout
-/// differences in tests for `Ty`.
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Layout {
-    marker: u64,
-}
-
-impl Layout {
-    #[cfg(test)]
-    fn test_marker(marker: u64) -> Self {
-        Self { marker }
-    }
-}
-
 /// Closed post-monomorphization type vocabulary.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum Ty {
@@ -336,6 +319,7 @@ pub type TyInterner = IndexVec<TyId, Ty>;
 mod tests {
     use super::*;
     use crate::ids::{ConstId, FnSigId, ItemId, TyId};
+    use crate::layout::LayoutKind;
     use crate::model::RegseqModel;
 
     use std::collections::hash_map::DefaultHasher;
@@ -354,7 +338,13 @@ mod tests {
     }
 
     fn layout(value: u64) -> Layout {
-        Layout::test_marker(value)
+        Layout {
+            size: value,
+            align: 1,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Struct { fields: vec![] },
+        }
     }
 
     fn args() -> GenericArgs {
@@ -706,7 +696,7 @@ mod tests {
     }
 
     #[test]
-    fn layout_placeholder_round_trips() {
+    fn layout_round_trips() {
         let value = layout(42);
         let json = serde_json::to_string(&value).unwrap();
         assert_eq!(serde_json::from_str::<Layout>(&json).unwrap(), value);

@@ -2591,7 +2591,7 @@
           "id": "regseq-model-67",
           "name": "P1a-DS-03: Layout",
           "spec": ".harness/tasks/regseq-model/67-layout.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-66"
           ],

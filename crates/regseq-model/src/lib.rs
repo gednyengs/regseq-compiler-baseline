@@ -15,6 +15,7 @@ mod ids;
 mod idx;
 mod index_vec;
 mod instance;
+mod layout;
 mod model;
 mod placeholders;
 mod pretty;
@@ -40,6 +41,10 @@ pub use instance::{
     regseq_instance_kind_rank, rustc_instance_kind_sort_rank, GenericArg, GenericArgs, Instance,
     InstanceKind, RustcInstanceKindTag,
 };
+pub use layout::{
+    EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
+    VariantRange, WrappingRange, UNIT_LAYOUT,
+};
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
 pub use placeholders::{
     Body, CAbiLowering, Const, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind,
@@ -50,9 +55,8 @@ pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
 pub use target::{default_scalar_layouts, Endian, ScalarLayouts, SizeAlign, TargetInfo};
 pub use ty::{
-    AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Layout, Mutability,
-    Provenance, Safety, Ty, TyInterner, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT,
-    UINT_KIND_COUNT,
+    AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Mutability, Provenance,
+    Safety, Ty, TyInterner, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,
 };
 
 const _: () = assert!(core::mem::size_of::<CrateId>() == 4);
