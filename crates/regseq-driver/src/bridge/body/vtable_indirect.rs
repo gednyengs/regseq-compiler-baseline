@@ -57,7 +57,7 @@ fn rewrite_vtable_indirect_in_model(
             fields: Vec::new(),
             layout: UNIT_LAYOUT,
         });
-        let data_ty = model.types.intern(Ty::Ptr(unit, Mutability::Mut));
+        let data_ty = model.types.intern(Ty::Ptr(unit, data_mutability));
         let data = body.push_synthetic_local(data_ty);
         let raw = if needs_raw {
             Some(

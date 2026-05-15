@@ -1,7 +1,7 @@
 //! Place validation for body content.
 
 use crate::body::Body;
-use crate::ids::{BlockId, InstanceId, LocalId, TyId};
+use crate::ids::{BlockId, LocalId, TyId};
 use crate::layout::{EnumShape, FieldLayout, LayoutKind, VariantLayout};
 use crate::model::RegseqModel;
 use crate::operand::Operand;
@@ -120,13 +120,6 @@ pub enum PlaceValidationErrorKind {
         actual: u32,
         /// Exclusive upper bound for valid variant indices.
         max: u32,
-    },
-    /// A direct call target does not resolve in `RegseqModel.instances`.
-    DirectCalleeOutOfRange {
-        /// Offending instance.
-        instance: InstanceId,
-        /// Length of `RegseqModel.instances`.
-        instances_len: usize,
     },
 }
 
@@ -300,18 +293,10 @@ fn validate_call_callee(
     location: PlaceLocation,
 ) -> Result<(), PlaceValidationError> {
     match callee {
-        CallCallee::Direct(instance) => {
-            if instance.index() >= model.instances.len() {
-                return Err(error(
-                    location,
-                    PlaceValidationErrorKind::DirectCalleeOutOfRange {
-                        instance: *instance,
-                        instances_len: model.instances.len(),
-                    },
-                ));
-            }
-            Ok(())
-        }
+        // Direct callee identifier bounds are owned by the
+        // model-side terminator invariant walk (spec section 23.6
+        // B-9), not the section 19.7 place walk.
+        CallCallee::Direct(_) => Ok(()),
         CallCallee::Indirect(operand) => validate_operand(model, body, operand, location),
     }
 }

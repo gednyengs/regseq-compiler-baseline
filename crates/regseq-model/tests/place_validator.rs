@@ -981,17 +981,14 @@ fn joint_validator_rejects_dangling_direct_call_instance() {
         .validate(&BridgeInput::matching(&failing.model))
         .unwrap_err();
     match err {
-        InvariantViolation::PlaceWalk {
-            instance: actual,
-            error,
+        InvariantViolation::DirectCalleeOutOfRange {
+            owner: actual_owner,
+            callee,
+            ..
         } => {
-            assert_eq!(actual, owner);
-            assert!(matches!(
-                error.kind,
-                PlaceValidationErrorKind::DirectCalleeOutOfRange { instance, .. }
-                    if instance == regseq_model::InstanceId::from_u32(99)
-            ));
+            assert_eq!(actual_owner, owner);
+            assert_eq!(callee, regseq_model::InstanceId::from_u32(99));
         }
-        other => panic!("expected PlaceWalk, got {other:?}"),
+        other => panic!("expected DirectCalleeOutOfRange, got {other:?}"),
     }
 }

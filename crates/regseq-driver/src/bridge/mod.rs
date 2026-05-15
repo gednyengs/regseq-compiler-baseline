@@ -101,6 +101,22 @@ impl<'tcx> BridgeCtxt<'tcx> {
     }
 }
 
+/// Position within an `extern "C"` function signature where an
+/// unsupported type was encountered. Spec section 14.5 treats Input,
+/// Output, and Field-of-aggregate admissibility separately, so the
+/// diagnostic must report which kind of position triggered the
+/// rejection.
+#[derive(Clone, Debug, PartialEq, Eq, Hash)]
+pub enum CAbiTypePosition {
+    /// Argument at the given positional index.
+    Input(usize),
+    /// Return type position.
+    Output,
+    /// Field of an aggregate that was being inspected for
+    /// field-position admissibility.
+    Field,
+}
+
 /// Errors returnable from the bridge.
 #[derive(Debug, Error)]
 pub enum BridgeError {
@@ -195,10 +211,14 @@ pub enum BridgeError {
         input_idx: usize,
     },
     /// A type has no v1 C ABI lowering at an extern C boundary.
-    #[error("unsupported C ABI type: {ty_repr}")]
+    #[error("unsupported C ABI type at {position:?}: {ty_repr}")]
     UnsupportedCAbiType {
         /// Rendered model type.
         ty_repr: String,
+        /// Where the offending type was encountered (spec section
+        /// 14.5 surfaces Input / Output / Field admissibility
+        /// separately, so the diagnostic must carry the position).
+        position: CAbiTypePosition,
     },
     /// A const shape is outside the current bridge task's translation surface.
     #[error("unsupported const: {const_repr}")]

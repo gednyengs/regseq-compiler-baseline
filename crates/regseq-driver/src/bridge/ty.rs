@@ -388,8 +388,12 @@ fn translate_ptr_mutability(mutability: rustc_ast::Mutability) -> Mutability {
 }
 
 fn translate_abi(abi: rustc_abi::ExternAbi) -> Result<FnAbi, BridgeError> {
+    // Spec section 14.2: `RustCall` is admissible only on rewritten
+    // synthesized closure calls, not on fn-pointer ABI. fnsig.rs
+    // already rejects it; mirror that here so the two ABI maps
+    // agree.
     match abi {
-        rustc_abi::ExternAbi::Rust | rustc_abi::ExternAbi::RustCall => Ok(FnAbi::Rust),
+        rustc_abi::ExternAbi::Rust => Ok(FnAbi::Rust),
         rustc_abi::ExternAbi::C { unwind: false } => Ok(FnAbi::C),
         _ => Err(BridgeError::UnsupportedTy {
             ty_repr: format!("extern ABI {abi:?}"),

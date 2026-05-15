@@ -97,8 +97,17 @@ fn translate_safety(safety: rustc_hir::Safety) -> Safety {
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 enum PositionKind {
-    Input,
+    Input(usize),
     Output,
+}
+
+impl PositionKind {
+    fn to_public(self) -> crate::bridge::CAbiTypePosition {
+        match self {
+            PositionKind::Input(idx) => crate::bridge::CAbiTypePosition::Input(idx),
+            PositionKind::Output => crate::bridge::CAbiTypePosition::Output,
+        }
+    }
 }
 
 struct CAbiChecker<'a, 'tcx> {
@@ -128,7 +137,8 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             inputs: sig
                 .inputs
                 .iter()
-                .map(|input| self.position_shape(*input, PositionKind::Input))
+                .enumerate()
+                .map(|(idx, input)| self.position_shape(*input, PositionKind::Input(idx)))
                 .collect::<Result<Vec<_>, _>>()?,
             output: self.position_shape(sig.output, PositionKind::Output)?,
         })
@@ -160,16 +170,16 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             }
             Ty::Ptr(pointee, _) | Ty::Ref(pointee, _) => {
                 if self.is_c_boundary_bad_pointee(pointee) {
-                    return self.unsupported(ty_id);
+                    return self.unsupported(ty_id, position.to_public());
                 }
                 CAbiShape::Direct
             }
             Ty::FnPtr(sig_id) => {
-                self.check_nested_sig(sig_id)?;
+                self.check_nested_sig(sig_id, position.to_public())?;
                 CAbiShape::Direct
             }
             Ty::Struct { item, layout, .. } if self.is_transparent(item) => {
-                self.transparent_shape(&layout_field_tys(&layout))?
+                self.transparent_shape(&layout_field_tys(&layout), position)?
             }
             Ty::Enum { item, .. } if self.is_fieldless_repr_int_enum(item) => {
                 self.tag_scalar_shape(item).unwrap_or(CAbiShape::Direct)
@@ -188,7 +198,7 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
                 }
                 CAbiShape::Direct
             }
-            _ => return self.unsupported(ty_id),
+            _ => return self.unsupported(ty_id, position.to_public()),
         })
     }
 
@@ -199,18 +209,24 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         let admissible = match self.cx.model.types.resolve(ty_id).clone() {
             Ty::Bool | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) => Ok(()),
             Ty::Ptr(pointee, _) | Ty::Ref(pointee, _)
-                if !self.is_c_boundary_bad_pointee(pointee) =>
+                if !self.is_c_field_bad_pointee(pointee) =>
             {
                 Ok(())
             }
-            Ty::FnPtr(sig_id) => self.check_nested_sig(sig_id),
+            Ty::FnPtr(sig_id) => {
+                // FnPtr appearing as a field: the outer "FnPtr is
+                // not C ABI" diagnostic carries Field position; the
+                // nested sig's own inputs/outputs are surfaced with
+                // their own positions if they themselves are bad.
+                self.check_nested_sig(sig_id, crate::bridge::CAbiTypePosition::Field)
+            }
             Ty::Array(elem, _) => self.field_admissible(elem),
             Ty::Tuple { fields, .. } if fields.is_empty() => Ok(()),
             Ty::Struct { item, layout, .. } if self.cx.model.items[item].is_phantom_data => {
                 if layout.size == 0 && layout.align == 1 {
                     Ok(())
                 } else {
-                    Err(self.unsupported_error(ty_id))
+                    Err(self.unsupported_error(ty_id, crate::bridge::CAbiTypePosition::Field))
                 }
             }
             Ty::Struct { item, layout, .. } if self.is_transparent(item) => {
@@ -239,13 +255,17 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
                 }
                 Ok(())
             }
-            _ => Err(self.unsupported_error(ty_id)),
+            _ => Err(self.unsupported_error(ty_id, crate::bridge::CAbiTypePosition::Field)),
         };
         self.visiting_field.remove(&ty_id);
         admissible
     }
 
-    fn check_nested_sig(&mut self, sig_id: FnSigId) -> Result<(), BridgeError> {
+    fn check_nested_sig(
+        &mut self,
+        sig_id: FnSigId,
+        caller_position: crate::bridge::CAbiTypePosition,
+    ) -> Result<(), BridgeError> {
         if !self.visiting_sig.insert(sig_id) {
             return Ok(());
         }
@@ -254,11 +274,12 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             self.visiting_sig.remove(&sig_id);
             return Err(BridgeError::UnsupportedCAbiType {
                 ty_repr: format!("FnPtr({})", sig_id.as_u32()),
+                position: caller_position,
             });
         }
         let mut inputs = Vec::with_capacity(sig.inputs.len());
-        for input in sig.inputs.iter().copied() {
-            inputs.push(self.position_shape(input, PositionKind::Input)?);
+        for (idx, input) in sig.inputs.iter().copied().enumerate() {
+            inputs.push(self.position_shape(input, PositionKind::Input(idx))?);
         }
         let output = self.position_shape(sig.output, PositionKind::Output)?;
         ensure_cabi_lowering_slots(self.cx);
@@ -267,7 +288,11 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         Ok(())
     }
 
-    fn transparent_shape(&mut self, fields: &[TyId]) -> Result<CAbiShape, BridgeError> {
+    fn transparent_shape(
+        &mut self,
+        fields: &[TyId],
+        outer_position: PositionKind,
+    ) -> Result<CAbiShape, BridgeError> {
         let inner = fields
             .iter()
             .copied()
@@ -276,7 +301,7 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         let Some(inner) = inner else {
             return Ok(CAbiShape::Direct);
         };
-        Ok(match self.position_shape(inner, PositionKind::Input)? {
+        Ok(match self.position_shape(inner, outer_position)? {
             CAbiShape::Direct => CAbiShape::Substituted {
                 emit_as: inner,
                 reason: SubstReason::TransparentChain,
@@ -352,6 +377,18 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         )
     }
 
+    /// Field-position pointee admissibility. Diverges from the
+    /// boundary rule in spec section 14.5: pointer/reference fields
+    /// admit any *sized* pointee, including `Never` (which is sized
+    /// even though uninhabited). Only unsized pointees (`Str`,
+    /// `Slice`, `Dynamic`) remain inadmissible at field position.
+    fn is_c_field_bad_pointee(&self, ty_id: TyId) -> bool {
+        matches!(
+            self.cx.model.types.resolve(ty_id),
+            Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. }
+        )
+    }
+
     fn is_zst(&self, ty_id: TyId) -> bool {
         match self.cx.model.types.resolve(ty_id) {
             Ty::Tuple { fields, layout } => fields.is_empty() && layout.size == 0,
@@ -362,13 +399,22 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         }
     }
 
-    fn unsupported<T>(&self, ty_id: TyId) -> Result<T, BridgeError> {
-        Err(self.unsupported_error(ty_id))
+    fn unsupported<T>(
+        &self,
+        ty_id: TyId,
+        position: crate::bridge::CAbiTypePosition,
+    ) -> Result<T, BridgeError> {
+        Err(self.unsupported_error(ty_id, position))
     }
 
-    fn unsupported_error(&self, ty_id: TyId) -> BridgeError {
+    fn unsupported_error(
+        &self,
+        ty_id: TyId,
+        position: crate::bridge::CAbiTypePosition,
+    ) -> BridgeError {
         BridgeError::UnsupportedCAbiType {
             ty_repr: format!("{:?}", self.cx.model.types.resolve(ty_id)),
+            position,
         }
     }
 }

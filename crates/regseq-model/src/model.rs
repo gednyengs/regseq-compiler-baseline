@@ -19,14 +19,17 @@ use crate::domain_attr::DomainAttrTables;
 use crate::domain_attr::IntrinsicKind;
 use crate::fn_sig::FnSig;
 use crate::fn_sig_interner::FnSigInterner;
-use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
+use crate::ids::{
+    BlockId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
+};
+use crate::terminator::{CallCallee, TerminatorKind};
 use crate::index_vec::IndexVec;
 use crate::instance::{
     regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
     RegseqInstanceKey,
 };
 use crate::instance_ref::InstanceRef;
-use crate::item::{InlineHint, Item, Linkage};
+use crate::item::{InlineHint, Item, ItemKind, Linkage};
 use crate::layout::{EnumShape, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout};
 use crate::place_validator::{validate_body_places, PlaceValidationError};
 use crate::pretty::PrettyPrinter;
@@ -34,7 +37,7 @@ use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
 use crate::synthetic::{PrincipalTraitKey, SyntheticItemKind};
 use crate::target::{default_scalar_layouts, Endian, SizeAlign, TargetInfo};
-use crate::ty::{FloatKind, IntKind, Ty, UintKind};
+use crate::ty::{FloatKind, IntKind, Mutability, Ty, UintKind};
 use crate::ty_interner::{TyIdentityKey, TyInterner};
 
 /// The owned root struct returned by the bridge for one rustc
@@ -277,12 +280,58 @@ pub enum InvariantViolation {
         reason: &'static str,
     },
 
+    /// `StringInterner` sentinel violated -- the spec mandates
+    /// `StringId(0) == ""` and a non-empty table (spec section 4 /
+    /// section 12 Phase B step 1).
+    StringInternerSentinelInvalid {
+        /// Brief reason describing which sentinel rule was violated.
+        reason: &'static str,
+    },
+
+    /// `StringInterner` rebuild found two entries with the same
+    /// string content (spec section 12 Phase B step 1 "content
+    /// uniqueness").
+    DuplicateString {
+        /// First `StringId` carrying the duplicate content.
+        first: StringId,
+        /// Second `StringId` carrying the duplicate content.
+        second: StringId,
+    },
+
     /// A function body's place walk found a malformed place.
     PlaceWalk {
         /// Function instance whose body contains the invalid place.
         instance: InstanceId,
         /// First place-validation failure in that body.
         error: PlaceValidationError,
+    },
+
+    /// A `SyntheticItemKind` payload does not match the shape its
+    /// owning `ItemKind` advertises (spec section 13: e.g.
+    /// `VTableType` must own a `Struct` Item; `VTableInstance` must
+    /// own a `Static { mutability: Not }` Item).
+    SyntheticKindItemKindMismatch {
+        /// Offending item.
+        item: ItemId,
+        /// Synthetic kind that drove the consistency check.
+        synthetic_kind: SyntheticItemKind,
+        /// Actual item kind that violated the consistency rule.
+        item_kind: ItemKind,
+    },
+
+    /// A `CallCallee::Direct` references an `InstanceId` outside
+    /// `RegseqModel.instances` (terminator invariant B-9, spec
+    /// section 23.6).
+    DirectCalleeOutOfRange {
+        /// Function instance whose body contains the unresolved
+        /// direct call.
+        owner: InstanceId,
+        /// Block containing the unresolved direct call.
+        block: BlockId,
+        /// Unresolved callee identifier.
+        callee: InstanceId,
+        /// Length of `RegseqModel.instances` at validation time.
+        instances_len: usize,
     },
 }
 
@@ -525,6 +574,7 @@ impl RegseqModel {
     /// Validates construction invariants enforceable at this phase.
     pub fn validate(&mut self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
         self.validate_synthesized_sentinel()?;
+        self.validate_string_interner()?;
 
         if self.primary_crate.index() >= self.crates.len() {
             return Err(InvariantViolation::PrimaryCrateOutOfRange {
@@ -580,12 +630,14 @@ impl RegseqModel {
             self.validate_span(instance.span, INSTANCE_SPAN_FILE)?;
             if let InstanceKind::Function(data) = &instance.kind {
                 if let Some(body) = data.body.as_ref() {
+                    let owner = InstanceId::from_u32(idx as u32);
                     validate_body_places(self, body).map_err(|error| {
                         InvariantViolation::PlaceWalk {
-                            instance: InstanceId::from_u32(idx as u32),
+                            instance: owner,
                             error,
                         }
                     })?;
+                    self.validate_body_direct_callees(owner, body)?;
                 }
             }
         }
@@ -1111,19 +1163,107 @@ impl RegseqModel {
         }
     }
 
+    /// Spec section 12 Phase B step 1: the `StringInterner` table is
+    /// non-empty, `StringId(0)` holds the empty string sentinel, and
+    /// every string is content-unique. Construction-time interning
+    /// already guarantees uniqueness, but the spec requires the
+    /// validator to re-verify the rebuild against the serialised
+    /// table.
+    fn validate_string_interner(&self) -> Result<(), InvariantViolation> {
+        if self.strings.is_empty() {
+            return Err(InvariantViolation::StringInternerSentinelInvalid {
+                reason: "StringInterner table is empty; spec mandates StringId(0) sentinel",
+            });
+        }
+        if self.strings.resolve(StringId::from_u32(0)) != "" {
+            return Err(InvariantViolation::StringInternerSentinelInvalid {
+                reason: "StringId(0) does not resolve to the empty string",
+            });
+        }
+        let mut seen: HashMap<&str, StringId> = HashMap::with_capacity(self.strings.len());
+        for (id, value) in self.strings.iter() {
+            if let Some(first) = seen.insert(value, id) {
+                return Err(InvariantViolation::DuplicateString {
+                    first,
+                    second: id,
+                });
+            }
+        }
+        Ok(())
+    }
+
     fn validate_synthetic_kinds(&self) -> Result<(), InvariantViolation> {
-        for kind in self.item_synthetic_kinds.iter() {
-            match kind {
-                SyntheticItemKind::None
-                | SyntheticItemKind::ClosureCaptures { .. }
-                | SyntheticItemKind::ClosureCall { .. }
+        for (idx, kind) in self.item_synthetic_kinds.iter().enumerate() {
+            let item_id = ItemId::from_u32(idx as u32);
+            let item_kind = &self.items[item_id].kind;
+            let consistent = match kind {
+                // Source-derived items are unconstrained at this
+                // check; their ItemKind reflects the source ADT or
+                // callable shape.
+                SyntheticItemKind::None => true,
+                // Closure captures are a synthesised struct.
+                SyntheticItemKind::ClosureCaptures { .. } => {
+                    matches!(item_kind, ItemKind::Struct)
+                }
+                // Closure call / drop-glue / drop-glue-for-concrete
+                // / vtable method shim / vtable drop shim are all
+                // synthesised functions.
+                SyntheticItemKind::ClosureCall { .. }
                 | SyntheticItemKind::ClosureDropGlue { .. }
                 | SyntheticItemKind::DropGlue { .. }
-                | SyntheticItemKind::VTableType { .. }
-                | SyntheticItemKind::VTableInstance { .. }
                 | SyntheticItemKind::VTableMethodShim { .. }
-                | SyntheticItemKind::VTableDropShim { .. }
-                | SyntheticItemKind::ConstMemoryStatic { .. } => {}
+                | SyntheticItemKind::VTableDropShim { .. } => {
+                    matches!(item_kind, ItemKind::Function)
+                }
+                // VTable type is a synthesised struct.
+                SyntheticItemKind::VTableType { .. } => {
+                    matches!(item_kind, ItemKind::Struct)
+                }
+                // VTable instance and anonymous const-memory both
+                // back immutable statics.
+                SyntheticItemKind::VTableInstance { .. }
+                | SyntheticItemKind::ConstMemoryStatic { .. } => matches!(
+                    item_kind,
+                    ItemKind::Static {
+                        mutability: Mutability::Not,
+                    }
+                ),
+            };
+            if !consistent {
+                return Err(InvariantViolation::SyntheticKindItemKindMismatch {
+                    item: item_id,
+                    synthetic_kind: kind.clone(),
+                    item_kind: item_kind.clone(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    /// Terminator invariant B-9 (spec section 23.6): every
+    /// `CallCallee::Direct(InstanceId)` resolves in
+    /// `RegseqModel.instances`. Bounds-only at this phase; type
+    /// invariants B-3 / B-4 / B-6 are validated separately when
+    /// statement and terminator type invariants land.
+    fn validate_body_direct_callees(
+        &self,
+        owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        for (block_idx, block) in body.basic_blocks.iter().enumerate() {
+            if let TerminatorKind::Call {
+                callee: CallCallee::Direct(callee),
+                ..
+            } = &block.terminator.kind
+            {
+                if callee.index() >= self.instances.len() {
+                    return Err(InvariantViolation::DirectCalleeOutOfRange {
+                        owner,
+                        block: BlockId::from_u32(block_idx as u32),
+                        callee: *callee,
+                        instances_len: self.instances.len(),
+                    });
+                }
             }
         }
         Ok(())
