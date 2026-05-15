@@ -2802,7 +2802,7 @@
           "id": "regseq-model-76",
           "name": "P1a-DS-11: Place + PlaceElem + structural invariants",
           "spec": ".harness/tasks/regseq-model/76-place-and-projection.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-66",
             "regseq-model-67"
