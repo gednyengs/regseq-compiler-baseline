@@ -4,6 +4,7 @@ use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::args_key::GenericArg;
 use crate::bridge_input::BridgeInput;
 use crate::build::BuildInfo;
 use crate::crate_info::{CrateInfo, StableCrateId};
@@ -11,7 +12,7 @@ use crate::def_path::{DefPath, DefPathHash};
 use crate::domain_attr::DomainAttrTables;
 use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
 use crate::index_vec::IndexVec;
-use crate::instance::{GenericArg, Instance, InstanceKind};
+use crate::instance::{Instance, InstanceKind};
 use crate::placeholders::{
     Body, CAbiLowering, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind, Item,
     Linkage, PrincipalTraitKey, SyntheticItemKind,
@@ -20,7 +21,8 @@ use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
 use crate::target::{default_scalar_layouts, Endian, SizeAlign, TargetInfo};
-use crate::ty::{FloatKind, IntKind, Ty, TyInterner, UintKind};
+use crate::ty::{FloatKind, IntKind, Ty, UintKind};
+use crate::ty_interner::TyInterner;
 
 /// The owned root struct returned by the bridge for one rustc
 /// compilation.
@@ -350,7 +352,7 @@ impl RegseqModel {
             },
             strings,
             source_files,
-            types: IndexVec::new(),
+            types: TyInterner::new(),
             consts: IndexVec::new(),
             sigs: IndexVec::new(),
             items: IndexVec::new(),
@@ -520,7 +522,7 @@ impl RegseqModel {
             Ty::Closure(item, args) => self
                 .types
                 .iter()
-                .find_map(|candidate| match candidate {
+                .find_map(|(_, candidate)| match candidate {
                     Ty::Struct {
                         item: struct_item,
                         args: struct_args,

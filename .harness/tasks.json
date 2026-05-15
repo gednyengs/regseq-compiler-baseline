@@ -2614,7 +2614,7 @@
           "id": "regseq-model-68",
           "name": "P1a-DS-04: TyInterner + ArgsKey + GenericArgs",
           "spec": ".harness/tasks/regseq-model/68-ty-interner-and-args-key.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-66",
             "regseq-model-67"

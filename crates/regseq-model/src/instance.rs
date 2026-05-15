@@ -14,25 +14,10 @@
 
 use serde::{Deserialize, Serialize};
 
+use crate::args_key::GenericArgs;
 use crate::ids::{ConstId, FnSigId, ItemId, StringId, TyId};
 use crate::placeholders::Body;
 use crate::source::Span;
-
-/// One generic argument substituted into an `Instance`.
-///
-/// Lifetimes are erased at the bridge (rustc's `erasing_regions`
-/// step) and never appear here.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum GenericArg {
-    Type(TyId),
-    Const(ConstId),
-}
-
-/// Vector of `GenericArg` substitutions for one `Instance`.
-///
-/// Order matches rustc's `GenericArgs` (parent-first, then own
-/// parameters in declaration order). Empty for non-generic items.
-pub type GenericArgs = Vec<GenericArg>;
 
 /// Kind-specific data for an `Instance`.
 ///

@@ -698,8 +698,9 @@ mod tests {
     #[test]
     fn size_align_of_arrays_uses_stride_and_length() {
         let mut model = model();
-        let elem_4 = model.types.push(Ty::Tuple {
-            fields: vec![],
+        let elem_4 = model.types.push(Ty::Struct {
+            item: iid(40),
+            args: vec![],
             layout: sized_layout(4, 4),
         });
         let array_4 = model.types.push(Ty::Array(elem_4, 10));
@@ -708,8 +709,9 @@ mod tests {
             SizeAlign { size: 40, align: 4 }
         );
 
-        let elem_1 = model.types.push(Ty::Tuple {
-            fields: vec![],
+        let elem_1 = model.types.push(Ty::Struct {
+            item: iid(41),
+            args: vec![],
             layout: sized_layout(1, 1),
         });
         let array_1 = model.types.push(Ty::Array(elem_1, 5));
@@ -718,8 +720,9 @@ mod tests {
             SizeAlign { size: 5, align: 1 }
         );
 
-        let elem_padded = model.types.push(Ty::Tuple {
-            fields: vec![],
+        let elem_padded = model.types.push(Ty::Struct {
+            item: iid(42),
+            args: vec![],
             layout: sized_layout(5, 4),
         });
         let array_padded = model.types.push(Ty::Array(elem_padded, 2));

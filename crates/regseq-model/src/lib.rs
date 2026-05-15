@@ -6,6 +6,7 @@
 //! `regseq-driver` builds a `RegseqModel` from `tcx` and hands it
 //! off.
 
+mod args_key;
 mod bridge_input;
 mod build;
 mod crate_info;
@@ -23,7 +24,12 @@ mod source;
 mod string_interner;
 mod target;
 mod ty;
+mod ty_interner;
 
+pub use args_key::{
+    args_key_for_generic_args, canonical_args_bytes, canonical_ty_bytes, ArgsKey, GenericArg,
+    GenericArgs,
+};
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
 pub use crate_info::{CrateInfo, StableCrateId};
@@ -38,8 +44,8 @@ pub use ids::{
 pub use idx::Idx;
 pub use index_vec::IndexVec;
 pub use instance::{
-    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, GenericArg, GenericArgs, Instance,
-    InstanceKind, RustcInstanceKindTag,
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
+    RustcInstanceKindTag,
 };
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
@@ -56,8 +62,9 @@ pub use string_interner::StringInterner;
 pub use target::{default_scalar_layouts, Endian, ScalarLayouts, SizeAlign, TargetInfo};
 pub use ty::{
     AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Mutability, Provenance,
-    Safety, Ty, TyInterner, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,
+    Safety, Ty, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,
 };
+pub use ty_interner::{NominalKind, TyInterner};
 
 const _: () = assert!(core::mem::size_of::<CrateId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<CrateId>>() == 4);

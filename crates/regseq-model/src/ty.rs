@@ -7,9 +7,8 @@ use core::convert::TryFrom;
 
 use serde::{Deserialize, Serialize};
 
+use crate::args_key::GenericArgs;
 use crate::ids::{FnSigId, ItemId, TyId};
-use crate::index_vec::IndexVec;
-use crate::instance::GenericArgs;
 use crate::layout::Layout;
 
 /// Number of signed integer primitive kinds.
@@ -312,9 +311,6 @@ pub enum Ty {
     },
 }
 
-/// Forward-declared type interner.
-pub type TyInterner = IndexVec<TyId, Ty>;
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -348,7 +344,7 @@ mod tests {
     }
 
     fn args() -> GenericArgs {
-        vec![crate::instance::GenericArg::Type(ty_id(7))]
+        vec![crate::GenericArg::Type(ty_id(7))]
     }
 
     fn hash<T: Hash>(value: &T) -> u64 {
@@ -894,13 +890,13 @@ mod tests {
 
     #[test]
     fn ty_interner_alias_constructs() {
-        let types: TyInterner = IndexVec::new();
+        let types = crate::TyInterner::new();
         assert!(types.is_empty());
     }
 
     #[test]
     fn generic_args_import_keeps_const_variant_available() {
-        let args = vec![crate::instance::GenericArg::Const(ConstId::from_u32(3))];
+        let args = vec![crate::GenericArg::Const(ConstId::from_u32(3))];
         assert_eq!(args.len(), 1);
     }
 }
