@@ -2826,7 +2826,7 @@
           "id": "regseq-model-77",
           "name": "P1a-DS-12a: Operand + LiteralValue",
           "spec": ".harness/tasks/regseq-model/77-operand-and-literal-value.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-76",
             "regseq-model-69"

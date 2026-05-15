@@ -25,6 +25,7 @@ mod instance_ref;
 mod item;
 mod layout;
 mod model;
+pub mod operand;
 mod place;
 mod placeholders;
 mod pretty;
@@ -69,6 +70,7 @@ pub use layout::{
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
+pub use operand::{LiteralValue, Operand};
 pub use place::{Place, PlaceElem};
 pub use placeholders::Body;
 pub use pretty::PrettyPrinter;
