@@ -12,6 +12,7 @@ use regseq_model::{DefPathHash, Item, RegseqModel, StableCrateId, SyntheticItemK
 mod assign;
 pub mod const_;
 mod discovery;
+pub mod fnsig;
 mod handles;
 mod sort;
 pub mod ty;
@@ -160,6 +161,24 @@ pub enum BridgeError {
     #[error("unsupported type: {ty_repr}")]
     UnsupportedTy {
         /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A function signature uses an ABI outside the v1 bridge surface.
+    #[error("unsupported ABI: {abi_repr}")]
+    UnsupportedAbi {
+        /// Rendered rustc ABI.
+        abi_repr: String,
+    },
+    /// A function signature has an uninhabited parameter.
+    #[error("unsupported never input at argument {input_idx}")]
+    UnsupportedNeverInput {
+        /// Positional argument index.
+        input_idx: usize,
+    },
+    /// A type has no v1 C ABI lowering at an extern C boundary.
+    #[error("unsupported C ABI type: {ty_repr}")]
+    UnsupportedCAbiType {
+        /// Rendered model type.
         ty_repr: String,
     },
     /// A const shape is outside the current bridge task's translation surface.
