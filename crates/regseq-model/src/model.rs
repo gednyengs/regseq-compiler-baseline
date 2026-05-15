@@ -1,6 +1,6 @@
 //! Top-level `RegseqModel` struct and construction-invariant registry.
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
@@ -17,6 +17,7 @@ use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
 use crate::index_vec::IndexVec;
 use crate::instance::{Instance, InstanceKind};
+use crate::layout::{EnumShape, LayoutKind};
 use crate::placeholders::{
     Body, InlineHint, IntrinsicKind, Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
 };
@@ -424,53 +425,53 @@ impl RegseqModel {
     }
 
     /// Returns the source-level def path for an instance.
-    pub fn instance_def_path(&self, _id: InstanceId) -> &DefPath {
-        todo!("P1a-DS-07 adds Item.def_path")
+    pub fn instance_def_path(&self, id: InstanceId) -> &DefPath {
+        &self.instance_item(id).def_path
     }
 
     /// Returns the source span for an instance's item.
-    pub fn instance_span(&self, _id: InstanceId) -> Span {
-        todo!("P1a-DS-07 adds Item.span")
+    pub fn instance_span(&self, id: InstanceId) -> Span {
+        self.instance_item(id).span
     }
 
     /// Returns the linkage for an instance's item.
-    pub fn instance_linkage(&self, _id: InstanceId) -> Linkage {
-        todo!("P1a-DS-07 adds Item.linkage")
+    pub fn instance_linkage(&self, id: InstanceId) -> Linkage {
+        self.instance_item(id).linkage
     }
 
     /// Returns the optional link section for an instance's item.
-    pub fn instance_link_section(&self, _id: InstanceId) -> Option<StringId> {
-        todo!("P1a-DS-07 adds Item.link_section")
+    pub fn instance_link_section(&self, id: InstanceId) -> Option<StringId> {
+        self.instance_item(id).link_section
     }
 
     /// Returns the inline hint for an instance's item.
-    pub fn instance_inline_hint(&self, _id: InstanceId) -> InlineHint {
-        todo!("P1a-DS-07 adds Item.inline_hint")
+    pub fn instance_inline_hint(&self, id: InstanceId) -> InlineHint {
+        self.instance_item(id).inline_hint
     }
 
     /// Returns whether an instance's item is unsafe.
-    pub fn instance_is_unsafe(&self, _id: InstanceId) -> bool {
-        todo!("P1a-DS-07 adds Item.is_unsafe")
+    pub fn instance_is_unsafe(&self, id: InstanceId) -> bool {
+        self.instance_item(id).is_unsafe
     }
 
     /// Returns whether an instance's item is `PhantomData`.
-    pub fn instance_is_phantom_data(&self, _id: InstanceId) -> bool {
-        todo!("P1a-DS-07 adds Item.is_phantom_data")
+    pub fn instance_is_phantom_data(&self, id: InstanceId) -> bool {
+        self.instance_item(id).is_phantom_data
     }
 
     /// Returns whether an instance's item is `UnsafeCell`.
-    pub fn instance_is_unsafe_cell(&self, _id: InstanceId) -> bool {
-        todo!("P1a-DS-07 adds Item.is_unsafe_cell")
+    pub fn instance_is_unsafe_cell(&self, id: InstanceId) -> bool {
+        self.instance_item(id).is_unsafe_cell
     }
 
     /// Returns true when `ty` structurally contains an `UnsafeCell`.
     ///
-    /// The real recursion depends on `TyInterner::find_nominal` and
-    /// `Item.is_unsafe_cell`, which land in later P1a tasks. This
-    /// signature is pinned here with tests ignored until those
-    /// dependencies are available.
-    pub fn contains_unsafe_cell(&self, _ty: TyId) -> bool {
-        todo!("P1a-DS-04 and P1a-DS-07 add find_nominal and Item.is_unsafe_cell")
+    /// Recurses through aggregate layouts and arrays, treats
+    /// references, pointers, function pointers, and function
+    /// definitions as boundaries, and uses `Item.is_unsafe_cell` for
+    /// the nominal struct marker.
+    pub fn contains_unsafe_cell(&self, ty: TyId) -> bool {
+        self.contains_unsafe_cell_inner(ty, &mut HashSet::new())
     }
 
     /// Returns the ABI size and alignment for a sized type.
@@ -549,13 +550,13 @@ impl RegseqModel {
     }
 
     /// Returns whether an instance's item is `ManuallyDrop`.
-    pub fn instance_is_manually_drop(&self, _id: InstanceId) -> bool {
-        todo!("P1a-DS-07 adds Item.is_manually_drop")
+    pub fn instance_is_manually_drop(&self, id: InstanceId) -> bool {
+        self.instance_item(id).is_manually_drop
     }
 
     /// Returns the bridge-computed opaque-handle eligibility flag.
-    pub fn instance_opaque_handle_eligible(&self, _id: InstanceId) -> bool {
-        todo!("P1a-DS-07 adds Item.opaque_handle_eligible")
+    pub fn instance_opaque_handle_eligible(&self, id: InstanceId) -> bool {
+        self.instance_item(id).opaque_handle_eligible
     }
 
     /// Returns the function signature for function instances.
@@ -577,6 +578,75 @@ impl RegseqModel {
     /// Returns the domain intrinsic marker for an instance's item.
     pub fn instance_intrinsic(&self, _id: InstanceId) -> Option<&IntrinsicKind> {
         todo!("P1a-DS-09 adds DomainAttrTables contents")
+    }
+
+    fn instance_item(&self, id: InstanceId) -> &Item {
+        &self.items[self.instances[id].item]
+    }
+
+    fn contains_unsafe_cell_inner(&self, ty: TyId, visited: &mut HashSet<TyId>) -> bool {
+        if !visited.insert(ty) {
+            return false;
+        }
+
+        match &self.types[ty] {
+            Ty::Struct { item, layout, .. } => {
+                self.items[*item].is_unsafe_cell
+                    || self.layout_contains_unsafe_cell(layout, visited)
+            }
+            Ty::Enum { layout, .. } | Ty::Union { layout, .. } => {
+                self.layout_contains_unsafe_cell(layout, visited)
+            }
+            Ty::Tuple { fields, .. } => fields
+                .iter()
+                .any(|field_ty| self.contains_unsafe_cell_inner(*field_ty, visited)),
+            Ty::Array(elem, _) => self.contains_unsafe_cell_inner(*elem, visited),
+            Ty::Closure(item, args) => {
+                let captures = self
+                    .types
+                    .find_nominal(crate::NominalKind::Struct, *item, args)
+                    .expect("closure capture struct type not found");
+                self.contains_unsafe_cell_inner(captures, visited)
+            }
+            Ty::Ref(_, _)
+            | Ty::Ptr(_, _)
+            | Ty::FnPtr(_)
+            | Ty::FnDef(_, _)
+            | Ty::Bool
+            | Ty::Char
+            | Ty::Int(_)
+            | Ty::Uint(_)
+            | Ty::Float(_)
+            | Ty::Str
+            | Ty::Slice(_)
+            | Ty::Dynamic { .. }
+            | Ty::Never => false,
+        }
+    }
+
+    fn layout_contains_unsafe_cell(
+        &self,
+        layout: &crate::Layout,
+        visited: &mut HashSet<TyId>,
+    ) -> bool {
+        match &layout.kind {
+            LayoutKind::Struct { fields } | LayoutKind::Union { fields } => fields
+                .iter()
+                .any(|field| self.contains_unsafe_cell_inner(field.ty, visited)),
+            LayoutKind::Enum { shape } => match shape {
+                EnumShape::Empty => false,
+                EnumShape::Single { variant, .. } => variant
+                    .fields
+                    .iter()
+                    .any(|field| self.contains_unsafe_cell_inner(field.ty, visited)),
+                EnumShape::Multiple { variants, .. } => variants.iter().any(|variant| {
+                    variant
+                        .fields
+                        .iter()
+                        .any(|field| self.contains_unsafe_cell_inner(field.ty, visited))
+                }),
+            },
+        }
     }
 
     fn validate_synthesized_sentinel(&self) -> Result<(), InvariantViolation> {

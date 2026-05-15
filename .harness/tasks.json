@@ -2684,7 +2684,7 @@
           "id": "regseq-model-71",
           "name": "P1a-DS-07: Item + ItemKind + flags",
           "spec": ".harness/tasks/regseq-model/71-item-and-itemkind.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-68"
           ],

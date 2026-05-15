@@ -22,6 +22,7 @@ mod idx;
 mod index_vec;
 mod instance;
 mod instance_ref;
+mod item;
 mod layout;
 mod model;
 mod placeholders;
@@ -59,14 +60,13 @@ pub use instance::{
     RustcInstanceKindTag,
 };
 pub use instance_ref::InstanceRef;
+pub use item::{InlineHint, Item, ItemKind, Linkage};
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
-pub use placeholders::{
-    Body, InlineHint, IntrinsicKind, Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
-};
+pub use placeholders::{Body, IntrinsicKind, PrincipalTraitKey, SyntheticItemKind};
 pub use pretty::PrettyPrinter;
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;

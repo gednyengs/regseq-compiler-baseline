@@ -5,10 +5,7 @@
 
 use serde::{Deserialize, Serialize};
 
-/// Forward-declared `Item`.
-// FORWARD: P1a-DS-07
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub struct Item {}
+pub use crate::item::{InlineHint, Item, Linkage};
 
 /// Forward-declared source item synthetic-kind tag.
 // FORWARD: P1a-DS-08b
@@ -28,24 +25,6 @@ pub enum SyntheticItemKind {
 // FORWARD: P1a-DS-08b
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct PrincipalTraitKey {}
-
-/// Forward-declared linkage classification.
-// FORWARD: P1a-DS-07
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum Linkage {
-    /// Default linkage placeholder.
-    #[default]
-    Default,
-}
-
-/// Forward-declared inline hint.
-// FORWARD: P1a-DS-07
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum InlineHint {
-    /// No inline hint placeholder.
-    #[default]
-    None,
-}
 
 /// Forward-declared intrinsic classification.
 // FORWARD: P1a-DS-09
@@ -67,7 +46,6 @@ mod tests {
 
     #[test]
     fn forward_value_stubs_construct() {
-        assert_eq!(Item::default(), Item {});
         assert_eq!(Body::default(), Body {});
     }
 
@@ -80,8 +58,6 @@ mod tests {
 
     #[test]
     fn remaining_forward_stubs_construct() {
-        assert_eq!(Linkage::default(), Linkage::Default);
-        assert_eq!(InlineHint::default(), InlineHint::None);
         assert_eq!(IntrinsicKind::default(), IntrinsicKind::Placeholder);
     }
 }

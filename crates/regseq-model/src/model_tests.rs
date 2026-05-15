@@ -13,9 +13,10 @@
 //!   noted via comments at their corresponding test sites.
 
 use crate::{
-    Body, BridgeInput, ConstId, CrateId, CrateInfo, FnAbi, FnSig, FnSigId, GenericArg, Instance,
-    InstanceId, InstanceKind, InvariantId, InvariantViolation, ItemId, RegseqModel, Safety,
-    SourceFileId, Span, StableCrateId, StringId, Ty, TyId,
+    Body, BridgeInput, ConstId, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, FnAbi,
+    FnSig, FnSigId, GenericArg, InlineHint, Instance, InstanceId, InstanceKind, InvariantId,
+    InvariantViolation, Item, ItemId, ItemKind, Linkage, RegseqModel, Safety, SourceFileId, Span,
+    StableCrateId, StringId, Ty, TyId,
 };
 
 fn default_sig() -> FnSig {
@@ -26,6 +27,45 @@ fn default_sig() -> FnSig {
         c_variadic: false,
         safety: Safety::Safe,
     }
+}
+
+fn fixture_item(model: &mut RegseqModel) -> Item {
+    let name = model.strings.intern("fixture_item");
+    Item {
+        def_path: DefPath {
+            crate_id: model.primary_crate,
+            segments: vec![
+                DefPathSegment {
+                    data: DefPathData::CrateRoot,
+                    disambiguator: 0,
+                },
+                DefPathSegment {
+                    data: DefPathData::ValueNs(name),
+                    disambiguator: 0,
+                },
+            ],
+            rendered: name,
+        },
+        kind: ItemKind::Function,
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        linkage: Linkage::Default,
+        link_section: None,
+        inline_hint: InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    }
+}
+
+fn push_fixture_item(model: &mut RegseqModel) -> ItemId {
+    let item = fixture_item(model);
+    model.items.push(item)
 }
 
 // ------------------------------------------------------------------
@@ -149,7 +189,7 @@ fn populated_model_passes_validate() {
     let init = m.consts.push(crate::Const::ZST);
     let sig = m.sigs.intern(default_sig());
 
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xCAFE,
@@ -173,7 +213,7 @@ fn populated_model_passes_validate() {
     });
 
     // Add a Static instance; another item entry for it.
-    let item2 = m.items.push(Default::default());
+    let item2 = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xF00D,
@@ -202,7 +242,7 @@ fn populated_model_passes_validate() {
 #[test]
 fn function_with_body_none_validates_when_sig_resolves() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -329,7 +369,7 @@ fn invariant_5_duplicate_stable_crate_id() {
 #[test]
 fn invariant_2_item_def_paths_length_mismatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    m.items.push(Default::default());
+    push_fixture_item(&mut m);
     // item_def_paths is empty -> mismatch.
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::ItemDefPathsLengthMismatch {
@@ -346,7 +386,7 @@ fn invariant_2_item_def_paths_length_mismatch() {
 #[test]
 fn invariant_2_item_synthetic_kinds_length_mismatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    m.items.push(Default::default());
+    push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -413,7 +453,7 @@ fn invariant_1_dangling_string_id_in_crate_info() {
 #[test]
 fn invariant_1_dangling_source_file_id_in_instance_span() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -443,7 +483,7 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
 #[test]
 fn invariant_1_dangling_ty_id_in_generic_args() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -473,7 +513,7 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
 #[test]
 fn invariant_1_dangling_const_id_in_generic_args() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -503,7 +543,7 @@ fn invariant_1_dangling_const_id_in_generic_args() {
 #[test]
 fn invariant_1_dangling_fn_sig_id_in_function_kind() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -535,7 +575,7 @@ fn invariant_1_dangling_fn_sig_id_in_function_kind() {
 #[test]
 fn invariant_10_inline_body_in_function_kind_validates() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -562,7 +602,7 @@ fn invariant_10_inline_body_in_function_kind_validates() {
 #[test]
 fn invariant_1_dangling_ty_id_in_static_kind() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -605,7 +645,7 @@ fn invariant_1_dangling_layout_in_struct_enum_union() {
         },
     ] {
         let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-        let item = m.items.push(Default::default());
+        let item = push_fixture_item(&mut m);
         m.item_def_paths.push(crate::DefPathHash {
             stable_crate_id: StableCrateId(1),
             local_hash: 0,
@@ -657,7 +697,7 @@ fn invariant_1_dangling_string_id_in_source_file_path() {
 #[test]
 fn invariant_1_dangling_string_id_in_instance_symbol_name() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -687,7 +727,7 @@ fn invariant_1_dangling_string_id_in_instance_symbol_name() {
 #[test]
 fn invariant_1_dangling_const_id_in_static_init() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -721,7 +761,7 @@ fn invariant_1_dangling_const_id_in_static_init() {
 #[test]
 fn invariant_1_dangling_ty_id_in_const_kind() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -753,7 +793,7 @@ fn invariant_1_dangling_ty_id_in_const_kind() {
 #[test]
 fn invariant_1_dangling_const_id_in_const_kind_value() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -802,7 +842,7 @@ fn populated_model_round_trips_through_json() {
     let _ = m.types.push(Ty::Bool);
     let _ = m.consts.push(crate::Const::ZST);
     let sig = m.sigs.intern(default_sig());
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xCAFE,
@@ -934,7 +974,7 @@ fn all_invariant_ids() -> [InvariantId; 20] {
 
 fn helper_fixture() -> (RegseqModel, InstanceId) {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let item = m.items.push(Default::default());
+    let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
@@ -971,69 +1011,56 @@ fn instance_body_helper_returns_inline_body() {
 }
 
 #[test]
-#[ignore]
 fn instance_def_path_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_def_path(id);
+    assert_eq!(
+        m.instance_def_path(id),
+        &m.items[m.instances[id].item].def_path
+    );
 }
 
 #[test]
-#[ignore]
 fn instance_span_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_span(id);
+    assert_eq!(m.instance_span(id), m.items[m.instances[id].item].span);
 }
 
 #[test]
-#[ignore]
 fn instance_linkage_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_linkage(id);
+    assert_eq!(m.instance_linkage(id), Linkage::Default);
 }
 
 #[test]
-#[ignore]
 fn instance_link_section_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_link_section(id);
+    assert_eq!(m.instance_link_section(id), None);
 }
 
 #[test]
-#[ignore]
 fn instance_inline_hint_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_inline_hint(id);
+    assert_eq!(m.instance_inline_hint(id), InlineHint::None);
 }
 
 #[test]
-#[ignore]
 fn instance_is_unsafe_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_is_unsafe(id);
+    assert!(!m.instance_is_unsafe(id));
 }
 
 #[test]
-#[ignore]
 fn instance_lang_item_helpers_signature_compile() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_is_phantom_data(id);
-    let _ = m.instance_is_unsafe_cell(id);
-    let _ = m.instance_is_manually_drop(id);
+    assert!(!m.instance_is_phantom_data(id));
+    assert!(!m.instance_is_unsafe_cell(id));
+    assert!(!m.instance_is_manually_drop(id));
 }
 
 #[test]
-#[ignore]
 fn instance_opaque_handle_eligible_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-07
     let (m, id) = helper_fixture();
-    let _ = m.instance_opaque_handle_eligible(id);
+    assert!(!m.instance_opaque_handle_eligible(id));
 }
 
 #[test]
