@@ -36,3 +36,6 @@ tests/fixtures/*/dump/
 # OS
 .DS_Store
 Thumbs.db
+
+# Working / scratch areas (per-author notes; not part of the spec or harness)
+docs/discussions/regseq-model/tmp/
