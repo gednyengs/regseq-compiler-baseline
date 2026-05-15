@@ -218,6 +218,9 @@ pub enum BridgeError {
     /// Phase 4 ItemId assignment failed.
     #[error("phase 4 assignment failed: {0}")]
     Phase4(String),
+    /// Phase 5 body materialisation or validation failed.
+    #[error("phase 5 body pass failed: {0}")]
+    Phase5(String),
 }
 
 /// DSL-policy type rejection family.
@@ -608,5 +611,6 @@ fn construct_instances_and_resolve_cross_references(
 ) -> Result<(), BridgeError> {
     synth::rekey_synthesis_in_phase5(ctxt)?;
     const_::construct_const_memory_static_instances(ctxt)?;
+    body::run_phase5_body_passes(ctxt)?;
     Ok(())
 }

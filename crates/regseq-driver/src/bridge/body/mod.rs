@@ -3,18 +3,22 @@
 use rustc_middle::mir;
 
 pub mod basic_block;
+pub mod materialise;
 pub mod operand;
 pub mod place;
 pub mod rvalue;
 pub mod statement;
 pub mod terminator;
+pub mod vtable_indirect;
 
 pub use basic_block::translate_basic_block;
+pub use materialise::{materialise_function_body, run_phase5_body_passes, InstanceHandle};
 pub use operand::{lower_runtime_check_operand, translate_operand};
 pub use place::translate_place;
 pub use rvalue::translate_rvalue;
 pub use statement::translate_statement;
 pub use terminator::translate_terminator;
+pub use vtable_indirect::rewrite_vtable_indirect;
 
 /// Per-body translation context shared by Place, Operand, Rvalue, and Statement translation.
 pub struct BodyCtxt<'tcx> {
