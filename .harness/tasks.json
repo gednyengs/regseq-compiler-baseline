@@ -2850,7 +2850,7 @@
           "id": "regseq-model-78",
           "name": "P1a-DS-12b: Rvalue + sub-enums",
           "spec": ".harness/tasks/regseq-model/78-rvalue-and-sub-enums.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-77",
             "regseq-model-69"

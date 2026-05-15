@@ -29,6 +29,7 @@ pub mod operand;
 mod place;
 mod placeholders;
 mod pretty;
+pub mod rvalue;
 mod source;
 mod string_interner;
 mod synthetic;
@@ -74,6 +75,7 @@ pub use operand::{LiteralValue, Operand};
 pub use place::{Place, PlaceElem};
 pub use placeholders::Body;
 pub use pretty::PrettyPrinter;
+pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
 pub use synthetic::{
