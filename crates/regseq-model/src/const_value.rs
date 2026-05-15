@@ -494,12 +494,26 @@ mod tests {
     }
 
     #[test]
+    #[should_panic(expected = "const canonicalization recursion limit reached")]
+    fn canonical_const_panics_on_self_referential_aggregate() {
+        // Task spec line 472-478: hand-build a tampered model where
+        // a `Const::Aggregate(vec![own_id])` references itself, and
+        // assert the canonicalizer reaches a documented bound or
+        // panics. Proper cycle rejection lives at P1a-VAL-03 step 9
+        // (const-graph acyclicity); `canonical_const` is allowed to
+        // assume acyclicity (spec.md:3232-3241) and bounds its
+        // recursion at `model.consts.len() + 1`.
+        let mut model = model();
+        let id = model.consts.intern(Const::Aggregate(vec![ConstId::ZERO]));
+        // `intern` of an empty interner returns ConstId(0); storage
+        // now holds a self-referential `Aggregate([ConstId(0)])`.
+        let _ = canonical_const_bytes(&model, id);
+    }
+
+    #[test]
     fn null_ptr_and_reloc_worked_examples_encode() {
         let mut model = model();
         let int_ty = model.types.intern(Ty::Int(IntKind::I32));
-        model
-            .consts
-            .set_type_context(&model.types, &model.sigs, &model.item_def_paths);
         let null = model.consts.intern(Const::NullPtr(int_ty));
         let reloc = model.consts.intern(Const::Reloc(instance_ref()));
 
@@ -545,15 +559,11 @@ mod tests {
     fn null_ptr_uses_canonical_ty_not_local_ty_id() {
         let mut a = model();
         let bool_a = a.types.intern(Ty::Bool);
-        a.consts
-            .set_type_context(&a.types, &a.sigs, &a.item_def_paths);
         let null_a = a.consts.intern(Const::NullPtr(bool_a));
 
         let mut b = model();
         let _char_b = b.types.intern(Ty::Char);
         let bool_b = b.types.intern(Ty::Bool);
-        b.consts
-            .set_type_context(&b.types, &b.sigs, &b.item_def_paths);
         let null_b = b.consts.intern(Const::NullPtr(bool_b));
 
         assert_ne!(bool_a, bool_b);
@@ -577,9 +587,6 @@ mod tests {
         let mut model = model();
         let bool_ty = model.types.intern(Ty::Bool);
         let ptr_ty = model.types.intern(Ty::Ptr(bool_ty, Mutability::Not));
-        model
-            .consts
-            .set_type_context(&model.types, &model.sigs, &model.item_def_paths);
         let null = model.consts.intern(Const::NullPtr(ptr_ty));
         assert_eq!(canonical_const_bytes(&model, null), vec![9, 10, 0, 0]);
     }

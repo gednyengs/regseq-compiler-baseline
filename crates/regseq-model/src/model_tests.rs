@@ -112,7 +112,7 @@ fn with_primary_pre_interns_empty_string_then_synthesized_then_primary_name() {
 fn with_primary_leaves_other_tables_empty() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     assert!(m.types.is_empty());
-    assert!(m.consts.is_empty());
+    assert_eq!(m.consts.len(), 0);
     assert!(m.items.is_empty());
     assert!(m.item_def_paths.is_empty());
     assert!(m.item_synthetic_kinds.is_empty());
@@ -151,7 +151,7 @@ fn root_struct_exposes_spec_field_set() {
     assert!(!strings.is_empty());
     assert_eq!(source_files.len(), 1);
     assert!(types.is_empty());
-    assert!(consts.is_empty());
+    assert_eq!(consts.len(), 0);
     assert_eq!(sigs.len(), 0);
     assert!(items.is_empty());
     assert!(item_def_paths.is_empty());
@@ -186,7 +186,7 @@ fn populated_model_passes_validate() {
 
     // Populate placeholder tables so InstanceKind references resolve.
     let ty = m.types.push(Ty::Bool);
-    let init = m.consts.push(crate::Const::ZST);
+    let init = m.consts.intern(crate::Const::ZST);
     let sig = m.sigs.intern(default_sig());
 
     let item = push_fixture_item(&mut m);
@@ -220,7 +220,7 @@ fn populated_model_passes_validate() {
     });
     m.item_synthetic_kinds.push(Default::default());
     let static_ty = m.types.push(Ty::Bool);
-    let static_init = m.consts.push(crate::Const::ZST);
+    let static_init = m.consts.intern(crate::Const::ZST);
     m.instances.push(Instance {
         item: item2,
         generic_args: vec![],
@@ -840,7 +840,7 @@ fn empty_model_round_trips_through_json() {
 fn populated_model_round_trips_through_json() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA));
     let _ = m.types.push(Ty::Bool);
-    let _ = m.consts.push(crate::Const::ZST);
+    let _ = m.consts.intern(crate::Const::ZST);
     let sig = m.sigs.intern(default_sig());
     let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {

@@ -2638,7 +2638,7 @@
           "id": "regseq-model-69",
           "name": "P1a-DS-05: Const vocabulary",
           "spec": ".harness/tasks/regseq-model/69-const-vocabulary.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-model-68"
           ],
