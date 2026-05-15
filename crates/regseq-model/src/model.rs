@@ -21,6 +21,7 @@ use crate::index_vec::IndexVec;
 use crate::instance::{Instance, InstanceKind};
 use crate::item::{InlineHint, Item, Linkage};
 use crate::layout::{EnumShape, LayoutKind};
+use crate::place_validator::{validate_body_places, PlaceValidationError};
 use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
@@ -156,6 +157,14 @@ pub enum InvariantViolation {
     SynthesizedSentinelInvalid {
         /// Brief reason.
         reason: &'static str,
+    },
+
+    /// A function body's place walk found a malformed place.
+    PlaceWalk {
+        /// Function instance whose body contains the invalid place.
+        instance: InstanceId,
+        /// First place-validation failure in that body.
+        error: PlaceValidationError,
     },
 }
 
@@ -418,8 +427,18 @@ impl RegseqModel {
             });
         }
 
-        for instance in self.instances.iter() {
+        for (idx, instance) in self.instances.iter().enumerate() {
             self.validate_instance(instance)?;
+            if let InstanceKind::Function(data) = &instance.kind {
+                if let Some(body) = data.body.as_ref() {
+                    validate_body_places(self, body).map_err(|error| {
+                        InvariantViolation::PlaceWalk {
+                            instance: InstanceId::from_u32(idx as u32),
+                            error,
+                        }
+                    })?;
+                }
+            }
         }
 
         Ok(())

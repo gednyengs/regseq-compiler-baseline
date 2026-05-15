@@ -2966,7 +2966,7 @@
           "id": "regseq-model-83",
           "name": "P1a-VAL-01: Place validator + type-coherence walk",
           "spec": ".harness/tasks/regseq-model/83-place-validator.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-76",
             "regseq-model-82"

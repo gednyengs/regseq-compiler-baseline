@@ -29,6 +29,7 @@ mod layout;
 mod model;
 pub mod operand;
 mod place;
+mod place_validator;
 mod pretty;
 pub mod rvalue;
 mod source;
@@ -79,6 +80,9 @@ pub use layout::{
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
 pub use operand::{LiteralValue, Operand};
 pub use place::{Place, PlaceElem};
+pub use place_validator::{
+    validate_body_places, PlaceLocation, PlaceSite, PlaceValidationError, PlaceValidationErrorKind,
+};
 pub use pretty::PrettyPrinter;
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use source::{Position, SourceFile, Span};
