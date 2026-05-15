@@ -9,6 +9,7 @@
 mod args_key;
 mod basic_block;
 mod body;
+mod body_ty;
 mod bridge_input;
 mod build;
 mod cabi;

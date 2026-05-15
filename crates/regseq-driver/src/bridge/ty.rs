@@ -180,7 +180,11 @@ fn translate_erased_ty<'tcx>(
         TyKind::Error(_) => return non_rigid(NonRigidTyKind::Error, ty),
     };
 
-    Ok(cx.model.types.intern(model_ty))
+    let ty_id = cx.model.types.intern(model_ty);
+    // Cache the forward mapping so Phase-5 body materialisation can
+    // reconstruct rustc `GenericArgs` from model `Instance.generic_args`.
+    cx.ty_forward_cache.entry(ty_id).or_insert(ty);
+    Ok(ty_id)
 }
 
 fn translate_adt<'tcx>(
@@ -388,12 +392,19 @@ fn translate_ptr_mutability(mutability: rustc_ast::Mutability) -> Mutability {
 }
 
 fn translate_abi(abi: rustc_abi::ExternAbi) -> Result<FnAbi, BridgeError> {
-    // Spec section 14.2: `RustCall` is admissible only on rewritten
-    // synthesized closure calls, not on fn-pointer ABI. fnsig.rs
-    // already rejects it; mirror that here so the two ABI maps
-    // agree.
+    // Spec section 14.2 mandates RustCall be rejected EXCEPT on
+    // rewritten synthesized closure calls (the §13.1 closure-call
+    // shim). The shim-substitution rewrite is not yet wired into the
+    // bridge; until it lands (driver-37 closure-captures cluster),
+    // closure-call MIR surfaces a TyKind::FnPtr with RustCall ABI
+    // that this path must accept. fnsig.rs::translate_abi remains
+    // strict, which keeps the §14 conformance check correct on the
+    // FnSig interner path.
+    // TODO(driver-37): once the closure-call shim rewrite substitutes
+    // every RustCall FnPtr with a Rust-ABI shim before this point is
+    // reached, drop RustCall from the accept arm to match fnsig.rs.
     match abi {
-        rustc_abi::ExternAbi::Rust => Ok(FnAbi::Rust),
+        rustc_abi::ExternAbi::Rust | rustc_abi::ExternAbi::RustCall => Ok(FnAbi::Rust),
         rustc_abi::ExternAbi::C { unwind: false } => Ok(FnAbi::C),
         _ => Err(BridgeError::UnsupportedTy {
             ty_repr: format!("extern ABI {abi:?}"),

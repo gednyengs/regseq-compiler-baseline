@@ -267,7 +267,13 @@ fn vtable_synthesis_dedups_on_principal_and_rekeys_mapping() {
 
         assert_eq!(first, second);
         assert_eq!(cx.vtable_synth_cache.len(), 1);
-        assert_eq!(cx.pending_items.len(), 4);
+        // The public `synthesise_vtable` entry has no rustc handle to
+        // consult `tcx.vtable_entries`, so it produces only the three
+        // family items: VTableType, VTableInstance, VTableDropShim.
+        // Method shims are added only by the rustc-aware call site in
+        // `bridge::scan_statement_for_synthesis`.
+        assert_eq!(cx.pending_items.len(), 3);
+        assert!(first.method_shims.is_empty());
 
         assign_pending(cx);
         rekey_synthesis_in_phase5(cx).unwrap();
@@ -278,6 +284,24 @@ fn vtable_synthesis_dedups_on_principal_and_rekeys_mapping() {
             &cx.model.item_synthetic_kinds[vtable_item],
             SyntheticItemKind::VTableType { .. }
         ));
+
+        // Phase 5 must materialise the VTableInstance Static Instance
+        // with an `init: Some(_)` value per spec.md:1063-1074. The
+        // public entry uses a minimal 3-slot common-header init since
+        // no `tcx.vtable_entries` data is available.
+        let vtable_instance = cx.handles.resolve(first.vtable_instance).unwrap();
+        let instance = cx
+            .model
+            .instances
+            .iter()
+            .find(|inst| inst.item == vtable_instance)
+            .expect("VTableInstance Static should be synthesised");
+        match &instance.kind {
+            regseq_model::InstanceKind::Static { init, .. } => {
+                assert!(init.is_some(), "Static must have init");
+            }
+            other => panic!("VTableInstance should be Static, got {other:?}"),
+        }
     });
 }
 
@@ -404,6 +428,58 @@ pub fn drop_fixture() {
         .iter()
         .any(|kind| matches!(kind, SyntheticItemKind::VTableMethodShim { .. })));
     assert!(!model.vtables.is_empty());
+
+    // The trait `T` has exactly one dispatchable method `m`, so the
+    // vtable_entries sequence is `[DropInPlace, Size, Align, Method]`
+    // and the synthesised method-shim's `vtable_entry_index` must be
+    // 3 (not slot 0 or any other hardcoded value). This guards
+    // against regressions to the prior hardcoded `vec![(3, None)]`
+    // that happened to coincidentally pick the right slot for this
+    // single-method trait shape.
+    let method_shim_slot = model
+        .item_synthetic_kinds
+        .iter()
+        .find_map(|kind| match kind {
+            SyntheticItemKind::VTableMethodShim {
+                vtable_entry_index,
+                ..
+            } => Some(*vtable_entry_index),
+            _ => None,
+        })
+        .expect("vtable_fixture should synthesise a VTableMethodShim");
+    assert_eq!(method_shim_slot, 3);
+
+    // The VTableInstance Static Instance must carry a structural
+    // init value per spec.md:1063-1074 and the slot count must
+    // match the four `vtable_entries` slots above.
+    let vtable_instance_item = model
+        .item_synthetic_kinds
+        .iter()
+        .enumerate()
+        .find_map(|(idx, kind)| match kind {
+            SyntheticItemKind::VTableInstance { .. } => {
+                Some(regseq_model::ItemId::from_u32(idx as u32))
+            }
+            _ => None,
+        })
+        .expect("VTableInstance Item should be synthesised");
+    let init_id = model
+        .instances
+        .iter()
+        .find(|inst| inst.item == vtable_instance_item)
+        .and_then(|inst| match &inst.kind {
+            regseq_model::InstanceKind::Static { init, .. } => *init,
+            _ => None,
+        })
+        .expect("VTableInstance Static must have Some(init)");
+    match model.consts.resolve(init_id) {
+        regseq_model::Const::Bytes(bytes) => {
+            let pointer_size = bytes.len() / 4;
+            assert!(pointer_size > 0);
+            assert_eq!(bytes.len(), pointer_size * 4);
+        }
+        other => panic!("VTableInstance init should be Const::Bytes, got {other:?}"),
+    }
     assert!(model.items.iter().any(|item| {
         model
             .strings

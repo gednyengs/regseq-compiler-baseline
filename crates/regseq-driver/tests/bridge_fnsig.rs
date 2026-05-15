@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::fnsig::{compute_cabi_lowering, translate_fn_sig};
-use regseq_driver::bridge::{BridgeCtxt, BridgeError, BridgeInput};
+use regseq_driver::bridge::{BridgeCtxt, BridgeError, BridgeInput, CAbiTypePosition};
 use regseq_model::{CAbiShape, FnAbi, SubstReason, Ty, UintKind};
 use rustc_hir::def_id::{LocalDefId, LocalModDefId};
 use rustc_middle::ty::TyCtxt;
@@ -346,5 +346,151 @@ pub fn hrtb(_: for<'a> fn(&'a u32, &'a u32)) {}
         )
         .unwrap_err();
         assert!(matches!(err, BridgeError::SubstantiveHrtb { .. }));
+    });
+}
+
+#[test]
+fn boundary_rejects_unit_at_input_position() {
+    // Spec section 14.5: Output admits the unit `()` type, Input does
+    // not. The boundary admissibility check must surface this with
+    // `position = Input(0)`.
+    let source = r#"
+pub extern "C" fn unit_input(_: ()) {}
+"#;
+
+    with_bridge("bridge_fnsig_unit_input", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "unit_input").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::UnsupportedCAbiType {
+                position: CAbiTypePosition::Input(0),
+                ..
+            }
+        ));
+    });
+}
+
+#[test]
+fn boundary_rejects_array_at_input_position() {
+    // Spec section 14.5: Array types are inadmissible at boundary
+    // positions (neither Input nor Output). The Input(0) row exercises
+    // this rejection.
+    let source = r#"
+pub extern "C" fn array_input(_: [u8; 4]) {}
+"#;
+
+    with_bridge("bridge_fnsig_array_input", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "array_input").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::UnsupportedCAbiType {
+                position: CAbiTypePosition::Input(0),
+                ..
+            }
+        ));
+    });
+}
+
+#[test]
+fn field_rejects_rust_abi_fn_ptr() {
+    // Spec section 14.5: A non-C-ABI function pointer embedded as a
+    // field of a `#[repr(C)]` aggregate is inadmissible. The nested
+    // sig check must surface this with `position = Field`.
+    let source = r#"
+#[repr(C)]
+pub struct Wrap {
+    pub f: fn(u32) -> u32,
+}
+
+pub extern "C" fn rust_fn_ptr_field(_: Wrap) {}
+"#;
+
+    with_bridge("bridge_fnsig_rust_fn_ptr_field", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "rust_fn_ptr_field").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::UnsupportedCAbiType {
+                position: CAbiTypePosition::Field,
+                ..
+            }
+        ));
+    });
+}
+
+#[test]
+fn nested_sig_rejects_never_output_fn_ptr() {
+    // Spec section 14.5: A function pointer whose own output is the
+    // never type `!` is inadmissible at the boundary. The nested sig
+    // check propagates the caller's position (Input(0) here).
+    let source = r#"
+#![feature(never_type)]
+pub extern "C" fn never_fn_ptr(_: extern "C" fn() -> !) {}
+"#;
+
+    with_bridge("bridge_fnsig_never_fn_ptr", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "never_fn_ptr").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::UnsupportedCAbiType {
+                position: CAbiTypePosition::Input(0),
+                ..
+            }
+        ));
+    });
+}
+
+#[test]
+fn boundary_rejects_unsized_pointee() {
+    // Spec section 14.5: References and raw pointers to unsized
+    // pointees (`str`, slices, `dyn Trait`) are inadmissible at
+    // boundary positions. Exercises the `is_c_boundary_bad_pointee`
+    // path for each of the three unsized families.
+    let source = r#"
+pub trait Marker {}
+
+pub extern "C" fn str_input(_: &str) {}
+pub extern "C" fn slice_input(_: &[u8]) {}
+pub extern "C" fn dyn_input(_: *const dyn Marker) {}
+"#;
+
+    with_bridge("bridge_fnsig_unsized_pointee", source, |tcx, cx| {
+        for name in ["str_input", "slice_input", "dyn_input"] {
+            let err = translate_fn_sig(
+                cx,
+                tcx.fn_sig(find_fn_def_id(tcx, name).to_def_id())
+                    .instantiate_identity(),
+            )
+            .unwrap_err();
+            assert!(
+                matches!(
+                    err,
+                    BridgeError::UnsupportedCAbiType {
+                        position: CAbiTypePosition::Input(0),
+                        ..
+                    }
+                ),
+                "expected Input(0) rejection for {name}, got {err:?}"
+            );
+        }
     });
 }

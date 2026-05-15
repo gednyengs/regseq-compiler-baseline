@@ -78,6 +78,11 @@ pub struct BridgeCtxt<'tcx> {
     pub vtable_synth_cache: HashMap<synth::VTableSynthKey, VTableSynthHandles>,
     /// Phase-2 cache for bridge-synthesised drop-glue items.
     pub drop_glue_synth_cache: HashMap<TyId, ItemHandle>,
+    /// Forward cache from model `TyId` back to the rustc `Ty<'tcx>` it
+    /// was translated from. Populated on the success path of
+    /// `translate_erased_ty`; used by Phase-5 body materialisation to
+    /// reconstruct rustc `GenericArgs` from model `Instance.generic_args`.
+    pub ty_forward_cache: HashMap<TyId, rustc_middle::ty::Ty<'tcx>>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -97,6 +102,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             vtable_type_synth_cache: HashMap::new(),
             vtable_synth_cache: HashMap::new(),
             drop_glue_synth_cache: HashMap::new(),
+            ty_forward_cache: HashMap::new(),
         }
     }
 }
@@ -392,8 +398,24 @@ fn scan_statement_for_synthesis<'tcx>(
     };
     let projection_bindings = dynamic_projection_bindings_key(ctxt, *target_ty);
     let principal = principal_trait_key(ctxt, principal_ref, projection_bindings);
-    let method_shims = method_shims_for_vtable(ctxt, source_ty, principal_ref);
-    synth::vtable::synthesise_vtable_with_method_shims(ctxt, principal, impl_ty, method_shims)?;
+    let (method_shims, init_meta) =
+        vtable_entries_and_init_meta(ctxt, source_ty, principal_ref);
+    if let Some(init_meta) = init_meta {
+        synth::vtable::synthesise_vtable_with_init_meta(
+            ctxt,
+            principal,
+            impl_ty,
+            method_shims,
+            init_meta,
+        )?;
+    } else {
+        synth::vtable::synthesise_vtable_with_method_shims(
+            ctxt,
+            principal,
+            impl_ty,
+            method_shims,
+        )?;
+    }
     Ok(())
 }
 
@@ -596,26 +618,61 @@ fn encode_def_path_hash(bytes: &mut Vec<u8>, hash: DefPathHash) {
     bytes.extend_from_slice(&hash.local_hash.to_le_bytes());
 }
 
-fn method_shims_for_vtable<'tcx>(
+/// Compute both the method-shim entry list and (when impl-type layout
+/// is available) the `VTableInitMeta` capturing the full slot sequence
+/// for Phase 5 init synthesis.
+///
+/// HYPOTHESIS: this uses `principal.with_self_ty(tcx, source_ty)` plus
+/// `erase_and_anonymize_regions` to mirror rustc's
+/// `vtable_allocation_provider` (see rustc-src
+/// `rustc_middle/src/ty/vtable.rs:88-93`). If the trait_ref cannot be
+/// resolved for any reason, both the method-shim list and the init
+/// meta come back empty/None.
+fn vtable_entries_and_init_meta<'tcx>(
     ctxt: &mut BridgeCtxt<'tcx>,
     source_ty: rustc_middle::ty::Ty<'tcx>,
     principal: rustc_middle::ty::ExistentialTraitRef<'tcx>,
-) -> Vec<(u32, Option<DefPathHash>)> {
+) -> (
+    Vec<(u32, Option<DefPathHash>)>,
+    Option<synth::VTableInitMeta>,
+) {
     let trait_ref = principal.with_self_ty(ctxt.input.tcx, source_ty);
     let trait_ref = ctxt.input.tcx.erase_and_anonymize_regions(trait_ref);
-    ctxt.input
+    let entries = ctxt.input.tcx.vtable_entries(trait_ref);
+
+    let mut method_shims = Vec::new();
+    let mut slots = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        let slot = match entry {
+            rustc_middle::ty::VtblEntry::MetadataDropInPlace => synth::VTableSlotKind::DropInPlace,
+            rustc_middle::ty::VtblEntry::MetadataSize => synth::VTableSlotKind::Size,
+            rustc_middle::ty::VtblEntry::MetadataAlign => synth::VTableSlotKind::Align,
+            rustc_middle::ty::VtblEntry::Vacant => synth::VTableSlotKind::Vacant,
+            rustc_middle::ty::VtblEntry::TraitVPtr(_) => synth::VTableSlotKind::TraitVPtr,
+            rustc_middle::ty::VtblEntry::Method(instance) => {
+                method_shims.push((
+                    idx as u32,
+                    Some(def_path_hash(ctxt.input.tcx, instance.def_id())),
+                ));
+                synth::VTableSlotKind::Method(None)
+            }
+        };
+        slots.push(slot);
+    }
+
+    let layout = ctxt
+        .input
         .tcx
-        .vtable_entries(trait_ref)
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, entry)| match entry {
-            rustc_middle::ty::VtblEntry::Method(instance) => Some((
-                idx as u32,
-                Some(def_path_hash(ctxt.input.tcx, instance.def_id())),
-            )),
-            _ => None,
-        })
-        .collect()
+        .layout_of(rustc_middle::ty::TypingEnv::fully_monomorphized().as_query_input(source_ty))
+        .ok();
+    let init_meta = layout.map(|layout| synth::VTableInitMeta {
+        slots,
+        size: layout.size.bytes(),
+        align: layout.align.abi.bytes(),
+        pointer_size: ctxt.input.tcx.data_layout.pointer_size().bytes(),
+    });
+
+    (method_shims, init_meta)
 }
 
 fn def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> DefPathHash {

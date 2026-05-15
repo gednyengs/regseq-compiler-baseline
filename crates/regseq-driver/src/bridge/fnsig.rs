@@ -4,12 +4,12 @@ use std::collections::HashSet;
 
 use regseq_model::{
     CAbiLowering, CAbiShape, FieldLayout, FnAbi, FnSig, FnSigId, IntKind, ItemId, ItemKind,
-    LayoutKind, Safety, SubstReason, Ty, TyId, UintKind,
+    LayoutKind, Safety, SubstReason, SyntheticItemKind, Ty, TyId, UintKind,
 };
 use rustc_abi::{ExternAbi, Integer, IntegerType};
+use rustc_data_structures::fingerprint::Fingerprint;
 use rustc_hir::definitions::DefPathHash as RustcDefPathHash;
-use rustc_middle::ty::{self, TyCtxt};
-use rustc_span::def_id::DefId;
+use rustc_middle::ty;
 
 use super::{
     ty::{erase_regions_or_reject, translate_ty},
@@ -356,14 +356,24 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             ItemKind::Struct | ItemKind::Enum | ItemKind::Union => {}
             _ => return None,
         }
-        let wanted = self.cx.model.item_def_paths[item];
-        for local_def_id in self.cx.input.tcx.hir_crate_items(()).definitions() {
-            let def_id = local_def_id.to_def_id();
-            if def_path_hash_eq(self.cx.input.tcx, def_id, wanted) {
-                return Some(self.cx.input.tcx.adt_def(def_id));
-            }
+        // Synthetic items (vtable types, closure capture structs, drop
+        // glue, etc.) have no rustc ADT counterpart. Their DefPathHash
+        // either uses the reserved synthetic `StableCrateId(0)` -- which
+        // would panic inside `def_path_hash_to_def_id_extern` -- or
+        // points to a non-ADT DefId such as a closure. Only items
+        // tagged `SyntheticItemKind::None` come from a real rustc ADT
+        // definition that supports the `adt_def` query.
+        if !matches!(
+            self.cx.model.item_synthetic_kinds[item],
+            SyntheticItemKind::None
+        ) {
+            return None;
         }
-        None
+        let wanted = self.cx.model.item_def_paths[item];
+        let rustc_hash =
+            RustcDefPathHash(Fingerprint::new(wanted.stable_crate_id.0, wanted.local_hash));
+        let def_id = self.cx.input.tcx.def_path_hash_to_def_id(rustc_hash)?;
+        Some(self.cx.input.tcx.adt_def(def_id))
     }
 
     fn is_never(&self, ty_id: TyId) -> bool {
@@ -448,12 +458,6 @@ fn layout_field_tys(layout: &regseq_model::Layout) -> Vec<TyId> {
 
 fn field_ty(field: &FieldLayout) -> TyId {
     field.ty
-}
-
-fn def_path_hash_eq(tcx: TyCtxt<'_>, def_id: DefId, wanted: regseq_model::DefPathHash) -> bool {
-    let actual: RustcDefPathHash = tcx.def_path_hash(def_id);
-    actual.stable_crate_id().as_u64() == wanted.stable_crate_id.0
-        && actual.local_hash().as_u64() == wanted.local_hash
 }
 
 fn match_integer(integer: Integer) -> IntKind {

@@ -313,6 +313,35 @@ fn validate_operand(
     }
 }
 
+/// Structural pre-pass for section 19.3 invariants `I-Deref-first`
+/// and `I-Downcast-followed-by-Field`. Runs before the type-coherence
+/// walk so structural violations precede type-narrowing failures.
+fn validate_place_structural(
+    place: &Place,
+    location: &PlaceLocation,
+) -> Result<(), PlaceValidationError> {
+    for (idx, elem) in place.projection.iter().enumerate() {
+        match elem {
+            PlaceElem::Deref if idx != 0 => {
+                return Err(error(
+                    with_projection_step(location, idx),
+                    PlaceValidationErrorKind::DerefNotFirst { index: idx },
+                ));
+            }
+            PlaceElem::Downcast(_)
+                if !matches!(place.projection.get(idx + 1), Some(PlaceElem::Field(_, _))) =>
+            {
+                return Err(error(
+                    with_projection_step(location, idx),
+                    PlaceValidationErrorKind::DowncastNotFollowedByField { index: idx },
+                ));
+            }
+            _ => {}
+        }
+    }
+    Ok(())
+}
+
 fn validate_place(
     model: &RegseqModel,
     body: &Body,
@@ -329,28 +358,13 @@ fn validate_place(
         ));
     }
 
+    validate_place_structural(place, &location)?;
+
     let mut current_ty = CurrentTy::Interned(body.local_decls[place.local].ty);
     let mut active_variant = None;
 
     for (idx, elem) in place.projection.iter().enumerate() {
         let step_location = with_projection_step(&location, idx);
-        match elem {
-            PlaceElem::Deref if idx != 0 => {
-                return Err(error(
-                    step_location,
-                    PlaceValidationErrorKind::DerefNotFirst { index: idx },
-                ));
-            }
-            PlaceElem::Downcast(_)
-                if !matches!(place.projection.get(idx + 1), Some(PlaceElem::Field(_, _))) =>
-            {
-                return Err(error(
-                    step_location,
-                    PlaceValidationErrorKind::DowncastNotFollowedByField { index: idx },
-                ));
-            }
-            _ => {}
-        }
 
         match elem {
             PlaceElem::Deref => match current_ty {
