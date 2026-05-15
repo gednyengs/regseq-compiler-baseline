@@ -13,6 +13,7 @@ mod assign;
 mod discovery;
 mod handles;
 mod sort;
+pub mod ty;
 
 pub use handles::{HandleTable, ItemHandle};
 
@@ -78,6 +79,84 @@ impl<'tcx> BridgeCtxt<'tcx> {
 /// Errors returnable from the bridge.
 #[derive(Debug, Error)]
 pub enum BridgeError {
+    /// A type is rejected by the driver DSL policy.
+    #[error("DSL rejects {kind:?} type: {ty_repr}")]
+    DslRejection {
+        /// Rejection family.
+        kind: DslRejectionKind,
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A non-rigid type survived normalization.
+    #[error("non-rigid TyKind survived normalization: {kind:?} in {ty_repr}")]
+    NonRigidTy {
+        /// Non-rigid TyKind family.
+        kind: NonRigidTyKind,
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A foreign type reached type translation.
+    #[error("foreign type is unsupported: {ty_repr}")]
+    Foreign {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A coroutine-family type reached type translation.
+    #[error("coroutine type is unsupported: {ty_repr}")]
+    Coroutine {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A pattern/refinement type reached type translation.
+    #[error("pattern type is unsupported: {ty_repr}")]
+    Pat {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// An unsafe binder reached type translation.
+    #[error("unsafe binder type is unsupported: {ty_repr}")]
+    UnsafeBinder {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A dynamic type has no principal trait.
+    #[error("auto-only dyn type is unsupported: {ty_repr}")]
+    DynAutoOnly {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A dyn-star type reached type translation.
+    #[error("dyn-star type is unsupported: {ty_repr}")]
+    DynStar {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A custom auto trait reached dynamic type translation.
+    #[error("custom auto trait is unsupported: {trait_repr} in {ty_repr}")]
+    CustomAutoTrait {
+        /// Rendered custom auto trait.
+        trait_repr: String,
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A substantive higher-ranked binder would lose type identity when erased.
+    #[error("substantive HRTB is unsupported: {binder_repr}")]
+    SubstantiveHrtb {
+        /// Rendered binder.
+        binder_repr: String,
+    },
+    /// A type layout could not be represented.
+    #[error("type layout is unavailable: {ty_repr}")]
+    Layout {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
+    /// A type kind is outside the current bridge task's translation surface.
+    #[error("unsupported type: {ty_repr}")]
+    UnsupportedTy {
+        /// Rendered rustc type.
+        ty_repr: String,
+    },
     /// Generic opaque handles are rejected before model construction.
     #[error("generic opaque handle is unsupported: {0}")]
     GenericOpaqueHandle(String),
@@ -90,6 +169,34 @@ pub enum BridgeError {
     /// Phase 4 ItemId assignment failed.
     #[error("phase 4 assignment failed: {0}")]
     Phase4(String),
+}
+
+/// DSL-policy type rejection family.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DslRejectionKind {
+    /// `Box<T>` is outside the no-alloc driver DSL.
+    Box,
+    /// `core::ffi::c_void` must be replaced with an opaque struct.
+    CVoid,
+    /// `core::sync::atomic::Atomic*` must use the Regseq atomic DSL.
+    Atomic,
+}
+
+/// Non-rigid `TyKind` family rejected after normalization.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum NonRigidTyKind {
+    /// `TyKind::Param`.
+    Param,
+    /// `TyKind::Bound`.
+    Bound,
+    /// `TyKind::Placeholder`.
+    Placeholder,
+    /// `TyKind::Infer`.
+    Infer,
+    /// `TyKind::Alias`.
+    Alias,
+    /// `TyKind::Error`.
+    Error,
 }
 
 /// Orchestrates the five-phase bridge pipeline.
