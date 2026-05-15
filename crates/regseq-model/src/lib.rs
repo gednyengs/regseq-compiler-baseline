@@ -58,8 +58,8 @@ pub use ids::{
 pub use idx::Idx;
 pub use index_vec::IndexVec;
 pub use instance::{
-    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
-    RustcInstanceKindTag,
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, FunctionInstanceData,
+    FunctionInstanceFlavor, Instance, InstanceKind, RegseqInstanceKey,
 };
 pub use instance_ref::InstanceRef;
 pub use item::{InlineHint, Item, ItemKind, Linkage};

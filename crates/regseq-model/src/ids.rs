@@ -209,7 +209,7 @@ newtype_index! {
     ///
     /// `FnSig` itself is defined in stage 11 (MIR bodies). Stage 1
     /// forward-declares the ID so that
-    /// `InstanceKind::Function { sig: FnSigId, .. }` compiles.
+    /// `InstanceKind::Function(FunctionInstanceData { fn_sig, .. })` compiles.
     pub struct FnSigId {}
 }
 

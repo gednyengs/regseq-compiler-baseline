@@ -14,63 +14,150 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::args_key::GenericArgs;
+use crate::args_key::{ArgsKey, GenericArgs};
 use crate::ids::{ConstId, FnSigId, ItemId, StringId, TyId};
 use crate::placeholders::Body;
 use crate::source::Span;
 
+/// Data carried by a function instance.
+///
+/// The payload is stored structurally on `InstanceKind::Function`
+/// so the post-monomorphization signature and body stay with the
+/// exact monomorphized instance that owns them.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct FunctionInstanceData {
+    /// Post-monomorphization function signature.
+    pub fn_sig: FnSigId,
+    /// Post-monomorphization body, or `None` for foreign functions.
+    pub body: Option<Body>,
+    /// Rustc instance-kind flavor translated by the bridge.
+    pub flavor: FunctionInstanceFlavor,
+    /// Vtable slot index for virtual function instances.
+    pub virtual_idx: Option<u32>,
+}
+
+impl FunctionInstanceData {
+    /// Returns the post-monomorphization function signature ID.
+    pub fn fn_sig(&self) -> FnSigId {
+        self.fn_sig
+    }
+
+    /// Returns the optional post-monomorphization body.
+    pub fn body(&self) -> Option<&Body> {
+        self.body.as_ref()
+    }
+
+    /// Returns the optional mutable post-monomorphization body.
+    pub fn body_mut(&mut self) -> Option<&mut Body> {
+        self.body.as_mut()
+    }
+
+    /// Returns the translated rustc instance-kind flavor.
+    pub fn flavor(&self) -> FunctionInstanceFlavor {
+        self.flavor
+    }
+
+    /// Returns the optional virtual dispatch slot.
+    pub fn virtual_idx(&self) -> Option<u32> {
+        self.virtual_idx
+    }
+}
+
 /// Kind-specific data for an `Instance`.
 ///
 /// Closed six-variant set covering every emittable C-level entity:
-/// `Function`, `Static`, `Const`, `Struct`, `Enum`, `Union`. Stage 13
-/// may extend with domain-specific subkinds (e.g., an `Isr` subkind
-/// of `Function`); the stage-1 set is the closed baseline.
+/// `Function`, `Static`, `Const`, `Struct`, `Enum`, `Union`.
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub enum InstanceKind {
-    /// Function instantiation. `sig` is always present (foreign
-    /// declarations have a sig but no body); `body` is `None` for
-    /// foreign declarations whose bodies are not in our crate set.
-    Function { sig: FnSigId, body: Option<Body> },
+    /// Function instantiation.
+    Function(FunctionInstanceData),
 
-    /// Static. The mutability flag (immutable `static` vs.
-    /// `static mut`) lives on the source `Item` (stage 12); C
-    /// codegen reads `instance.item` to decide on the `const`
-    /// qualifier.
-    Static { ty: TyId, init: ConstId },
+    /// Static instance.
+    Static {
+        /// Static type.
+        ty: TyId,
+        /// Initializer value, or `None` for foreign statics.
+        init: Option<ConstId>,
+    },
 
     /// Const item.
-    Const { ty: TyId, value: ConstId },
+    Const {
+        /// Const value type.
+        ty: TyId,
+        /// Const value.
+        value: ConstId,
+    },
 
-    /// Nominal struct. `layout` indexes the matching `Ty::Struct`
-    /// in `RegseqModel.types`.
-    Struct { layout: TyId },
+    /// Nominal struct.
+    Struct {
+        /// Matching `Ty::Struct` layout.
+        layout: TyId,
+    },
 
-    /// Nominal enum. `layout` indexes the matching `Ty::Enum`.
-    Enum { layout: TyId },
+    /// Nominal enum.
+    Enum {
+        /// Matching `Ty::Enum` layout.
+        layout: TyId,
+    },
 
-    /// Nominal C-style union. `layout` indexes the matching
-    /// `Ty::Union`.
-    Union { layout: TyId },
+    /// Nominal C-style union.
+    Union {
+        /// Matching `Ty::Union` layout.
+        layout: TyId,
+    },
+}
+
+impl InstanceKind {
+    /// Returns the function payload for function instances.
+    pub fn as_function(&self) -> Option<&FunctionInstanceData> {
+        match self {
+            InstanceKind::Function(data) => Some(data),
+            _ => None,
+        }
+    }
+
+    /// Returns the mutable function payload for function instances.
+    pub fn as_function_mut(&mut self) -> Option<&mut FunctionInstanceData> {
+        match self {
+            InstanceKind::Function(data) => Some(data),
+            _ => None,
+        }
+    }
 }
 
 /// One monomorphized item.
 ///
 /// `item` back-references the source-level Item (always present;
 /// even bridge-synthesized vtable instances have a synthesized Item
-/// entry per the spec). `generic_args` is empty for non-generic
-/// items. `symbol_name` is rustc's mangled name; uniqueness across
-/// `instances` is guaranteed by the bridge (rustc's mangler factors
-/// in the full instance identity, including shim discriminator).
-/// `span` uses the synthesized sentinel
-/// (`SourceFileId::SYNTHESIZED`, `lo: 0`, `hi: 0`) for
-/// bridge-synthesized constructs that have no source location.
+/// entry per the spec).
 #[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Instance {
+    /// Originating source-level item.
     pub item: ItemId,
+    /// Resolved generic arguments, empty for non-generic items.
     pub generic_args: GenericArgs,
-    pub symbol_name: StringId,
+    /// C-side identifier emitted for this instance.
+    pub emission_name: StringId,
+    /// Source span, synthesized for bridge-synthesized items.
     pub span: Span,
+    /// Kind-specific instance payload.
     pub kind: InstanceKind,
+}
+
+/// Bridge-side instance interning key.
+///
+/// Internal to instance construction; the bridge uses this shape to
+/// distinguish Regseq emission kinds and function shim flavors.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub struct RegseqInstanceKey {
+    /// Stable rank for the Regseq `InstanceKind` variant.
+    pub regseq_kind_rank: u8,
+    /// Originating source-level item.
+    pub item: ItemId,
+    /// Stable key for the resolved generic arguments.
+    pub generic_args_key: ArgsKey,
+    /// Function shim discriminator, or `0` for non-functions.
+    pub fn_shim_disambig: u8,
 }
 
 /// Pinned stable rank for the Regseq `InstanceKind` variant.
@@ -82,7 +169,7 @@ pub struct Instance {
 /// and in the bridge's instance interning key.
 pub const fn regseq_instance_kind_rank(kind: &InstanceKind) -> u8 {
     match kind {
-        InstanceKind::Function { .. } => 0,
+        InstanceKind::Function(_) => 0,
         InstanceKind::Static { .. } => 1,
         InstanceKind::Const { .. } => 2,
         InstanceKind::Struct { .. } => 3,
@@ -91,7 +178,7 @@ pub const fn regseq_instance_kind_rank(kind: &InstanceKind) -> u8 {
     }
 }
 
-/// Tag enum mirroring rustc's `ty::InstanceKind` discriminator.
+/// Flavor enum mirroring rustc's `ty::InstanceKind` discriminator.
 ///
 /// `regseq-model` has zero rustc deps (Q1), so the rustc-side enum
 /// cannot be referenced directly. The bridge converts a
@@ -101,22 +188,37 @@ pub const fn regseq_instance_kind_rank(kind: &InstanceKind) -> u8 {
 ///
 /// Append-only: a toolchain bump that adds a rustc variant adds a
 /// new tag at the end and a matching new rank.
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord)]
-pub enum RustcInstanceKindTag {
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
+pub enum FunctionInstanceFlavor {
+    /// Plain item instance.
     Item,
+    /// Intrinsic instance.
     Intrinsic,
+    /// Vtable shim instance.
     VTableShim,
+    /// Reify shim instance.
     ReifyShim,
+    /// Function pointer shim instance.
     FnPtrShim,
+    /// Virtual dispatch instance.
     Virtual,
+    /// Closure `FnOnce` shim instance.
     ClosureOnceShim,
+    /// Coroutine-in-closure constructor shim instance.
     ConstructCoroutineInClosureShim,
+    /// Thread-local shim instance.
     ThreadLocalShim,
+    /// Future drop poll shim instance.
     FutureDropPollShim,
+    /// Drop glue instance.
     DropGlue,
+    /// Clone shim instance.
     CloneShim,
+    /// Function pointer address shim instance.
     FnPtrAddrShim,
+    /// Async drop-glue constructor shim instance.
     AsyncDropGlueCtorShim,
+    /// Async drop-glue instance.
     AsyncDropGlue,
 }
 
@@ -129,23 +231,23 @@ pub enum RustcInstanceKindTag {
 ///
 /// Append-only: existing ranks are immutable. A toolchain bump that
 /// adds a rustc variant appends a new tag and a new rank.
-pub const fn rustc_instance_kind_sort_rank(tag: RustcInstanceKindTag) -> u8 {
+pub const fn rustc_instance_kind_sort_rank(tag: FunctionInstanceFlavor) -> u8 {
     match tag {
-        RustcInstanceKindTag::Item => 0,
-        RustcInstanceKindTag::Intrinsic => 1,
-        RustcInstanceKindTag::VTableShim => 2,
-        RustcInstanceKindTag::ReifyShim => 3,
-        RustcInstanceKindTag::FnPtrShim => 4,
-        RustcInstanceKindTag::Virtual => 5,
-        RustcInstanceKindTag::ClosureOnceShim => 6,
-        RustcInstanceKindTag::ConstructCoroutineInClosureShim => 7,
-        RustcInstanceKindTag::ThreadLocalShim => 8,
-        RustcInstanceKindTag::FutureDropPollShim => 9,
-        RustcInstanceKindTag::DropGlue => 10,
-        RustcInstanceKindTag::CloneShim => 11,
-        RustcInstanceKindTag::FnPtrAddrShim => 12,
-        RustcInstanceKindTag::AsyncDropGlueCtorShim => 13,
-        RustcInstanceKindTag::AsyncDropGlue => 14,
+        FunctionInstanceFlavor::Item => 0,
+        FunctionInstanceFlavor::Intrinsic => 1,
+        FunctionInstanceFlavor::VTableShim => 2,
+        FunctionInstanceFlavor::ReifyShim => 3,
+        FunctionInstanceFlavor::FnPtrShim => 4,
+        FunctionInstanceFlavor::Virtual => 5,
+        FunctionInstanceFlavor::ClosureOnceShim => 6,
+        FunctionInstanceFlavor::ConstructCoroutineInClosureShim => 7,
+        FunctionInstanceFlavor::ThreadLocalShim => 8,
+        FunctionInstanceFlavor::FutureDropPollShim => 9,
+        FunctionInstanceFlavor::DropGlue => 10,
+        FunctionInstanceFlavor::CloneShim => 11,
+        FunctionInstanceFlavor::FnPtrAddrShim => 12,
+        FunctionInstanceFlavor::AsyncDropGlueCtorShim => 13,
+        FunctionInstanceFlavor::AsyncDropGlue => 14,
     }
 }
 

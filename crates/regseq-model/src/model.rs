@@ -82,11 +82,11 @@ mod tests;
 const SOURCE_FILE_PATH: &str = "SourceFile.path (StringId)";
 const CRATE_INFO_NAME: &str = "CrateInfo.name (StringId)";
 const INSTANCE_ITEM: &str = "Instance.item (ItemId)";
-const INSTANCE_SYMBOL_NAME: &str = "Instance.symbol_name (StringId)";
+const INSTANCE_EMISSION_NAME: &str = "Instance.emission_name (StringId)";
 const INSTANCE_SPAN_FILE: &str = "Instance.span.file (SourceFileId)";
 const INSTANCE_GENERIC_ARG_TY: &str = "Instance.generic_args[..](TyId)";
 const INSTANCE_GENERIC_ARG_CONST: &str = "Instance.generic_args[..](ConstId)";
-const INSTANCE_KIND_FUNCTION_SIG: &str = "InstanceKind::Function.sig (FnSigId)";
+const INSTANCE_KIND_FUNCTION_SIG: &str = "InstanceKind::Function.fn_sig (FnSigId)";
 const INSTANCE_KIND_STATIC_TY: &str = "InstanceKind::Static.ty (TyId)";
 const INSTANCE_KIND_STATIC_INIT: &str = "InstanceKind::Static.init (ConstId)";
 const INSTANCE_KIND_CONST_TY: &str = "InstanceKind::Const.ty (TyId)";
@@ -265,7 +265,7 @@ pub fn invariant_descriptor(id: InvariantId) -> &'static str {
         InvariantId::FunctionBodyPresenceMatchesKind => {
             concat!(
                 "Body presence matches `InstanceKind::Function` shape. Bodies live ",
-                "structurally on `InstanceKind::Function { body: Option<Body>, ... }`. ",
+                "structurally on `InstanceKind::Function(FunctionInstanceData { body: Option<Body>, ... })`. ",
                 "`body: Some(b)` stores the body on the Instance-side field; `body: None` ",
                 "is reserved for foreign declarations. Non-Function kinds have no body field."
             )
@@ -560,8 +560,8 @@ impl RegseqModel {
 
     /// Returns the function signature for function instances.
     pub fn instance_fn_sig(&self, id: InstanceId) -> Option<&FnSig> {
-        match self.instances[id].kind {
-            InstanceKind::Function { sig, .. } => Some(self.sigs.resolve(sig)),
+        match &self.instances[id].kind {
+            InstanceKind::Function(data) => Some(self.sigs.resolve(data.fn_sig)),
             _ => None,
         }
     }
@@ -569,7 +569,7 @@ impl RegseqModel {
     /// Returns the inline body for function instances that have one.
     pub fn instance_body(&self, id: InstanceId) -> Option<&Body> {
         match &self.instances[id].kind {
-            InstanceKind::Function { body, .. } => body.as_ref(),
+            InstanceKind::Function(data) => data.body.as_ref(),
             _ => None,
         }
     }
@@ -697,7 +697,7 @@ impl RegseqModel {
 
     fn validate_instance(&self, instance: &Instance) -> Result<(), InvariantViolation> {
         self.check_item_id(instance.item, INSTANCE_ITEM)?;
-        self.check_string_id(instance.symbol_name, INSTANCE_SYMBOL_NAME)?;
+        self.check_string_id(instance.emission_name, INSTANCE_EMISSION_NAME)?;
         self.check_source_file_id(instance.span.file, INSTANCE_SPAN_FILE)?;
 
         for arg in &instance.generic_args {
@@ -707,26 +707,28 @@ impl RegseqModel {
             }
         }
 
-        match instance.kind {
-            InstanceKind::Function { sig, .. } => {
-                self.check_fn_sig_id(sig, INSTANCE_KIND_FUNCTION_SIG)?;
+        match &instance.kind {
+            InstanceKind::Function(data) => {
+                self.check_fn_sig_id(data.fn_sig, INSTANCE_KIND_FUNCTION_SIG)?;
             }
             InstanceKind::Static { ty, init } => {
-                self.check_ty_id(ty, INSTANCE_KIND_STATIC_TY)?;
-                self.check_const_id(init, INSTANCE_KIND_STATIC_INIT)?;
+                self.check_ty_id(*ty, INSTANCE_KIND_STATIC_TY)?;
+                if let Some(init) = *init {
+                    self.check_const_id(init, INSTANCE_KIND_STATIC_INIT)?;
+                }
             }
             InstanceKind::Const { ty, value } => {
-                self.check_ty_id(ty, INSTANCE_KIND_CONST_TY)?;
-                self.check_const_id(value, INSTANCE_KIND_CONST_VALUE)?;
+                self.check_ty_id(*ty, INSTANCE_KIND_CONST_TY)?;
+                self.check_const_id(*value, INSTANCE_KIND_CONST_VALUE)?;
             }
             InstanceKind::Struct { layout } => {
-                self.check_ty_id(layout, INSTANCE_KIND_STRUCT_LAYOUT)?;
+                self.check_ty_id(*layout, INSTANCE_KIND_STRUCT_LAYOUT)?;
             }
             InstanceKind::Enum { layout } => {
-                self.check_ty_id(layout, INSTANCE_KIND_ENUM_LAYOUT)?;
+                self.check_ty_id(*layout, INSTANCE_KIND_ENUM_LAYOUT)?;
             }
             InstanceKind::Union { layout } => {
-                self.check_ty_id(layout, INSTANCE_KIND_UNION_LAYOUT)?;
+                self.check_ty_id(*layout, INSTANCE_KIND_UNION_LAYOUT)?;
             }
         }
 

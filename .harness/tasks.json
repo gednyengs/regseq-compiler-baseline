@@ -2776,7 +2776,7 @@
           "id": "regseq-model-75",
           "name": "P1a-DS-10: Instance + InstanceKind + InstanceId",
           "spec": ".harness/tasks/regseq-model/75-instance-and-instance-kind.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-68",
             "regseq-model-69",

@@ -34,7 +34,10 @@ impl InstanceRef {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{regseq_instance_kind_rank, InstanceKind, StableCrateId};
+    use crate::{
+        regseq_instance_kind_rank, FunctionInstanceData, FunctionInstanceFlavor, InstanceKind,
+        StableCrateId,
+    };
 
     use std::collections::hash_map::DefaultHasher;
     use std::hash::{Hash, Hasher};
@@ -60,13 +63,15 @@ mod tests {
     #[test]
     fn instance_ref_constructs_for_each_regseq_rank() {
         let ranks = [
-            regseq_instance_kind_rank(&InstanceKind::Function {
-                sig: crate::FnSigId::ZERO,
+            regseq_instance_kind_rank(&InstanceKind::Function(FunctionInstanceData {
+                fn_sig: crate::FnSigId::ZERO,
                 body: None,
-            }),
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            })),
             regseq_instance_kind_rank(&InstanceKind::Static {
                 ty: crate::TyId::ZERO,
-                init: crate::ConstId::ZERO,
+                init: None,
             }),
             regseq_instance_kind_rank(&InstanceKind::Const {
                 ty: crate::TyId::ZERO,

@@ -14,9 +14,9 @@
 
 use crate::{
     Body, BridgeInput, ConstId, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, FnAbi,
-    FnSig, FnSigId, GenericArg, InlineHint, Instance, InstanceId, InstanceKind, InvariantId,
-    InvariantViolation, Item, ItemId, ItemKind, Linkage, RegseqModel, Safety, SourceFileId, Span,
-    StableCrateId, StringId, Ty, TyId,
+    FnSig, FnSigId, FunctionInstanceData, FunctionInstanceFlavor, GenericArg, InlineHint, Instance,
+    InstanceId, InstanceKind, InvariantId, InvariantViolation, Item, ItemId, ItemKind, Linkage,
+    RegseqModel, Safety, SourceFileId, Span, StableCrateId, StringId, Ty, TyId,
 };
 
 fn default_sig() -> FnSig {
@@ -66,6 +66,15 @@ fn fixture_item(model: &mut RegseqModel) -> Item {
 fn push_fixture_item(model: &mut RegseqModel) -> ItemId {
     let item = fixture_item(model);
     model.items.push(item)
+}
+
+fn function_kind(sig: FnSigId, body: Option<Body>) -> InstanceKind {
+    InstanceKind::Function(FunctionInstanceData {
+        fn_sig: sig,
+        body,
+        flavor: FunctionInstanceFlavor::Item,
+        virtual_idx: None,
+    })
 }
 
 // ------------------------------------------------------------------
@@ -200,16 +209,13 @@ fn populated_model_passes_validate() {
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Type(ty), GenericArg::Const(init)],
-        symbol_name: symbol,
+        emission_name: symbol,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function {
-            sig,
-            body: Some(Body::default()),
-        },
+        kind: function_kind(sig, Some(Body::default())),
     });
 
     // Add a Static instance; another item entry for it.
@@ -224,7 +230,7 @@ fn populated_model_passes_validate() {
     m.instances.push(Instance {
         item: item2,
         generic_args: vec![],
-        symbol_name: symbol,
+        emission_name: symbol,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
@@ -232,7 +238,7 @@ fn populated_model_passes_validate() {
         },
         kind: InstanceKind::Static {
             ty: static_ty,
-            init: static_init,
+            init: Some(static_init),
         },
     });
 
@@ -252,13 +258,13 @@ fn function_with_body_none_validates_when_sig_resolves() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function { sig, body: None },
+        kind: function_kind(sig, None),
     });
 
     // (10) `body: None` is reserved for foreign declarations whose
@@ -411,13 +417,13 @@ fn invariant_1_dangling_item_id_in_instance() {
         // No items pushed; ItemId(0) is dangling.
         item: ItemId::from_u32(0),
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function { sig, body: None },
+        kind: function_kind(sig, None),
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId {
@@ -463,13 +469,13 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::from_u32(42),
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function { sig, body: None },
+        kind: function_kind(sig, None),
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
@@ -493,13 +499,13 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Type(TyId::from_u32(5))],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function { sig, body: None },
+        kind: function_kind(sig, None),
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
@@ -523,13 +529,13 @@ fn invariant_1_dangling_const_id_in_generic_args() {
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Const(ConstId::from_u32(7))],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function { sig, body: None },
+        kind: function_kind(sig, None),
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
@@ -552,20 +558,17 @@ fn invariant_1_dangling_fn_sig_id_in_function_kind() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function {
-            sig: FnSigId::from_u32(3),
-            body: None,
-        },
+        kind: function_kind(FnSigId::from_u32(3), None),
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
-            assert!(field.contains("Function.sig"), "field: {field}");
+            assert!(field.contains("Function.fn_sig"), "field: {field}");
             assert_eq!(value, 3);
         }
         other => panic!("expected DanglingId on FnSigId, got {:?}", other),
@@ -585,16 +588,13 @@ fn invariant_10_inline_body_in_function_kind_validates() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function {
-            sig,
-            body: Some(Body::default()),
-        },
+        kind: function_kind(sig, Some(Body::default())),
     });
     assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
 }
@@ -611,7 +611,7 @@ fn invariant_1_dangling_ty_id_in_static_kind() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
@@ -619,7 +619,7 @@ fn invariant_1_dangling_ty_id_in_static_kind() {
         },
         kind: InstanceKind::Static {
             ty: TyId::from_u32(0),
-            init: ConstId::from_u32(0),
+            init: Some(ConstId::from_u32(0)),
         },
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
@@ -654,7 +654,7 @@ fn invariant_1_dangling_layout_in_struct_enum_union() {
         m.instances.push(Instance {
             item,
             generic_args: vec![],
-            symbol_name: StringId::ZERO,
+            emission_name: StringId::ZERO,
             span: Span {
                 file: SourceFileId::SYNTHESIZED,
                 lo: 0,
@@ -695,7 +695,7 @@ fn invariant_1_dangling_string_id_in_source_file_path() {
 }
 
 #[test]
-fn invariant_1_dangling_string_id_in_instance_symbol_name() {
+fn invariant_1_dangling_string_id_in_instance_emission_name() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
@@ -707,20 +707,20 @@ fn invariant_1_dangling_string_id_in_instance_symbol_name() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::from_u32(9999),
+        emission_name: StringId::from_u32(9999),
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function { sig, body: None },
+        kind: function_kind(sig, None),
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
-            assert!(field.contains("Instance.symbol_name"), "field: {field}");
+            assert!(field.contains("Instance.emission_name"), "field: {field}");
             assert_eq!(value, 9999);
         }
-        other => panic!("expected DanglingId on symbol_name, got {:?}", other),
+        other => panic!("expected DanglingId on emission_name, got {:?}", other),
     }
 }
 
@@ -737,7 +737,7 @@ fn invariant_1_dangling_const_id_in_static_init() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
@@ -746,7 +746,7 @@ fn invariant_1_dangling_const_id_in_static_init() {
         kind: InstanceKind::Static {
             ty,
             // No consts pushed -> ConstId(0) is dangling.
-            init: ConstId::from_u32(0),
+            init: Some(ConstId::from_u32(0)),
         },
     });
     match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
@@ -770,7 +770,7 @@ fn invariant_1_dangling_ty_id_in_const_kind() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
@@ -803,7 +803,7 @@ fn invariant_1_dangling_const_id_in_const_kind_value() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
@@ -852,16 +852,13 @@ fn populated_model_round_trips_through_json() {
     m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: symbol,
+        emission_name: symbol,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function {
-            sig,
-            body: Some(Body::default()),
-        },
+        kind: function_kind(sig, Some(Body::default())),
     });
 
     let json = serde_json::to_string(&m).unwrap();
@@ -993,16 +990,13 @@ fn helper_fixture() -> (RegseqModel, InstanceId) {
     let id = m.instances.push(Instance {
         item,
         generic_args: vec![],
-        symbol_name: StringId::ZERO,
+        emission_name: StringId::ZERO,
         span: Span {
             file: SourceFileId::SYNTHESIZED,
             lo: 0,
             hi: 0,
         },
-        kind: InstanceKind::Function {
-            sig,
-            body: Some(Body::default()),
-        },
+        kind: function_kind(sig, Some(Body::default())),
     });
     (m, id)
 }
