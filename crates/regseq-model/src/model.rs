@@ -4,23 +4,30 @@ use std::collections::{HashMap, HashSet};
 
 use serde::{Deserialize, Serialize};
 
-use crate::args_key::GenericArg;
+use crate::args_key::{args_key_for_generic_args, GenericArg};
 use crate::body::Body;
 use crate::bridge_input::BridgeInput;
 use crate::build::BuildInfo;
-use crate::cabi::CAbiLowering;
-use crate::const_interner::ConstInterner;
+use crate::cabi::{CAbiLowering, CAbiShape};
+use crate::const_interner::{ConstIdentityKey, ConstInterner};
+use crate::const_value::{Byte, Const};
 use crate::crate_info::{CrateInfo, StableCrateId};
-use crate::def_path::{DefPath, DefPathHash};
+use crate::def_path::{
+    def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash,
+};
 use crate::domain_attr::DomainAttrTables;
 use crate::domain_attr::IntrinsicKind;
 use crate::fn_sig::FnSig;
 use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
 use crate::index_vec::IndexVec;
-use crate::instance::{Instance, InstanceKind};
+use crate::instance::{
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
+    RegseqInstanceKey,
+};
+use crate::instance_ref::InstanceRef;
 use crate::item::{InlineHint, Item, Linkage};
-use crate::layout::{EnumShape, LayoutKind};
+use crate::layout::{EnumShape, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout};
 use crate::place_validator::{validate_body_places, PlaceValidationError};
 use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
@@ -28,7 +35,7 @@ use crate::string_interner::StringInterner;
 use crate::synthetic::{PrincipalTraitKey, SyntheticItemKind};
 use crate::target::{default_scalar_layouts, Endian, SizeAlign, TargetInfo};
 use crate::ty::{FloatKind, IntKind, Ty, UintKind};
-use crate::ty_interner::TyInterner;
+use crate::ty_interner::{TyIdentityKey, TyInterner};
 
 /// The owned root struct returned by the bridge for one rustc
 /// compilation.
@@ -84,6 +91,27 @@ mod tests;
 
 const SOURCE_FILE_PATH: &str = "SourceFile.path (StringId)";
 const CRATE_INFO_NAME: &str = "CrateInfo.name (StringId)";
+const ITEM_DEF_PATH_CRATE: &str = "Item.def_path.crate_id (CrateId)";
+const ITEM_DEF_PATH_RENDERED: &str = "Item.def_path.rendered (StringId)";
+const ITEM_DEF_PATH_SEGMENT_NAME: &str = "Item.def_path.segments[..].data (StringId)";
+const ITEM_SPAN_FILE: &str = "Item.span.file (SourceFileId)";
+const ITEM_LINK_SECTION: &str = "Item.link_section (StringId)";
+const TY_ID: &str = "Ty nested TyId";
+const TY_ITEM: &str = "Ty nominal ItemId";
+const TY_FN_SIG: &str = "Ty::FnPtr (FnSigId)";
+const TY_GENERIC_ARG_TY: &str = "Ty generic_args[..](TyId)";
+const TY_GENERIC_ARG_CONST: &str = "Ty generic_args[..](ConstId)";
+const TY_LAYOUT_FIELD_NAME: &str = "Layout.field.name (StringId)";
+const TY_LAYOUT_FIELD_TY: &str = "Layout.field.ty (TyId)";
+const TY_LAYOUT_VARIANT_NAME: &str = "Layout.variant.name (StringId)";
+const TY_LAYOUT_TAG_SCALAR_TY: &str = "Layout.tag.scalar_ty (TyId)";
+const CONST_TY: &str = "Const nested TyId";
+const CONST_CHILD: &str = "Const nested ConstId";
+const CONST_RELOC_INSTANCE: &str = "Const relocation InstanceRef";
+const FN_SIG_INPUT: &str = "FnSig.inputs[..] (TyId)";
+const FN_SIG_OUTPUT: &str = "FnSig.output (TyId)";
+const C_ABI_LOWERING_EMIT_AS: &str = "CAbiLowering.emit_as (TyId)";
+const DOMAIN_ATTR_SPAN_FILE: &str = "DomainAttrTables.span_attrs key file (SourceFileId)";
 const INSTANCE_ITEM: &str = "Instance.item (ItemId)";
 const INSTANCE_EMISSION_NAME: &str = "Instance.emission_name (StringId)";
 const INSTANCE_SPAN_FILE: &str = "Instance.span.file (SourceFileId)";
@@ -151,6 +179,96 @@ pub enum InvariantViolation {
         first: CrateId,
         /// Second crate id carrying the stable id.
         second: CrateId,
+    },
+
+    /// `Item.def_path.crate_id` does not resolve to `crates`.
+    DefPathCrateIdOutOfBounds {
+        /// Item carrying the invalid def-path crate.
+        item: ItemId,
+        /// Invalid crate id.
+        crate_id: CrateId,
+        /// Length of `crates`.
+        crates_len: usize,
+    },
+
+    /// Two entries in a content-keyed interner have the same identity key.
+    DuplicateInternerEntry {
+        /// Interner name.
+        interner: &'static str,
+        /// First ID as a raw index.
+        first: u32,
+        /// Second ID as a raw index.
+        second: u32,
+    },
+
+    /// Two items share the same `DefPathHash`.
+    DuplicateItemDefPathHash {
+        /// Duplicate hash.
+        hash: DefPathHash,
+        /// First item carrying the hash.
+        first: ItemId,
+        /// Second item carrying the hash.
+        second: ItemId,
+    },
+
+    /// Adjacent `items` entries are not in F4 order.
+    F4OutOfOrder {
+        /// First adjacent item.
+        first: ItemId,
+        /// Second adjacent item.
+        second: ItemId,
+    },
+
+    /// Adjacent `instances` entries are not in F4-2 order.
+    F4OutOfOrderInstance {
+        /// First adjacent instance.
+        first: InstanceId,
+        /// Second adjacent instance.
+        second: InstanceId,
+    },
+
+    /// Stored `DefPath.rendered` does not match canonical rendering.
+    DefPathRenderMismatch {
+        /// Item carrying the mismatched rendered path.
+        item: ItemId,
+        /// Canonical rendered path.
+        expected: String,
+        /// Stored rendered path.
+        actual: String,
+    },
+
+    /// Source span byte range exceeds file content bounds.
+    SpanOutOfBounds {
+        /// Source file referenced by the span.
+        file: SourceFileId,
+        /// Inclusive start byte.
+        lo: u32,
+        /// Exclusive end byte.
+        hi: u32,
+        /// Source content length in bytes.
+        content_len: usize,
+    },
+
+    /// Source span endpoint is not on a UTF-8 boundary.
+    SpanNotOnUtf8Boundary {
+        /// Source file referenced by the span.
+        file: SourceFileId,
+        /// Inclusive start byte.
+        lo: u32,
+        /// Exclusive end byte.
+        hi: u32,
+        /// Endpoint that failed the boundary check.
+        end: &'static str,
+    },
+
+    /// Two vtable type items share one principal trait key.
+    DuplicateVTablePrincipal {
+        /// Duplicate principal key.
+        principal: PrincipalTraitKey,
+        /// First item carrying the principal.
+        first: ItemId,
+        /// Second item carrying the principal.
+        second: ItemId,
     },
 
     /// `source_files[0]` is not the synthesized sentinel.
@@ -385,7 +503,7 @@ impl RegseqModel {
     }
 
     /// Validates construction invariants enforceable at this phase.
-    pub fn validate(&self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
+    pub fn validate(&mut self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
         self.validate_synthesized_sentinel()?;
 
         if self.primary_crate.index() >= self.crates.len() {
@@ -395,20 +513,13 @@ impl RegseqModel {
             });
         }
 
-        let primary_stable_id = self.crates[self.primary_crate].stable_crate_id;
-        if primary_stable_id != bridge_input.spec_crate_stable_id {
-            return Err(InvariantViolation::PrimaryCrateStableIdMismatch {
-                model: primary_stable_id,
-                bridge_input: bridge_input.spec_crate_stable_id,
-            });
-        }
-
         for info in self.crates.iter() {
             self.check_string_id(info.name, CRATE_INFO_NAME)?;
         }
 
-        for file in self.source_files.iter() {
+        for (idx, file) in self.source_files.iter().enumerate() {
             self.check_string_id(file.path, SOURCE_FILE_PATH)?;
+            self.validate_line_starts(SourceFileId::from_u32(idx as u32), file)?;
         }
 
         self.validate_unique_stable_crate_ids()?;
@@ -427,8 +538,26 @@ impl RegseqModel {
             });
         }
 
+        self.validate_items()?;
+        self.validate_f4_item_order()?;
+
+        let primary_stable_id = self.crates[self.primary_crate].stable_crate_id;
+        if primary_stable_id != bridge_input.spec_crate_stable_id {
+            return Err(InvariantViolation::PrimaryCrateStableIdMismatch {
+                model: primary_stable_id,
+                bridge_input: bridge_input.spec_crate_stable_id,
+            });
+        }
+
+        self.validate_const_interner_uniqueness()?;
+        self.validate_fn_sig_interner()?;
+        self.validate_ty_interner()?;
+        self.validate_c_abi_lowerings()?;
+        self.validate_synthetic_kinds()?;
+
         for (idx, instance) in self.instances.iter().enumerate() {
             self.validate_instance(instance)?;
+            self.validate_span(instance.span, INSTANCE_SPAN_FILE)?;
             if let InstanceKind::Function(data) = &instance.kind {
                 if let Some(body) = data.body.as_ref() {
                     validate_body_places(self, body).map_err(|error| {
@@ -440,6 +569,12 @@ impl RegseqModel {
                 }
             }
         }
+
+        self.validate_value_consts()?;
+        self.validate_item_def_path_hash_uniqueness()?;
+        self.validate_domain_attr_spans()?;
+        self.validate_f4_instance_order()?;
+        self.rebuild_vtables()?;
 
         Ok(())
     }
@@ -716,6 +851,494 @@ impl RegseqModel {
         Ok(())
     }
 
+    fn validate_items(&self) -> Result<(), InvariantViolation> {
+        for (idx, item) in self.items.iter().enumerate() {
+            let item_id = ItemId::from_u32(idx as u32);
+            if item.def_path.crate_id.index() >= self.crates.len() {
+                return Err(InvariantViolation::DefPathCrateIdOutOfBounds {
+                    item: item_id,
+                    crate_id: item.def_path.crate_id,
+                    crates_len: self.crates.len(),
+                });
+            }
+            self.check_crate_id(item.def_path.crate_id, ITEM_DEF_PATH_CRATE)?;
+            self.check_string_id(item.def_path.rendered, ITEM_DEF_PATH_RENDERED)?;
+            self.validate_def_path_segment_strings(&item.def_path)?;
+            self.validate_span(item.span, ITEM_SPAN_FILE)?;
+            if let Some(link_section) = item.link_section {
+                self.check_string_id(link_section, ITEM_LINK_SECTION)?;
+            }
+
+            let expected = render_def_path(&item.def_path, &self.crates, &self.strings);
+            let actual = self.strings.resolve(item.def_path.rendered).to_owned();
+            if expected != actual {
+                return Err(InvariantViolation::DefPathRenderMismatch {
+                    item: item_id,
+                    expected,
+                    actual,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_def_path_segment_strings(&self, path: &DefPath) -> Result<(), InvariantViolation> {
+        for segment in &path.segments {
+            if let Some(string) = def_path_data_string_id(&segment.data) {
+                self.check_string_id(string, ITEM_DEF_PATH_SEGMENT_NAME)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_f4_item_order(&self) -> Result<(), InvariantViolation> {
+        for idx in 0..self.items.len().saturating_sub(1) {
+            let first = ItemId::from_u32(idx as u32);
+            let second = ItemId::from_u32((idx + 1) as u32);
+            if self.compare_item_f4(first, second).is_gt() {
+                return Err(InvariantViolation::F4OutOfOrder { first, second });
+            }
+        }
+        Ok(())
+    }
+
+    fn compare_item_f4(&self, first: ItemId, second: ItemId) -> core::cmp::Ordering {
+        let first_path = &self.items[first].def_path;
+        let second_path = &self.items[second].def_path;
+        let first_crate = &self.crates[first_path.crate_id];
+        let second_crate = &self.crates[second_path.crate_id];
+
+        self.strings
+            .resolve(first_crate.name)
+            .cmp(self.strings.resolve(second_crate.name))
+            .then_with(|| {
+                first_crate
+                    .stable_crate_id
+                    .cmp(&second_crate.stable_crate_id)
+            })
+            .then_with(|| {
+                self.compare_def_path_segments(&first_path.segments, &second_path.segments)
+            })
+    }
+
+    fn compare_def_path_segments(
+        &self,
+        first: &[crate::def_path::DefPathSegment],
+        second: &[crate::def_path::DefPathSegment],
+    ) -> core::cmp::Ordering {
+        let first_keys = first
+            .iter()
+            .map(|segment| self.def_path_segment_sort_key(segment))
+            .collect::<Vec<_>>();
+        let second_keys = second
+            .iter()
+            .map(|segment| self.def_path_segment_sort_key(segment))
+            .collect::<Vec<_>>();
+        first_keys.cmp(&second_keys)
+    }
+
+    fn def_path_segment_sort_key<'a>(
+        &'a self,
+        segment: &'a crate::def_path::DefPathSegment,
+    ) -> (u8, &'a str, u32) {
+        (
+            def_path_data_sort_rank(&segment.data),
+            def_path_data_string_id(&segment.data)
+                .map(|id| self.strings.resolve(id))
+                .unwrap_or(""),
+            segment.disambiguator,
+        )
+    }
+
+    fn validate_const_interner_uniqueness(&self) -> Result<(), InvariantViolation> {
+        let mut seen = HashMap::new();
+        for (id, value) in self.consts.iter() {
+            let key = ConstIdentityKey::from_const(value);
+            if let Some(first) = seen.insert(key, id) {
+                return Err(InvariantViolation::DuplicateInternerEntry {
+                    interner: "ConstInterner",
+                    first: first.as_u32(),
+                    second: id.as_u32(),
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_fn_sig_interner(&self) -> Result<(), InvariantViolation> {
+        let mut seen = HashMap::new();
+        for (id, sig) in self.sigs.iter() {
+            if let Some(first) = seen.insert(sig.clone(), id) {
+                return Err(InvariantViolation::DuplicateInternerEntry {
+                    interner: "FnSigInterner",
+                    first: first.as_u32(),
+                    second: id.as_u32(),
+                });
+            }
+            for input in &sig.inputs {
+                self.check_ty_id(*input, FN_SIG_INPUT)?;
+            }
+            self.check_ty_id(sig.output, FN_SIG_OUTPUT)?;
+        }
+        Ok(())
+    }
+
+    fn validate_ty_interner(&self) -> Result<(), InvariantViolation> {
+        let mut seen = HashMap::new();
+        for (id, ty) in self.types.iter() {
+            let key = TyIdentityKey::from_ty(ty);
+            if let Some(first) = seen.insert(key, id) {
+                return Err(InvariantViolation::DuplicateInternerEntry {
+                    interner: "TyInterner",
+                    first: first.as_u32(),
+                    second: id.as_u32(),
+                });
+            }
+            self.validate_ty_references(ty)?;
+        }
+        Ok(())
+    }
+
+    fn validate_ty_references(&self, ty: &Ty) -> Result<(), InvariantViolation> {
+        match ty {
+            Ty::Array(elem, _) | Ty::Slice(elem) | Ty::Ref(elem, _) | Ty::Ptr(elem, _) => {
+                self.check_ty_id(*elem, TY_ID)?;
+            }
+            Ty::FnDef(item, args) | Ty::Closure(item, args) => {
+                self.check_item_id(*item, TY_ITEM)?;
+                self.validate_generic_args(args, TY_GENERIC_ARG_TY, TY_GENERIC_ARG_CONST)?;
+            }
+            Ty::FnPtr(sig) => self.check_fn_sig_id(*sig, TY_FN_SIG)?,
+            Ty::Dynamic { vtable_ty, .. } => self.check_ty_id(*vtable_ty, TY_ID)?,
+            Ty::Tuple { fields, layout } => {
+                for field in fields {
+                    self.check_ty_id(*field, TY_ID)?;
+                }
+                self.validate_layout_references(layout)?;
+            }
+            Ty::Struct { item, args, layout }
+            | Ty::Enum { item, args, layout }
+            | Ty::Union { item, args, layout } => {
+                self.check_item_id(*item, TY_ITEM)?;
+                self.validate_generic_args(args, TY_GENERIC_ARG_TY, TY_GENERIC_ARG_CONST)?;
+                self.validate_layout_references(layout)?;
+            }
+            Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) | Ty::Str | Ty::Never => {
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_layout_references(&self, layout: &Layout) -> Result<(), InvariantViolation> {
+        match &layout.kind {
+            LayoutKind::Struct { fields } | LayoutKind::Union { fields } => {
+                self.validate_field_layouts(fields)?;
+            }
+            LayoutKind::Enum { shape } => match shape {
+                EnumShape::Empty => {}
+                EnumShape::Single { variant, scalar } => {
+                    self.validate_variant_layout(variant)?;
+                    if let Some(scalar) = scalar {
+                        self.validate_tag_scalar(scalar)?;
+                    }
+                }
+                EnumShape::Multiple {
+                    tag,
+                    encoding,
+                    variants,
+                } => {
+                    self.validate_tag_scalar(tag)?;
+                    if let TagEncoding::Niche {
+                        untagged_variant,
+                        niche_variants,
+                        ..
+                    } = encoding
+                    {
+                        self.check_variant_idx(*untagged_variant, variants.len())?;
+                        self.check_variant_idx(niche_variants.start, variants.len())?;
+                        self.check_variant_idx(niche_variants.end, variants.len())?;
+                    }
+                    for variant in variants {
+                        self.validate_variant_layout(variant)?;
+                    }
+                }
+            },
+        }
+        Ok(())
+    }
+
+    fn validate_field_layouts(
+        &self,
+        fields: &[crate::layout::FieldLayout],
+    ) -> Result<(), InvariantViolation> {
+        for field in fields {
+            self.check_string_id(field.name, TY_LAYOUT_FIELD_NAME)?;
+            self.check_ty_id(field.ty, TY_LAYOUT_FIELD_TY)?;
+        }
+        Ok(())
+    }
+
+    fn validate_variant_layout(&self, variant: &VariantLayout) -> Result<(), InvariantViolation> {
+        self.check_string_id(variant.name, TY_LAYOUT_VARIANT_NAME)?;
+        self.validate_field_layouts(&variant.fields)
+    }
+
+    fn validate_tag_scalar(&self, scalar: &TagScalar) -> Result<(), InvariantViolation> {
+        self.check_ty_id(scalar.scalar_ty, TY_LAYOUT_TAG_SCALAR_TY)
+    }
+
+    fn validate_c_abi_lowerings(&self) -> Result<(), InvariantViolation> {
+        for lowering in self.sig_c_abi_lowerings.iter().flatten() {
+            for shape in &lowering.inputs {
+                self.validate_c_abi_shape(shape)?;
+            }
+            self.validate_c_abi_shape(&lowering.output)?;
+        }
+        Ok(())
+    }
+
+    fn validate_c_abi_shape(&self, shape: &CAbiShape) -> Result<(), InvariantViolation> {
+        match shape {
+            CAbiShape::Direct => Ok(()),
+            CAbiShape::Substituted { emit_as, .. } => {
+                self.check_ty_id(*emit_as, C_ABI_LOWERING_EMIT_AS)
+            }
+        }
+    }
+
+    fn validate_synthetic_kinds(&self) -> Result<(), InvariantViolation> {
+        for kind in self.item_synthetic_kinds.iter() {
+            match kind {
+                SyntheticItemKind::None
+                | SyntheticItemKind::ClosureCaptures { .. }
+                | SyntheticItemKind::ClosureCall { .. }
+                | SyntheticItemKind::ClosureDropGlue { .. }
+                | SyntheticItemKind::VTableType { .. }
+                | SyntheticItemKind::VTableInstance { .. }
+                | SyntheticItemKind::VTableMethodShim { .. }
+                | SyntheticItemKind::VTableDropShim { .. }
+                | SyntheticItemKind::ConstMemoryStatic { .. } => {}
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_value_consts(&self) -> Result<(), InvariantViolation> {
+        let instance_refs = self.instance_refs()?;
+        for value in self.consts.iter().map(|(_, value)| value) {
+            self.validate_const_references(value, &instance_refs)?;
+        }
+        Ok(())
+    }
+
+    fn validate_const_references(
+        &self,
+        value: &Const,
+        instance_refs: &HashSet<InstanceRef>,
+    ) -> Result<(), InvariantViolation> {
+        match value {
+            Const::Aggregate(children) => {
+                for child in children {
+                    self.check_const_id(*child, CONST_CHILD)?;
+                }
+            }
+            Const::EnumValue { payload, .. } => {
+                for child in payload {
+                    self.check_const_id(*child, CONST_CHILD)?;
+                }
+            }
+            Const::NullPtr(ty) => self.check_ty_id(*ty, CONST_TY)?,
+            Const::Reloc(instance) => {
+                self.check_instance_ref(*instance, instance_refs, CONST_RELOC_INSTANCE)?
+            }
+            Const::Bytes(bytes) => {
+                for byte in bytes {
+                    if let Byte::Reloc(instance) = byte {
+                        self.check_instance_ref(*instance, instance_refs, CONST_RELOC_INSTANCE)?;
+                    }
+                }
+            }
+            Const::Bool(_)
+            | Const::Char(_)
+            | Const::Int(_, _)
+            | Const::Uint(_, _)
+            | Const::Float(_, _)
+            | Const::ZST => {}
+        }
+        Ok(())
+    }
+
+    fn validate_item_def_path_hash_uniqueness(&self) -> Result<(), InvariantViolation> {
+        let mut seen = HashMap::new();
+        for (idx, hash) in self.item_def_paths.iter().copied().enumerate() {
+            let item = ItemId::from_u32(idx as u32);
+            if let Some(first) = seen.insert(hash, item) {
+                return Err(InvariantViolation::DuplicateItemDefPathHash {
+                    hash,
+                    first,
+                    second: item,
+                });
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_domain_attr_spans(&self) -> Result<(), InvariantViolation> {
+        for span in self.domain_attrs.span_attrs.keys() {
+            self.check_source_file_id(span.file, DOMAIN_ATTR_SPAN_FILE)?;
+            self.validate_span(*span, DOMAIN_ATTR_SPAN_FILE)?;
+        }
+        Ok(())
+    }
+
+    fn validate_f4_instance_order(&self) -> Result<(), InvariantViolation> {
+        for idx in 0..self.instances.len().saturating_sub(1) {
+            let first = InstanceId::from_u32(idx as u32);
+            let second = InstanceId::from_u32((idx + 1) as u32);
+            let first_key = self.regseq_instance_key(&self.instances[first]);
+            let second_key = self.regseq_instance_key(&self.instances[second]);
+            if first_key > second_key {
+                return Err(InvariantViolation::F4OutOfOrderInstance { first, second });
+            }
+        }
+        Ok(())
+    }
+
+    fn rebuild_vtables(&mut self) -> Result<(), InvariantViolation> {
+        let mut rebuilt = HashMap::new();
+        for (idx, kind) in self.item_synthetic_kinds.iter().enumerate() {
+            if let SyntheticItemKind::VTableType { principal } = kind {
+                let item = ItemId::from_u32(idx as u32);
+                if let Some(first) = rebuilt.insert(principal.clone(), item) {
+                    return Err(InvariantViolation::DuplicateVTablePrincipal {
+                        principal: principal.clone(),
+                        first,
+                        second: item,
+                    });
+                }
+            }
+        }
+        self.vtables = rebuilt;
+        Ok(())
+    }
+
+    fn validate_line_starts(
+        &self,
+        file_id: SourceFileId,
+        file: &SourceFile,
+    ) -> Result<(), InvariantViolation> {
+        if file.line_starts.first().copied() != Some(0) {
+            return Err(InvariantViolation::SpanOutOfBounds {
+                file: file_id,
+                lo: file.line_starts.first().copied().unwrap_or(1),
+                hi: file.line_starts.first().copied().unwrap_or(1),
+                content_len: file.content.as_ref().map_or(0, |text| text.len()),
+            });
+        }
+        if file.line_starts.windows(2).any(|pair| pair[0] > pair[1]) {
+            return Err(InvariantViolation::SpanOutOfBounds {
+                file: file_id,
+                lo: 0,
+                hi: 0,
+                content_len: file.content.as_ref().map_or(0, |text| text.len()),
+            });
+        }
+        Ok(())
+    }
+
+    fn validate_span(&self, span: Span, field: &'static str) -> Result<(), InvariantViolation> {
+        self.check_source_file_id(span.file, field)?;
+        let file = &self.source_files[span.file];
+        let Some(content) = file.content.as_ref() else {
+            return Ok(());
+        };
+        let lo = span.lo as usize;
+        let hi = span.hi as usize;
+        if lo > hi || hi > content.len() {
+            return Err(InvariantViolation::SpanOutOfBounds {
+                file: span.file,
+                lo: span.lo,
+                hi: span.hi,
+                content_len: content.len(),
+            });
+        }
+        if !content.is_char_boundary(lo) {
+            return Err(InvariantViolation::SpanNotOnUtf8Boundary {
+                file: span.file,
+                lo: span.lo,
+                hi: span.hi,
+                end: "lo",
+            });
+        }
+        if !content.is_char_boundary(hi) {
+            return Err(InvariantViolation::SpanNotOnUtf8Boundary {
+                file: span.file,
+                lo: span.lo,
+                hi: span.hi,
+                end: "hi",
+            });
+        }
+        Ok(())
+    }
+
+    fn instance_refs(&self) -> Result<HashSet<InstanceRef>, InvariantViolation> {
+        let mut refs = HashSet::new();
+        for instance in self.instances.iter() {
+            refs.insert(self.instance_ref(instance)?);
+        }
+        Ok(refs)
+    }
+
+    fn check_instance_ref(
+        &self,
+        reference: InstanceRef,
+        instance_refs: &HashSet<InstanceRef>,
+        field: &'static str,
+    ) -> Result<(), InvariantViolation> {
+        if !instance_refs.contains(&reference) {
+            return Err(InvariantViolation::DanglingId {
+                field,
+                value: 0,
+                table_len: self.instances.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn instance_ref(&self, instance: &Instance) -> Result<InstanceRef, InvariantViolation> {
+        self.check_item_id(instance.item, INSTANCE_ITEM)?;
+        Ok(InstanceRef {
+            regseq_kind_rank: regseq_instance_kind_rank(&instance.kind),
+            def_path_hash: self.item_def_paths[instance.item],
+            args_key: args_key_for_generic_args(self, &instance.generic_args),
+            fn_shim_disambig: function_instance_disambig(&instance.kind),
+        })
+    }
+
+    fn regseq_instance_key(&self, instance: &Instance) -> RegseqInstanceKey {
+        RegseqInstanceKey {
+            regseq_kind_rank: regseq_instance_kind_rank(&instance.kind),
+            item: instance.item,
+            generic_args_key: args_key_for_generic_args(self, &instance.generic_args),
+            fn_shim_disambig: function_instance_disambig(&instance.kind),
+        }
+    }
+
+    fn validate_generic_args(
+        &self,
+        args: &[GenericArg],
+        ty_field: &'static str,
+        const_field: &'static str,
+    ) -> Result<(), InvariantViolation> {
+        for arg in args {
+            match *arg {
+                GenericArg::Type(ty) => self.check_ty_id(ty, ty_field)?,
+                GenericArg::Const(c) => self.check_const_id(c, const_field)?,
+            }
+        }
+        Ok(())
+    }
+
     fn validate_instance(&self, instance: &Instance) -> Result<(), InvariantViolation> {
         self.check_item_id(instance.item, INSTANCE_ITEM)?;
         self.check_string_id(instance.emission_name, INSTANCE_EMISSION_NAME)?;
@@ -762,6 +1385,17 @@ impl RegseqModel {
                 field,
                 value: id.as_u32(),
                 table_len: self.strings.len(),
+            });
+        }
+        Ok(())
+    }
+
+    fn check_crate_id(&self, id: CrateId, field: &'static str) -> Result<(), InvariantViolation> {
+        if id.index() >= self.crates.len() {
+            return Err(InvariantViolation::DanglingId {
+                field,
+                value: id.as_u32(),
+                table_len: self.crates.len(),
             });
         }
         Ok(())
@@ -826,6 +1460,21 @@ impl RegseqModel {
         Ok(())
     }
 
+    fn check_variant_idx(
+        &self,
+        id: crate::VariantIdx,
+        variants_len: usize,
+    ) -> Result<(), InvariantViolation> {
+        if id.index() >= variants_len {
+            return Err(InvariantViolation::DanglingId {
+                field: "Layout variant index (VariantIdx)",
+                value: id.as_u32(),
+                table_len: variants_len,
+            });
+        }
+        Ok(())
+    }
+
     fn is_unsized_marker(&self, ty: TyId) -> bool {
         matches!(self.types[ty], Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. })
     }
@@ -861,5 +1510,40 @@ fn target_usize_max(pointer_width: u8) -> u64 {
         u64::MAX
     } else {
         (1u64 << pointer_width) - 1
+    }
+}
+
+fn def_path_data_string_id(data: &DefPathData) -> Option<StringId> {
+    match data {
+        DefPathData::TypeNs(id)
+        | DefPathData::ValueNs(id)
+        | DefPathData::MacroNs(id)
+        | DefPathData::LifetimeNs(id)
+        | DefPathData::OpaqueLifetime(id)
+        | DefPathData::AnonAssocTy(id) => Some(*id),
+        DefPathData::CrateRoot
+        | DefPathData::Impl
+        | DefPathData::ForeignMod
+        | DefPathData::Use
+        | DefPathData::GlobalAsm
+        | DefPathData::Closure
+        | DefPathData::Ctor
+        | DefPathData::AnonConst
+        | DefPathData::LateAnonConst
+        | DefPathData::DesugaredAnonymousLifetime
+        | DefPathData::OpaqueTy
+        | DefPathData::SyntheticCoroutineBody
+        | DefPathData::NestedStatic => None,
+    }
+}
+
+fn function_instance_disambig(kind: &InstanceKind) -> u8 {
+    match kind {
+        InstanceKind::Function(data) => rustc_instance_kind_sort_rank(data.flavor),
+        InstanceKind::Static { .. }
+        | InstanceKind::Const { .. }
+        | InstanceKind::Struct { .. }
+        | InstanceKind::Enum { .. }
+        | InstanceKind::Union { .. } => 0,
     }
 }

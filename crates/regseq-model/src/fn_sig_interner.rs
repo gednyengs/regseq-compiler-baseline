@@ -24,6 +24,18 @@ impl FnSigInterner {
         }
     }
 
+    /// Builds an interner from raw storage without rebuilding its lookup map.
+    ///
+    /// This exists for validator corruption fixtures that must model a
+    /// tampered deserialized table. Normal construction must use
+    /// `FnSigInterner::new` and `FnSigInterner::intern`.
+    pub fn from_storage_unchecked_for_validation(storage: IndexVec<FnSigId, FnSig>) -> Self {
+        Self {
+            storage,
+            lookup: HashMap::new(),
+        }
+    }
+
     /// Interns `sig` and returns the content identity's `FnSigId`.
     pub fn intern(&mut self, sig: FnSig) -> FnSigId {
         if let Some(id) = self.lookup.get(&sig) {

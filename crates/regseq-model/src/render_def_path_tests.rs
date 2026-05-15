@@ -243,7 +243,7 @@ fn renders_ctor_dis_zero() {
 fn renders_anon_const_dis_zero() {
     assert_eq!(
         render_one(DefPathData::AnonConst, 0),
-        "my_crate::{constant#0}"
+        "my_crate::{anonconst#0}"
     );
 }
 
@@ -251,7 +251,7 @@ fn renders_anon_const_dis_zero() {
 fn renders_late_anon_const_dis_zero() {
     assert_eq!(
         render_one(DefPathData::LateAnonConst, 0),
-        "my_crate::{constant#0}"
+        "my_crate::{anonconst#0}"
     );
 }
 

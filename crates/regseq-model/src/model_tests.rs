@@ -31,6 +31,7 @@ fn default_sig() -> FnSig {
 
 fn fixture_item(model: &mut RegseqModel) -> Item {
     let name = model.strings.intern("fixture_item");
+    let rendered = model.strings.intern("pl011-spec::fixture_item");
     Item {
         def_path: DefPath {
             crate_id: model.primary_crate,
@@ -44,7 +45,7 @@ fn fixture_item(model: &mut RegseqModel) -> Item {
                     disambiguator: 0,
                 },
             ],
-            rendered: name,
+            rendered,
         },
         kind: ItemKind::Function,
         span: Span {
@@ -177,7 +178,7 @@ fn root_struct_exposes_spec_field_set() {
 
 #[test]
 fn empty_model_passes_validate() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
 }
 
@@ -254,6 +255,7 @@ fn function_with_body_none_validates_when_sig_resolves() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
@@ -333,7 +335,7 @@ fn invariant_4_primary_crate_out_of_range() {
 
 #[test]
 fn invariant_4_primary_crate_stable_id_mismatch() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let bridge_input = BridgeInput {
         spec_crate_stable_id: StableCrateId(2),
     };
@@ -412,6 +414,7 @@ fn invariant_2_item_synthetic_kinds_length_mismatch() {
 #[test]
 fn invariant_1_dangling_item_id_in_instance() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         // No items pushed; ItemId(0) is dangling.
@@ -465,6 +468,7 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
@@ -495,6 +499,7 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
@@ -525,6 +530,7 @@ fn invariant_1_dangling_const_id_in_generic_args() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
@@ -584,6 +590,7 @@ fn invariant_10_inline_body_in_function_kind_validates() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
@@ -703,6 +710,7 @@ fn invariant_1_dangling_string_id_in_instance_emission_name() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
     m.instances.push(Instance {
         item,
@@ -862,7 +870,7 @@ fn populated_model_round_trips_through_json() {
     });
 
     let json = serde_json::to_string(&m).unwrap();
-    let back: RegseqModel = serde_json::from_str(&json).unwrap();
+    let mut back: RegseqModel = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);
     assert_eq!(back.validate(&BridgeInput::matching(&back)), Ok(()));
 }

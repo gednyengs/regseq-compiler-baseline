@@ -72,6 +72,18 @@ impl TyInterner {
         }
     }
 
+    /// Builds an interner from raw storage without rebuilding its lookup map.
+    ///
+    /// This exists for validator corruption fixtures that must model a
+    /// tampered deserialized table. Normal construction must use
+    /// `TyInterner::new` and `TyInterner::intern`.
+    pub fn from_storage_unchecked_for_validation(storage: IndexVec<TyId, Ty>) -> Self {
+        Self {
+            storage,
+            lookup: HashMap::new(),
+        }
+    }
+
     /// Interns `ty` and returns the content identity's `TyId`.
     pub fn intern(&mut self, ty: Ty) -> TyId {
         let key = TyIdentityKey::from_ty(&ty);
@@ -192,7 +204,7 @@ impl<'de> Deserialize<'de> for TyInterner {
 }
 
 impl TyIdentityKey {
-    fn from_ty(ty: &Ty) -> Self {
+    pub(crate) fn from_ty(ty: &Ty) -> Self {
         match ty {
             Ty::Bool => Self::empty(0),
             Ty::Char => Self::empty(1),

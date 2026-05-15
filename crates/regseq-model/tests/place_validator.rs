@@ -27,7 +27,8 @@ impl Fixture {
     }
 
     fn item(&mut self, kind: ItemKind, name: &str) -> ItemId {
-        let rendered = self.model.strings.intern(name);
+        let name_id = self.model.strings.intern(name);
+        let rendered = self.model.strings.intern(&format!("spec::{name}"));
         let item = Item {
             def_path: DefPath {
                 crate_id: self.model.primary_crate,
@@ -37,7 +38,7 @@ impl Fixture {
                         disambiguator: 0,
                     },
                     DefPathSegment {
-                        data: DefPathData::ValueNs(rendered),
+                        data: DefPathData::ValueNs(name_id),
                         disambiguator: 0,
                     },
                 ],
@@ -958,5 +959,39 @@ fn joint_validator_integration_pass_and_reject() {
             );
         }
         other => panic!("unexpected validation error: {other:?}"),
+    }
+}
+
+#[test]
+fn joint_validator_rejects_dangling_direct_call_instance() {
+    let mut failing = Fixture::new();
+    let mut body = failing.body_with_statements(&[failing.u32_ty], Box::new([]));
+    body.basic_blocks[regseq_model::BlockId::START_BLOCK].terminator = Terminator {
+        kind: TerminatorKind::Call {
+            callee: regseq_model::CallCallee::Direct(regseq_model::InstanceId::from_u32(99)),
+            args: Box::new([]),
+            destination: place(0, []),
+            target: None,
+        },
+        span: Span::dummy(),
+    };
+    let owner = failing.push_function(body);
+    let err = failing
+        .model
+        .validate(&BridgeInput::matching(&failing.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::PlaceWalk {
+            instance: actual,
+            error,
+        } => {
+            assert_eq!(actual, owner);
+            assert!(matches!(
+                error.kind,
+                PlaceValidationErrorKind::DirectCalleeOutOfRange { instance, .. }
+                    if instance == regseq_model::InstanceId::from_u32(99)
+            ));
+        }
+        other => panic!("expected PlaceWalk, got {other:?}"),
     }
 }

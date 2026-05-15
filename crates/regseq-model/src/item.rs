@@ -583,7 +583,12 @@ mod tests {
     #[test]
     fn regseq_model_validate_accepts_matching_item_side_tables() {
         let mut model = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-        model.items.push(item(ItemKind::Function));
+        let name = model.strings.intern("<synthesized>");
+        let rendered = model.strings.intern("pl011-spec::<synthesized>");
+        let mut item = item(ItemKind::Function);
+        item.def_path.segments[1].data = DefPathData::ValueNs(name);
+        item.def_path.rendered = rendered;
+        model.items.push(item);
         model.item_def_paths.push(DefPathHash {
             stable_crate_id: StableCrateId(1),
             local_hash: 1,

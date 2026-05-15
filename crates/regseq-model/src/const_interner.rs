@@ -34,6 +34,18 @@ impl ConstInterner {
         }
     }
 
+    /// Builds an interner from raw storage without rebuilding its lookup map.
+    ///
+    /// This exists for validator corruption fixtures that must model a
+    /// tampered deserialized table. Normal construction must use
+    /// `ConstInterner::new` and `ConstInterner::intern`.
+    pub fn from_storage_unchecked_for_validation(storage: IndexVec<ConstId, Const>) -> Self {
+        Self {
+            storage,
+            lookup: HashMap::new(),
+        }
+    }
+
     /// Interns `c` and returns the content identity's `ConstId`.
     pub fn intern(&mut self, c: Const) -> ConstId {
         let key = ConstIdentityKey::from_const(&c);
