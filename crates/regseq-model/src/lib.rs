@@ -48,12 +48,12 @@ pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
-pub use domain_attr::DomainAttrTables;
+pub use domain_attr::{AttrData, DomainAttrTables, FieldPath, IntrinsicKind, LogLevel};
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
 pub use ids::{
-    BlockId, ConstId, CrateId, FnSigId, InstanceId, ItemId, LocalId, SourceFileId, StringId, TyId,
-    VariantIdx,
+    BlockId, ConstId, CrateId, FieldIdx, FnSigId, InstanceId, ItemId, LocalId, SourceFileId,
+    StringId, Symbol, TyId, VariantIdx,
 };
 pub use idx::Idx;
 pub use index_vec::IndexVec;
@@ -68,7 +68,7 @@ pub use layout::{
     VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
-pub use placeholders::{Body, IntrinsicKind};
+pub use placeholders::Body;
 pub use pretty::PrettyPrinter;
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
@@ -105,4 +105,6 @@ const _: () = assert!(core::mem::size_of::<BlockId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<BlockId>>() == 4);
 const _: () = assert!(core::mem::size_of::<VariantIdx>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<VariantIdx>>() == 4);
+const _: () = assert!(core::mem::size_of::<FieldIdx>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<FieldIdx>>() == 4);
 const _: () = assert!(core::mem::size_of::<Span>() == 12);

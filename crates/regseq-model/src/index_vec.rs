@@ -42,6 +42,17 @@ impl<I, T> IndexVec<I, T> {
         }
     }
 
+    /// Creates an `IndexVec` with `n` cloned copies of `elem`.
+    pub fn from_elem(elem: T, n: usize) -> Self
+    where
+        T: Clone,
+    {
+        Self {
+            inner: vec![elem; n],
+            _marker: PhantomData,
+        }
+    }
+
     /// Number of elements stored.
     pub fn len(&self) -> usize {
         self.inner.len()

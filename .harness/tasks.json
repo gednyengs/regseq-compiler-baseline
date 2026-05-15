@@ -2753,7 +2753,7 @@
           "id": "regseq-model-74",
           "name": "P1a-DS-09: DomainAttr sibling tables",
           "spec": ".harness/tasks/regseq-model/74-domain-attr-tables.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-71"
           ],

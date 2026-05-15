@@ -8,15 +8,6 @@ use serde::{Deserialize, Serialize};
 pub use crate::item::{InlineHint, Item, Linkage};
 pub use crate::synthetic::{PrincipalTraitKey, SyntheticItemKind};
 
-/// Forward-declared intrinsic classification.
-// FORWARD: P1a-DS-09
-#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
-pub enum IntrinsicKind {
-    /// Placeholder intrinsic kind.
-    #[default]
-    Placeholder,
-}
-
 /// Forward-declared `Body`.
 // FORWARD: P1a-DS-10
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -43,10 +34,5 @@ mod tests {
         };
         let kind = SyntheticItemKind::VTableType { principal };
         assert!(matches!(kind, SyntheticItemKind::VTableType { .. }));
-    }
-
-    #[test]
-    fn remaining_forward_stubs_construct() {
-        assert_eq!(IntrinsicKind::default(), IntrinsicKind::Placeholder);
     }
 }

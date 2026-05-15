@@ -12,15 +12,14 @@ use crate::const_interner::ConstInterner;
 use crate::crate_info::{CrateInfo, StableCrateId};
 use crate::def_path::{DefPath, DefPathHash};
 use crate::domain_attr::DomainAttrTables;
+use crate::domain_attr::IntrinsicKind;
 use crate::fn_sig::FnSig;
 use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
 use crate::index_vec::IndexVec;
 use crate::instance::{Instance, InstanceKind};
 use crate::layout::{EnumShape, LayoutKind};
-use crate::placeholders::{
-    Body, InlineHint, IntrinsicKind, Item, Linkage, PrincipalTraitKey, SyntheticItemKind,
-};
+use crate::placeholders::{Body, InlineHint, Item, Linkage, PrincipalTraitKey, SyntheticItemKind};
 use crate::pretty::PrettyPrinter;
 use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;

@@ -8,6 +8,26 @@
 
 use crate::idx::newtype_index;
 
+/// Interned rustc symbol text used at bridge lookup boundaries.
+///
+/// `Symbol` does not appear inside serialized RegseqModels. It is a
+/// compact lookup adapter for closed vocabularies that are resolved
+/// before payloads enter the rustc-independent model.
+#[derive(Copy, Clone, Debug, PartialEq, Eq, Hash)]
+pub struct Symbol(&'static str);
+
+impl Symbol {
+    /// Creates a symbol from static text.
+    pub const fn new(text: &'static str) -> Self {
+        Self(text)
+    }
+
+    /// Returns the symbol text.
+    pub fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
 newtype_index! {
     /// Identifies a crate the model contains items from.
     ///
@@ -314,6 +334,30 @@ impl<'de> serde::Deserialize<'de> for VariantIdx {
         if raw > Self::MAX_AS_U32 {
             return Err(serde::de::Error::custom(format!(
                 "VariantIdx value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a field within a variant, struct, union, or MIR aggregate.
+    pub struct FieldIdx {}
+}
+
+impl serde::Serialize for FieldIdx {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for FieldIdx {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "FieldIdx value {raw} exceeds MAX ({})",
                 Self::MAX_AS_U32
             )));
         }
