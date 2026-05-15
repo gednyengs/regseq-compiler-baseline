@@ -134,9 +134,6 @@ pub struct DefPathHash {
 /// fixed by this function. Adding a variant during a toolchain bump
 /// means appending a new rank at the end (e.g., 19); existing ranks
 /// are immutable.
-///
-/// Authoritative ordering for the F4 sort comparator.
-
 /// Renders a `DefPath` to its canonical verbose form.
 ///
 /// Single source of truth for the `DefPath.rendered` byte-identical-
@@ -203,10 +200,7 @@ pub fn render_def_path(
         match seg.data {
             DefPathData::CrateRoot => {
                 if idx != 0 {
-                    panic!(
-                        "render_def_path: CrateRoot at non-leading position {}",
-                        idx
-                    );
+                    panic!("render_def_path: CrateRoot at non-leading position {}", idx);
                 }
                 // Index 0 CrateRoot: skip; the crate prefix already covers it.
             }
@@ -344,3 +338,11 @@ pub const fn def_path_data_sort_rank(data: &DefPathData) -> u8 {
         DefPathData::NestedStatic => 18,
     }
 }
+
+#[cfg(test)]
+#[path = "def_path_tests.rs"]
+mod tests;
+
+#[cfg(test)]
+#[path = "render_def_path_tests.rs"]
+mod render_tests;

@@ -1,83 +1,78 @@
-//! Top-level `RegseqModel` struct, construction, and the
-//! construction-invariants checker.
-//!
-//! `RegseqModel` is the owned root the bridge produces by extracting
-//! one rustc compilation. All other stage-1 tables hang off it. Per
-//! Q2 the model is fully owned (no `'tcx`); per Q6 the `crates`
-//! table holds one entry per crate the model contains items from
-//! (the spec crate plus regseq-aware deps).
-//!
-//! The 10 construction invariants listed in the spec section
-//! "Construction invariants" are enforced where stage 1 has the
-//! information to do so. Several invariants depend on
-//! later-stage Item / Body / Ty / Const content (e.g., F4 item
-//! ordering needs `Item.def_path`, which lands in stage 12); those
-//! are explicitly deferred and re-enforced when the relevant stage
-//! expands the placeholder. See the per-invariant comments in
-//! `RegseqModel::validate`.
+//! Top-level `RegseqModel` struct and construction-invariant registry.
+
+use std::collections::HashMap;
 
 use serde::{Deserialize, Serialize};
 
+use crate::bridge_input::BridgeInput;
+use crate::build::BuildInfo;
 use crate::crate_info::{CrateInfo, StableCrateId};
-use crate::def_path::DefPathHash;
-use crate::ids::{
-    BodyId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
-};
+use crate::def_path::{DefPath, DefPathHash};
+use crate::domain_attr::DomainAttrTables;
+use crate::ids::{ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId};
 use crate::index_vec::IndexVec;
 use crate::instance::{GenericArg, Instance, InstanceKind};
-use crate::placeholders::{Body, Const, FnSig, Item, Ty};
+use crate::placeholders::{
+    Body, CAbiLowering, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind, Item,
+    Linkage, PrincipalTraitKey, SyntheticItemKind, TyInterner,
+};
 use crate::pretty::PrettyPrinter;
-use crate::source::SourceFile;
+use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
+use crate::target::{default_scalar_layouts, Endian, TargetInfo};
 
 /// The owned root struct returned by the bridge for one rustc
 /// compilation.
-///
-/// Field order matches the spec's "Top-level RegseqModel" section.
-/// `source_files[0]` is the synthesized-source sentinel
-/// (per construction invariant 8); `RegseqModel::new` populates it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct RegseqModel {
-    /// Crate inventory. One entry per crate the model contains
-    /// items from (per Q6: spec crate + regseq facade + regseq-aware
-    /// deps).
+    /// Crate inventory.
     pub crates: IndexVec<CrateId, CrateInfo>,
-    /// Index in `crates` of the spec crate the bridge was invoked
-    /// on.
+    /// Index of the spec crate in `crates`.
     pub primary_crate: CrateId,
 
-    /// Content-unique string interner; `StringId::ZERO` is the
-    /// empty string, pre-interned by `StringInterner::new`.
-    pub strings: StringInterner,
+    /// Target context.
+    pub target: TargetInfo,
 
-    /// Source files. `source_files[0]` is the synthesized sentinel.
+    /// Build provenance.
+    pub build: BuildInfo,
+
+    /// Content-unique string interner.
+    pub strings: StringInterner,
+    /// Source files; index 0 is the synthesized sentinel.
     pub source_files: IndexVec<SourceFileId, SourceFile>,
 
-    /// Type table. Stage 3 expands `Ty`.
-    pub types: IndexVec<TyId, Ty>,
-    /// Const table. Stage 4 expands `Const`.
-    pub consts: IndexVec<ConstId, Const>,
+    /// Content-keyed type interner.
+    pub types: TyInterner,
+    /// Content-keyed const interner.
+    pub consts: ConstInterner,
+    /// Content-keyed function signature interner.
+    pub sigs: FnSigInterner,
 
-    /// Source-level item alphabet (generic forms + attributes,
-    /// not the emission table). Stage 12 expands `Item`.
+    /// Source-level item alphabet.
     pub items: IndexVec<ItemId, Item>,
-    /// F4 cross-build identity side table; mirrors `items`.
+    /// Stable item identity side table parallel to `items`.
     pub item_def_paths: IndexVec<ItemId, DefPathHash>,
+    /// Synthetic item classification side table parallel to `items`.
+    pub item_synthetic_kinds: IndexVec<ItemId, SyntheticItemKind>,
 
-    /// Function signatures. Stage 11 expands `FnSig`.
-    pub sigs: IndexVec<FnSigId, FnSig>,
+    /// C ABI lowering side table parallel to `sigs`.
+    pub sig_c_abi_lowerings: IndexVec<FnSigId, Option<CAbiLowering>>,
 
-    /// MIR bodies. Stage 11 expands `Body`.
-    pub bodies: IndexVec<BodyId, Body>,
-
-    /// The primary monomorphized table -- iteration target for
-    /// domain analyses and C codegen.
+    /// Primary monomorphized table.
     pub instances: IndexVec<InstanceId, Instance>,
+
+    /// Bridge-side vtable dedup table rebuilt after deserialization.
+    #[serde(skip)]
+    pub vtables: HashMap<PrincipalTraitKey, ItemId>,
+
+    /// Domain attribute sibling tables.
+    pub domain_attrs: DomainAttrTables,
 }
 
-/// Path used in `InvariantViolation` to identify *where* a dangling
-/// ID was discovered. Stable strings rather than enum variants so
-/// the violation set stays small.
+#[cfg(test)]
+#[path = "model_tests.rs"]
+mod tests;
+
 const SOURCE_FILE_PATH: &str = "SourceFile.path (StringId)";
 const CRATE_INFO_NAME: &str = "CrateInfo.name (StringId)";
 const INSTANCE_ITEM: &str = "Instance.item (ItemId)";
@@ -86,7 +81,6 @@ const INSTANCE_SPAN_FILE: &str = "Instance.span.file (SourceFileId)";
 const INSTANCE_GENERIC_ARG_TY: &str = "Instance.generic_args[..](TyId)";
 const INSTANCE_GENERIC_ARG_CONST: &str = "Instance.generic_args[..](ConstId)";
 const INSTANCE_KIND_FUNCTION_SIG: &str = "InstanceKind::Function.sig (FnSigId)";
-const INSTANCE_KIND_FUNCTION_BODY: &str = "InstanceKind::Function.body (BodyId)";
 const INSTANCE_KIND_STATIC_TY: &str = "InstanceKind::Static.ty (TyId)";
 const INSTANCE_KIND_STATIC_INIT: &str = "InstanceKind::Static.init (ConstId)";
 const INSTANCE_KIND_CONST_TY: &str = "InstanceKind::Const.ty (TyId)";
@@ -96,74 +90,234 @@ const INSTANCE_KIND_ENUM_LAYOUT: &str = "InstanceKind::Enum.layout (TyId)";
 const INSTANCE_KIND_UNION_LAYOUT: &str = "InstanceKind::Union.layout (TyId)";
 
 /// One construction-invariant violation.
-///
-/// `RegseqModel::validate` reports the *first* violation it finds.
-/// Stage 1 enforces the subset of invariants whose information is
-/// available without later-stage content (notably: invariants 3, 6
-/// are deferred to stage 12, and the spec-crate stable-id check
-/// inside invariant 4 is bridge-input-dependent; see the
-/// per-invariant comments in `validate`).
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub enum InvariantViolation {
-    /// (1) An ID does not resolve to a valid entry in its table.
+    /// An ID does not resolve to a valid entry in its table.
     DanglingId {
-        /// What field carried the dangling reference (a stable
-        /// human-readable label; see the `*_PATH` constants in this
-        /// module for the canonical strings).
+        /// Field carrying the dangling reference.
         field: &'static str,
-        /// Logical index value (`Idx::index()` of the offending ID).
+        /// Logical index value of the offending ID.
         value: u32,
-        /// Length of the table the ID was supposed to address.
+        /// Length of the referenced table.
         table_len: usize,
     },
 
-    /// (2) `item_def_paths.len() != items.len()`.
-    ItemDefPathsLengthMismatch { items_len: usize, def_paths_len: usize },
+    /// `item_def_paths.len() != items.len()`.
+    ItemDefPathsLengthMismatch {
+        /// Length of `items`.
+        items_len: usize,
+        /// Length of `item_def_paths`.
+        def_paths_len: usize,
+    },
 
-    /// (4) `primary_crate.index() >= crates.len()`.
-    PrimaryCrateOutOfRange { value: u32, crates_len: usize },
+    /// `item_synthetic_kinds.len() != items.len()`.
+    ItemSyntheticKindsLengthMismatch {
+        /// Length of `items`.
+        items_len: usize,
+        /// Length of `item_synthetic_kinds`.
+        synthetic_kinds_len: usize,
+    },
 
-    /// (5) Two `CrateInfo` entries share a `StableCrateId`.
+    /// `primary_crate.index() >= crates.len()`.
+    PrimaryCrateOutOfRange {
+        /// Offending primary-crate index.
+        value: u32,
+        /// Length of `crates`.
+        crates_len: usize,
+    },
+
+    /// Primary crate stable id does not match bridge input.
+    PrimaryCrateStableIdMismatch {
+        /// Stable id stored in the model primary crate.
+        model: StableCrateId,
+        /// Stable id supplied by the bridge input.
+        bridge_input: StableCrateId,
+    },
+
+    /// Two `CrateInfo` entries share a `StableCrateId`.
     DuplicateStableCrateId {
+        /// Duplicate stable crate id.
         stable_id: StableCrateId,
+        /// First crate id carrying the stable id.
         first: CrateId,
+        /// Second crate id carrying the stable id.
         second: CrateId,
     },
 
-    /// (8) `source_files[0]` is not the synthesized sentinel.
+    /// `source_files[0]` is not the synthesized sentinel.
     SynthesizedSentinelInvalid {
-        /// Brief reason ("source_files empty", "path != \"<synthesized>\"", etc.).
+        /// Brief reason.
         reason: &'static str,
     },
 }
 
-impl RegseqModel {
-    /// Empty model with the synthesized-source sentinel pre-populated
-    /// at `SourceFileId::ZERO` and the primary crate registered at
-    /// `CrateId::ZERO`.
-    ///
-    /// Bridge usage: call `with_primary(name, stable_id)`, then push
-    /// items / bodies / instances / etc. as extraction proceeds.
-    /// Real source files are pushed starting at `SourceFileId(1)`
-    /// (the sentinel already occupies index 0).
-    ///
-    /// The constructor takes the primary crate's *raw* name and
-    /// `StableCrateId` (rather than a pre-built `CrateInfo`) because
-    /// the crate name has to be interned through the model's own
-    /// `StringInterner` -- a pre-built `CrateInfo` would carry a
-    /// `StringId` that came from somewhere else, which the model
-    /// cannot resolve.
-    /// Returns a context-bearing pretty-printer over this model.
-    /// Convenience accessor for `PrettyPrinter::new(self)`.
-    pub fn pretty(&self) -> PrettyPrinter<'_> {
-        PrettyPrinter::new(self)
-    }
+/// Construction-invariant identifier.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+pub enum InvariantId {
+    /// 1. Tables are populated before they are referenced. Every model ID resolves to a valid index in its table.
+    TablesPopulatedBeforeReference,
+    /// 2. `item_def_paths` and `item_synthetic_kinds` mirror `items`.
+    ItemSideTablesMirrorItems,
+    /// 3. Items are sorted at construction by the F4 sort comparator.
+    ItemsSortedAtConstruction,
+    /// 4. `primary_crate` is valid and corresponds to the spec crate.
+    PrimaryCrateValidAndMatchesSpec,
+    /// 5. `crates[c].stable_crate_id` is unique across `c`.
+    StableCrateIdsUnique,
+    /// 6. Every `DefPath.crate_id` resolves to a valid entry.
+    DefPathCrateIdsResolve,
+    /// 7. No rustc lifetime references are stored in the model.
+    NoTcxReferences,
+    /// 8. `source_files[0]` is the synthesised source-file sentinel.
+    SynthesizedSourceFileSentinel,
+    /// 9. Instance closure-completeness holds for every `InstanceId` referenced anywhere in the model.
+    InstanceClosureCompleteness,
+    /// 10. Body presence matches the `InstanceKind::Function` shape.
+    FunctionBodyPresenceMatchesKind,
+    /// 11. Content-keyed interner uniqueness holds for `types`, `sigs`, `consts`, and strings.
+    ContentKeyedInternerUniqueness,
+    /// 12. Unsized marker types appear only as the pointee of a reference or pointer.
+    UnsizedMarkerPlacement,
+    /// 13. `Ty::Dynamic` values are well formed.
+    DynamicWellFormedness,
+    /// 14. `InstanceKind` layout references are consistent with the matching nominal type variant.
+    InstanceKindLayoutConsistency,
+    /// 15. `TargetInfo` is well formed.
+    TargetInfoWellFormedness,
+    /// 16. C ABI admissibility outcomes and lowering records are recorded for function signatures.
+    CAbiLoweringRecordsMatchSignatures,
+    /// 17. `BuildInfo` is well formed.
+    BuildInfoWellFormedness,
+    /// 18. `item_def_paths` are globally unique.
+    ItemDefPathGlobalUniqueness,
+    /// 19. `Item.opaque_handle_eligible` is consistent for non-generic items.
+    OpaqueHandleEligibilityConsistency,
+    /// 20. `StableCrateId(0)` is reserved as the synthetic-domain sentinel.
+    StableCrateIdZeroReserved,
+}
 
+/// Returns the locked spec wording for a construction invariant.
+pub fn invariant_descriptor(id: InvariantId) -> &'static str {
+    match id {
+        InvariantId::TablesPopulatedBeforeReference => {
+            concat!(
+                "Tables are populated before they are referenced. Every `CrateId`, `TyId`, ",
+                "`ConstId`, `ItemId`, `InstanceId`, `FnSigId`, `SourceFileId`, `StringId`, ",
+                "`VariantIdx` resolves to a valid index in its table. Debug-build assertion. ",
+                "No `BodyId` per stage-12 D-12-1.4 / Option B; bodies live structurally on ",
+                "`InstanceKind::Function`."
+            )
+        }
+        InvariantId::ItemSideTablesMirrorItems => {
+            concat!(
+                "`item_def_paths` and `item_synthetic_kinds` mirror `items`. Both side tables ",
+                "have `len() == items.len()`. Source-level items use rustc `DefPathHash` and ",
+                "`SyntheticItemKind::None`; bridge-synthesised items use the synthetic hash and ",
+                "structured synthetic-kind tag, except `ClosureCaptures` keeps the closure ",
+                "rustc `DefPathHash`."
+            )
+        }
+        InvariantId::ItemsSortedAtConstruction => {
+            concat!(
+                "Items are sorted at construction. Items are placed in `items` and ",
+                "`item_def_paths` in F4 sort-comparator order. Builds satisfying the ",
+                "build-equivalence quad produce identical `ItemId` assignments; other builds ",
+                "are aligned by `DefPathHash`."
+            )
+        }
+        InvariantId::PrimaryCrateValidAndMatchesSpec => {
+            concat!(
+                "`primary_crate` is valid and corresponds to the spec crate. ",
+                "`primary_crate.index() < crates.len()` and ",
+                "`crates[primary_crate].stable_crate_id` matches the bridge input's ",
+                "`spec_crate_stable_id`."
+            )
+        }
+        InvariantId::StableCrateIdsUnique => {
+            concat!(
+                "`crates[c].stable_crate_id` is unique across `c`. No two `CrateInfo` ",
+                "entries share a `StableCrateId`. `crates` is sorted by ",
+                "`(crate_name, stable_crate_id)` before `CrateId` assignment."
+            )
+        }
+        InvariantId::DefPathCrateIdsResolve => {
+            "Every `DefPath.crate_id` resolves to a valid entry. For every item, `item.def_path.crate_id.index() < crates.len()`."
+        }
+        InvariantId::NoTcxReferences => {
+            "No `'tcx` references. The model is fully owned and `'static`-compatible; serialisation round-trips losslessly."
+        }
+        InvariantId::SynthesizedSourceFileSentinel => {
+            "Synthesised source-file sentinel. `source_files[0]` has path `\"<synthesized>\"`, `content: None`, and `line_starts: vec![0]`; real source files start at `SourceFileId(1)`."
+        }
+        InvariantId::InstanceClosureCompleteness => {
+            concat!(
+                "Instance closure-completeness. The bridge computes the monomorphisation ",
+                "closure from a settled root set. Every `InstanceId` referenced anywhere in ",
+                "the model resolves to a valid entry."
+            )
+        }
+        InvariantId::FunctionBodyPresenceMatchesKind => {
+            concat!(
+                "Body presence matches `InstanceKind::Function` shape. Bodies live ",
+                "structurally on `InstanceKind::Function { body: Option<Body>, ... }`. ",
+                "`body: Some(b)` stores the body on the Instance-side field; `body: None` ",
+                "is reserved for foreign declarations. Non-Function kinds have no body field."
+            )
+        }
+        InvariantId::ContentKeyedInternerUniqueness => {
+            "Content-keyed interner uniqueness. `types`, `sigs`, and `consts` are content-keyed with no two distinct IDs mapping to canonically-equal values; strings follow the same rule."
+        }
+        InvariantId::UnsizedMarkerPlacement => {
+            "`Ty::Str`, `Ty::Slice`, and `Ty::Dynamic` appear only as the pointee of a `Ty::Ref` or `Ty::Ptr`; bare unsized markers are rejected elsewhere."
+        }
+        InvariantId::DynamicWellFormedness => {
+            "`Ty::Dynamic` well-formedness. Auto traits are sorted with no duplicates, a principal trait is required, and `vtable_ty` resolves to the synthesised vtable `Ty::Struct` for the full `PrincipalTraitKey`."
+        }
+        InvariantId::InstanceKindLayoutConsistency => {
+            "`InstanceKind` layout consistency. For `Struct`, `Enum`, and `Union`, the referenced `TyId` resolves to the matching nominal `Ty` variant whose `(item, args)` equals `(Instance.item, Instance.generic_args)`."
+        }
+        InvariantId::TargetInfoWellFormedness => {
+            "`TargetInfo` well-formedness. Target strings are non-empty, pointer width is one of 16, 32, or 64, endian and pointer width agree with the data layout, and scalar layouts match the target ABI."
+        }
+        InvariantId::CAbiLoweringRecordsMatchSignatures => {
+            concat!(
+                "C ABI admissibility outcome and lowering record. Every `FnSig` with ",
+                "`abi: FnAbi::C` was checked for C ABI admissibility at bridge time, Rust ",
+                "`TyId`s are preserved, and `sig_c_abi_lowerings` records `Some(CAbiLowering)` ",
+                "for C ABI signatures and `None` for Rust ABI signatures."
+            )
+        }
+        InvariantId::BuildInfoWellFormedness => {
+            "`BuildInfo` well-formedness. `build.toolchain` is a non-empty interned string and `build.bridge_options_hash` is deterministic over normalised extraction options."
+        }
+        InvariantId::ItemDefPathGlobalUniqueness => {
+            "`item_def_paths` global uniqueness. No two distinct `ItemId`s map to the same `DefPathHash`; source-derived and synthetic spaces are domain-separated by `stable_crate_id`."
+        }
+        InvariantId::OpaqueHandleEligibilityConsistency => {
+            concat!(
+                "`Item.opaque_handle_eligible` consistency (non-generic only). When true, ",
+                "the item is a non-generic `ItemKind::Struct`, has bridge-certified C repr, ",
+                "has a unique ZST monomorphic layout, and every reachable use is behind a ",
+                "`Ref` or `Ptr`."
+            )
+        }
+        InvariantId::StableCrateIdZeroReserved => {
+            "`StableCrateId(0)` reserved as synthetic-domain sentinel. No real source crate carries `StableCrateId(0)`; synthetic-item `DefPathHash`es use `stable_crate_id == 0`."
+        }
+    }
+}
+
+impl RegseqModel {
+    /// Empty model with the synthesized-source sentinel and primary
+    /// crate pre-populated.
     pub fn with_primary(primary_name: &str, primary_stable_crate_id: StableCrateId) -> Self {
         let mut strings = StringInterner::new();
 
-        // (8) source_files[0] is the synthesized sentinel.
         let synth_path = strings.intern("<synthesized>");
+        let target_triple = strings.intern("unknown-unknown-unknown");
+        let data_layout = strings.intern("e-p:64:64");
+        let toolchain = strings.intern("nightly-2026-02-01");
+
         let mut source_files: IndexVec<SourceFileId, SourceFile> = IndexVec::new();
         let pushed = source_files.push(SourceFile {
             path: synth_path,
@@ -182,58 +336,41 @@ impl RegseqModel {
         Self {
             crates,
             primary_crate: primary_id,
+            target: TargetInfo {
+                triple: target_triple,
+                pointer_width: 64,
+                endian: Endian::Little,
+                data_layout,
+                scalar_layouts: default_scalar_layouts(64),
+            },
+            build: BuildInfo {
+                toolchain,
+                bridge_options_hash: 0,
+            },
             strings,
             source_files,
             types: IndexVec::new(),
             consts: IndexVec::new(),
+            sigs: IndexVec::new(),
             items: IndexVec::new(),
             item_def_paths: IndexVec::new(),
-            sigs: IndexVec::new(),
-            bodies: IndexVec::new(),
+            item_synthetic_kinds: IndexVec::new(),
+            sig_c_abi_lowerings: IndexVec::new(),
             instances: IndexVec::new(),
+            vtables: HashMap::new(),
+            domain_attrs: DomainAttrTables::default(),
         }
     }
 
-    /// Validates the construction invariants enforceable at stage 1.
-    ///
-    /// Returns the first violation found, or `Ok(())` when the
-    /// model is well-formed. Coverage:
-    ///
-    /// - Invariant 1 (IDs resolve): walked over `crates`,
-    ///   `source_files`, and `instances` for every ID-bearing
-    ///   field. `Item` / `Body` / `Ty` / `Const` / `FnSig` are
-    ///   placeholders at stage 1, so no IDs ride inside them yet;
-    ///   stage 3, 4, 11, and 12 extend coverage as their fields
-    ///   land.
-    /// - Invariant 2 (`item_def_paths` mirrors `items`): length
-    ///   check.
-    /// - Invariant 3 (items F4-sorted): deferred. The F4 sort key
-    ///   reads `crates[item.def_path.crate_id].name`, segments,
-    ///   and disambiguators; `Item.def_path` lands in stage 12.
-    /// - Invariant 4 (`primary_crate` valid; corresponds to spec
-    ///   crate): the index-bound half is checked here. The
-    ///   "corresponds to spec crate" half is bridge-input-dependent
-    ///   (matches `bridge_input.spec_crate_stable_id`) and lives
-    ///   in the bridge.
-    /// - Invariant 5 (`StableCrateId` unique across crates): direct
-    ///   check.
-    /// - Invariant 6 (`DefPath.crate_id` valid for every item):
-    ///   deferred. Needs `Item.def_path` (stage 12).
-    /// - Invariant 7 (no `'tcx`): structural; satisfied by Q1 and
-    ///   the type definitions in this crate. Not a runtime check.
-    /// - Invariant 8 (synthesized source-file sentinel): direct
-    ///   check on `source_files[0]`.
-    /// - Invariant 9 (Instance closure-completeness): vacuously
-    ///   true at stage 1 because no stage-1 construct stores an
-    ///   `InstanceId`. Stage 9 (terminators) and stage 12 (vtables)
-    ///   add reference sites; coverage extends then.
-    /// - Invariant 10 (Function body presence): walked here for
-    ///   every Instance with `kind = Function { body: Some(b) }`.
-    pub fn validate(&self) -> Result<(), InvariantViolation> {
-        // (8) Synthesized source-file sentinel at index 0.
+    /// Convenience accessor for `PrettyPrinter::new(self)`.
+    pub fn pretty(&self) -> PrettyPrinter<'_> {
+        PrettyPrinter::new(self)
+    }
+
+    /// Validates construction invariants enforceable at this phase.
+    pub fn validate(&self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
         self.validate_synthesized_sentinel()?;
 
-        // (4, partial) primary_crate index is in range.
         if self.primary_crate.index() >= self.crates.len() {
             return Err(InvariantViolation::PrimaryCrateOutOfRange {
                 value: self.primary_crate.as_u32(),
@@ -241,20 +378,24 @@ impl RegseqModel {
             });
         }
 
-        // (1, partial) StringIds in the crates table resolve.
+        let primary_stable_id = self.crates[self.primary_crate].stable_crate_id;
+        if primary_stable_id != bridge_input.spec_crate_stable_id {
+            return Err(InvariantViolation::PrimaryCrateStableIdMismatch {
+                model: primary_stable_id,
+                bridge_input: bridge_input.spec_crate_stable_id,
+            });
+        }
+
         for info in self.crates.iter() {
             self.check_string_id(info.name, CRATE_INFO_NAME)?;
         }
 
-        // (1, partial) StringIds in source files resolve.
         for file in self.source_files.iter() {
             self.check_string_id(file.path, SOURCE_FILE_PATH)?;
         }
 
-        // (5) StableCrateId unique across crates.
         self.validate_unique_stable_crate_ids()?;
 
-        // (2) item_def_paths mirrors items in length.
         if self.item_def_paths.len() != self.items.len() {
             return Err(InvariantViolation::ItemDefPathsLengthMismatch {
                 items_len: self.items.len(),
@@ -262,7 +403,13 @@ impl RegseqModel {
             });
         }
 
-        // (1) and (10) for instances.
+        if self.item_synthetic_kinds.len() != self.items.len() {
+            return Err(InvariantViolation::ItemSyntheticKindsLengthMismatch {
+                items_len: self.items.len(),
+                synthetic_kinds_len: self.item_synthetic_kinds.len(),
+            });
+        }
+
         for instance in self.instances.iter() {
             self.validate_instance(instance)?;
         }
@@ -270,15 +417,84 @@ impl RegseqModel {
         Ok(())
     }
 
+    /// Returns the source-level def path for an instance.
+    pub fn instance_def_path(&self, _id: InstanceId) -> &DefPath {
+        todo!("P1a-DS-07 adds Item.def_path")
+    }
+
+    /// Returns the source span for an instance's item.
+    pub fn instance_span(&self, _id: InstanceId) -> Span {
+        todo!("P1a-DS-07 adds Item.span")
+    }
+
+    /// Returns the linkage for an instance's item.
+    pub fn instance_linkage(&self, _id: InstanceId) -> Linkage {
+        todo!("P1a-DS-07 adds Item.linkage")
+    }
+
+    /// Returns the optional link section for an instance's item.
+    pub fn instance_link_section(&self, _id: InstanceId) -> Option<StringId> {
+        todo!("P1a-DS-07 adds Item.link_section")
+    }
+
+    /// Returns the inline hint for an instance's item.
+    pub fn instance_inline_hint(&self, _id: InstanceId) -> InlineHint {
+        todo!("P1a-DS-07 adds Item.inline_hint")
+    }
+
+    /// Returns whether an instance's item is unsafe.
+    pub fn instance_is_unsafe(&self, _id: InstanceId) -> bool {
+        todo!("P1a-DS-07 adds Item.is_unsafe")
+    }
+
+    /// Returns whether an instance's item is `PhantomData`.
+    pub fn instance_is_phantom_data(&self, _id: InstanceId) -> bool {
+        todo!("P1a-DS-07 adds Item.is_phantom_data")
+    }
+
+    /// Returns whether an instance's item is `UnsafeCell`.
+    pub fn instance_is_unsafe_cell(&self, _id: InstanceId) -> bool {
+        todo!("P1a-DS-07 adds Item.is_unsafe_cell")
+    }
+
+    /// Returns whether an instance's item is `ManuallyDrop`.
+    pub fn instance_is_manually_drop(&self, _id: InstanceId) -> bool {
+        todo!("P1a-DS-07 adds Item.is_manually_drop")
+    }
+
+    /// Returns the bridge-computed opaque-handle eligibility flag.
+    pub fn instance_opaque_handle_eligible(&self, _id: InstanceId) -> bool {
+        todo!("P1a-DS-07 adds Item.opaque_handle_eligible")
+    }
+
+    /// Returns the function signature for function instances.
+    pub fn instance_fn_sig(&self, id: InstanceId) -> Option<&FnSig> {
+        match self.instances[id].kind {
+            InstanceKind::Function { sig, .. } => Some(&self.sigs[sig]),
+            _ => None,
+        }
+    }
+
+    /// Returns the inline body for function instances that have one.
+    pub fn instance_body(&self, id: InstanceId) -> Option<&Body> {
+        match &self.instances[id].kind {
+            InstanceKind::Function { body, .. } => body.as_ref(),
+            _ => None,
+        }
+    }
+
+    /// Returns the domain intrinsic marker for an instance's item.
+    pub fn instance_intrinsic(&self, _id: InstanceId) -> Option<&IntrinsicKind> {
+        todo!("P1a-DS-09 adds DomainAttrTables contents")
+    }
+
     fn validate_synthesized_sentinel(&self) -> Result<(), InvariantViolation> {
-        let sf = self.source_files.iter().next().ok_or_else(|| {
+        let sf = self.source_files.iter().next().ok_or({
             InvariantViolation::SynthesizedSentinelInvalid {
                 reason: "source_files is empty",
             }
         })?;
 
-        // The path StringId must resolve and the resolved string
-        // must be exactly "<synthesized>".
         if sf.path.index() >= self.strings.len() {
             return Err(InvariantViolation::SynthesizedSentinelInvalid {
                 reason: "sentinel path StringId is dangling",
@@ -303,10 +519,6 @@ impl RegseqModel {
     }
 
     fn validate_unique_stable_crate_ids(&self) -> Result<(), InvariantViolation> {
-        // O(n^2) is fine: the `crates` table is bounded by the
-        // crate-graph fan-in (typically <= a few dozen entries).
-        // Hashing would obscure error reporting (we want the two
-        // colliding CrateIds in the violation).
         for i in 0..self.crates.len() {
             for j in (i + 1)..self.crates.len() {
                 let a = CrateId::from_u32(i as u32);
@@ -336,13 +548,8 @@ impl RegseqModel {
         }
 
         match instance.kind {
-            InstanceKind::Function { sig, body } => {
+            InstanceKind::Function { sig, .. } => {
                 self.check_fn_sig_id(sig, INSTANCE_KIND_FUNCTION_SIG)?;
-                if let Some(b) = body {
-                    // (10) Body presence matches kind: when
-                    // `Some(b)`, b resolves to a valid Body.
-                    self.check_body_id(b, INSTANCE_KIND_FUNCTION_BODY)?;
-                }
             }
             InstanceKind::Static { ty, init } => {
                 self.check_ty_id(ty, INSTANCE_KIND_STATIC_TY)?;
@@ -420,17 +627,6 @@ impl RegseqModel {
                 field,
                 value: id.as_u32(),
                 table_len: self.consts.len(),
-            });
-        }
-        Ok(())
-    }
-
-    fn check_body_id(&self, id: BodyId, field: &'static str) -> Result<(), InvariantViolation> {
-        if id.index() >= self.bodies.len() {
-            return Err(InvariantViolation::DanglingId {
-                field,
-                value: id.as_u32(),
-                table_len: self.bodies.len(),
             });
         }
         Ok(())

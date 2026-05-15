@@ -102,3 +102,7 @@ impl<I, T: core::fmt::Debug> core::fmt::Debug for IndexVec<I, T> {
         self.inner.fmt(f)
     }
 }
+
+#[cfg(test)]
+#[path = "index_vec_tests.rs"]
+mod tests;

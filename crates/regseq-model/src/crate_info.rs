@@ -34,3 +34,7 @@ pub struct CrateInfo {
     pub name: StringId,
     pub stable_crate_id: StableCrateId,
 }
+
+#[cfg(test)]
+#[path = "crate_info_tests.rs"]
+mod tests;

@@ -7,7 +7,7 @@
 //! messages so that any change to those messages is a deliberate
 //! event picked up by the test suite.
 
-use regseq_model::{
+use crate::{
     render_def_path, ConstId, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, InstanceId,
     ItemId, RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId, TyId,
 };
@@ -21,7 +21,7 @@ fn pretty_printer_new_constructs_from_model() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     // Both APIs should produce a usable printer without panicking.
     let _ = m.pretty();
-    let _ = regseq_model::PrettyPrinter::new(&m);
+    let _ = crate::PrettyPrinter::new(&m);
 }
 
 // ------------------------------------------------------------------
@@ -190,21 +190,21 @@ fn render_def_path_by_item_id_is_unimplemented_at_stage_one() {
 }
 
 #[test]
-#[should_panic(expected = "stage 3 fills render_ty")]
+#[should_panic(expected = "stage 13 fills render_ty")]
 fn render_ty_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render_ty(TyId::ZERO);
 }
 
 #[test]
-#[should_panic(expected = "stage 4 fills render_const")]
+#[should_panic(expected = "stage 14 fills render_const")]
 fn render_const_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render_const(ConstId::ZERO);
 }
 
 #[test]
-#[should_panic(expected = "stage 13 fills render_instance")]
+#[should_panic(expected = "stage 14 fills render_instance")]
 fn render_instance_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render_instance(InstanceId::ZERO);

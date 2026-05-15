@@ -3,8 +3,8 @@
 //! `regseq_instance_kind_rank`, `RustcInstanceKindTag`, and
 //! `rustc_instance_kind_sort_rank`.
 
-use regseq_model::{
-    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, BodyId, ConstId, FnSigId, GenericArg,
+use crate::{
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Body, ConstId, FnSigId, GenericArg,
     Instance, InstanceKind, ItemId, RustcInstanceKindTag, SourceFileId, Span, StringId, TyId,
 };
 
@@ -59,7 +59,7 @@ fn all_instance_kinds() -> Vec<InstanceKind> {
     vec![
         InstanceKind::Function {
             sig: FnSigId::from_u32(1),
-            body: Some(BodyId::from_u32(2)),
+            body: Some(Body::default()),
         },
         InstanceKind::Function {
             sig: FnSigId::from_u32(3),
@@ -98,10 +98,10 @@ fn instance_kind_round_trips_all_variants_including_foreign() {
 fn instance_kind_function_with_body_json_shape() {
     let k = InstanceKind::Function {
         sig: FnSigId::from_u32(2),
-        body: Some(BodyId::from_u32(7)),
+        body: Some(Body::default()),
     };
     let v = serde_json::to_value(&k).unwrap();
-    assert_eq!(v, serde_json::json!({"Function": {"sig": 2, "body": 7}}));
+    assert_eq!(v, serde_json::json!({"Function": {"sig": 2, "body": {}}}));
 }
 
 #[test]
@@ -111,10 +111,7 @@ fn instance_kind_function_without_body_serializes_body_as_null() {
         body: None,
     };
     let v = serde_json::to_value(&k).unwrap();
-    assert_eq!(
-        v,
-        serde_json::json!({"Function": {"sig": 2, "body": null}})
-    );
+    assert_eq!(v, serde_json::json!({"Function": {"sig": 2, "body": null}}));
 }
 
 #[test]
@@ -263,7 +260,7 @@ fn regseq_instance_kind_ranks_are_unique_and_dense() {
 fn regseq_instance_kind_rank_ignores_payload_and_function_body_presence() {
     let with = InstanceKind::Function {
         sig: FnSigId::from_u32(99),
-        body: Some(BodyId::from_u32(11)),
+        body: Some(Body::default()),
     };
     let without = InstanceKind::Function {
         sig: FnSigId::from_u32(1),
@@ -369,7 +366,7 @@ fn instance_round_trips() {
         span: span_zero(),
         kind: InstanceKind::Function {
             sig: FnSigId::from_u32(0),
-            body: Some(BodyId::from_u32(7)),
+            body: Some(Body::default()),
         },
     };
     let json = serde_json::to_string(&inst).unwrap();
@@ -416,7 +413,10 @@ fn instance_json_top_level_shape() {
     assert_eq!(v["item"], serde_json::json!(2));
     assert_eq!(v["generic_args"], serde_json::json!([{"Type": 3}]));
     assert_eq!(v["symbol_name"], serde_json::json!(33));
-    assert_eq!(v["span"], serde_json::json!({"file": 4, "lo": 100, "hi": 200}));
+    assert_eq!(
+        v["span"],
+        serde_json::json!({"file": 4, "lo": 100, "hi": 200})
+    );
     assert_eq!(
         v["kind"],
         serde_json::json!({"Static": {"ty": 5, "init": 6}})

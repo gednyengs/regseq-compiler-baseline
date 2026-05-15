@@ -52,7 +52,10 @@ impl SourceFile {
     /// reported on line 1 with column `byte + 1`.
     pub fn position(&self, byte: u32) -> Position {
         match self.line_starts.partition_point(|&start| start <= byte) {
-            0 => Position { line: 1, col: byte + 1 },
+            0 => Position {
+                line: 1,
+                col: byte + 1,
+            },
             pp => {
                 let line_idx = pp - 1;
                 let line_start = self.line_starts[line_idx];
@@ -140,12 +143,13 @@ impl Span {
     /// these are bridge-invariant violations and surface via
     /// standard slice-bounds panics rather than defensive
     /// `Option`s (per methodology).
-    pub fn slice<'a>(
-        &self,
-        files: &'a IndexVec<SourceFileId, SourceFile>,
-    ) -> Option<&'a str> {
+    pub fn slice<'a>(&self, files: &'a IndexVec<SourceFileId, SourceFile>) -> Option<&'a str> {
         let sf = &files[self.file];
         let content = sf.content.as_ref()?;
         Some(&content[self.lo as usize..self.hi as usize])
     }
 }
+
+#[cfg(test)]
+#[path = "source_tests.rs"]
+mod tests;

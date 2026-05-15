@@ -129,35 +129,6 @@ impl<'de> serde::Deserialize<'de> for ItemId {
 }
 
 newtype_index! {
-    /// Identifies a `Body` in `RegseqModel.bodies`.
-    ///
-    /// `Body` itself is defined in stage 11 (MIR bodies). Stage 1
-    /// forward-declares the ID so that
-    /// `InstanceKind::Function { body: Option<BodyId>, .. }`
-    /// compiles against the foundation crate.
-    pub struct BodyId {}
-}
-
-impl serde::Serialize for BodyId {
-    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
-        s.serialize_u32(self.as_u32())
-    }
-}
-
-impl<'de> serde::Deserialize<'de> for BodyId {
-    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
-        let raw = u32::deserialize(d)?;
-        if raw > Self::MAX_AS_U32 {
-            return Err(serde::de::Error::custom(format!(
-                "BodyId value {raw} exceeds MAX ({})",
-                Self::MAX_AS_U32
-            )));
-        }
-        Ok(Self::from_u32(raw))
-    }
-}
-
-newtype_index! {
     /// Identifies a `Ty` in `RegseqModel.types`.
     ///
     /// `Ty` itself is defined in stage 3 (Type system). Stage 1
@@ -267,3 +238,89 @@ impl<'de> serde::Deserialize<'de> for InstanceId {
         Ok(Self::from_u32(raw))
     }
 }
+
+newtype_index! {
+    /// Identifies a local in a MIR body.
+    pub struct LocalId {}
+}
+
+impl LocalId {
+    /// Return-place local. Equal to `LocalId::ZERO`.
+    pub const RETURN_PLACE: LocalId = LocalId::ZERO;
+}
+
+impl serde::Serialize for LocalId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for LocalId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "LocalId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a basic block in a MIR body.
+    pub struct BlockId {}
+}
+
+impl BlockId {
+    /// Entry basic block. Equal to `BlockId::ZERO`.
+    pub const START_BLOCK: BlockId = BlockId::ZERO;
+}
+
+impl serde::Serialize for BlockId {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for BlockId {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "BlockId value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+newtype_index! {
+    /// Identifies a variant within an enum.
+    pub struct VariantIdx {}
+}
+
+impl serde::Serialize for VariantIdx {
+    fn serialize<S: serde::Serializer>(&self, s: S) -> Result<S::Ok, S::Error> {
+        s.serialize_u32(self.as_u32())
+    }
+}
+
+impl<'de> serde::Deserialize<'de> for VariantIdx {
+    fn deserialize<D: serde::Deserializer<'de>>(d: D) -> Result<Self, D::Error> {
+        let raw = u32::deserialize(d)?;
+        if raw > Self::MAX_AS_U32 {
+            return Err(serde::de::Error::custom(format!(
+                "VariantIdx value {raw} exceeds MAX ({})",
+                Self::MAX_AS_U32
+            )));
+        }
+        Ok(Self::from_u32(raw))
+    }
+}
+
+#[cfg(test)]
+#[path = "ids_tests.rs"]
+mod tests;

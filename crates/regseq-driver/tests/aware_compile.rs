@@ -116,7 +116,11 @@ pub fn add(a: u32, b: u32) -> u32 {
         rlib_path.display(),
     );
     let metadata = std::fs::metadata(&rlib_path).expect("rlib metadata");
-    assert!(metadata.len() > 0, "rlib at {} is empty", rlib_path.display());
+    assert!(
+        metadata.len() > 0,
+        "rlib at {} is empty",
+        rlib_path.display()
+    );
 
     std::fs::remove_dir_all(&test_dir).ok();
 }

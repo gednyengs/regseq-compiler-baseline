@@ -10,7 +10,7 @@
 //! - Deserialize rejects: empty array, non-empty index 0, and
 //!   duplicate entries.
 
-use regseq_model::{StringId, StringInterner};
+use crate::{StringId, StringInterner};
 
 #[test]
 fn new_pre_interns_empty_string_at_zero() {
@@ -139,19 +139,20 @@ fn deserialize_rejects_non_empty_index_zero() {
 
 #[test]
 fn deserialize_rejects_duplicate_entries() {
-    let result: Result<StringInterner, _> =
-        serde_json::from_str(r#"["","foo","bar","foo"]"#);
+    let result: Result<StringInterner, _> = serde_json::from_str(r#"["","foo","bar","foo"]"#);
     let err = result.expect_err("duplicate entry must be rejected");
     let msg = err.to_string();
     assert!(msg.contains("duplicate"), "error names the cause: {msg}");
-    assert!(msg.contains("foo"), "error names the duplicated value: {msg}");
+    assert!(
+        msg.contains("foo"),
+        "error names the duplicated value: {msg}"
+    );
 }
 
 #[test]
 fn deserialize_rejects_duplicate_empty_strings() {
     // Two empty strings at indices 0 and 5 must also be rejected.
-    let result: Result<StringInterner, _> =
-        serde_json::from_str(r#"["","a","b","c","d",""]"#);
+    let result: Result<StringInterner, _> = serde_json::from_str(r#"["","a","b","c","d",""]"#);
     let err = result.expect_err("duplicate empty entry must be rejected");
     assert!(
         err.to_string().contains("duplicate"),
@@ -164,10 +165,7 @@ fn debug_format_omits_lookup_for_determinism() {
     let mut interner = StringInterner::new();
     interner.intern("foo");
     let dbg = format!("{:?}", interner);
-    assert!(
-        dbg.contains("storage"),
-        "Debug must surface storage: {dbg}"
-    );
+    assert!(dbg.contains("storage"), "Debug must surface storage: {dbg}");
     assert!(
         !dbg.contains("lookup"),
         "Debug must not surface lookup (nondeterministic ordering): {dbg}"

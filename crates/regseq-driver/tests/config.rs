@@ -83,18 +83,17 @@ fn compiler_options_round_trip_through_json() {
     assert_eq!(decoded, options);
 }
 
-/// The whitelist returned by `regseq_mir_passes` is the initial,
-/// conservative set: UB-check passes are force-disabled. The
-/// shape-altering cleanup passes (RemoveStorageMarkers, RemoveZsts,
-/// SimplifyLocals-final, ReorderBasicBlocks, ReorderLocals) are the
-/// design target but must wait on updates to the `?`-pattern
-/// recognizer in `construction/try_folding.rs` that currently keys
-/// on the unmodified MIR shape. See the docstring on
-/// `callbacks::regseq_mir_passes` for the deferred items.
+/// The whitelist returned by `regseq_mir_passes` is the canonical
+/// clean-MIR shape shared by spec and regseq-aware crate compilation.
 #[test]
 fn regseq_mir_passes_whitelist_matches_contract() {
     let passes = regseq_mir_passes();
     let expected: Vec<(String, bool)> = vec![
+        ("RemoveStorageMarkers".to_string(), true),
+        ("RemoveZsts".to_string(), true),
+        ("SimplifyLocals-final".to_string(), true),
+        ("ReorderBasicBlocks".to_string(), true),
+        ("ReorderLocals".to_string(), true),
         ("CheckAlignment".to_string(), false),
         ("CheckNull".to_string(), false),
         ("CheckEnums".to_string(), false),
@@ -147,16 +146,20 @@ fn regseq_callbacks_config_source_does_not_inject_register_tool() {
         }
     }
     let body = &after_impl[body_start..body_end];
+    let executable_body = body
+        .lines()
+        .filter(|line| !line.trim_start().starts_with("//"))
+        .collect::<Vec<_>>()
+        .join("\n");
 
     assert!(
-        !body.contains("register_tool"),
+        !executable_body.contains("register_tool"),
         "RegseqCallbacks::config must not reference register_tool; \
          found in body:\n{body}",
     );
     assert!(
-        !body.contains("feature(register_tool)"),
+        !executable_body.contains("feature(register_tool)"),
         "RegseqCallbacks::config must not inject feature(register_tool); \
          found in body:\n{body}",
     );
 }
-

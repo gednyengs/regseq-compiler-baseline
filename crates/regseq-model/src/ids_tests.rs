@@ -8,8 +8,9 @@
 //!   here; if this file compiles, encapsulation holds).
 //! - `Option<CrateId>` is 4 bytes.
 
-use regseq_model::{
-    BodyId, ConstId, CrateId, FnSigId, Idx, InstanceId, ItemId, StringId, TyId,
+use crate::{
+    BlockId, ConstId, CrateId, FnSigId, Idx, InstanceId, ItemId, LocalId, SourceFileId, StringId,
+    TyId, VariantIdx,
 };
 use std::cmp::Ordering;
 use std::mem::size_of;
@@ -112,7 +113,10 @@ fn string_id_rejects_max_u32_on_deserialize() {
     let err = result.expect_err("u32::MAX must be rejected (niche-reserved)");
     let msg = err.to_string();
     assert!(msg.contains("StringId"), "error names the type: {msg}");
-    assert!(msg.contains(&u32::MAX.to_string()), "error names the value: {msg}");
+    assert!(
+        msg.contains(&u32::MAX.to_string()),
+        "error names the value: {msg}"
+    );
 }
 
 #[test]
@@ -126,8 +130,7 @@ fn option_string_id_is_four_bytes() {
 // invocation with its own hand-rolled serde impl; the focused
 // per-ID tests below guard against copy-paste drift in the
 // niche-validation, error-message, ordering, debug, and round-trip
-// behavior. They cover the `ItemId`, `BodyId`, `TyId`, `ConstId`,
-// `FnSigId`, and `InstanceId` ID types added in step 5.
+// behavior. They cover the phase-1a ID inventory.
 // ---------------------------------------------------------------
 
 macro_rules! forward_id_battery {
@@ -213,11 +216,14 @@ macro_rules! forward_id_battery {
 }
 
 forward_id_battery!(ItemId, item_id_tests);
-forward_id_battery!(BodyId, body_id_tests);
 forward_id_battery!(TyId, ty_id_tests);
 forward_id_battery!(ConstId, const_id_tests);
 forward_id_battery!(FnSigId, fn_sig_id_tests);
 forward_id_battery!(InstanceId, instance_id_tests);
+forward_id_battery!(SourceFileId, source_file_id_tests);
+forward_id_battery!(LocalId, local_id_tests);
+forward_id_battery!(BlockId, block_id_tests);
+forward_id_battery!(VariantIdx, variant_idx_tests);
 
 #[test]
 fn forward_ids_are_distinct_types() {
@@ -225,9 +231,17 @@ fn forward_ids_are_distinct_types() {
     // not compile. The runtime body just exercises `from_u32` so
     // the test is named.
     let _ = ItemId::from_u32(0);
-    let _ = BodyId::from_u32(0);
     let _ = TyId::from_u32(0);
     let _ = ConstId::from_u32(0);
     let _ = FnSigId::from_u32(0);
     let _ = InstanceId::from_u32(0);
+    let _ = LocalId::from_u32(0);
+    let _ = BlockId::from_u32(0);
+    let _ = VariantIdx::from_u32(0);
+}
+
+#[test]
+fn local_and_block_sentinel_constants_match_zero() {
+    assert_eq!(LocalId::RETURN_PLACE, LocalId::ZERO);
+    assert_eq!(BlockId::START_BLOCK, BlockId::ZERO);
 }

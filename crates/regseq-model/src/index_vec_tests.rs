@@ -8,7 +8,7 @@
 //! - JSON serialization is a flat array of `T`, with the phantom
 //!   type parameter invisible.
 
-use regseq_model::{CrateId, IndexVec};
+use crate::{CrateId, IndexVec};
 
 #[test]
 fn new_is_empty() {

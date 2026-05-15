@@ -2,7 +2,7 @@
 //! `CrateInfo`. Locks in the JSON wire shape, transparent u64
 //! serialization, and structural sanity.
 
-use regseq_model::{CrateInfo, StableCrateId, StringId};
+use crate::{CrateInfo, StableCrateId, StringId};
 
 #[test]
 fn stable_crate_id_serializes_as_bare_u64() {

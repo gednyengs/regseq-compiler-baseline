@@ -2541,7 +2541,7 @@
           "id": "regseq-model-65",
           "name": "P1a-DS-01: Root RegseqModel + foundation conformance",
           "spec": ".harness/tasks/regseq-model/65-root-regseq-model-and-foundation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,

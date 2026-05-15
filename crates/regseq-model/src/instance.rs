@@ -14,7 +14,8 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::ids::{BodyId, ConstId, FnSigId, ItemId, StringId, TyId};
+use crate::ids::{ConstId, FnSigId, ItemId, StringId, TyId};
+use crate::placeholders::Body;
 use crate::source::Span;
 
 /// One generic argument substituted into an `Instance`.
@@ -44,10 +45,7 @@ pub enum InstanceKind {
     /// Function instantiation. `sig` is always present (foreign
     /// declarations have a sig but no body); `body` is `None` for
     /// foreign declarations whose bodies are not in our crate set.
-    Function {
-        sig: FnSigId,
-        body: Option<BodyId>,
-    },
+    Function { sig: FnSigId, body: Option<Body> },
 
     /// Static. The mutability flag (immutable `static` vs.
     /// `static mut`) lives on the source `Item` (stage 12); C
@@ -165,3 +163,7 @@ pub const fn rustc_instance_kind_sort_rank(tag: RustcInstanceKindTag) -> u8 {
         RustcInstanceKindTag::AsyncDropGlue => 14,
     }
 }
+
+#[cfg(test)]
+#[path = "instance_tests.rs"]
+mod tests;

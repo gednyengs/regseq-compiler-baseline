@@ -63,10 +63,15 @@ impl StringInterner {
         &self.storage[id.index()]
     }
 
+    /// Number of interned strings, including the empty-string sentinel.
     pub fn len(&self) -> usize {
         self.storage.len()
     }
 
+    /// Returns true when the backing storage has no strings.
+    ///
+    /// A well-formed interner created by `StringInterner::new` is
+    /// never empty because it contains the empty-string sentinel.
     pub fn is_empty(&self) -> bool {
         // Under the construction invariants, an interner always
         // contains at least the empty string at index 0; this
@@ -75,6 +80,7 @@ impl StringInterner {
         self.storage.is_empty()
     }
 
+    /// Iterates over interned strings in `StringId` order.
     pub fn iter(&self) -> impl Iterator<Item = (StringId, &str)> + '_ {
         self.storage
             .iter()
@@ -162,3 +168,7 @@ impl<'de> Deserialize<'de> for StringInterner {
         Ok(Self { storage, lookup })
     }
 }
+
+#[cfg(test)]
+#[path = "string_interner_tests.rs"]
+mod tests;

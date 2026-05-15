@@ -2,7 +2,7 @@
 //! `DefPathSegment`, `DefPath`, `DefPathHash`,
 //! `def_path_data_sort_rank`.
 
-use regseq_model::{
+use crate::{
     def_path_data_sort_rank, CrateId, DefPath, DefPathData, DefPathHash, DefPathSegment,
     StableCrateId, StringId,
 };

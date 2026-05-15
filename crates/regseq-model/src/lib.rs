@@ -6,10 +6,13 @@
 //! `regseq-driver` builds a `RegseqModel` from `tcx` and hands it
 //! off.
 
+mod bridge_input;
+mod build;
 mod crate_info;
 mod def_path;
-mod idx;
+mod domain_attr;
 mod ids;
+mod idx;
 mod index_vec;
 mod instance;
 mod model;
@@ -17,25 +20,37 @@ mod placeholders;
 mod pretty;
 mod source;
 mod string_interner;
+mod target;
 
+pub use bridge_input::BridgeInput;
+pub use build::BuildInfo;
 pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
+pub use domain_attr::DomainAttrTables;
+pub use ids::{
+    BlockId, ConstId, CrateId, FnSigId, InstanceId, ItemId, LocalId, SourceFileId, StringId, TyId,
+    VariantIdx,
+};
 pub use idx::Idx;
+pub use index_vec::IndexVec;
 pub use instance::{
     regseq_instance_kind_rank, rustc_instance_kind_sort_rank, GenericArg, GenericArgs, Instance,
     InstanceKind, RustcInstanceKindTag,
 };
-pub use model::{InvariantViolation, RegseqModel};
-pub use placeholders::{Body, Const, FnSig, Item, Ty};
-pub use pretty::PrettyPrinter;
-pub use ids::{
-    BodyId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
+pub use model::{invariant_descriptor, InvariantId, InvariantViolation, RegseqModel};
+pub use placeholders::{
+    Body, CAbiLowering, Const, ConstInterner, FnSig, FnSigInterner, InlineHint, IntrinsicKind,
+    Item, Linkage, PrincipalTraitKey, SyntheticItemKind, Ty, TyInterner,
 };
-pub use index_vec::IndexVec;
+pub use pretty::PrettyPrinter;
 pub use source::{Position, SourceFile, Span};
 pub use string_interner::StringInterner;
+pub use target::{
+    default_scalar_layouts, Endian, FloatKind, IntKind, ScalarLayouts, SizeAlign, TargetInfo,
+    UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,
+};
 
 const _: () = assert!(core::mem::size_of::<CrateId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<CrateId>>() == 4);
@@ -45,8 +60,6 @@ const _: () = assert!(core::mem::size_of::<SourceFileId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<SourceFileId>>() == 4);
 const _: () = assert!(core::mem::size_of::<ItemId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<ItemId>>() == 4);
-const _: () = assert!(core::mem::size_of::<BodyId>() == 4);
-const _: () = assert!(core::mem::size_of::<Option<BodyId>>() == 4);
 const _: () = assert!(core::mem::size_of::<TyId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<TyId>>() == 4);
 const _: () = assert!(core::mem::size_of::<ConstId>() == 4);
@@ -55,4 +68,10 @@ const _: () = assert!(core::mem::size_of::<FnSigId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<FnSigId>>() == 4);
 const _: () = assert!(core::mem::size_of::<InstanceId>() == 4);
 const _: () = assert!(core::mem::size_of::<Option<InstanceId>>() == 4);
+const _: () = assert!(core::mem::size_of::<LocalId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<LocalId>>() == 4);
+const _: () = assert!(core::mem::size_of::<BlockId>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<BlockId>>() == 4);
+const _: () = assert!(core::mem::size_of::<VariantIdx>() == 4);
+const _: () = assert!(core::mem::size_of::<Option<VariantIdx>>() == 4);
 const _: () = assert!(core::mem::size_of::<Span>() == 12);

@@ -26,8 +26,13 @@ fn env_value(command: &Command, key: &str) -> Option<String> {
     })
 }
 
-fn sample_options_and_toolchain(
-) -> (CompilerOptions, ToolchainInfo, NamedTempFile, NamedTempFile, TempDir) {
+fn sample_options_and_toolchain() -> (
+    CompilerOptions,
+    ToolchainInfo,
+    NamedTempFile,
+    NamedTempFile,
+    TempDir,
+) {
     let platform_file = NamedTempFile::new().expect("temporary platform file");
     let driver_file = NamedTempFile::new().expect("temporary driver file");
     let root = TempDir::new().expect("temporary root");

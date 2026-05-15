@@ -12,9 +12,10 @@
 //! - Deferred invariants (3, 6, 7, 9 + the bridge-input half of 4)
 //!   noted via comments at their corresponding test sites.
 
-use regseq_model::{
-    BodyId, ConstId, CrateId, CrateInfo, FnSigId, GenericArg, Instance, InstanceKind,
-    InvariantViolation, ItemId, RegseqModel, SourceFileId, Span, StableCrateId, StringId, TyId,
+use crate::{
+    Body, BridgeInput, ConstId, CrateId, CrateInfo, FnSigId, GenericArg, Instance, InstanceId,
+    InstanceKind, InvariantId, InvariantViolation, ItemId, RegseqModel, SourceFileId, Span,
+    StableCrateId, StringId, TyId,
 };
 
 // ------------------------------------------------------------------
@@ -53,10 +54,7 @@ fn with_primary_pre_interns_empty_string_then_synthesized_then_primary_name() {
     // then "pl011-spec" (becomes index 2). The exact StringIds are
     // implementation detail; round-trip through resolve is the
     // observable contract.
-    assert!(m
-        .strings
-        .iter()
-        .any(|(_, s)| s == "<synthesized>"));
+    assert!(m.strings.iter().any(|(_, s)| s == "<synthesized>"));
     assert!(m.strings.iter().any(|(_, s)| s == "pl011-spec"));
 }
 
@@ -67,9 +65,51 @@ fn with_primary_leaves_other_tables_empty() {
     assert!(m.consts.is_empty());
     assert!(m.items.is_empty());
     assert!(m.item_def_paths.is_empty());
+    assert!(m.item_synthetic_kinds.is_empty());
     assert!(m.sigs.is_empty());
-    assert!(m.bodies.is_empty());
+    assert!(m.sig_c_abi_lowerings.is_empty());
     assert!(m.instances.is_empty());
+    assert!(m.vtables.is_empty());
+}
+
+#[test]
+fn root_struct_exposes_spec_field_set() {
+    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let RegseqModel {
+        crates,
+        primary_crate,
+        target,
+        build,
+        strings,
+        source_files,
+        types,
+        consts,
+        sigs,
+        items,
+        item_def_paths,
+        item_synthetic_kinds,
+        sig_c_abi_lowerings,
+        instances,
+        vtables,
+        domain_attrs,
+    } = m;
+
+    assert_eq!(primary_crate, CrateId::ZERO);
+    assert_eq!(crates.len(), 1);
+    assert_eq!(target.pointer_width, 64);
+    assert_eq!(build.bridge_options_hash, 0);
+    assert!(!strings.is_empty());
+    assert_eq!(source_files.len(), 1);
+    assert!(types.is_empty());
+    assert!(consts.is_empty());
+    assert!(sigs.is_empty());
+    assert!(items.is_empty());
+    assert!(item_def_paths.is_empty());
+    assert!(item_synthetic_kinds.is_empty());
+    assert!(sig_c_abi_lowerings.is_empty());
+    assert!(instances.is_empty());
+    assert!(vtables.is_empty());
+    assert_eq!(domain_attrs, crate::DomainAttrTables::default());
 }
 
 // ------------------------------------------------------------------
@@ -79,7 +119,7 @@ fn with_primary_leaves_other_tables_empty() {
 #[test]
 fn empty_model_passes_validate() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    assert_eq!(m.validate(), Ok(()));
+    assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
 }
 
 #[test]
@@ -98,13 +138,13 @@ fn populated_model_passes_validate() {
     let ty = m.types.push(Default::default());
     let init = m.consts.push(Default::default());
     let sig = m.sigs.push(Default::default());
-    let body = m.bodies.push(Default::default());
 
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xCAFE,
     });
+    m.item_synthetic_kinds.push(Default::default());
 
     let symbol = m.strings.intern("foo");
     m.instances.push(Instance {
@@ -118,16 +158,17 @@ fn populated_model_passes_validate() {
         },
         kind: InstanceKind::Function {
             sig,
-            body: Some(body),
+            body: Some(Body::default()),
         },
     });
 
     // Add a Static instance; another item entry for it.
     let item2 = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xF00D,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let static_ty = m.types.push(Default::default());
     let static_init = m.consts.push(Default::default());
     m.instances.push(Instance {
@@ -145,17 +186,18 @@ fn populated_model_passes_validate() {
         },
     });
 
-    assert_eq!(m.validate(), Ok(()));
+    assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
 }
 
 #[test]
 fn function_with_body_none_validates_when_sig_resolves() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let sig = m.sigs.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -173,7 +215,7 @@ fn function_with_body_none_validates_when_sig_resolves() {
     // bodies are not in our crate set; the bridge does not synthesize
     // empty bodies, and validate must accept it without requiring a
     // Body entry.
-    assert_eq!(m.validate(), Ok(()));
+    assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
 }
 
 // ------------------------------------------------------------------
@@ -186,7 +228,7 @@ fn invariant_8_synthesized_sentinel_invalid_path() {
     // Corrupt the path of source_files[0].
     let bogus = m.strings.intern("not-the-sentinel");
     m.source_files[SourceFileId::SYNTHESIZED].path = bogus;
-    let err = m.validate().unwrap_err();
+    let err = m.validate(&BridgeInput::matching(&m)).unwrap_err();
     match err {
         InvariantViolation::SynthesizedSentinelInvalid { reason } => {
             assert!(reason.contains("synthesized"), "reason: {reason}");
@@ -199,7 +241,7 @@ fn invariant_8_synthesized_sentinel_invalid_path() {
 fn invariant_8_synthesized_sentinel_with_content_rejected() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     m.source_files[SourceFileId::SYNTHESIZED].content = Some("nope".into());
-    let err = m.validate().unwrap_err();
+    let err = m.validate(&BridgeInput::matching(&m)).unwrap_err();
     assert!(matches!(
         err,
         InvariantViolation::SynthesizedSentinelInvalid { reason: r } if r.contains("content")
@@ -210,7 +252,7 @@ fn invariant_8_synthesized_sentinel_with_content_rejected() {
 fn invariant_8_synthesized_sentinel_with_wrong_line_starts_rejected() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     m.source_files[SourceFileId::SYNTHESIZED].line_starts = vec![0, 1, 2];
-    let err = m.validate().unwrap_err();
+    let err = m.validate(&BridgeInput::matching(&m)).unwrap_err();
     assert!(matches!(
         err,
         InvariantViolation::SynthesizedSentinelInvalid { reason: r } if r.contains("line_starts")
@@ -221,12 +263,33 @@ fn invariant_8_synthesized_sentinel_with_wrong_line_starts_rejected() {
 fn invariant_4_primary_crate_out_of_range() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     m.primary_crate = CrateId::from_u32(99);
-    match m.validate().unwrap_err() {
+    let bridge_input = BridgeInput {
+        spec_crate_stable_id: StableCrateId(1),
+    };
+    match m.validate(&bridge_input).unwrap_err() {
         InvariantViolation::PrimaryCrateOutOfRange { value, crates_len } => {
             assert_eq!(value, 99);
             assert_eq!(crates_len, 1);
         }
         other => panic!("expected PrimaryCrateOutOfRange, got {:?}", other),
+    }
+}
+
+#[test]
+fn invariant_4_primary_crate_stable_id_mismatch() {
+    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let bridge_input = BridgeInput {
+        spec_crate_stable_id: StableCrateId(2),
+    };
+    match m.validate(&bridge_input).unwrap_err() {
+        InvariantViolation::PrimaryCrateStableIdMismatch {
+            model,
+            bridge_input,
+        } => {
+            assert_eq!(model, StableCrateId(1));
+            assert_eq!(bridge_input, StableCrateId(2));
+        }
+        other => panic!("expected PrimaryCrateStableIdMismatch, got {:?}", other),
     }
 }
 
@@ -239,7 +302,7 @@ fn invariant_5_duplicate_stable_crate_id() {
         // Same stable_crate_id as the primary crate -> violation.
         stable_crate_id: StableCrateId(0xAAAA),
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DuplicateStableCrateId {
             stable_id,
             first,
@@ -258,7 +321,7 @@ fn invariant_2_item_def_paths_length_mismatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     m.items.push(Default::default());
     // item_def_paths is empty -> mismatch.
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::ItemDefPathsLengthMismatch {
             items_len,
             def_paths_len,
@@ -267,6 +330,26 @@ fn invariant_2_item_def_paths_length_mismatch() {
             assert_eq!(def_paths_len, 0);
         }
         other => panic!("expected ItemDefPathsLengthMismatch, got {:?}", other),
+    }
+}
+
+#[test]
+fn invariant_2_item_synthetic_kinds_length_mismatch() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    m.items.push(Default::default());
+    m.item_def_paths.push(crate::DefPathHash {
+        stable_crate_id: StableCrateId(1),
+        local_hash: 0,
+    });
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
+        InvariantViolation::ItemSyntheticKindsLengthMismatch {
+            items_len,
+            synthetic_kinds_len,
+        } => {
+            assert_eq!(items_len, 1);
+            assert_eq!(synthetic_kinds_len, 0);
+        }
+        other => panic!("expected ItemSyntheticKindsLengthMismatch, got {:?}", other),
     }
 }
 
@@ -286,7 +369,7 @@ fn invariant_1_dangling_item_id_in_instance() {
         },
         kind: InstanceKind::Function { sig, body: None },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId {
             field,
             value,
@@ -308,7 +391,7 @@ fn invariant_1_dangling_string_id_in_crate_info() {
         name: bad,
         stable_crate_id: StableCrateId(2),
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("CrateInfo.name"), "field: {field}");
             assert_eq!(value, 9999);
@@ -321,10 +404,11 @@ fn invariant_1_dangling_string_id_in_crate_info() {
 fn invariant_1_dangling_source_file_id_in_instance_span() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let sig = m.sigs.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -337,7 +421,7 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
         },
         kind: InstanceKind::Function { sig, body: None },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Instance.span.file"), "field: {field}");
             assert_eq!(value, 42);
@@ -350,10 +434,11 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
 fn invariant_1_dangling_ty_id_in_generic_args() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let sig = m.sigs.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -366,7 +451,7 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
         },
         kind: InstanceKind::Function { sig, body: None },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("generic_args"), "field: {field}");
             assert_eq!(value, 5);
@@ -379,10 +464,11 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
 fn invariant_1_dangling_const_id_in_generic_args() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let sig = m.sigs.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -395,7 +481,7 @@ fn invariant_1_dangling_const_id_in_generic_args() {
         },
         kind: InstanceKind::Function { sig, body: None },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("generic_args"), "field: {field}");
             assert_eq!(value, 7);
@@ -408,10 +494,11 @@ fn invariant_1_dangling_const_id_in_generic_args() {
 fn invariant_1_dangling_fn_sig_id_in_function_kind() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -426,7 +513,7 @@ fn invariant_1_dangling_fn_sig_id_in_function_kind() {
             body: None,
         },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Function.sig"), "field: {field}");
             assert_eq!(value, 3);
@@ -436,13 +523,14 @@ fn invariant_1_dangling_fn_sig_id_in_function_kind() {
 }
 
 #[test]
-fn invariant_10_dangling_body_id_in_function_kind() {
+fn invariant_10_inline_body_in_function_kind_validates() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let sig = m.sigs.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -455,27 +543,21 @@ fn invariant_10_dangling_body_id_in_function_kind() {
         },
         kind: InstanceKind::Function {
             sig,
-            // No bodies pushed -> Some(BodyId(0)) is dangling.
-            body: Some(BodyId::from_u32(0)),
+            body: Some(Body::default()),
         },
     });
-    match m.validate().unwrap_err() {
-        InvariantViolation::DanglingId { field, value, .. } => {
-            assert!(field.contains("Function.body"), "field: {field}");
-            assert_eq!(value, 0);
-        }
-        other => panic!("expected DanglingId on BodyId, got {:?}", other),
-    }
+    assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
 }
 
 #[test]
 fn invariant_1_dangling_ty_id_in_static_kind() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -490,7 +572,7 @@ fn invariant_1_dangling_ty_id_in_static_kind() {
             init: ConstId::from_u32(0),
         },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Static.ty"), "field: {field}");
             assert_eq!(value, 0);
@@ -514,10 +596,11 @@ fn invariant_1_dangling_layout_in_struct_enum_union() {
     ] {
         let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
         let item = m.items.push(Default::default());
-        m.item_def_paths.push(regseq_model::DefPathHash {
+        m.item_def_paths.push(crate::DefPathHash {
             stable_crate_id: StableCrateId(1),
             local_hash: 0,
         });
+        m.item_synthetic_kinds.push(Default::default());
         m.instances.push(Instance {
             item,
             generic_args: vec![],
@@ -529,12 +612,15 @@ fn invariant_1_dangling_layout_in_struct_enum_union() {
             },
             kind: kind.clone(),
         });
-        match m.validate().unwrap_err() {
+        match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
             InvariantViolation::DanglingId { field, value, .. } => {
                 assert!(field.contains("layout"), "field: {field}");
                 assert_eq!(value, 7);
             }
-            other => panic!("expected DanglingId on layout for {:?}, got {:?}", kind, other),
+            other => panic!(
+                "expected DanglingId on layout for {:?}, got {:?}",
+                kind, other
+            ),
         }
     }
 }
@@ -544,12 +630,12 @@ fn invariant_1_dangling_string_id_in_source_file_path() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     // Push a real source file with a deliberately-dangling path
     // StringId (a value larger than any interned string).
-    m.source_files.push(regseq_model::SourceFile {
+    m.source_files.push(crate::SourceFile {
         path: StringId::from_u32(9999),
         content: None,
         line_starts: vec![0],
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("SourceFile.path"), "field: {field}");
             assert_eq!(value, 9999);
@@ -562,10 +648,11 @@ fn invariant_1_dangling_string_id_in_source_file_path() {
 fn invariant_1_dangling_string_id_in_instance_symbol_name() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let sig = m.sigs.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -578,7 +665,7 @@ fn invariant_1_dangling_string_id_in_instance_symbol_name() {
         },
         kind: InstanceKind::Function { sig, body: None },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Instance.symbol_name"), "field: {field}");
             assert_eq!(value, 9999);
@@ -591,10 +678,11 @@ fn invariant_1_dangling_string_id_in_instance_symbol_name() {
 fn invariant_1_dangling_const_id_in_static_init() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let ty = m.types.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -611,7 +699,7 @@ fn invariant_1_dangling_const_id_in_static_init() {
             init: ConstId::from_u32(0),
         },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Static.init"), "field: {field}");
             assert_eq!(value, 0);
@@ -624,10 +712,11 @@ fn invariant_1_dangling_const_id_in_static_init() {
 fn invariant_1_dangling_ty_id_in_const_kind() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -642,7 +731,7 @@ fn invariant_1_dangling_ty_id_in_const_kind() {
             value: ConstId::from_u32(0),
         },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Const.ty"), "field: {field}");
             assert_eq!(value, 0);
@@ -655,10 +744,11 @@ fn invariant_1_dangling_ty_id_in_const_kind() {
 fn invariant_1_dangling_const_id_in_const_kind_value() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(1),
         local_hash: 0,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let ty = m.types.push(Default::default());
     m.instances.push(Instance {
         item,
@@ -675,7 +765,7 @@ fn invariant_1_dangling_const_id_in_const_kind_value() {
             value: ConstId::from_u32(0),
         },
     });
-    match m.validate().unwrap_err() {
+    match m.validate(&BridgeInput::matching(&m)).unwrap_err() {
         InvariantViolation::DanglingId { field, value, .. } => {
             assert!(field.contains("Const.value"), "field: {field}");
             assert_eq!(value, 0);
@@ -702,12 +792,12 @@ fn populated_model_round_trips_through_json() {
     let _ = m.types.push(Default::default());
     let _ = m.consts.push(Default::default());
     let sig = m.sigs.push(Default::default());
-    let body = m.bodies.push(Default::default());
     let item = m.items.push(Default::default());
-    m.item_def_paths.push(regseq_model::DefPathHash {
+    m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xCAFE,
     });
+    m.item_synthetic_kinds.push(Default::default());
     let symbol = m.strings.intern("foo");
     m.instances.push(Instance {
         item,
@@ -720,14 +810,27 @@ fn populated_model_round_trips_through_json() {
         },
         kind: InstanceKind::Function {
             sig,
-            body: Some(body),
+            body: Some(Body::default()),
         },
     });
 
     let json = serde_json::to_string(&m).unwrap();
     let back: RegseqModel = serde_json::from_str(&json).unwrap();
     assert_eq!(m, back);
-    assert_eq!(back.validate(), Ok(()));
+    assert_eq!(back.validate(&BridgeInput::matching(&back)), Ok(()));
+}
+
+#[test]
+fn vtables_are_skipped_during_json_round_trip() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA));
+    m.vtables
+        .insert(crate::PrincipalTraitKey::default(), ItemId::ZERO);
+
+    let value = serde_json::to_value(&m).unwrap();
+    assert!(value.get("vtables").is_none());
+
+    let back: RegseqModel = serde_json::from_value(value).unwrap();
+    assert!(back.vtables.is_empty());
 }
 
 #[test]
@@ -738,16 +841,195 @@ fn model_json_top_level_shape_has_named_fields() {
     for field in [
         "crates",
         "primary_crate",
+        "target",
+        "build",
         "strings",
         "source_files",
         "types",
         "consts",
         "items",
         "item_def_paths",
+        "item_synthetic_kinds",
         "sigs",
-        "bodies",
+        "sig_c_abi_lowerings",
         "instances",
+        "domain_attrs",
     ] {
         assert!(v.get(field).is_some(), "missing field: {field}");
     }
+}
+
+#[test]
+fn invariant_registry_has_twenty_non_empty_descriptors() {
+    let ids = all_invariant_ids();
+    assert_eq!(ids.len(), 20);
+    for id in ids {
+        assert!(!crate::invariant_descriptor(id).is_empty());
+    }
+}
+
+#[test]
+fn invariant_registry_match_is_closed() {
+    for id in all_invariant_ids() {
+        let n = match id {
+            InvariantId::TablesPopulatedBeforeReference => 1,
+            InvariantId::ItemSideTablesMirrorItems => 2,
+            InvariantId::ItemsSortedAtConstruction => 3,
+            InvariantId::PrimaryCrateValidAndMatchesSpec => 4,
+            InvariantId::StableCrateIdsUnique => 5,
+            InvariantId::DefPathCrateIdsResolve => 6,
+            InvariantId::NoTcxReferences => 7,
+            InvariantId::SynthesizedSourceFileSentinel => 8,
+            InvariantId::InstanceClosureCompleteness => 9,
+            InvariantId::FunctionBodyPresenceMatchesKind => 10,
+            InvariantId::ContentKeyedInternerUniqueness => 11,
+            InvariantId::UnsizedMarkerPlacement => 12,
+            InvariantId::DynamicWellFormedness => 13,
+            InvariantId::InstanceKindLayoutConsistency => 14,
+            InvariantId::TargetInfoWellFormedness => 15,
+            InvariantId::CAbiLoweringRecordsMatchSignatures => 16,
+            InvariantId::BuildInfoWellFormedness => 17,
+            InvariantId::ItemDefPathGlobalUniqueness => 18,
+            InvariantId::OpaqueHandleEligibilityConsistency => 19,
+            InvariantId::StableCrateIdZeroReserved => 20,
+        };
+        assert!((1..=20).contains(&n));
+    }
+}
+
+fn all_invariant_ids() -> [InvariantId; 20] {
+    [
+        InvariantId::TablesPopulatedBeforeReference,
+        InvariantId::ItemSideTablesMirrorItems,
+        InvariantId::ItemsSortedAtConstruction,
+        InvariantId::PrimaryCrateValidAndMatchesSpec,
+        InvariantId::StableCrateIdsUnique,
+        InvariantId::DefPathCrateIdsResolve,
+        InvariantId::NoTcxReferences,
+        InvariantId::SynthesizedSourceFileSentinel,
+        InvariantId::InstanceClosureCompleteness,
+        InvariantId::FunctionBodyPresenceMatchesKind,
+        InvariantId::ContentKeyedInternerUniqueness,
+        InvariantId::UnsizedMarkerPlacement,
+        InvariantId::DynamicWellFormedness,
+        InvariantId::InstanceKindLayoutConsistency,
+        InvariantId::TargetInfoWellFormedness,
+        InvariantId::CAbiLoweringRecordsMatchSignatures,
+        InvariantId::BuildInfoWellFormedness,
+        InvariantId::ItemDefPathGlobalUniqueness,
+        InvariantId::OpaqueHandleEligibilityConsistency,
+        InvariantId::StableCrateIdZeroReserved,
+    ]
+}
+
+fn helper_fixture() -> (RegseqModel, InstanceId) {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = m.items.push(Default::default());
+    m.item_def_paths.push(crate::DefPathHash {
+        stable_crate_id: StableCrateId(1),
+        local_hash: 0,
+    });
+    m.item_synthetic_kinds.push(Default::default());
+    let sig = m.sigs.push(Default::default());
+    let id = m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        symbol_name: StringId::ZERO,
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        kind: InstanceKind::Function {
+            sig,
+            body: Some(Body::default()),
+        },
+    });
+    (m, id)
+}
+
+#[test]
+fn instance_fn_sig_helper_returns_function_signature() {
+    let (m, id) = helper_fixture();
+    assert!(m.instance_fn_sig(id).is_some());
+}
+
+#[test]
+fn instance_body_helper_returns_inline_body() {
+    let (m, id) = helper_fixture();
+    assert!(m.instance_body(id).is_some());
+}
+
+#[test]
+#[ignore]
+fn instance_def_path_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_def_path(id);
+}
+
+#[test]
+#[ignore]
+fn instance_span_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_span(id);
+}
+
+#[test]
+#[ignore]
+fn instance_linkage_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_linkage(id);
+}
+
+#[test]
+#[ignore]
+fn instance_link_section_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_link_section(id);
+}
+
+#[test]
+#[ignore]
+fn instance_inline_hint_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_inline_hint(id);
+}
+
+#[test]
+#[ignore]
+fn instance_is_unsafe_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_is_unsafe(id);
+}
+
+#[test]
+#[ignore]
+fn instance_lang_item_helpers_signature_compile() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_is_phantom_data(id);
+    let _ = m.instance_is_unsafe_cell(id);
+    let _ = m.instance_is_manually_drop(id);
+}
+
+#[test]
+#[ignore]
+fn instance_opaque_handle_eligible_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-07
+    let (m, id) = helper_fixture();
+    let _ = m.instance_opaque_handle_eligible(id);
+}
+
+#[test]
+#[ignore]
+fn instance_intrinsic_helper_signature_compiles() {
+    // IGNORE-UNTIL: P1a-DS-09
+    let (m, id) = helper_fixture();
+    let _ = m.instance_intrinsic(id);
 }

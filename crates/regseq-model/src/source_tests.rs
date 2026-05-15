@@ -12,9 +12,7 @@
 
 use std::sync::Arc;
 
-use regseq_model::{
-    IndexVec, Position, SourceFile, SourceFileId, Span, StringId,
-};
+use crate::{IndexVec, Position, SourceFile, SourceFileId, Span, StringId};
 
 fn make_files(content: &str) -> IndexVec<SourceFileId, SourceFile> {
     let mut line_starts: Vec<u32> = vec![0];

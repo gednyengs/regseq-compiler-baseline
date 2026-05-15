@@ -1,50 +1,136 @@
-//! Forward-declared value types for stages 3, 4, 11, and 12.
+//! Forward-declared value types for phase-1a tasks.
 //!
-//! Step 6 lands the top-level `RegseqModel` struct, which carries
-//! `IndexVec<TyId, Ty>`, `IndexVec<ConstId, Const>`,
-//! `IndexVec<ItemId, Item>`, `IndexVec<FnSigId, FnSig>`, and
-//! `IndexVec<BodyId, Body>` -- but the *value types* in those
-//! tables (`Ty`, `Const`, `Item`, `FnSig`, `Body`) are defined by
-//! later stages:
-//!
-//! - `Ty` is defined in stage 3 (Type system).
-//! - `Const` is defined in stage 4 (Constants and literals).
-//! - `Item` is defined in stage 12 (Rust Items).
-//! - `FnSig` and `Body` are defined in stage 11 (MIR bodies).
-//!
-//! Stage 1 ships them as empty braced placeholder structs so the
-//! `RegseqModel` field set compiles and can be exercised end-to-end
-//! by foundation tests. The empty-struct shape was deliberate: the
-//! braced form (`pub struct X {}`) keeps named-field syntax open
-//! for stage-N expansion without requiring callers to switch from
-//! `X` to `X { .. }`. On the wire, an empty braced struct is `{}`
-//! (a JSON object), which extends naturally as fields are added.
-//!
-//! Stage-1 RegseqModels have *empty* tables for these types -- the
-//! placeholder is there to make the struct definition cohere, not
-//! to be instantiated. Per methodology ("re-derive from evidence;
-//! do not import baggage"), the eventual stage-N expansion is not
-//! drawn from `regseq-model-old`; it is built bottom-up from
-//! MIR/HIR evidence.
+//! These stubs keep the root model shape compileable while later
+//! P1a-DS tasks replace them with concrete schemas.
 
 use serde::{Deserialize, Serialize};
 
-/// Forward-declared `Ty`. Defined fully in stage 3 (Type system).
+use crate::ids::{ConstId, FnSigId, TyId};
+use crate::index_vec::IndexVec;
+
+/// Forward-declared `Ty`.
+// FORWARD: P1a-DS-02
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Ty {}
 
-/// Forward-declared `Const`. Defined fully in stage 4 (Constants).
+/// Forward-declared type interner.
+// FORWARD: P1a-DS-04
+pub type TyInterner = IndexVec<TyId, Ty>;
+
+/// Forward-declared `Const`.
+// FORWARD: P1a-DS-05
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Const {}
 
-/// Forward-declared `Item`. Defined fully in stage 12 (Rust Items).
+/// Forward-declared const interner.
+// FORWARD: P1a-DS-05
+pub type ConstInterner = IndexVec<ConstId, Const>;
+
+/// Forward-declared `Item`.
+// FORWARD: P1a-DS-07
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Item {}
 
-/// Forward-declared `FnSig`. Defined fully in stage 11 (MIR bodies).
+/// Forward-declared source item synthetic-kind tag.
+// FORWARD: P1a-DS-08b
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum SyntheticItemKind {
+    /// Source-derived item.
+    #[default]
+    None,
+    /// Bridge-synthesized vtable type item.
+    VTableType {
+        /// Principal trait key for the vtable type.
+        principal: PrincipalTraitKey,
+    },
+}
+
+/// Forward-declared principal trait identity.
+// FORWARD: P1a-DS-08b
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct PrincipalTraitKey {}
+
+/// Forward-declared `FnSig`.
+// FORWARD: P1a-DS-06
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct FnSig {}
 
-/// Forward-declared `Body`. Defined fully in stage 11 (MIR bodies).
+/// Forward-declared function signature interner.
+// FORWARD: P1a-DS-06
+pub type FnSigInterner = IndexVec<FnSigId, FnSig>;
+
+/// Forward-declared C ABI lowering record.
+// FORWARD: P1a-DS-06
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub struct CAbiLowering {}
+
+/// Forward-declared linkage classification.
+// FORWARD: P1a-DS-07
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum Linkage {
+    /// Default linkage placeholder.
+    #[default]
+    Default,
+}
+
+/// Forward-declared inline hint.
+// FORWARD: P1a-DS-07
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum InlineHint {
+    /// No inline hint placeholder.
+    #[default]
+    None,
+}
+
+/// Forward-declared intrinsic classification.
+// FORWARD: P1a-DS-09
+#[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum IntrinsicKind {
+    /// Placeholder intrinsic kind.
+    #[default]
+    Placeholder,
+}
+
+/// Forward-declared `Body`.
+// FORWARD: P1a-DS-10
 #[derive(Clone, Debug, Default, PartialEq, Eq, Hash, Serialize, Deserialize)]
 pub struct Body {}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn forward_value_stubs_construct() {
+        assert_eq!(Ty::default(), Ty {});
+        assert_eq!(Const::default(), Const {});
+        assert_eq!(Item::default(), Item {});
+        assert_eq!(FnSig::default(), FnSig {});
+        assert_eq!(Body::default(), Body {});
+    }
+
+    #[test]
+    fn forward_interner_aliases_construct() {
+        let types: TyInterner = IndexVec::new();
+        let consts: ConstInterner = IndexVec::new();
+        let sigs: FnSigInterner = IndexVec::new();
+        assert!(types.is_empty());
+        assert!(consts.is_empty());
+        assert!(sigs.is_empty());
+    }
+
+    #[test]
+    fn synthetic_item_kind_and_principal_key_construct() {
+        let principal = PrincipalTraitKey::default();
+        let kind = SyntheticItemKind::VTableType { principal };
+        assert!(matches!(kind, SyntheticItemKind::VTableType { .. }));
+    }
+
+    #[test]
+    fn remaining_forward_stubs_construct() {
+        assert_eq!(CAbiLowering::default(), CAbiLowering {});
+        assert_eq!(Linkage::default(), Linkage::Default);
+        assert_eq!(InlineHint::default(), InlineHint::None);
+        assert_eq!(IntrinsicKind::default(), IntrinsicKind::Placeholder);
+    }
+}

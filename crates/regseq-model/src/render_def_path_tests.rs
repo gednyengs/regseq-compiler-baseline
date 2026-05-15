@@ -9,7 +9,7 @@
 //! that two RegseqModels for the same source produce
 //! byte-identical `rendered` strings for corresponding items.
 
-use regseq_model::{
+use crate::{
     render_def_path, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, IndexVec,
     StableCrateId, StringId, StringInterner,
 };
@@ -60,7 +60,11 @@ fn render_named(name: &str, ctor: fn(StringId) -> DefPathData, disambiguator: u3
         name: primary_name,
         stable_crate_id: StableCrateId(1),
     });
-    render_def_path(&one_segment(ctor(payload), disambiguator), &crates, &strings)
+    render_def_path(
+        &one_segment(ctor(payload), disambiguator),
+        &crates,
+        &strings,
+    )
 }
 
 // ------------------------------------------------------------------
@@ -76,7 +80,10 @@ fn renders_type_ns_dis_zero() {
 
 #[test]
 fn renders_type_ns_dis_nonzero() {
-    assert_eq!(render_named("Foo", DefPathData::TypeNs, 3), "my_crate::Foo#3");
+    assert_eq!(
+        render_named("Foo", DefPathData::TypeNs, 3),
+        "my_crate::Foo#3"
+    );
 }
 
 #[test]
@@ -113,10 +120,7 @@ fn renders_macro_ns_dis_nonzero() {
 
 #[test]
 fn renders_lifetime_ns_dis_zero() {
-    assert_eq!(
-        render_named("a", DefPathData::LifetimeNs, 0),
-        "my_crate::a"
-    );
+    assert_eq!(render_named("a", DefPathData::LifetimeNs, 0), "my_crate::a");
 }
 
 #[test]
@@ -224,10 +228,7 @@ fn renders_global_asm_dis_zero() {
 
 #[test]
 fn renders_closure_dis_zero() {
-    assert_eq!(
-        render_one(DefPathData::Closure, 0),
-        "my_crate::{closure#0}"
-    );
+    assert_eq!(render_one(DefPathData::Closure, 0), "my_crate::{closure#0}");
 }
 
 #[test]
@@ -256,10 +257,7 @@ fn renders_late_anon_const_dis_zero() {
 
 #[test]
 fn renders_opaque_ty_dis_zero() {
-    assert_eq!(
-        render_one(DefPathData::OpaqueTy, 0),
-        "my_crate::{opaque#0}"
-    );
+    assert_eq!(render_one(DefPathData::OpaqueTy, 0), "my_crate::{opaque#0}");
 }
 
 #[test]
@@ -479,10 +477,7 @@ fn render_def_path_is_byte_identical_across_calls() {
         rendered_a, rendered_b,
         "rendered strings must be byte-identical across independent builds"
     );
-    assert_eq!(
-        rendered_a,
-        "my_crate::module::Item::{impl#0}::method"
-    );
+    assert_eq!(rendered_a, "my_crate::module::Item::{impl#0}::method");
 }
 
 // ------------------------------------------------------------------

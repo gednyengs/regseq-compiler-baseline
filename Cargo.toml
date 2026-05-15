@@ -4,17 +4,12 @@ members = [
     "crates/cargo-regseq",
     "crates/regseq",
     "crates/regseq-analysis",
-    "crates/regseq-analysis-old",
     "crates/regseq-backends",
-    "crates/regseq-backends-old",
     "crates/regseq-config",
     "crates/regseq-diagnostics",
     "crates/regseq-driver",
-    "crates/regseq-driver-old",
     "crates/regseq-macros",
     "crates/regseq-model",
-    "crates/regseq-model-old",
-    "tests/e2e-old",
 ]
 exclude = [
     "tests/fixtures/minimal-driver",
