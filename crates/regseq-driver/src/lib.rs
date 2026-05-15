@@ -11,6 +11,7 @@ extern crate rustc_session;
 extern crate rustc_span;
 
 pub mod args;
+pub mod bridge;
 mod callbacks;
 pub use callbacks::{regseq_mir_passes, RegseqAwareCallbacks, RegseqCallbacks};
 

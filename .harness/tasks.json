@@ -936,7 +936,7 @@
           "id": "regseq-driver-36",
           "name": "P1a-BR-01: Bridge construction-pipeline scaffold (Phases 1+3+4)",
           "spec": ".harness/tasks/regseq-driver/36-bridge-pipeline-scaffold.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-65",
             "regseq-model-71",

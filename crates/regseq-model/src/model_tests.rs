@@ -133,6 +133,30 @@ fn with_primary_leaves_other_tables_empty() {
 }
 
 #[test]
+fn compare_items_f4_orders_item_payloads_by_def_path() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let beta_name = m.strings.intern("beta");
+    let beta_rendered = m.strings.intern("pl011-spec::beta");
+    let alpha_name = m.strings.intern("alpha");
+    let alpha_rendered = m.strings.intern("pl011-spec::alpha");
+    let mut beta = fixture_item(&mut m);
+    beta.def_path.segments[1] = DefPathSegment {
+        data: DefPathData::ValueNs(beta_name),
+        disambiguator: 0,
+    };
+    beta.def_path.rendered = beta_rendered;
+    let mut alpha = fixture_item(&mut m);
+    alpha.def_path.segments[1] = DefPathSegment {
+        data: DefPathData::ValueNs(alpha_name),
+        disambiguator: 0,
+    };
+    alpha.def_path.rendered = alpha_rendered;
+
+    assert!(m.compare_items_f4(&alpha, &beta).is_lt());
+    assert!(m.compare_items_f4(&beta, &alpha).is_gt());
+}
+
+#[test]
 fn root_struct_exposes_spec_field_set() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let RegseqModel {

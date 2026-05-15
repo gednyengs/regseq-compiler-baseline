@@ -502,6 +502,26 @@ impl RegseqModel {
         PrettyPrinter::new(self)
     }
 
+    /// Compares two item payloads by the F4 item sort contract.
+    pub fn compare_items_f4(&self, first: &Item, second: &Item) -> core::cmp::Ordering {
+        let first_path = &first.def_path;
+        let second_path = &second.def_path;
+        let first_crate = &self.crates[first_path.crate_id];
+        let second_crate = &self.crates[second_path.crate_id];
+
+        self.strings
+            .resolve(first_crate.name)
+            .cmp(self.strings.resolve(second_crate.name))
+            .then_with(|| {
+                first_crate
+                    .stable_crate_id
+                    .cmp(&second_crate.stable_crate_id)
+            })
+            .then_with(|| {
+                self.compare_def_path_segments(&first_path.segments, &second_path.segments)
+            })
+    }
+
     /// Validates construction invariants enforceable at this phase.
     pub fn validate(&mut self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
         self.validate_synthesized_sentinel()?;
@@ -903,22 +923,7 @@ impl RegseqModel {
     }
 
     fn compare_item_f4(&self, first: ItemId, second: ItemId) -> core::cmp::Ordering {
-        let first_path = &self.items[first].def_path;
-        let second_path = &self.items[second].def_path;
-        let first_crate = &self.crates[first_path.crate_id];
-        let second_crate = &self.crates[second_path.crate_id];
-
-        self.strings
-            .resolve(first_crate.name)
-            .cmp(self.strings.resolve(second_crate.name))
-            .then_with(|| {
-                first_crate
-                    .stable_crate_id
-                    .cmp(&second_crate.stable_crate_id)
-            })
-            .then_with(|| {
-                self.compare_def_path_segments(&first_path.segments, &second_path.segments)
-            })
+        self.compare_items_f4(&self.items[first], &self.items[second])
     }
 
     fn compare_def_path_segments(
