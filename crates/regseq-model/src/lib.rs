@@ -36,6 +36,7 @@ mod string_interner;
 mod synthetic;
 mod synthetic_def_path;
 mod target;
+mod terminator;
 mod ty;
 mod ty_interner;
 
@@ -85,6 +86,7 @@ pub use synthetic::{
 };
 pub use synthetic_def_path::{synthetic_def_path_hash, synthetic_def_path_segments};
 pub use target::{default_scalar_layouts, Endian, ScalarLayouts, SizeAlign, TargetInfo};
+pub use terminator::{AssertKind, CallCallee, SwitchTargets, Terminator, TerminatorKind};
 pub use ty::{
     AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Mutability, Provenance,
     Safety, Ty, UintKind, FLOAT_KIND_COUNT, INT_KIND_COUNT, UINT_KIND_COUNT,

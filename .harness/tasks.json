@@ -2897,7 +2897,7 @@
           "id": "regseq-model-80",
           "name": "P1a-DS-13b: Terminator + TerminatorKind + sub-enums",
           "spec": ".harness/tasks/regseq-model/80-terminator-and-sub-enums.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-79"
           ],
