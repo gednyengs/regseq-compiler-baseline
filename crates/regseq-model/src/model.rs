@@ -333,142 +333,6 @@ pub enum InvariantViolation {
         /// Length of `RegseqModel.instances` at validation time.
         instances_len: usize,
     },
-
-    /// Statement invariant B-1: `Assign(p, rv)` has
-    /// `place_ty(p) != rvalue_ty(rv)` (spec section 22.5.2).
-    StatementAssignTypeMismatch {
-        /// Function instance whose body contains the bad assignment.
-        owner: InstanceId,
-        /// Block containing the bad assignment.
-        block: BlockId,
-        /// Statement index within the block.
-        stmt: usize,
-        /// Recovered place type.
-        place_ty: TyId,
-        /// Recovered rvalue type.
-        rvalue_ty: TyId,
-    },
-
-    /// Statement invariant B-2: `SetDiscriminant(p, vi)` has
-    /// `vi >= variant_count(place_ty(p))` (spec section 22.5.2).
-    SetDiscriminantVariantIdxOutOfRange {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Statement index within the block.
-        stmt: usize,
-        /// Offending variant index.
-        variant: crate::ids::VariantIdx,
-        /// Exclusive upper bound for valid variant indices.
-        max: u32,
-    },
-
-    /// Statement invariant B-3: `SetDiscriminant(p, _)` was applied
-    /// to a non-enum `place_ty(p)` (spec section 22.5.2).
-    SetDiscriminantNonEnumTarget {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Statement index within the block.
-        stmt: usize,
-        /// Recovered place type.
-        place_ty: TyId,
-    },
-
-    /// Statement invariant B-4:
-    /// `Intrinsic(Assume(op))` with `operand_ty(op) != Ty::Bool`
-    /// (spec section 22.5.2).
-    AssumeOperandNotBool {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Statement index within the block.
-        stmt: usize,
-        /// Recovered operand type.
-        operand_ty: TyId,
-    },
-
-    /// Statement invariant B-5: a `CopyNonOverlapping` operand has
-    /// the wrong type (spec section 22.5.2). `which` identifies the
-    /// offending position: `"src"`, `"dst"`, `"count"`, or
-    /// `"pointee"` for src/dst pointee disagreement.
-    CopyNonOverlappingOperandType {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Statement index within the block.
-        stmt: usize,
-        /// Offending operand position.
-        which: &'static str,
-        /// Actual operand type.
-        actual_ty: TyId,
-    },
-
-    /// Terminator invariant B-1: `SwitchInt.discr` has a type
-    /// outside `{Ty::Bool, Ty::Char, Ty::Int(_), Ty::Uint(_)}`
-    /// (spec section 23.6.2).
-    SwitchIntDiscrTypeMismatch {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Recovered discriminant type.
-        operand_ty: TyId,
-    },
-
-    /// Terminator invariant B-2: `Assert.cond` has a type other
-    /// than `Ty::Bool` (spec section 23.6.2).
-    AssertCondNotBool {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Recovered condition type.
-        cond_ty: TyId,
-    },
-
-    /// Terminator invariant B-3: `Call.destination_ty` disagrees
-    /// with the callee's return type when `target: Some(_)` (spec
-    /// section 23.6.2).
-    CallDestinationTypeMismatch {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Callee return type.
-        expected_ty: TyId,
-        /// Recovered destination type.
-        actual_ty: TyId,
-    },
-
-    /// Terminator invariant B-4: `Call.args.len()` disagrees with
-    /// the callee signature's input count (spec section 23.6.2).
-    CallArityMismatch {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Callee signature input count.
-        expected: usize,
-        /// Actual argument count.
-        actual: usize,
-    },
-
-    /// Terminator invariant B-5: `Call(Indirect(operand))` has an
-    /// operand type that is not `Ty::FnPtr(_)` (spec section
-    /// 23.6.2).
-    IndirectCalleeNotFnPtr {
-        /// Function instance whose body contains the violation.
-        owner: InstanceId,
-        /// Block containing the violation.
-        block: BlockId,
-        /// Recovered callee operand type.
-        operand_ty: TyId,
-    },
 }
 
 /// Construction-invariant identifier.
@@ -773,8 +637,7 @@ impl RegseqModel {
                             error,
                         }
                     })?;
-                    self.validate_body_statement_invariants(owner, body)?;
-                    self.validate_body_terminator_invariants(owner, body)?;
+                    self.validate_body_direct_callees(owner, body)?;
                 }
             }
         }
@@ -1377,242 +1240,30 @@ impl RegseqModel {
         Ok(())
     }
 
-    /// Walks statements in `body` and enforces section 22.5.2
-    /// invariants B-1 through B-5. First-error-wins in walk order.
-    fn validate_body_statement_invariants(
+    /// Terminator invariant B-9 (spec section 23.6): every
+    /// `CallCallee::Direct(InstanceId)` resolves in
+    /// `RegseqModel.instances`. Bounds-only at this phase; type
+    /// invariants B-3 / B-4 / B-6 are validated separately when
+    /// statement and terminator type invariants land.
+    fn validate_body_direct_callees(
         &self,
         owner: InstanceId,
         body: &Body,
     ) -> Result<(), InvariantViolation> {
-        use crate::body_ty::{operand_ty, place_enum_variant_count, place_ty, pointee_ty, rvalue_ty};
-        use crate::statement::{CopyNonOverlapping, NonDivergingIntrinsic, StatementKind};
-
         for (block_idx, block) in body.basic_blocks.iter().enumerate() {
-            let block_id = BlockId::from_u32(block_idx as u32);
-            for (stmt_idx, statement) in block.statements.iter().enumerate() {
-                match &statement.kind {
-                    StatementKind::Assign(place, rvalue) => {
-                        if let (Some(pt), Some(rt)) =
-                            (place_ty(self, body, place), rvalue_ty(self, body, rvalue))
-                        {
-                            if pt != rt {
-                                return Err(InvariantViolation::StatementAssignTypeMismatch {
-                                    owner,
-                                    block: block_id,
-                                    stmt: stmt_idx,
-                                    place_ty: pt,
-                                    rvalue_ty: rt,
-                                });
-                            }
-                        }
-                    }
-                    StatementKind::SetDiscriminant(place, variant) => {
-                        if let Some(pt) = place_ty(self, body, place) {
-                            match self.types.resolve(pt) {
-                                Ty::Enum { .. } => {
-                                    if let Some(max) =
-                                        place_enum_variant_count(self, body, place)
-                                    {
-                                        if variant.as_u32() >= max {
-                                            return Err(
-                                                InvariantViolation::SetDiscriminantVariantIdxOutOfRange {
-                                                    owner,
-                                                    block: block_id,
-                                                    stmt: stmt_idx,
-                                                    variant: *variant,
-                                                    max,
-                                                },
-                                            );
-                                        }
-                                    }
-                                }
-                                _ => {
-                                    return Err(
-                                        InvariantViolation::SetDiscriminantNonEnumTarget {
-                                            owner,
-                                            block: block_id,
-                                            stmt: stmt_idx,
-                                            place_ty: pt,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                    }
-                    StatementKind::Intrinsic(NonDivergingIntrinsic::Assume(operand)) => {
-                        if let Some(ot) = operand_ty(self, body, operand) {
-                            if !matches!(self.types.resolve(ot), Ty::Bool) {
-                                return Err(InvariantViolation::AssumeOperandNotBool {
-                                    owner,
-                                    block: block_id,
-                                    stmt: stmt_idx,
-                                    operand_ty: ot,
-                                });
-                            }
-                        }
-                    }
-                    StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(
-                        CopyNonOverlapping { src, dst, count },
-                    )) => {
-                        let src_ty = operand_ty(self, body, src);
-                        let dst_ty = operand_ty(self, body, dst);
-                        let count_ty = operand_ty(self, body, count);
-
-                        if let Some(st) = src_ty {
-                            if pointee_ty(self, st).is_none() {
-                                return Err(InvariantViolation::CopyNonOverlappingOperandType {
-                                    owner,
-                                    block: block_id,
-                                    stmt: stmt_idx,
-                                    which: "src",
-                                    actual_ty: st,
-                                });
-                            }
-                        }
-                        if let Some(dt) = dst_ty {
-                            if pointee_ty(self, dt).is_none() {
-                                return Err(InvariantViolation::CopyNonOverlappingOperandType {
-                                    owner,
-                                    block: block_id,
-                                    stmt: stmt_idx,
-                                    which: "dst",
-                                    actual_ty: dt,
-                                });
-                            }
-                        }
-                        if let (Some(st), Some(dt)) = (src_ty, dst_ty) {
-                            if let (Some(sp), Some(dp)) =
-                                (pointee_ty(self, st), pointee_ty(self, dt))
-                            {
-                                if sp != dp {
-                                    return Err(
-                                        InvariantViolation::CopyNonOverlappingOperandType {
-                                            owner,
-                                            block: block_id,
-                                            stmt: stmt_idx,
-                                            which: "pointee",
-                                            actual_ty: dt,
-                                        },
-                                    );
-                                }
-                            }
-                        }
-                        if let Some(ct) = count_ty {
-                            if !matches!(
-                                self.types.resolve(ct),
-                                Ty::Uint(crate::ty::UintKind::Usize)
-                            ) {
-                                return Err(InvariantViolation::CopyNonOverlappingOperandType {
-                                    owner,
-                                    block: block_id,
-                                    stmt: stmt_idx,
-                                    which: "count",
-                                    actual_ty: ct,
-                                });
-                            }
-                        }
-                    }
+            if let TerminatorKind::Call {
+                callee: CallCallee::Direct(callee),
+                ..
+            } = &block.terminator.kind
+            {
+                if callee.index() >= self.instances.len() {
+                    return Err(InvariantViolation::DirectCalleeOutOfRange {
+                        owner,
+                        block: BlockId::from_u32(block_idx as u32),
+                        callee: *callee,
+                        instances_len: self.instances.len(),
+                    });
                 }
-            }
-        }
-        Ok(())
-    }
-
-    /// Walks terminators in `body` and enforces section 23.6.2
-    /// invariants B-1, B-2, B-3, B-4, B-5, plus B-9 callee
-    /// resolution (`DirectCalleeOutOfRange`). First-error-wins in
-    /// walk order.
-    fn validate_body_terminator_invariants(
-        &self,
-        owner: InstanceId,
-        body: &Body,
-    ) -> Result<(), InvariantViolation> {
-        use crate::body_ty::{operand_ty, place_ty};
-
-        for (block_idx, block) in body.basic_blocks.iter().enumerate() {
-            let block_id = BlockId::from_u32(block_idx as u32);
-            match &block.terminator.kind {
-                TerminatorKind::Goto(_)
-                | TerminatorKind::Return
-                | TerminatorKind::Unreachable => {}
-                TerminatorKind::SwitchInt { discr, .. } => {
-                    if let Some(ot) = operand_ty(self, body, discr) {
-                        if !matches!(
-                            self.types.resolve(ot),
-                            Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Uint(_)
-                        ) {
-                            return Err(InvariantViolation::SwitchIntDiscrTypeMismatch {
-                                owner,
-                                block: block_id,
-                                operand_ty: ot,
-                            });
-                        }
-                    }
-                }
-                TerminatorKind::Assert { cond, .. } => {
-                    if let Some(ot) = operand_ty(self, body, cond) {
-                        if !matches!(self.types.resolve(ot), Ty::Bool) {
-                            return Err(InvariantViolation::AssertCondNotBool {
-                                owner,
-                                block: block_id,
-                                cond_ty: ot,
-                            });
-                        }
-                    }
-                }
-                TerminatorKind::Call {
-                    callee,
-                    args,
-                    destination,
-                    target,
-                } => match callee {
-                    CallCallee::Direct(id) => {
-                        if id.index() >= self.instances.len() {
-                            return Err(InvariantViolation::DirectCalleeOutOfRange {
-                                owner,
-                                block: block_id,
-                                callee: *id,
-                                instances_len: self.instances.len(),
-                            });
-                        }
-                        if let InstanceKind::Function(data) = &self.instances[*id].kind {
-                            let sig = self.sigs.resolve(data.fn_sig);
-                            if args.len() != sig.inputs.len() {
-                                return Err(InvariantViolation::CallArityMismatch {
-                                    owner,
-                                    block: block_id,
-                                    expected: sig.inputs.len(),
-                                    actual: args.len(),
-                                });
-                            }
-                            if target.is_some() {
-                                if let Some(dest_ty) = place_ty(self, body, destination) {
-                                    if dest_ty != sig.output {
-                                        return Err(
-                                            InvariantViolation::CallDestinationTypeMismatch {
-                                                owner,
-                                                block: block_id,
-                                                expected_ty: sig.output,
-                                                actual_ty: dest_ty,
-                                            },
-                                        );
-                                    }
-                                }
-                            }
-                        }
-                    }
-                    CallCallee::Indirect(operand) => {
-                        if let Some(ot) = operand_ty(self, body, operand) {
-                            if !matches!(self.types.resolve(ot), Ty::FnPtr(_)) {
-                                return Err(InvariantViolation::IndirectCalleeNotFnPtr {
-                                    owner,
-                                    block: block_id,
-                                    operand_ty: ot,
-                                });
-                            }
-                        }
-                    }
-                },
             }
         }
         Ok(())

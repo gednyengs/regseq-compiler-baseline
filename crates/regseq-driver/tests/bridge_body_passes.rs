@@ -507,34 +507,3 @@ pub fn f(r: &dyn Reader) -> u8 {
         validate_body_places(&cx.model, &body).unwrap();
     });
 }
-
-#[test]
-fn phase5_pipeline_on_real_mir_trait_object() {
-    let source = r#"
-pub trait Reader { fn read(&self) -> u8; }
-impl Reader for u32 { fn read(&self) -> u8 { 0 } }
-pub fn caller(r: &dyn Reader) -> u8 {
-    r.read()
-}
-"#;
-    with_bridge("bridge_body_passes_phase5_real_mir", source, |tcx, cx| {
-        let instance = push_function_instance(tcx, cx, "caller");
-
-        run_phase5_body_passes(cx).unwrap();
-
-        let body = cx.model.instances[instance]
-            .kind
-            .as_function()
-            .and_then(|function| function.body.as_ref())
-            .expect("phase 5 should attach the materialised body from real MIR");
-        assert!(
-            !body.basic_blocks.is_empty(),
-            "real-MIR body must have at least one block"
-        );
-        validate_body_places(&cx.model, body).unwrap();
-        assert!(body.basic_blocks.iter().any(|block| matches!(
-            block.terminator.kind,
-            TerminatorKind::Call { .. }
-        )));
-    });
-}

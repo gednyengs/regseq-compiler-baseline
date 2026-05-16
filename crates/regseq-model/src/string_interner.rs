@@ -40,30 +40,6 @@ impl StringInterner {
         Self { storage, lookup }
     }
 
-    /// Constructs an interner from raw storage, bypassing the
-    /// content-uniqueness guard, so the validator can exercise
-    /// `DuplicateString` rejection in tests. The lookup table is
-    /// rebuilt from `storage` and silently coalesces duplicates;
-    /// after this call, `len()` reflects the raw storage length
-    /// (which may contain duplicates) and validator iteration
-    /// observes them.
-    #[doc(hidden)]
-    pub fn from_storage_unchecked_for_validation(storage: Vec<&str>) -> Self {
-        let mut storage_arcs: Vec<Arc<str>> = Vec::with_capacity(storage.len());
-        let mut lookup: HashMap<Arc<str>, StringId> = HashMap::with_capacity(storage.len());
-        for (idx, s) in storage.iter().enumerate() {
-            let arc: Arc<str> = Arc::from(*s);
-            storage_arcs.push(Arc::clone(&arc));
-            lookup
-                .entry(arc)
-                .or_insert(StringId::from_u32(idx as u32));
-        }
-        Self {
-            storage: storage_arcs,
-            lookup,
-        }
-    }
-
     /// Returns the `StringId` for `s`, allocating and assigning a
     /// fresh ID if `s` is not already interned.
     ///

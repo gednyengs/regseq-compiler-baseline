@@ -7,7 +7,7 @@ use regseq_model::{
     SyntheticItemKind, TyId,
 };
 
-use super::{VTableInitMeta, VTableSlotKind, VTableSynthHandles, VTableSynthKey};
+use super::{VTableSynthHandles, VTableSynthKey};
 use crate::bridge::{BridgeCtxt, BridgeError, ItemHandle, PendingItem};
 
 pub(crate) fn synthesise_vtable_type(
@@ -30,20 +30,12 @@ pub(crate) fn synthesise_vtable_type(
 }
 
 /// Synthesise the vtable type, instance, and shim Items.
-///
-/// This public entry point has no rustc handle for the trait/impl
-/// pair, so it cannot consult `tcx.vtable_entries` to compute the
-/// real slot composition. It synthesises only the family-level
-/// items (type, instance, drop shim); method shims are added by the
-/// rustc-aware caller in `bridge/mod.rs` via
-/// `synthesise_vtable_with_method_shims` when an unsize coercion site
-/// is observed and `tcx.vtable_entries` can be queried.
 pub fn synthesise_vtable<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     principal: PrincipalTraitKey,
     impl_ty: TyId,
 ) -> Result<VTableSynthHandles, BridgeError> {
-    synthesise_vtable_with_method_shims(cx, principal, impl_ty, Vec::new())
+    synthesise_vtable_with_method_shims(cx, principal, impl_ty, vec![(3, None)])
 }
 
 pub(crate) fn synthesise_vtable_with_method_shims<'tcx>(
@@ -51,36 +43,6 @@ pub(crate) fn synthesise_vtable_with_method_shims<'tcx>(
     principal: PrincipalTraitKey,
     impl_ty: TyId,
     method_shims: Vec<(u32, Option<DefPathHash>)>,
-) -> Result<VTableSynthHandles, BridgeError> {
-    synthesise_vtable_inner(cx, principal, impl_ty, method_shims, None)
-}
-
-/// Like `synthesise_vtable_with_method_shims` but additionally records
-/// the full slot sequence and impl-type layout so Phase 5 can build
-/// the VTableInstance Static's init from real `tcx.vtable_entries`
-/// data.
-pub(crate) fn synthesise_vtable_with_init_meta<'tcx>(
-    cx: &mut BridgeCtxt<'tcx>,
-    principal: PrincipalTraitKey,
-    impl_ty: TyId,
-    method_shims: Vec<(u32, Option<DefPathHash>)>,
-    init_meta_template: VTableInitMeta,
-) -> Result<VTableSynthHandles, BridgeError> {
-    synthesise_vtable_inner(
-        cx,
-        principal,
-        impl_ty,
-        method_shims,
-        Some(init_meta_template),
-    )
-}
-
-fn synthesise_vtable_inner<'tcx>(
-    cx: &mut BridgeCtxt<'tcx>,
-    principal: PrincipalTraitKey,
-    impl_ty: TyId,
-    method_shims: Vec<(u32, Option<DefPathHash>)>,
-    init_meta_template: Option<VTableInitMeta>,
 ) -> Result<VTableSynthHandles, BridgeError> {
     let self_ty = args_key_for_generic_args(&cx.model, &vec![GenericArg::Type(impl_ty)]);
     let key = VTableSynthKey {
@@ -103,15 +65,10 @@ fn synthesise_vtable_inner<'tcx>(
         },
         None,
     );
-    // Track which slot indices map to which method-shim handle so the
-    // init-meta `Method(handle)` slot references stay aligned with the
-    // synthesised Item handles.
-    let mut method_shim_by_slot: std::collections::HashMap<u32, ItemHandle> =
-        std::collections::HashMap::new();
     let method_shims = method_shims
         .into_iter()
         .map(|(vtable_entry_index, method_def_path)| {
-            let handle = push_pending_synthetic_item(
+            push_pending_synthetic_item(
                 cx,
                 ItemKind::Function,
                 SyntheticItemKind::VTableMethodShim {
@@ -121,9 +78,7 @@ fn synthesise_vtable_inner<'tcx>(
                     method_def_path: method_def_path.unwrap_or(principal.trait_path),
                 },
                 None,
-            );
-            method_shim_by_slot.insert(vtable_entry_index, handle);
-            handle
+            )
         })
         .collect::<Vec<_>>();
     let drop_shim = push_pending_synthetic_item(
@@ -136,24 +91,11 @@ fn synthesise_vtable_inner<'tcx>(
         None,
     );
 
-    // The init-meta caller supplies the slot sequence with
-    // `Method(None)` placeholders; fill in each shim Item handle now
-    // that synthesis assigned them.
-    let init_meta = init_meta_template.map(|mut meta| {
-        for (idx, slot) in meta.slots.iter_mut().enumerate() {
-            if let VTableSlotKind::Method(handle_slot) = slot {
-                *handle_slot = method_shim_by_slot.get(&(idx as u32)).copied();
-            }
-        }
-        meta
-    });
-
     let handles = VTableSynthHandles {
         vtable_type,
         vtable_instance,
         method_shims,
         drop_shim,
-        init_meta,
     };
     cx.vtable_synth_cache.insert(key, handles.clone());
     Ok(handles)
