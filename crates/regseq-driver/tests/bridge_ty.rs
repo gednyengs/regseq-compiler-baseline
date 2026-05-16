@@ -704,6 +704,22 @@ pub fn dyn_holder(_: &dyn Device) {}
         let Ty::Dynamic { vtable_ty, .. } = cx.model.types.resolve(dynamic_id).clone() else {
             panic!("dynamic should translate as Ty::Dynamic");
         };
+
+        // Per spec section 3.4 D-12-5.3 plus the audit-finding
+        // refinement on regseq-driver-40, the VTableType ItemId is
+        // assigned at Phase 4 and the placeholder Ty::Struct is
+        // patched at Phase 4 deferred resolution. Drive the bridge's
+        // Phase-4 + rekey transitions before reading
+        // `item_synthetic_kinds`.
+        for pending in cx.pending_items.drain(..).collect::<Vec<_>>() {
+            let item_id = cx.model.items.push(pending.item);
+            cx.model.item_def_paths.push(pending.def_path_hash);
+            cx.model.item_synthetic_kinds.push(pending.synthetic_kind);
+            cx.model.domain_attrs.item_attrs.push(Vec::new());
+            cx.handles.bind_final_item_id(pending.handle, item_id);
+        }
+        regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
+
         let Ty::Struct {
             item: vtable_item,
             layout,

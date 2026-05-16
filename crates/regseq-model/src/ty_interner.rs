@@ -153,6 +153,39 @@ impl TyInterner {
             _ => panic!("patch_layout called for type without inline layout"),
         }
     }
+
+    /// Patches the `item: ItemId` field on a nominal type entry and
+    /// re-keys the lookup map to reflect the new identity.
+    ///
+    /// This exists so the bridge can intern a placeholder
+    /// `Ty::Struct` before the final `ItemId` is assigned and then
+    /// resolve it to the real `ItemId` once Phase 4 completes (per
+    /// spec section 3.4 D-12-5.3). Panics if the target type is not
+    /// nominal (`Struct`, `Enum`, `Union`, `FnDef`, or `Closure`) or
+    /// if the post-patch identity collides with another interned
+    /// entry.
+    pub fn patch_nominal_item_id(&mut self, id: TyId, new_item: crate::ids::ItemId) {
+        let old_key = TyIdentityKey::from_ty(&self.storage[id]);
+        match &mut self.storage[id] {
+            Ty::Struct { item, .. }
+            | Ty::Enum { item, .. }
+            | Ty::Union { item, .. }
+            | Ty::FnDef(item, _)
+            | Ty::Closure(item, _) => *item = new_item,
+            _ => panic!("patch_nominal_item_id called for non-nominal type"),
+        }
+        let new_key = TyIdentityKey::from_ty(&self.storage[id]);
+        if old_key != new_key {
+            self.lookup.remove(&old_key);
+            if let Some(existing) = self.lookup.insert(new_key, id) {
+                panic!(
+                    "patch_nominal_item_id collides with existing TyId {} (incoming {})",
+                    existing.as_u32(),
+                    id.as_u32(),
+                );
+            }
+        }
+    }
 }
 
 impl Default for TyInterner {

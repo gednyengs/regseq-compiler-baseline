@@ -536,19 +536,27 @@ fn translate_auto_traits<'tcx>(
 /// returned struct's `Item` carries
 /// `SyntheticItemKind::VTableType { principal }` and its layout is
 /// built from `tcx.vtable_entries(principal_ref)`: one pointer-width
-/// slot per vtable entry. Caches by `PrincipalTraitKey` so repeated
-/// translations of the same dyn type share the same `Item` and
-/// `Ty::Struct`. NOTE: registration goes through `model.items`
-/// directly here (and is also routed through `pending_items` by the
-/// Phase-2 scan in `bridge::mod.rs::scan_ty_for_synthesis`); the
-/// `synthetic_kind` marker is what allows downstream consumers to
-/// recognise this as the canonical vtable Type Item.
+/// slot per vtable entry.
+///
+/// VTableType Item synthesis is routed through
+/// `synth/vtable.rs::synthesise_vtable_type` (per spec.md section 3.4
+/// D-12-5.2 plus the audit-finding refinement on this task: every
+/// synthetic Item must enter through `pending_items` and acquire its
+/// final `ItemId` at Phase 4 via the `HandleTable` abstraction;
+/// no eager `model.items.push` shortcut). The `Ty::Struct` view is
+/// interned with a placeholder `ItemId` derived from the Phase-2
+/// handle when the final `ItemId` is not yet known; the placeholder
+/// is patched to the real `ItemId` at Phase 4 via
+/// `TyInterner::patch_nominal_item_id`.
 fn synthesize_dynamic_vtable_ty<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     principal: PrincipalTraitKey,
     principal_ref: ty::ExistentialTraitRef<'tcx>,
-    rendered: &str,
+    _rendered: &str,
 ) -> TyId {
+    let handle = crate::bridge::synth::vtable::synthesise_vtable_type(cx, principal.clone());
+    let layout = vtable_struct_layout(cx, principal_ref);
+
     if let Some(existing) = cx.model.vtables.get(&principal).copied() {
         if let Some(ty_id) =
             cx.model
@@ -557,61 +565,24 @@ fn synthesize_dynamic_vtable_ty<'tcx>(
         {
             return ty_id;
         }
-        let layout = vtable_struct_layout(cx, principal_ref);
         return cx.model.types.intern(Ty::Struct {
             item: existing,
             args: Vec::new(),
             layout,
         });
     }
-    let item_id = synthesize_vtable_type_item(cx, principal.clone(), rendered);
-    cx.model.vtables.insert(principal, item_id);
-    let layout = vtable_struct_layout(cx, principal_ref);
-    cx.model.types.intern(Ty::Struct {
-        item: item_id,
+
+    if let Some(existing) = cx.dynamic_vtable_ty_pending.get(&handle).copied() {
+        return existing;
+    }
+    let placeholder_item = ItemId::from_u32(ItemId::MAX_AS_U32 - handle.as_u32());
+    let ty_id = cx.model.types.intern(Ty::Struct {
+        item: placeholder_item,
         args: Vec::new(),
         layout,
-    })
-}
-
-fn synthesize_vtable_type_item(
-    cx: &mut BridgeCtxt<'_>,
-    principal: PrincipalTraitKey,
-    rendered: &str,
-) -> ItemId {
-    let name = format!("<vtable_ty for {rendered}>");
-    let rendered_id = cx.model.strings.intern(&name);
-    let leaf_id = cx.model.strings.intern(&name);
-    let item = Item {
-        def_path: DefPath {
-            crate_id: cx.model.primary_crate,
-            segments: vec![DefPathSegment {
-                data: DefPathData::TypeNs(leaf_id),
-                disambiguator: 0,
-            }],
-            rendered: rendered_id,
-        },
-        kind: ItemKind::Struct,
-        span: Span::dummy(),
-        linkage: Linkage::Default,
-        link_section: None,
-        inline_hint: InlineHint::None,
-        is_unsafe: false,
-        is_phantom_data: false,
-        is_unsafe_cell: false,
-        is_manually_drop: false,
-        opaque_handle_eligible: false,
-    };
-    let item_id = cx.model.items.push(item);
-    cx.model.item_def_paths.push(DefPathHash {
-        stable_crate_id: StableCrateId(0),
-        local_hash: 0x71AB_1E00_0000_0000_u64.wrapping_add(item_id.as_u32() as u64),
     });
-    cx.model
-        .item_synthetic_kinds
-        .push(SyntheticItemKind::VTableType { principal });
-    cx.model.domain_attrs.item_attrs.push(Vec::new());
-    item_id
+    cx.dynamic_vtable_ty_pending.insert(handle, ty_id);
+    ty_id
 }
 
 fn vtable_struct_layout<'tcx>(

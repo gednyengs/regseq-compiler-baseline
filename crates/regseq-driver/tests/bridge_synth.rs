@@ -16,8 +16,8 @@ use regseq_driver::bridge::synth::{
 };
 use regseq_driver::bridge::{run_bridge, BridgeCtxt, BridgeInput};
 use regseq_model::{
-    ArgsKey, DefPathHash, ItemId, PrincipalTraitKey, ProjectionBindingsKey, StableCrateId,
-    SyntheticItemKind, Ty, UintKind,
+    ArgsKey, Const, DefPathHash, InstanceKind, ItemId, PrincipalTraitKey, ProjectionBindingsKey,
+    StableCrateId, SyntheticItemKind, Ty, UintKind,
 };
 use rustc_hir::def_id::LocalModDefId;
 use rustc_middle::ty::{self, TyCtxt, TyKind};
@@ -267,7 +267,10 @@ fn vtable_synthesis_dedups_on_principal_and_rekeys_mapping() {
 
         assert_eq!(first, second);
         assert_eq!(cx.vtable_synth_cache.len(), 1);
-        assert_eq!(cx.pending_items.len(), 4);
+        // Synthetic test path produces vtable_type + vtable_instance
+        // + drop_shim (no method shims; per audit findings the
+        // hardcoded `vec![(3, None)]` is removed).
+        assert_eq!(cx.pending_items.len(), 3);
 
         assign_pending(cx);
         rekey_synthesis_in_phase5(cx).unwrap();
@@ -410,4 +413,252 @@ pub fn drop_fixture() {
             .resolve(item.def_path.rendered)
             .contains("drop_glue")
     }));
+}
+
+#[test]
+fn vtable_method_shims_carry_distinct_def_paths_and_match_entry_indices() {
+    // Two-method trait. `tcx.vtable_entries` produces a per-method
+    // `VtblEntry::Method` slot after the leading drop/size/align
+    // triple; per audit findings every method shim's
+    // `vtable_entry_index` must match that slot index and every
+    // shim's `method_def_path` must be the source method's def-path
+    // (no shared `principal.trait_path` fallback).
+    let source = r#"
+pub trait T {
+    fn first(&self);
+    fn second(&self);
+}
+impl T for u32 {
+    fn first(&self) {}
+    fn second(&self) {}
+}
+pub fn f() {
+    let x = 0u32;
+    let t = &x as &dyn T;
+    t.first();
+    t.second();
+}
+"#;
+
+    let model = compile_model("bridge_synth_multi_method", source);
+
+    let mut method_shims: Vec<(u32, DefPathHash)> = model
+        .item_synthetic_kinds
+        .iter()
+        .filter_map(|kind| match kind {
+            SyntheticItemKind::VTableMethodShim {
+                vtable_entry_index,
+                method_def_path,
+                ..
+            } => Some((*vtable_entry_index, *method_def_path)),
+            _ => None,
+        })
+        .collect();
+    method_shims.sort_by_key(|entry| entry.0);
+
+    assert_eq!(method_shims.len(), 2);
+    assert!(
+        method_shims[0].0 >= 3,
+        "method slots follow the leading triple"
+    );
+    assert!(method_shims[1].0 > method_shims[0].0);
+    assert_ne!(
+        method_shims[0].1, method_shims[1].1,
+        "every method shim has a distinct DefPathHash; principal.trait_path fallback is forbidden"
+    );
+}
+
+#[test]
+fn vtable_for_trivial_drop_impl_writes_null_pointer_in_drop_slot() {
+    // `u32` has trivial Drop; per audit findings the
+    // MetadataDropInPlace slot must hold a null pointer cell
+    // (Const::NullPtr), not a drop-shim Reloc, and no
+    // VTableDropShim Item should be synthesised.
+    let source = r#"
+pub trait T {
+    fn m(&self);
+}
+impl T for u32 {
+    fn m(&self) {}
+}
+pub fn f() {
+    let x = 0u32;
+    let t = &x as &dyn T;
+    t.m();
+}
+"#;
+
+    let model = compile_model("bridge_synth_trivial_drop", source);
+
+    assert!(
+        !model
+            .item_synthetic_kinds
+            .iter()
+            .any(|kind| matches!(kind, SyntheticItemKind::VTableDropShim { .. })),
+        "trivial Drop impl must not synthesise a VTableDropShim Item"
+    );
+
+    let init_const_id = model
+        .instances
+        .iter()
+        .find_map(|instance| {
+            if let InstanceKind::Static { init: Some(c), .. } = &instance.kind {
+                let kind = &model.item_synthetic_kinds[instance.item];
+                if matches!(kind, SyntheticItemKind::VTableInstance { .. }) {
+                    return Some(*c);
+                }
+            }
+            None
+        })
+        .expect("VTableInstance Static must exist");
+
+    let init = model.consts.resolve(init_const_id);
+    let Const::Aggregate(fields) = init else {
+        panic!("VTableInstance init must be Const::Aggregate");
+    };
+    let drop_slot = model.consts.resolve(fields[0]);
+    assert!(
+        matches!(drop_slot, Const::NullPtr(_)),
+        "MetadataDropInPlace slot must be a null pointer cell for trivial Drop, got {drop_slot:?}"
+    );
+}
+
+#[test]
+fn vtable_for_supertrait_holds_reloc_in_trait_vptr_slot() {
+    // A trait with multiple supertraits forces rustc's
+    // `prepare_vtable_segments` to emit at least one TraitVPtr entry:
+    // sibling supertraits of an already-emitted segment cannot share
+    // a vtable prefix, so they get explicit back-pointers per
+    // `rustc_trait_selection/src/traits/vtable.rs`. The audit
+    // requires that this slot resolves to a supertrait vtable
+    // instance, not uninit/null.
+    let source = r#"
+pub trait SuperA {
+    fn a(&self);
+}
+pub trait SuperB {
+    fn b(&self);
+}
+pub trait Sub: SuperA + SuperB {
+    fn d(&self);
+}
+impl SuperA for u32 {
+    fn a(&self) {}
+}
+impl SuperB for u32 {
+    fn b(&self) {}
+}
+impl Sub for u32 {
+    fn d(&self) {}
+}
+pub fn f() {
+    let x = 0u32;
+    let t = &x as &dyn Sub;
+    t.d();
+}
+"#;
+
+    let model = compile_model("bridge_synth_supertrait", source);
+
+    // Locate the Sub principal vs the Super principal by counting
+    // VTableInstance Items: Sub's vtable contains a TraitVPtr slot
+    // pointing at Super's vtable, so the model has TWO VTableInstance
+    // Items per impl_ty.
+    let vtable_instances: Vec<(regseq_model::ItemId, regseq_model::ConstId)> = model
+        .instances
+        .iter()
+        .filter_map(|instance| {
+            if let InstanceKind::Static { init: Some(c), .. } = &instance.kind {
+                let kind = &model.item_synthetic_kinds[instance.item];
+                if matches!(kind, SyntheticItemKind::VTableInstance { .. }) {
+                    return Some((instance.item, *c));
+                }
+            }
+            None
+        })
+        .collect();
+    assert!(
+        vtable_instances.len() >= 2,
+        "should synthesise vtable instances for both Sub and at least one supertrait, got {}",
+        vtable_instances.len()
+    );
+
+    // Compute the synthetic def-path-hash sets so we can identify
+    // which init aggregate slot is the supertrait Reloc.
+    let vtable_instance_def_paths: std::collections::HashSet<regseq_model::DefPathHash> =
+        vtable_instances
+            .iter()
+            .map(|(item, _)| model.item_def_paths[*item])
+            .collect();
+
+    let mut found_supertrait_slot = false;
+    for (_, init_const_id) in &vtable_instances {
+        let Const::Aggregate(fields) = model.consts.resolve(*init_const_id) else {
+            panic!("VTableInstance init must be Const::Aggregate");
+        };
+        for field in fields {
+            if let Const::Reloc(instance_ref) = model.consts.resolve(*field) {
+                if instance_ref.regseq_kind_rank == 1
+                    && vtable_instance_def_paths.contains(&instance_ref.def_path_hash)
+                {
+                    found_supertrait_slot = true;
+                }
+            }
+        }
+    }
+    assert!(
+        found_supertrait_slot,
+        "TraitVPtr slot must hold a Reloc to a supertrait VTableInstance Static"
+    );
+}
+
+#[test]
+fn vtable_items_and_instances_are_f4_and_f4_2_ordered_post_phase4() {
+    // After Phase 4 + Phase 5 the model.items table must be sorted
+    // by F4 (`<regseq_synth>` synthetic items follow source items in
+    // the comparator) and model.instances must be F4-2 sorted: the
+    // VTableInstance Statics (rank 1) appear after every Function
+    // instance (rank 0). This task does not push Function instances
+    // (regseq-driver-42 owns that), so the Static-only suffix is
+    // trivially F4-2 conformant; the Items table check is the
+    // load-bearing assertion here.
+    let source = r#"
+pub trait T {
+    fn m(&self);
+}
+impl T for u32 {
+    fn m(&self) {}
+}
+pub fn f() {
+    let x = 0u32;
+    let t = &x as &dyn T;
+    t.m();
+}
+"#;
+
+    let model = compile_model("bridge_synth_f4_ordering", source);
+
+    // Per spec section 16.1, model.items must be sorted by the
+    // canonical F4 comparator. Use the model's own
+    // `compare_items_f4` to avoid re-deriving the byte-key order.
+    for window in model.items.iter().collect::<Vec<_>>().windows(2) {
+        let ordering = model.compare_items_f4(window[0], window[1]);
+        assert!(
+            !ordering.is_gt(),
+            "model.items must be F4-sorted at Phase 4 entry per spec section 16.1; got {:?} between consecutive items",
+            ordering
+        );
+    }
+
+    // F4-2 instance ordering: walk `model.instances` and assert
+    // ranks are non-decreasing.
+    let mut last_rank: i32 = -1;
+    for instance in model.instances.iter() {
+        let rank = regseq_model::regseq_instance_kind_rank(&instance.kind) as i32;
+        assert!(
+            rank >= last_rank,
+            "model.instances must be F4-2 sorted; saw rank {rank} after {last_rank}"
+        );
+        last_rank = rank;
+    }
 }

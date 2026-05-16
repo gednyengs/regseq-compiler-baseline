@@ -82,6 +82,13 @@ pub struct BridgeCtxt<'tcx> {
     pub drop_glue_synth_cache: HashMap<TyId, ItemHandle>,
     /// Phase-2 cache for diagnostic-logging intrinsic callees.
     pub diag_log_intrinsics: HashMap<DefPathHash, regseq_model::IntrinsicKind>,
+    /// Deferred resolution side-table for `Ty::Dynamic.vtable_ty`
+    /// `Ty::Struct` views interned during Phase 2 with placeholder
+    /// `ItemId`s. Per spec.md section 3.4 D-12-5.3, final `ItemId`s
+    /// are not assigned until Phase 4; this map records each
+    /// placeholder `Ty::Struct` so the bridge can patch it to the
+    /// real `ItemId` once Phase 4 binds the synth/vtable.rs handle.
+    pub dynamic_vtable_ty_pending: HashMap<ItemHandle, TyId>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -102,6 +109,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             vtable_synth_cache: HashMap::new(),
             drop_glue_synth_cache: HashMap::new(),
             diag_log_intrinsics: HashMap::new(),
+            dynamic_vtable_ty_pending: HashMap::new(),
         }
     }
 }
@@ -397,8 +405,13 @@ fn scan_statement_for_synthesis<'tcx>(
     };
     let projection_bindings = dynamic_projection_bindings_key(ctxt, *target_ty);
     let principal = principal_trait_key(ctxt, principal_ref, projection_bindings);
-    let method_shims = method_shims_for_vtable(ctxt, source_ty, principal_ref);
-    synth::vtable::synthesise_vtable_with_method_shims(ctxt, principal, impl_ty, method_shims)?;
+    synth::vtable::synthesise_vtable_with_rustc_entries(
+        ctxt,
+        principal,
+        principal_ref,
+        impl_ty,
+        source_ty,
+    )?;
     Ok(())
 }
 
@@ -451,18 +464,14 @@ fn scan_call_ty_for_vtable<'tcx>(
     ctxt: &mut BridgeCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
 ) -> Result<(), BridgeError> {
-    scan_ty_for_synthesis(ctxt, ty)?;
-    let Some(principal_ref) = dynamic_principal_ref(ty) else {
-        return Ok(());
-    };
-    let projection_bindings = dynamic_projection_bindings_key(ctxt, ty);
-    let principal = principal_trait_key(ctxt, principal_ref, projection_bindings);
-    let impl_ty = ctxt.model.types.intern(regseq_model::Ty::Tuple {
-        fields: Vec::new(),
-        layout: regseq_model::UNIT_LAYOUT,
-    });
-    synth::synthesise_vtable(ctxt, principal, impl_ty)?;
-    Ok(())
+    // Per spec.md sections 13.2 and 3.4, `Ty::Dynamic` translation
+    // triggers VTableType synthesis only; the (instance + method
+    // shims + drop shim) trio is keyed on the concrete impl_ty and
+    // is synthesised at `Cast::Unsize` sites in
+    // `scan_statement_for_synthesis`. Call sites with `dyn Trait`
+    // arguments do not carry a concrete impl_ty so they only need
+    // to register the principal's vtable type.
+    scan_ty_for_synthesis(ctxt, ty)
 }
 
 fn scan_rvalue_moves_for_drop_glue<'tcx>(
@@ -615,28 +624,6 @@ pub(crate) fn projection_bindings_key<'tcx>(
 fn encode_def_path_hash(bytes: &mut Vec<u8>, hash: DefPathHash) {
     bytes.extend_from_slice(&hash.stable_crate_id.0.to_le_bytes());
     bytes.extend_from_slice(&hash.local_hash.to_le_bytes());
-}
-
-fn method_shims_for_vtable<'tcx>(
-    ctxt: &mut BridgeCtxt<'tcx>,
-    source_ty: rustc_middle::ty::Ty<'tcx>,
-    principal: rustc_middle::ty::ExistentialTraitRef<'tcx>,
-) -> Vec<(u32, Option<DefPathHash>)> {
-    let trait_ref = principal.with_self_ty(ctxt.input.tcx, source_ty);
-    let trait_ref = ctxt.input.tcx.erase_and_anonymize_regions(trait_ref);
-    ctxt.input
-        .tcx
-        .vtable_entries(trait_ref)
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, entry)| match entry {
-            rustc_middle::ty::VtblEntry::Method(instance) => Some((
-                idx as u32,
-                Some(def_path_hash(ctxt.input.tcx, instance.def_id())),
-            )),
-            _ => None,
-        })
-        .collect()
 }
 
 fn def_path_hash(tcx: TyCtxt<'_>, def_id: DefId) -> DefPathHash {

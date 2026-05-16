@@ -1,15 +1,25 @@
 //! Vtable-family bridge item synthesis.
 
+use std::collections::HashMap;
+
 use regseq_model::{
     args_key_for_generic_args, render_def_path, synthetic_def_path_hash,
-    synthetic_def_path_segments, CrateId, DefPath, DefPathData, DefPathHash, DefPathSegment,
-    GenericArg, InlineHint, Item, ItemKind, Linkage, Mutability, PrincipalTraitKey, Span,
-    SyntheticItemKind, TyId,
+    synthetic_def_path_segments, ArgsKey, Const, ConstId, CrateId, DefPath, DefPathData,
+    DefPathHash, DefPathSegment, FieldLayout, FunctionInstanceFlavor, GenericArg, InlineHint,
+    Instance, InstanceKind, InstanceRef, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage,
+    Mutability, PrincipalTraitKey, ProjectionBindingsKey, Span, StableCrateId, SyntheticItemKind,
+    Ty, TyId, UintKind, UNIT_LAYOUT,
 };
+use rustc_middle::ty::{self as rustc_ty};
+use rustc_span::def_id::DefId;
 
-use super::{VTableSynthHandles, VTableSynthKey};
+use super::{VTableSlot, VTableSynthHandles, VTableSynthKey};
 use crate::bridge::{BridgeCtxt, BridgeError, ItemHandle, PendingItem};
 
+/// Synthesise the vtable type Item for a principal trait. Idempotent
+/// per `PrincipalTraitKey` per spec.md section 13.3. Returns the
+/// Phase-2 `ItemHandle` that gets remapped to the final `ItemId` in
+/// Phase 4.
 pub(crate) fn synthesise_vtable_type(
     cx: &mut BridgeCtxt<'_>,
     principal: PrincipalTraitKey,
@@ -29,20 +39,123 @@ pub(crate) fn synthesise_vtable_type(
     handle
 }
 
-/// Synthesise the vtable type, instance, and shim Items.
+/// Synthesise the vtable family for the synthetic test path: vtable
+/// type + vtable instance + drop shim, no method shims, no slot
+/// composition. Production code uses
+/// `synthesise_vtable_with_rustc_entries` instead so that the slot
+/// composition reflects `tcx.vtable_entries`.
 pub fn synthesise_vtable<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     principal: PrincipalTraitKey,
     impl_ty: TyId,
 ) -> Result<VTableSynthHandles, BridgeError> {
-    synthesise_vtable_with_method_shims(cx, principal, impl_ty, vec![(3, None)])
+    synthesise_vtable_inner(cx, principal, impl_ty, Vec::new(), Vec::new(), true, None)
 }
 
-pub(crate) fn synthesise_vtable_with_method_shims<'tcx>(
+/// Synthesise the vtable family from a Cast::Unsize site backed by a
+/// rustc impl_ty. Per spec.md sections 13.2 and 13.3 plus the audit
+/// findings, this consults
+/// `tcx.vtable_entries(principal_ref.with_self_ty(tcx, impl_ty))` to
+/// derive the full slot-by-slot composition (drop, size, align,
+/// methods, supertrait vptrs, vacant). One method shim Function Item
+/// is synthesised per `VtblEntry::Method`. The drop shim is
+/// synthesised only if `impl_ty` has non-trivial Drop.
+pub(crate) fn synthesise_vtable_with_rustc_entries<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     principal: PrincipalTraitKey,
+    principal_ref: rustc_ty::ExistentialTraitRef<'tcx>,
+    impl_ty_model: TyId,
+    impl_ty_rustc: rustc_ty::Ty<'tcx>,
+) -> Result<VTableSynthHandles, BridgeError> {
+    let trait_ref = principal_ref.with_self_ty(cx.input.tcx, impl_ty_rustc);
+    let trait_ref = cx.input.tcx.erase_and_anonymize_regions(trait_ref);
+    let entries = cx.input.tcx.vtable_entries(trait_ref).to_vec();
+
+    let needs_drop =
+        impl_ty_rustc.needs_drop(cx.input.tcx, rustc_ty::TypingEnv::fully_monomorphized());
+
+    let (size_bytes, align_bytes) = layout_size_align(cx, impl_ty_rustc)?;
+
+    let mut method_entries: Vec<(u32, DefPathHash)> = Vec::new();
+    let mut slot_seeds: Vec<VTableSlot> = Vec::with_capacity(entries.len());
+    for (idx, entry) in entries.iter().enumerate() {
+        let slot_idx = idx as u32;
+        match entry {
+            rustc_ty::VtblEntry::MetadataDropInPlace => {
+                slot_seeds.push(VTableSlot::Drop { shim_handle: None });
+            }
+            rustc_ty::VtblEntry::MetadataSize => {
+                slot_seeds.push(VTableSlot::Size { bytes: size_bytes });
+            }
+            rustc_ty::VtblEntry::MetadataAlign => {
+                slot_seeds.push(VTableSlot::Align { bytes: align_bytes });
+            }
+            rustc_ty::VtblEntry::Method(instance) => {
+                let method_def_path = def_path_hash(cx.input.tcx, instance.def_id());
+                let method_name = cx.input.tcx.item_name(instance.def_id()).to_string();
+                method_entries.push((slot_idx, method_def_path));
+                slot_seeds.push(VTableSlot::Method {
+                    handle: ItemHandle::from_u32(0),
+                    method_def_path,
+                    vtable_entry_index: slot_idx,
+                    method_name,
+                });
+            }
+            rustc_ty::VtblEntry::Vacant => {
+                slot_seeds.push(VTableSlot::Vacant);
+            }
+            rustc_ty::VtblEntry::TraitVPtr(supertrait_ref) => {
+                // Per spec.md section 13.2 plus the audit-finding
+                // refinement on this task: TraitVPtr slots reference
+                // the supertrait's VTableInstance Static, not just
+                // its VTableType. Recursively synthesize the full
+                // supertrait vtable family (type + instance + method
+                // shims + drop shim) so the relocation in the slot
+                // resolves to a real Instance.
+                let supertrait_existential =
+                    rustc_ty::ExistentialTraitRef::erase_self_ty(cx.input.tcx, *supertrait_ref);
+                let supertrait_name = cx.input.tcx.item_name(supertrait_ref.def_id).to_string();
+                let supertrait_principal = crate::bridge::principal_trait_key(
+                    cx,
+                    supertrait_existential,
+                    ProjectionBindingsKey(0),
+                );
+                synthesise_vtable_with_rustc_entries(
+                    cx,
+                    supertrait_principal.clone(),
+                    supertrait_existential,
+                    impl_ty_model,
+                    impl_ty_rustc,
+                )?;
+                slot_seeds.push(VTableSlot::TraitVPtr {
+                    supertrait_principal,
+                    supertrait_name,
+                });
+            }
+        }
+    }
+
+    let layout = vtable_layout_for_slots(cx, &slot_seeds);
+
+    synthesise_vtable_inner(
+        cx,
+        principal,
+        impl_ty_model,
+        method_entries,
+        slot_seeds,
+        needs_drop,
+        Some(layout),
+    )
+}
+
+fn synthesise_vtable_inner(
+    cx: &mut BridgeCtxt<'_>,
+    principal: PrincipalTraitKey,
     impl_ty: TyId,
-    method_shims: Vec<(u32, Option<DefPathHash>)>,
+    method_entries: Vec<(u32, DefPathHash)>,
+    slot_seeds: Vec<VTableSlot>,
+    needs_drop: bool,
+    layout: Option<Layout>,
 ) -> Result<VTableSynthHandles, BridgeError> {
     let self_ty = args_key_for_generic_args(&cx.model, &vec![GenericArg::Type(impl_ty)]);
     let key = VTableSynthKey {
@@ -65,40 +178,362 @@ pub(crate) fn synthesise_vtable_with_method_shims<'tcx>(
         },
         None,
     );
-    let method_shims = method_shims
-        .into_iter()
-        .map(|(vtable_entry_index, method_def_path)| {
-            push_pending_synthetic_item(
-                cx,
-                ItemKind::Function,
-                SyntheticItemKind::VTableMethodShim {
-                    principal: principal.clone(),
-                    self_ty,
-                    vtable_entry_index,
-                    method_def_path: method_def_path.unwrap_or(principal.trait_path),
-                },
-                None,
-            )
-        })
-        .collect::<Vec<_>>();
-    let drop_shim = push_pending_synthetic_item(
-        cx,
-        ItemKind::Function,
-        SyntheticItemKind::VTableDropShim {
-            principal: principal.clone(),
-            self_ty,
-        },
-        None,
-    );
+
+    let mut method_shims_by_slot: HashMap<u32, ItemHandle> = HashMap::new();
+    let mut method_shim_handles: Vec<ItemHandle> = Vec::with_capacity(method_entries.len());
+    for (vtable_entry_index, method_def_path) in &method_entries {
+        let handle = push_pending_synthetic_item(
+            cx,
+            ItemKind::Function,
+            SyntheticItemKind::VTableMethodShim {
+                principal: principal.clone(),
+                self_ty,
+                vtable_entry_index: *vtable_entry_index,
+                method_def_path: *method_def_path,
+            },
+            None,
+        );
+        method_shim_handles.push(handle);
+        method_shims_by_slot.insert(*vtable_entry_index, handle);
+    }
+
+    let drop_shim = if needs_drop {
+        Some(push_pending_synthetic_item(
+            cx,
+            ItemKind::Function,
+            SyntheticItemKind::VTableDropShim {
+                principal: principal.clone(),
+                self_ty,
+            },
+            None,
+        ))
+    } else {
+        None
+    };
+
+    let mut slots = slot_seeds;
+    for slot in &mut slots {
+        match slot {
+            VTableSlot::Drop { shim_handle } => {
+                *shim_handle = drop_shim;
+            }
+            VTableSlot::Method {
+                handle,
+                vtable_entry_index,
+                ..
+            } => {
+                if let Some(found) = method_shims_by_slot.get(vtable_entry_index) {
+                    *handle = *found;
+                }
+            }
+            _ => {}
+        }
+    }
 
     let handles = VTableSynthHandles {
         vtable_type,
         vtable_instance,
-        method_shims,
+        method_shims: method_shim_handles,
         drop_shim,
+        slots,
+        layout,
     };
     cx.vtable_synth_cache.insert(key, handles.clone());
     Ok(handles)
+}
+
+/// Phase-5 step that pushes a `Static` Instance for every cached
+/// VTableInstance Item, with a `Const::Aggregate` initializer whose
+/// fields mirror the `tcx.vtable_entries` slot composition recorded
+/// during Phase-2 synthesis. Per spec.md sections 13.2 and 13.3 plus
+/// the audit findings on slot semantics. The Static's `ty` references
+/// the `Ty::Struct` view of the vtable type Item; that struct view is
+/// interned here using the cached vtable layout so callers do not
+/// need to first translate a `dyn Trait` use of the principal.
+pub(crate) fn push_vtable_instance_statics(
+    cx: &mut BridgeCtxt<'_>,
+    entries: &[(VTableSynthKey, VTableSynthHandles)],
+) -> Result<(), BridgeError> {
+    for (key, handles) in entries {
+        let vtable_type_item = super::resolve_handle(cx, handles.vtable_type, "VTableType")?;
+        let vtable_instance_item =
+            super::resolve_handle(cx, handles.vtable_instance, "VTableInstance")?;
+
+        // Intern (or reuse) the `Ty::Struct` view of the vtable type
+        // so the Static instance's `ty` field is well-typed.
+        let vtable_struct_ty =
+            intern_vtable_struct_ty(cx, vtable_type_item, handles.layout.clone());
+
+        // Build the per-slot Const values that make up the vtable
+        // instance aggregate per spec.md section 13.2.
+        let init_const = build_vtable_init_aggregate(cx, key, handles)?;
+
+        let emission_name = cx.model.items[vtable_instance_item].def_path.rendered;
+        cx.model.instances.push(Instance {
+            item: vtable_instance_item,
+            generic_args: Vec::new(),
+            emission_name,
+            span: Span::dummy(),
+            kind: InstanceKind::Static {
+                ty: vtable_struct_ty,
+                init: Some(init_const),
+            },
+        });
+    }
+    Ok(())
+}
+
+fn intern_vtable_struct_ty(
+    cx: &mut BridgeCtxt<'_>,
+    vtable_type_item: ItemId,
+    cached_layout: Option<Layout>,
+) -> TyId {
+    if let Some(ty_id) = cx.model.types.find_nominal(
+        regseq_model::NominalKind::Struct,
+        vtable_type_item,
+        &Vec::new(),
+    ) {
+        // The shared `Ty::Struct` view may have been interned earlier
+        // by `bridge::ty::synthesize_dynamic_vtable_ty` with a
+        // pointer-only approximation of the layout. Patch it here to
+        // the slot-precise layout cached by the rustc-aware
+        // synthesis path so the Static and the `Ty::Dynamic.vtable_ty`
+        // share an identical, spec-conformant layout.
+        if let Some(layout) = cached_layout {
+            cx.model.types.patch_layout(ty_id, layout);
+        }
+        return ty_id;
+    }
+    let layout = cached_layout.unwrap_or_else(empty_struct_layout);
+    cx.model.types.intern(Ty::Struct {
+        item: vtable_type_item,
+        args: Vec::new(),
+        layout,
+    })
+}
+
+fn empty_struct_layout() -> Layout {
+    Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields: vec![] },
+    }
+}
+
+fn build_vtable_init_aggregate(
+    cx: &mut BridgeCtxt<'_>,
+    key: &VTableSynthKey,
+    handles: &VTableSynthHandles,
+) -> Result<ConstId, BridgeError> {
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let unit_ptr = cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut));
+    let null_ptr = cx.model.consts.intern(Const::NullPtr(unit_ptr));
+    let pointer_size = (cx.model.target.pointer_width / 8) as usize;
+    let uninit_ptr_cell = cx
+        .model
+        .consts
+        .intern(Const::Bytes(vec![regseq_model::Byte::Uninit; pointer_size]));
+
+    let mut field_consts: Vec<ConstId> = Vec::with_capacity(handles.slots.len());
+    for slot in &handles.slots {
+        let value = match slot {
+            VTableSlot::Drop { shim_handle: None } => null_ptr,
+            VTableSlot::Drop {
+                shim_handle: Some(handle),
+            } => {
+                let drop_shim_def_path = pending_def_path_hash_for(cx, *handle, "VTableDropShim")?;
+                cx.model.consts.intern(Const::Reloc(InstanceRef {
+                    regseq_kind_rank: 0,
+                    def_path_hash: drop_shim_def_path,
+                    args_key: ArgsKey::EMPTY,
+                    fn_shim_disambig: vtable_shim_disambig(),
+                }))
+            }
+            VTableSlot::Size { bytes } => cx
+                .model
+                .consts
+                .intern(Const::Uint(UintKind::Usize, *bytes as u128)),
+            VTableSlot::Align { bytes } => cx
+                .model
+                .consts
+                .intern(Const::Uint(UintKind::Usize, *bytes as u128)),
+            VTableSlot::Method {
+                handle,
+                method_def_path: _,
+                ..
+            } => {
+                let shim_def_path = pending_def_path_hash_for(cx, *handle, "VTableMethodShim")?;
+                cx.model.consts.intern(Const::Reloc(InstanceRef {
+                    regseq_kind_rank: 0,
+                    def_path_hash: shim_def_path,
+                    args_key: ArgsKey::EMPTY,
+                    fn_shim_disambig: vtable_shim_disambig(),
+                }))
+            }
+            // Per the audit-finding refinement and rustc's
+            // `vtable_allocation_provider`, vacant slots hold an
+            // uninit pointer cell, not a null pointer.
+            VTableSlot::Vacant => uninit_ptr_cell,
+            VTableSlot::TraitVPtr {
+                supertrait_principal,
+                ..
+            } => {
+                let supertrait_synth_kind = SyntheticItemKind::VTableInstance {
+                    principal: supertrait_principal.clone(),
+                    self_ty: key.self_ty,
+                };
+                let supertrait_def_path = synthetic_def_path_hash(&supertrait_synth_kind);
+                cx.model.consts.intern(Const::Reloc(InstanceRef {
+                    regseq_kind_rank: 1,
+                    def_path_hash: supertrait_def_path,
+                    args_key: ArgsKey::EMPTY,
+                    fn_shim_disambig: 0,
+                }))
+            }
+        };
+        field_consts.push(value);
+    }
+
+    Ok(cx.model.consts.intern(Const::Aggregate(field_consts)))
+}
+
+fn vtable_shim_disambig() -> u8 {
+    use regseq_model::rustc_instance_kind_sort_rank;
+    rustc_instance_kind_sort_rank(FunctionInstanceFlavor::VTableShim)
+}
+
+fn pending_def_path_hash_for(
+    cx: &BridgeCtxt<'_>,
+    handle: ItemHandle,
+    family: &'static str,
+) -> Result<DefPathHash, BridgeError> {
+    let item_id = super::resolve_handle(cx, handle, family)?;
+    Ok(cx.model.item_def_paths[item_id])
+}
+
+fn def_path_hash(tcx: rustc_middle::ty::TyCtxt<'_>, def_id: DefId) -> DefPathHash {
+    let hash = tcx.def_path_hash(def_id);
+    DefPathHash {
+        stable_crate_id: StableCrateId(hash.stable_crate_id().as_u64()),
+        local_hash: hash.local_hash().as_u64(),
+    }
+}
+
+fn layout_size_align<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    impl_ty: rustc_ty::Ty<'tcx>,
+) -> Result<(u64, u64), BridgeError> {
+    let typing_env = rustc_ty::TypingEnv::fully_monomorphized();
+    let layout = cx
+        .input
+        .tcx
+        .layout_of(typing_env.as_query_input(impl_ty))
+        .map_err(|_| BridgeError::Layout {
+            ty_repr: impl_ty.to_string(),
+        })?;
+    Ok((layout.size.bytes(), layout.align.abi.bytes()))
+}
+
+/// Build the vtable struct `Layout` per the spec.md section 13.2
+/// "Synthetic vtable layout algorithm": one slot per
+/// `tcx.vtable_entries` entry, each slot pointer-width, with stable
+/// per-slot field names (`__drop_in_place`, `__size`, `__align`,
+/// the source method's name with `#N` disambiguation when collision,
+/// `__super_TraitName` with `#N` disambiguation, or `__vacant_N`).
+/// Size/align slots use `Ty::Uint(Usize)` field types; vacant and
+/// method slots use the canonical vacant `Ty::FnPtr` signature
+/// `extern "C" fn(*mut ()) -> ()` per spec section 13.2's
+/// canonical-vacant-signature rule; supertrait vptr and drop-in-place
+/// slots use `Ty::Ptr(unit, Mut)` since they carry whole-pointer
+/// relocations rather than fn-shaped values.
+fn vtable_layout_for_slots(cx: &mut BridgeCtxt<'_>, slots: &[VTableSlot]) -> Layout {
+    let pointer_size = (cx.model.target.pointer_width / 8) as u64;
+    let pointer_align = pointer_size.max(1);
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let unit_ptr = cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut));
+    let usize_ty = cx.model.types.intern(Ty::Uint(UintKind::Usize));
+    let canonical_vacant_fn_ptr = canonical_vacant_fn_ptr_ty(cx);
+
+    // Method-name and supertrait-name collision disambiguator: the
+    // first occurrence keeps the source name; later occurrences get
+    // `#N` appended where N is the slot index per spec.md section
+    // 13.2.
+    let mut method_name_seen = std::collections::HashSet::new();
+    let mut super_name_seen = std::collections::HashSet::new();
+
+    let mut fields: Vec<FieldLayout> = Vec::with_capacity(slots.len());
+    for (idx, slot) in slots.iter().enumerate() {
+        let (name_text, ty) = match slot {
+            VTableSlot::Drop { .. } => ("__drop_in_place".to_owned(), unit_ptr),
+            VTableSlot::Size { .. } => ("__size".to_owned(), usize_ty),
+            VTableSlot::Align { .. } => ("__align".to_owned(), usize_ty),
+            VTableSlot::Method {
+                vtable_entry_index,
+                method_name,
+                ..
+            } => {
+                let name = if method_name_seen.insert(method_name.clone()) {
+                    method_name.clone()
+                } else {
+                    format!("{method_name}#{vtable_entry_index}")
+                };
+                (name, canonical_vacant_fn_ptr)
+            }
+            VTableSlot::Vacant => (format!("__vacant_{idx}"), canonical_vacant_fn_ptr),
+            VTableSlot::TraitVPtr {
+                supertrait_name, ..
+            } => {
+                let base = format!("__super_{supertrait_name}");
+                let name = if super_name_seen.insert(base.clone()) {
+                    base
+                } else {
+                    format!("{base}#{idx}")
+                };
+                (name, unit_ptr)
+            }
+        };
+        let name = cx.model.strings.intern(&name_text);
+        fields.push(FieldLayout {
+            name,
+            ty,
+            offset: idx as u64 * pointer_size,
+        });
+    }
+    Layout {
+        size: slots.len() as u64 * pointer_size,
+        align: pointer_align,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields },
+    }
+}
+
+/// Intern the canonical vacant FnPtr signature
+/// `extern "C" fn(*mut ()) -> ()` per spec.md section 13.2.
+fn canonical_vacant_fn_ptr_ty(cx: &mut BridgeCtxt<'_>) -> TyId {
+    use regseq_model::{FnAbi, FnSig, Safety};
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let unit_ptr = cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut));
+    let sig = FnSig {
+        inputs: vec![unit_ptr],
+        output: unit_ty,
+        abi: FnAbi::C,
+        c_variadic: false,
+        safety: Safety::Safe,
+    };
+    let sig_id = cx.model.sigs.intern(sig);
+    cx.model.types.intern(Ty::FnPtr(sig_id))
 }
 
 pub(crate) fn push_pending_synthetic_item(
