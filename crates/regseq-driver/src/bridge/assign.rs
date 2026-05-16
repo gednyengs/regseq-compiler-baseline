@@ -11,6 +11,15 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
     Ok(())
 }
 
+/// Drains any pending items added after the initial Phase-4 assignment,
+/// running them through the same ItemId + side-table population path.
+/// Used to absorb late synthesis triggers fired during Phase-5 body
+/// materialisation (e.g., reference-typed const operands that
+/// synthesise `ConstMemoryStatic` items per spec section 3.4).
+pub(crate) fn assign_late_pending_items(ctxt: &mut BridgeCtxt<'_>) {
+    assign_pending_items(&mut ctxt.model, &mut ctxt.handles, &mut ctxt.pending_items);
+}
+
 fn assign_pending_items(
     model: &mut regseq_model::RegseqModel,
     handles: &mut super::HandleTable,

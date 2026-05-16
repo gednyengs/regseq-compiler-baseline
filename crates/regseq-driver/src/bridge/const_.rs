@@ -242,7 +242,6 @@ fn translate_const_value<'tcx>(
         mir::ConstValue::Scalar(scalar) => translate_scalar(cx, scalar, ty)?,
         mir::ConstValue::ZeroSized => Const::ZST,
         mir::ConstValue::Slice { alloc_id, meta } => {
-            intern_fat_pointer_auxiliary_tys(cx, ty)?;
             let alloc = cx.input.tcx.global_alloc(alloc_id);
             let GlobalAlloc::Memory(memory) = alloc else {
                 return Err(BridgeError::UnsupportedConst {
@@ -252,15 +251,8 @@ fn translate_const_value<'tcx>(
             let bytes = allocation_bytes(cx, memory.inner())?;
             let pointee = cx.model.consts.intern(Const::Bytes(bytes));
             synthesise_const_memory_static(cx, pointee)?;
-            let reloc = cx
-                .model
-                .consts
-                .intern(Const::Reloc(instance_ref_for_const(cx, pointee)));
-            let len = cx
-                .model
-                .consts
-                .intern(Const::Uint(UintKind::Usize, meta as u128));
-            Const::Aggregate(vec![reloc, len])
+            let inner = Const::Reloc(instance_ref_for_const(cx, pointee));
+            wrap_reference_const(cx, ty, inner, meta as u128)?
         }
         mir::ConstValue::Indirect { alloc_id, offset } => {
             if offset.bytes() != 0 {
@@ -272,7 +264,12 @@ fn translate_const_value<'tcx>(
             match alloc {
                 GlobalAlloc::Memory(memory) => {
                     let bytes = allocation_bytes(cx, memory.inner())?;
-                    if is_reference_typed(ty) {
+                    if matches!(ty.kind(), TyKind::Ref(..)) {
+                        let pointee = cx.model.consts.intern(Const::Bytes(bytes));
+                        synthesise_const_memory_static(cx, pointee)?;
+                        let inner = Const::Reloc(instance_ref_for_const(cx, pointee));
+                        wrap_reference_const(cx, ty, inner, 0)?
+                    } else if matches!(ty.kind(), TyKind::RawPtr(..)) {
                         let pointee = cx.model.consts.intern(Const::Bytes(bytes));
                         synthesise_const_memory_static(cx, pointee)?;
                         Const::Reloc(instance_ref_for_const(cx, pointee))
@@ -291,6 +288,23 @@ fn translate_const_value<'tcx>(
     Ok(cx.model.consts.intern(value))
 }
 
+/// Wrap an inner `Const::Reloc` for a Rust reference-typed const into the
+/// `Const::Aggregate([Reloc, Uint(meta)])` carrier mandated by spec
+/// section 9.7's reference-const dispatch + the audit-finding refinement
+/// requiring a uniform Aggregate carrier for thin references (with
+/// `Uint(0)` as the metadata placeholder).
+fn wrap_reference_const<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+    inner_reloc: Const,
+    meta: u128,
+) -> Result<Const, BridgeError> {
+    intern_fat_pointer_auxiliary_tys(cx, ty)?;
+    let reloc = cx.model.consts.intern(inner_reloc);
+    let len = cx.model.consts.intern(Const::Uint(UintKind::Usize, meta));
+    Ok(Const::Aggregate(vec![reloc, len]))
+}
+
 fn translate_scalar<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     scalar: Scalar,
@@ -301,19 +315,31 @@ fn translate_scalar<'tcx>(
         Scalar::Ptr(ptr, _) => {
             let alloc_id = ptr.provenance.alloc_id();
             let alloc = cx.input.tcx.global_alloc(alloc_id);
-            match alloc {
+            let inner_reloc = match alloc {
                 GlobalAlloc::Memory(memory) => {
                     let bytes = allocation_bytes(cx, memory.inner())?;
                     let pointee = cx.model.consts.intern(Const::Bytes(bytes));
                     synthesise_const_memory_static(cx, pointee)?;
-                    Ok(Const::Reloc(instance_ref_for_const(cx, pointee)))
+                    Const::Reloc(instance_ref_for_const(cx, pointee))
                 }
                 GlobalAlloc::Static(def_id) => {
-                    Ok(Const::Reloc(instance_ref_for_static(cx.input.tcx, def_id)))
+                    Const::Reloc(instance_ref_for_static(cx.input.tcx, def_id))
                 }
-                _ => Err(BridgeError::UnsupportedConst {
-                    const_repr: format!("pointer scalar over {alloc:?}"),
-                }),
+                _ => {
+                    return Err(BridgeError::UnsupportedConst {
+                        const_repr: format!("pointer scalar over {alloc:?}"),
+                    });
+                }
+            };
+            // Per the audit-finding refinement, Rust reference-typed
+            // consts (`TyKind::Ref`) emit the uniform Aggregate carrier
+            // even when the pointer is thin (`Uint(0)` placeholder).
+            // Raw pointers (`TyKind::RawPtr`) keep the bare `Const::Reloc`
+            // shape.
+            if matches!(ty.kind(), TyKind::Ref(..)) {
+                wrap_reference_const(cx, ty, inner_reloc, 0)
+            } else {
+                Ok(inner_reloc)
             }
         }
     }
@@ -465,10 +491,6 @@ fn def_path_hash(tcx: rustc_middle::ty::TyCtxt<'_>, def_id: DefId) -> regseq_mod
         stable_crate_id: StableCrateId(hash.stable_crate_id().as_u64()),
         local_hash: hash.local_hash().as_u64(),
     }
-}
-
-fn is_reference_typed(ty: rustc_middle::ty::Ty<'_>) -> bool {
-    matches!(ty.kind(), TyKind::Ref(..) | TyKind::RawPtr(..))
 }
 
 fn content_hash_for_const(cx: &BridgeCtxt<'_>, pointee_const: ConstId) -> ContentHash {

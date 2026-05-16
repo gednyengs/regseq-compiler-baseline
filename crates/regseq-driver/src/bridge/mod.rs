@@ -651,7 +651,16 @@ fn construct_instances_and_resolve_cross_references(
     ctxt: &mut BridgeCtxt<'_>,
 ) -> Result<(), BridgeError> {
     synth::rekey_synthesis_in_phase5(ctxt)?;
-    const_::construct_const_memory_static_instances(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
+    // Body materialisation calls `translate_const`, which can synthesise
+    // late `ConstMemoryStatic` pending items for reference-typed const
+    // operands. Drain those through the same Phase-4 ItemId assignment
+    // path before constructing the corresponding Static instances per
+    // spec section 3.4.
+    if !ctxt.pending_items.is_empty() {
+        sort::f4_sort(&ctxt.model, &mut ctxt.pending_items)?;
+        assign::assign_late_pending_items(ctxt);
+    }
+    const_::construct_const_memory_static_instances(ctxt)?;
     Ok(())
 }

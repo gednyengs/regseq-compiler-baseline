@@ -263,9 +263,15 @@ fn reference_typed_const_synthesises_const_memory_static() {
     let source = r#"
 pub const R: &str = "abc";
 pub const T: &u32 = &42;
+pub const E: &'static str = "";
 "#;
 
     with_bridge("bridge_const_ref", source, |tcx, cx| {
+        // Pre-condition: no items have been pushed to model.items via a
+        // direct shortcut path; const-memory synthesis routes through
+        // pending_items + Phase-4 assignment per spec section 3.4.
+        let initial_item_count = cx.model.items.len();
+
         let parent = translate_const(cx, const_as_val(tcx, "R")).unwrap();
         let Const::Aggregate(fields) = cx.model.consts.resolve(parent) else {
             panic!("wide reference should translate to Aggregate([Reloc, Uint])");
@@ -289,13 +295,47 @@ pub const T: &u32 = &42;
             .types
             .iter()
             .any(|(_, ty)| ty == &Ty::Uint(UintKind::Usize)));
+
+        // Thin reference (per audit-finding 1): `&u32` lowers to the
+        // uniform Aggregate([Reloc, Uint(0)]) carrier rather than a
+        // bare Const::Reloc; the Uint(0) is the metadata placeholder.
         let thin = translate_const(cx, const_as_val(tcx, "T")).unwrap();
-        let Const::Reloc(thin_reloc) = cx.model.consts.resolve(thin) else {
-            panic!("thin reference should translate to Const::Reloc");
+        let Const::Aggregate(thin_fields) = cx.model.consts.resolve(thin) else {
+            panic!("thin reference should translate to Aggregate([Reloc, Uint(0)])");
         };
-        assert_eq!(cx.const_memory_static_cache.len(), 2);
-        assert_eq!(cx.pending_items.len(), 2);
-        assert_eq!(thin_reloc.def_path_hash, cx.pending_items[1].def_path_hash);
+        assert_eq!(thin_fields.len(), 2);
+        let Const::Reloc(thin_reloc) = cx.model.consts.resolve(thin_fields[0]) else {
+            panic!("thin reference data field should be Const::Reloc");
+        };
+        let thin_reloc_def_path_hash = thin_reloc.def_path_hash;
+        assert_eq!(
+            cx.model.consts.resolve(thin_fields[1]),
+            &Const::Uint(UintKind::Usize, 0)
+        );
+
+        // Empty `&'static str` is the audit-prescribed worked example
+        // for the Aggregate([Reloc, Uint(0)]) carrier on a wide
+        // reference whose metadata happens to be 0.
+        let empty = translate_const(cx, const_as_val(tcx, "E")).unwrap();
+        let Const::Aggregate(empty_fields) = cx.model.consts.resolve(empty) else {
+            panic!("empty &'static str should translate to Aggregate([Reloc, Uint(0)])");
+        };
+        assert_eq!(empty_fields.len(), 2);
+        assert!(matches!(
+            cx.model.consts.resolve(empty_fields[0]),
+            Const::Reloc(_)
+        ));
+        assert_eq!(
+            cx.model.consts.resolve(empty_fields[1]),
+            &Const::Uint(UintKind::Usize, 0)
+        );
+
+        assert_eq!(cx.const_memory_static_cache.len(), 3);
+        assert_eq!(cx.pending_items.len(), 3);
+        assert_eq!(thin_reloc_def_path_hash, cx.pending_items[1].def_path_hash);
+        // Verifies finding 2: synthesis still routes through
+        // pending_items, never via a direct model.items.push shortcut.
+        assert_eq!(cx.model.items.len(), initial_item_count);
 
         let mut items = Vec::new();
         for pending in std::mem::take(&mut cx.pending_items) {
@@ -315,11 +355,98 @@ pub const T: &u32 = &42;
                 SyntheticItemKind::ConstMemoryStatic { .. }
             ));
         }
-        assert_eq!(cx.model.instances.len(), 2);
+        assert_eq!(cx.model.instances.len(), 3);
         assert!(cx
             .model
             .instances
             .iter()
             .all(|instance| matches!(&instance.kind, InstanceKind::Static { init: Some(_), .. })));
+    });
+}
+
+#[test]
+fn late_reference_typed_const_synthesis_after_phase4_is_observable_in_pending_items() {
+    // Phase-5 body materialisation invokes `translate_const` (per
+    // crates/regseq-driver/src/bridge/body/operand.rs:24), which can
+    // synthesise additional `ConstMemoryStatic` pending items after
+    // the initial Phase-4 assignment has already drained the queue.
+    // This test simulates that ordering: do an initial Phase-4
+    // assignment + ConstMemoryStatic instance construction, then
+    // synthesise a *new* reference-typed const, and assert it enters
+    // `pending_items` (rather than being pushed to `model.items`
+    // directly) so the bridge's late-drain pass can route it through
+    // the same Phase-4 path per spec section 3.4.
+    let source = r#"
+pub const FIRST: &u32 = &11;
+pub const SECOND: &u32 = &22;
+"#;
+
+    with_bridge("bridge_const_late_synth", source, |tcx, cx| {
+        // Wave 1: synthesise the FIRST reference-typed const, drain
+        // pending items into the model (simulating Phase 4).
+        translate_const(cx, const_as_val(tcx, "FIRST")).unwrap();
+        assert_eq!(cx.pending_items.len(), 1);
+        for pending in std::mem::take(&mut cx.pending_items) {
+            let item = cx.model.items.push(pending.item);
+            cx.model.item_def_paths.push(pending.def_path_hash);
+            cx.model.item_synthetic_kinds.push(pending.synthetic_kind);
+            cx.model.domain_attrs.item_attrs.push(Vec::new());
+            cx.handles.bind_final_item_id(pending.handle, item);
+        }
+        let items_after_phase4 = cx.model.items.len();
+        assert_eq!(items_after_phase4, 1);
+
+        // Wave 2: simulate body materialisation re-entering
+        // translate_const for a *different* reference-typed const,
+        // mirroring the late-synthesis path that
+        // `crates/regseq-driver/src/bridge/body/operand.rs` triggers
+        // when materialising a function body that consumes a const.
+        // The synthesised item MUST land in `pending_items` (per
+        // audit-finding 2: never a direct `model.items.push`
+        // shortcut) so the bridge's late-drain pass can subsequently
+        // route it through the same Phase-4 assignment.
+        translate_const(cx, const_as_val(tcx, "SECOND")).unwrap();
+        assert_eq!(
+            cx.model.items.len(),
+            items_after_phase4,
+            "late ConstMemoryStatic synthesis must not push directly to model.items"
+        );
+        assert_eq!(cx.pending_items.len(), 1);
+        assert!(matches!(
+            cx.pending_items[0].synthetic_kind,
+            SyntheticItemKind::ConstMemoryStatic { .. }
+        ));
+
+        // Drain the late pending item the same way the production
+        // pipeline now does (Phase-4 late assignment), then run the
+        // single Phase-5 instance-construction pass for both cache
+        // entries. Spec section 13.3 + the audit findings require
+        // every ConstMemoryStatic Item to enter `model.items` and
+        // own a Static Instance carrying its byte-array initializer.
+        let mut all_items = Vec::new();
+        for pending in std::mem::take(&mut cx.pending_items) {
+            let item = cx.model.items.push(pending.item);
+            cx.model.item_def_paths.push(pending.def_path_hash);
+            cx.model.item_synthetic_kinds.push(pending.synthetic_kind);
+            cx.model.domain_attrs.item_attrs.push(Vec::new());
+            cx.handles.bind_final_item_id(pending.handle, item);
+            all_items.push(item);
+        }
+        construct_const_memory_static_instances(cx).unwrap();
+        assert_eq!(cx.model.items.len(), 2);
+        assert_eq!(cx.model.instances.len(), 2);
+        for item in 0..cx.model.items.len() {
+            let item_id = regseq_model::ItemId::from_u32(item as u32);
+            assert!(matches!(
+                cx.model.item_synthetic_kinds[item_id],
+                SyntheticItemKind::ConstMemoryStatic { .. }
+            ));
+            assert!(cx
+                .model
+                .instances
+                .iter()
+                .any(|instance| instance.item == item_id
+                    && matches!(&instance.kind, InstanceKind::Static { init: Some(_), .. })));
+        }
     });
 }
