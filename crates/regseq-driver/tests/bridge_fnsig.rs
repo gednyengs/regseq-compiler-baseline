@@ -12,7 +12,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::fnsig::{compute_cabi_lowering, translate_fn_sig};
-use regseq_driver::bridge::{BridgeCtxt, BridgeError, BridgeInput};
+use regseq_driver::bridge::{BridgeCtxt, BridgeError, BridgeInput, CAbiTypePosition};
 use regseq_model::{CAbiShape, FnAbi, SubstReason, Ty, UintKind};
 use rustc_hir::def_id::{LocalDefId, LocalModDefId};
 use rustc_middle::ty::TyCtxt;
@@ -346,5 +346,186 @@ pub fn hrtb(_: for<'a> fn(&'a u32, &'a u32)) {}
         )
         .unwrap_err();
         assert!(matches!(err, BridgeError::SubstantiveHrtb { .. }));
+    });
+}
+
+fn assert_unsupported_cabi(err: BridgeError, expected: CAbiTypePosition) {
+    match err {
+        BridgeError::UnsupportedCAbiType { position, .. } => {
+            assert_eq!(position, expected, "wrong CAbi rejection position");
+        }
+        other => panic!("expected UnsupportedCAbiType, got {other:?}"),
+    }
+}
+
+#[test]
+fn rejects_unit_input_at_c_boundary() {
+    let source = r#"
+pub extern "C" fn unit_arg(_: ()) {}
+"#;
+
+    with_bridge("bridge_fnsig_unit_input", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "unit_arg").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Input(0));
+    });
+}
+
+#[test]
+fn rejects_array_input_at_c_boundary() {
+    let source = r#"
+pub extern "C" fn array_arg(_: [u32; 4]) {}
+"#;
+
+    with_bridge("bridge_fnsig_array_input", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "array_arg").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Input(0));
+    });
+}
+
+#[test]
+fn rejects_rust_abi_fnptr_field_at_c_boundary() {
+    let source = r#"
+#[repr(C)]
+pub struct WithRustFn {
+    pub f: fn(),
+}
+
+pub extern "C" fn with_rust_fn(_: WithRustFn) {}
+"#;
+
+    with_bridge("bridge_fnsig_field_rust_fnptr", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "with_rust_fn").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Field);
+    });
+}
+
+#[test]
+fn rejects_nested_never_output_at_field_position() {
+    let source = r#"
+#[repr(C)]
+pub struct WithDiverging {
+    pub f: extern "C" fn() -> !,
+}
+
+pub extern "C" fn with_diverging(_: WithDiverging) {}
+"#;
+
+    with_bridge("bridge_fnsig_field_never_output", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "with_diverging").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Field);
+    });
+}
+
+#[test]
+fn rejects_unsized_str_pointee_at_c_boundary() {
+    let source = r#"
+pub extern "C" fn raw_str(_: *const str) {}
+"#;
+
+    with_bridge("bridge_fnsig_raw_str", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "raw_str").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Input(0));
+    });
+}
+
+#[test]
+fn rejects_unsized_slice_pointee_at_c_boundary() {
+    let source = r#"
+pub extern "C" fn raw_slice(_: *const [u8]) {}
+"#;
+
+    with_bridge("bridge_fnsig_raw_slice", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "raw_slice").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Input(0));
+    });
+}
+
+#[test]
+fn rejects_unsized_dyn_pointee_at_c_boundary() {
+    let source = r#"
+pub trait Marker {}
+pub extern "C" fn raw_dyn(_: *const dyn Marker) {}
+"#;
+
+    with_bridge("bridge_fnsig_raw_dyn", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "raw_dyn").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Input(0));
+    });
+}
+
+#[test]
+fn nested_fnptr_input_inherits_field_position() {
+    let source = r#"
+#[repr(C)]
+pub struct WithBadCb {
+    pub f: extern "C" fn(char),
+}
+
+pub extern "C" fn with_bad_cb(_: WithBadCb) {}
+"#;
+
+    with_bridge("bridge_fnsig_nested_inherits_field", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "with_bad_cb").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Field);
+    });
+}
+
+#[test]
+fn rejects_repr_c_zst_at_input_position() {
+    let source = r#"
+#[repr(C)]
+pub struct Empty;
+
+pub extern "C" fn empty_arg(_: Empty) {}
+"#;
+
+    with_bridge("bridge_fnsig_repr_c_zst", source, |tcx, cx| {
+        let err = translate_fn_sig(
+            cx,
+            tcx.fn_sig(find_fn_def_id(tcx, "empty_arg").to_def_id())
+                .instantiate_identity(),
+        )
+        .unwrap_err();
+        assert_unsupported_cabi(err, CAbiTypePosition::Input(0));
     });
 }

@@ -4,12 +4,13 @@ use std::collections::HashSet;
 
 use regseq_model::{
     CAbiLowering, CAbiShape, FieldLayout, FnAbi, FnSig, FnSigId, IntKind, ItemId, ItemKind,
-    LayoutKind, Safety, SubstReason, Ty, TyId, UintKind,
+    LayoutKind, Safety, SubstReason, SyntheticItemKind, Ty, TyId, UintKind,
 };
 use rustc_abi::{ExternAbi, Integer, IntegerType};
+use rustc_data_structures::fingerprint::Fingerprint;
+use rustc_hir::def::DefKind;
 use rustc_hir::definitions::DefPathHash as RustcDefPathHash;
-use rustc_middle::ty::{self, TyCtxt};
-use rustc_span::def_id::DefId;
+use rustc_middle::ty;
 
 use super::{
     ty::{erase_regions_or_reject, translate_ty},
@@ -187,12 +188,21 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             Ty::Struct { item, layout, .. } | Ty::Union { item, layout, .. }
                 if self.is_repr_c(item) =>
             {
+                // Spec section 14.5: a `repr(C)` aggregate with zero
+                // size has no C ABI lowering at a boundary position
+                // (no value to pass by-value).
+                if layout.size == 0 {
+                    return self.unsupported(ty_id, position.to_public());
+                }
                 for field in layout_field_tys(&layout) {
                     self.field_admissible(field)?;
                 }
                 CAbiShape::Direct
             }
             Ty::Enum { item, layout, .. } if self.is_repr_c(item) => {
+                if layout.size == 0 {
+                    return self.unsupported(ty_id, position.to_public());
+                }
                 for field in layout_field_tys(&layout) {
                     self.field_admissible(field)?;
                 }
@@ -240,18 +250,30 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             Ty::Struct { item, layout, .. } | Ty::Union { item, layout, .. }
                 if self.is_repr_c(item) =>
             {
-                for field in layout_field_tys(&layout) {
-                    self.field_admissible(field)?;
+                // Spec section 14.5: a `repr(C)` aggregate with zero
+                // size is not an admissible field of another C
+                // boundary aggregate (the audit calls this out as a
+                // missing rejection row).
+                if layout.size == 0 {
+                    Err(self.unsupported_error(ty_id, crate::bridge::CAbiTypePosition::Field))
+                } else {
+                    for field in layout_field_tys(&layout) {
+                        self.field_admissible(field)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
             Ty::Enum { item, layout, .. }
                 if self.is_repr_c(item) || self.is_fieldless_repr_int_enum(item) =>
             {
-                for field in layout_field_tys(&layout) {
-                    self.field_admissible(field)?;
+                if layout.size == 0 {
+                    Err(self.unsupported_error(ty_id, crate::bridge::CAbiTypePosition::Field))
+                } else {
+                    for field in layout_field_tys(&layout) {
+                        self.field_admissible(field)?;
+                    }
+                    Ok(())
                 }
-                Ok(())
             }
             _ => Err(self.unsupported_error(ty_id, crate::bridge::CAbiTypePosition::Field)),
         };
@@ -275,11 +297,22 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
                 position: caller_position,
             });
         }
+        // Recurse into the nested sig's own positions. Any rejection
+        // raised below must inherit the *caller's* position rather
+        // than the nested sig's local Input(idx)/Output payload --
+        // the nested sig only exists because of the outer position,
+        // so the diagnostic must point at that outer position per
+        // spec section 14.5 and the regseq-driver-39 audit findings.
         let mut inputs = Vec::with_capacity(sig.inputs.len());
         for (idx, input) in sig.inputs.iter().copied().enumerate() {
-            inputs.push(self.position_shape(input, PositionKind::Input(idx))?);
+            let shape = self
+                .position_shape(input, PositionKind::Input(idx))
+                .map_err(|err| inherit_position(err, caller_position.clone()))?;
+            inputs.push(shape);
         }
-        let output = self.position_shape(sig.output, PositionKind::Output)?;
+        let output = self
+            .position_shape(sig.output, PositionKind::Output)
+            .map_err(|err| inherit_position(err, caller_position.clone()))?;
         ensure_cabi_lowering_slots(self.cx);
         self.cx.model.sig_c_abi_lowerings[sig_id] = Some(CAbiLowering { inputs, output });
         self.visiting_sig.remove(&sig_id);
@@ -354,14 +387,29 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
             ItemKind::Struct | ItemKind::Enum | ItemKind::Union => {}
             _ => return None,
         }
-        let wanted = self.cx.model.item_def_paths[item];
-        for local_def_id in self.cx.input.tcx.hir_crate_items(()).definitions() {
-            let def_id = local_def_id.to_def_id();
-            if def_path_hash_eq(self.cx.input.tcx, def_id, wanted) {
-                return Some(self.cx.input.tcx.adt_def(def_id));
-            }
+        // Synthetic items use the reserved `StableCrateId(0)`; that
+        // hash is never interned in rustc's cstore so calling
+        // `tcx.def_path_hash_to_def_id` panics with
+        // `bug!("uninterned StableCrateId: ...")`. Synthetic items
+        // also have no source `AdtDef`, so skip them outright per
+        // spec section 14.5 audit guidance.
+        if !matches!(
+            self.cx.model.item_synthetic_kinds[item],
+            SyntheticItemKind::None
+        ) {
+            return None;
         }
-        None
+        let wanted = self.cx.model.item_def_paths[item];
+        let rustc_hash = rustc_def_path_hash(wanted);
+        let def_id = self.cx.input.tcx.def_path_hash_to_def_id(rustc_hash)?;
+        // `tcx.adt_def` panics if `def_id` is not an ADT; restrict to
+        // Struct/Enum/Union DefKinds before consulting it.
+        match self.cx.input.tcx.def_kind(def_id) {
+            DefKind::Struct | DefKind::Enum | DefKind::Union => {
+                Some(self.cx.input.tcx.adt_def(def_id))
+            }
+            _ => None,
+        }
     }
 
     fn is_never(&self, ty_id: TyId) -> bool {
@@ -448,10 +496,26 @@ fn field_ty(field: &FieldLayout) -> TyId {
     field.ty
 }
 
-fn def_path_hash_eq(tcx: TyCtxt<'_>, def_id: DefId, wanted: regseq_model::DefPathHash) -> bool {
-    let actual: RustcDefPathHash = tcx.def_path_hash(def_id);
-    actual.stable_crate_id().as_u64() == wanted.stable_crate_id.0
-        && actual.local_hash().as_u64() == wanted.local_hash
+fn rustc_def_path_hash(hash: regseq_model::DefPathHash) -> RustcDefPathHash {
+    RustcDefPathHash(Fingerprint::new(hash.stable_crate_id.0, hash.local_hash))
+}
+
+/// Rewrite an `UnsupportedCAbiType` raised inside a nested FnSig to
+/// carry the *outer* caller's position. The nested sig has no
+/// boundary of its own at C-emission time -- it only exists because
+/// the FnPtr value appeared in some outer position, so the
+/// diagnostic must surface that outer position per spec section 14.5.
+fn inherit_position(
+    err: BridgeError,
+    caller_position: crate::bridge::CAbiTypePosition,
+) -> BridgeError {
+    match err {
+        BridgeError::UnsupportedCAbiType { ty_repr, .. } => BridgeError::UnsupportedCAbiType {
+            ty_repr,
+            position: caller_position,
+        },
+        other => other,
+    }
 }
 
 fn match_integer(integer: Integer) -> IntKind {
