@@ -230,3 +230,125 @@ cargo clippy -p regseq-driver -- -D warnings
 - Each translation rule covered by a positive test.
 - Drop-as-Call covered by a non-Copy drop fixture.
 - All tests pass; Codex Task Review verdict APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and reverted. On re-execution, the
+implementation MUST address the following audit findings in addition
+to the original Implementation Notes. THIS TASK HAS THE DEEPEST
+ARCHITECTURAL REQUIREMENTS OF THE RE-EXECUTION SET; read all items
+before starting.
+
+### Required additional work
+
+1. **Basic-block translation restructure (spec section 3.4 Phase 5).**
+   `bridge/body/basic_block.rs::translate_basic_block` MUST collect
+   statements into a `Vec<Statement>` (mutable), pass `&mut
+   Vec<Statement>` to `translate_terminator`, and ONLY THEN finalise
+   into `Box<[Statement]>`. The prior shape -- statements finalised
+   via `.into_boxed_slice()` BEFORE terminator translation -- made it
+   impossible for `translate_terminator` to append the
+   Drop-as-Call synthetic-statement prelude.
+
+2. **`BodyCtxt` carries the mutable model body.** Extend `BodyCtxt` to
+   optionally hold `&mut Body` (e.g., `new_with_model_body(...)` ctor +
+   `model_body_mut()` accessor). The Drop-as-Call collapse and any
+   other terminator that needs to allocate synthetic locals MUST go
+   through this mutable Body reference. Materialisation (regseq-driver-43)
+   MUST construct the `BodyCtxt` via `new_with_model_body` so the
+   synthetic-local allocations land in the actual materialised body.
+
+3. **Drop-as-Call structural prelude (spec section 23.4 + 25.7.1).**
+   For a rustc `TerminatorKind::Drop { place, target, .. }`:
+   - Allocate a `_t_drop_arg` synthetic local via
+     `Body::push_synthetic_local` with type `Ty::Ptr(place_ty,
+     Mutability::Mut)`.
+   - Allocate a `_t_drop_ret` synthetic local with type
+     `Ty::Tuple { fields: [], layout: UNIT_LAYOUT }` (unit return slot).
+     The destination is `Place::from(_t_drop_ret)`, NOT
+     `Place::from(LocalId::RETURN_PLACE)`.
+   - Append `Statement::Assign(Place::from(_t_drop_arg),
+     Rvalue::RawPtr(Mutability::Mut, place))` to the statement
+     accumulator BEFORE the Call.
+   - Emit `TerminatorKind::Call { callee: CallCallee::Direct(...),
+     args: [Operand::Move(Place::from(_t_drop_arg))], destination:
+     Place::from(_t_drop_ret), target }`. NO `Operand::Move(place)`
+     directly -- spec section 23.4 step 4 explicitly says Stage-6
+     `Operand` does not admit a `&raw mut place` form.
+
+4. **Direct callee InstanceId resolution (spec section 23.7).**
+   `CallCallee::Direct(InstanceId)` MUST reference a real Instance in
+   `model.instances`. Required architecture:
+   - Add a Phase-4 pass `construct_function_instances` (in
+     `bridge/mod.rs` or a dedicated module) that, after `f4_sort` +
+     ItemId assignment, walks every `ItemKind::Function` model Item
+     and creates a matching `Instance` of `InstanceKind::Function(
+     FunctionInstanceData { fn_sig, body: None, flavor, ... })`.
+   - Maintain `BridgeCtxt.function_instance_for_item: HashMap<(ItemId,
+     ArgsKey, FunctionInstanceFlavor), InstanceId>` (NOT keyed by
+     ItemId alone -- generic monomorphisations + shim flavors MUST
+     NOT collapse).
+   - `translate_call_callee` resolves Direct callees through this
+     map. If a `(ItemId, args, flavor)` triple has no Instance yet,
+     lazy-create one with the call-site-substituted `fn_sig`.
+   - DELETE `instance_id_for_def_path` entirely; def-path-hash
+     truncation is forbidden.
+
+5. **F4-2 instance order (spec section 16.2 / 3.4).** The new
+   `construct_function_instances` pass MUST push instances in
+   `(F4-2 rank, item, generic_args_key, shim_flavor)` order so the
+   final `model.instances` table is F4-2 sorted. Function (rank 0)
+   instances precede Static (rank 1) instances.
+
+6. **Virtual flavor wiring for dyn-Trait dispatch.** Spec section 11
+   (dyn-Trait dispatch) requires that calls against `dyn Trait`
+   receivers MUST be lowered as Direct callees with
+   `FunctionInstanceFlavor::Virtual { virtual_idx: Some(slot) }`. The
+   bridge MUST detect these:
+   - **dyn-Trait method call**: rustc emits the callee as
+     `Instance::resolve(...)` returning an `InstanceKind::Virtual`.
+     Translate this into a synthesized Virtual Function Instance whose
+     `virtual_idx` is the vtable slot from rustc's
+     `tcx.vtable_entries(...)` lookup.
+   - **dyn-Trait Drop**: a `TerminatorKind::Drop { place, .. }` where
+     `place_ty(place) = Ty::Dynamic { .. }` MUST be lowered as Direct
+     with a Virtual-flavor Instance carrying `virtual_idx: Some(0)`
+     (the `MetadataDropInPlace` slot). This is DIFFERENT from the
+     concrete-type Drop-as-Call path in item 3 above.
+
+7. **Section 15.1 call-site DSL rejections.** Before accepting an
+   FnDef or FnPtr callee in `translate_call_callee`, REJECT:
+   - Atomic intrinsics (`std::intrinsics::atomic_*`).
+   - Fence intrinsics (`std::intrinsics::atomic_fence_*`).
+   - Volatile pointer load/store/copy intrinsics.
+
+   These rejections MUST run BEFORE the callee Item is interned (or
+   the rejection must clean up if interning already happened). Use
+   `BridgeError::DslRejection { kind: DslRejectionKind::Call, .. }`
+   or a dedicated variant.
+
+### Test coverage
+
+- Positive test: a concrete-type Drop is collapsed to a Call with
+  the prepended `Statement::Assign(_t_drop_arg, RawPtr(Mut, place))`,
+  the synthetic unit return slot, AND the call's
+  `CallCallee::Direct(instance_id)` resolves to a real
+  `InstanceKind::Function` Instance in `model.instances` with
+  `flavor == DropGlue`.
+- Positive test: a dyn-Trait method call is lowered as
+  `CallCallee::Direct(instance_id)` where the resolved Instance has
+  `flavor == Virtual { virtual_idx: Some(slot) }` matching the
+  rustc vtable_entries slot for that method.
+- Positive test: a dyn-Trait Drop is lowered as Virtual with
+  `virtual_idx: Some(0)`.
+- Positive test: a generic function instantiated at two different
+  argument sets produces TWO distinct Function Instances in
+  `model.instances` (keyed by `(ItemId, ArgsKey)`), not one collapsed
+  entry.
+- Negative test: a call to `std::intrinsics::atomic_load` is rejected
+  by the section 15.1 DSL check.
+- Negative test: a call to a volatile-ptr intrinsic is rejected.
+- Integration test: a real-MIR function containing a `Drop` terminator
+  AND a `dyn Trait` method call passes through
+  `bridge/body/basic_block.rs::translate_basic_block` end-to-end with
+  the expected post-bridge shapes.

@@ -964,7 +964,7 @@
           "id": "regseq-driver-37",
           "name": "P1a-BR-02: TyKind translation + special-ADT + \u00a715.1 rejections + Appendix A.1",
           "spec": ".harness/tasks/regseq-driver/37-tykind-translation-and-rejections.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-36",
             "regseq-model-66",
@@ -979,7 +979,7 @@
             "spec.md#17",
             "spec.md#Appendix"
           ],
-          "spec_version": 3,
+          "spec_version": 4,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
@@ -997,6 +997,12 @@
               "event": "spec_edited",
               "spec_version": 3,
               "reason": "Codex round-2 fix: \u00a715.1 non-rigid TyKind add Alias + Error"
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 4,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },
@@ -1004,7 +1010,7 @@
           "id": "regseq-driver-38",
           "name": "P1a-BR-03a: Const bridge + reference-typed const + ConstMemoryStatic synthesis",
           "spec": ".harness/tasks/regseq-driver/38-const-bridge-and-const-memory-static-synthesis.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-37",
             "regseq-model-69",
@@ -1017,12 +1023,18 @@
             "spec.md#9",
             "spec.md#3"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },
@@ -1030,7 +1042,7 @@
           "id": "regseq-driver-39",
           "name": "P1a-BR-03b: FnSig + CAbi bridge",
           "spec": ".harness/tasks/regseq-driver/39-fnsig-and-cabi-bridge.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-37",
             "regseq-model-70"
@@ -1041,12 +1053,18 @@
           "spec_refs": [
             "spec.md#14"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },
@@ -1054,7 +1072,7 @@
           "id": "regseq-driver-40",
           "name": "P1a-BR-04: Closure + vtable + drop-glue Item synthesis",
           "spec": ".harness/tasks/regseq-driver/40-closure-vtable-drop-glue-synthesis.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-37",
             "regseq-model-72",
@@ -1067,12 +1085,18 @@
             "spec.md#13",
             "spec.md#3"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },
@@ -1111,7 +1135,7 @@
           "id": "regseq-driver-42",
           "name": "P1a-BR-06: Terminator + Drop-as-Call collapse + basic-block bridge",
           "spec": ".harness/tasks/regseq-driver/42-terminator-and-drop-as-call-bridge.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-41",
             "regseq-driver-40",
@@ -1126,12 +1150,18 @@
             "spec.md#24",
             "spec.md#25"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },
@@ -1139,7 +1169,7 @@
           "id": "regseq-driver-43",
           "name": "P1a-BR-07: Body materialisation + vtable-indirect rewrite + joint validation",
           "spec": ".harness/tasks/regseq-driver/43-body-materialisation-and-vtable-indirect.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-42",
             "regseq-driver-40",
@@ -1152,12 +1182,18 @@
           "spec_refs": [
             "spec.md#25"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },
@@ -2990,7 +3026,7 @@
           "id": "regseq-model-84",
           "name": "P1a-VAL-02: ID referential integrity + sort + DefPath + spans + Phase C vtables",
           "spec": ".harness/tasks/regseq-model/84-id-referential-integrity-validator.md",
-          "status": "done",
+          "status": "pending",
           "depends_on": [
             "regseq-model-65",
             "regseq-model-66",
@@ -3011,12 +3047,18 @@
             "spec.md#3",
             "spec.md#16"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-14T23:39:07Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-16T00:28:29Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "augment with audit findings from Codex scoped + 4-partition re-review; re-execution required to address material spec deviations"
             }
           ]
         },

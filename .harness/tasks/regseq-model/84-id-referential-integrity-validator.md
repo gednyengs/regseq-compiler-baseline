@@ -454,3 +454,131 @@ cargo clippy -p regseq-model -- -D warnings
   canonical and permuted-input fixtures.
 - `cargo test -p regseq-model` passes; Codex Task Review verdict is
   APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and the implementation was reverted
+because a Codex post-implementation audit (both a scoped-fix review and
+the 4-partition re-review) identified material spec deviations. On
+re-execution, the implementation MUST address every finding below in
+addition to the original Implementation Notes.
+
+### Tier A fixes already landed in `crates/regseq-model/src/model.rs`
+
+The following pre-fixes are already in the working tree and MUST be
+preserved (do not undo them):
+
+- `InvariantViolation::DirectCalleeOutOfRange` -- moved out of
+  `place_validator`'s public error type into a top-level invariant
+  variant (spec section 23.6 B-9 is owned by this task, not by
+  place_validator).
+- `validate_synthetic_kinds` -- now enforces
+  `SyntheticItemKind` <-> `ItemKind` consistency per spec section 13
+  (e.g., `VTableType` -> `Struct`, `VTableInstance` -> `Static { Not }`,
+  `VTableMethodShim` / `VTableDropShim` / `DropGlue` / `ClosureCall` /
+  `ClosureDropGlue` -> `Function`, `ClosureCaptures` -> `Struct`,
+  `ConstMemoryStatic` -> `Static { Not }`).
+- `validate_string_interner` -- enforces spec section 12 Phase B step 1
+  (non-empty table, `StringId(0) == ""` sentinel, content uniqueness via
+  rebuild).
+
+### Required additional work
+
+1. **Place validator structural pre-pass (spec section 19.3).** Split
+   `validate_place` in `place_validator.rs` into two passes: a
+   structural pre-pass over the FULL projection chain that checks
+   `I-Deref-first` and `I-Downcast-followed-by-Field` for every
+   element, then the section 19.4 type-narrowing walk only if the
+   structural pass returned `Ok(())`. A type-narrowing error at element
+   0 MUST NOT be allowed to mask a structural error at element 5.
+
+2. **Statement-site invariants B-1..B-5 (spec section 22.5).** Add new
+   InvariantViolation variants and a `validate_body_statement_invariants`
+   method on `RegseqModel`. Wire it into `validate()`'s per-instance
+   walk. The required invariants:
+   - **B-1** `Assign(p, rv)`: `place_ty(p) == rvalue_ty(rv)` modulo
+     lifetime erasure. Use rustc's well-formedness rule.
+   - **B-2** `SetDiscriminant(p, vi)`: `vi <
+     variant_count(place_ty(p))` per `EnumShape` cardinality.
+   - **B-3** `SetDiscriminant(p, _)`: `place_ty(p) = Ty::Enum { .. }`
+     (other shapes rejected).
+   - **B-4** `Intrinsic(NonDivergingIntrinsic::Assume(op))`:
+     `operand_ty(op) == Ty::Bool`.
+   - **B-5** `Intrinsic(CopyNonOverlapping { src, dst, count })`:
+     `src` / `dst` are sized pointer or raw-pointer types; `count` is
+     `Ty::Uint(Usize)`.
+
+3. **Terminator-site invariants B-1..B-9 (spec section 23.6).** Add
+   new InvariantViolation variants and a
+   `validate_body_terminator_invariants` method that enforces ALL of:
+   - **B-1** `SwitchInt.discr` operand type
+     `∈ {Bool, Char, Int(_), Uint(_)}`.
+   - **B-2** `Assert.cond` operand type `== Ty::Bool`.
+   - **B-3** `Call.destination` type matches `callee_fn_sig.output()`
+     when `target: Some(_)`. Applies to BOTH Direct and Indirect calls
+     -- for Indirect, recover the FnSig from
+     `operand_ty(callee_operand) = Ty::FnPtr(sig_id)`.
+   - **B-4** `Call.args.len() == callee_sig.inputs.len()`. Applies to
+     BOTH Direct and Indirect.
+   - **B-5** Direct callee MUST resolve to
+     `InstanceKind::Function(_)` specifically (bounds-check alone is
+     insufficient; rejection variants for non-Function targets are
+     required). Indirect callee operand type MUST be `Ty::FnPtr(_)`.
+   - **B-6** Per-argument type equality: for each i,
+     `operand_ty(args[i]) == callee_sig.inputs[i]` modulo lifetime
+     erasure. Applies to BOTH Direct and Indirect.
+   - **B-8** When the callee Instance is
+     `FunctionInstanceFlavor::Virtual`, `virtual_idx.is_some()` MUST
+     hold. Conversely, non-Virtual flavors MUST have
+     `virtual_idx.is_none()`.
+   - **B-9** `target.is_none() iff callee_output == Ty::Never`. Both
+     directions: a divergent callee (return type Never) MUST have
+     `target: None`; a non-divergent callee MUST have `target:
+     Some(_)`.
+
+4. **TyId closure walk (spec section 25.6.3 invariant 1).** Add a
+   `validate_body_ty_closure` method that walks every TyId referenced
+   by the body (LocalDecl.ty, projection field types, Rvalue::Cast
+   destination type, AggregateKind carrier types, Operand-context
+   types) and asserts each resolves within `model.types.len()`. Wire
+   into the per-instance validate() walk.
+
+5. **`body_ty` helper semantics.** When implementing
+   `place_ty(model, body, place) -> ...`, `rvalue_ty(...)`, and
+   `operand_ty(...)` helpers, distinguish:
+   - "The spec rule does not apply at this site" (return a sentinel,
+     skip the check).
+   - "Type recovery failed because the body is malformed" (must
+     produce a typed error, NOT silently skip).
+   The previous implementation used `Option<TyId>` and silently
+   skipped on `None`, which let several spec-mandated invariants
+   silently pass on malformed bodies. Re-execution MUST NOT allow
+   silent skips when the cause is malformedness rather than spec
+   inapplicability.
+
+6. **`rvalue_ty(UnOp::PtrMetadata)`** MUST recover the metadata type
+   from the operand's pointee (spec section 21):
+   - For `Ptr(dyn Trait)` pointee, return `Ty::Ptr(vtable_struct,
+     Mutability::Not)` (the vtable pointer type).
+   - For `Ptr(slice T)` pointee, return `Ty::Uint(Usize)`.
+   Returning a hardcoded `Ty::Uint(Usize)` for all cases breaks B-1
+   validation on the vtable-indirect rewrite output.
+
+### Negative test coverage
+
+Add `#[test]` cases that exercise rejection paths for EVERY new
+InvariantViolation variant added in items 2-4 above. At minimum:
+
+- One negative test per variant in the statement B-1..B-5 set.
+- One negative test per variant in the terminator B-1..B-9 set
+  (separate cases for Direct and Indirect callees where the
+  invariant applies to both).
+- A negative test for the structural-pre-pass ordering (item 1):
+  construct a Place projection chain that has BOTH a type error at
+  element 0 AND a structural error at element 5; assert the
+  structural error is reported, not the type error.
+- A negative test for the TyId closure walk (item 4): construct a
+  body whose LocalDecl.ty references a TyId beyond
+  `model.types.len()`.
+- Positive smoke tests for invariants 2, 6, 18 that prior coverage
+  flagged as missing.

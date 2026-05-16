@@ -250,3 +250,87 @@ cargo clippy -p regseq-driver -- -D warnings
   dedup hits via TyId.
 - All unit and integration tests pass; Codex Task Review verdict
   APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and reverted. On re-execution, the
+implementation MUST address the following audit findings in addition
+to the original Implementation Notes.
+
+### Note on task spec drift vs. core spec
+
+The original task spec previously said the `vtables` map values are
+"vtable_instance_item_id"; the locked core spec at spec.md sections
+3:333 and 13.3:4797 says vtables map to the vtable TYPE Item. The
+locked spec is authoritative -- `model.vtables` keys to the VTableType
+ItemId, not the VTableInstance.
+
+### Required additional work
+
+1. **Real `tcx.vtable_entries` consultation (spec section 13.3).**
+   `synth/vtable.rs` MUST consult `tcx.vtable_entries(principal
+   .with_self_ty(tcx, impl_ty))` to derive the full slot-by-slot
+   composition. Map each `VtblEntry` variant per rustc's
+   `vtable_allocation_provider` (see `rustc_middle/src/ty/vtable.rs`
+   in the pinned tree):
+   - **MetadataDropInPlace** -> drop-shim function-pointer reloc IF
+     `impl_ty` has a non-trivial Drop; ELSE write a null pointer cell
+     (per rustc_middle/src/ty/vtable.rs:121).
+   - **MetadataSize** -> usize bytes (target-endian) of `impl_ty`
+     size.
+   - **MetadataAlign** -> usize bytes (target-endian) of `impl_ty`
+     align.
+   - **Method(Instance)** -> method-shim function-pointer reloc;
+     `VTableMethodShim.vtable_entry_index = slot_idx`;
+     `VTableMethodShim.method_def_path =
+     Instance.def_id().to_def_path_hash()`. The current code's
+     `principal.trait_path` fallback when `method_def_path` is `None`
+     is WRONG -- every method shim has a distinct method DefPath.
+   - **Vacant** -> uninit pointer cell at that slot index.
+   - **TraitVPtr(supertrait)** -> pointer to the supertrait's vtable
+     (per rustc_middle/src/ty/vtable.rs:141); NOT uninit.
+
+   The hardcoded `vec![(3, None)]` shim list MUST be removed.
+
+2. **VTableInstance Static synthesis (spec section 13.3:4743 and
+   1066).** Phase-5 rekey MUST create an `Instance` of
+   `InstanceKind::Static { ty: Ty::Struct(vtable_type_item, args,
+   layout), init: Some(init_const) }` for every VTableInstance Item.
+   `init_const` is a `Const::Aggregate` (the section 13.2 reference
+   const carrier shape, NOT raw bytes) whose fields are the
+   per-slot values from item 1 above. The `ty` of the Static is the
+   `Ty::Struct` backed by the VTableType ItemId -- the SAME TyId
+   that regseq-driver-37 references from `Ty::Dynamic.vtable_ty`.
+
+3. **F4-2 instance order (spec section 16.2 / 3.4).** When pushing
+   the VTableInstance Static via `model.instances.push(...)`, it MUST
+   land AFTER all Function instances (Static has F4-2 rank 1; Function
+   has rank 0). Coordinate with regseq-driver-42's
+   `construct_function_instances` Phase-4 step so the final
+   `model.instances` is F4-2 sorted at workspace-validator entry.
+
+4. **No direct push to `model.items` (spec section 3.4).** Every
+   synthetic Item (VTableType, VTableInstance, VTableMethodShim,
+   VTableDropShim) MUST go through `pending_items` + `f4_sort` +
+   Phase-4 assignment. NO `push_eager_synthetic_item` shortcut. If
+   coordination with regseq-driver-37's
+   `Ty::Dynamic.vtable_ty` resolution requires the VTableType Item's
+   ItemId at Phase 2 (before assignment), the design MUST use the
+   `HandleTable` abstraction (ItemHandle bound to a final ItemId at
+   Phase 4) instead of eager assignment.
+
+### Test coverage
+
+- Positive test: synthesize a vtable for a trait with multiple
+  methods at non-3 slot positions; assert each method shim's
+  `vtable_entry_index` matches `tcx.vtable_entries` output and
+  `method_def_path` is distinct per method.
+- Positive test: synthesize a vtable for a type with trivial Drop;
+  assert the MetadataDropInPlace slot in the VTableInstance init is
+  a null pointer cell, not a drop-shim reloc.
+- Positive test: synthesize a vtable for a trait with a supertrait;
+  assert the TraitVPtr slot in the init holds a supertrait vtable
+  pointer, not uninit.
+- Positive test: post-Phase-4, every vtable-related Item AND every
+  vtable-related Instance is F4 / F4-2 ordered in
+  `model.items` / `model.instances`.

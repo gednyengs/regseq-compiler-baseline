@@ -256,3 +256,115 @@ cargo clippy -p regseq-driver -- -D warnings
 - Joint validation walk invokes regseq-model-83's Place walker per
   spec.md §25.6.
 - All tests pass; Codex Task Review verdict APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and reverted. On re-execution, the
+implementation MUST address the following audit findings in addition
+to the original Implementation Notes.
+
+### Tier A fix already landed
+
+- `bridge/body/vtable_indirect.rs` `_t_data` mutability is now
+  `data_mutability` (tracking receiver/raw-source mutability per spec
+  section 25.7.2 step 5), NOT hardcoded `Mutability::Mut`. Preserve.
+
+### Required additional work
+
+1. **No skip-if-body branch in Phase 5 (spec section 25.7).**
+   `run_phase5_body_passes` in `bridge/body/materialise.rs` MUST
+   materialise every Function instance unconditionally. The previous
+   `function.body.is_some()` short-circuit violates the section-25.7
+   per-body pass-order rule.
+
+2. **Per-instance generic args (spec section 25.5 / 25.7).**
+   Materialisation MUST use `Instance.generic_args` (NOT
+   `GenericArgs::identity_for_item`). Required architecture:
+   - Add `BridgeCtxt.ty_forward_cache: HashMap<TyId, rustc::ty::Ty<'tcx>>`
+     populated on the success path of `bridge/ty.rs::translate_erased_ty`.
+   - Add `translate_model_generic_args(cx, generic_args)` helper that
+     walks rustc's `GenericArgs::for_item` param list and substitutes:
+     - Lifetimes -> `tcx.lifetimes.re_erased`.
+     - Types -> resolved via the forward cache from
+       `ModelGenericArg::Type(TyId)`.
+     - Consts -> coordinated with regseq-driver-37's
+       `translate_generic_args`: the resolution MUST match (either
+       both preserve scalar const generics, or both reject). The prior
+       implementation silently dropped const args, which is a spec
+       gap; the re-execution MUST either preserve or explicitly
+       reject.
+   - Use the result with `Instance::new_raw(local_def_id.to_def_id(),
+     translated_args)` for the rustc `Instance` handed to
+     `tcx.instance_mir(...)`.
+
+3. **Phase-5 materialisation flavor dispatch.** The body driver must
+   handle each `FunctionInstanceFlavor` correctly:
+   - **Item flavor** -> source-derived body via `tcx.instance_mir(
+     InstanceKind::Item(...))`.
+   - **DropGlue flavor** -> body via `tcx.instance_mir(
+     InstanceKind::DropGlue(impl_ty))` for the drop-glue Function.
+   - **ClosureCall flavor** -> body via `tcx.instance_mir(
+     InstanceKind::Item(closure_def_id))` for the closure-call shim
+     (the closure body itself, with RustCall already
+     tuple-normalised per regseq-driver-37).
+   - **Virtual flavor** -> body is `None` (no own MIR; the vtable
+     rewrite in step 5 below substitutes the indirect call).
+   - **VTable shim flavors** (VTableMethodShim, VTableDropShim) -> body
+     via the appropriate shim builder; do NOT call
+     `tcx.instance_mir` with an `Item(...)` InstanceKind for these.
+
+   The prior implementation unconditionally skipped non-Item flavors,
+   leaving their bodies `None` and breaking downstream consumers.
+
+4. **`BodyCtxt::new_with_model_body` during materialisation.** The
+   per-body `BodyCtxt` MUST be constructed with the mutable `Body`
+   reference so the Drop-as-Call prelude (regseq-driver-42 item 3)
+   can allocate synthetic locals into the actual materialised body.
+   Constructing via bare `BodyCtxt::new()` makes Drop-as-Call error
+   on real-MIR Drop terminators.
+
+5. **VTable-indirect rewrite trigger (spec section 25.7.2).** The
+   rewrite MUST fire on Direct callees with
+   `FunctionInstanceFlavor::Virtual { virtual_idx: Some(slot) }` --
+   period. The rewrite predicate MUST NOT additionally require
+   `SyntheticItemKind::VTableMethodShim` tags on the callee Item; the
+   correct identity is "the Instance's flavor is Virtual." Spec
+   section 25.7.2 prescribes 6 rewrite steps; verify each per the
+   spec lines 11625-11725.
+
+6. **Joint validation drives the full section 25.6 set.**
+   `joint_validation_walk` MUST drive ALL of:
+   - DFS-RPO body prechecks (existing scaffold).
+   - `RegseqModel::validate_body_ty_closure` (TyId closure walk;
+     coordinated with regseq-model-84 item 4).
+   - `RegseqModel::validate_body_direct_callees` (B-9 closure;
+     coordinated with regseq-model-84 item 3).
+   - `RegseqModel::validate_body_places` (section 19.7 walk; the
+     restored place_validator from regseq-model-83).
+   - `RegseqModel::validate_body_statement_invariants` (section 22.5
+     B-1..B-5; coordinated with regseq-model-84 item 2).
+   - `RegseqModel::validate_body_terminator_invariants` (section
+     23.6 B-1..B-9; coordinated with regseq-model-84 item 3, the
+     complete set including B-3/B-4/B-6 indirect-call coverage).
+
+   The model-side methods that drive these MUST be `pub` so the
+   driver can call them from Phase-5 joint validation.
+
+### Test coverage
+
+- Integration test: a real-MIR fixture containing a `Drop` terminator
+  passes through `run_phase5_body_passes`; assert:
+  - The Drop-as-Call prelude is observable in the materialised body
+    (the `_t_drop_arg` local exists, the `Assign(RawPtr(...))` exists,
+    the Call's args[0] is `Operand::Move(...)`).
+  - Joint validation passes.
+- Integration test: a real-MIR fixture containing a `dyn Trait`
+  method call passes through `run_phase5_body_passes`; assert:
+  - The pre-rewrite Direct callee has `Virtual { virtual_idx:
+    Some(slot) }`.
+  - The post-rewrite Call has `CallCallee::Indirect(_)`.
+  - The 4-5 synthetic locals allocated by the rewrite exist.
+  - Joint validation passes.
+- Negative test: a body whose Phase-4 generic_args resolution
+  produces a TyId that does NOT resolve in `model.types` triggers a
+  `validate_body_ty_closure` failure during joint validation.

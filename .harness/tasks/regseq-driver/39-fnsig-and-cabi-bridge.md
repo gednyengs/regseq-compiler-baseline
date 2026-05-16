@@ -195,3 +195,76 @@ cargo clippy -p regseq-driver -- -D warnings
 - Both CAbiLowering shapes (Direct / Substituted) covered by a
   positive test.
 - All tests pass; Codex Task Review verdict APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and reverted. On re-execution, the
+implementation MUST address the following audit findings in addition
+to the original Implementation Notes.
+
+### Tier A fixes already landed in `crates/regseq-driver/src/bridge/`
+
+These are KEPT in the working tree -- do not undo them:
+
+- `CAbiTypePosition` enum in `bridge/mod.rs` with variants
+  `Input(usize) | Output | Field`.
+- `UnsupportedCAbiType { ty_repr, position }` -- position payload added.
+- `is_c_field_bad_pointee` split from `is_c_boundary_bad_pointee` in
+  `bridge/fnsig.rs`: Field-position admissibility accepts `Ptr/Ref`
+  to `Never` (Never is sized); boundary-position rules remain strict
+  for `Never | Str | Slice | Dynamic`.
+
+### Required additional work
+
+1. **`UnsupportedCAbiType.position` threading.** Every call site in
+   `bridge/fnsig.rs` that produces `UnsupportedCAbiType` MUST pass the
+   correct `CAbiTypePosition`. Internal `PositionKind::Input(idx)` /
+   `Output` mapping into the public enum is required; field-position
+   call sites use `CAbiTypePosition::Field`; nested FnSig errors
+   inherit the caller's position. Re-execution MUST plumb position
+   through `position_shape_inner`, `field_admissible`, `check_nested_sig`,
+   `transparent_shape`, `unsupported_error`, and `unsupported`.
+
+2. **Cross-crate ADT resolution (spec section 14.5 + 15.0).** Replace
+   the linear `hir_crate_items` scan in the C ABI checker's
+   `adt_def(item)` helper with proper rustc cross-crate resolution via
+   `tcx.def_path_hash_to_def_id(hash, &mut || { ... })`. ADTs defined
+   in `core` / `std` / dependency crates (e.g., `core::ptr::NonNull`,
+   `core::mem::MaybeUninit`) MUST be resolvable for `is_repr_c`,
+   `is_transparent`, and `is_fieldless_repr_int_enum` checks. Guard
+   the call against `SyntheticItemKind::None` only (synthetic items
+   use the reserved `StableCrateId(0)` which would panic the rustc
+   query).
+
+3. **repr(C) ZST rejection (spec section 14.5).** A `repr(C)` struct
+   with `layout.size == 0` used by-value at a C ABI boundary position
+   OR as a sized field of another C-boundary aggregate MUST be
+   rejected. The prior implementation accepted them silently; the
+   re-execution MUST add this rejection row to `position_shape_inner`
+   AND `field_admissible`.
+
+4. **Reject `RustCall` in FnSig translation (spec section 14.2).**
+   `bridge/fnsig.rs::translate_abi` MUST reject `ExternAbi::RustCall`
+   for FnSig interning (this is unchanged from the prior strict
+   behavior; the audit confirmed it's correct). Coordinate with
+   regseq-driver-37 which owns the FnPtr-side rejection and the
+   closure-call shim rewrite.
+
+### Test coverage
+
+Add the following rows to `crates/regseq-driver/tests/bridge_fnsig.rs`:
+
+- **Boundary rejects unit at Input position**: an `extern "C" fn(())`
+  signature -- rejected with `position: Input(0)`.
+- **Boundary rejects array at Input position**: an `extern "C"
+  fn([u32; 4]) -> ()` signature -- rejected with `position: Input(0)`.
+- **Field rejects Rust-ABI FnPtr**: a `#[repr(C)] struct { f: fn() }`
+  used at a C boundary -- rejected with `position: Field`.
+- **Nested sig rejects never output**: an `extern "C" fn() -> !`
+  appearing inside a Field position -- rejected with `position:
+  Field` and the appropriate ty_repr.
+- **Boundary rejects unsized pointee**: `*const str`, `*const [u8]`,
+  `*const dyn Trait` at Input or Output -- rejected with the correct
+  position payload.
+- **Boundary rejects repr(C) ZST**: a `#[repr(C)] struct Empty;` used
+  by-value at Input position -- rejected with `position: Input(0)`.

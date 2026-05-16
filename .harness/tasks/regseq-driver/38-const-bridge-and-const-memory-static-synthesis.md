@@ -202,3 +202,38 @@ cargo clippy -p regseq-driver -- -D warnings
   Phase 4 -> Phase 5 synthesis cycle and the
   `item_synthetic_kinds[item] = ConstMemoryStatic` side-table entry.
 - All tests pass; Codex Task Review verdict APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and reverted. On re-execution, the
+implementation MUST address the following audit findings in addition
+to the original Implementation Notes.
+
+### Required additional work
+
+1. **Reference-typed const carrier (spec section 13.2).** Thin
+   reference consts (e.g., `&'static str` thin-pointer header pointing
+   into anonymous const memory) MUST emit a parent
+   `Const::Aggregate([Const::Reloc(static_id), Const::Uint(0)])`, NOT a
+   bare `Const::Reloc`. The `Uint(0)` carries the length placeholder
+   required by the section 13.2 reference-const shape. The prior
+   implementation emitted bare `Const::Reloc`, and the test plan
+   accepted this non-spec shape; the re-execution MUST produce the
+   Aggregate carrier AND update the integration test in
+   `crates/regseq-driver/tests/bridge_const.rs` to assert it.
+
+2. **No direct push to `model.items` (spec section 3.4).** Any
+   `ConstMemoryStatic`-flavored Static Item created via this task MUST
+   go through `pending_items` + Phase-4 assignment, never via
+   `model.items.push(...)` directly. The Tier A fix kept
+   `validate_synthetic_kinds` enforcing `ConstMemoryStatic` -> `Static
+   { Not }` consistency; re-execution MUST satisfy that constraint.
+
+### Test coverage
+
+- Add a positive test that exercises a `&'static str` const and
+  asserts the post-bridge model has a top-level
+  `Const::Aggregate([Reloc, Uint(0)])` and the underlying
+  `ConstMemoryStatic` static is interned via the pending-items path
+  (verifiable by inspecting `model.item_synthetic_kinds` post Phase 4
+  and confirming no direct `model.items` shortcut was taken).

@@ -264,3 +264,87 @@ cargo clippy -p regseq-driver -- -D warnings
 - Each spec.md §15.1 rejection row covered by a negative integration
   fixture, including the Appendix A.1 `*mut c_void` example.
 - All tests pass; Codex Task Review verdict APPROVED.
+
+## Audit Findings -- Re-execution Requirements
+
+This task was previously executed and the implementation was reverted
+because a Codex post-implementation audit (both a scoped-fix review and
+the 4-partition re-review) identified material spec deviations. On
+re-execution, the implementation MUST address every finding below in
+addition to the original Implementation Notes.
+
+### Tier A fix already landed
+
+- `is_c_field_bad_pointee` is split from `is_c_boundary_bad_pointee`
+  (in `bridge/fnsig.rs`) -- this is task 39's concern but the variant
+  payload `CAbiTypePosition` enum lives in `bridge/mod.rs` and is
+  consumed by FnPtr ABI translation. Preserve.
+
+### Required additional work
+
+1. **RustCall ABI rejection (spec section 14.2).** `translate_abi` in
+   `bridge/ty.rs` MUST reject `ExternAbi::RustCall` (spec section 14.2
+   admits `RustCall` only on rewritten synthesized closure-call shim
+   items; raw FnPtr ABI must be Rust or C). To make the existing
+   closure-call fixture pass, this task MUST ALSO implement the
+   spec section 13.1 closure-call shim rewrite: every `Fn::call` /
+   `FnMut::call_mut` / `FnOnce::call_once` direct call against a closure
+   captures struct must be lowered into a Rust-ABI `ClosureCall`
+   synthetic Function Item produced by `synth/closure.rs`, with the
+   call arguments tuple-normalised. The bridge MUST substitute the
+   call's callee from the rustc closure-trait method (RustCall) to
+   the synthesized shim (Rust ABI) BEFORE `translate_abi` runs. The
+   pre-existing test
+   `bridge_body::translates_representative_place_and_rvalue_rows_from_mir`
+   exercises this path and must pass post-implementation.
+
+2. **Closure captures parallel Ty::Struct view (spec section 13.1).**
+   Each `TyKind::Closure(def_id, args)` MUST intern BOTH:
+   - `Ty::Closure(item, args)` (the existing intern), AND
+   - A parallel `Ty::Struct { item, layout }` view of the closure's
+     captures field-by-field, sharing the SAME ItemId as the
+     `Ty::Closure` intern.
+   Layout MUST be computed from `tcx.layout_of(closure_ty)` and field
+   types from `ClosureArgs::upvar_tys()`. Add a
+   `RegseqModel.closure_captures_struct_ty: HashMap<TyId, TyId>`
+   (`#[serde(skip)]` mirroring `vtables`) mapping `Ty::Closure` TyId
+   to its `Ty::Struct` view TyId.
+
+3. **Dynamic vtable_ty resolved to VTableType-backed Ty::Struct (spec
+   section 13.0 / 13.2).** `Ty::Dynamic.vtable_ty` MUST reference a
+   real `Ty::Struct { item, layout, .. }` whose Item carries
+   `SyntheticItemKind::VTableType { principal }`. The vtable Struct
+   layout (pointer-width per slot, slot count from
+   `tcx.vtable_entries(principal_poly_trait_ref)`) MUST go through
+   `pending_items` and Phase-4 ItemId assignment -- DO NOT use any
+   "eager push" helper that bypasses the F4 sort. Coordinate the
+   ordering with the synth/vtable pipeline (regseq-driver-40) so the
+   vtable Type Item exists in `pending_items` at translate-time and
+   gets its final ItemId during Phase 4.
+
+4. **No direct push to `model.items` from Phase 2 (spec section 3.4).**
+   `intern_item` and any synthetic item helper called from
+   `translate_erased_ty` MUST register items via `pending_items` /
+   `HandleTable`, never via `model.items.push(...)` directly. Phase 3
+   (F4 sort) and Phase 4 (ItemId assignment) own all final ItemId
+   ordering.
+
+### Test coverage
+
+- Positive test: a closure expression interns both `Ty::Closure(item,
+  args)` and the parallel `Ty::Struct { item, layout }` view, sharing
+  the same ItemId; the captures field count and types match the
+  closure body's upvars.
+- Positive test: a `dyn Trait` type's `Ty::Dynamic.vtable_ty` resolves
+  to `Ty::Struct(item, ...)` where `model.item_synthetic_kinds[item]
+  == SyntheticItemKind::VTableType { principal }`.
+- Negative test: an FnPtr with ExternAbi::RustCall NOT inside a
+  closure-call shim context is rejected with the appropriate error
+  variant (likely `BridgeError::UnsupportedTy` or a new variant).
+- Negative test: every dropped rustc TyKind that section 15.1 lists
+  (Bound / Placeholder / Infer / Alias / Error, plus Foreign /
+  Coroutine / Pat / UnsafeBinder / DynStar / unbinder-substantive-HRTB)
+  is rejected.
+- `TyKind::Error` translation path MUST have a test (the prior
+  implementation rejected via `NonRigidTyKind::Error` but no test
+  exercised the path).
