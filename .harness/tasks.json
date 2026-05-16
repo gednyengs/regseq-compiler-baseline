@@ -1190,12 +1190,12 @@
           "id": "regseq-driver-45",
           "name": "P1a-BR-08b: DiagLogPeel + format-template grammar + validation diagnostics",
           "spec": ".harness/tasks/regseq-driver/45-diag-log-peel-and-format-grammar.md",
-          "status": "failed",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-44"
           ],
           "artifacts": [],
-          "fail_reason": "Codex review did not approve: remaining gaps require MIR-shape format-literal tracking for D6, real LogArg::from wrapper recovery, and required rustc fixture diagnostics D1-D8 beyond the current partial Body-level implementation.",
+          "fail_reason": null,
           "phase": "1a",
           "spec_refs": [
             "spec.md#25",
