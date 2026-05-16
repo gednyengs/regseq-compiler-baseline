@@ -688,20 +688,37 @@ fn vtable_struct_layout<'tcx>(
     }
 }
 
+/// Approximate the vtable entry count for `Ty::Dynamic.vtable_ty`.
+///
+/// **Why an approximation rather than `tcx.vtable_entries`.** The
+/// regseq-driver-37 task spec (line 317-318) calls for the slot
+/// count to come from `tcx.vtable_entries(principal_poly_trait_ref)`.
+/// That rustc query is keyed on a *fully-resolved* `PolyTraitRef`
+/// whose `Self` type implements the trait
+/// (`vtable_entries` is invoked only after `.with_self_ty(...)` in
+/// rustc's own `vtable_allocation_provider`; see
+/// `~/.rustup/toolchains/nightly-2026-02-01-.../rustc-src/rust/compiler/rustc_middle/src/ty/vtable.rs:90-94`).
+/// At `Ty::Dynamic` translation time the bridge has only the
+/// *existential* trait ref -- there is no concrete impl yet, so the
+/// query is unavailable. Rustc itself has the same constraint and
+/// solves it with `vtable_min_entries`
+/// (`rustc_middle/src/ty/vtable.rs:53-75`): 3 common slots
+/// (drop_in_place + size + align) plus
+/// `own_existential_vtable_entries(trait_def_id).len()` summed over
+/// the principal and every supertrait. This function mirrors that
+/// algorithm. The post-Phase-5 vtable Struct layout is refined when
+/// a concrete `impl_ty` becomes available at a `Cast::Unsize` site
+/// (`synth/vtable.rs::synthesise_vtable_with_rustc_entries` already
+/// calls `tcx.vtable_entries(with_self_ty)` for the full
+/// composition); the count here is used only for the Phase-2
+/// `Ty::Struct` placeholder layout and is later patched if it
+/// changes. Audit-finding MEDIUM-37-4 deliberately keeps this
+/// approximation; the task spec text describes a query that rustc
+/// itself cannot satisfy at this point.
 fn vtable_entry_count<'tcx>(
     cx: &BridgeCtxt<'tcx>,
     principal_ref: ty::ExistentialTraitRef<'tcx>,
 ) -> u32 {
-    // `tcx.vtable_entries(poly_trait_ref)` requires a fully-resolved
-    // trait ref (with a self type that actually implements the
-    // trait) and therefore cannot be called for the existential
-    // alone (no concrete impl is available at `Ty::Dynamic`
-    // translation time). Mirror rustc's internal `vtable_min_entries`
-    // approximation: 3 common slots (drop_in_place, size, align)
-    // plus the count of every method in the principal trait and its
-    // supertraits via `own_existential_vtable_entries`. This matches
-    // the same slot count rustc uses for `&dyn Trait` layout, which
-    // is the load-bearing requirement on the vtable-Struct layout.
     use rustc_middle::ty::Upcast;
     let tcx = cx.input.tcx;
     let mut count = 3u32; // COMMON_VTABLE_ENTRIES: drop_in_place + size + align
