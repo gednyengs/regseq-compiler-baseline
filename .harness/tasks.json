@@ -1226,7 +1226,7 @@
           "id": "regseq-driver-45",
           "name": "P1a-BR-08b: DiagLogPeel + format-template grammar + validation diagnostics",
           "spec": ".harness/tasks/regseq-driver/45-diag-log-peel-and-format-grammar.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-44"
           ],

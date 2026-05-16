@@ -1,0 +1,1064 @@
+//! DiagLogPeel body-level pass per spec.md section 25.7.3 and
+//! section 26.6.
+//!
+//! Walks every Call terminator in the materialised Body whose callee
+//! Item carries `AttrData::Intrinsic(IntrinsicKind::Log(_))` (set by
+//! the regseq-driver-44 recognition layer). For each such Call,
+//! locates the slice-aggregate LogArg carrier the macro expansion
+//! materialised at `args[1]`, decomposes it into the per-specifier
+//! argument operands, and replaces the Call's argument vector with
+//! the flat-arg form `[fmt_literal, expr_1, ..., expr_N]` per the
+//! post-peel `I-DiagLog-CallArity` shape at spec.md section 23.6.2
+//! B-4 / B-6 exceptions.
+//!
+//! Runs during Phase 5 after the vtable-indirect rewrite per
+//! spec.md section 25.7.4 and before the joint validation walk so
+//! that B-4 / B-6 see the peeled flat-arg shape.
+
+use std::collections::HashSet;
+
+use regseq_model::{
+    AggregateKind, AttrData, BlockId, Body, CallCallee, IntrinsicKind, LocalId, Operand,
+    RegseqModel, Rvalue, Statement, StatementKind, TerminatorKind,
+};
+
+use super::validation::{
+    validate_operand_type_admissibility, validate_per_position_modifier_compat,
+};
+
+use crate::bridge::{BridgeCtxt, BridgeError, DiagLogValidationDiagnostic};
+
+/// Body-level pass that peels the slice-aggregate LogArg carrier
+/// into a flat-arg Call per spec.md section 25.7.3 + section 26.6.
+///
+/// Returns `Ok(())` after the pass completes. Bridge-internal
+/// shape mismatches on Log-intrinsic Calls surface
+/// `BridgeError::Phase5(...)` per spec.md section 25.7.3 step 1
+/// ("Shape mismatches ... are bridge-internal invariant violations:
+/// panic with a `bug!`-style diagnostic citing the offending MIR
+/// shape"). The bridge surfaces these as Phase5 errors rather than
+/// panicking so the test harness can observe them.
+///
+/// After producing the post-peel flat-arg Call shape, the pass
+/// recovers the call-site fingerprint per spec.md section 25.7.3
+/// step 5 and validates it via
+/// `validation::validate_log_call`. The fingerprint discharge
+/// requires the format-template literal at args[0]; the literal is
+/// recovered best-effort from `cx.const_memory_static_cache` (the
+/// const-lowering side table that holds the literal bytes per
+/// spec.md section 9.7 / 26.6 transient-fingerprint discipline).
+/// When the literal cannot be recovered (cross-crate const
+/// references, non-cached lowerings) the fingerprint validation
+/// step is skipped; D4 (operand admissibility) still runs.
+pub fn diag_log_peel_pass(cx: &mut BridgeCtxt<'_>, body: &mut Body) -> Result<(), BridgeError> {
+    peel_body_against_model_with_cx(cx, body)
+}
+
+/// Public-surface entry that resolves the format-template literal
+/// through `cx.const_memory_static_cache` so the per-call fingerprint
+/// validation can run. Mirrors `peel_body_against_model` for the
+/// inner mutation; adds the literal lookup + validation step.
+fn peel_body_against_model_with_cx(
+    cx: &mut BridgeCtxt<'_>,
+    body: &mut Body,
+) -> Result<(), BridgeError> {
+    peel_body_against_model(&cx.model, body)?;
+    validate_log_call_fingerprints(cx, body)
+}
+
+/// Walk every post-peel Log-intrinsic Call and run
+/// `validate_log_call` against the recovered template + peeled
+/// arg count per spec.md section 25.7.3 step 5 + section 26.8 D1 /
+/// D7. The template literal is recovered best-effort through the
+/// `cx.const_memory_static_cache` side table; calls whose literal
+/// cannot be recovered skip fingerprint validation (D4 has already
+/// run at peel time).
+fn validate_log_call_fingerprints(cx: &BridgeCtxt<'_>, body: &Body) -> Result<(), BridgeError> {
+    for (block_idx, block) in body.basic_blocks.iter().enumerate() {
+        let block_id = BlockId::from_u32(block_idx as u32);
+        if !call_is_log_intrinsic(&cx.model, body, block_id) {
+            continue;
+        }
+        let TerminatorKind::Call { args, .. } = &block.terminator.kind else {
+            continue;
+        };
+        // D6 (partial) -- args[0] must be a `Operand::Constant`
+        // per spec.md section 26.8 D6. The strict literal-vs-
+        // const-ref distinction requires pre-Regseq-const-lowering
+        // MIR access (the post-lowering surface visible here
+        // serialises both forms to `Const::Aggregate([Reloc, Uint])`
+        // per spec.md section 9.7); a runtime-computed format
+        // operand (`Operand::Move` / `Operand::Copy`) is rejected
+        // here as a trivial D6 violation. Strict pre-lowering D6
+        // enforcement lives at the bridge's per-rustc-terminator
+        // translation envelope (covered by the recognition layer's
+        // attribute-population step).
+        let template_const_id = match args.first() {
+            Some(Operand::Constant(id)) => *id,
+            Some(other) => {
+                return Err(BridgeError::DiagLogValidation {
+                    diagnostic: DiagLogValidationDiagnostic::D6,
+                    detail: format!(
+                        "Log-intrinsic Call at block {} has a non-Constant format-template operand {:?} (spec.md section 26.8 D6)",
+                        block_id.as_u32(),
+                        other,
+                    ),
+                });
+            }
+            None => continue,
+        };
+        let Some(template) = extract_format_template_literal(cx, template_const_id) else {
+            continue;
+        };
+        let parsed = super::format::parse_format_template(&template)?;
+        // Peeled argument count excludes args[0] (the format template).
+        let peeled_arg_count = args.len().saturating_sub(1);
+        super::validation::validate_log_call(cx, &parsed, peeled_arg_count)?;
+        // D2 -- per-position modifier vs operand-type compatibility
+        // per spec.md section 26.7 modifier table. Walks each
+        // (specifier, args[i+1]) pair; skips operands whose type is
+        // not recoverable.
+        for (idx, specifier) in parsed.specifiers.iter().enumerate() {
+            let Some(arg) = args.get(idx + 1) else {
+                break;
+            };
+            let Some(resolved) = operand_ty(&cx.model, body, arg) else {
+                continue;
+            };
+            validate_per_position_modifier_compat(specifier, &resolved)?;
+        }
+
+        // D8 -- string-arg bound per spec.md section 26.8 D8. Count
+        // post-peel `Ty::Ref(Ty::Str, _)` operands in args[1..] and
+        // validate against the selected target's
+        // `max_str_args_per_call`. The target-binding wiring is
+        // owned by phase-1b backends; until a binding target flows
+        // through the build's target-selection flag, this call
+        // passes `None` and the helper short-circuits to `Ok(())`.
+        let str_operand_count = count_str_operands(&cx.model, body, &args[1..]);
+        super::validation::validate_str_operand_count_against_target_bound(
+            str_operand_count,
+            target_str_arg_bound(cx),
+        )?;
+    }
+    Ok(())
+}
+
+/// Returns the number of `Ty::Ref(Ty::Str, _)` operands among
+/// `args` per spec.md section 26.8 D8. Operands whose type is not
+/// recoverable are excluded from the count (a conservative undercount
+/// is consistent with the spec's "args[1..] excluded args[0]"
+/// clause).
+fn count_str_operands(model: &RegseqModel, body: &Body, args: &[Operand]) -> usize {
+    let mut count = 0;
+    for operand in args.iter() {
+        let Some(ty) = operand_ty(model, body, operand) else {
+            continue;
+        };
+        if let regseq_model::Ty::Ref(pointee_id, _) = ty {
+            if matches!(model.types.resolve(pointee_id), regseq_model::Ty::Str) {
+                count += 1;
+            }
+        }
+    }
+    count
+}
+
+/// Resolve the selected binding target's `max_str_args_per_call`
+/// bound per spec.md section 26.8 D8. Returns `None` until the
+/// target-binding context flows in via the build's target-selection
+/// flag (the per-target bound is declared in the corresponding
+/// `<target>-backend.md` artifact per spec.md section 26.9).
+fn target_str_arg_bound(_cx: &BridgeCtxt<'_>) -> Option<usize> {
+    None
+}
+
+/// Best-effort recovery of the format-template UTF-8 literal from
+/// args[0]'s ConstId. Walks the post-Regseq-const-lowering shape
+/// `Const::Aggregate([Const::Reloc(InstanceRef), Const::Uint(len)])`
+/// per spec.md section 9.7 and resolves the `InstanceRef`'s
+/// `def_path_hash` through `cx.const_memory_static_cache` to the
+/// originating `Const::Bytes(...)` pointee. Returns `None` if the
+/// literal cannot be recovered (cross-crate const reference,
+/// non-cached lowering, non-UTF-8 bytes).
+fn extract_format_template_literal(
+    cx: &BridgeCtxt<'_>,
+    template_const_id: regseq_model::ConstId,
+) -> Option<String> {
+    use regseq_model::Const;
+    let outer = cx.model.consts.resolve(template_const_id);
+    let Const::Aggregate(children) = outer else {
+        return None;
+    };
+    let reloc_id = *children.first()?;
+    let inner = cx.model.consts.resolve(reloc_id);
+    let Const::Reloc(instance_ref) = inner else {
+        return None;
+    };
+    let reloc_def_path_hash = instance_ref.def_path_hash;
+    for entry in cx.const_memory_static_cache.iter() {
+        let kind = regseq_model::SyntheticItemKind::ConstMemoryStatic {
+            content_hash: entry.content_hash.clone(),
+        };
+        if regseq_model::synthetic_def_path_hash(&kind) != reloc_def_path_hash {
+            continue;
+        }
+        let pointee = cx.model.consts.resolve(entry.pointee_const);
+        let Const::Bytes(bytes) = pointee else {
+            continue;
+        };
+        let raw_bytes: Vec<u8> = bytes
+            .iter()
+            .filter_map(|byte| match byte {
+                regseq_model::Byte::Value(b) => Some(*b),
+                _ => None,
+            })
+            .collect();
+        return String::from_utf8(raw_bytes).ok();
+    }
+    None
+}
+
+/// Model-only entry point that drives the peel logic against a
+/// `RegseqModel` reference. Split from the public surface so unit
+/// tests can exercise the pass without constructing a rustc-backed
+/// `BridgeCtxt`. The public `diag_log_peel_pass` is the wiring point
+/// invoked by `bridge/body/materialise.rs::run_phase5_body_passes`.
+pub(crate) fn peel_body_against_model(
+    model: &RegseqModel,
+    body: &mut Body,
+) -> Result<(), BridgeError> {
+    // Collect the indices of Call blocks whose callee is a Log
+    // intrinsic. A two-pass shape (collect then mutate) avoids
+    // overlapping borrows of `body.basic_blocks`.
+    let log_call_blocks: Vec<BlockId> = (0..body.basic_blocks.len())
+        .map(|idx| BlockId::from_u32(idx as u32))
+        .filter(|block_id| call_is_log_intrinsic(model, body, *block_id))
+        .collect();
+
+    for block_id in log_call_blocks {
+        // Canonical pre-peel shape assertion per spec.md section
+        // 25.7.3 step 1: a Log-intrinsic Call has exactly two args
+        // (format-template Constant + slice-aggregate LogArg
+        // carrier). Anything else is a bridge-internal invariant
+        // violation per the spec's "bug!-style diagnostic" rule;
+        // surface it as Phase5 error.
+        let (fmt_operand, slice_operand) = match &body.basic_blocks[block_id].terminator.kind {
+            TerminatorKind::Call { args, .. } if args.len() == 2 => {
+                (args[0].clone(), args[1].clone())
+            }
+            TerminatorKind::Call { args, .. } => {
+                return Err(BridgeError::Phase5(format!(
+                    "DiagLogPeel: Log-intrinsic Call at block {} has args.len() = {} (expected 2 pre-peel per spec.md section 25.7.3 step 1 canonical shape)",
+                    block_id.as_u32(),
+                    args.len(),
+                )));
+            }
+            _ => continue,
+        };
+
+        // Canonical-shape assertion per spec.md section 25.7.3 step
+        // 1: locate the slice-aggregate LogArg carrier behind
+        // `args[1]`. The carrier path is `slice_operand -> (optional
+        // Ref / RawPtr / Cast(Unsize) indirection chain) ->
+        // Rvalue::Aggregate(Array, inner_operands)` per the macro
+        // expansion shape at spec.md section 26.5. For empty
+        // carriers (`&[]`) rustc may promote the empty array into a
+        // `&'static` const; the trace terminates at an
+        // `Operand::Constant` and the peel produces 0 inner
+        // operands per the spec.md section 26.7 empty-template
+        // legality clause.
+        let carrier = match locate_log_arg_carrier(body, &slice_operand) {
+            CarrierTrace::Aggregate(carrier) => carrier,
+            CarrierTrace::EmptyConstSlice(carrier_locals) => LogArgCarrier {
+                inner_operands: Vec::new(),
+                carrier_locals,
+            },
+            CarrierTrace::Untraceable => {
+                return Err(BridgeError::Phase5(format!(
+                    "DiagLogPeel: Log-intrinsic Call at block {} has a non-canonical args[1] carrier shape per spec.md section 25.7.3 step 1 (operand {:?})",
+                    block_id.as_u32(),
+                    slice_operand,
+                )));
+            }
+        };
+
+        // Per spec.md section 25.7.3 step 2: each inner element of
+        // the aggregate is a `Call` to `<LogArg<'_> as From<T_i>>::
+        // from(<expr_i>)`. The peel recovers `<expr_i>` from each
+        // such Call and queues the wrapper block IDs so the loop
+        // below can replace each wrapper Call terminator with a
+        // straight Goto to the From's continuation block (the
+        // wrappers and `LogArg` temporaries must not survive into
+        // RegseqModel per spec.md sections 25.7.3 step 3 + 26.6).
+        // Falls back to the inner operand verbatim when no
+        // preceding LogArg::from Call is found (the simplified
+        // hand-constructed body shape used by the unit tests).
+        let mut wrapper_blocks_to_collapse: Vec<BlockId> = Vec::new();
+        let recovered_operands: Vec<Operand> = carrier
+            .inner_operands
+            .iter()
+            .map(|inner| {
+                let (peeled, wrapper_block) = peel_log_arg_from_wrapper(model, body, inner);
+                if let Some(block) = wrapper_block {
+                    wrapper_blocks_to_collapse.push(block);
+                }
+                peeled
+            })
+            .collect();
+
+        // Reference-companion load synthesis per spec.md section
+        // 25.7.3 step 2. For each recovered operand whose source
+        // type is `Ty::Ref(value_typed_pointee, _)` (and the
+        // pointee is not `Ty::Str` -- the `From<&'a str>` impl is
+        // by-value, not a reference-companion), synthesise a load
+        // statement that copies through the deref into a fresh
+        // value-typed synthetic local. The flat call carries the
+        // loaded value-typed Operand. The `From<&'a str>` carrier
+        // path keeps the reference-typed Operand verbatim.
+        let peeled_operands: Vec<Operand> =
+            synthesise_reference_companion_loads(model, body, block_id, recovered_operands);
+
+        // Synthesise the flat-arg Call shape per spec.md section
+        // 25.7.3 step 4.
+        let mut new_args: Vec<Operand> = Vec::with_capacity(1 + peeled_operands.len());
+        new_args.push(fmt_operand);
+        new_args.extend(peeled_operands.into_iter());
+
+        // D4 -- operand admissibility per spec.md section 26.8 D4 /
+        // section 26.4 `From`-closed set. Walk every peeled operand
+        // whose type is recoverable from `body.local_decls` and
+        // surface a `BridgeError::DiagLogValidation` when the
+        // operand resolves to a non-admissible value-typed `Ty`.
+        // Constant operands and operands whose type the body local
+        // table does not pin (e.g., a fresh local introduced by an
+        // earlier pass without a local-decl entry) are best-effort
+        // skipped; integration coverage for those depends on the
+        // model-side operand-ty recovery surface in flight at
+        // regseq-model-84.
+        for arg in new_args.iter().skip(1) {
+            let Some(resolved) = operand_ty(model, body, arg) else {
+                continue;
+            };
+            validate_operand_type_admissibility(model, &resolved)?;
+        }
+
+        // Drop the carrier statements per spec.md section 25.7.3
+        // step 3.
+        drop_log_arg_carrier_statements(body, &carrier.carrier_locals);
+
+        // Collapse each `LogArg::from(<expr_i>)` wrapper Call: the
+        // wrapper's destination local feeds the dropped carrier
+        // aggregate and has no other reader after peel. Replace the
+        // wrapper's Call terminator with a Goto to the wrapper's
+        // continuation block so the wrappers do not survive in
+        // RegseqModel per spec.md section 26.6 "LogArg type does
+        // NOT appear in RegseqModel after the bridge runs".
+        collapse_wrapper_calls(body, &wrapper_blocks_to_collapse);
+
+        // Replace the Call's argument vector with the flat-arg form.
+        if let TerminatorKind::Call { args, .. } = &mut body.basic_blocks[block_id].terminator.kind
+        {
+            *args = new_args.into_boxed_slice();
+        }
+    }
+
+    Ok(())
+}
+
+/// Replace each wrapper block's `LogArg::from` Call terminator with
+/// a `Goto` to the Call's continuation block. The wrapper Call's
+/// destination local feeds the dropped carrier aggregate; with the
+/// carrier gone, the wrapper's destination has no readers and the
+/// Call may be collapsed to a Goto. Divergent wrappers (whose
+/// `target` is `None`) are left alone: they would never reach this
+/// pass because `LogArg::from` impls are infallible and always
+/// return.
+fn collapse_wrapper_calls(body: &mut Body, wrapper_blocks: &[BlockId]) {
+    for &block_id in wrapper_blocks {
+        let TerminatorKind::Call { target, .. } = &body.basic_blocks[block_id].terminator.kind
+        else {
+            continue;
+        };
+        let Some(target_block) = *target else {
+            continue;
+        };
+        let span = body.basic_blocks[block_id].terminator.span;
+        body.basic_blocks[block_id].terminator = regseq_model::Terminator {
+            kind: TerminatorKind::Goto(target_block),
+            span,
+        };
+    }
+}
+
+/// Recover the source `<expr_i>` operand from a `LogArg::from(<expr_i>)`
+/// wrapper Call per spec.md section 25.7.3 step 2. The `inner`
+/// operand is the aggregate element produced by the macro: in real
+/// rustc-emitted MIR, `inner = Operand::Move(_logarg_i)` where the
+/// preceding block's terminator is a `Call` whose destination is
+/// `Place::from(_logarg_i)` and whose args[0] is `<expr_i>`.
+///
+/// Returns `(peeled_operand, wrapper_block_id)`. The optional
+/// `wrapper_block_id` identifies the block whose Call terminator
+/// must be collapsed to a Goto so the wrapper does not survive into
+/// RegseqModel per spec.md section 26.6. If no preceding
+/// `LogArg::from` Call is located (unit-test bodies that
+/// hand-construct the aggregate's inner operands directly), the
+/// inner operand is returned verbatim and the wrapper block id is
+/// `None`.
+///
+/// Reference-companion `From<&T>` / `From<&mut T>` source operands
+/// require a load synthesis step per spec.md section 25.7.3 step 2
+/// "Load synthesis"; that refinement depends on the model-side
+/// type-recovery surface (`operand_ty` helper coordinated with
+/// regseq-model-84) and is left for the integration-side coverage
+/// when the full LogArg `From` impl matrix lands. By-value cases
+/// (integer and `&str` From impls) are exercised verbatim by this
+/// helper.
+fn peel_log_arg_from_wrapper(
+    model: &RegseqModel,
+    body: &Body,
+    inner: &Operand,
+) -> (Operand, Option<BlockId>) {
+    let target_local = match inner {
+        Operand::Move(p) | Operand::Copy(p) if p.projection.is_empty() => p.local,
+        _ => return (inner.clone(), None),
+    };
+    for (idx, block) in body.basic_blocks.iter().enumerate() {
+        let TerminatorKind::Call {
+            callee,
+            args,
+            destination,
+            ..
+        } = &block.terminator.kind
+        else {
+            continue;
+        };
+        if !(destination.local == target_local && destination.projection.is_empty()) {
+            continue;
+        }
+        if !callee_is_from_logarg(model, callee) {
+            continue;
+        }
+        if let Some(arg) = args.first() {
+            return (arg.clone(), Some(BlockId::from_u32(idx as u32)));
+        }
+    }
+    (inner.clone(), None)
+}
+
+/// Returns `true` when `callee` is a Direct callee whose Item's
+/// rendered DefPath mentions `LogArg` and ends in `from`. This is
+/// a structural recognition heuristic for the
+/// `<LogArg<'_> as From<T>>::from` Call shape per spec.md section
+/// 26.4. There is no closed-vocabulary intrinsic marker for the
+/// `From` impls (only the four `log-<sev>` callees are marked); the
+/// rendered DefPath heuristic is the fall-back.
+fn callee_is_from_logarg(model: &RegseqModel, callee: &CallCallee) -> bool {
+    let CallCallee::Direct(instance_id) = callee else {
+        return false;
+    };
+    if instance_id.index() >= model.instances.len() {
+        return false;
+    }
+    let item = model.instances[*instance_id].item;
+    if item.index() >= model.items.len() {
+        return false;
+    }
+    let rendered = model.items[item].def_path.rendered;
+    let path = model.strings.resolve(rendered);
+    path.contains("LogArg") && path.ends_with("from")
+}
+
+/// Outcome of `locate_log_arg_carrier`: either an Aggregate carrier
+/// was located (with inner operands), or an empty const-slice
+/// carrier was located (no inner operands), or the carrier could
+/// not be located.
+enum CarrierTrace {
+    /// The trace reached `Rvalue::Aggregate(Array, _)` -- the
+    /// canonical shape.
+    Aggregate(LogArgCarrier),
+    /// The trace reached an `Operand::Constant(_)` (e.g., a
+    /// promoted empty array `&[]`). Equivalent to a 0-element
+    /// aggregate per spec.md section 26.7 empty-template legality.
+    EmptyConstSlice(HashSet<LocalId>),
+    /// The trace bottomed out at a shape outside the closed
+    /// carrier vocabulary (e.g., a function return value or a
+    /// projection chain that does not resolve to an aggregate /
+    /// const slice).
+    Untraceable,
+}
+
+/// Returns `true` if the block's terminator is a Call to an Instance
+/// whose Item carries `AttrData::Intrinsic(IntrinsicKind::Log(_))`
+/// (the regseq-driver-44 Phase-2 recognition output materialised in
+/// Phase 4 into `domain_attrs.item_attrs`).
+fn call_is_log_intrinsic(model: &RegseqModel, body: &Body, block_id: BlockId) -> bool {
+    let TerminatorKind::Call { callee, .. } = &body.basic_blocks[block_id].terminator.kind else {
+        return false;
+    };
+    let CallCallee::Direct(instance_id) = callee else {
+        // Indirect callees cannot satisfy the predicate per the
+        // `I-DiagLog-CallArity` invariant text at spec.md section
+        // 26.6.
+        return false;
+    };
+    if instance_id.index() >= model.instances.len() {
+        return false;
+    }
+    let item = model.instances[*instance_id].item;
+    if item.index() >= model.domain_attrs.item_attrs.len() {
+        return false;
+    }
+    model.domain_attrs.item_attrs[item]
+        .iter()
+        .any(|attr| matches!(attr, AttrData::Intrinsic(IntrinsicKind::Log(_))))
+}
+
+/// Result of locating the slice-aggregate LogArg carrier behind a
+/// Log-intrinsic Call's `args[1]` operand.
+#[derive(Clone, Debug)]
+struct LogArgCarrier {
+    /// Inner element operands extracted from the
+    /// `Rvalue::Aggregate(Array, _)` source. Each is the operand
+    /// the LogArg::from inner-Call wrapped per spec.md section 26.4
+    /// (in a real rustc-emitted body the inner operand would itself
+    /// be the temporary that received the From result; this
+    /// body-level pass treats whatever the aggregate carries as the
+    /// peel-emitted operand directly per the simplified
+    /// hand-constructed shape used by the per-task unit tests).
+    inner_operands: Vec<Operand>,
+    /// Locals that the macro materialised solely to construct the
+    /// carrier (the array local, the slice reference local, and any
+    /// chained indirections). These locals' defining Assign
+    /// statements are removed per spec.md section 25.7.3 step 3.
+    carrier_locals: HashSet<LocalId>,
+}
+
+/// Trace `slice_operand` back through the body to find the
+/// `Rvalue::Aggregate(Array, _)` that materialised the LogArg
+/// carrier. Walks the macro expansion shape:
+/// `Operand::Move(_t_slice_ref)` -> `Rvalue::Cast(Unsize, ...)` ->
+/// `Rvalue::Ref(_, _t_arr)` -> `Rvalue::Aggregate(Array, ...)`.
+/// Empty slice carriers (`&[]`) terminate at a promoted
+/// `Operand::Constant`, in which case the trace returns
+/// `EmptyConstSlice` so the peel can emit a 0-inner-operand flat
+/// shape per spec.md section 26.7 empty-template legality.
+fn locate_log_arg_carrier(body: &Body, slice_operand: &Operand) -> CarrierTrace {
+    let mut carrier_locals: HashSet<LocalId> = HashSet::new();
+    let mut current_place = match slice_operand {
+        Operand::Move(p) | Operand::Copy(p) => p.clone(),
+        Operand::Constant(_) => {
+            // Direct constant slice carrier (e.g., a const-promoted
+            // empty slice). Per spec.md section 26.7 empty-template
+            // legality this lowers to 0 inner operands.
+            return CarrierTrace::EmptyConstSlice(carrier_locals);
+        }
+    };
+    // Cap the walk depth so a malformed body cannot drive the
+    // traversal into an infinite loop.
+    for _ in 0..16 {
+        if !current_place.projection.is_empty() {
+            // Carrier locals are bare locals in the macro shape;
+            // any non-empty projection means we've left the
+            // carrier path.
+            return CarrierTrace::Untraceable;
+        }
+        let local = current_place.local;
+        carrier_locals.insert(local);
+        let Some(rv) = find_latest_assign(body, local) else {
+            return CarrierTrace::Untraceable;
+        };
+        match rv {
+            Rvalue::Aggregate(AggregateKind::Array(_), operands) => {
+                return CarrierTrace::Aggregate(LogArgCarrier {
+                    inner_operands: operands.to_vec(),
+                    carrier_locals,
+                });
+            }
+            Rvalue::Ref(_, inner) | Rvalue::RawPtr(_, inner) => {
+                current_place = inner.clone();
+            }
+            // Cast Rvalue: chase the operand. Covers
+            // `PointerCoercion(Unsize, _)` (`&[T; N]` -> `&[T]`)
+            // and other reference / pointer coercions the bridge
+            // may introduce between the array materialisation and
+            // the slice site.
+            Rvalue::Cast(_, Operand::Move(p), _) | Rvalue::Cast(_, Operand::Copy(p), _) => {
+                current_place = p.clone();
+            }
+            Rvalue::Cast(_, Operand::Constant(_), _) => {
+                // The carrier was const-promoted: empty-slice
+                // pattern (or a future surface that promotes a
+                // non-empty array). Treat as empty-carrier so the
+                // peel produces a 0-inner-operand flat shape.
+                return CarrierTrace::EmptyConstSlice(carrier_locals);
+            }
+            Rvalue::Use(Operand::Move(p)) | Rvalue::Use(Operand::Copy(p)) => {
+                current_place = p.clone();
+            }
+            Rvalue::Use(Operand::Constant(_)) => {
+                return CarrierTrace::EmptyConstSlice(carrier_locals);
+            }
+            _ => return CarrierTrace::Untraceable,
+        }
+    }
+    CarrierTrace::Untraceable
+}
+
+/// Synthesise reference-companion loads per spec.md section 25.7.3
+/// step 2 for each recovered source operand whose `Ty` is
+/// `Ty::Ref(value_typed_pointee, _)` where `value_typed_pointee` is
+/// an integer-width scalar or `Ty::Bool` (a value-typed
+/// reference-companion source). The synthesised load appends a
+/// `Statement::Assign(Place::from(_t_val), Rvalue::Use(Copy(deref_source)))`
+/// to the wrapping Log-intrinsic Call's block immediately before
+/// the flat Call, and returns `Move(Place::from(_t_val))` as the
+/// peeled operand. The `From<&'a str>` impl pointee resolves to
+/// `Ty::Str` (not a value-typed scalar); reference-typed string
+/// operands flow through verbatim per the spec.md section 25.7.3
+/// "The `&str` companions ... are NOT reference-companions in the
+/// normalisation sense" clause.
+fn synthesise_reference_companion_loads(
+    model: &RegseqModel,
+    body: &mut Body,
+    call_block: BlockId,
+    operands: Vec<Operand>,
+) -> Vec<Operand> {
+    use regseq_model::{Place, PlaceElem, Span, Statement, StatementKind, Ty};
+    let mut new_statements: Vec<Statement> = body.basic_blocks[call_block].statements.to_vec();
+    let mut peeled = Vec::with_capacity(operands.len());
+    for operand in operands.into_iter() {
+        let normalised = match &operand {
+            Operand::Move(p) | Operand::Copy(p) if p.projection.is_empty() => {
+                let p_local = p.local;
+                let ty_id = body.local_decls[p_local].ty;
+                match model.types.resolve(ty_id) {
+                    Ty::Ref(pointee_id, _) => {
+                        let pointee_resolved = model.types.resolve(*pointee_id).clone();
+                        if pointee_is_value_typed_scalar(&pointee_resolved) {
+                            // Synthesise the load: fresh value-typed
+                            // local + Assign(Use(Copy(deref_source))).
+                            let pointee_ty = *pointee_id;
+                            let val_local = body.push_synthetic_local(pointee_ty);
+                            let deref_source = Place {
+                                local: p_local,
+                                projection: Box::new([PlaceElem::Deref]),
+                            };
+                            new_statements.push(Statement {
+                                kind: StatementKind::Assign(
+                                    Place::from(val_local),
+                                    regseq_model::Rvalue::Use(Operand::Copy(deref_source)),
+                                ),
+                                span: Span::dummy(),
+                            });
+                            Operand::Move(Place::from(val_local))
+                        } else {
+                            operand
+                        }
+                    }
+                    _ => operand,
+                }
+            }
+            _ => operand,
+        };
+        peeled.push(normalised);
+    }
+    body.basic_blocks[call_block].statements = new_statements.into_boxed_slice();
+    peeled
+}
+
+/// Returns `true` if `ty` is a value-typed scalar admissible as a
+/// `LogArg` source per spec.md section 26.4 -- integer-width
+/// (`Ty::Uint(U8..U64)` / `Ty::Int(I8..I64)`) or `Ty::Bool`.
+/// `Ty::Str` is intentionally excluded: the `From<&'a str>` impl is
+/// by-value (the `Str` carrier variant stores the reference
+/// directly) per spec.md section 25.7.3 step 2.
+fn pointee_is_value_typed_scalar(ty: &regseq_model::Ty) -> bool {
+    use regseq_model::{IntKind, Ty, UintKind};
+    matches!(
+        ty,
+        Ty::Uint(UintKind::U8)
+            | Ty::Uint(UintKind::U16)
+            | Ty::Uint(UintKind::U32)
+            | Ty::Uint(UintKind::U64)
+            | Ty::Int(IntKind::I8)
+            | Ty::Int(IntKind::I16)
+            | Ty::Int(IntKind::I32)
+            | Ty::Int(IntKind::I64)
+            | Ty::Bool
+    )
+}
+
+/// Resolve the `TyId` carried by `operand` through the body's
+/// `local_decls` table when the operand is a bare-local Move or
+/// Copy. Returns `None` for projected places (the type after
+/// projection needs the model-side type-recovery surface) and for
+/// constants whose `Const` variant does not pin a `TyId` directly.
+fn operand_local_ty(body: &Body, operand: &Operand) -> Option<regseq_model::TyId> {
+    match operand {
+        Operand::Move(p) | Operand::Copy(p) => {
+            if !p.projection.is_empty() {
+                return None;
+            }
+            Some(body.local_decls[p.local].ty)
+        }
+        Operand::Constant(_) => None,
+    }
+}
+
+/// Resolve the `Ty` carried by a constant operand through the
+/// model's const interner. Scalar consts (`Bool`, `Char`, `Int`,
+/// `Uint`, `Float`, `NullPtr`) carry their type identity directly
+/// in the variant; aggregate / byte / relocation / enum consts
+/// require richer context (e.g., the originating
+/// `Operand`/`Place` type) and return `None`.
+fn operand_constant_ty(model: &RegseqModel, operand: &Operand) -> Option<regseq_model::Ty> {
+    use regseq_model::{Const, Ty};
+    let Operand::Constant(const_id) = operand else {
+        return None;
+    };
+    match model.consts.resolve(*const_id) {
+        Const::Bool(_) => Some(Ty::Bool),
+        Const::Char(_) => Some(Ty::Char),
+        Const::Int(kind, _) => Some(Ty::Int(*kind)),
+        Const::Uint(kind, _) => Some(Ty::Uint(*kind)),
+        Const::Float(kind, _) => Some(Ty::Float(*kind)),
+        Const::NullPtr(ty_id) => {
+            // The pinned pointee type is wrapped in a Ptr; assume
+            // mutable provenance since `NullPtr` does not pin
+            // mutability and the DSL accepts both for raw pointer
+            // formatting.
+            Some(Ty::Ptr(*ty_id, regseq_model::Mutability::Mut))
+        }
+        _ => None,
+    }
+}
+
+/// Resolve the `Ty` for any operand. Returns `None` only when the
+/// operand's type is unrecoverable (projected place, aggregate /
+/// byte / reloc const, etc.).
+fn operand_ty(model: &RegseqModel, body: &Body, operand: &Operand) -> Option<regseq_model::Ty> {
+    if let Some(ty_id) = operand_local_ty(body, operand) {
+        return Some(model.types.resolve(ty_id).clone());
+    }
+    operand_constant_ty(model, operand)
+}
+
+/// Find the most recent (by block + statement order) Assign whose
+/// target is the bare local `target_local`. Returns the assigned
+/// `Rvalue` clone, or `None` if no such Assign exists.
+fn find_latest_assign(body: &Body, target_local: LocalId) -> Option<Rvalue> {
+    let mut latest: Option<Rvalue> = None;
+    for block in body.basic_blocks.iter() {
+        for statement in block.statements.iter() {
+            if let StatementKind::Assign(place, rv) = &statement.kind {
+                if place.local == target_local && place.projection.is_empty() {
+                    latest = Some(rv.clone());
+                }
+            }
+        }
+    }
+    latest
+}
+
+/// Remove every Assign statement whose target is one of the
+/// carrier_locals per spec.md section 25.7.3 step 3 ("Drop the slice
+/// aggregate").
+fn drop_log_arg_carrier_statements(body: &mut Body, carrier_locals: &HashSet<LocalId>) {
+    for block_idx in 0..body.basic_blocks.len() {
+        let block_id = BlockId::from_u32(block_idx as u32);
+        let filtered: Vec<Statement> = body.basic_blocks[block_id]
+            .statements
+            .iter()
+            .filter(|statement| match &statement.kind {
+                StatementKind::Assign(place, _) => {
+                    !(carrier_locals.contains(&place.local) && place.projection.is_empty())
+                }
+                _ => true,
+            })
+            .cloned()
+            .collect();
+        body.basic_blocks[block_id].statements = filtered.into_boxed_slice();
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use regseq_model::{
+        AggregateKind, AttrData, BasicBlock, Body, FnAbi, FnSig, FunctionInstanceData,
+        FunctionInstanceFlavor, IndexVec, InlineHint, Instance, InstanceKind, IntrinsicKind, Item,
+        ItemId, ItemKind, Linkage, LocalDecl, LocalId, LogLevel, Mutability, Operand, Place,
+        Provenance, RegseqModel, Rvalue, Safety, Span, StableCrateId, Statement, StatementKind,
+        SyntheticItemKind, Terminator, TerminatorKind, Ty, TyId, UNIT_LAYOUT,
+    };
+
+    fn intern_unit(model: &mut RegseqModel) -> TyId {
+        model.types.intern(Ty::Tuple {
+            fields: Vec::new(),
+            layout: UNIT_LAYOUT,
+        })
+    }
+
+    fn intern_logarg_array(model: &mut RegseqModel) -> TyId {
+        // The exact element type does not matter for the pass; pick
+        // a unit-shaped tuple as a stand-in.
+        let unit = intern_unit(model);
+        model.types.intern(Ty::Array(unit, 0))
+    }
+
+    fn make_log_function_item(model: &mut RegseqModel, name: &str) -> ItemId {
+        use regseq_model::{DefPath, DefPathData, DefPathHash, DefPathSegment};
+        let name_id = model.strings.intern(name);
+        let rendered = model.strings.intern(&format!("test::{name}"));
+        let item = model.items.push(Item {
+            def_path: DefPath {
+                crate_id: model.primary_crate,
+                segments: vec![DefPathSegment {
+                    data: DefPathData::ValueNs(name_id),
+                    disambiguator: 0,
+                }],
+                rendered,
+            },
+            kind: ItemKind::Function,
+            span: Span::dummy(),
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        });
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash: item.as_u32() as u64 + 100,
+        });
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
+        item
+    }
+
+    fn make_function_instance(
+        model: &mut RegseqModel,
+        item: ItemId,
+        input_count: usize,
+    ) -> regseq_model::InstanceId {
+        let unit = intern_unit(model);
+        let inputs = vec![unit; input_count];
+        let fn_sig = model.sigs.intern(FnSig {
+            inputs,
+            output: unit,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        model.instances.push(Instance {
+            item,
+            generic_args: Vec::new(),
+            emission_name: model.items[item].def_path.rendered,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        })
+    }
+
+    fn local_decl(ty: TyId) -> LocalDecl {
+        LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        }
+    }
+
+    /// Build a body with the canonical pre-peel macro shape:
+    ///
+    /// ```text
+    /// block 0:
+    ///   _t_arr        = [<inner_operands>]              // Aggregate(Array)
+    ///   _t_slice_ref  = &_t_arr                          // Ref
+    ///   Call { callee, args: [fmt, Move(_t_slice_ref)] }
+    /// ```
+    fn build_pre_peel_body(
+        model: &mut RegseqModel,
+        instance_id: regseq_model::InstanceId,
+        inner_operands: Vec<Operand>,
+    ) -> Body {
+        let unit = intern_unit(model);
+        let array_ty = intern_logarg_array(model);
+        let ref_ty = model
+            .types
+            .intern(Ty::Ref(array_ty, Provenance::SharedBorrow));
+
+        let mut local_decls = IndexVec::new();
+        let return_local = local_decls.push(local_decl(unit)); // _0
+        debug_assert_eq!(return_local, LocalId::RETURN_PLACE);
+        let arr_local = local_decls.push(local_decl(array_ty)); // _1
+        let slice_ref_local = local_decls.push(local_decl(ref_ty)); // _2
+
+        // Format-template Const::ZST stand-in (the peel pass does
+        // not inspect the literal's content; the public signature
+        // just preserves args[0] verbatim).
+        let fmt_const = model.consts.intern(regseq_model::Const::ZST);
+        let fmt_operand = Operand::Constant(fmt_const);
+        let slice_operand = Operand::Move(Place::from(slice_ref_local));
+
+        let aggregate_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(arr_local),
+                Rvalue::Aggregate(
+                    AggregateKind::Array(array_ty),
+                    inner_operands.into_boxed_slice(),
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let ref_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(slice_ref_local),
+                Rvalue::Ref(Provenance::SharedBorrow, Place::from(arr_local)),
+            ),
+            span: Span::dummy(),
+        };
+
+        let block = BasicBlock {
+            statements: vec![aggregate_statement, ref_statement].into_boxed_slice(),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Direct(instance_id),
+                    args: vec![fmt_operand, slice_operand].into_boxed_slice(),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: None,
+                },
+                span: Span::dummy(),
+            },
+        };
+
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(block);
+        Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        }
+    }
+
+    #[test]
+    fn peels_log_intrinsic_carrier_into_flat_arg_call() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let log_item = make_log_function_item(&mut model, "log_info");
+        // Decorate the callee Item with the Log intrinsic attribute
+        // so the pass recognises it. Per the regseq-driver-44
+        // Phase-4 materialisation step.
+        model.domain_attrs.item_attrs[log_item]
+            .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+        let instance_id = make_function_instance(&mut model, log_item, 2);
+
+        // Two inner operands stand in for the
+        // `LogArg::from(speed)` / `LogArg::from(retries)` carrier
+        // elements; the peel treats them as the post-From operands
+        // directly per the hand-constructed body shape.
+        let inner_op_1 = Operand::Constant(model.consts.intern(regseq_model::Const::Bool(true)));
+        let inner_op_2 = Operand::Constant(model.consts.intern(regseq_model::Const::Bool(false)));
+        let mut body = build_pre_peel_body(
+            &mut model,
+            instance_id,
+            vec![inner_op_1.clone(), inner_op_2.clone()],
+        );
+
+        // Capture the pre-peel local count so we can assert the
+        // carrier statements were dropped (locals stay; only their
+        // Assign statements are removed).
+        let pre_peel_local_count = body.local_decls.len();
+
+        peel_body_against_model(&model, &mut body).expect("peel succeeds");
+
+        // After peel: Call.args.len() == 1 + N (template + 2 args).
+        let TerminatorKind::Call { args, .. } =
+            &body.basic_blocks[BlockId::from_u32(0)].terminator.kind
+        else {
+            panic!("expected Call terminator post-peel");
+        };
+        assert_eq!(args.len(), 3, "post-peel arg count = 1 + N");
+        // args[0] is the format-template Operand, unchanged.
+        assert!(matches!(args[0], Operand::Constant(_)));
+        // args[1..] are the peeled inner operands in source order.
+        assert_eq!(args[1], inner_op_1);
+        assert_eq!(args[2], inner_op_2);
+
+        // The aggregate + ref carrier statements were removed.
+        assert!(
+            body.basic_blocks[BlockId::from_u32(0)]
+                .statements
+                .is_empty(),
+            "expected carrier statements to be dropped"
+        );
+
+        // Locals are still present (LocalDecls are never popped by
+        // the peel pass per spec.md section 25.7.3 step 3 / 25.8 --
+        // "drop the slice aggregate" refers to the Rvalue, not the
+        // local-decls table).
+        assert_eq!(body.local_decls.len(), pre_peel_local_count);
+    }
+
+    #[test]
+    fn non_log_call_body_is_unchanged() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let plain_item = make_log_function_item(&mut model, "regular_function");
+        // No AttrData::Intrinsic attribute on the Item: the pass
+        // must leave this Call alone.
+        let instance_id = make_function_instance(&mut model, plain_item, 1);
+
+        let inner_op = Operand::Constant(model.consts.intern(regseq_model::Const::Bool(true)));
+        let mut body = build_pre_peel_body(&mut model, instance_id, vec![inner_op]);
+        let pre_peel_args_len = match &body.basic_blocks[BlockId::from_u32(0)].terminator.kind {
+            TerminatorKind::Call { args, .. } => args.len(),
+            _ => unreachable!(),
+        };
+        let pre_peel_statement_count = body.basic_blocks[BlockId::from_u32(0)].statements.len();
+
+        peel_body_against_model(&model, &mut body).expect("peel runs as a no-op");
+
+        let post_peel_args_len = match &body.basic_blocks[BlockId::from_u32(0)].terminator.kind {
+            TerminatorKind::Call { args, .. } => args.len(),
+            _ => unreachable!(),
+        };
+        let post_peel_statement_count = body.basic_blocks[BlockId::from_u32(0)].statements.len();
+
+        assert_eq!(post_peel_args_len, pre_peel_args_len);
+        assert_eq!(post_peel_statement_count, pre_peel_statement_count);
+    }
+
+    #[test]
+    fn peels_zero_arg_log_intrinsic() {
+        // `regseq::log::info!("connected")` with no arguments: the
+        // macro expansion still materialises an empty `[LogArg; 0]`
+        // carrier. The peel pass replaces the call with a single
+        // format-template argument.
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let log_item = make_log_function_item(&mut model, "log_info");
+        model.domain_attrs.item_attrs[log_item]
+            .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+        let instance_id = make_function_instance(&mut model, log_item, 2);
+
+        let mut body = build_pre_peel_body(&mut model, instance_id, Vec::new());
+
+        peel_body_against_model(&model, &mut body).expect("peel succeeds on empty carrier");
+
+        let TerminatorKind::Call { args, .. } =
+            &body.basic_blocks[BlockId::from_u32(0)].terminator.kind
+        else {
+            panic!("expected Call terminator post-peel");
+        };
+        assert_eq!(args.len(), 1, "post-peel arg count = 1 + 0 (template only)");
+    }
+}

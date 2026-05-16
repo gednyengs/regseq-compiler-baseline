@@ -1,6 +1,13 @@
 //! Diagnostic-logging intrinsic recognition for bridge Call translation.
 
+pub mod format;
+pub mod peel;
 mod recognition;
+pub mod validation;
+
+pub use format::{parse_format_template, FormatSpecifier, ParsedFormatTemplate};
+pub use peel::diag_log_peel_pass;
+pub use validation::validate_log_call;
 
 use regseq_model::DefPath;
 use rustc_span::def_id::DefId;

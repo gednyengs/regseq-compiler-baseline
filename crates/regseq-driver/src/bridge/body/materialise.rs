@@ -1,9 +1,9 @@
 //! Phase-5 function body materialisation.
 
 use regseq_model::{
-    validate_body_places, Body, BodyValidationError, CallCallee, FunctionInstanceFlavor,
-    GenericArg, InstanceId, InstanceKind, LocalDecl, Mutability, SyntheticItemKind, Terminator,
-    TerminatorKind, TyId, Visitor,
+    validate_body_places, AttrData, Body, BodyValidationError, CallCallee, FunctionInstanceFlavor,
+    GenericArg, InstanceId, InstanceKind, IntrinsicKind, LocalDecl, Mutability, SyntheticItemKind,
+    Terminator, TerminatorKind, TyId, Visitor,
 };
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::ty::{GenericArgs, Instance, TyCtxt};
@@ -325,6 +325,11 @@ pub fn run_phase5_body_passes(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError
             }
         };
         rewrite_vtable_indirect(cx, &mut body)?;
+        // Spec section 25.7.4: DiagLogPeel slots in after the
+        // vtable-indirect rewrite and before joint validation so
+        // B-4 / B-6 see the peeled flat-arg shape. The pass is a
+        // no-op for Bodies without Log-intrinsic Calls.
+        crate::bridge::diag_log::diag_log_peel_pass(cx, &mut body)?;
         joint_validation_walk(&cx.model, instance, &body)?;
         let function = cx.model.instances[instance]
             .kind
@@ -487,9 +492,18 @@ impl<'m> Visitor for JointValidationVisitor<'m> {
         // Indirect-callee arity check requires operand-type recovery
         // (spec 23.6 B-4 Indirect bullet); that path is coordinated
         // with regseq-model-84 and lands when the model-side B-4
-        // validator becomes pub. Diagnostic-logging arity exception
-        // (regseq-driver-44 scope) is intentionally not enforced
-        // here.
+        // validator becomes pub.
+        //
+        // Diagnostic-logging arity exception per spec.md sections
+        // 23.6.2 B-4 / B-6 + 26.6 (I-DiagLog-CallArity): when the
+        // callee resolves to an Instance whose Item carries
+        // `AttrData::Intrinsic(IntrinsicKind::Log(_))`, the
+        // post-DiagLogPeel Call shape is `[fmt_literal, expr_1,
+        // ..., expr_N]` per spec.md section 26.6 and does NOT match
+        // the declared callee signature `fn(&'static str,
+        // &[LogArg<'_>])` (2 inputs). The peeled shape is the
+        // load-bearing invariant; skip the standard arity check for
+        // Log-intrinsic callees so the B-4 exception holds.
         if self.call_arity_mismatch.is_none() {
             if let TerminatorKind::Call {
                 callee: CallCallee::Direct(callee_id),
@@ -497,7 +511,9 @@ impl<'m> Visitor for JointValidationVisitor<'m> {
                 ..
             } = &term.kind
             {
-                if callee_id.index() < self.model.instances.len() {
+                if callee_id.index() < self.model.instances.len()
+                    && !self.callee_is_log_intrinsic(*callee_id)
+                {
                     if let Some(sig) = self.model.instance_fn_sig(*callee_id) {
                         if sig.inputs.len() != args.len() {
                             self.call_arity_mismatch =
@@ -508,6 +524,26 @@ impl<'m> Visitor for JointValidationVisitor<'m> {
             }
         }
         self.super_terminator(term);
+    }
+}
+
+impl<'m> JointValidationVisitor<'m> {
+    /// Returns `true` when the resolved Direct callee's Item carries
+    /// `AttrData::Intrinsic(IntrinsicKind::Log(_))` per spec.md
+    /// section 26.6 and so qualifies for the
+    /// `I-DiagLog-CallArity` B-4 / B-6 exceptions at spec.md
+    /// section 23.6.2.
+    fn callee_is_log_intrinsic(&self, callee_id: InstanceId) -> bool {
+        if callee_id.index() >= self.model.instances.len() {
+            return false;
+        }
+        let item = self.model.instances[callee_id].item;
+        if item.index() >= self.model.domain_attrs.item_attrs.len() {
+            return false;
+        }
+        self.model.domain_attrs.item_attrs[item]
+            .iter()
+            .any(|attr| matches!(attr, AttrData::Intrinsic(IntrinsicKind::Log(_))))
     }
 }
 

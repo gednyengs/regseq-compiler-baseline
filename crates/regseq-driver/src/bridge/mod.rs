@@ -463,6 +463,73 @@ pub enum BridgeError {
     /// Phase 5 body materialisation or validation failed.
     #[error("phase 5 body pass failed: {0}")]
     Phase5(String),
+    /// A diagnostic-logging format-template parse rejected by the
+    /// closed-subset grammar at spec.md section 26.7 (e.g., `{:?}`
+    /// Debug formatter rejection per D3 at spec.md line 12840).
+    #[error("diagnostic-logging format error ({reason:?}) in template `{template}`")]
+    DiagLogFormat {
+        /// Rule-specific rejection family.
+        reason: DiagLogFormatReason,
+        /// Original (or offending) template text for diagnostics.
+        template: String,
+    },
+    /// A diagnostic-logging bridge-side validation diagnostic per
+    /// spec.md section 26.8 (D1, D2, D4, D6, D7, D8). D3 is
+    /// surface-formatted as `DiagLogFormat` since the closed-subset
+    /// grammar parser enforces it at parse time.
+    #[error("diagnostic-logging validation failed ({diagnostic:?}): {detail}")]
+    DiagLogValidation {
+        /// The spec.md section 26.8 rule that failed.
+        diagnostic: DiagLogValidationDiagnostic,
+        /// Author-facing detail for the failing rule.
+        detail: String,
+    },
+}
+
+/// Format-template parser rejection family per spec.md section 26.7
+/// and D3 at spec.md line 12840.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagLogFormatReason {
+    /// `{:?}` Debug formatter: parsed only to reject per D3 at
+    /// spec.md line 12840.
+    DebugFormatterRejected,
+    /// Positional argument like `{0}`: outside the closed subset
+    /// (spec.md section 26.7).
+    PositionalArgRejected,
+    /// Named argument like `{name}`: outside the closed subset
+    /// (spec.md section 26.7).
+    NamedArgRejected,
+    /// Modifier outside the closed Hex / formatted-Hex subset (e.g.,
+    /// `{:b}`, `{:o}`, `{:.5}`, `{:p}`).
+    NonSubsetModifier,
+    /// Unclosed `{` brace.
+    UnclosedBrace,
+    /// Stray `}` brace not part of the `}}` escape.
+    UnmatchedClosingBrace,
+}
+
+/// Bridge-side validation diagnostics per spec.md section 26.8.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum DiagLogValidationDiagnostic {
+    /// D1: specifier count differs from peeled argument count
+    /// (template / arg arity parity).
+    D1,
+    /// D2: per-position modifier incompatible with operand type
+    /// (e.g., hex modifier on a non-integer operand).
+    D2,
+    /// D4: an operand's source type is outside the `LogArg`
+    /// admissible set (spec.md section 26.4).
+    D4,
+    /// D6: `args[0]` is not a `&'static str` literal at the MIR
+    /// shape (spec.md section 26.8 D6).
+    D6,
+    /// D7: format template ends in a newline; backends append the
+    /// target-appropriate terminator (spec.md section 26.7 +
+    /// section 26.8 D7).
+    D7,
+    /// D8: `&str` operand count in args[1..] exceeds the selected
+    /// binding target's declared `max_str_args_per_call`.
+    D8,
 }
 
 /// DSL-policy type rejection family.
