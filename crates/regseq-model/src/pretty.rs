@@ -34,12 +34,16 @@
 //! `LocalId` (`_N`) and `BlockId` (`bbN`) sigils land in stages 10
 //! and 11 alongside the IDs themselves.
 
+use crate::args_key::{GenericArg, GenericArgs};
 use crate::def_path::{render_def_path, DefPath};
 use crate::ids::{ConstId, InstanceId, ItemId, SourceFileId, TyId};
+use crate::instance::InstanceKind;
 use crate::item::{InlineHint, ItemKind, Linkage};
 use crate::model::RegseqModel;
 use crate::source::Span;
-use crate::ty::Mutability;
+use crate::ty::{
+    AutoTrait, FloatKind, FnAbi, IntKind, Mutability, Provenance, Safety, Ty, UintKind,
+};
 
 /// Column at which trailing `// <span>` comments are aligned per
 /// `pretty-printer.md` §4.2. Matches rustc's `mir/pretty.rs:21`
@@ -130,14 +134,201 @@ impl<'a> PrettyPrinter<'a> {
         unimplemented!("stage 12+ fills the top-level render")
     }
 
-    /// Type rendering. Filled in stage 13 (type-system
-    /// pretty-printing). Stage 3 specified the closed `Ty` enum
-    /// but deferred the renderer-style decision (originally
-    /// reserved as D14) to stage 13, where the renderer's input
-    /// is fully populated by stage-11 (`FnSig`) and stage-12
-    /// (`Item` / DefPath) content.
-    pub fn render_ty(&self, _ty: TyId) -> String {
-        unimplemented!("stage 13 fills render_ty")
+    /// Type rendering. Dispatches across the closed 19-variant
+    /// `Ty` enum per `pretty-printer.md` §6.1 - §6.6. All nested
+    /// `TyId` payloads resolve recursively through this method.
+    pub fn render_ty(&self, id: TyId) -> String {
+        match self.model.types.resolve(id) {
+            // §6.1 Primitives.
+            Ty::Bool => "bool".to_owned(),
+            Ty::Char => "char".to_owned(),
+            Ty::Int(kind) => match kind {
+                IntKind::I8 => "i8",
+                IntKind::I16 => "i16",
+                IntKind::I32 => "i32",
+                IntKind::I64 => "i64",
+                IntKind::I128 => "i128",
+                IntKind::Isize => "isize",
+            }
+            .to_owned(),
+            Ty::Uint(kind) => match kind {
+                UintKind::U8 => "u8",
+                UintKind::U16 => "u16",
+                UintKind::U32 => "u32",
+                UintKind::U64 => "u64",
+                UintKind::U128 => "u128",
+                UintKind::Usize => "usize",
+            }
+            .to_owned(),
+            Ty::Float(kind) => match kind {
+                FloatKind::F16 => "f16",
+                FloatKind::F32 => "f32",
+                FloatKind::F64 => "f64",
+                FloatKind::F128 => "f128",
+            }
+            .to_owned(),
+            Ty::Str => "str".to_owned(),
+            Ty::Never => "!".to_owned(),
+
+            // §6.2 Compound non-recursive.
+            Ty::Array(elem, n) => format!("[{}; {}]", self.render_ty(*elem), n),
+            Ty::Slice(elem) => format!("[{}]", self.render_ty(*elem)),
+            Ty::Ref(pointee, Provenance::SharedBorrow) => {
+                format!("&{}", self.render_ty(*pointee))
+            }
+            Ty::Ref(pointee, Provenance::UniqueBorrow) => {
+                format!("&mut {}", self.render_ty(*pointee))
+            }
+            Ty::Ptr(pointee, Mutability::Not) => {
+                format!("*const {}", self.render_ty(*pointee))
+            }
+            Ty::Ptr(pointee, Mutability::Mut) => {
+                format!("*mut {}", self.render_ty(*pointee))
+            }
+
+            // §6.3 Tuple.
+            Ty::Tuple { fields, .. } => match fields.as_slice() {
+                [] => "()".to_owned(),
+                [only] => format!("({},)", self.render_ty(*only)),
+                many => {
+                    let parts: Vec<String> = many.iter().map(|t| self.render_ty(*t)).collect();
+                    format!("({})", parts.join(", "))
+                }
+            },
+
+            // §6.4 ADT and Closure.
+            Ty::Struct { item, args, .. }
+            | Ty::Enum { item, args, .. }
+            | Ty::Union { item, args, .. } => {
+                let path = self.render_def_path(*item);
+                let args_text = self.render_generic_args(args, *item);
+                format!("{path}{args_text}")
+            }
+            Ty::Closure(item, args) => {
+                let path = self.render_def_path(*item);
+                let args_text = self.render_generic_args(args, *item);
+                format!("{path}{args_text}")
+            }
+
+            // §6.4 FnDef: rustc-faithful curly-brace form. Look up
+            // the matching `Instance` by `(item, generic_args)`,
+            // resolve its `InstanceKind::Function { fn_sig, .. }`,
+            // and render the post-monomorphization signature's
+            // arg / return types via `render_ty`.
+            Ty::FnDef(item, args) => {
+                let path = self.render_def_path(*item);
+                let args_text = self.render_generic_args(args, *item);
+                let inner = format!("{path}{args_text}");
+                let fn_sig_id = self
+                    .model
+                    .instances
+                    .iter()
+                    .find(|inst| inst.item == *item && &inst.generic_args == args)
+                    .and_then(|inst| match &inst.kind {
+                        InstanceKind::Function(data) => Some(data.fn_sig),
+                        _ => None,
+                    })
+                    .unwrap_or_else(|| {
+                        panic!(
+                            "render_ty: Ty::FnDef has no matching function Instance \
+                             for ItemId {} with the given GenericArgs",
+                            item.as_u32()
+                        )
+                    });
+                let sig = self.model.sigs.resolve(fn_sig_id);
+                let inputs: Vec<String> = sig.inputs.iter().map(|t| self.render_ty(*t)).collect();
+                let output = self.render_ty(sig.output);
+                format!("fn({}) -> {} {{{}}}", inputs.join(", "), output, inner)
+            }
+
+            // §6.5 Function pointer.
+            Ty::FnPtr(sig_id) => {
+                let sig = self.model.sigs.resolve(*sig_id);
+                let mut head = String::new();
+                if matches!(sig.safety, Safety::Unsafe) {
+                    head.push_str("unsafe ");
+                }
+                if !matches!(sig.abi, FnAbi::Rust) {
+                    let abi = match sig.abi {
+                        FnAbi::Rust => "Rust",
+                        FnAbi::C => "C",
+                    };
+                    head.push_str(&format!("extern \"{abi}\" "));
+                }
+                let inputs: Vec<String> = sig.inputs.iter().map(|t| self.render_ty(*t)).collect();
+                let output = self.render_ty(sig.output);
+                format!("{head}fn({}) -> {}", inputs.join(", "), output)
+            }
+
+            // §6.6 Dynamic.
+            Ty::Dynamic {
+                auto_traits,
+                vtable_ty,
+            } => {
+                let vtable_item = match self.model.types.resolve(*vtable_ty) {
+                    Ty::Struct { item, .. } => *item,
+                    other => panic!(
+                        "render_ty: Ty::Dynamic.vtable_ty must resolve to Ty::Struct, got {:?}",
+                        other
+                    ),
+                };
+                let mut out = format!("dyn {}", self.render_def_path(vtable_item));
+                // Per pretty-printer.md §6.6 + spec.md §10.1: auto-traits
+                // render in sorted order (Send < Sync < Unpin). Although
+                // model validation enforces sorted storage, the renderer
+                // sorts defensively so a malformed-but-loaded input still
+                // produces the canonical textual form (matches the
+                // same defensive sort in args_key.rs canonical encoding).
+                let mut sorted: Vec<AutoTrait> = auto_traits.clone();
+                sorted.sort();
+                for auto in sorted {
+                    let label = match auto {
+                        AutoTrait::Send => "Send",
+                        AutoTrait::Sync => "Sync",
+                        AutoTrait::Unpin => "Unpin",
+                    };
+                    out.push_str(" + ");
+                    out.push_str(label);
+                }
+                out
+            }
+        }
+    }
+
+    /// Generic-argument rendering per `pretty-printer.md` §6.7.
+    ///
+    /// Returns the empty `String` when `args.is_empty()`; otherwise
+    /// returns `<T1, T2, K1>` with `, ` separators wrapped in
+    /// angle brackets. The caller does not need to add a wrapper.
+    ///
+    /// Per stage-14 D-14-4.9, the enclosing `ItemId` is required so
+    /// each `GenericArg::Const(c)` arg can be resolved to the
+    /// declared type of the matching positional const-generic
+    /// parameter from `model.items[item]`'s generic-parameter list.
+    /// `render_const` (P1a-PP-04a/b) is not yet available; the
+    /// Const-arm body therefore stays `todo!()` per this task's
+    /// spec until P1a-PP-04a lands.
+    pub fn render_generic_args(&self, args: &GenericArgs, item: ItemId) -> String {
+        if args.is_empty() {
+            return String::new();
+        }
+        let parts: Vec<String> = args
+            .iter()
+            .map(|arg| match arg {
+                GenericArg::Type(ty) => self.render_ty(*ty),
+                GenericArg::Const(_c) => {
+                    // Per spec: Const-arm wiring depends on
+                    // P1a-PP-04a's `render_const`. The helper
+                    // signature is fixed; the body stays `todo!()`
+                    // until that task lands.
+                    let _ = item;
+                    todo!(
+                        "render_generic_args: GenericArg::Const wiring lands with P1a-PP-04a (render_const)"
+                    )
+                }
+            })
+            .collect();
+        format!("<{}>", parts.join(", "))
     }
 
     /// Const rendering. Deferred to stage 14 because complete

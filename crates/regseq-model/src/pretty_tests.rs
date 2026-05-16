@@ -9,7 +9,7 @@
 
 use crate::{
     render_def_path, ConstId, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, InstanceId,
-    RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId, TyId,
+    RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId,
 };
 
 // ------------------------------------------------------------------
@@ -180,13 +180,6 @@ fn render_def_path_value_handles_primary_crate_paths() {
 fn render_top_level_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render();
-}
-
-#[test]
-#[should_panic(expected = "stage 13 fills render_ty")]
-fn render_ty_is_unimplemented_at_stage_one() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let _ = m.pretty().render_ty(TyId::ZERO);
 }
 
 #[test]
@@ -389,4 +382,330 @@ fn render_item_attribute_block_inline_hint_each_form() {
         m.pretty().render_item_attribute_block(never),
         "#[inline(never)]\n"
     );
+}
+
+// ------------------------------------------------------------------
+// Unit tests for `render_ty` per-arm dispatch
+// (pretty-printer.md §6.1 - §6.6) and `render_generic_args`
+// (§6.7). Per the spec's Test Plan: cover per-arm dispatch shape;
+// the §9.1 worked-example specimens live in
+// `tests/pretty.rs` as insta snapshots.
+// ------------------------------------------------------------------
+
+use crate::args_key::GenericArg;
+use crate::body::Body;
+use crate::fn_sig::FnSig;
+use crate::instance::{FunctionInstanceData, FunctionInstanceFlavor, Instance, InstanceKind};
+use crate::ty::{AutoTrait, FloatKind, FnAbi, IntKind, Provenance, Safety, Ty, UintKind};
+
+#[test]
+fn render_ty_primitives_match_section_6_1() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let cases: Vec<(Ty, &'static str)> = vec![
+        (Ty::Bool, "bool"),
+        (Ty::Char, "char"),
+        (Ty::Int(IntKind::I8), "i8"),
+        (Ty::Int(IntKind::I16), "i16"),
+        (Ty::Int(IntKind::I32), "i32"),
+        (Ty::Int(IntKind::I64), "i64"),
+        (Ty::Int(IntKind::I128), "i128"),
+        (Ty::Int(IntKind::Isize), "isize"),
+        (Ty::Uint(UintKind::U8), "u8"),
+        (Ty::Uint(UintKind::U16), "u16"),
+        (Ty::Uint(UintKind::U32), "u32"),
+        (Ty::Uint(UintKind::U64), "u64"),
+        (Ty::Uint(UintKind::U128), "u128"),
+        (Ty::Uint(UintKind::Usize), "usize"),
+        (Ty::Float(FloatKind::F16), "f16"),
+        (Ty::Float(FloatKind::F32), "f32"),
+        (Ty::Float(FloatKind::F64), "f64"),
+        (Ty::Float(FloatKind::F128), "f128"),
+        (Ty::Str, "str"),
+        (Ty::Never, "!"),
+    ];
+    for (ty, expected) in cases {
+        let id = m.types.intern(ty);
+        assert_eq!(m.pretty().render_ty(id), expected);
+    }
+}
+
+#[test]
+fn render_ty_array_uses_decimal_length() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let elem = m.types.intern(Ty::Uint(UintKind::U8));
+    let array = m.types.intern(Ty::Array(elem, 32));
+    assert_eq!(m.pretty().render_ty(array), "[u8; 32]");
+}
+
+#[test]
+fn render_ty_slice_recurses_into_element() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let elem = m.types.intern(Ty::Uint(UintKind::U8));
+    let slice = m.types.intern(Ty::Slice(elem));
+    assert_eq!(m.pretty().render_ty(slice), "[u8]");
+}
+
+#[test]
+fn render_ty_ref_and_ptr_dispatch_all_four_combinations() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+
+    let ref_shared = m.types.intern(Ty::Ref(i32_ty, Provenance::SharedBorrow));
+    let ref_unique = m.types.intern(Ty::Ref(i32_ty, Provenance::UniqueBorrow));
+    let ptr_const = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
+    let ptr_mut = m.types.intern(Ty::Ptr(u8_ty, Mutability::Mut));
+
+    let p = m.pretty();
+    assert_eq!(p.render_ty(ref_shared), "&i32");
+    assert_eq!(p.render_ty(ref_unique), "&mut i32");
+    assert_eq!(p.render_ty(ptr_const), "*const u8");
+    assert_eq!(p.render_ty(ptr_mut), "*mut u8");
+}
+
+#[test]
+fn render_ty_tuple_arity_zero_one_and_two() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: crate::UNIT_LAYOUT,
+    });
+    let arity_one = m.types.intern(Ty::Tuple {
+        fields: vec![i32_ty],
+        layout: crate::UNIT_LAYOUT,
+    });
+    let arity_two = m.types.intern(Ty::Tuple {
+        fields: vec![i32_ty, bool_ty],
+        layout: crate::UNIT_LAYOUT,
+    });
+    let p = m.pretty();
+    assert_eq!(p.render_ty(unit), "()");
+    assert_eq!(p.render_ty(arity_one), "(i32,)");
+    assert_eq!(p.render_ty(arity_two), "(i32, bool)");
+}
+
+#[test]
+fn render_ty_struct_enum_union_compose_path_then_args() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let pl011_name = m.strings.intern("pl011::PL011");
+    let option_name = m.strings.intern("core::option::Option");
+    let my_union_name = m.strings.intern("pl011::regs::MyUnion");
+    let pl011_id = unit_item(&mut m, ItemKind::Struct, pl011_name);
+    let option_id = unit_item(&mut m, ItemKind::Enum, option_name);
+    let my_union_id = unit_item(&mut m, ItemKind::Union, my_union_name);
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+
+    let pl011 = m.types.intern(Ty::Struct {
+        item: pl011_id,
+        args: vec![],
+        layout: crate::UNIT_LAYOUT,
+    });
+    let option_u32 = m.types.intern(Ty::Enum {
+        item: option_id,
+        args: vec![GenericArg::Type(u32_ty)],
+        layout: crate::UNIT_LAYOUT,
+    });
+    let my_union = m.types.intern(Ty::Union {
+        item: my_union_id,
+        args: vec![],
+        layout: crate::UNIT_LAYOUT,
+    });
+
+    let p = m.pretty();
+    assert_eq!(p.render_ty(pl011), "pl011::PL011");
+    assert_eq!(p.render_ty(option_u32), "core::option::Option<u32>");
+    assert_eq!(p.render_ty(my_union), "pl011::regs::MyUnion");
+}
+
+#[test]
+fn render_ty_closure_with_generic_args() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let closure_name = m.strings.intern("pl011::init::{closure#0}");
+    let item_id = unit_item(&mut m, ItemKind::Function, closure_name);
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let closure = m
+        .types
+        .intern(Ty::Closure(item_id, vec![GenericArg::Type(i32_ty)]));
+    assert_eq!(
+        m.pretty().render_ty(closure),
+        "pl011::init::{closure#0}<i32>"
+    );
+}
+
+#[test]
+fn render_ty_fn_def_renders_curly_brace_form_with_instance_lookup() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let pl011_name = m.strings.intern("pl011::PL011");
+    let init_name = m.strings.intern("pl011::init");
+    let pl011_id = unit_item(&mut m, ItemKind::Struct, pl011_name);
+    let init_id = unit_item(&mut m, ItemKind::Function, init_name);
+
+    let pl011_ty = m.types.intern(Ty::Struct {
+        item: pl011_id,
+        args: vec![],
+        layout: crate::UNIT_LAYOUT,
+    });
+    let ptr_ty = m.types.intern(Ty::Ptr(pl011_ty, Mutability::Mut));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_ty],
+        output: bool_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+
+    let emission_name = m.strings.intern("pl011_init");
+    m.instances.push(Instance {
+        item: init_id,
+        generic_args: vec![],
+        emission_name,
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(Body::default()),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    let fn_def = m.types.intern(Ty::FnDef(init_id, vec![]));
+    assert_eq!(
+        m.pretty().render_ty(fn_def),
+        "fn(*mut pl011::PL011) -> bool {pl011::init}"
+    );
+}
+
+#[test]
+fn render_ty_fn_ptr_prefix_combinations() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_u8 = m.types.intern(Ty::Ptr(u8_ty, Mutability::Mut));
+
+    let safe_rust = m.sigs.intern(FnSig {
+        inputs: vec![i32_ty],
+        output: u32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let safe_c = m.sigs.intern(FnSig {
+        inputs: vec![i32_ty],
+        output: u32_ty,
+        abi: FnAbi::C,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let unsafe_rust = m.sigs.intern(FnSig {
+        inputs: vec![i32_ty],
+        output: u32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Unsafe,
+    });
+    let unsafe_c = m.sigs.intern(FnSig {
+        inputs: vec![ptr_u8],
+        output: i32_ty,
+        abi: FnAbi::C,
+        c_variadic: false,
+        safety: Safety::Unsafe,
+    });
+
+    let p_safe_rust = m.types.intern(Ty::FnPtr(safe_rust));
+    let p_safe_c = m.types.intern(Ty::FnPtr(safe_c));
+    let p_unsafe_rust = m.types.intern(Ty::FnPtr(unsafe_rust));
+    let p_unsafe_c = m.types.intern(Ty::FnPtr(unsafe_c));
+
+    let p = m.pretty();
+    assert_eq!(p.render_ty(p_safe_rust), "fn(i32) -> u32");
+    assert_eq!(p.render_ty(p_safe_c), "extern \"C\" fn(i32) -> u32");
+    assert_eq!(p.render_ty(p_unsafe_rust), "unsafe fn(i32) -> u32");
+    assert_eq!(
+        p.render_ty(p_unsafe_c),
+        "unsafe extern \"C\" fn(*mut u8) -> i32"
+    );
+}
+
+#[test]
+fn render_ty_dynamic_with_empty_and_sorted_auto_traits() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let vtable_path = m
+        .strings
+        .intern("<regseq_synth>::vtable::Reader::for::<std::fs::File>");
+    let vtable_item = unit_item(&mut m, ItemKind::Struct, vtable_path);
+    let vtable_ty = m.types.intern(Ty::Struct {
+        item: vtable_item,
+        args: vec![],
+        layout: crate::UNIT_LAYOUT,
+    });
+
+    let with_autos = m.types.intern(Ty::Dynamic {
+        auto_traits: vec![AutoTrait::Send, AutoTrait::Sync],
+        vtable_ty,
+    });
+    let without_autos = m.types.intern(Ty::Dynamic {
+        auto_traits: vec![],
+        vtable_ty,
+    });
+
+    let p = m.pretty();
+    assert_eq!(
+        p.render_ty(with_autos),
+        "dyn <regseq_synth>::vtable::Reader::for::<std::fs::File> + Send + Sync"
+    );
+    assert_eq!(
+        p.render_ty(without_autos),
+        "dyn <regseq_synth>::vtable::Reader::for::<std::fs::File>"
+    );
+}
+
+#[test]
+fn render_ty_dynamic_defensively_sorts_unsorted_auto_traits() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let vtable_path = m.strings.intern("<regseq_synth>::vtable::Foo::for::<Bar>");
+    let vtable_item = unit_item(&mut m, ItemKind::Struct, vtable_path);
+    let vtable_ty = m.types.intern(Ty::Struct {
+        item: vtable_item,
+        args: vec![],
+        layout: crate::UNIT_LAYOUT,
+    });
+
+    // Construct an input with deliberately reversed-order auto traits.
+    // The renderer must emit the §10.1 sorted order (Send < Sync < Unpin)
+    // regardless, matching the canonical-encoding defensive sort.
+    let id = m.types.intern(Ty::Dynamic {
+        auto_traits: vec![AutoTrait::Unpin, AutoTrait::Send],
+        vtable_ty,
+    });
+    assert_eq!(
+        m.pretty().render_ty(id),
+        "dyn <regseq_synth>::vtable::Foo::for::<Bar> + Send + Unpin"
+    );
+}
+
+#[test]
+fn render_generic_args_empty_returns_empty_string() {
+    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = crate::ItemId::ZERO;
+    assert_eq!(m.pretty().render_generic_args(&vec![], item), "");
+}
+
+#[test]
+fn render_generic_args_renders_type_args_with_angle_bracket_wrap() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    // ItemId arg is irrelevant for Type-only args (it only matters
+    // for the still-`todo!()` Const arm).
+    let item = crate::ItemId::ZERO;
+    let args = vec![GenericArg::Type(i32_ty), GenericArg::Type(bool_ty)];
+    assert_eq!(m.pretty().render_generic_args(&args, item), "<i32, bool>");
 }

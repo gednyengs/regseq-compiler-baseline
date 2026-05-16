@@ -3122,7 +3122,7 @@
           "id": "regseq-model-87",
           "name": "P1a-PP-02: render_ty + render_generic_args helper",
           "spec": ".harness/tasks/regseq-model/87-render-ty.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-66",
             "regseq-model-68",
