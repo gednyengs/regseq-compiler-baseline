@@ -319,3 +319,97 @@ fn translates_basic_block_statements_and_terminator() {
         assert!(matches!(block.terminator.kind, TerminatorKind::Return));
     });
 }
+
+#[test]
+fn closure_trait_method_call_rewrites_to_synth_closure_call_shim() {
+    // Audit-finding F1c (regseq-driver-37 v4 task spec lines 286-299
+    // + spec.md section 13.1): every `Fn::call` / `FnMut::call_mut` /
+    // `FnOnce::call_once` direct call against a closure captures
+    // struct must be lowered to the synth `ClosureCall` Function Item
+    // with positional (un-tupled) arguments.
+    let source = r#"
+pub fn caller() -> u32 {
+    let c = |x: u32| x + 1;
+    c(7)
+}
+"#;
+
+    with_bridge("bridge_terminator_closure_call_shim", source, |tcx, cx| {
+        // Iterate every reachable function body looking for a call
+        // terminator whose callee handle matches a synth-recorded
+        // ClosureCall handle. The mono-item discovery the bridge
+        // runs in production isn't wired here, but MIR for
+        // `caller` is reachable through `tcx.hir_body_owners`.
+        let mut saw_shim_callee = false;
+        let mut saw_positional_args = false;
+        for def_id in tcx.hir_body_owners() {
+            if !matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::Fn) {
+                continue;
+            }
+            let body = tcx.optimized_mir(def_id.to_def_id());
+            let mut body_cx = BodyCtxt::new(&body.local_decls);
+            for block in body.basic_blocks.iter() {
+                let Some(term) = block.terminator.clone() else {
+                    continue;
+                };
+                if !matches!(term.kind, mir::TerminatorKind::Call { .. }) {
+                    continue;
+                }
+                let translated = match translate_terminator(cx, &mut body_cx, term) {
+                    Ok(t) => t,
+                    Err(_) => continue,
+                };
+                let TerminatorKind::Call {
+                    callee: CallCallee::Direct(instance_id),
+                    args,
+                    ..
+                } = translated.kind
+                else {
+                    continue;
+                };
+                // The synth path records ClosureCall handles in
+                // `closure_synth_cache`; match the InstanceId
+                // (raw handle index) against any cached call
+                // handle.
+                let matches_closure_call = cx
+                    .closure_synth_cache
+                    .iter()
+                    .flat_map(|handles| handles.calls.iter().copied())
+                    .any(|handle| handle.as_u32() == instance_id.as_u32());
+                if matches_closure_call {
+                    saw_shim_callee = true;
+                    // Spec 13.1: receiver + tuple-flattened
+                    // positional args. The single-arg closure
+                    // `|x| x + 1` yields receiver + one
+                    // positional u32 = 2 args.
+                    if args.len() >= 2 {
+                        saw_positional_args = true;
+                    }
+                }
+            }
+        }
+        assert!(
+            saw_shim_callee,
+            "expected at least one Fn::call/FnMut::call_mut/FnOnce::call_once \
+                 terminator to rewrite to a synth ClosureCall callee",
+        );
+        assert!(
+            saw_positional_args,
+            "closure-call shim must untuple the trailing args tuple into \
+                 positional inputs (receiver + per-tuple-field args)",
+        );
+        // Cross-check: at least one ClosureCall synth item was
+        // pushed to pending_items, confirming synth/closure.rs
+        // ran and the shim rewrite found its handle.
+        let pending_has_closure_call = cx.pending_items.iter().any(|pending| {
+            matches!(
+                pending.synthetic_kind,
+                SyntheticItemKind::ClosureCall { .. }
+            )
+        });
+        assert!(
+            pending_has_closure_call,
+            "synth/closure.rs must register at least one ClosureCall pending item"
+        );
+    });
+}

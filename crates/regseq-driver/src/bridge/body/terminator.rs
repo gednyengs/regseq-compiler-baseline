@@ -1,9 +1,10 @@
 //! MIR `Terminator` bridge translation.
 
 use regseq_model::{
-    AssertKind, BlockId, CallCallee, InstanceId, LocalId, Operand, Place, SwitchTargets,
-    Terminator, TerminatorKind, Ty,
+    AssertKind, BlockId, CallCallee, ClosureCallKind, InstanceId, LocalId, Operand, Place,
+    PlaceElem, SwitchTargets, Terminator, TerminatorKind, Ty,
 };
+use rustc_hir::LangItem;
 use rustc_middle::mir;
 use rustc_middle::ty;
 
@@ -40,16 +41,35 @@ pub fn translate_terminator<'tcx>(
             destination,
             target,
             ..
-        } => TerminatorKind::Call {
-            callee: translate_call_callee(cx, body_cx, &func)?,
-            args: args
-                .iter()
-                .map(|arg| translate_operand(cx, body_cx, arg.node.clone()))
-                .collect::<Result<Vec<_>, _>>()?
-                .into_boxed_slice(),
-            destination: translate_place(cx, body_cx, destination)?,
-            target: target.map(block_id),
-        },
+        } => {
+            // Spec section 13.1 closure-call shim rewrite (audit-finding
+            // F1c, regseq-driver-37 v4 task spec lines 286-299):
+            // every `Fn::call` / `FnMut::call_mut` / `FnOnce::call_once`
+            // direct call against a closure captures struct must be
+            // lowered into a Rust-ABI `ClosureCall` synthetic Function
+            // Item with the call arguments tuple-normalised.
+            if let Some((callee, normalised_args)) =
+                rewrite_closure_call_shim(cx, body_cx, &func, &args)?
+            {
+                TerminatorKind::Call {
+                    callee,
+                    args: normalised_args.into_boxed_slice(),
+                    destination: translate_place(cx, body_cx, destination)?,
+                    target: target.map(block_id),
+                }
+            } else {
+                TerminatorKind::Call {
+                    callee: translate_call_callee(cx, body_cx, &func)?,
+                    args: args
+                        .iter()
+                        .map(|arg| translate_operand(cx, body_cx, arg.node.clone()))
+                        .collect::<Result<Vec<_>, _>>()?
+                        .into_boxed_slice(),
+                    destination: translate_place(cx, body_cx, destination)?,
+                    target: target.map(block_id),
+                }
+            }
+        }
         mir::TerminatorKind::Assert {
             cond,
             expected,
@@ -123,6 +143,147 @@ fn translate_switch_targets(targets: mir::SwitchTargets) -> SwitchTargets {
             .into_boxed_slice(),
         otherwise: block_id(targets.otherwise()),
     }
+}
+
+/// Detect calls to `Fn::call` / `FnMut::call_mut` / `FnOnce::call_once`
+/// against a closure receiver and rewrite them to call the
+/// `synth/closure.rs`-produced `ClosureCall` Function Item directly.
+/// The rustc closure-trait `RustCall` ABI passes args as a single
+/// tuple operand; per spec 13.1 the synth shim takes positional
+/// arguments instead, so this function untuples them.
+///
+/// Returns `Some((callee, args))` with the rewritten callee and the
+/// flattened positional arguments when the call matches the
+/// closure-trait shim pattern; returns `None` otherwise so the caller
+/// falls back to the standard call-translation path.
+fn rewrite_closure_call_shim<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx>,
+    func: &mir::Operand<'tcx>,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+) -> Result<Option<(CallCallee, Vec<Operand>)>, BridgeError> {
+    let mir::Operand::Constant(constant) = func else {
+        return Ok(None);
+    };
+    let ty::TyKind::FnDef(method_def_id, method_args) = constant.const_.ty().kind() else {
+        return Ok(None);
+    };
+    let Some(trait_def_id) = cx.input.tcx.trait_of_assoc(*method_def_id) else {
+        return Ok(None);
+    };
+    let Some(closure_kind) = cx.input.tcx.fn_trait_kind_from_def_id(trait_def_id) else {
+        return Ok(None);
+    };
+    // The closure-trait method's Self type is the closure type, in
+    // generic-arg slot 0. Slot 1 is the tupled call args.
+    let receiver_ty = method_args.type_at(0);
+    let ty::TyKind::Closure(closure_def_id, closure_args) = receiver_ty.kind() else {
+        return Ok(None);
+    };
+
+    let call_kind = match cx.input.tcx.lang_items().from_def_id(trait_def_id) {
+        Some(LangItem::Fn) => ClosureCallKind::Call,
+        Some(LangItem::FnMut) => ClosureCallKind::CallMut,
+        Some(LangItem::FnOnce) => ClosureCallKind::CallOnce,
+        _ => return Ok(None),
+    };
+    // `closure_kind` is unused beyond confirming this is a closure-
+    // trait method call; the synth handle is keyed on the method's
+    // trait, not the closure's intrinsic kind.
+    let _ = closure_kind;
+
+    let handles = synth::closure::synthesise_closure_for_def_id(
+        cx,
+        *closure_def_id,
+        closure_args.as_closure(),
+    )?;
+    let Some(call_handle) = pick_closure_call_handle(cx, &handles, call_kind) else {
+        return Ok(None);
+    };
+
+    // Translate the receiver (args[0]) and the tupled call args
+    // (args[1]). Untuple the second operand by emitting one
+    // field-projected operand per tuple field so the synth shim,
+    // which takes positional inputs, sees the same argument list
+    // shape it was synthesised for.
+    let mut normalised: Vec<Operand> = Vec::new();
+    if let Some(receiver) = args.first() {
+        normalised.push(translate_operand(cx, body_cx, receiver.node.clone())?);
+    }
+    if let Some(tuple_arg) = args.get(1) {
+        let local_decls = body_cx
+            .local_decls()
+            .ok_or_else(|| BridgeError::DslRejection {
+                kind: DslRejectionKind::Terminator,
+                ty_repr: "closure-call shim requires body local declarations to untuple args"
+                    .to_string(),
+            })?;
+        let tuple_ty = tuple_arg.node.ty(local_decls, cx.input.tcx);
+        let ty::TyKind::Tuple(tuple_fields) = tuple_ty.kind() else {
+            // RustCall trait method invoked with a non-tuple second
+            // operand is malformed; let the caller's strict path
+            // surface the error.
+            return Ok(None);
+        };
+        match &tuple_arg.node {
+            mir::Operand::Move(place) | mir::Operand::Copy(place) => {
+                let base = translate_place(cx, body_cx, *place)?;
+                let move_semantics = matches!(tuple_arg.node, mir::Operand::Move(_));
+                for (idx, field_ty) in tuple_fields.iter().enumerate() {
+                    let model_field_ty = translate_ty(cx, field_ty)?;
+                    let mut projection: Vec<PlaceElem> = base.projection.to_vec();
+                    projection.push(PlaceElem::Field(
+                        regseq_model::FieldIdx::from_u32(idx as u32),
+                        model_field_ty,
+                    ));
+                    let projected = Place {
+                        local: base.local,
+                        projection: projection.into_boxed_slice(),
+                    };
+                    normalised.push(if move_semantics {
+                        Operand::Move(projected)
+                    } else {
+                        Operand::Copy(projected)
+                    });
+                }
+            }
+            _ => {
+                // ConstantOperand for the tuple is unusual at a
+                // closure-call shim site; fall back so the caller's
+                // path reports an explicit rejection if needed.
+                return Ok(None);
+            }
+        }
+    }
+
+    let callee = CallCallee::Direct(InstanceId::from_u32(call_handle.as_u32()));
+    Ok(Some((callee, normalised)))
+}
+
+fn pick_closure_call_handle(
+    cx: &BridgeCtxt<'_>,
+    handles: &crate::bridge::synth::ClosureSynthHandles,
+    call_kind: ClosureCallKind,
+) -> Option<ItemHandle> {
+    // The synth path records call-method handles in the order
+    // `closure_call_kinds` returns them, which depends on the
+    // closure's intrinsic kind:
+    //   Fn    -> [Call, CallMut, CallOnce]
+    //   FnMut -> [CallMut, CallOnce]
+    //   FnOnce-> [CallOnce]
+    //   _     -> [CallOnce]
+    // The pending item carries the discriminator in
+    // `SyntheticItemKind::ClosureCall { call_kind, .. }`; scan the
+    // pending list for the matching variant.
+    handles.calls.iter().copied().find(|handle| {
+        let placeholder = crate::bridge::placeholder_item_id_for_handle(*handle);
+        match cx.lookup_item_synthetic_kind(placeholder) {
+            Some(regseq_model::SyntheticItemKind::ClosureCall { call_kind: ck, .. }) => {
+                ck == call_kind
+            }
+            _ => false,
+        }
+    })
 }
 
 fn translate_call_callee<'tcx>(

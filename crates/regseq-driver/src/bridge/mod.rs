@@ -189,7 +189,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
     }
 
     /// Resolve an `ItemId` to its `SyntheticItemKind`.
-    pub(crate) fn lookup_item_synthetic_kind(
+    pub fn lookup_item_synthetic_kind(
         &self,
         item: regseq_model::ItemId,
     ) -> Option<regseq_model::SyntheticItemKind> {
