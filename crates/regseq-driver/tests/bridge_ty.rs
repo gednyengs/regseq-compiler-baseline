@@ -673,6 +673,16 @@ pub fn closure_holder() {
             2,
             "captures struct should have one field per upvar"
         );
+        // Spec section 13.1 lines 4527-4529: fields are positionally
+        // named `_0`, `_1`, ... (audit-finding MEDIUM-40-3).
+        for (idx, field) in fields.iter().enumerate() {
+            let rendered = cx.model.strings.resolve(field.name);
+            assert_eq!(
+                rendered,
+                format!("_{idx}"),
+                "captures struct field {idx} must be named `_{idx}`"
+            );
+        }
         // The captured upvar field types match the closure body's
         // upvar tys.
         let rustc_upvars = if let rustc_middle::ty::TyKind::Closure(_, args) = closure_ty.kind() {

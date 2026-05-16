@@ -761,13 +761,15 @@ fn intern_closure_captures_struct_view<'tcx>(
         .map_err(|_| BridgeError::Layout {
             ty_repr: closure_ty.to_string(),
         })?;
-    let empty = cx.model.strings.intern("");
+    // Per spec.md section 13.1 lines 4527-4529, the closure captures
+    // struct view's fields are flattened from `tupled_upvars_ty()` to
+    // positional `_0`, `_1`, ... names (audit-finding MEDIUM-40-3).
     let fields = upvar_tys
         .iter()
         .copied()
         .enumerate()
         .map(|(idx, ty)| FieldLayout {
-            name: empty,
+            name: cx.model.strings.intern(&format!("_{idx}")),
             ty,
             offset: if idx < rustc_layout.fields.count() {
                 rustc_layout.fields.offset(idx).bytes()
