@@ -63,6 +63,7 @@ impl Fixture {
         self.model
             .item_synthetic_kinds
             .push(SyntheticItemKind::None);
+        self.model.domain_attrs.item_attrs.push(Vec::new());
         id
     }
 
@@ -114,10 +115,14 @@ impl Fixture {
     }
 
     fn tuple_ty(&mut self, fields: &[TyId]) -> TyId {
-        let field_layouts = self.fields(fields);
-        let layout = self.layout(LayoutKind::Struct {
-            fields: field_layouts,
-        });
+        let layout = if fields.is_empty() {
+            regseq_model::UNIT_LAYOUT
+        } else {
+            let field_layouts = self.fields(fields);
+            self.layout(LayoutKind::Struct {
+                fields: field_layouts,
+            })
+        };
         self.model.types.intern(Ty::Tuple {
             fields: fields.to_vec(),
             layout,
@@ -224,6 +229,7 @@ impl Fixture {
             c_variadic: false,
             safety: Safety::Safe,
         });
+        self.model.sig_c_abi_lowerings.push(None);
         let item = self.item(ItemKind::Function, "function");
         let name = self.model.strings.intern("function");
         self.model.instances.push(Instance {

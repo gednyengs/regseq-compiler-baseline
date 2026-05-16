@@ -26,6 +26,7 @@ mod instance;
 mod instance_ref;
 mod item;
 mod layout;
+mod layout_validator;
 mod model;
 pub mod operand;
 mod place;

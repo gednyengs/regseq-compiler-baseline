@@ -8,7 +8,7 @@ use crate::args_key::{args_key_for_generic_args, GenericArg};
 use crate::body::Body;
 use crate::bridge_input::BridgeInput;
 use crate::build::BuildInfo;
-use crate::cabi::{CAbiLowering, CAbiShape};
+use crate::cabi::CAbiLowering;
 use crate::const_interner::{ConstIdentityKey, ConstInterner};
 use crate::const_value::{Byte, Const};
 use crate::crate_info::{CrateInfo, StableCrateId};
@@ -110,7 +110,6 @@ const CONST_CHILD: &str = "Const nested ConstId";
 const CONST_RELOC_INSTANCE: &str = "Const relocation InstanceRef";
 const FN_SIG_INPUT: &str = "FnSig.inputs[..] (TyId)";
 const FN_SIG_OUTPUT: &str = "FnSig.output (TyId)";
-const C_ABI_LOWERING_EMIT_AS: &str = "CAbiLowering.emit_as (TyId)";
 const DOMAIN_ATTR_SPAN_FILE: &str = "DomainAttrTables.span_attrs key file (SourceFileId)";
 const INSTANCE_ITEM: &str = "Instance.item (ItemId)";
 const INSTANCE_EMISSION_NAME: &str = "Instance.emission_name (StringId)";
@@ -283,6 +282,133 @@ pub enum InvariantViolation {
         instance: InstanceId,
         /// First place-validation failure in that body.
         error: PlaceValidationError,
+    },
+
+    /// `TargetInfo` violates invariant 15 well-formedness.
+    TargetMalformed {
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// `BuildInfo` violates invariant 17 well-formedness.
+    BuildMalformed {
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// A `FnSig` violates `c_variadic` or input-shape invariants.
+    FnSigMalformed {
+        /// Offending signature.
+        sig: FnSigId,
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// A `CAbiLowering` entry violates a structural rule.
+    CAbiLoweringMalformed {
+        /// Signature whose lowering entry is malformed.
+        sig: FnSigId,
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// A `Layout` violates §11.5 / §12.5 sanity rules.
+    LayoutMalformed {
+        /// Type whose layout is malformed.
+        ty: TyId,
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// A tag scalar carries a value outside the scalar bit width.
+    TagScalarOutOfRange {
+        /// Type whose tag-bearing layout is offending.
+        ty: TyId,
+        /// Out-of-range tag value.
+        value: u128,
+        /// Bit width of the tag scalar type.
+        scalar_width_bits: u32,
+    },
+
+    /// An `InstanceKind` layout TyId does not resolve to the matching
+    /// nominal variant.
+    InstanceLayoutMismatch {
+        /// Offending instance.
+        instance: InstanceId,
+        /// Expected nominal kind name.
+        expected_kind: &'static str,
+        /// Resolved kind name.
+        found_kind: &'static str,
+    },
+
+    /// An `InstanceKind` layout's `(item, args)` does not match the
+    /// instance's `(item, generic_args)`.
+    InstanceLayoutItemArgsMismatch {
+        /// Offending instance.
+        instance: InstanceId,
+    },
+
+    /// A back-edge was found while walking value-level const
+    /// recursion edges.
+    ConstGraphCycle {
+        /// Entry point used to discover the cycle.
+        entry_point: ConstId,
+        /// Cycle path containing the back edge.
+        cycle: Vec<ConstId>,
+    },
+
+    /// A domain-attribute sibling table is malformed.
+    DomainAttrMalformed {
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// An opaque-handle eligibility flag is inconsistent with the
+    /// model.
+    OpaqueHandleInconsistent {
+        /// Offending item.
+        item: ItemId,
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// A real source crate carries `StableCrateId(0)`.
+    StableCrateIdZeroCollision {
+        /// Offending crate id.
+        crate_id: CrateId,
+    },
+
+    /// A synthetic-domain boundary is violated.
+    SyntheticDomainBoundary {
+        /// Offending item.
+        item: ItemId,
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// An empty `Ty::Tuple { fields: [] }` does not carry
+    /// `UNIT_LAYOUT`.
+    UnitLayoutMismatch {
+        /// Offending tuple type.
+        ty: TyId,
+    },
+
+    /// A `SourceFile` is malformed.
+    SourceFileMalformed {
+        /// Offending source file.
+        file: SourceFileId,
+        /// Brief reason describing the violation.
+        reason: &'static str,
+    },
+
+    /// Two `SourceFile` entries share the same `path` string id.
+    DuplicateSourceFilePath {
+        /// First source file carrying the duplicate path.
+        first: SourceFileId,
+        /// Second source file carrying the duplicate path.
+        second: SourceFileId,
+        /// Shared path string id.
+        path: StringId,
     },
 }
 
@@ -537,10 +663,10 @@ impl RegseqModel {
             self.check_string_id(info.name, CRATE_INFO_NAME)?;
         }
 
-        for (idx, file) in self.source_files.iter().enumerate() {
+        for file in self.source_files.iter() {
             self.check_string_id(file.path, SOURCE_FILE_PATH)?;
-            self.validate_line_starts(SourceFileId::from_u32(idx as u32), file)?;
         }
+        crate::layout_validator::validate_source_files(self)?;
 
         self.validate_unique_stable_crate_ids()?;
 
@@ -569,10 +695,15 @@ impl RegseqModel {
             });
         }
 
+        crate::layout_validator::validate_target(self)?;
+        crate::layout_validator::validate_build(self)?;
+
         self.validate_const_interner_uniqueness()?;
         self.validate_fn_sig_interner()?;
+        crate::layout_validator::validate_fn_sigs(self)?;
+        crate::layout_validator::validate_c_abi_lowerings(self)?;
         self.validate_ty_interner()?;
-        self.validate_c_abi_lowerings()?;
+        crate::layout_validator::validate_layouts(self)?;
         self.validate_synthetic_kinds()?;
 
         for (idx, instance) in self.instances.iter().enumerate() {
@@ -590,9 +721,16 @@ impl RegseqModel {
             }
         }
 
+        crate::layout_validator::validate_instance_layouts(self)?;
+
         self.validate_value_consts()?;
-        self.validate_item_def_path_hash_uniqueness()?;
+        crate::layout_validator::validate_const_graph_acyclic(self)?;
+        crate::layout_validator::validate_domain_attrs(self)?;
         self.validate_domain_attr_spans()?;
+        self.validate_item_def_path_hash_uniqueness()?;
+        crate::layout_validator::validate_stable_crate_id_zero(self)?;
+        crate::layout_validator::validate_opaque_handle_eligibility(self)?;
+        crate::layout_validator::validate_unit_layout(self)?;
         self.validate_f4_instance_order()?;
         self.rebuild_vtables()?;
 
@@ -1092,25 +1230,6 @@ impl RegseqModel {
         self.check_ty_id(scalar.scalar_ty, TY_LAYOUT_TAG_SCALAR_TY)
     }
 
-    fn validate_c_abi_lowerings(&self) -> Result<(), InvariantViolation> {
-        for lowering in self.sig_c_abi_lowerings.iter().flatten() {
-            for shape in &lowering.inputs {
-                self.validate_c_abi_shape(shape)?;
-            }
-            self.validate_c_abi_shape(&lowering.output)?;
-        }
-        Ok(())
-    }
-
-    fn validate_c_abi_shape(&self, shape: &CAbiShape) -> Result<(), InvariantViolation> {
-        match shape {
-            CAbiShape::Direct => Ok(()),
-            CAbiShape::Substituted { emit_as, .. } => {
-                self.check_ty_id(*emit_as, C_ABI_LOWERING_EMIT_AS)
-            }
-        }
-    }
-
     fn validate_synthetic_kinds(&self) -> Result<(), InvariantViolation> {
         for kind in self.item_synthetic_kinds.iter() {
             match kind {
@@ -1225,30 +1344,6 @@ impl RegseqModel {
             }
         }
         self.vtables = rebuilt;
-        Ok(())
-    }
-
-    fn validate_line_starts(
-        &self,
-        file_id: SourceFileId,
-        file: &SourceFile,
-    ) -> Result<(), InvariantViolation> {
-        if file.line_starts.first().copied() != Some(0) {
-            return Err(InvariantViolation::SpanOutOfBounds {
-                file: file_id,
-                lo: file.line_starts.first().copied().unwrap_or(1),
-                hi: file.line_starts.first().copied().unwrap_or(1),
-                content_len: file.content.as_ref().map_or(0, |text| text.len()),
-            });
-        }
-        if file.line_starts.windows(2).any(|pair| pair[0] > pair[1]) {
-            return Err(InvariantViolation::SpanOutOfBounds {
-                file: file_id,
-                lo: 0,
-                hi: 0,
-                content_len: file.content.as_ref().map_or(0, |text| text.len()),
-            });
-        }
         Ok(())
     }
 

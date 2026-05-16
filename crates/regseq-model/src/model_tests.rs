@@ -222,6 +222,7 @@ fn populated_model_passes_validate() {
     let ty = m.types.push(Ty::Bool);
     let init = m.consts.intern(crate::Const::ZST);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
 
     let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
@@ -229,6 +230,7 @@ fn populated_model_passes_validate() {
         local_hash: 0xCAFE,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
 
     let symbol = m.strings.intern("foo");
     m.instances.push(Instance {
@@ -250,6 +252,7 @@ fn populated_model_passes_validate() {
         local_hash: 0xF00D,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let static_ty = m.types.push(Ty::Bool);
     let static_init = m.consts.intern(crate::Const::ZST);
     m.instances.push(Instance {
@@ -279,8 +282,10 @@ fn function_with_body_none_validates_when_sig_resolves() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -440,6 +445,7 @@ fn invariant_1_dangling_item_id_in_instance() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         // No items pushed; ItemId(0) is dangling.
         item: ItemId::from_u32(0),
@@ -492,8 +498,10 @@ fn invariant_1_dangling_source_file_id_in_instance_span() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -523,8 +531,10 @@ fn invariant_1_dangling_ty_id_in_generic_args() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Type(TyId::from_u32(5))],
@@ -554,8 +564,10 @@ fn invariant_1_dangling_const_id_in_generic_args() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Const(ConstId::from_u32(7))],
@@ -585,6 +597,7 @@ fn invariant_1_dangling_fn_sig_id_in_function_kind() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -614,8 +627,10 @@ fn invariant_10_inline_body_in_function_kind_validates() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -639,6 +654,7 @@ fn invariant_1_dangling_ty_id_in_static_kind() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -682,6 +698,7 @@ fn invariant_1_dangling_layout_in_struct_enum_union() {
             local_hash: 0,
         });
         m.item_synthetic_kinds.push(Default::default());
+        m.domain_attrs.item_attrs.push(Vec::new());
         m.instances.push(Instance {
             item,
             generic_args: vec![],
@@ -734,8 +751,10 @@ fn invariant_1_dangling_string_id_in_instance_emission_name() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let _ = m.types.push(Ty::Bool);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -765,6 +784,7 @@ fn invariant_1_dangling_const_id_in_static_init() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let ty = m.types.push(Ty::Bool);
     m.instances.push(Instance {
         item,
@@ -799,6 +819,7 @@ fn invariant_1_dangling_ty_id_in_const_kind() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     m.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -831,6 +852,7 @@ fn invariant_1_dangling_const_id_in_const_kind_value() {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let ty = m.types.push(Ty::Bool);
     m.instances.push(Instance {
         item,
@@ -874,12 +896,14 @@ fn populated_model_round_trips_through_json() {
     let _ = m.types.push(Ty::Bool);
     let _ = m.consts.intern(crate::Const::ZST);
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     let item = push_fixture_item(&mut m);
     m.item_def_paths.push(crate::DefPathHash {
         stable_crate_id: StableCrateId(0xAAAA),
         local_hash: 0xCAFE,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let symbol = m.strings.intern("foo");
     m.instances.push(Instance {
         item,
@@ -1018,7 +1042,9 @@ fn helper_fixture() -> (RegseqModel, InstanceId) {
         local_hash: 0,
     });
     m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs.item_attrs.push(Vec::new());
     let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
     let id = m.instances.push(Instance {
         item,
         generic_args: vec![],
