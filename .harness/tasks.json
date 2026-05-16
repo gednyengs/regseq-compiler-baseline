@@ -3207,7 +3207,7 @@
           "id": "regseq-model-90",
           "name": "P1a-PP-04b: render_const for aggregate/recursion variants",
           "spec": ".harness/tasks/regseq-model/90-render-const-aggregate.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-89"
           ],

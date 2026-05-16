@@ -34,22 +34,24 @@
 //! `LocalId` (`_N`) and `BlockId` (`bbN`) sigils land in stages 10
 //! and 11 alongside the IDs themselves.
 
-use crate::args_key::{GenericArg, GenericArgs};
+use crate::args_key::{args_key_for_generic_args, GenericArg, GenericArgs};
 use crate::basic_block::BasicBlock;
 use crate::body::Body;
 use crate::body_ty::{operand_ty, place_ty, TypeRecovery};
-use crate::const_value::Const;
+use crate::const_value::{Byte, Const};
 use crate::def_path::{render_def_path, DefPath};
-use crate::ids::{ConstId, InstanceId, ItemId, SourceFileId, TyId};
-use crate::instance::InstanceKind;
+use crate::ids::{ConstId, InstanceId, ItemId, SourceFileId, TyId, VariantIdx};
+use crate::instance::{regseq_instance_kind_rank, rustc_instance_kind_sort_rank, InstanceKind};
+use crate::instance_ref::InstanceRef;
 use crate::item::{InlineHint, ItemKind, Linkage};
-use crate::layout::{EnumShape, FieldLayout, LayoutKind};
+use crate::layout::{EnumShape, FieldLayout, LayoutKind, VariantLayout};
 use crate::model::RegseqModel;
 use crate::operand::Operand;
 use crate::place::{Place, PlaceElem};
 use crate::rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 use crate::source::Span;
 use crate::statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};
+use crate::synthetic::SyntheticItemKind;
 use crate::terminator::{AssertKind, CallCallee, SwitchTargets, Terminator, TerminatorKind};
 use crate::ty::{
     AutoTrait, FloatKind, FnAbi, IntKind, Mutability, Provenance, Safety, Ty, UintKind,
@@ -354,9 +356,10 @@ impl<'a> PrettyPrinter<'a> {
     ///   and ignore the consumer Ty (§10.1.1).
     /// - `ZST` keys on the consumer `Ty.kind()` and recurses on the
     ///   same `ConstId` for composite cases (§10.1.2).
-    /// - `Aggregate / EnumValue / Bytes / NullPtr / Reloc` are owned
-    ///   by P1a-PP-04b (regseq-model-90) and stay `todo!()` until
-    ///   that task lands.
+    /// - `Aggregate / EnumValue / Bytes / NullPtr / Reloc` dispatch
+    ///   per §10.1.3 - §10.1.7 with §10.1.8 per-sub-field Ty
+    ///   resolution. Cannot-occur cases panic with informative
+    ///   messages.
     pub fn render_const(&self, id: ConstId, expected_ty: TyId) -> String {
         match &self.model.consts[id] {
             Const::Bool(value) => render_const_bool(*value),
@@ -365,20 +368,26 @@ impl<'a> PrettyPrinter<'a> {
             Const::Uint(kind, bits) => self.render_const_uint(*kind, *bits),
             Const::Float(kind, bits) => render_const_float(*kind, *bits),
             Const::ZST => self.render_const_zst(id, expected_ty),
-            Const::Aggregate(_) => {
-                todo!("render_const Aggregate arm lands with P1a-PP-04b (regseq-model-90)")
+            Const::Aggregate(children) => {
+                let children = children.clone();
+                self.render_const_aggregate(&children, expected_ty)
             }
-            Const::EnumValue { .. } => {
-                todo!("render_const EnumValue arm lands with P1a-PP-04b (regseq-model-90)")
+            Const::EnumValue {
+                variant_idx,
+                payload,
+            } => {
+                let variant_idx = *variant_idx;
+                let payload = payload.clone();
+                self.render_const_enum_value(variant_idx, &payload, expected_ty)
             }
-            Const::Bytes(_) => {
-                todo!("render_const Bytes arm lands with P1a-PP-04b (regseq-model-90)")
+            Const::Bytes(bytes) => {
+                let bytes = bytes.clone();
+                self.render_const_bytes_arm(&bytes, expected_ty)
             }
-            Const::NullPtr(_) => {
-                todo!("render_const NullPtr arm lands with P1a-PP-04b (regseq-model-90)")
-            }
-            Const::Reloc(_) => {
-                todo!("render_const Reloc arm lands with P1a-PP-04b (regseq-model-90)")
+            Const::NullPtr(_) => self.render_const_null_ptr(expected_ty),
+            Const::Reloc(instance_ref) => {
+                let instance_ref = *instance_ref;
+                self.render_const_reloc(instance_ref, expected_ty)
             }
         }
     }
@@ -612,6 +621,666 @@ impl<'a> PrettyPrinter<'a> {
             let args_text = self.render_generic_args(args, item);
             format!("{path}::{args_text}")
         }
+    }
+
+    /// `Aggregate(Vec<ConstId>)` per-Ty.kind() dispatch per §10.1.3.
+    ///
+    /// Recurses on children with the per-sub-field Ty resolved per
+    /// §10.1.8. Fat-pointer Ref consumers attempt the `&str` / `&[u8]`
+    /// literal special cases (5 pre-conditions per row); on failure,
+    /// falls back to the typed-cast structural form.
+    fn render_const_aggregate(&self, children: &[ConstId], expected_ty: TyId) -> String {
+        match self.model.types.resolve(expected_ty) {
+            Ty::Array(elem, n) => {
+                let elem = *elem;
+                let expected = *n as usize;
+                assert!(
+                    children.len() == expected,
+                    "render_const: Const::Aggregate over Ty::Array expected {expected} children, \
+                     found {} (bridge-validated invariant violated per pretty-printer.md \
+                     §10.1.3)",
+                    children.len()
+                );
+                let parts: Vec<String> = children
+                    .iter()
+                    .map(|c| self.render_const(*c, elem))
+                    .collect();
+                format!("[{}]", parts.join(", "))
+            }
+            Ty::Tuple { fields, .. } => {
+                let field_tys: Vec<TyId> = fields.clone();
+                assert!(
+                    children.len() == field_tys.len(),
+                    "render_const: Const::Aggregate over Ty::Tuple expected {} children, \
+                     found {} (bridge-validated invariant violated per pretty-printer.md \
+                     §10.1.3)",
+                    field_tys.len(),
+                    children.len()
+                );
+                match field_tys.as_slice() {
+                    [] => "()".to_owned(),
+                    [only] => format!("({},)", self.render_const(children[0], *only)),
+                    many => {
+                        let parts: Vec<String> = children
+                            .iter()
+                            .zip(many.iter())
+                            .map(|(c, t)| self.render_const(*c, *t))
+                            .collect();
+                        format!("({})", parts.join(", "))
+                    }
+                }
+            }
+            Ty::Struct { item, args, layout } => {
+                let item = *item;
+                let args = args.clone();
+                let field_layouts = match &layout.kind {
+                    LayoutKind::Struct { fields } => fields.clone(),
+                    _ => panic!(
+                        "render_const: Const::Aggregate over Ty::Struct item {} carries \
+                         non-Struct LayoutKind (validation rejects this per spec.md §11)",
+                        item.as_u32()
+                    ),
+                };
+                self.render_aggregate_struct(children, item, &args, &field_layouts)
+            }
+            Ty::Ref(pointee, _) => {
+                let pointee = *pointee;
+                self.render_aggregate_ref(children, pointee, expected_ty)
+            }
+            Ty::Enum { .. } | Ty::Union { .. } => panic!(
+                "render_const: Const::Aggregate cannot be consumed by Ty::Enum or Ty::Union; \
+                 Enum aggregates use Const::EnumValue per §10.1.4; Union aggregates lack \
+                 field disambiguation"
+            ),
+            other => panic!(
+                "render_const: Const::Aggregate consumed by non-aggregate Ty.kind() {other:?}; \
+                 bridge bug per pretty-printer.md §10.1.3"
+            ),
+        }
+    }
+
+    /// `Aggregate` over `Ty::Struct` dispatch: fieldless / tuple-style /
+    /// named-field-style per §10.1.3 + §3.4.
+    fn render_aggregate_struct(
+        &self,
+        children: &[ConstId],
+        item: ItemId,
+        args: &GenericArgs,
+        fields: &[FieldLayout],
+    ) -> String {
+        let head = self.render_value_namespace_path(item, args);
+        assert!(
+            children.len() == fields.len(),
+            "render_const: Const::Aggregate over Ty::Struct expected {} children, found {} \
+             (bridge-validated invariant violated per pretty-printer.md §10.1.3)",
+            fields.len(),
+            children.len()
+        );
+        if fields.is_empty() {
+            return head;
+        }
+        if self.fields_are_tuple_synthetic(fields) {
+            let parts: Vec<String> = children
+                .iter()
+                .zip(fields.iter())
+                .map(|(c, f)| self.render_const(*c, f.ty))
+                .collect();
+            format!("{head}({})", parts.join(", "))
+        } else {
+            let parts: Vec<String> = children
+                .iter()
+                .zip(fields.iter())
+                .map(|(c, f)| {
+                    let name = self.model.strings.resolve(f.name);
+                    format!("{name}: {}", self.render_const(*c, f.ty))
+                })
+                .collect();
+            format!("{head} {{ {} }}", parts.join(", "))
+        }
+    }
+
+    /// `Aggregate` over `Ty::Ref(_, pointee, _)` dispatch: attempts
+    /// `&str` and `&[u8]` literal special cases per §10.1.3, else
+    /// structural fallback per D-14-4.9 §10.1.8. Thin reference
+    /// pointees are cannot-occur for `Const::Aggregate` per §10.1.3
+    /// row 12 and panic with an informative message.
+    fn render_aggregate_ref(
+        &self,
+        children: &[ConstId],
+        pointee: TyId,
+        consumer_ty: TyId,
+    ) -> String {
+        match self.model.types.resolve(pointee) {
+            Ty::Str => {
+                if let Some(bytes) = self.aggregate_fat_pointer_byte_string(children) {
+                    let lossy = String::from_utf8_lossy(&bytes);
+                    return format!("\"{lossy}\"");
+                }
+            }
+            Ty::Slice(elem_ty) => {
+                let elem_ty = *elem_ty;
+                if matches!(self.model.types.resolve(elem_ty), Ty::Uint(UintKind::U8)) {
+                    if let Some(bytes) = self.aggregate_fat_pointer_byte_string(children) {
+                        return format!("b\"{}\"", escape_ascii_bytes(&bytes));
+                    }
+                }
+            }
+            Ty::Dynamic { .. } => {}
+            other => panic!(
+                "render_const: Const::Aggregate over Ty::Ref to thin pointee {other:?} is \
+                 cannot-occur; bridge produces Const::Reloc for thin references per \
+                 pretty-printer.md §10.1.3"
+            ),
+        }
+        // Structural fallback per §10.1.3 row 9 + §10.1.8 fat-pointer
+        // resolution.
+        assert!(
+            children.len() == 2,
+            "render_const: Const::Aggregate fat-pointer fallback expected 2 children, found \
+             {} (bridge-validated invariant per pretty-printer.md §10.1.3)",
+            children.len()
+        );
+        let ptr_ty = self
+            .model
+            .types
+            .find(&Ty::Ptr(pointee, Mutability::Not))
+            .unwrap_or_else(|| {
+                panic!(
+                    "render_const: fat-pointer Aggregate fallback requires bridge to intern \
+                     `Ty::Ptr(pointee, Mutability::Not)` per pretty-printer.md §10.1.8 \
+                     bridge-interning invariant"
+                )
+            });
+        let usize_ty = self
+            .model
+            .types
+            .find(&Ty::Uint(UintKind::Usize))
+            .unwrap_or_else(|| {
+                panic!(
+                    "render_const: fat-pointer Aggregate fallback requires bridge to intern \
+                     `Ty::Uint(UintKind::Usize)` per pretty-printer.md §10.1.8 \
+                     bridge-interning invariant"
+                )
+            });
+        let data_text = self.render_const(children[0], ptr_ty);
+        let meta_text = self.render_const(children[1], usize_ty);
+        let consumer_text = self.render_ty(consumer_ty);
+        format!("({data_text}, {meta_text}) as {consumer_text}")
+    }
+
+    /// Fat-pointer `&str` / `&[u8]` byte-string pre-condition check
+    /// per §10.1.3. Returns `Some(bytes)` when all five preconditions
+    /// hold, `None` otherwise (caller falls back to structural form).
+    fn aggregate_fat_pointer_byte_string(&self, children: &[ConstId]) -> Option<Vec<u8>> {
+        // 1. Aggregate has exactly 2 children.
+        if children.len() != 2 {
+            return None;
+        }
+        // 2. children[0] resolves to Const::Reloc(InstanceRef).
+        let reloc = match &self.model.consts[children[0]] {
+            Const::Reloc(r) => *r,
+            _ => return None,
+        };
+        // 3. InstanceRef resolves to a Static Instance with
+        //    item_synthetic_kinds[item] == ConstMemoryStatic { .. }.
+        let instance_id = self.find_instance_id_for_ref(reloc)?;
+        let instance = &self.model.instances[instance_id];
+        let (init_id, item) = match &instance.kind {
+            InstanceKind::Static { init: Some(c), .. } => (*c, instance.item),
+            _ => return None,
+        };
+        if !matches!(
+            &self.model.item_synthetic_kinds[item],
+            SyntheticItemKind::ConstMemoryStatic { .. }
+        ) {
+            return None;
+        }
+        // 4. Static.init resolves to Const::Bytes(vec) of all
+        //    Byte::Value(b) bytes.
+        let raw_bytes = match &self.model.consts[init_id] {
+            Const::Bytes(b) => b.clone(),
+            _ => return None,
+        };
+        let mut decoded: Vec<u8> = Vec::with_capacity(raw_bytes.len());
+        for byte in &raw_bytes {
+            match byte {
+                Byte::Value(v) => decoded.push(*v),
+                _ => return None,
+            }
+        }
+        // 5. children[1] resolves to Const::Uint(Usize, len) where
+        //    len == vec.len() as u128.
+        match &self.model.consts[children[1]] {
+            Const::Uint(UintKind::Usize, n) if *n == decoded.len() as u128 => Some(decoded),
+            _ => None,
+        }
+    }
+
+    /// `EnumValue { variant_idx, payload }` dispatch per §10.1.4.
+    ///
+    /// Resolves the named variant from the consumer `Ty::Enum`'s
+    /// `EnumShape`, then dispatches on the variant's `fields` per
+    /// §3.4 (unit / tuple / named). Payload children render via
+    /// `render_const(p_i, fields[i].ty)` per §10.1.8.
+    fn render_const_enum_value(
+        &self,
+        variant_idx: VariantIdx,
+        payload: &[ConstId],
+        expected_ty: TyId,
+    ) -> String {
+        let (item, args, variant) = match self.model.types.resolve(expected_ty) {
+            Ty::Enum { item, args, layout } => match &layout.kind {
+                LayoutKind::Enum { shape } => {
+                    let variant = self.enum_variant_for_const(shape, variant_idx);
+                    (*item, args.clone(), variant)
+                }
+                _ => panic!(
+                    "render_const: Const::EnumValue consumer Ty::Enum item {} carries \
+                     non-Enum LayoutKind (validation rejects this per spec.md §11)",
+                    item.as_u32()
+                ),
+            },
+            other => panic!(
+                "render_const: Const::EnumValue cannot be consumed by non-Enum Ty {other:?}; \
+                 bridge produces EnumValue only for enum consumer Tys per pretty-printer.md \
+                 §10.1.4"
+            ),
+        };
+        assert!(
+            payload.len() == variant.fields.len(),
+            "render_const: Const::EnumValue payload.len={} != variant.fields.len={} \
+             (bridge-validated invariant per pretty-printer.md §10.1.4)",
+            payload.len(),
+            variant.fields.len()
+        );
+        let enum_path = self.render_value_namespace_path(item, &args);
+        let variant_name = self.model.strings.resolve(variant.name).to_owned();
+        if variant.fields.is_empty() {
+            format!("{enum_path}::{variant_name}")
+        } else if self.fields_are_tuple_synthetic(&variant.fields) {
+            let parts: Vec<String> = payload
+                .iter()
+                .zip(variant.fields.iter())
+                .map(|(p, f)| self.render_const(*p, f.ty))
+                .collect();
+            format!("{enum_path}::{variant_name}({})", parts.join(", "))
+        } else {
+            let parts: Vec<String> = payload
+                .iter()
+                .zip(variant.fields.iter())
+                .map(|(p, f)| {
+                    let name = self.model.strings.resolve(f.name);
+                    format!("{name}: {}", self.render_const(*p, f.ty))
+                })
+                .collect();
+            format!("{enum_path}::{variant_name} {{ {} }}", parts.join(", "))
+        }
+    }
+
+    /// Locates the `VariantLayout` named by `variant_idx` on the
+    /// consumer `EnumShape`. Panics on `EnumShape::Empty` (cannot-occur)
+    /// or out-of-bounds index (cannot-occur, bridge-validated). For
+    /// `EnumShape::Single`, only `variant_idx == 0` is admissible;
+    /// any other index is a bridge bug per pretty-printer.md §10.1.4.
+    fn enum_variant_for_const(&self, shape: &EnumShape, variant_idx: VariantIdx) -> VariantLayout {
+        match shape {
+            EnumShape::Empty => panic!(
+                "render_const: Const::EnumValue cannot occur on EnumShape::Empty; a \
+                 zero-variant uninhabited enum has no values per pretty-printer.md §10.1.4"
+            ),
+            EnumShape::Single { variant, .. } => {
+                assert!(
+                    variant_idx.as_u32() == 0,
+                    "render_const: Const::EnumValue variant_idx {} out of bounds for \
+                     EnumShape::Single (only index 0 is admissible; bridge-validated \
+                     invariant per pretty-printer.md §10.1.4)",
+                    variant_idx.as_u32()
+                );
+                variant.clone()
+            }
+            EnumShape::Multiple { variants, .. } => {
+                let idx = variant_idx.as_u32() as usize;
+                assert!(
+                    idx < variants.len(),
+                    "render_const: Const::EnumValue variant_idx {} out of bounds for \
+                     EnumShape::Multiple.variants.len()={} (bridge-validated invariant per \
+                     pretty-printer.md §10.1.4)",
+                    idx,
+                    variants.len()
+                );
+                variants[idx].clone()
+            }
+        }
+    }
+
+    /// `Bytes(Vec<Byte>)` dispatch per §10.1.5.
+    ///
+    /// Evaluates the all-uninit shortcut FIRST per §10.1.5 precedence
+    /// (applies for any consumer Ty), then rejects cannot-occur
+    /// consumer Tys (`Ty::Ref` to `Str` / `Slice` or scalar Tys), then
+    /// the byte-array `*b"..."` deref form, otherwise the structural
+    /// `bytes![...]` fallback.
+    fn render_const_bytes_arm(&self, bytes: &[Byte], expected_ty: TyId) -> String {
+        // All-uninit shortcut: evaluated FIRST per §10.1.5 "applies for
+        // any consumer Ty"; takes precedence over both the byte-array
+        // case and the cannot-occur consumer checks.
+        if !bytes.is_empty() && bytes.iter().all(|b| matches!(b, Byte::Uninit)) {
+            return "<uninit>".to_owned();
+        }
+
+        // Cannot-occur consumer Tys for non-all-uninit Bytes payloads.
+        match self.model.types.resolve(expected_ty) {
+            Ty::Ref(pointee, _) => {
+                let pointee = *pointee;
+                if matches!(self.model.types.resolve(pointee), Ty::Str | Ty::Slice(_)) {
+                    panic!(
+                        "render_const: Const::Bytes cannot be consumed by Ty::Ref(_, Ty::Str) \
+                         or Ty::Ref(_, Ty::Slice(_)); bridge produces Const::Aggregate per \
+                         spec.md §9.7"
+                    );
+                }
+            }
+            Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) => panic!(
+                "render_const: Const::Bytes cannot be consumed by scalar Ty {:?}; bridge \
+                 produces the scalar Const variant per spec.md §9.7",
+                self.model.types.resolve(expected_ty)
+            ),
+            _ => {}
+        }
+
+        // Byte-array `*b"..."` deref form: all-Value + Ty::Array(u8, N).
+        if let Ty::Array(elem_ty, n) = self.model.types.resolve(expected_ty) {
+            let elem_ty = *elem_ty;
+            let n = *n;
+            if matches!(self.model.types.resolve(elem_ty), Ty::Uint(UintKind::U8)) {
+                let all_value: Option<Vec<u8>> = bytes
+                    .iter()
+                    .map(|b| match b {
+                        Byte::Value(v) => Some(*v),
+                        _ => None,
+                    })
+                    .collect();
+                if let Some(values) = all_value {
+                    if values.len() as u64 == n {
+                        return format!("*b\"{}\"", escape_ascii_bytes(&values));
+                    }
+                }
+            }
+        }
+
+        // Structural fallback `bytes![...]`.
+        self.render_bytes_structural_fallback(bytes)
+    }
+
+    /// Renders the `bytes![...]` structural form per §10.1.5.
+    ///
+    /// Per-byte forms: `Byte::Value(b)` -> `0xHH`; `Byte::Uninit` ->
+    /// `<uninit>`; `Byte::Reloc(r)` -> `<reloc: <path>>` collapsed
+    /// across maximal consecutive same-target Reloc runs.
+    fn render_bytes_structural_fallback(&self, bytes: &[Byte]) -> String {
+        let mut tokens: Vec<String> = Vec::new();
+        let mut i = 0;
+        while i < bytes.len() {
+            match bytes[i] {
+                Byte::Value(v) => {
+                    tokens.push(format!("0x{v:02x}"));
+                    i += 1;
+                }
+                Byte::Uninit => {
+                    tokens.push("<uninit>".to_owned());
+                    i += 1;
+                }
+                Byte::Reloc(r) => {
+                    let instance_id = self.find_instance_id_for_ref(r).unwrap_or_else(|| {
+                        panic!(
+                            "render_const: Byte::Reloc(InstanceRef) does not resolve to any \
+                             Instance (bridge-validated F4-2 invariant violated)"
+                        )
+                    });
+                    let item = self.model.instances[instance_id].item;
+                    let path = self.render_def_path(item);
+                    tokens.push(format!("<reloc: {path}>"));
+                    // Collapse consecutive same-target Reloc bytes
+                    // into one token per §10.1.5 "one token per maximal
+                    // relocation run".
+                    let mut j = i + 1;
+                    while j < bytes.len() {
+                        if let Byte::Reloc(r2) = bytes[j] {
+                            if r2 == r {
+                                j += 1;
+                                continue;
+                            }
+                        }
+                        break;
+                    }
+                    i = j;
+                }
+            }
+        }
+        format!("bytes![{}]", tokens.join(", "))
+    }
+
+    /// `NullPtr(TyId)` dispatch per §10.1.6.
+    ///
+    /// Renders in the typed-cast form `0x0 as <render_ty(consumer_ty)>`
+    /// for thin pointers. Per spec, the consumer Ty supplies mutability,
+    /// borrow-flavor, and FnPtr signature info that the variant's
+    /// `pointee_ty` payload does not carry (the payload is for
+    /// canonical-equality only).
+    fn render_const_null_ptr(&self, consumer_ty: TyId) -> String {
+        match self.model.types.resolve(consumer_ty) {
+            Ty::Ref(inner, Provenance::SharedBorrow) => {
+                let inner = *inner;
+                self.assert_thin_pointee(inner);
+                format!("0x0 as &{}", self.render_ty(inner))
+            }
+            Ty::Ref(inner, Provenance::UniqueBorrow) => {
+                let inner = *inner;
+                self.assert_thin_pointee(inner);
+                format!("0x0 as &mut {}", self.render_ty(inner))
+            }
+            Ty::Ptr(inner, Mutability::Not) => {
+                let inner = *inner;
+                self.assert_thin_pointee(inner);
+                format!("0x0 as *const {}", self.render_ty(inner))
+            }
+            Ty::Ptr(inner, Mutability::Mut) => {
+                let inner = *inner;
+                self.assert_thin_pointee(inner);
+                format!("0x0 as *mut {}", self.render_ty(inner))
+            }
+            Ty::FnPtr(_) => format!("0x0 as {}", self.render_ty(consumer_ty)),
+            other => panic!(
+                "render_const: Const::NullPtr cannot be consumed by non-thin / non-pointer Ty \
+                 {other:?}; fat pointers produce Const::Aggregate per pretty-printer.md §10.1.6"
+            ),
+        }
+    }
+
+    /// Asserts a `Ty::Ref` / `Ty::Ptr` pointee is thin (sized) per
+    /// §10.1.6's admissible-consumer table. Unsized pointees
+    /// (`Ty::Str`, `Ty::Slice(_)`, `Ty::Dynamic`) signal a fat-pointer
+    /// reference and panic as bridge bugs because the bridge produces
+    /// `Const::Aggregate([NullPtr, NullPtr])` for those cases.
+    fn assert_thin_pointee(&self, pointee: TyId) {
+        match self.model.types.resolve(pointee) {
+            Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. } => panic!(
+                "render_const: Const::NullPtr cannot be consumed by a reference / pointer to \
+                 an unsized pointee {:?}; fat pointers produce Const::Aggregate per \
+                 pretty-printer.md §10.1.6",
+                self.model.types.resolve(pointee)
+            ),
+            _ => {}
+        }
+    }
+
+    /// `Reloc(InstanceRef)` dispatch per §10.1.7.
+    ///
+    /// Steps: resolve InstanceRef -> InstanceId; look up the Instance;
+    /// dispatch on (instance.kind, consumer Ty) producing bare path
+    /// for FnDef, typed-cast for Static / FnPtr, or `b"..."` for the
+    /// ConstMemoryStatic byte-string special case.
+    fn render_const_reloc(&self, target: InstanceRef, consumer_ty: TyId) -> String {
+        let instance_id = self.find_instance_id_for_ref(target).unwrap_or_else(|| {
+            panic!(
+                "render_const: Const::Reloc(InstanceRef) does not resolve to any Instance \
+                 (bridge-validated F4-2 invariant violated)"
+            )
+        });
+        let instance = &self.model.instances[instance_id];
+        let item = instance.item;
+        let generic_args = instance.generic_args.clone();
+        match &instance.kind {
+            InstanceKind::Function(_) => match self.model.types.resolve(consumer_ty) {
+                Ty::FnDef(fn_def_item, fn_def_args) => {
+                    // Per §10.1.7: the no-cast FnDef arm requires the
+                    // consumer Ty::FnDef(item, args) to match
+                    // (instance.item, instance.generic_args).
+                    // Non-matching FnDef consumers are cannot-occur
+                    // bridge bugs.
+                    assert!(
+                        *fn_def_item == item && *fn_def_args == generic_args,
+                        "render_const: Const::Reloc to InstanceKind::Function consumed by \
+                         Ty::FnDef({}, ..) that does not match the resolved instance \
+                         (item {}, generic_args mismatch); bridge bug per pretty-printer.md \
+                         §10.1.7",
+                        fn_def_item.as_u32(),
+                        item.as_u32()
+                    );
+                    let path = self.render_def_path(item);
+                    let args_text = self.render_generic_args(&generic_args, item);
+                    format!("{path}{args_text}")
+                }
+                Ty::FnPtr(_) => {
+                    let path = self.render_def_path(item);
+                    let args_text = self.render_generic_args(&generic_args, item);
+                    let consumer_text = self.render_ty(consumer_ty);
+                    format!("{path}{args_text} as {consumer_text}")
+                }
+                other => panic!(
+                    "render_const: Const::Reloc to InstanceKind::Function consumed by non-FnDef / \
+                     non-FnPtr Ty {other:?}; bridge bug per pretty-printer.md §10.1.7"
+                ),
+            },
+            InstanceKind::Static {
+                ty: static_ty,
+                init,
+            } => {
+                let static_ty = *static_ty;
+                let synth_is_const_memory = matches!(
+                    &self.model.item_synthetic_kinds[item],
+                    SyntheticItemKind::ConstMemoryStatic { .. }
+                );
+                if synth_is_const_memory {
+                    if let Some(init_id) = *init {
+                        if let Some(bytes) =
+                            self.reloc_const_memory_byte_string(consumer_ty, static_ty, init_id)
+                        {
+                            return format!("b\"{}\"", escape_ascii_bytes(&bytes));
+                        }
+                    }
+                }
+                // Structural fallback / non-synth Static / VTableInstance synth:
+                // typed cast. Reject non-pointer consumer Tys.
+                match self.model.types.resolve(consumer_ty) {
+                    Ty::Ref(_, _) | Ty::Ptr(_, _) | Ty::FnPtr(_) => {}
+                    other => panic!(
+                        "render_const: Const::Reloc to InstanceKind::Static consumed by \
+                         non-pointer Ty {other:?}; bridge bug per pretty-printer.md §10.1.7"
+                    ),
+                }
+                let path = self.render_def_path(item);
+                let consumer_text = self.render_ty(consumer_ty);
+                format!("{path} as {consumer_text}")
+            }
+            InstanceKind::Const { .. }
+            | InstanceKind::Struct { .. }
+            | InstanceKind::Enum { .. }
+            | InstanceKind::Union { .. } => panic!(
+                "render_const: Const::Reloc resolved to InstanceKind::Const / Struct / Enum / \
+                 Union; only Function and Static are admissible per pretty-printer.md §10.1.7"
+            ),
+        }
+    }
+
+    /// `Reloc` `b"..."` byte-string pre-condition check per §10.1.7.
+    /// Returns `Some(bytes)` when all six preconditions hold,
+    /// `None` otherwise (caller falls back to structural typed cast).
+    /// Per spec pre-condition 2, the resolved Static's own `ty` must
+    /// itself be the byte-array `Ty::Array(u8, _)` that matches the
+    /// consumer reference's inner type.
+    fn reloc_const_memory_byte_string(
+        &self,
+        consumer_ty: TyId,
+        static_ty: TyId,
+        init_id: ConstId,
+    ) -> Option<Vec<u8>> {
+        // 1. Consumer Ty is Ty::Ref(_, Ty::Array(u8_ty, N), _).
+        let array_inner = match self.model.types.resolve(consumer_ty) {
+            Ty::Ref(inner, _) => *inner,
+            _ => return None,
+        };
+        let (u8_ty, n) = match self.model.types.resolve(array_inner) {
+            Ty::Array(elem, count) => (*elem, *count),
+            _ => return None,
+        };
+        if !matches!(self.model.types.resolve(u8_ty), Ty::Uint(UintKind::U8)) {
+            return None;
+        }
+        // 2. Resolved Static's own `ty` must be Ty::Array(u8, _). When
+        //    the bridge produces a ConstMemoryStatic for a different
+        //    backing type, the b"..." special case does not apply.
+        let static_ty_ok = match self.model.types.resolve(static_ty) {
+            Ty::Array(elem, _) => {
+                matches!(self.model.types.resolve(*elem), Ty::Uint(UintKind::U8))
+            }
+            _ => false,
+        };
+        if !static_ty_ok {
+            return None;
+        }
+        // 4. consts[init_id] == Const::Bytes(vec).
+        let raw_bytes = match &self.model.consts[init_id] {
+            Const::Bytes(b) => b.clone(),
+            _ => return None,
+        };
+        // 5. Every byte is Byte::Value(b).
+        let mut out: Vec<u8> = Vec::with_capacity(raw_bytes.len());
+        for byte in &raw_bytes {
+            match byte {
+                Byte::Value(v) => out.push(*v),
+                _ => return None,
+            }
+        }
+        // 6. vec.len() == N.
+        if out.len() as u64 != n {
+            return None;
+        }
+        Some(out)
+    }
+
+    /// O(N) scan for the `InstanceId` whose canonical `InstanceRef`
+    /// equals `target`. Returns `None` when no instance matches; the
+    /// caller produces a context-specific panic. Matches the
+    /// `instance_ref` reconstruction used by `RegseqModel::validate`
+    /// per F4-2 (regseq kind rank + def_path_hash + args_key +
+    /// fn_shim_disambig).
+    fn find_instance_id_for_ref(&self, target: InstanceRef) -> Option<InstanceId> {
+        for (idx, instance) in self.model.instances.iter().enumerate() {
+            let candidate = InstanceRef {
+                regseq_kind_rank: regseq_instance_kind_rank(&instance.kind),
+                def_path_hash: self.model.item_def_paths[instance.item],
+                args_key: args_key_for_generic_args(self.model, &instance.generic_args),
+                fn_shim_disambig: match &instance.kind {
+                    InstanceKind::Function(data) => rustc_instance_kind_sort_rank(data.flavor),
+                    _ => 0,
+                },
+            };
+            if candidate == target {
+                return Some(InstanceId::from_u32(idx as u32));
+            }
+        }
+        None
     }
 
     /// Item-keyed `DefPath` rendering. Resolves the eager
@@ -1640,6 +2309,21 @@ impl<'a> PrettyPrinter<'a> {
         let span_text = self.render_span(span);
         format!("{line:ALIGN$} // {span_text}")
     }
+}
+
+/// Returns the `escape_ascii` text rendering of a byte sequence, as
+/// used by the `&[u8]` / `*b"..."` / `b"..."` byte-string forms per
+/// `pretty-printer.md` §10.1.3, §10.1.5, and §10.1.7. Each byte
+/// renders through `u8::escape_ascii` (rustc-mirrored per
+/// `mir/pretty.rs:1831-1833`'s `pretty_print_byte_str`).
+fn escape_ascii_bytes(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in bytes {
+        for ch in b.escape_ascii() {
+            out.push(ch as char);
+        }
+    }
+    out
 }
 
 /// Returns the CastKind annotation per §7.3.1, or `None` when the

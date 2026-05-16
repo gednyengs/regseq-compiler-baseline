@@ -11,15 +11,15 @@
 
 use insta::assert_snapshot;
 use regseq_model::{
-    AggregateKind, AssertKind, AutoTrait, BasicBlock, BinOp, BlockId, Body, CallCallee, CastKind,
-    Const, ConstId, CopyNonOverlapping, DefPath, DefPathData, DefPathSegment, EnumShape, FieldIdx,
-    FieldLayout, FloatKind, FnAbi, FnSig, GenericArg, InlineHint, Instance, InstanceKind, IntKind,
-    Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, LocalDecl, LocalId, Mutability,
-    NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, PrettyPrintOptions,
-    PrettyPrinter, Provenance, RegseqModel, Rvalue, Safety, SourceFile, SourceFileId, Span,
-    StableCrateId, Statement, StatementKind, StringId, SwitchTargets, TagEncoding, TagScalar,
-    Terminator, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx, VariantLayout, WrappingRange,
-    UNIT_LAYOUT,
+    AggregateKind, AssertKind, AutoTrait, BasicBlock, BinOp, BlockId, Body, Byte, CallCallee,
+    CastKind, Const, ConstId, ContentHash, CopyNonOverlapping, DefPath, DefPathData, DefPathHash,
+    DefPathSegment, EnumShape, FieldIdx, FieldLayout, FloatKind, FnAbi, FnSig, GenericArg,
+    InlineHint, Instance, InstanceKind, InstanceRef, IntKind, Item, ItemId, ItemKind, Layout,
+    LayoutKind, Linkage, LocalDecl, LocalId, Mutability, NonDivergingIntrinsic, Operand, Place,
+    PlaceElem, PointerCoercion, PrettyPrintOptions, PrettyPrinter, Provenance, RegseqModel, Rvalue,
+    Safety, SourceFile, SourceFileId, Span, StableCrateId, Statement, StatementKind, SwitchTargets,
+    SyntheticItemKind, TagEncoding, TagScalar, Terminator, TerminatorKind, Ty, TyId, UintKind,
+    UnOp, VariantIdx, VariantLayout, WrappingRange, UNIT_LAYOUT,
 };
 use regseq_model::{FunctionInstanceData, FunctionInstanceFlavor};
 
@@ -1902,4 +1902,599 @@ fn render_const_specimen_90_zst_composite_tuple_recursion() {
     });
     let id = m.consts.intern(Const::ZST);
     assert_snapshot!(m.pretty().render_const(id, triple), @"((), (), ())");
+}
+
+// ------------------------------------------------------------------
+// §9.10 render_const specimens 91 - 109 (P1a-PP-04b).
+//
+// NullPtr / Reloc / Aggregate / EnumValue / Bytes per the
+// pretty-printer.md §9.10 worked-example specimens.
+// ------------------------------------------------------------------
+
+/// Test helper: pushes a synthetic-classification entry for `item` so
+/// `model.item_synthetic_kinds` stays parallel to `model.items`.
+fn align_synthetic_kinds(model: &mut RegseqModel, synth: SyntheticItemKind) -> ItemId {
+    let id = ItemId::from_u32((model.items.len() - 1) as u32);
+    while model.item_def_paths.len() < model.items.len() {
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(0),
+            local_hash: 0,
+        });
+    }
+    while model.item_synthetic_kinds.len() < model.items.len() {
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+    }
+    model.item_synthetic_kinds[id] = synth;
+    id
+}
+
+/// Pushes a Static instance whose item carries the given synth and
+/// optional `init`. Returns the canonical InstanceRef for the new
+/// instance.
+fn install_static_with_synth(
+    m: &mut RegseqModel,
+    kind: ItemKind,
+    rendered_text: &str,
+    ty: TyId,
+    init: Option<ConstId>,
+    synth: SyntheticItemKind,
+) -> InstanceRef {
+    let _id = push_item(m, kind, rendered_text);
+    let item = align_synthetic_kinds(m, synth);
+    let emission = m.strings.intern("emission");
+    let inst = Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        kind: InstanceKind::Static { ty, init },
+    };
+    let kind_rank = regseq_model::regseq_instance_kind_rank(&inst.kind);
+    let _iid = m.instances.push(inst);
+    let hash = m.item_def_paths[item];
+    InstanceRef {
+        regseq_kind_rank: kind_rank,
+        def_path_hash: hash,
+        args_key: regseq_model::args_key_for_generic_args(m, &vec![]),
+        fn_shim_disambig: 0,
+    }
+}
+
+/// Pushes a Function instance backed by an item with the given
+/// rendered path. Returns `(InstanceRef, ItemId)`.
+fn install_function(
+    m: &mut RegseqModel,
+    rendered_text: &str,
+    args: Vec<GenericArg>,
+    sig: regseq_model::FnSigId,
+) -> (InstanceRef, ItemId) {
+    let _id = push_item(m, ItemKind::Function, rendered_text);
+    let item = align_synthetic_kinds(m, SyntheticItemKind::None);
+    let emission = m.strings.intern("emission");
+    let inst = Instance {
+        item,
+        generic_args: args.clone(),
+        emission_name: emission,
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    };
+    let kind_rank = regseq_model::regseq_instance_kind_rank(&inst.kind);
+    let disambig = regseq_model::rustc_instance_kind_sort_rank(FunctionInstanceFlavor::Item);
+    let _iid = m.instances.push(inst);
+    let hash = m.item_def_paths[item];
+    let r = InstanceRef {
+        regseq_kind_rank: kind_rank,
+        def_path_hash: hash,
+        args_key: regseq_model::args_key_for_generic_args(m, &args),
+        fn_shim_disambig: disambig,
+    };
+    (r, item)
+}
+
+/// Installs a ConstMemoryStatic synthetic Static with a fully-init
+/// byte payload. Returns `(InstanceRef, len_const_id)` for the caller
+/// to plug into a fat-pointer Aggregate.
+fn install_const_memory_static(m: &mut RegseqModel, bytes: Vec<u8>) -> (InstanceRef, ConstId, u64) {
+    let len = bytes.len() as u64;
+    let bytes_const = m
+        .consts
+        .intern(Const::Bytes(bytes.into_iter().map(Byte::Value).collect()));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let array_ty = m.types.intern(Ty::Array(u8_ty, len));
+    let synth = SyntheticItemKind::ConstMemoryStatic {
+        content_hash: ContentHash(0xCAFE_BABE),
+    };
+    let r = install_static_with_synth(
+        m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "<regseq_synth>::ConstMemoryStatic::a1b2",
+        array_ty,
+        Some(bytes_const),
+        synth,
+    );
+    let len_const = m.consts.intern(Const::Uint(UintKind::Usize, len as u128));
+    (r, len_const, len)
+}
+
+#[test]
+fn render_const_specimen_91_null_ptr_raw_const_pointer() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let ptr_ty = m.types.intern(Ty::Ptr(u32_ty, Mutability::Not));
+    let id = m.consts.intern(Const::NullPtr(u32_ty));
+    assert_snapshot!(m.pretty().render_const(id, ptr_ty), @"0x0 as *const u32");
+}
+
+#[test]
+fn render_const_specimen_92_null_ptr_shared_reference() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let ref_ty = m.types.intern(Ty::Ref(u32_ty, Provenance::SharedBorrow));
+    let id = m.consts.intern(Const::NullPtr(u32_ty));
+    assert_snapshot!(m.pretty().render_const(id, ref_ty), @"0x0 as &u32");
+}
+
+#[test]
+fn render_const_specimen_93_reloc_fn_def_no_cast() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![u32_ty],
+        output: bool_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let args = vec![GenericArg::Type(u32_ty)];
+    let (r, item) = install_function(&mut m, "pl011::foo", args.clone(), sig);
+    let fn_def_ty = m.types.intern(Ty::FnDef(item, args));
+    let id = m.consts.intern(Const::Reloc(r));
+    assert_snapshot!(m.pretty().render_const(id, fn_def_ty), @"pl011::foo<u32>");
+}
+
+#[test]
+fn render_const_specimen_94_reloc_fn_ptr_typed_cast() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![u32_ty],
+        output: bool_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let (r, _item) = install_function(&mut m, "pl011::foo", vec![], sig);
+    let fn_ptr_ty = m.types.intern(Ty::FnPtr(sig));
+    let id = m.consts.intern(Const::Reloc(r));
+    assert_snapshot!(
+        m.pretty().render_const(id, fn_ptr_ty),
+        @"pl011::foo as fn(u32) -> bool"
+    );
+}
+
+#[test]
+fn render_const_specimen_95_reloc_source_static_typed_cast() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let ptr_ty = m.types.intern(Ty::Ptr(u32_ty, Mutability::Mut));
+    let r = install_static_with_synth(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Mut,
+        },
+        "pl011::MY_REG",
+        u32_ty,
+        None,
+        SyntheticItemKind::None,
+    );
+    let id = m.consts.intern(Const::Reloc(r));
+    assert_snapshot!(
+        m.pretty().render_const(id, ptr_ty),
+        @"pl011::MY_REG as *mut u32"
+    );
+}
+
+#[test]
+fn render_const_specimen_96_reloc_const_memory_static_byte_string() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (reloc_ref, _len_const, len) = install_const_memory_static(&mut m, b"hello".to_vec());
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, len));
+    let ref_ty = m.types.intern(Ty::Ref(arr_ty, Provenance::SharedBorrow));
+    let id = m.consts.intern(Const::Reloc(reloc_ref));
+    assert_snapshot!(m.pretty().render_const(id, ref_ty), @r#"b"hello""#);
+}
+
+#[test]
+fn render_const_specimen_97_aggregate_array_of_u8() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 3));
+    let c1 = m.consts.intern(Const::Uint(UintKind::U8, 1));
+    let c2 = m.consts.intern(Const::Uint(UintKind::U8, 2));
+    let c3 = m.consts.intern(Const::Uint(UintKind::U8, 3));
+    let id = m.consts.intern(Const::Aggregate(vec![c1, c2, c3]));
+    assert_snapshot!(m.pretty().render_const(id, arr_ty), @"[1_u8, 2_u8, 3_u8]");
+}
+
+#[test]
+fn render_const_specimen_98_aggregate_2_tuple() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let tup_ty = m.types.intern(Ty::Tuple {
+        fields: vec![i32_ty, bool_ty],
+        layout: UNIT_LAYOUT,
+    });
+    let c1 = m.consts.intern(Const::Int(IntKind::I32, 42));
+    let c2 = m.consts.intern(Const::Bool(true));
+    let id = m.consts.intern(Const::Aggregate(vec![c1, c2]));
+    assert_snapshot!(m.pretty().render_const(id, tup_ty), @"(42_i32, true)");
+}
+
+#[test]
+fn render_const_specimen_99_aggregate_1_tuple_trailing_comma() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let tup_ty = m.types.intern(Ty::Tuple {
+        fields: vec![i32_ty],
+        layout: UNIT_LAYOUT,
+    });
+    let c1 = m.consts.intern(Const::Int(IntKind::I32, 42));
+    let id = m.consts.intern(Const::Aggregate(vec![c1]));
+    assert_snapshot!(m.pretty().render_const(id, tup_ty), @"(42_i32,)");
+}
+
+#[test]
+fn render_const_specimen_100_aggregate_struct_named_fields() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_item(&mut m, ItemKind::Struct, "geom::Point");
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let x = m.strings.intern("x");
+    let y = m.strings.intern("y");
+    let layout = Layout {
+        size: 8,
+        align: 4,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct {
+            fields: vec![
+                FieldLayout {
+                    name: x,
+                    ty: i32_ty,
+                    offset: 0,
+                },
+                FieldLayout {
+                    name: y,
+                    ty: i32_ty,
+                    offset: 4,
+                },
+            ],
+        },
+    };
+    let struct_ty = m.types.intern(Ty::Struct {
+        item,
+        args: vec![],
+        layout,
+    });
+    let c0 = m.consts.intern(Const::Int(IntKind::I32, 0));
+    let c1 = m.consts.intern(Const::Int(IntKind::I32, 1));
+    let id = m.consts.intern(Const::Aggregate(vec![c0, c1]));
+    assert_snapshot!(
+        m.pretty().render_const(id, struct_ty),
+        @"geom::Point { x: 0_i32, y: 1_i32 }"
+    );
+}
+
+#[test]
+fn render_const_specimen_101_aggregate_str_literal_special_case() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (reloc_ref, len_const, _len) = install_const_memory_static(&mut m, b"hello".to_vec());
+    let str_ty = m.types.intern(Ty::Str);
+    let ref_ty = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+    let reloc_const = m.consts.intern(Const::Reloc(reloc_ref));
+    let id = m
+        .consts
+        .intern(Const::Aggregate(vec![reloc_const, len_const]));
+    assert_snapshot!(m.pretty().render_const(id, ref_ty), @r#""hello""#);
+}
+
+#[test]
+fn render_const_specimen_102_aggregate_slice_u8_literal_special_case() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (reloc_ref, len_const, _len) = install_const_memory_static(&mut m, vec![0u8, 1, 2, 3]);
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let slice_ty = m.types.intern(Ty::Slice(u8_ty));
+    let ref_ty = m.types.intern(Ty::Ref(slice_ty, Provenance::SharedBorrow));
+    let reloc_const = m.consts.intern(Const::Reloc(reloc_ref));
+    let id = m
+        .consts
+        .intern(Const::Aggregate(vec![reloc_const, len_const]));
+    assert_snapshot!(
+        m.pretty().render_const(id, ref_ty),
+        @r#"b"\x00\x01\x02\x03""#
+    );
+}
+
+fn build_option_layout(m: &mut RegseqModel, payload_ty: TyId) -> Layout {
+    let none = m.strings.intern("None");
+    let some = m.strings.intern("Some");
+    let field0 = m.strings.intern("_0");
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    Layout {
+        size: 8,
+        align: 4,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum {
+            shape: EnumShape::Multiple {
+                tag: TagScalar {
+                    offset: 0,
+                    scalar_ty: u8_ty,
+                    valid_range: WrappingRange { start: 0, end: 1 },
+                },
+                encoding: TagEncoding::Direct,
+                variants: vec![
+                    VariantLayout {
+                        name: none,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 0,
+                        tag_value: Some(0),
+                    },
+                    VariantLayout {
+                        name: some,
+                        fields: vec![FieldLayout {
+                            name: field0,
+                            ty: payload_ty,
+                            offset: 4,
+                        }],
+                        uninhabited: false,
+                        discriminant: 1,
+                        tag_value: Some(1),
+                    },
+                ],
+            },
+        },
+    }
+}
+
+#[test]
+fn render_const_specimen_103_enum_value_option_none() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_item(&mut m, ItemKind::Enum, "core::option::Option");
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let layout = build_option_layout(&mut m, u32_ty);
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![GenericArg::Type(u32_ty)],
+        layout,
+    });
+    let id = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    assert_snapshot!(
+        m.pretty().render_const(id, enum_ty),
+        @"core::option::Option::<u32>::None"
+    );
+}
+
+#[test]
+fn render_const_specimen_104_enum_value_option_some_42_u32() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_item(&mut m, ItemKind::Enum, "core::option::Option");
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let layout = build_option_layout(&mut m, u32_ty);
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![GenericArg::Type(u32_ty)],
+        layout,
+    });
+    let c = m.consts.intern(Const::Uint(UintKind::U32, 42));
+    let id = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![c],
+    });
+    assert_snapshot!(
+        m.pretty().render_const(id, enum_ty),
+        @"core::option::Option::<u32>::Some(42_u32)"
+    );
+}
+
+#[test]
+fn render_const_specimen_105_enum_value_c_style() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_item(&mut m, ItemKind::Enum, "pl011::Color");
+    let red = m.strings.intern("Red");
+    let green = m.strings.intern("Green");
+    let blue = m.strings.intern("Blue");
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let layout = Layout {
+        size: 1,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum {
+            shape: EnumShape::Multiple {
+                tag: TagScalar {
+                    offset: 0,
+                    scalar_ty: u8_ty,
+                    valid_range: WrappingRange { start: 0, end: 2 },
+                },
+                encoding: TagEncoding::Direct,
+                variants: vec![
+                    VariantLayout {
+                        name: red,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 0,
+                        tag_value: Some(0),
+                    },
+                    VariantLayout {
+                        name: green,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 1,
+                        tag_value: Some(1),
+                    },
+                    VariantLayout {
+                        name: blue,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 2,
+                        tag_value: Some(2),
+                    },
+                ],
+            },
+        },
+    };
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout,
+    });
+    let id = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    assert_snapshot!(m.pretty().render_const(id, enum_ty), @"pl011::Color::Red");
+}
+
+#[test]
+fn render_const_specimen_106_enum_value_named_field_variant() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_item(&mut m, ItemKind::Enum, "pl011::MyEnum");
+    let err = m.strings.intern("Err");
+    let reason = m.strings.intern("reason");
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let str_ty = m.types.intern(Ty::Str);
+    let ref_str_ty = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+    let layout = Layout {
+        size: 16,
+        align: 8,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum {
+            shape: EnumShape::Multiple {
+                tag: TagScalar {
+                    offset: 0,
+                    scalar_ty: u8_ty,
+                    valid_range: WrappingRange { start: 0, end: 0 },
+                },
+                encoding: TagEncoding::Direct,
+                variants: vec![VariantLayout {
+                    name: err,
+                    fields: vec![FieldLayout {
+                        name: reason,
+                        ty: ref_str_ty,
+                        offset: 8,
+                    }],
+                    uninhabited: false,
+                    discriminant: 0,
+                    tag_value: Some(0),
+                }],
+            },
+        },
+    };
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout,
+    });
+    // Build the `"oops"` payload via the &str special-case pipeline.
+    let (reloc_ref, len_const, _len) = install_const_memory_static(&mut m, b"oops".to_vec());
+    let reloc_const = m.consts.intern(Const::Reloc(reloc_ref));
+    let payload_const = m
+        .consts
+        .intern(Const::Aggregate(vec![reloc_const, len_const]));
+    let id = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![payload_const],
+    });
+    assert_snapshot!(
+        m.pretty().render_const(id, enum_ty),
+        @r#"pl011::MyEnum::Err { reason: "oops" }"#
+    );
+}
+
+#[test]
+fn render_const_specimen_107_bytes_all_uninit_shortcut() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 4));
+    let id = m.consts.intern(Const::Bytes(vec![
+        Byte::Uninit,
+        Byte::Uninit,
+        Byte::Uninit,
+        Byte::Uninit,
+    ]));
+    assert_snapshot!(m.pretty().render_const(id, arr_ty), @"<uninit>");
+}
+
+#[test]
+fn render_const_specimen_108_bytes_byte_array_deref_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 5));
+    let id = m.consts.intern(Const::Bytes(vec![
+        Byte::Value(b'h'),
+        Byte::Value(b'e'),
+        Byte::Value(b'l'),
+        Byte::Value(b'l'),
+        Byte::Value(b'o'),
+    ]));
+    assert_snapshot!(m.pretty().render_const(id, arr_ty), @r#"*b"hello""#);
+}
+
+#[test]
+fn render_const_specimen_109_bytes_structural_fallback() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    // Install a non-synth Static `pl011::some_item` so the Reloc byte
+    // resolves to a renderable def_path.
+    let r = install_static_with_synth(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "pl011::some_item",
+        u8_ty,
+        None,
+        SyntheticItemKind::None,
+    );
+    let s_item = push_item(&mut m, ItemKind::Struct, "pl011::MyStruct");
+    align_synthetic_kinds(&mut m, SyntheticItemKind::None);
+    let struct_ty = m.types.intern(Ty::Struct {
+        item: s_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::Bytes(vec![
+        Byte::Value(0x00),
+        Byte::Uninit,
+        Byte::Value(0xff),
+        Byte::Reloc(r),
+    ]));
+    assert_snapshot!(
+        m.pretty().render_const(id, struct_ty),
+        @"bytes![0x00, <uninit>, 0xff, <reloc: pl011::some_item>]"
+    );
 }
