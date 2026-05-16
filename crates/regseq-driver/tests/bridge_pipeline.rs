@@ -117,7 +117,12 @@ pub extern "C" fn no_op() {}
     let (discovered, model) = compile_with_bridge("noop_bridge", source);
 
     assert!(discovered > 0);
-    assert!(model.instances.is_empty());
+    // Per spec.md section 3.4 Phase 5 contract (`spec.md:1226`):
+    // one Instance per (Item, GenericArgs, flavor) tuple. The
+    // single discovered `no_op` FnDef yields exactly one Function
+    // Instance after regseq-driver-46 lands the Phase-2 FnDef
+    // Item-interning pass.
+    assert_eq!(model.instances.len(), 1);
 }
 
 #[test]

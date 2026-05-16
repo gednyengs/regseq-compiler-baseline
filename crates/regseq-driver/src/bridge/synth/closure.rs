@@ -1,12 +1,13 @@
 //! Closure-family bridge item synthesis.
 
 use regseq_model::{
-    ClosureCallKind, CrateId, CrateInfo, DefPath, DefPathData, DefPathHash, DefPathSegment,
-    InlineHint, Item, ItemKind, Linkage, Span, StableCrateId, SyntheticItemKind,
+    ClosureCallKind, CrateId, CrateInfo, DefPath, DefPathHash, DefPathSegment, InlineHint, Item,
+    ItemKind, Linkage, Span, StableCrateId, SyntheticItemKind,
 };
 use rustc_span::def_id::DefId;
 
 use super::ClosureSynthHandles;
+use crate::bridge::def_path::translate_def_path_data;
 use crate::bridge::{BridgeCtxt, BridgeError, PendingItem};
 
 /// Synthesise the closure captures, call, and drop-glue Items.
@@ -175,7 +176,7 @@ fn source_item(cx: &mut BridgeCtxt<'_>, def_id: DefId, kind: ItemKind) -> Item {
         .data
         .iter()
         .map(|segment| DefPathSegment {
-            data: translate_def_path_data(cx, segment.data),
+            data: translate_def_path_data(&mut cx.model.strings, segment.data),
             disambiguator: segment.disambiguator,
         })
         .collect();
@@ -195,49 +196,6 @@ fn source_item(cx: &mut BridgeCtxt<'_>, def_id: DefId, kind: ItemKind) -> Item {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
-    }
-}
-
-fn translate_def_path_data(
-    cx: &mut BridgeCtxt<'_>,
-    data: rustc_hir::definitions::DefPathData,
-) -> DefPathData {
-    match data {
-        rustc_hir::definitions::DefPathData::CrateRoot => DefPathData::CrateRoot,
-        rustc_hir::definitions::DefPathData::Impl => DefPathData::Impl,
-        rustc_hir::definitions::DefPathData::ForeignMod => DefPathData::ForeignMod,
-        rustc_hir::definitions::DefPathData::Use => DefPathData::Use,
-        rustc_hir::definitions::DefPathData::GlobalAsm => DefPathData::GlobalAsm,
-        rustc_hir::definitions::DefPathData::TypeNs(symbol) => {
-            DefPathData::TypeNs(cx.model.strings.intern(symbol.as_str()))
-        }
-        rustc_hir::definitions::DefPathData::ValueNs(symbol) => {
-            DefPathData::ValueNs(cx.model.strings.intern(symbol.as_str()))
-        }
-        rustc_hir::definitions::DefPathData::MacroNs(symbol) => {
-            DefPathData::MacroNs(cx.model.strings.intern(symbol.as_str()))
-        }
-        rustc_hir::definitions::DefPathData::LifetimeNs(symbol) => {
-            DefPathData::LifetimeNs(cx.model.strings.intern(symbol.as_str()))
-        }
-        rustc_hir::definitions::DefPathData::Closure => DefPathData::Closure,
-        rustc_hir::definitions::DefPathData::Ctor => DefPathData::Ctor,
-        rustc_hir::definitions::DefPathData::AnonConst => DefPathData::AnonConst,
-        rustc_hir::definitions::DefPathData::LateAnonConst => DefPathData::LateAnonConst,
-        rustc_hir::definitions::DefPathData::DesugaredAnonymousLifetime => {
-            DefPathData::DesugaredAnonymousLifetime
-        }
-        rustc_hir::definitions::DefPathData::OpaqueTy => DefPathData::OpaqueTy,
-        rustc_hir::definitions::DefPathData::OpaqueLifetime(symbol) => {
-            DefPathData::OpaqueLifetime(cx.model.strings.intern(symbol.as_str()))
-        }
-        rustc_hir::definitions::DefPathData::AnonAssocTy(symbol) => {
-            DefPathData::AnonAssocTy(cx.model.strings.intern(symbol.as_str()))
-        }
-        rustc_hir::definitions::DefPathData::SyntheticCoroutineBody => {
-            DefPathData::SyntheticCoroutineBody
-        }
-        rustc_hir::definitions::DefPathData::NestedStatic => DefPathData::NestedStatic,
     }
 }
 

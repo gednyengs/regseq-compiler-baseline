@@ -5,12 +5,13 @@ use rustc_middle::ty::{self, TyKind, TypeSuperVisitable, TypeVisitable};
 use rustc_span::def_id::DefId;
 
 use regseq_model::{
-    AutoTrait, CrateId, CrateInfo, DefPath, DefPathData, DefPathHash, DefPathSegment, FieldLayout,
-    FloatKind, FnAbi, FnSig, GenericArg, GenericArgs, InlineHint, IntKind, Item, ItemId, ItemKind,
-    Layout, LayoutKind, Linkage, Mutability, PrincipalTraitKey, Provenance, Safety, Span,
-    StableCrateId, SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
+    render_def_path, AutoTrait, CrateId, CrateInfo, DefPath, DefPathHash, DefPathSegment,
+    FieldLayout, FloatKind, FnAbi, FnSig, GenericArg, GenericArgs, InlineHint, IntKind, Item,
+    ItemId, ItemKind, Layout, LayoutKind, Linkage, Mutability, PrincipalTraitKey, Provenance,
+    Safety, Span, StableCrateId, SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
 };
 
+use super::def_path::translate_def_path_data;
 use super::{
     placeholder_item_id_for_handle, BridgeCtxt, BridgeError, DslRejectionKind, ItemHandle,
     NonRigidTyKind, PendingItem,
@@ -347,11 +348,19 @@ fn translate_adt<'tcx>(
     Ok((model_ty, handle))
 }
 
+/// Source-derived ADT classification used by `intern_item`. The
+/// nominal-flag fields on `Item` (`is_phantom_data`, `is_unsafe_cell`,
+/// `is_manually_drop`) are populated from this tag at intern time.
 #[derive(Clone, Copy)]
-enum SpecialAdt {
+pub(crate) enum SpecialAdt {
+    /// No special-ADT classification (the common case for ordinary
+    /// structs / enums / unions / function items).
     None,
+    /// The ADT is `core::marker::PhantomData`.
     PhantomData,
+    /// The ADT is `core::cell::UnsafeCell`.
     UnsafeCell,
+    /// The ADT is `core::mem::ManuallyDrop`.
     ManuallyDrop,
 }
 
@@ -365,7 +374,7 @@ enum SpecialAdt {
 /// handle to a real `ItemId`; `bridge/synth/mod.rs::patch_source_item_ty_views`
 /// patches every placeholder `Ty` entry recorded in
 /// `cx.source_ty_pending` at Phase 5.
-fn intern_item(
+pub(crate) fn intern_item(
     cx: &mut BridgeCtxt<'_>,
     def_id: DefId,
     kind: ItemKind,
@@ -398,23 +407,42 @@ fn intern_source_item_handle(
     cx.source_item_handles.insert(def_path_hash, handle);
 
     let crate_id = crate_id(cx, def_id);
-    let rendered = cx.input.tcx.def_path_str(def_id);
-    let rendered_id = cx.model.strings.intern(&rendered);
-    let leaf = rendered.rsplit("::").next().unwrap_or(&rendered);
-    let leaf_id = cx.model.strings.intern(leaf);
-    let segment_data = match kind {
-        ItemKind::Function | ItemKind::Static { .. } | ItemKind::Const => {
-            DefPathData::ValueNs(leaf_id)
-        }
-        ItemKind::Struct | ItemKind::Enum | ItemKind::Union => DefPathData::TypeNs(leaf_id),
+
+    // Build full multi-segment DefPath.segments per spec.md section
+    // 3.4 Phase 3 (spec.md:1198-1202): source-derived Items use
+    // rustc's DefPath segments verbatim. `tcx.def_path(def_id).data`
+    // is a Vec<DisambiguatedDefPathData> per the pinned toolchain;
+    // it does not include a leading CrateRoot for non-root DefIds.
+    // The render_def_path helper at def_path.rs:175 emits the crate
+    // name first regardless, so no leading CrateRoot is prepended.
+    let rustc_def_path = cx.input.tcx.def_path(def_id);
+    let segments: Vec<DefPathSegment> = rustc_def_path
+        .data
+        .iter()
+        .map(|disambiguated| DefPathSegment {
+            data: translate_def_path_data(&mut cx.model.strings, disambiguated.data),
+            disambiguator: disambiguated.disambiguator,
+        })
+        .collect();
+
+    let intermediate_path = DefPath {
+        crate_id,
+        segments,
+        rendered: regseq_model::StringId::from_u32(0),
     };
+
+    // Compute canonical rendered string per spec.md section 7.2
+    // (spec.md:2079-2088): the always-verbose `crate::module::Item`
+    // form. Both bridge and pretty-printer call this helper so the
+    // rendering rule lives in exactly one place; validate_items
+    // (model.rs:1442) enforces byte-equality against this string.
+    let rendered = render_def_path(&intermediate_path, &cx.model.crates, &cx.model.strings);
+    let rendered_id = cx.model.strings.intern(&rendered);
+
     let item = Item {
         def_path: DefPath {
             crate_id,
-            segments: vec![DefPathSegment {
-                data: segment_data,
-                disambiguator: 0,
-            }],
+            segments: intermediate_path.segments,
             rendered: rendered_id,
         },
         kind,

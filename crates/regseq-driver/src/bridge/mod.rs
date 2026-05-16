@@ -10,13 +10,14 @@ use thiserror::Error;
 
 use regseq_model::{
     args_key_for_generic_args_with_pending, canonical_ty_bytes_with_pending, ArgsKey, DefPathHash,
-    FunctionInstanceFlavor, GenericArg, InstanceId, Item, ItemId, PrincipalTraitKey,
+    FunctionInstanceFlavor, GenericArg, InstanceId, Item, ItemId, ItemKind, PrincipalTraitKey,
     ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, Ty, TyId,
 };
 
 mod assign;
 pub mod body;
 pub mod const_;
+pub mod def_path;
 pub mod diag_log;
 mod discovery;
 pub mod fnsig;
@@ -607,6 +608,41 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
         .lock()
         .map_err(|_| BridgeError::Phase1("discovery set lock poisoned".to_string()))?
         .clone();
+
+    // Per spec.md section 3.4 Phase 2 (`spec.md:1142`): "Bridge walks
+    // the discovered mono-item set. For each MonoItem, translates
+    // rustc state into RegseqModel content." This pre-pass interns
+    // each source-derived `MonoItem::Fn(instance)` whose
+    // `instance.def` is `InstanceKind::Item(def_id)` and whose
+    // `DefKind` is `Fn` or `AssocFn`. Shim flavors (DropGlue,
+    // VTableShim, ClosureOnceShim, ...) and `DefKind::Closure` are
+    // skipped here -- those route through the synthesis triggers in
+    // the body-scan loop below per spec.md section 3.4 Phase-2
+    // trigger table (`spec.md:1148-1158`) and spec.md section 13.1
+    // (closure synthesis at `spec.md:4511-4554`).
+    //
+    // No `as_local()` gate: spec.md section 3.4 Phase 1
+    // (`spec.md:1133-1139`) discovers items across "primary crate +
+    // all regseq-aware dependency crates per Q6", and the new
+    // Item-interning pass does not require MIR access (only the
+    // `DefId`). `ty::intern_item` dispatches to
+    // `intern_source_item_handle` which dedups via
+    // `source_item_handles`, making the call idempotent if the
+    // body-scan loop later re-discovers the same FnDef via a callee
+    // constant.
+    for mono_item in &discovered_mono_items {
+        let MonoItem::Fn(instance) = mono_item else {
+            continue;
+        };
+        let rustc_middle::ty::InstanceKind::Item(def_id) = instance.def else {
+            continue;
+        };
+        if !is_source_derived_function(ctxt.input.tcx, def_id) {
+            continue;
+        }
+        let _ = ty::intern_item(ctxt, def_id, ItemKind::Function, ty::SpecialAdt::None);
+    }
+
     for mono_item in discovered_mono_items {
         let MonoItem::Fn(instance) = mono_item else {
             continue;
@@ -1124,5 +1160,24 @@ fn is_rustc_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         rustc_hir::def::DefKind::Fn
             | rustc_hir::def::DefKind::AssocFn
             | rustc_hir::def::DefKind::Closure
+    )
+}
+
+/// True iff `def_id` names a top-level source-derived function
+/// definition that the Phase-2 baseline pass should intern as an
+/// `ItemKind::Function` Item.
+///
+/// Excludes `DefKind::Closure`: closures are handled by the spec.md
+/// section 13.1 synthesis path (ClosureCaptures + ClosureCall +
+/// ClosureDropGlue) via `synth::closure::synthesise_closure_for_def_id`
+/// and would otherwise be interned by both paths.
+///
+/// This is intentionally narrower than `is_rustc_function`, which
+/// also includes `DefKind::Closure` for Instance resolution in
+/// `construct_function_instances`.
+pub fn is_source_derived_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    matches!(
+        tcx.def_kind(def_id),
+        rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
     )
 }

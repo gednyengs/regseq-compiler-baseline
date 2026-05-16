@@ -85,6 +85,13 @@ where
         fn config(&mut self, config: &mut rustc_interface::interface::Config) {
             config.opts.unstable_opts.no_codegen = true;
             config.opts.unstable_opts.mir_opt_level = Some(0);
+            // Mirror the production `RegseqCallbacks::config` MIR pass
+            // whitelist so source-derived FnDef Items interned by the
+            // regseq-driver-46 Phase-2 pass have `RemoveStorageMarkers`
+            // applied before Phase-5 body materialisation walks the
+            // bodies; otherwise let-binding fixtures trip the DSL
+            // rejection for raw StorageLive/StorageDead markers.
+            config.opts.unstable_opts.mir_enable_passes = regseq_driver::regseq_mir_passes();
             config
                 .opts
                 .unstable_opts
@@ -119,6 +126,15 @@ where
         crate_name.to_string(),
         "--out-dir".to_string(),
         test_dir.to_str().unwrap().to_string(),
+        // Bridge expects panic=abort cleanup-block pruning to remove
+        // is_cleanup=true blocks before Phase-5 body materialisation.
+        // The regseq-driver-46 Phase-2 pass interns source-derived
+        // FnDef Items as `ItemKind::Function` and now their bodies
+        // get materialised; without panic=abort, fixtures with Drop /
+        // closures retain cleanup blocks that trip the body
+        // translator's panic=abort assertion.
+        "-C".to_string(),
+        "panic=abort".to_string(),
     ];
 
     let mut callbacks = Callbacks {
@@ -197,9 +213,15 @@ fn synthetic_kinds(cx: &BridgeCtxt<'_>) -> Vec<SyntheticItemKind> {
 
 #[test]
 fn closure_synthesis_records_three_family_handles() {
+    // The `c(0)` call keeps the closure local live across the
+    // `SimplifyLocals-final` MIR pass in
+    // `regseq_driver::regseq_mir_passes()`; without it the unused
+    // closure local is elided and `first_closure_args` cannot
+    // recover the closure args from the body's local_decls.
     let source = r#"
 pub fn f() {
-    let _c = |x: u32| x + 1;
+    let c = |x: u32| x + 1;
+    let _ = c(0);
 }
 "#;
 

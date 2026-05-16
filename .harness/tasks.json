@@ -1251,6 +1251,31 @@
               "reason": "Codex review fix: trace severity / Ty::Phantom / \u00a715.1 expansion / \u00a726.8 expansion"
             }
           ]
+        },
+        {
+          "id": "regseq-driver-46",
+          "name": "P1a-BR-09: Top-level FnDef Item interning + canonical DefPath rendering",
+          "spec": ".harness/tasks/regseq-driver/46-top-level-fndef-interning-and-canonical-def-path.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-driver-45"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#7",
+            "spec.md#16"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-16T23:09:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -5682,7 +5707,7 @@
           "id": "test-ir-fixtures-01",
           "name": "P1a-TS-01-E2E-01: test-ir-fixtures crate scaffold + no-op smoke",
           "spec": ".harness/tasks/test-ir-fixtures/01-scaffold-and-no-op-smoke.md",
-          "status": "pending",
+          "status": "failed",
           "depends_on": [
             "regseq-driver-36",
             "regseq-driver-37",
@@ -5697,7 +5722,7 @@
             "regseq-model-93"
           ],
           "artifacts": [],
-          "fail_reason": null,
+          "fail_reason": "Task spec's Test Plan \u00a76 asserts `model.instances.len() == 1` and `render_default(&model)` non-empty for the no-op fixture (`pub fn no_op() {}`). Empirically, the current regseq-driver bridge produces 0 items / 0 instances for this fixture: (1) `bridge::translate_with_interleaved_synthesis` only scans MIR bodies for synthesis-trigger types (Closure, Dynamic, Ref, Array, Tuple) but never registers the discovered function's own FnDef as an Item, and (2) `construct_function_instances` only walks already-registered Function Items in `model.items`. A function with no in-crate callers therefore never enters `model.items` (and consequently `model.instances`). Verified by direct exploration: `run_bridge` against the spec-mandated `#![no_std] pub fn no_op() {}` source yields `items: 0, instances: 0`. The existing `crates/regseq-driver/tests/bridge_pipeline.rs::no_op_crate_phase_1_discovers_mono_items` test also asserts `instances.is_empty()` for the same shape, confirming this is the current bridge contract. A minimal fix (translate each `MonoItem::Fn(Item-flavor)`'s FnDef in Phase 2) additionally exposes a second bridge bug: `bridge::ty::intern_source_item_handle` stores `tcx.def_path_str(def_id)` (e.g. \"no_op\") as `item.def_path.rendered`, but `RegseqModel::validate_items` requires it to equal `render_def_path(...)` which is `<crate_name>::<segment>` (e.g. \"no_op::no_op\"), producing `InvariantViolation::DefPathRenderMismatch`. Both are bridge-side gaps explicitly out of scope per Non-Goals (\"The regseq-driver bridge itself (Phases 1-5) ... this task only orchestrates the existing driver via a helper\"). The crate scaffold, four fixture sources, helper API, and unit tests are all in place at `crates/test-ir-fixtures/`; only the smoke integration test cannot pass without bridge enhancements. Recommend either (a) a follow-up regseq-driver task to register top-level `MonoItem::Fn` Items and fix the `def_path_str` -> `render_def_path` rendering contract, or (b) relaxing the test plan's instance-count assertion so the no-op fixture asserts only that `bridge_fixture` and `validate` complete cleanly.",
           "phase": "1a",
           "spec_refs": [
             "spec.md#3",
