@@ -3026,7 +3026,7 @@
           "id": "regseq-model-84",
           "name": "P1a-VAL-02: ID referential integrity + sort + DefPath + spans + Phase C vtables",
           "spec": ".harness/tasks/regseq-model/84-id-referential-integrity-validator.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-65",
             "regseq-model-66",

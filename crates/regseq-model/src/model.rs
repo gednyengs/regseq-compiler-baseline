@@ -6,6 +6,9 @@ use serde::{Deserialize, Serialize};
 
 use crate::args_key::{args_key_for_generic_args, GenericArg};
 use crate::body::Body;
+use crate::body_ty::{
+    operand_ty, place_enum_variant_count, place_ty, rvalue_ty, TypeRecovery, VariantRecovery,
+};
 use crate::bridge_input::BridgeInput;
 use crate::build::BuildInfo;
 use crate::cabi::CAbiLowering;
@@ -24,19 +27,23 @@ use crate::ids::{
 };
 use crate::index_vec::IndexVec;
 use crate::instance::{
-    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
-    RegseqInstanceKey,
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, FunctionInstanceFlavor, Instance,
+    InstanceKind, RegseqInstanceKey,
 };
 use crate::instance_ref::InstanceRef;
 use crate::item::{InlineHint, Item, ItemKind, Linkage};
 use crate::layout::{EnumShape, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout};
+use crate::operand::Operand;
+use crate::place::PlaceElem;
 use crate::place_validator::{validate_body_places, PlaceValidationError};
 use crate::pretty::PrettyPrinter;
+use crate::rvalue::{AggregateKind, CastKind, Rvalue};
 use crate::source::{SourceFile, Span};
+use crate::statement::{CopyNonOverlapping, NonDivergingIntrinsic, StatementKind};
 use crate::string_interner::StringInterner;
 use crate::synthetic::{PrincipalTraitKey, SyntheticItemKind};
 use crate::target::{default_scalar_layouts, Endian, SizeAlign, TargetInfo};
-use crate::terminator::{CallCallee, TerminatorKind};
+use crate::terminator::{AssertKind, CallCallee, TerminatorKind};
 use crate::ty::{FloatKind, IntKind, Mutability, Ty, UintKind};
 use crate::ty_interner::{TyIdentityKey, TyInterner};
 
@@ -470,6 +477,220 @@ pub enum InvariantViolation {
         /// Shared path string id.
         path: StringId,
     },
+
+    /// A `LocalDecl.ty`, projection-carried `TyId`, or other
+    /// body-embedded `TyId` references an entry outside
+    /// `model.types`. Spec section 25.6.3 invariant 1 fold-in.
+    BodyTyIdOutOfRange {
+        /// Function instance whose body carries the dangling TyId.
+        owner: InstanceId,
+        /// Diagnostic-only label describing the offending slot.
+        site: &'static str,
+        /// Offending TyId.
+        ty: TyId,
+        /// Length of `model.types` at validation time.
+        types_len: usize,
+    },
+
+    /// `Assign(p, rv)` has `place_ty(p) != rvalue_ty(rv)`. Spec
+    /// section 22.5.2 B-1.
+    StatementAssignTypeMismatch {
+        /// Function instance whose body contains the bad assignment.
+        owner: InstanceId,
+        /// Block containing the bad assignment.
+        block: BlockId,
+        /// Statement index within the block.
+        stmt: usize,
+        /// Recovered place type.
+        place_ty: TyId,
+        /// Recovered rvalue type.
+        rvalue_ty: TyId,
+    },
+
+    /// `Assign(p, rv)` could not validate B-1 because the body's
+    /// type recovery failed at the place or rvalue side. Spec
+    /// section 22.5.2 B-1 with audit-mandated malformed-body
+    /// distinction.
+    StatementAssignMalformed {
+        /// Function instance whose body contains the assignment.
+        owner: InstanceId,
+        /// Block containing the assignment.
+        block: BlockId,
+        /// Statement index within the block.
+        stmt: usize,
+        /// Which side failed recovery: `"place"` or `"rvalue"`.
+        side: &'static str,
+    },
+
+    /// `SetDiscriminant(p, vi)` has `vi >= variant_count(place_ty(p))`.
+    /// Spec section 22.5.2 B-2.
+    SetDiscriminantVariantIdxOutOfRange {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Statement index within the block.
+        stmt: usize,
+        /// Offending variant index.
+        variant: crate::ids::VariantIdx,
+        /// Exclusive upper bound for valid variant indices.
+        max: u32,
+    },
+
+    /// `SetDiscriminant(p, _)` was applied to a non-enum
+    /// `place_ty(p)`. Spec section 22.5.2 B-3.
+    SetDiscriminantNonEnumTarget {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Statement index within the block.
+        stmt: usize,
+        /// Recovered place type.
+        place_ty: TyId,
+    },
+
+    /// `Intrinsic(Assume(op))` has `operand_ty(op) != Ty::Bool`. Spec
+    /// section 22.5.2 B-4.
+    AssumeOperandNotBool {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Statement index within the block.
+        stmt: usize,
+        /// Recovered operand type.
+        operand_ty: TyId,
+    },
+
+    /// A `CopyNonOverlapping` operand has a type outside the spec
+    /// section 22.5.2 B-5 admitted set. `which` identifies the
+    /// offending position: `"src"`, `"dst"`, `"count"`, or
+    /// `"pointee"` for `src` / `dst` pointee disagreement.
+    CopyNonOverlappingOperandType {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Statement index within the block.
+        stmt: usize,
+        /// Offending operand position.
+        which: &'static str,
+        /// Actual operand type.
+        actual_ty: TyId,
+    },
+
+    /// `SwitchInt.discr` has a type outside
+    /// `{Ty::Bool, Ty::Char, Ty::Int(_), Ty::Uint(_)}`. Spec
+    /// section 23.6.2 B-1.
+    SwitchIntDiscrTypeMismatch {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Recovered discriminant type.
+        operand_ty: TyId,
+    },
+
+    /// `Assert.cond` has a type other than `Ty::Bool`. Spec
+    /// section 23.6.2 B-2.
+    AssertCondNotBool {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Recovered condition type.
+        cond_ty: TyId,
+    },
+
+    /// `Call.destination` type disagrees with the callee's return
+    /// type when `target: Some(_)`. Spec section 23.6.2 B-3.
+    CallDestinationTypeMismatch {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Callee return type.
+        expected_ty: TyId,
+        /// Recovered destination type.
+        actual_ty: TyId,
+    },
+
+    /// `Call.args.len()` disagrees with the callee signature's input
+    /// count. Spec section 23.6.2 B-4.
+    CallArgsArityMismatch {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Expected signature arity.
+        expected: usize,
+        /// Actual `Call.args` length.
+        actual: usize,
+    },
+
+    /// `Call.callee = Direct(_)` resolves to a non-Function instance.
+    /// Spec section 23.6.2 B-5 Direct branch.
+    CallDirectCalleeNotFunction {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// The non-Function callee id.
+        callee: InstanceId,
+    },
+
+    /// `Call.callee = Indirect(op)` whose `operand_ty(op)` is not
+    /// `Ty::FnPtr(_)`. Spec section 23.6.2 B-5 Indirect branch.
+    CallIndirectCalleeNotFnPtr {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Recovered callee operand type.
+        operand_ty: TyId,
+    },
+
+    /// `Call.args[i]` has a type that disagrees with the callee
+    /// signature's `inputs[i]`. Spec section 23.6.2 B-6.
+    CallArgTypeMismatch {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Argument index.
+        idx: usize,
+        /// Callee signature input type.
+        expected_ty: TyId,
+        /// Recovered argument type.
+        actual_ty: TyId,
+    },
+
+    /// `Call.callee = Direct(<virtual instance>)` with
+    /// `virtual_idx == None`, or a non-Virtual flavor with
+    /// `virtual_idx == Some(_)`. Spec section 23.6.2 B-8 +
+    /// section 9.4 biconditional.
+    CallVirtualIdxInconsistent {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// The callee whose flavor / virtual_idx are inconsistent.
+        callee: InstanceId,
+        /// Brief reason describing the inconsistency.
+        reason: &'static str,
+    },
+
+    /// `Call.target.is_none()` does not match
+    /// `callee_output == Ty::Never`. Spec section 23.6.2 B-9.
+    CallTargetDivergenceMismatch {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Brief reason describing the inconsistency.
+        reason: &'static str,
+    },
 }
 
 /// Construction-invariant identifier.
@@ -826,8 +1047,12 @@ impl RegseqModel {
 
     /// Validates construction invariants enforceable at this phase.
     pub fn validate(&mut self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
-        self.validate_synthesized_sentinel()?;
+        // Phase B step 1 (spec section 12, line 676-680 ordering):
+        // string interner sentinel + content uniqueness precede the
+        // synthesized-source-file sentinel check, because the latter
+        // resolves `source_files[0].path` through `model.strings`.
         self.validate_string_interner()?;
+        self.validate_synthesized_sentinel()?;
 
         if self.primary_crate.index() >= self.crates.len() {
             return Err(InvariantViolation::PrimaryCrateOutOfRange {
@@ -889,6 +1114,12 @@ impl RegseqModel {
             if let InstanceKind::Function(data) = &instance.kind {
                 if let Some(body) = data.body.as_ref() {
                     let owner = InstanceId::from_u32(idx as u32);
+                    // TyId closure walk (spec section 25.6.3
+                    // invariant 1) runs first so a dangling
+                    // `LocalDecl.ty` does not cause the §19.7 place
+                    // walk to panic when it indexes
+                    // `model.types[..]`.
+                    self.validate_body_ty_closure(owner, body)?;
                     validate_body_places(self, body).map_err(|error| {
                         InvariantViolation::PlaceWalk {
                             instance: owner,
@@ -896,6 +1127,8 @@ impl RegseqModel {
                         }
                     })?;
                     self.validate_body_direct_callees(owner, body)?;
+                    self.validate_body_statement_invariants(owner, body)?;
+                    self.validate_body_terminator_invariants(owner, body)?;
                 }
             }
         }
@@ -1507,6 +1740,703 @@ impl RegseqModel {
                         instances_len: self.instances.len(),
                     });
                 }
+            }
+        }
+        Ok(())
+    }
+
+    /// Closes construction invariant 1 over body content (spec
+    /// section 25.6.3): every `LocalDecl.ty`, every projection-
+    /// carried field type, every `Rvalue::Cast` destination, every
+    /// `AggregateKind` carrier, and every Operand-context type
+    /// resolves within `model.types`.
+    fn validate_body_ty_closure(
+        &self,
+        owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        let check = |ty: TyId, site: &'static str| -> Result<(), InvariantViolation> {
+            if ty.index() >= self.types.len() {
+                return Err(InvariantViolation::BodyTyIdOutOfRange {
+                    owner,
+                    site,
+                    ty,
+                    types_len: self.types.len(),
+                });
+            }
+            Ok(())
+        };
+
+        for decl in body.local_decls.iter() {
+            check(decl.ty, "LocalDecl.ty")?;
+        }
+
+        for block in body.basic_blocks.iter() {
+            for stmt in block.statements.iter() {
+                match &stmt.kind {
+                    StatementKind::Assign(place, rvalue) => {
+                        self.body_ty_closure_place(owner, place)?;
+                        self.body_ty_closure_rvalue(owner, rvalue)?;
+                    }
+                    StatementKind::SetDiscriminant(place, _) => {
+                        self.body_ty_closure_place(owner, place)?;
+                    }
+                    StatementKind::Intrinsic(intrinsic) => match intrinsic {
+                        NonDivergingIntrinsic::Assume(operand) => {
+                            self.body_ty_closure_operand(owner, operand)?;
+                        }
+                        NonDivergingIntrinsic::CopyNonOverlapping(payload) => {
+                            let CopyNonOverlapping { src, dst, count } = payload;
+                            self.body_ty_closure_operand(owner, src)?;
+                            self.body_ty_closure_operand(owner, dst)?;
+                            self.body_ty_closure_operand(owner, count)?;
+                        }
+                    },
+                }
+            }
+            self.body_ty_closure_terminator(owner, &block.terminator.kind)?;
+        }
+        Ok(())
+    }
+
+    fn body_ty_closure_place(
+        &self,
+        owner: InstanceId,
+        place: &crate::place::Place,
+    ) -> Result<(), InvariantViolation> {
+        for elem in place.projection.iter() {
+            if let PlaceElem::Field(_, ty) = elem {
+                if ty.index() >= self.types.len() {
+                    return Err(InvariantViolation::BodyTyIdOutOfRange {
+                        owner,
+                        site: "PlaceElem::Field.ty",
+                        ty: *ty,
+                        types_len: self.types.len(),
+                    });
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn body_ty_closure_operand(
+        &self,
+        owner: InstanceId,
+        operand: &Operand,
+    ) -> Result<(), InvariantViolation> {
+        match operand {
+            Operand::Copy(place) | Operand::Move(place) => self.body_ty_closure_place(owner, place),
+            Operand::Constant(const_id) => {
+                if const_id.index() >= self.consts.len() {
+                    return Err(InvariantViolation::DanglingId {
+                        field: "Operand::Constant.ConstId",
+                        value: const_id.as_u32(),
+                        table_len: self.consts.len(),
+                    });
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn body_ty_closure_rvalue(
+        &self,
+        owner: InstanceId,
+        rvalue: &Rvalue,
+    ) -> Result<(), InvariantViolation> {
+        match rvalue {
+            Rvalue::Use(op) | Rvalue::Repeat(op, _) | Rvalue::UnaryOp(_, op) => {
+                self.body_ty_closure_operand(owner, op)
+            }
+            Rvalue::Ref(_, place) | Rvalue::RawPtr(_, place) | Rvalue::Discriminant(place) => {
+                self.body_ty_closure_place(owner, place)
+            }
+            Rvalue::Cast(_kind, op, ty) => {
+                self.body_ty_closure_operand(owner, op)?;
+                if ty.index() >= self.types.len() {
+                    return Err(InvariantViolation::BodyTyIdOutOfRange {
+                        owner,
+                        site: "Rvalue::Cast.dest",
+                        ty: *ty,
+                        types_len: self.types.len(),
+                    });
+                }
+                // CastKind has no nested TyId surface; the variants
+                // are pinned by spec section 21.2.5.
+                let _ = CastKind::IntToInt;
+                Ok(())
+            }
+            Rvalue::BinaryOp(_op, left, right) => {
+                self.body_ty_closure_operand(owner, left)?;
+                self.body_ty_closure_operand(owner, right)
+            }
+            Rvalue::Aggregate(kind, operands) => {
+                let ty = match kind {
+                    AggregateKind::Array(ty)
+                    | AggregateKind::Tuple(ty)
+                    | AggregateKind::Struct(ty)
+                    | AggregateKind::Enum(ty, _)
+                    | AggregateKind::Union(ty, _)
+                    | AggregateKind::Closure(ty)
+                    | AggregateKind::RawPtr(ty, _) => *ty,
+                };
+                if ty.index() >= self.types.len() {
+                    return Err(InvariantViolation::BodyTyIdOutOfRange {
+                        owner,
+                        site: "AggregateKind carrier",
+                        ty,
+                        types_len: self.types.len(),
+                    });
+                }
+                for op in operands.iter() {
+                    self.body_ty_closure_operand(owner, op)?;
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn body_ty_closure_terminator(
+        &self,
+        owner: InstanceId,
+        kind: &TerminatorKind,
+    ) -> Result<(), InvariantViolation> {
+        match kind {
+            TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {
+                Ok(())
+            }
+            TerminatorKind::SwitchInt { discr, .. } => self.body_ty_closure_operand(owner, discr),
+            TerminatorKind::Call {
+                callee,
+                args,
+                destination,
+                target: _,
+            } => {
+                match callee {
+                    CallCallee::Direct(_) => {}
+                    CallCallee::Indirect(operand) => {
+                        self.body_ty_closure_operand(owner, operand)?
+                    }
+                }
+                for arg in args.iter() {
+                    self.body_ty_closure_operand(owner, arg)?;
+                }
+                self.body_ty_closure_place(owner, destination)
+            }
+            TerminatorKind::Assert { cond, msg, .. } => {
+                self.body_ty_closure_operand(owner, cond)?;
+                match msg {
+                    AssertKind::BoundsCheck { len, index } => {
+                        self.body_ty_closure_operand(owner, len)?;
+                        self.body_ty_closure_operand(owner, index)
+                    }
+                    AssertKind::Overflow(_, left, right) => {
+                        self.body_ty_closure_operand(owner, left)?;
+                        self.body_ty_closure_operand(owner, right)
+                    }
+                    AssertKind::OverflowNeg(op)
+                    | AssertKind::DivisionByZero(op)
+                    | AssertKind::RemainderByZero(op)
+                    | AssertKind::InvalidEnumConstruction(op) => {
+                        self.body_ty_closure_operand(owner, op)
+                    }
+                    AssertKind::MisalignedPointerDereference { required, found } => {
+                        self.body_ty_closure_operand(owner, required)?;
+                        self.body_ty_closure_operand(owner, found)
+                    }
+                    AssertKind::NullPointerDereference => Ok(()),
+                }
+            }
+        }
+    }
+
+    /// Per-statement invariants B-1..B-5 (spec section 22.5.2).
+    /// Place / Operand structural integrity is handled separately by
+    /// `validate_body_places`; this pass focuses on type coherence
+    /// rules.
+    fn validate_body_statement_invariants(
+        &self,
+        owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        for (block_idx, block) in body.basic_blocks.iter().enumerate() {
+            let block_id = BlockId::from_u32(block_idx as u32);
+            for (stmt_idx, stmt) in block.statements.iter().enumerate() {
+                match &stmt.kind {
+                    StatementKind::Assign(place, rvalue) => {
+                        let place_recovery = place_ty(self, body, place);
+                        let rvalue_recovery = rvalue_ty(self, body, rvalue);
+                        match (place_recovery, rvalue_recovery) {
+                            (TypeRecovery::Malformed, _) => {
+                                return Err(InvariantViolation::StatementAssignMalformed {
+                                    owner,
+                                    block: block_id,
+                                    stmt: stmt_idx,
+                                    side: "place",
+                                });
+                            }
+                            (_, TypeRecovery::Malformed) => {
+                                return Err(InvariantViolation::StatementAssignMalformed {
+                                    owner,
+                                    block: block_id,
+                                    stmt: stmt_idx,
+                                    side: "rvalue",
+                                });
+                            }
+                            (TypeRecovery::Recovered(p), TypeRecovery::Recovered(r)) => {
+                                if p != r {
+                                    return Err(InvariantViolation::StatementAssignTypeMismatch {
+                                        owner,
+                                        block: block_id,
+                                        stmt: stmt_idx,
+                                        place_ty: p,
+                                        rvalue_ty: r,
+                                    });
+                                }
+                            }
+                            // Either side NotApplicable means we do
+                            // not have a derivable Ty for that arm;
+                            // skip per spec section 22.5.2 narrowing.
+                            _ => {}
+                        }
+                    }
+                    StatementKind::SetDiscriminant(place, variant) => {
+                        match place_enum_variant_count(self, body, place) {
+                            VariantRecovery::Recovered(max) => {
+                                if variant.as_u32() >= max {
+                                    return Err(
+                                        InvariantViolation::SetDiscriminantVariantIdxOutOfRange {
+                                            owner,
+                                            block: block_id,
+                                            stmt: stmt_idx,
+                                            variant: *variant,
+                                            max,
+                                        },
+                                    );
+                                }
+                            }
+                            VariantRecovery::NotEnum(place_ty) => {
+                                return Err(InvariantViolation::SetDiscriminantNonEnumTarget {
+                                    owner,
+                                    block: block_id,
+                                    stmt: stmt_idx,
+                                    place_ty,
+                                });
+                            }
+                            VariantRecovery::Malformed => {
+                                return Err(InvariantViolation::StatementAssignMalformed {
+                                    owner,
+                                    block: block_id,
+                                    stmt: stmt_idx,
+                                    side: "place",
+                                });
+                            }
+                            VariantRecovery::NotApplicable => {}
+                        }
+                    }
+                    StatementKind::Intrinsic(intrinsic) => match intrinsic {
+                        NonDivergingIntrinsic::Assume(op) => match operand_ty(self, body, op) {
+                            TypeRecovery::Recovered(ty) => {
+                                if !matches!(self.types.resolve(ty), Ty::Bool) {
+                                    return Err(InvariantViolation::AssumeOperandNotBool {
+                                        owner,
+                                        block: block_id,
+                                        stmt: stmt_idx,
+                                        operand_ty: ty,
+                                    });
+                                }
+                            }
+                            TypeRecovery::Malformed => {
+                                return Err(InvariantViolation::StatementAssignMalformed {
+                                    owner,
+                                    block: block_id,
+                                    stmt: stmt_idx,
+                                    side: "rvalue",
+                                });
+                            }
+                            TypeRecovery::NotApplicable => {}
+                        },
+                        NonDivergingIntrinsic::CopyNonOverlapping(payload) => {
+                            self.validate_copy_non_overlapping(
+                                owner, block_id, stmt_idx, body, payload,
+                            )?;
+                        }
+                    },
+                }
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_copy_non_overlapping(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        stmt: usize,
+        body: &Body,
+        payload: &CopyNonOverlapping,
+    ) -> Result<(), InvariantViolation> {
+        let CopyNonOverlapping { src, dst, count } = payload;
+        let src_ty = self.expect_operand_ty(owner, block, stmt, body, src, "src")?;
+        let dst_ty = self.expect_operand_ty(owner, block, stmt, body, dst, "dst")?;
+        let count_ty = self.expect_operand_ty(owner, block, stmt, body, count, "count")?;
+
+        let src_pointee = match (src_ty, self.types.resolve(src_ty)) {
+            (_, Ty::Ref(p, _) | Ty::Ptr(p, _)) => *p,
+            _ => {
+                return Err(InvariantViolation::CopyNonOverlappingOperandType {
+                    owner,
+                    block,
+                    stmt,
+                    which: "src",
+                    actual_ty: src_ty,
+                });
+            }
+        };
+        let dst_pointee = match (dst_ty, self.types.resolve(dst_ty)) {
+            (_, Ty::Ref(p, _) | Ty::Ptr(p, _)) => *p,
+            _ => {
+                return Err(InvariantViolation::CopyNonOverlappingOperandType {
+                    owner,
+                    block,
+                    stmt,
+                    which: "dst",
+                    actual_ty: dst_ty,
+                });
+            }
+        };
+        if src_pointee != dst_pointee {
+            return Err(InvariantViolation::CopyNonOverlappingOperandType {
+                owner,
+                block,
+                stmt,
+                which: "pointee",
+                actual_ty: src_pointee,
+            });
+        }
+        if !matches!(self.types.resolve(count_ty), Ty::Uint(UintKind::Usize)) {
+            return Err(InvariantViolation::CopyNonOverlappingOperandType {
+                owner,
+                block,
+                stmt,
+                which: "count",
+                actual_ty: count_ty,
+            });
+        }
+        Ok(())
+    }
+
+    fn expect_operand_ty(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        stmt: usize,
+        body: &Body,
+        op: &Operand,
+        which: &'static str,
+    ) -> Result<TyId, InvariantViolation> {
+        match operand_ty(self, body, op) {
+            TypeRecovery::Recovered(ty) => Ok(ty),
+            TypeRecovery::Malformed => Err(InvariantViolation::StatementAssignMalformed {
+                owner,
+                block,
+                stmt,
+                side: which,
+            }),
+            // For CopyNonOverlapping the type rule applies; an
+            // unrecoverable operand is treated as malformed so the
+            // invariant is not silently skipped.
+            TypeRecovery::NotApplicable => Err(InvariantViolation::StatementAssignMalformed {
+                owner,
+                block,
+                stmt,
+                side: which,
+            }),
+        }
+    }
+
+    /// Per-terminator invariants B-1..B-9 (spec section 23.6.2).
+    /// Place / Operand structural integrity is handled separately by
+    /// `validate_body_places`; this pass focuses on type coherence and
+    /// callee-shape rules.
+    fn validate_body_terminator_invariants(
+        &self,
+        owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        for (block_idx, block) in body.basic_blocks.iter().enumerate() {
+            let block_id = BlockId::from_u32(block_idx as u32);
+            self.validate_terminator(owner, block_id, body, &block.terminator.kind)?;
+        }
+        Ok(())
+    }
+
+    fn validate_terminator(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        body: &Body,
+        kind: &TerminatorKind,
+    ) -> Result<(), InvariantViolation> {
+        match kind {
+            TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {
+                Ok(())
+            }
+            TerminatorKind::SwitchInt { discr, .. } => {
+                self.validate_switch_int_discr(owner, block, body, discr)
+            }
+            TerminatorKind::Assert { cond, .. } => {
+                self.validate_assert_cond(owner, block, body, cond)
+            }
+            TerminatorKind::Call {
+                callee,
+                args,
+                destination,
+                target,
+            } => self.validate_call(owner, block, body, callee, args, destination, *target),
+        }
+    }
+
+    fn validate_switch_int_discr(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        body: &Body,
+        discr: &Operand,
+    ) -> Result<(), InvariantViolation> {
+        match operand_ty(self, body, discr) {
+            TypeRecovery::Recovered(ty) => {
+                if !matches!(
+                    self.types.resolve(ty),
+                    Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Uint(_)
+                ) {
+                    return Err(InvariantViolation::SwitchIntDiscrTypeMismatch {
+                        owner,
+                        block,
+                        operand_ty: ty,
+                    });
+                }
+                Ok(())
+            }
+            TypeRecovery::Malformed => Err(InvariantViolation::SwitchIntDiscrTypeMismatch {
+                owner,
+                block,
+                operand_ty: TyId::ZERO,
+            }),
+            TypeRecovery::NotApplicable => Ok(()),
+        }
+    }
+
+    fn validate_assert_cond(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        body: &Body,
+        cond: &Operand,
+    ) -> Result<(), InvariantViolation> {
+        match operand_ty(self, body, cond) {
+            TypeRecovery::Recovered(ty) => {
+                if !matches!(self.types.resolve(ty), Ty::Bool) {
+                    return Err(InvariantViolation::AssertCondNotBool {
+                        owner,
+                        block,
+                        cond_ty: ty,
+                    });
+                }
+                Ok(())
+            }
+            TypeRecovery::Malformed => Err(InvariantViolation::AssertCondNotBool {
+                owner,
+                block,
+                cond_ty: TyId::ZERO,
+            }),
+            TypeRecovery::NotApplicable => Ok(()),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)]
+    fn validate_call(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        body: &Body,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &crate::place::Place,
+        target: Option<BlockId>,
+    ) -> Result<(), InvariantViolation> {
+        let resolved_sig: Option<(Vec<TyId>, TyId)> = match callee {
+            CallCallee::Direct(id) => {
+                if id.index() >= self.instances.len() {
+                    // Bounds owned by `validate_body_direct_callees`;
+                    // emit `DirectCalleeOutOfRange` from there. Skip
+                    // here.
+                    return Ok(());
+                }
+                let inst = &self.instances[*id];
+                match &inst.kind {
+                    InstanceKind::Function(data) => {
+                        // B-8: flavor / virtual_idx biconditional at
+                        // the per-call site.
+                        let is_virtual = data.flavor == FunctionInstanceFlavor::Virtual;
+                        match (is_virtual, data.virtual_idx.is_some()) {
+                            (true, false) => {
+                                return Err(InvariantViolation::CallVirtualIdxInconsistent {
+                                    owner,
+                                    block,
+                                    callee: *id,
+                                    reason: "Virtual flavor requires virtual_idx",
+                                });
+                            }
+                            (false, true) => {
+                                return Err(InvariantViolation::CallVirtualIdxInconsistent {
+                                    owner,
+                                    block,
+                                    callee: *id,
+                                    reason: "non-Virtual flavor must not carry virtual_idx",
+                                });
+                            }
+                            _ => {}
+                        }
+                        if data.fn_sig.index() >= self.sigs.len() {
+                            return Ok(());
+                        }
+                        let sig = self.sigs.resolve(data.fn_sig);
+                        Some((sig.inputs.clone(), sig.output))
+                    }
+                    _ => {
+                        return Err(InvariantViolation::CallDirectCalleeNotFunction {
+                            owner,
+                            block,
+                            callee: *id,
+                        });
+                    }
+                }
+            }
+            CallCallee::Indirect(op) => match operand_ty(self, body, op) {
+                TypeRecovery::Recovered(ty) => match self.types.resolve(ty) {
+                    Ty::FnPtr(sig_id) => {
+                        if sig_id.index() >= self.sigs.len() {
+                            return Ok(());
+                        }
+                        let sig = self.sigs.resolve(*sig_id);
+                        Some((sig.inputs.clone(), sig.output))
+                    }
+                    _ => {
+                        return Err(InvariantViolation::CallIndirectCalleeNotFnPtr {
+                            owner,
+                            block,
+                            operand_ty: ty,
+                        });
+                    }
+                },
+                // Per audit-finding 5: a Malformed indirect-callee
+                // operand must surface as a typed error rather than
+                // silently skipping B-5. The constructed `TyId::ZERO`
+                // is a diagnostic placeholder.
+                TypeRecovery::Malformed => {
+                    return Err(InvariantViolation::CallIndirectCalleeNotFnPtr {
+                        owner,
+                        block,
+                        operand_ty: TyId::ZERO,
+                    });
+                }
+                // NotApplicable arises when the callee operand is a
+                // constant whose `Ty` is not recoverable from inline
+                // data (spec section 20.5 places that responsibility
+                // upstream). Skipping here is the spec-inapplicable
+                // case, not a silent malformed skip.
+                TypeRecovery::NotApplicable => None,
+            },
+        };
+
+        let Some((inputs, output)) = resolved_sig else {
+            return Ok(());
+        };
+
+        // B-4: arity match.
+        if args.len() != inputs.len() {
+            return Err(InvariantViolation::CallArgsArityMismatch {
+                owner,
+                block,
+                expected: inputs.len(),
+                actual: args.len(),
+            });
+        }
+
+        // B-6: per-arg type match. NotApplicable arms are skipped per
+        // the spec narrowing (operand-context typing for constants is
+        // upstream's responsibility).
+        for (i, arg) in args.iter().enumerate() {
+            match operand_ty(self, body, arg) {
+                TypeRecovery::Recovered(ty) => {
+                    if ty != inputs[i] {
+                        return Err(InvariantViolation::CallArgTypeMismatch {
+                            owner,
+                            block,
+                            idx: i,
+                            expected_ty: inputs[i],
+                            actual_ty: ty,
+                        });
+                    }
+                }
+                TypeRecovery::NotApplicable => {}
+                TypeRecovery::Malformed => {
+                    return Err(InvariantViolation::CallArgTypeMismatch {
+                        owner,
+                        block,
+                        idx: i,
+                        expected_ty: inputs[i],
+                        actual_ty: TyId::ZERO,
+                    });
+                }
+            }
+        }
+
+        let output_is_never = matches!(self.types.resolve(output), Ty::Never);
+
+        // B-9: target / divergence coherence.
+        match (target, output_is_never) {
+            (None, true) | (Some(_), false) => {}
+            (None, false) => {
+                return Err(InvariantViolation::CallTargetDivergenceMismatch {
+                    owner,
+                    block,
+                    reason: "target: None requires callee output == Ty::Never",
+                });
+            }
+            (Some(_), true) => {
+                return Err(InvariantViolation::CallTargetDivergenceMismatch {
+                    owner,
+                    block,
+                    reason: "target: Some(_) requires callee output != Ty::Never",
+                });
+            }
+        }
+
+        // B-3: destination type matches callee output (when
+        // target: Some(_)).
+        if target.is_some() {
+            match place_ty(self, body, destination) {
+                TypeRecovery::Recovered(actual) => {
+                    if actual != output {
+                        return Err(InvariantViolation::CallDestinationTypeMismatch {
+                            owner,
+                            block,
+                            expected_ty: output,
+                            actual_ty: actual,
+                        });
+                    }
+                }
+                TypeRecovery::Malformed => {
+                    return Err(InvariantViolation::CallDestinationTypeMismatch {
+                        owner,
+                        block,
+                        expected_ty: output,
+                        actual_ty: TyId::ZERO,
+                    });
+                }
+                TypeRecovery::NotApplicable => {}
             }
         }
         Ok(())

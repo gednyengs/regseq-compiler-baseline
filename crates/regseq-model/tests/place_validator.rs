@@ -19,6 +19,14 @@ impl Fixture {
         let mut model = regseq_model::RegseqModel::with_primary("spec", StableCrateId(7));
         let bool_ty = model.types.intern(Ty::Bool);
         let u32_ty = model.types.intern(Ty::Uint(UintKind::U32));
+        // Intern a u32 const at ConstId::ZERO so body fixtures that
+        // reference Operand::Constant(ConstId::ZERO) for type-u32
+        // locals satisfy the spec section 22.5.2 B-1 assign-type
+        // equality check. body_ty's operand-context constant typing
+        // recovers Ty::Uint(U32) for Const::Uint(U32, _).
+        let _ = model
+            .consts
+            .intern(regseq_model::Const::Uint(UintKind::U32, 0));
         Self {
             model,
             bool_ty,

@@ -9,6 +9,7 @@
 mod args_key;
 mod basic_block;
 mod body;
+mod body_ty;
 mod bridge_input;
 mod build;
 mod cabi;
@@ -51,6 +52,10 @@ pub use args_key::{
 };
 pub use basic_block::BasicBlock;
 pub use body::{Body, LocalDecl};
+pub use body_ty::{
+    operand_ty, place_enum_variant_count, place_ty, pointee_ty, rvalue_ty, TypeRecovery,
+    VariantRecovery,
+};
 pub use bridge_input::BridgeInput;
 pub use build::BuildInfo;
 pub use cabi::{CAbiLowering, CAbiShape, SubstReason};

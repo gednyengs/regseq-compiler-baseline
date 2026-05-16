@@ -1,12 +1,15 @@
 use std::sync::Arc;
 
 use regseq_model::{
-    render_def_path, ArgsKey, Body, BridgeInput, Byte, Const, ConstInterner, CrateId, DefPath,
-    DefPathData, DefPathHash, DefPathSegment, FnAbi, FnSig, FnSigInterner, FunctionInstanceData,
+    render_def_path, ArgsKey, BasicBlock, BlockId, Body, BridgeInput, Byte, CallCallee, Const,
+    ConstId, ConstInterner, CopyNonOverlapping, CrateId, DefPath, DefPathData, DefPathHash,
+    DefPathSegment, FieldIdx, FnAbi, FnSig, FnSigInterner, FunctionInstanceData,
     FunctionInstanceFlavor, GenericArg, IndexVec, InlineHint, Instance, InstanceKind, InstanceRef,
-    InvariantViolation, Item, ItemId, ItemKind, Linkage, PrincipalTraitKey, ProjectionBindingsKey,
-    RegseqModel, Safety, SourceFile, SourceFileId, Span, StableCrateId, StringId,
-    SyntheticItemKind, Ty, TyId, TyInterner,
+    InvariantViolation, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, LocalDecl, LocalId,
+    Mutability, NonDivergingIntrinsic, Operand, Place, PlaceElem, PrincipalTraitKey,
+    ProjectionBindingsKey, RegseqModel, Rvalue, Safety, SourceFile, SourceFileId, Span,
+    StableCrateId, Statement, StatementKind, StringId, SwitchTargets, SyntheticItemKind,
+    Terminator, TerminatorKind, Ty, TyId, TyInterner, UintKind, UnOp, VariantIdx, WrappingRange,
 };
 
 fn validate(model: &mut RegseqModel) -> Result<(), InvariantViolation> {
@@ -674,4 +677,1105 @@ fn phase_b_then_c_ordering() {
         Err(InvariantViolation::DuplicateInternerEntry { interner, .. })
             if interner == "ConstInterner"
     ));
+}
+
+// ---------------------------------------------------------------------
+// Body-level invariant tests (audit-finding 1-6 additions).
+//
+// These helpers construct a self-contained RegseqModel that carries
+// the matching nominal types, a single function instance whose body
+// hosts the offending statement / terminator, and the minimum
+// supporting state the joint validator needs (FnSig, return type, two
+// blocks for Goto / Assert / Call return paths). Every test below
+// asserts the precise InvariantViolation variant returned by the
+// validator after the audit-finding work landed.
+// ---------------------------------------------------------------------
+
+fn unit_layout() -> Layout {
+    Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields: vec![] },
+    }
+}
+
+struct BodyFixture {
+    model: RegseqModel,
+    bool_ty: TyId,
+    u32_ty: TyId,
+    unit_ty: TyId,
+    bool_const: ConstId,
+    u32_const: ConstId,
+    next_local_hash: u64,
+}
+
+impl BodyFixture {
+    fn new() -> Self {
+        let mut model = RegseqModel::with_primary("pl011_spec", StableCrateId(1));
+        let bool_ty = model.types.intern(Ty::Bool);
+        let u32_ty = model.types.intern(Ty::Uint(UintKind::U32));
+        let unit_ty = model.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: unit_layout(),
+        });
+        let bool_const = model.consts.intern(Const::Bool(true));
+        let u32_const = model.consts.intern(Const::Uint(UintKind::U32, 0));
+        Self {
+            model,
+            bool_ty,
+            u32_ty,
+            unit_ty,
+            bool_const,
+            u32_const,
+            next_local_hash: 1,
+        }
+    }
+
+    /// Pushes an item with a per-fixture monotonically increasing
+    /// DefPathHash and a name that strictly orders after every
+    /// previously-pushed item per the F4 sort key
+    /// (`(crate_name, stable_crate_id, segments)`). Items in the
+    /// fixture share a crate; the per-test name encodes the sort
+    /// position via a numeric prefix.
+    fn push_named_item(&mut self, name: &str, kind: ItemKind) -> ItemId {
+        let local_hash = self.next_local_hash;
+        self.next_local_hash += 1;
+        let prefixed = format!("z_{:03}_{}", local_hash, name);
+        push_item(&mut self.model, &prefixed, kind, local_hash)
+    }
+
+    fn local(ty: TyId) -> LocalDecl {
+        LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        }
+    }
+
+    fn body_from_blocks(local_tys: &[TyId], blocks: Vec<BasicBlock>) -> Body {
+        let mut local_decls = IndexVec::new();
+        for ty in local_tys {
+            local_decls.push(Self::local(*ty));
+        }
+        let mut basic_blocks = IndexVec::new();
+        for block in blocks {
+            basic_blocks.push(block);
+        }
+        Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        }
+    }
+
+    fn push_function_with_body(
+        &mut self,
+        body: Body,
+        inputs: Vec<TyId>,
+        output: TyId,
+    ) -> regseq_model::InstanceId {
+        let item = self.push_named_item("driver", ItemKind::Function);
+        let sig = self.model.sigs.intern(FnSig {
+            inputs,
+            output,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        self.model.sig_c_abi_lowerings.push(None);
+        self.model.instances.push(Instance {
+            item,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: sig,
+                body: Some(body),
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        })
+    }
+}
+
+fn return_block() -> BasicBlock {
+    BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: Span::dummy(),
+        },
+    }
+}
+
+fn block_with_terminator(kind: TerminatorKind) -> BasicBlock {
+    BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind,
+            span: Span::dummy(),
+        },
+    }
+}
+
+fn block_with_statements(statements: Vec<Statement>) -> BasicBlock {
+    BasicBlock {
+        statements: statements.into_boxed_slice(),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: Span::dummy(),
+        },
+    }
+}
+
+fn place_local(local: u32) -> Place {
+    Place::from(LocalId::from_u32(local))
+}
+
+#[test]
+fn statement_b1_assign_type_mismatch_rejects() {
+    let mut f = BodyFixture::new();
+    // local _0: u32, rvalue: bool constant -> mismatch.
+    let stmt = Statement {
+        kind: StatementKind::Assign(place_local(0), Rvalue::Use(Operand::Constant(f.bool_const))),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[f.u32_ty], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.u32_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::StatementAssignTypeMismatch {
+            place_ty,
+            rvalue_ty,
+            ..
+        } => {
+            assert_eq!(place_ty, f.u32_ty);
+            assert_eq!(rvalue_ty, f.bool_ty);
+        }
+        other => panic!("expected StatementAssignTypeMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn statement_b2_set_discriminant_variant_idx_out_of_range_rejects() {
+    let mut f = BodyFixture::new();
+    // Build a 2-variant enum type.
+    let item = f.push_named_item("Enum2", ItemKind::Enum);
+    let v0 = f.model.strings.intern("V0");
+    let v1 = f.model.strings.intern("V1");
+    let enum_ty = f.model.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Enum {
+                shape: regseq_model::EnumShape::Multiple {
+                    tag: regseq_model::TagScalar {
+                        scalar_ty: f.u32_ty,
+                        offset: 0,
+                        valid_range: WrappingRange { start: 0, end: 1 },
+                    },
+                    encoding: regseq_model::TagEncoding::Direct,
+                    variants: vec![
+                        regseq_model::VariantLayout {
+                            name: v0,
+                            fields: vec![],
+                            uninhabited: false,
+                            discriminant: 0,
+                            tag_value: Some(0),
+                        },
+                        regseq_model::VariantLayout {
+                            name: v1,
+                            fields: vec![],
+                            uninhabited: false,
+                            discriminant: 1,
+                            tag_value: Some(1),
+                        },
+                    ],
+                },
+            },
+        },
+    });
+    let stmt = Statement {
+        kind: StatementKind::SetDiscriminant(place_local(0), VariantIdx::from_u32(5)),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[enum_ty], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::SetDiscriminantVariantIdxOutOfRange { max: 2, .. }
+    ));
+}
+
+#[test]
+fn statement_b3_set_discriminant_non_enum_target_rejects() {
+    let mut f = BodyFixture::new();
+    // local _0 is u32 (non-enum) -> SetDiscriminant should reject.
+    let stmt = Statement {
+        kind: StatementKind::SetDiscriminant(place_local(0), VariantIdx::from_u32(0)),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[f.u32_ty], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::SetDiscriminantNonEnumTarget { place_ty, .. } if place_ty == f.u32_ty
+    ));
+}
+
+#[test]
+fn statement_b4_assume_operand_not_bool_rejects() {
+    let mut f = BodyFixture::new();
+    let stmt = Statement {
+        kind: StatementKind::Intrinsic(NonDivergingIntrinsic::Assume(Operand::Constant(
+            f.u32_const,
+        ))),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::AssumeOperandNotBool { operand_ty, .. } if operand_ty == f.u32_ty
+    ));
+}
+
+#[test]
+fn statement_b5_copy_non_overlapping_count_type_rejects() {
+    let mut f = BodyFixture::new();
+    let usize_ty = f.model.types.intern(Ty::Uint(UintKind::Usize));
+    let usize_const = f.model.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let _ = usize_const;
+    let _ = usize_ty;
+    let ptr_u32 = f.model.types.intern(Ty::Ptr(f.u32_ty, Mutability::Mut));
+    // src/dst typed as *mut u32 (pass through local _0/_1). count is
+    // a u32 (wrong type; spec requires Ty::Uint(Usize)).
+    let stmt = Statement {
+        kind: StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(
+            CopyNonOverlapping {
+                src: Operand::Copy(place_local(0)),
+                dst: Operand::Copy(place_local(1)),
+                count: Operand::Constant(f.u32_const),
+            },
+        )),
+        span: Span::dummy(),
+    };
+    let body =
+        BodyFixture::body_from_blocks(&[ptr_u32, ptr_u32], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::CopyNonOverlappingOperandType { which: "count", .. }
+    ));
+}
+
+#[test]
+fn terminator_b1_switch_int_discr_type_mismatch_rejects() {
+    let mut f = BodyFixture::new();
+    // Build a 2-variant enum type whose value is the SwitchInt
+    // discriminant (an enum value, not an integer-typed Operand).
+    let item = f.push_named_item("Enum2", ItemKind::Enum);
+    let v0 = f.model.strings.intern("V0");
+    let enum_ty = f.model.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Enum {
+                shape: regseq_model::EnumShape::Single {
+                    variant: regseq_model::VariantLayout {
+                        name: v0,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 0,
+                        tag_value: None,
+                    },
+                    scalar: None,
+                },
+            },
+        },
+    });
+    let switch = block_with_terminator(TerminatorKind::SwitchInt {
+        discr: Operand::Copy(place_local(0)),
+        targets: SwitchTargets {
+            cases: Box::new([]),
+            otherwise: BlockId::from_u32(1),
+        },
+    });
+    let body = BodyFixture::body_from_blocks(&[enum_ty], vec![switch, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::SwitchIntDiscrTypeMismatch { operand_ty, .. } if operand_ty == enum_ty
+    ));
+}
+
+#[test]
+fn terminator_b2_assert_cond_not_bool_rejects() {
+    let mut f = BodyFixture::new();
+    let assert = block_with_terminator(TerminatorKind::Assert {
+        cond: Operand::Constant(f.u32_const),
+        expected: true,
+        msg: regseq_model::AssertKind::NullPointerDereference,
+        target: BlockId::from_u32(1),
+    });
+    let body = BodyFixture::body_from_blocks(&[], vec![assert, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::AssertCondNotBool { cond_ty, .. } if cond_ty == f.u32_ty
+    ));
+}
+
+#[test]
+fn terminator_b3_call_destination_type_mismatch_rejects() {
+    let mut f = BodyFixture::new();
+    // Function callee returns u32; destination place is bool.
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![],
+        output: f.u32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let callee_item = f.push_named_item("callee", ItemKind::Function);
+    let callee_id = f.model.instances.push(Instance {
+        item: callee_item,
+        generic_args: vec![],
+        emission_name: StringId::ZERO,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: callee_sig,
+            body: Some(Body::default()),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(callee_id),
+        args: Box::new([]),
+        // local _0: bool != callee output u32.
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.bool_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallDestinationTypeMismatch {
+            expected_ty,
+            actual_ty,
+            ..
+        } => {
+            assert_eq!(expected_ty, f.u32_ty);
+            assert_eq!(actual_ty, f.bool_ty);
+        }
+        other => panic!("expected CallDestinationTypeMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn terminator_b4_call_args_arity_mismatch_rejects_direct() {
+    let mut f = BodyFixture::new();
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![f.u32_ty, f.u32_ty],
+        output: f.unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let callee_item = f.push_named_item("callee", ItemKind::Function);
+    let callee_id = f.model.instances.push(Instance {
+        item: callee_item,
+        generic_args: vec![],
+        emission_name: StringId::ZERO,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: callee_sig,
+            body: Some(Body::default()),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(callee_id),
+        // Only 1 arg but sig has 2 inputs.
+        args: Box::new([Operand::Constant(f.u32_const)]),
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::CallArgsArityMismatch {
+            expected: 2,
+            actual: 1,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn terminator_b4_call_args_arity_mismatch_rejects_indirect() {
+    let mut f = BodyFixture::new();
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![f.u32_ty],
+        output: f.unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let fn_ptr_ty = f.model.types.intern(Ty::FnPtr(callee_sig));
+    // Indirect callee operand whose type is the fn ptr above.
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Indirect(Operand::Copy(place_local(0))),
+        args: Box::new([]),
+        destination: place_local(1),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[fn_ptr_ty, f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::CallArgsArityMismatch {
+            expected: 1,
+            actual: 0,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn terminator_b5_call_direct_callee_not_function_rejects() {
+    let mut f = BodyFixture::new();
+    // Build a Static instance the call site references.
+    let static_item = f.push_named_item(
+        "GLOBAL",
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+    );
+    let static_id = f.model.instances.push(Instance {
+        item: static_item,
+        generic_args: vec![],
+        emission_name: StringId::ZERO,
+        span: Span::dummy(),
+        kind: InstanceKind::Static {
+            ty: f.u32_ty,
+            init: None,
+        },
+    });
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(static_id),
+        args: Box::new([]),
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::CallDirectCalleeNotFunction { callee, .. } if callee == static_id
+    ));
+}
+
+#[test]
+fn terminator_b5_call_indirect_callee_not_fn_ptr_rejects() {
+    let mut f = BodyFixture::new();
+    // Indirect callee operand is u32, not a function pointer.
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Indirect(Operand::Constant(f.u32_const)),
+        args: Box::new([]),
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::CallIndirectCalleeNotFnPtr { operand_ty, .. } if operand_ty == f.u32_ty
+    ));
+}
+
+#[test]
+fn terminator_b6_call_arg_type_mismatch_rejects_direct() {
+    let mut f = BodyFixture::new();
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![f.u32_ty],
+        output: f.unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let callee_item = f.push_named_item("callee", ItemKind::Function);
+    let callee_id = f.model.instances.push(Instance {
+        item: callee_item,
+        generic_args: vec![],
+        emission_name: StringId::ZERO,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: callee_sig,
+            body: Some(Body::default()),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    // Pass a bool to a u32-typed param -> type mismatch.
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(callee_id),
+        args: Box::new([Operand::Constant(f.bool_const)]),
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallArgTypeMismatch {
+            idx,
+            expected_ty,
+            actual_ty,
+            ..
+        } => {
+            assert_eq!(idx, 0);
+            assert_eq!(expected_ty, f.u32_ty);
+            assert_eq!(actual_ty, f.bool_ty);
+        }
+        other => panic!("expected CallArgTypeMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn terminator_b3_call_destination_type_mismatch_rejects_indirect() {
+    let mut f = BodyFixture::new();
+    // Indirect callee whose recovered signature returns u32; the
+    // destination is bool -- spec section 23.6 B-3 mismatch.
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![],
+        output: f.u32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let fn_ptr_ty = f.model.types.intern(Ty::FnPtr(callee_sig));
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Indirect(Operand::Copy(place_local(0))),
+        args: Box::new([]),
+        // local _1: bool != callee output u32.
+        destination: place_local(1),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[fn_ptr_ty, f.bool_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallDestinationTypeMismatch {
+            expected_ty,
+            actual_ty,
+            ..
+        } => {
+            assert_eq!(expected_ty, f.u32_ty);
+            assert_eq!(actual_ty, f.bool_ty);
+        }
+        other => panic!("expected CallDestinationTypeMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn terminator_b6_call_arg_type_mismatch_rejects_indirect() {
+    let mut f = BodyFixture::new();
+    // Indirect callee whose recovered signature requires a u32 input;
+    // the test passes a bool constant -- spec section 23.6 B-6
+    // mismatch.
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![f.u32_ty],
+        output: f.unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let fn_ptr_ty = f.model.types.intern(Ty::FnPtr(callee_sig));
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Indirect(Operand::Copy(place_local(0))),
+        args: Box::new([Operand::Constant(f.bool_const)]),
+        destination: place_local(1),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[fn_ptr_ty, f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallArgTypeMismatch {
+            idx,
+            expected_ty,
+            actual_ty,
+            ..
+        } => {
+            assert_eq!(idx, 0);
+            assert_eq!(expected_ty, f.u32_ty);
+            assert_eq!(actual_ty, f.bool_ty);
+        }
+        other => panic!("expected CallArgTypeMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn terminator_b8_virtual_idx_inconsistent_rejects() {
+    let mut f = BodyFixture::new();
+    // Use a u32-returning callee signature so the interner key is
+    // distinct from the unit-returning outer-function signature added
+    // by `push_function_with_body`.
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![],
+        output: f.u32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let callee_item = f.push_named_item("callee", ItemKind::Function);
+    // Virtual flavor but virtual_idx is None.
+    let callee_id = f.model.instances.push(Instance {
+        item: callee_item,
+        generic_args: vec![],
+        emission_name: StringId::ZERO,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: callee_sig,
+            body: Some(Body::default()),
+            flavor: FunctionInstanceFlavor::Virtual,
+            virtual_idx: None,
+        }),
+    });
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(callee_id),
+        args: Box::new([]),
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallVirtualIdxInconsistent { callee, .. } => {
+            assert_eq!(callee, callee_id);
+        }
+        other => panic!("expected CallVirtualIdxInconsistent, got {other:?}"),
+    }
+}
+
+#[test]
+fn terminator_b9_target_divergence_mismatch_rejects_non_diverging_no_target() {
+    let mut f = BodyFixture::new();
+    // Use a u32-returning signature so it doesn't collide with the
+    // unit-returning outer-function signature in push_function_with_body.
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![],
+        output: f.u32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let callee_item = f.push_named_item("callee", ItemKind::Function);
+    let callee_id = f.model.instances.push(Instance {
+        item: callee_item,
+        generic_args: vec![],
+        emission_name: StringId::ZERO,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: callee_sig,
+            body: Some(Body::default()),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(callee_id),
+        args: Box::new([]),
+        destination: place_local(0),
+        target: None,
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallTargetDivergenceMismatch { .. } => {}
+        other => panic!("expected CallTargetDivergenceMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer() {
+    // `PtrMetadata` applied to a non-fat-pointer operand cannot
+    // recover a metadata type. body_ty's rvalue_ty returns
+    // `Malformed`; the statement-site B-1 validator must surface
+    // `StatementAssignMalformed` rather than silently skipping.
+    let mut f = BodyFixture::new();
+    let usize_ty = f.model.types.intern(Ty::Uint(UintKind::Usize));
+    let stmt = Statement {
+        kind: StatementKind::Assign(
+            place_local(1),
+            // PtrMetadata on a u32 operand has no recoverable
+            // metadata pointee.
+            Rvalue::UnaryOp(UnOp::PtrMetadata, Operand::Copy(place_local(0))),
+        ),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(
+        &[f.u32_ty, usize_ty],
+        vec![block_with_statements(vec![stmt])],
+    );
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::StatementAssignMalformed { side, .. } => {
+            assert_eq!(side, "rvalue");
+        }
+        other => panic!("expected StatementAssignMalformed, got {other:?}"),
+    }
+}
+
+#[test]
+fn body_ty_closure_rejects_dangling_const_id_in_operand() {
+    // A dangling `Operand::Constant(ConstId)` is rejected by
+    // body_ty_closure_operand with a `DanglingId` referencing the
+    // operand-context ConstId.
+    let mut f = BodyFixture::new();
+    let dangling_const = ConstId::from_u32(f.model.consts.len() as u32 + 99);
+    let stmt = Statement {
+        kind: StatementKind::Assign(
+            place_local(0),
+            Rvalue::Use(Operand::Constant(dangling_const)),
+        ),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[f.u32_ty], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::DanglingId { field, .. }
+            if field == "Operand::Constant.ConstId"
+    ));
+}
+
+#[test]
+fn terminator_b9_target_divergence_mismatch_rejects_indirect_divergent_target_some() {
+    let mut f = BodyFixture::new();
+    let never_ty = f.model.types.intern(Ty::Never);
+    // Indirect callee whose recovered signature returns Never; the
+    // Call carries a Some(_) target -- spec section 23.6 B-9
+    // mismatch covering the Indirect side.
+    let callee_sig = f.model.sigs.intern(FnSig {
+        inputs: vec![],
+        output: never_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    f.model.sig_c_abi_lowerings.push(None);
+    let fn_ptr_ty = f.model.types.intern(Ty::FnPtr(callee_sig));
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Indirect(Operand::Copy(place_local(0))),
+        args: Box::new([]),
+        destination: place_local(1),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[fn_ptr_ty, f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::CallTargetDivergenceMismatch { .. } => {}
+        other => panic!("expected CallTargetDivergenceMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn terminator_b7_direct_callee_out_of_range_rejects() {
+    // Spec section 23.6.2 B-7: every `Direct(InstanceId)` referenced
+    // from any Terminator::Call resolves in `model.instances`.
+    let mut f = BodyFixture::new();
+    let call = block_with_terminator(TerminatorKind::Call {
+        callee: CallCallee::Direct(regseq_model::InstanceId::from_u32(999)),
+        args: Box::new([]),
+        destination: place_local(0),
+        target: Some(BlockId::from_u32(1)),
+    });
+    let body = BodyFixture::body_from_blocks(&[f.unit_ty], vec![call, return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::DirectCalleeOutOfRange { callee, .. } => {
+            assert_eq!(callee, regseq_model::InstanceId::from_u32(999));
+        }
+        other => panic!("expected DirectCalleeOutOfRange, got {other:?}"),
+    }
+}
+
+#[test]
+fn body_ty_closure_rejects_dangling_local_decl_ty() {
+    let mut f = BodyFixture::new();
+    let dangling = TyId::from_u32(f.model.types.len() as u32 + 99);
+    let body = BodyFixture::body_from_blocks(&[dangling], vec![return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    assert!(matches!(
+        err,
+        InvariantViolation::BodyTyIdOutOfRange {
+            site: "LocalDecl.ty",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn place_validator_structural_error_at_index_5_not_masked_by_type_error_at_index_0() {
+    // Construct a place whose projection chain has:
+    //   index 0: Field(0, wrong_ty) -- type mismatch
+    //   index 5: Deref -- structural violation (Deref must be first)
+    // The audit-mandated structural pre-pass must report the Deref
+    // (structural) error, not the field (type-narrowing) error.
+    let mut f = BodyFixture::new();
+    let struct_item = f.push_named_item("S", ItemKind::Struct);
+    let struct_layout = Layout {
+        size: 4,
+        align: 4,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct {
+            fields: vec![regseq_model::FieldLayout {
+                name: f.model.strings.intern("x"),
+                ty: f.u32_ty,
+                offset: 0,
+            }],
+        },
+    };
+    let struct_ty = f.model.types.intern(Ty::Struct {
+        item: struct_item,
+        args: vec![],
+        layout: struct_layout,
+    });
+    // Wrong field type on the projection (claims bool when layout
+    // says u32) -- type error at index 0.
+    let bad_field_ty = f.bool_ty;
+    let projection: Box<[PlaceElem]> = Box::new([
+        PlaceElem::Field(FieldIdx::from_u32(0), bad_field_ty),
+        PlaceElem::Field(FieldIdx::from_u32(0), f.u32_ty),
+        PlaceElem::Field(FieldIdx::from_u32(0), f.u32_ty),
+        PlaceElem::Field(FieldIdx::from_u32(0), f.u32_ty),
+        PlaceElem::Field(FieldIdx::from_u32(0), f.u32_ty),
+        // Structural violation: Deref past index 0.
+        PlaceElem::Deref,
+    ]);
+    let bad_place = Place {
+        local: LocalId::from_u32(0),
+        projection,
+    };
+    let stmt = Statement {
+        kind: StatementKind::Assign(bad_place, Rvalue::Use(Operand::Constant(f.u32_const))),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[struct_ty], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let err = f
+        .model
+        .validate(&BridgeInput::matching(&f.model))
+        .unwrap_err();
+    match err {
+        InvariantViolation::PlaceWalk { error, .. } => match error.kind {
+            regseq_model::PlaceValidationErrorKind::DerefNotFirst { index } => {
+                assert_eq!(index, 5);
+            }
+            other => panic!("expected DerefNotFirst structural error, got {other:?}"),
+        },
+        other => panic!("expected PlaceWalk, got {other:?}"),
+    }
+}
+
+#[test]
+fn rvalue_ty_ptr_metadata_on_dyn_returns_vtable_ptr() {
+    // Build:
+    //   _0: *const dyn Trait (fat pointer)
+    //   _1: *const VTableStruct (the expected metadata type)
+    // Assign _1 = PtrMetadata(Copy(_0)) -- should NOT mismatch.
+    let mut f = BodyFixture::new();
+    let vtable_item = f.push_named_item("VT", ItemKind::Struct);
+    let vtable_layout = Layout {
+        size: 8,
+        align: 8,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields: vec![] },
+    };
+    let vtable_ty = f.model.types.intern(Ty::Struct {
+        item: vtable_item,
+        args: vec![],
+        layout: vtable_layout,
+    });
+    let dynamic_ty = f.model.types.intern(Ty::Dynamic {
+        auto_traits: vec![],
+        vtable_ty,
+    });
+    let ptr_dyn = f.model.types.intern(Ty::Ptr(dynamic_ty, Mutability::Not));
+    let ptr_vtable = f.model.types.intern(Ty::Ptr(vtable_ty, Mutability::Not));
+    let stmt = Statement {
+        kind: StatementKind::Assign(
+            place_local(1),
+            Rvalue::UnaryOp(UnOp::PtrMetadata, Operand::Copy(place_local(0))),
+        ),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(
+        &[ptr_dyn, ptr_vtable],
+        vec![block_with_statements(vec![stmt])],
+    );
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let result = f.model.validate(&BridgeInput::matching(&f.model));
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn rvalue_ty_ptr_metadata_on_slice_returns_usize() {
+    // Build:
+    //   _0: *const [u32]
+    //   _1: usize
+    // Assign _1 = PtrMetadata(Copy(_0)) -- should NOT mismatch.
+    let mut f = BodyFixture::new();
+    let usize_ty = f.model.types.intern(Ty::Uint(UintKind::Usize));
+    let slice_u32 = f.model.types.intern(Ty::Slice(f.u32_ty));
+    let ptr_slice = f.model.types.intern(Ty::Ptr(slice_u32, Mutability::Not));
+    let stmt = Statement {
+        kind: StatementKind::Assign(
+            place_local(1),
+            Rvalue::UnaryOp(UnOp::PtrMetadata, Operand::Copy(place_local(0))),
+        ),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(
+        &[ptr_slice, usize_ty],
+        vec![block_with_statements(vec![stmt])],
+    );
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    let result = f.model.validate(&BridgeInput::matching(&f.model));
+    assert_eq!(result, Ok(()));
+}
+
+#[test]
+fn invariant_2_pass_full_alignment() {
+    // items / item_def_paths / item_synthetic_kinds all aligned.
+    let mut model = base_model();
+    push_item(&mut model, "a", ItemKind::Function, 1);
+    push_item(&mut model, "b", ItemKind::Function, 2);
+    assert_eq!(validate(&mut model), Ok(()));
+}
+
+#[test]
+fn invariant_6_pass_full_closure() {
+    let mut model = base_model();
+    push_item(&mut model, "driver", ItemKind::Function, 1);
+    assert_eq!(validate(&mut model), Ok(()));
+}
+
+#[test]
+fn invariant_18_pass_unique_def_path_hashes() {
+    let mut model = base_model();
+    push_item(&mut model, "a", ItemKind::Function, 1);
+    push_item(&mut model, "b", ItemKind::Function, 2);
+    push_item(&mut model, "c", ItemKind::Function, 3);
+    assert_eq!(validate(&mut model), Ok(()));
 }
