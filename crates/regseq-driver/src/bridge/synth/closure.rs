@@ -145,7 +145,17 @@ fn push_closure_captures_item(
     closure_def_id: DefId,
     closure: DefPathHash,
 ) -> crate::bridge::ItemHandle {
+    // Per spec 13.1 + audit-finding F4 the captures-struct Item is
+    // owned by this synth path. We also register the handle in
+    // `source_item_handles` so any defensive `intern_item` call for
+    // the closure DefId dedups against the same handle rather than
+    // pushing a second `SyntheticItemKind::None` Item (see HIGH-40-1
+    // / HIGH-37-1 audit findings).
+    if let Some(handle) = cx.source_item_handles.get(&closure).copied() {
+        return handle;
+    }
     let handle = cx.handles.fresh_handle();
+    cx.source_item_handles.insert(closure, handle);
     let item = source_item(cx, closure_def_id, ItemKind::Struct);
     cx.pending_items.push(PendingItem {
         handle,

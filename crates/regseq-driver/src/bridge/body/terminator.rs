@@ -139,7 +139,13 @@ fn translate_call_callee<'tcx>(
             let Ty::FnDef(callee_item, _) = cx.model.types.resolve(model_ty).clone() else {
                 return rejected_terminator(format!("unsupported call callee {func:?}"));
             };
-            let callee_def_path = cx.model.items[callee_item].def_path.clone();
+            // Source-derived Items carry placeholder ItemIds until
+            // Phase 4 binds them (audit-finding F4); look up through
+            // pending_items when the ItemId hasn't yet been assigned.
+            let callee_def_path = cx
+                .lookup_item_def_path(callee_item)
+                .expect("FnDef callee Item must be interned")
+                .clone();
             diag_log::recognise_log_intrinsic_def_id(
                 cx,
                 ItemHandle::from_u32(callee_item.as_u32()),

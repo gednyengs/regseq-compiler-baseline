@@ -331,6 +331,13 @@ pub fn f(
         let ids = (0..4)
             .map(|idx| translate_ty(cx, param_ty(tcx, "f", idx)).unwrap())
             .collect::<Vec<_>>();
+        // Source-derived nominal Items are interned with placeholder
+        // ItemIds during Phase 2 (audit-finding F4: no direct
+        // `model.items.push` from Phase 2); drive Phase 3 + Phase 4
+        // + Phase 5 patching so the Ty entries resolve to real
+        // ItemIds before reading them.
+        regseq_driver::bridge::flush_pending_items_for_tests(cx).unwrap();
+        regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
         let items = ids
             .iter()
             .map(|id| match cx.model.types.resolve(*id) {
@@ -711,13 +718,7 @@ pub fn dyn_holder(_: &dyn Device) {}
         // patched at Phase 4 deferred resolution. Drive the bridge's
         // Phase-4 + rekey transitions before reading
         // `item_synthetic_kinds`.
-        for pending in cx.pending_items.drain(..).collect::<Vec<_>>() {
-            let item_id = cx.model.items.push(pending.item);
-            cx.model.item_def_paths.push(pending.def_path_hash);
-            cx.model.item_synthetic_kinds.push(pending.synthetic_kind);
-            cx.model.domain_attrs.item_attrs.push(Vec::new());
-            cx.handles.bind_final_item_id(pending.handle, item_id);
-        }
+        regseq_driver::bridge::flush_pending_items_for_tests(cx).unwrap();
         regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
 
         let Ty::Struct {

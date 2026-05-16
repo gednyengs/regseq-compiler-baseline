@@ -11,7 +11,10 @@ use regseq_model::{
     StableCrateId, SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
 };
 
-use super::{BridgeCtxt, BridgeError, DslRejectionKind, NonRigidTyKind};
+use super::{
+    placeholder_item_id_for_handle, BridgeCtxt, BridgeError, DslRejectionKind, ItemHandle,
+    NonRigidTyKind, PendingItem,
+};
 
 /// Translate a rustc `TyKind` into a `regseq_model::TyId`. Runs during
 /// Phase 2 of `run_bridge`. Per spec.md section 15.0 lines 5849-5864.
@@ -97,10 +100,18 @@ fn translate_erased_ty<'tcx>(
             let layout = tuple_layout(cx, ty, &fields)?;
             Ty::Tuple { fields, layout }
         }
-        TyKind::Adt(adt, args) => translate_adt(cx, ty, *adt, args)?,
+        TyKind::Adt(adt, args) => {
+            let (model_ty, handle) = translate_adt(cx, ty, *adt, args)?;
+            let ty_id = cx.model.types.intern(model_ty);
+            track_source_ty_placeholder(cx, handle, ty_id);
+            return Ok(ty_id);
+        }
         TyKind::FnDef(def_id, args) => {
-            let item = intern_item(cx, *def_id, ItemKind::Function, SpecialAdt::None);
-            Ty::FnDef(item, translate_generic_args(cx, args)?)
+            let (item, handle) = intern_item(cx, *def_id, ItemKind::Function, SpecialAdt::None);
+            let model_args = translate_generic_args(cx, args)?;
+            let ty_id = cx.model.types.intern(Ty::FnDef(item, model_args));
+            track_source_ty_placeholder(cx, handle, ty_id);
+            return Ok(ty_id);
         }
         TyKind::FnPtr(sig_tys, header) => {
             reject_substantive_fn_ptr_binder(&ty.to_string())?;
@@ -190,15 +201,32 @@ fn translate_erased_ty<'tcx>(
             }
         }
         TyKind::Closure(def_id, args) => {
-            let item = intern_item(cx, *def_id, ItemKind::Struct, SpecialAdt::None);
+            // Spec 13.1 + audit-finding F4 (no direct push to
+            // `model.items`): the captures-struct Item is owned by
+            // `synth/closure.rs`. Driving synthesis here makes
+            // translate_ty idempotent regardless of whether Phase 2
+            // scanning already ran for this closure; the dedup on
+            // `closure_synth_cache` guarantees a single handle.
+            let handles = crate::bridge::synth::closure::synthesise_closure_for_def_id(
+                cx,
+                *def_id,
+                args.as_closure(),
+            )?;
+            let handle = handles.captures;
+            let item = cx
+                .handles
+                .resolve(handle)
+                .unwrap_or_else(|| placeholder_item_id_for_handle(handle));
             let model_args = translate_generic_args(cx, args)?;
             let closure_ty_id = cx.model.types.intern(Ty::Closure(item, model_args.clone()));
+            track_source_ty_placeholder(cx, handle, closure_ty_id);
             // Spec 13.1: the closure has two parallel `Ty` views
             // sharing one `Item`. Intern the captures-struct view now
             // and record the mapping so consumers can recover the
             // layout-bearing struct from the closure type-identity.
             let captures_struct_ty_id =
                 intern_closure_captures_struct_view(cx, ty, item, &model_args, args.as_closure())?;
+            track_source_ty_placeholder(cx, handle, captures_struct_ty_id);
             cx.model
                 .closure_captures_struct_ty
                 .insert(closure_ty_id, captures_struct_ty_id);
@@ -240,7 +268,7 @@ fn translate_adt<'tcx>(
     ty: rustc_middle::ty::Ty<'tcx>,
     adt: rustc_middle::ty::AdtDef<'tcx>,
     args: rustc_middle::ty::GenericArgsRef<'tcx>,
-) -> Result<Ty, BridgeError> {
+) -> Result<(Ty, ItemHandle), BridgeError> {
     let special = if adt.is_phantom_data() {
         SpecialAdt::PhantomData
     } else if adt.is_unsafe_cell() {
@@ -273,7 +301,7 @@ fn translate_adt<'tcx>(
         ty::AdtKind::Enum => ItemKind::Enum,
         ty::AdtKind::Union => ItemKind::Union,
     };
-    let item = intern_item(cx, adt.did(), item_kind, special);
+    let (item, handle) = intern_item(cx, adt.did(), item_kind, special);
     let model_args = translate_generic_args(cx, args)?;
     let field_tys = adt
         .all_fields()
@@ -281,7 +309,7 @@ fn translate_adt<'tcx>(
         .collect::<Result<Vec<_>, _>>()?;
     let layout = nominal_layout(cx, ty, &field_tys)?;
 
-    Ok(match adt.adt_kind() {
+    let model_ty = match adt.adt_kind() {
         ty::AdtKind::Struct => Ty::Struct {
             item,
             args: model_args,
@@ -297,7 +325,8 @@ fn translate_adt<'tcx>(
             args: model_args,
             layout,
         },
-    })
+    };
+    Ok((model_ty, handle))
 }
 
 #[derive(Clone, Copy)]
@@ -308,18 +337,47 @@ enum SpecialAdt {
     ManuallyDrop,
 }
 
+/// Allocate (or recover) the Phase-2 handle for a source-derived
+/// `Item` (`Struct`, `Enum`, `Union`, `FnDef`, or closure captures
+/// struct). Per spec.md section 3.4 D-12-5.3 the bridge MUST route
+/// every Item through `pending_items` + `HandleTable` so that final
+/// `ItemId` assignment happens at Phase 4 after the F4 sort. The
+/// returned `ItemHandle` resolves to a placeholder `ItemId`
+/// (via [`placeholder_item_id_for_handle`]) until Phase 4 binds the
+/// handle to a real `ItemId`; `bridge/synth/mod.rs::patch_source_item_ty_views`
+/// patches every placeholder `Ty` entry recorded in
+/// `cx.source_ty_pending` at Phase 5.
 fn intern_item(
     cx: &mut BridgeCtxt<'_>,
     def_id: DefId,
     kind: ItemKind,
     special: SpecialAdt,
-) -> ItemId {
+) -> (ItemId, ItemHandle) {
+    let handle = intern_source_item_handle(cx, def_id, kind, special);
+    let item_id = cx
+        .handles
+        .resolve(handle)
+        .unwrap_or_else(|| placeholder_item_id_for_handle(handle));
+    (item_id, handle)
+}
+
+/// Allocate (or recover) the Phase-2 handle for a source-derived
+/// Item without materialising an `ItemId`. Used by Phase-2 callers
+/// that need to coordinate handle identity with the synth path
+/// (e.g., the closure captures struct shared with `synth/closure.rs`).
+fn intern_source_item_handle(
+    cx: &mut BridgeCtxt<'_>,
+    def_id: DefId,
+    kind: ItemKind,
+    special: SpecialAdt,
+) -> ItemHandle {
     let def_path_hash = def_path_hash(cx.input.tcx, def_id);
-    for (idx, existing) in cx.model.item_def_paths.iter().enumerate() {
-        if *existing == def_path_hash {
-            return ItemId::from_u32(idx as u32);
-        }
+    if let Some(handle) = cx.source_item_handles.get(&def_path_hash).copied() {
+        return handle;
     }
+
+    let handle = cx.handles.fresh_handle();
+    cx.source_item_handles.insert(def_path_hash, handle);
 
     let crate_id = crate_id(cx, def_id);
     let rendered = cx.input.tcx.def_path_str(def_id);
@@ -352,11 +410,24 @@ fn intern_item(
         is_manually_drop: matches!(special, SpecialAdt::ManuallyDrop),
         opaque_handle_eligible: false,
     };
-    let item_id = cx.model.items.push(item);
-    cx.model.item_def_paths.push(def_path_hash);
-    cx.model.item_synthetic_kinds.push(SyntheticItemKind::None);
-    cx.model.domain_attrs.item_attrs.push(Vec::new());
-    item_id
+    cx.pending_items.push(PendingItem {
+        handle,
+        item,
+        def_path_hash,
+        synthetic_kind: SyntheticItemKind::None,
+    });
+    handle
+}
+
+/// Record a Phase-2 placeholder `Ty` so Phase 5 can patch its
+/// embedded `ItemId` to the final value once the handle binds.
+/// No-op if the handle already resolves to a real `ItemId` (e.g.,
+/// when translation runs after Phase 4 during body materialisation).
+fn track_source_ty_placeholder(cx: &mut BridgeCtxt<'_>, handle: ItemHandle, ty_id: TyId) {
+    if cx.handles.resolve(handle).is_some() {
+        return;
+    }
+    cx.source_ty_pending.entry(handle).or_default().push(ty_id);
 }
 
 fn crate_id(cx: &mut BridgeCtxt<'_>, def_id: DefId) -> CrateId {

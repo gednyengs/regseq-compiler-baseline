@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use regseq_model::{
-    args_key_for_generic_args, canonical_ty_bytes, DefPathHash, GenericArg, Item,
-    PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, Ty,
-    TyId,
+    args_key_for_generic_args_with_pending, canonical_ty_bytes_with_pending, DefPathHash,
+    GenericArg, Item, PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId,
+    SyntheticItemKind, Ty, TyId,
 };
 
 mod assign;
@@ -89,6 +89,22 @@ pub struct BridgeCtxt<'tcx> {
     /// placeholder `Ty::Struct` so the bridge can patch it to the
     /// real `ItemId` once Phase 4 binds the synth/vtable.rs handle.
     pub dynamic_vtable_ty_pending: HashMap<ItemHandle, TyId>,
+    /// Dedup cache for source-derived items (`Struct`, `Enum`,
+    /// `Union`, `FnDef`, closure captures). One `ItemHandle` per
+    /// `DefPathHash` regardless of how many monomorphisations the
+    /// bridge sees. Per spec.md section 3.4 D-12-5.3 the final
+    /// `ItemId` is assigned at Phase 4; Phase 2 uses placeholder
+    /// `ItemId`s derived from these handles and the
+    /// `source_ty_pending` side-table records the placeholder
+    /// `TyId`s so Phase 5 can patch them to the real `ItemId`s.
+    pub source_item_handles: HashMap<DefPathHash, ItemHandle>,
+    /// Deferred-resolution side-table for source-derived nominal
+    /// `Ty` entries (`Ty::Struct`, `Ty::Enum`, `Ty::Union`,
+    /// `Ty::FnDef`, `Ty::Closure`) interned during Phase 2 with
+    /// placeholder `ItemId`s. Phase 5 walks this map and calls
+    /// `TyInterner::patch_nominal_item_id` for each entry once the
+    /// handles bind their final `ItemId`s.
+    pub source_ty_pending: HashMap<ItemHandle, Vec<TyId>>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -110,8 +126,133 @@ impl<'tcx> BridgeCtxt<'tcx> {
             drop_glue_synth_cache: HashMap::new(),
             diag_log_intrinsics: HashMap::new(),
             dynamic_vtable_ty_pending: HashMap::new(),
+            source_item_handles: HashMap::new(),
+            source_ty_pending: HashMap::new(),
         }
     }
+}
+
+impl<'tcx> BridgeCtxt<'tcx> {
+    /// Resolve an `ItemId` (real OR Phase-2 placeholder) to its
+    /// `DefPath`. Used by Phase-2 callers that need a callee's
+    /// rendered path before Phase-4 binds the final `ItemId`. Returns
+    /// `None` if the `ItemId` is out of bounds for both
+    /// `model.items` and `pending_items`.
+    pub(crate) fn lookup_item_def_path(
+        &self,
+        item: regseq_model::ItemId,
+    ) -> Option<&regseq_model::DefPath> {
+        let idx = item.as_u32() as usize;
+        if idx < self.model.items.len() {
+            return Some(&self.model.items[item].def_path);
+        }
+        let handle_idx = regseq_model::ItemId::MAX_AS_U32 - item.as_u32();
+        let handle = ItemHandle::from_u32(handle_idx);
+        self.pending_items
+            .iter()
+            .find(|pending| pending.handle == handle)
+            .map(|pending| &pending.item.def_path)
+    }
+
+    /// Resolve an `ItemId` to its `ItemKind`.
+    pub(crate) fn lookup_item_kind(
+        &self,
+        item: regseq_model::ItemId,
+    ) -> Option<regseq_model::ItemKind> {
+        let idx = item.as_u32() as usize;
+        if idx < self.model.items.len() {
+            return Some(self.model.items[item].kind.clone());
+        }
+        let handle_idx = regseq_model::ItemId::MAX_AS_U32 - item.as_u32();
+        let handle = ItemHandle::from_u32(handle_idx);
+        self.pending_items
+            .iter()
+            .find(|pending| pending.handle == handle)
+            .map(|pending| pending.item.kind.clone())
+    }
+
+    /// Resolve an `ItemId` to its `DefPathHash`.
+    pub(crate) fn lookup_item_def_path_hash(
+        &self,
+        item: regseq_model::ItemId,
+    ) -> Option<DefPathHash> {
+        let idx = item.as_u32() as usize;
+        if idx < self.model.item_def_paths.len() {
+            return Some(self.model.item_def_paths[item]);
+        }
+        let handle_idx = regseq_model::ItemId::MAX_AS_U32 - item.as_u32();
+        let handle = ItemHandle::from_u32(handle_idx);
+        self.pending_items
+            .iter()
+            .find(|pending| pending.handle == handle)
+            .map(|pending| pending.def_path_hash)
+    }
+
+    /// Resolve an `ItemId` to its `SyntheticItemKind`.
+    pub(crate) fn lookup_item_synthetic_kind(
+        &self,
+        item: regseq_model::ItemId,
+    ) -> Option<regseq_model::SyntheticItemKind> {
+        let idx = item.as_u32() as usize;
+        if idx < self.model.item_synthetic_kinds.len() {
+            return Some(self.model.item_synthetic_kinds[item].clone());
+        }
+        let handle_idx = regseq_model::ItemId::MAX_AS_U32 - item.as_u32();
+        let handle = ItemHandle::from_u32(handle_idx);
+        self.pending_items
+            .iter()
+            .find(|pending| pending.handle == handle)
+            .map(|pending| pending.synthetic_kind.clone())
+    }
+
+    /// Build the placeholder-`ItemId` → `DefPathHash` overlay used by
+    /// `regseq_model::args_key_for_generic_args_with_pending` and
+    /// `canonical_ty_bytes_with_pending`. Walks `pending_items` and
+    /// keys every pending handle by its placeholder `ItemId` so that
+    /// nominal `Ty` encoding during Phase 2 (e.g.,
+    /// `principal_trait_key` for a vtable whose trait args include a
+    /// source-derived ADT) resolves to the rustc-stable `DefPathHash`
+    /// instead of panicking on an out-of-bounds index into
+    /// `model.item_def_paths`. Post-Phase-4 the map is empty
+    /// (`pending_items` has been drained into `model.items` /
+    /// `model.item_def_paths`), so callers can use this helper
+    /// regardless of phase.
+    pub(crate) fn pending_def_path_hashes(&self) -> HashMap<regseq_model::ItemId, DefPathHash> {
+        self.pending_items
+            .iter()
+            .map(|pending| {
+                (
+                    placeholder_item_id_for_handle(pending.handle),
+                    pending.def_path_hash,
+                )
+            })
+            .collect()
+    }
+}
+
+/// Drive Phase 3 (F4 sort) and Phase 4 (final `ItemId` assignment +
+/// side-table population) for tests that need real `ItemId`s. After
+/// this returns, every `Item` recorded in `pending_items` has been
+/// pushed to `model.items` in F4-deterministic order and its
+/// `ItemHandle` resolves to a final `ItemId`. Subsequent
+/// [`synth::rekey_synthesis_in_phase5`] calls patch placeholder
+/// `Ty` entries (recorded in `source_ty_pending` /
+/// `dynamic_vtable_ty_pending`) to the bound `ItemId`s, mirroring
+/// what `run_bridge` does in production.
+pub fn flush_pending_items_for_tests(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    sort::f4_sort(&ctxt.model, &mut ctxt.pending_items)?;
+    assign::assign_item_ids_and_populate_sidetables(ctxt)?;
+    Ok(())
+}
+
+/// Derive the Phase-2 placeholder `ItemId` for a Phase-2 `ItemHandle`.
+/// Final `ItemId`s are assigned at Phase 4 per spec.md section 3.4
+/// D-12-5.3; the placeholder occupies the high end of `ItemId` space
+/// (mirroring `synthesize_dynamic_vtable_ty`'s pattern at
+/// `bridge/ty.rs`) so it cannot collide with any real Phase-4
+/// assignment which fills `ItemId` densely from zero.
+pub(crate) fn placeholder_item_id_for_handle(handle: ItemHandle) -> regseq_model::ItemId {
+    regseq_model::ItemId::from_u32(regseq_model::ItemId::MAX_AS_U32 - handle.as_u32())
 }
 
 /// Position within an `extern "C"` function signature where an
@@ -428,7 +569,15 @@ fn scan_terminator_for_synthesis<'tcx>(
                 if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, *def_id).is_some() {
                     let model_ty = ty::translate_ty(ctxt, constant.const_.ty())?;
                     if let Ty::FnDef(callee_item, _) = ctxt.model.types.resolve(model_ty).clone() {
-                        let callee_def_path = ctxt.model.items[callee_item].def_path.clone();
+                        // Per audit-finding F4 source-derived Items
+                        // carry placeholder ItemIds during Phase 2;
+                        // look the callee's DefPath up through
+                        // `pending_items` when the ItemId hasn't yet
+                        // been bound to `model.items`.
+                        let callee_def_path = ctxt
+                            .lookup_item_def_path(callee_item)
+                            .expect("FnDef callee Item must be interned")
+                            .clone();
                         diag_log::recognise_log_intrinsic_def_id(
                             ctxt,
                             ItemHandle::from_u32(callee_item.as_u32()),
@@ -556,9 +705,15 @@ pub(crate) fn principal_trait_key<'tcx>(
             | rustc_middle::ty::GenericArgKind::Lifetime(_) => None,
         })
         .collect::<Vec<_>>();
+    // Per audit-finding F4 + spec.md section 3.4 D-12-5.3, source
+    // -derived ADT Items interned during Phase 2 carry placeholder
+    // ItemIds until Phase 4. The pending overlay resolves them
+    // through their rustc DefPathHashes so trait_args canonical bytes
+    // are stable across the placeholder→final ItemId remap.
+    let pending = ctxt.pending_def_path_hashes();
     PrincipalTraitKey {
         trait_path: def_path_hash(ctxt.input.tcx, principal.def_id),
-        trait_args: args_key_for_generic_args(&ctxt.model, &trait_args),
+        trait_args: args_key_for_generic_args_with_pending(&ctxt.model, &trait_args, &pending),
         projection_bindings,
     }
 }
@@ -598,7 +753,12 @@ pub(crate) fn projection_bindings_key<'tcx>(
             rustc_middle::ty::TermKind::Ty(ty) => {
                 entry.push(0);
                 if let Ok(ty) = ty::translate_ty(ctxt, ty) {
-                    entry.extend_from_slice(&canonical_ty_bytes(&ctxt.model, ty));
+                    let pending = ctxt.pending_def_path_hashes();
+                    entry.extend_from_slice(&canonical_ty_bytes_with_pending(
+                        &ctxt.model,
+                        ty,
+                        &pending,
+                    ));
                 }
             }
             rustc_middle::ty::TermKind::Const(konst) => {

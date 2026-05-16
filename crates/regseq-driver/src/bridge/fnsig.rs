@@ -383,7 +383,10 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
     }
 
     fn adt_def(&self, item: ItemId) -> Option<ty::AdtDef<'tcx>> {
-        match self.cx.model.items[item].kind {
+        // Per audit-finding F4, source-derived Items carry placeholder
+        // ItemIds during Phase 2; route through `lookup_item_*`
+        // helpers that consult both `model.items` and `pending_items`.
+        match self.cx.lookup_item_kind(item)? {
             ItemKind::Struct | ItemKind::Enum | ItemKind::Union => {}
             _ => return None,
         }
@@ -394,12 +397,12 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         // also have no source `AdtDef`, so skip them outright per
         // spec section 14.5 audit guidance.
         if !matches!(
-            self.cx.model.item_synthetic_kinds[item],
+            self.cx.lookup_item_synthetic_kind(item)?,
             SyntheticItemKind::None
         ) {
             return None;
         }
-        let wanted = self.cx.model.item_def_paths[item];
+        let wanted = self.cx.lookup_item_def_path_hash(item)?;
         let rustc_hash = rustc_def_path_hash(wanted);
         let def_id = self.cx.input.tcx.def_path_hash_to_def_id(rustc_hash)?;
         // `tcx.adt_def` panics if `def_id` is not an ADT; restrict to

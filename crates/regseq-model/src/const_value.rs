@@ -6,12 +6,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::args_key::{canonical_ty_bytes, encode_ty_with_tables};
+use crate::args_key::{canonical_ty_bytes, encode_ty_with_tables, DefPathHashLookup};
 use crate::const_interner::ConstInterner;
-use crate::def_path::DefPathHash;
 use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{ConstId, TyId, VariantIdx};
-use crate::index_vec::IndexVec;
 use crate::instance_ref::InstanceRef;
 use crate::model::RegseqModel;
 use crate::ty::{FloatKind, IntKind, UintKind};
@@ -92,7 +90,7 @@ pub(crate) fn encode_const_id_with_tables(
     consts: &ConstInterner,
     types: &TyInterner,
     sigs: &FnSigInterner,
-    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    lookup: &DefPathHashLookup<'_>,
     id: ConstId,
     out: &mut Vec<u8>,
 ) {
@@ -100,7 +98,7 @@ pub(crate) fn encode_const_id_with_tables(
         consts,
         types,
         sigs,
-        item_def_paths,
+        lookup,
         &consts[id],
         out,
         consts.len() + 1,
@@ -183,7 +181,7 @@ fn encode_const_with_tables(
     consts: &ConstInterner,
     types: &TyInterner,
     sigs: &FnSigInterner,
-    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    lookup: &DefPathHashLookup<'_>,
     value: &Const,
     out: &mut Vec<u8>,
     remaining_depth: usize,
@@ -233,7 +231,7 @@ fn encode_const_with_tables(
                     consts,
                     types,
                     sigs,
-                    item_def_paths,
+                    lookup,
                     &consts[*child],
                     out,
                     remaining_depth - 1,
@@ -252,7 +250,7 @@ fn encode_const_with_tables(
                     consts,
                     types,
                     sigs,
-                    item_def_paths,
+                    lookup,
                     &consts[*child],
                     out,
                     remaining_depth - 1,
@@ -261,7 +259,7 @@ fn encode_const_with_tables(
         }
         Const::NullPtr(ty) => {
             out.push(9);
-            encode_ty_with_tables(types, sigs, Some(consts), item_def_paths, *ty, out);
+            encode_ty_with_tables(types, sigs, Some(consts), lookup, *ty, out);
         }
         Const::Reloc(instance) => {
             out.push(10);

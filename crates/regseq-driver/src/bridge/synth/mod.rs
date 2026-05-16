@@ -214,6 +214,24 @@ pub fn rekey_synthesis_in_phase5(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeEr
         resolve_handle(cx, handle, "DropGlue")?;
     }
 
+    // Phase-4 deferred-Ty resolution for source-derived nominal
+    // entries (`Ty::Struct`, `Ty::Enum`, `Ty::Union`, `Ty::FnDef`,
+    // `Ty::Closure`) interned during Phase 2 with placeholder
+    // `ItemId`s. Per spec.md section 3.4 D-12-5.3 the final
+    // `ItemId`s are bound at Phase 4; this pass patches every
+    // placeholder `Ty` recorded in `cx.source_ty_pending`. Runs
+    // before `vtable::push_vtable_instance_statics` and before
+    // `body::run_phase5_body_passes` so subsequent `translate_ty`
+    // calls see real `ItemId`s and the `TyInterner` lookup hits
+    // existing entries instead of producing duplicates.
+    let source_pending = cx.source_ty_pending.drain().collect::<Vec<_>>();
+    for (handle, ty_ids) in source_pending {
+        let item_id = resolve_handle(cx, handle, "SourceItem")?;
+        for ty_id in ty_ids {
+            cx.model.types.patch_nominal_item_id(ty_id, item_id);
+        }
+    }
+
     vtable::push_vtable_instance_statics(cx, &vtable_entries)?;
 
     Ok(())

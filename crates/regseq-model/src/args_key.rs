@@ -8,6 +8,8 @@
 //! encoded value carries a `StringId`; the type variants in this task
 //! do not carry one directly.
 
+use std::collections::HashMap;
+
 use serde::{Deserialize, Serialize};
 
 use crate::const_interner::ConstInterner;
@@ -47,22 +49,153 @@ impl ArgsKey {
     pub const EMPTY: ArgsKey = ArgsKey(0xdf3f_6198_04a9_2fdb_4057_192d_c43d_d748);
 }
 
+/// `DefPathHash` lookup overlay used during canonical encoding.
+///
+/// Final builds resolve every nominal `ItemId` through
+/// `RegseqModel.item_def_paths`. The bridge, however, interns
+/// `Ty::Struct`/`Enum`/`Union`/`FnDef`/`Closure` entries during
+/// Phase 2 with **placeholder** `ItemId`s before Phase 4 binds the
+/// final `ItemId` (spec.md section 3.4 D-12-5.3 + the audit-finding
+/// refinement on regseq-driver-37 / -40). When canonical bytes have
+/// to be produced before Phase 4 (e.g., to compute a
+/// `PrincipalTraitKey`'s `ArgsKey` while synthesising a vtable), the
+/// bridge supplies a `pending` map keyed by those placeholder
+/// `ItemId`s. The lookup checks `item_def_paths` first and falls back
+/// to `pending` only when the index is outside the model's currently
+/// assigned `ItemId` range.
+#[derive(Clone, Copy)]
+pub struct DefPathHashLookup<'a> {
+    item_def_paths: &'a IndexVec<crate::ItemId, DefPathHash>,
+    pending: Option<&'a HashMap<crate::ItemId, DefPathHash>>,
+}
+
+impl<'a> DefPathHashLookup<'a> {
+    /// Resolves through `model.item_def_paths` only.
+    pub fn from_model(model: &'a RegseqModel) -> Self {
+        Self {
+            item_def_paths: &model.item_def_paths,
+            pending: None,
+        }
+    }
+
+    /// Resolves through `model.item_def_paths` first, falling back to
+    /// `pending` for placeholder `ItemId`s assigned during Phase 2.
+    pub fn from_model_with_pending(
+        model: &'a RegseqModel,
+        pending: &'a HashMap<crate::ItemId, DefPathHash>,
+    ) -> Self {
+        Self {
+            item_def_paths: &model.item_def_paths,
+            pending: Some(pending),
+        }
+    }
+
+    pub(crate) fn resolve(&self, item: crate::ItemId) -> DefPathHash {
+        let idx = item.as_u32() as usize;
+        if idx < self.item_def_paths.len() {
+            return self.item_def_paths[item];
+        }
+        if let Some(pending) = self.pending {
+            if let Some(hash) = pending.get(&item).copied() {
+                return hash;
+            }
+        }
+        panic!(
+            "ItemId {} cannot be resolved to a DefPathHash (model has {} items{})",
+            item.as_u32(),
+            self.item_def_paths.len(),
+            if self.pending.is_some() {
+                "; pending map does not cover this placeholder"
+            } else {
+                "; no pending overlay was supplied"
+            },
+        );
+    }
+}
+
 /// Returns the SHA-256-truncated key for `args`.
 pub fn args_key_for_generic_args(model: &RegseqModel, args: &GenericArgs) -> ArgsKey {
     args_key_from_canonical_bytes(&canonical_args_bytes(model, args))
 }
 
+/// Returns the SHA-256-truncated key for `args`, resolving any
+/// placeholder `ItemId`s in nominal types via `pending`. Used by the
+/// bridge during Phase 2 before Phase-4 final `ItemId` assignment.
+pub fn args_key_for_generic_args_with_pending(
+    model: &RegseqModel,
+    args: &GenericArgs,
+    pending: &HashMap<crate::ItemId, DefPathHash>,
+) -> ArgsKey {
+    args_key_from_canonical_bytes(&canonical_args_bytes_with_pending(model, args, pending))
+}
+
 /// Returns the canonical byte stream for `args`.
 pub fn canonical_args_bytes(model: &RegseqModel, args: &GenericArgs) -> Vec<u8> {
     let mut out = Vec::new();
-    encode_args(model, args, &mut out);
+    let lookup = DefPathHashLookup::from_model(model);
+    encode_args_with_tables(
+        &model.types,
+        &model.sigs,
+        Some(&model.consts),
+        &lookup,
+        args,
+        &mut out,
+    );
+    out
+}
+
+/// Returns the canonical byte stream for `args`, resolving any
+/// placeholder `ItemId`s in nominal types via `pending`.
+pub fn canonical_args_bytes_with_pending(
+    model: &RegseqModel,
+    args: &GenericArgs,
+    pending: &HashMap<crate::ItemId, DefPathHash>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let lookup = DefPathHashLookup::from_model_with_pending(model, pending);
+    encode_args_with_tables(
+        &model.types,
+        &model.sigs,
+        Some(&model.consts),
+        &lookup,
+        args,
+        &mut out,
+    );
     out
 }
 
 /// Returns the canonical byte stream for `ty`.
 pub fn canonical_ty_bytes(model: &RegseqModel, ty: TyId) -> Vec<u8> {
     let mut out = Vec::new();
-    encode_ty(model, ty, &mut out);
+    let lookup = DefPathHashLookup::from_model(model);
+    encode_ty_with_tables(
+        &model.types,
+        &model.sigs,
+        Some(&model.consts),
+        &lookup,
+        ty,
+        &mut out,
+    );
+    out
+}
+
+/// Returns the canonical byte stream for `ty`, resolving any
+/// placeholder `ItemId`s in nominal types via `pending`.
+pub fn canonical_ty_bytes_with_pending(
+    model: &RegseqModel,
+    ty: TyId,
+    pending: &HashMap<crate::ItemId, DefPathHash>,
+) -> Vec<u8> {
+    let mut out = Vec::new();
+    let lookup = DefPathHashLookup::from_model_with_pending(model, pending);
+    encode_ty_with_tables(
+        &model.types,
+        &model.sigs,
+        Some(&model.consts),
+        &lookup,
+        ty,
+        &mut out,
+    );
     out
 }
 
@@ -75,38 +208,11 @@ fn args_key_from_canonical_bytes(bytes: &[u8]) -> ArgsKey {
     ArgsKey(u128::from_be_bytes(head))
 }
 
-fn encode_args(model: &RegseqModel, args: &GenericArgs, out: &mut Vec<u8>) {
-    push_u32(out, args.len());
-    for arg in args {
-        match *arg {
-            GenericArg::Type(ty) => {
-                out.push(0);
-                encode_ty(model, ty, out);
-            }
-            GenericArg::Const(c) => {
-                out.push(1);
-                crate::const_value::encode_const_id(model, c, out);
-            }
-        }
-    }
-}
-
-fn encode_ty(model: &RegseqModel, ty: TyId, out: &mut Vec<u8>) {
-    encode_ty_with_tables(
-        &model.types,
-        &model.sigs,
-        Some(&model.consts),
-        &model.item_def_paths,
-        ty,
-        out,
-    );
-}
-
-fn encode_args_with_tables(
+pub(crate) fn encode_args_with_tables(
     types: &TyInterner,
     sigs: &FnSigInterner,
     consts: Option<&ConstInterner>,
-    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    lookup: &DefPathHashLookup<'_>,
     args: &GenericArgs,
     out: &mut Vec<u8>,
 ) {
@@ -115,7 +221,7 @@ fn encode_args_with_tables(
         match *arg {
             GenericArg::Type(ty) => {
                 out.push(0);
-                encode_ty_with_tables(types, sigs, consts, item_def_paths, ty, out);
+                encode_ty_with_tables(types, sigs, consts, lookup, ty, out);
             }
             GenericArg::Const(c) => {
                 out.push(1);
@@ -123,12 +229,7 @@ fn encode_args_with_tables(
                     panic!("const generic args require a const table in type canonicalization");
                 };
                 crate::const_value::encode_const_id_with_tables(
-                    consts,
-                    types,
-                    sigs,
-                    item_def_paths,
-                    c,
-                    out,
+                    consts, types, sigs, lookup, c, out,
                 );
             }
         }
@@ -139,7 +240,7 @@ pub(crate) fn encode_ty_with_tables(
     types: &TyInterner,
     sigs: &FnSigInterner,
     consts: Option<&ConstInterner>,
-    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    lookup: &DefPathHashLookup<'_>,
     ty: TyId,
     out: &mut Vec<u8>,
 ) {
@@ -162,31 +263,31 @@ pub(crate) fn encode_ty_with_tables(
         Ty::Never => out.push(6),
         Ty::Array(elem, len) => {
             out.push(7);
-            encode_ty_with_tables(types, sigs, consts, item_def_paths, *elem, out);
+            encode_ty_with_tables(types, sigs, consts, lookup, *elem, out);
             out.extend_from_slice(&len.to_le_bytes());
         }
         Ty::Slice(elem) => {
             out.push(8);
-            encode_ty_with_tables(types, sigs, consts, item_def_paths, *elem, out);
+            encode_ty_with_tables(types, sigs, consts, lookup, *elem, out);
         }
         Ty::Ref(pointee, provenance) => {
             out.push(9);
-            encode_ty_with_tables(types, sigs, consts, item_def_paths, *pointee, out);
+            encode_ty_with_tables(types, sigs, consts, lookup, *pointee, out);
             out.push((*provenance).into());
         }
         Ty::Ptr(pointee, mutability) => {
             out.push(10);
-            encode_ty_with_tables(types, sigs, consts, item_def_paths, *pointee, out);
+            encode_ty_with_tables(types, sigs, consts, lookup, *pointee, out);
             out.push((*mutability).into());
         }
         Ty::FnDef(item, args) => {
             out.push(11);
-            encode_item_def_path_hash(item_def_paths, *item, out);
-            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
+            encode_item_def_path_hash(lookup, *item, out);
+            encode_args_with_tables(types, sigs, consts, lookup, args, out);
         }
         Ty::FnPtr(sig) => {
             out.push(12);
-            encode_fn_sig_with_tables(sigs.resolve(*sig), types, sigs, consts, item_def_paths, out);
+            encode_fn_sig_with_tables(sigs.resolve(*sig), types, sigs, consts, lookup, out);
         }
         Ty::Dynamic {
             auto_traits,
@@ -197,44 +298,44 @@ pub(crate) fn encode_ty_with_tables(
             sorted.sort_unstable();
             push_u32(out, sorted.len());
             out.extend_from_slice(&sorted);
-            encode_ty_with_tables(types, sigs, consts, item_def_paths, *vtable_ty, out);
+            encode_ty_with_tables(types, sigs, consts, lookup, *vtable_ty, out);
         }
         Ty::Closure(item, args) => {
             out.push(14);
-            encode_item_def_path_hash(item_def_paths, *item, out);
-            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
+            encode_item_def_path_hash(lookup, *item, out);
+            encode_args_with_tables(types, sigs, consts, lookup, args, out);
         }
         Ty::Tuple { fields, .. } => {
             out.push(15);
             push_u32(out, fields.len());
             for field in fields {
-                encode_ty_with_tables(types, sigs, consts, item_def_paths, *field, out);
+                encode_ty_with_tables(types, sigs, consts, lookup, *field, out);
             }
         }
         Ty::Struct { item, args, .. } => {
             out.push(16);
-            encode_item_def_path_hash(item_def_paths, *item, out);
-            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
+            encode_item_def_path_hash(lookup, *item, out);
+            encode_args_with_tables(types, sigs, consts, lookup, args, out);
         }
         Ty::Enum { item, args, .. } => {
             out.push(17);
-            encode_item_def_path_hash(item_def_paths, *item, out);
-            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
+            encode_item_def_path_hash(lookup, *item, out);
+            encode_args_with_tables(types, sigs, consts, lookup, args, out);
         }
         Ty::Union { item, args, .. } => {
             out.push(18);
-            encode_item_def_path_hash(item_def_paths, *item, out);
-            encode_args_with_tables(types, sigs, consts, item_def_paths, args, out);
+            encode_item_def_path_hash(lookup, *item, out);
+            encode_args_with_tables(types, sigs, consts, lookup, args, out);
         }
     }
 }
 
 fn encode_item_def_path_hash(
-    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    lookup: &DefPathHashLookup<'_>,
     item: crate::ItemId,
     out: &mut Vec<u8>,
 ) {
-    let hash = item_def_paths[item];
+    let hash = lookup.resolve(item);
     out.extend_from_slice(&hash.stable_crate_id.0.to_le_bytes());
     out.extend_from_slice(&hash.local_hash.to_le_bytes());
 }

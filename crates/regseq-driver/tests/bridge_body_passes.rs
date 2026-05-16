@@ -162,10 +162,17 @@ fn push_function_instance<'tcx>(
 ) -> regseq_model::InstanceId {
     let def_id = find_fn_def_id(tcx, name).to_def_id();
     let fn_ty = translate_ty(cx, tcx.type_of(def_id).instantiate_identity()).unwrap();
+    let fn_sig = translate_fn_sig(cx, tcx.fn_sig(def_id).instantiate_identity()).unwrap();
+    // Per audit-finding F4 (regseq-driver-37 v4 spec lines 325-330),
+    // source-derived Items are interned with placeholder ItemIds during
+    // Phase 2; drive Phase 3 + Phase 4 + Phase 5 patching so the
+    // FnDef Ty resolves to the final ItemId before reading
+    // `model.items[item]`.
+    regseq_driver::bridge::flush_pending_items_for_tests(cx).unwrap();
+    regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
     let Ty::FnDef(item, args) = cx.model.types.resolve(fn_ty).clone() else {
         panic!("function type should translate as Ty::FnDef");
     };
-    let fn_sig = translate_fn_sig(cx, tcx.fn_sig(def_id).instantiate_identity()).unwrap();
     cx.model.instances.push(Instance {
         item,
         generic_args: args,

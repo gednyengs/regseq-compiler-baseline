@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 
 use regseq_model::{
-    args_key_for_generic_args, render_def_path, synthetic_def_path_hash,
+    args_key_for_generic_args_with_pending, render_def_path, synthetic_def_path_hash,
     synthetic_def_path_segments, ArgsKey, Const, ConstId, CrateId, DefPath, DefPathData,
     DefPathHash, DefPathSegment, FieldLayout, FunctionInstanceFlavor, GenericArg, InlineHint,
     Instance, InstanceKind, InstanceRef, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage,
@@ -157,7 +157,12 @@ fn synthesise_vtable_inner(
     needs_drop: bool,
     layout: Option<Layout>,
 ) -> Result<VTableSynthHandles, BridgeError> {
-    let self_ty = args_key_for_generic_args(&cx.model, &vec![GenericArg::Type(impl_ty)]);
+    let pending = cx.pending_def_path_hashes();
+    let self_ty = args_key_for_generic_args_with_pending(
+        &cx.model,
+        &vec![GenericArg::Type(impl_ty)],
+        &pending,
+    );
     let key = VTableSynthKey {
         principal: principal.clone(),
         self_ty,

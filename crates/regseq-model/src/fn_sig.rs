@@ -2,12 +2,10 @@
 
 use serde::{Deserialize, Serialize};
 
-use crate::args_key::encode_ty_with_tables;
+use crate::args_key::{encode_ty_with_tables, DefPathHashLookup};
 use crate::const_interner::ConstInterner;
-use crate::def_path::DefPathHash;
 use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::TyId;
-use crate::index_vec::IndexVec;
 use crate::model::RegseqModel;
 use crate::ty::{FnAbi, Safety};
 use crate::ty_interner::TyInterner;
@@ -40,12 +38,13 @@ pub struct FnSig {
 /// Returns the canonical byte stream for a function signature.
 pub fn canonical_fn_sig(sig: &FnSig, model: &RegseqModel) -> Vec<u8> {
     let mut out = Vec::new();
+    let lookup = DefPathHashLookup::from_model(model);
     encode_fn_sig_with_tables(
         sig,
         &model.types,
         &model.sigs,
         Some(&model.consts),
-        &model.item_def_paths,
+        &lookup,
         &mut out,
     );
     out
@@ -56,14 +55,14 @@ pub(crate) fn encode_fn_sig_with_tables(
     types: &TyInterner,
     sigs: &FnSigInterner,
     consts: Option<&ConstInterner>,
-    item_def_paths: &IndexVec<crate::ItemId, DefPathHash>,
+    lookup: &DefPathHashLookup<'_>,
     out: &mut Vec<u8>,
 ) {
     push_u32(out, sig.inputs.len());
     for input in &sig.inputs {
-        encode_ty_with_tables(types, sigs, consts, item_def_paths, *input, out);
+        encode_ty_with_tables(types, sigs, consts, lookup, *input, out);
     }
-    encode_ty_with_tables(types, sigs, consts, item_def_paths, sig.output, out);
+    encode_ty_with_tables(types, sigs, consts, lookup, sig.output, out);
     out.push(u8::from(sig.abi));
     out.push(u8::from(sig.c_variadic));
     out.push(u8::from(sig.safety));

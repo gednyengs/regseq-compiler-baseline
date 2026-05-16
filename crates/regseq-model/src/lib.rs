@@ -45,8 +45,9 @@ mod ty_interner;
 mod visit;
 
 pub use args_key::{
-    args_key_for_generic_args, canonical_args_bytes, canonical_ty_bytes, ArgsKey, GenericArg,
-    GenericArgs,
+    args_key_for_generic_args, args_key_for_generic_args_with_pending, canonical_args_bytes,
+    canonical_args_bytes_with_pending, canonical_ty_bytes, canonical_ty_bytes_with_pending,
+    ArgsKey, DefPathHashLookup, GenericArg, GenericArgs,
 };
 pub use basic_block::BasicBlock;
 pub use body::{Body, LocalDecl};
