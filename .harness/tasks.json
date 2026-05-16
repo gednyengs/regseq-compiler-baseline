@@ -3285,7 +3285,7 @@
           "id": "regseq-model-93",
           "name": "P1a-PP-06: top-level render + PrettyPrintOptions + \u00a74 propagation",
           "spec": ".harness/tasks/regseq-model/93-render-top-level-and-pretty-print-options.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-92"
           ],

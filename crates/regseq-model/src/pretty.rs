@@ -148,11 +148,27 @@ impl<'a> PrettyPrinter<'a> {
         render_def_path(path, &self.model.crates, &self.model.strings)
     }
 
-    /// Top-level dump of the entire model. Filled in stage 12+
-    /// once the body content (stage 11), Item content
-    /// (stage 12), and instances exist in non-trivial form.
+    /// Top-level model dump per `pretty-printer.md` §10.3.
+    ///
+    /// Iterates `self.model.instances` in `InstanceId` order
+    /// verbatim (no render-time re-sort -- the IndexVec is already
+    /// in canonical F4-2 sorted order per `spec.md` §16.3, enforced
+    /// by P1a-VAL-02 at construction time). Composes each Instance
+    /// via [`render_instance`](Self::render_instance) and inserts
+    /// the two-byte `"\n\n"` sequence between consecutive Instances
+    /// (no leading or trailing separator). Emits no file-level
+    /// header, trailer, or trailing newline; returns the empty
+    /// `String` when `self.model.instances.is_empty()`.
     pub fn render(&self) -> String {
-        unimplemented!("stage 12+ fills the top-level render")
+        let mut buf = String::new();
+        for (idx, _inst) in self.model.instances.iter().enumerate() {
+            if idx > 0 {
+                buf.push_str("\n\n");
+            }
+            let id = InstanceId::from_u32(idx as u32);
+            buf.push_str(&self.render_instance(id));
+        }
+        buf
     }
 
     /// Type rendering. Dispatches across the closed 19-variant

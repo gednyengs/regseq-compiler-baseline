@@ -3309,3 +3309,438 @@ fn render_instance_specimen_128_simple_union() {
     }
     "###);
 }
+
+// ------------------------------------------------------------------
+// §9.12 render specimens 129 - 133 (P1a-PP-06).
+//
+// Top-level `render(&self)` per pretty-printer.md §10.3: iteration
+// order, "\n\n" separator, no file envelope, empty-model identity.
+// Per-Instance text comes from `render_instance` (§9.11 specimens
+// 110 - 128) -- these snapshots compose existing per-Instance
+// rendering with the §10.3 scaffolding only.
+//
+// Trailing `+ Options propagation` integration test exercises the
+// `with_options` -> per-construct emission propagation path end-to-
+// end (§4.2 body-level spans, §4.4 debug-name lines).
+// ------------------------------------------------------------------
+
+/// Specimen 130/131/132/133 helper: install a zero-arg `fn(): ()`
+/// Function Instance with one synthesized statement (`_0 = ();`)
+/// so the rendered body matches the spec's specimen text shape
+/// (locals block -> bb0 with the unit-assignment + Return).
+fn push_unit_fn_with_assignment(
+    m: &mut RegseqModel,
+    rendered: &str,
+    arg_tys: &[TyId],
+) -> regseq_model::InstanceId {
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = m.sigs.intern(FnSig {
+        inputs: arg_tys.to_vec(),
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(m, rendered);
+    let body = minimal_function_body(unit_ty, arg_tys);
+    push_function_instance_local(m, fn_item, sig, Some(body))
+}
+
+#[test]
+fn render_top_level_specimen_129_empty_model_is_empty_string() {
+    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    // §10.3.5: empty `model.instances` returns the empty `String`.
+    // No header, no separator, no placeholder.
+    assert_snapshot!(m.pretty().render(), @"");
+}
+
+#[test]
+fn render_top_level_specimen_130_single_function_no_separator() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let _ = push_unit_fn_with_assignment(&mut m, "pl011::write_byte", &[u8_ty]);
+    // §10.3.2: single-Instance iteration; §10.3.3: separator never
+    // fires; §10.3.4: no file-level decoration; output starts at the
+    // `fn` keyword (no Stream-1 / Stream-2 attribute block).
+    assert_snapshot!(m.pretty().render(), @r###"
+    fn pl011::write_byte(_1: u8) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_top_level_specimen_131_rank_grouped_function_static_struct() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+
+    // Rank 0: Function `pl011::write_byte`.
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let _ = push_unit_fn_with_assignment(&mut m, "pl011::write_byte", &[u8_ty]);
+
+    // Rank 1: Static `pl011::BASE_ADDR: u32 = 268472320_u32;`.
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let base_addr = m.consts.intern(Const::Uint(UintKind::U32, 268472320));
+    let static_item = push_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "pl011::BASE_ADDR",
+    );
+    let _ = push_static_instance_local(&mut m, static_item, u32_ty, Some(base_addr));
+
+    // Rank 3: Struct `pl011::Resource { base: u32, state: u32 }`.
+    let f_base = field_layout_named(&mut m, "base", u32_ty);
+    let f_state = field_layout_named(&mut m, "state", u32_ty);
+    let (struct_item, struct_ty) =
+        install_struct_with_layout(&mut m, "pl011::Resource", vec![], vec![f_base, f_state]);
+    let _ = push_struct_instance_local(&mut m, struct_item, struct_ty);
+
+    // §10.3.2 iteration walks `[0, 1, 2]` in InstanceId order
+    // (already rank-grouped: 0 -> 1 -> 3). §10.3.3 emits "\n\n"
+    // between each pair; §10.3.4 emits no file-level header or
+    // trailer.
+    assert_snapshot!(m.pretty().render(), @r###"
+    fn pl011::write_byte(_1: u8) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+
+    static pl011::BASE_ADDR: u32 = 268472320_u32;
+
+    struct pl011::Resource {
+        base: u32,
+        state: u32,
+    }
+    "###);
+}
+
+#[test]
+fn render_top_level_specimen_132_same_rank_three_functions_item_id_ordered() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+
+    // Rank 0, ItemId 4: `regseq::log::intrinsics::log_info` with the
+    // Stream-2 `#[rseq::intrinsic("log-info")]` attribute.
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_const_u8 = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
+    let log_item = push_fn_item(&mut m, "regseq::log::intrinsics::log_info");
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let log_sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_const_u8],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let log_body = minimal_function_body(unit_ty, &[ptr_const_u8]);
+    let _ = push_function_instance_local(&mut m, log_item, log_sig, Some(log_body));
+    ensure_item_attrs_capacity_inttest(&mut m);
+    m.domain_attrs.item_attrs[log_item]
+        .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+
+    // Rank 0, ItemId 9: `pl011::init` with no attributes.
+    let _ = push_unit_fn_with_assignment(&mut m, "pl011::init", &[]);
+
+    // Rank 0, ItemId 15: `libc::printf` foreign declaration.
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let printf_item = push_fn_item(&mut m, "libc::printf");
+    m.items[printf_item].linkage = Linkage::Foreign;
+    let printf_sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_const_u8],
+        output: i32_ty,
+        abi: FnAbi::C,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let _ = push_function_instance_local(&mut m, printf_item, printf_sig, None);
+
+    // All three Functions share rank 0; F4-2 orders by ItemId.
+    // First Instance's first rendered line is the Stream-2
+    // `#[rseq::intrinsic(...)]` (§10.2.7). Third Instance's first
+    // line is `#[foreign]` (Stream-1).
+    assert_snapshot!(m.pretty().render(), @r###"
+    #[rseq::intrinsic("log-info")]
+    fn regseq::log::intrinsics::log_info(_1: *const u8) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+
+    fn pl011::init() -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+
+    #[foreign]
+    extern "C" fn libc::printf(_1: *const u8) -> i32;
+    "###);
+}
+
+#[test]
+fn render_top_level_specimen_133_one_instance_per_rank_group() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+
+    // Rank 0: Function `pl011::ping`.
+    let _ = push_unit_fn_with_assignment(&mut m, "pl011::ping", &[]);
+
+    // Rank 1: Static `pl011::CFG: u32 = 42_u32;`.
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let cfg_init = m.consts.intern(Const::Uint(UintKind::U32, 42));
+    let cfg_item = push_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "pl011::CFG",
+    );
+    let _ = push_static_instance_local(&mut m, cfg_item, u32_ty, Some(cfg_init));
+
+    // Rank 2: Const `pl011::MAGIC: u32 = 170_u32;`.
+    let magic_value = m.consts.intern(Const::Uint(UintKind::U32, 170));
+    let magic_item = push_item(&mut m, ItemKind::Const, "pl011::MAGIC");
+    let _ = push_const_instance_local(&mut m, magic_item, u32_ty, magic_value);
+
+    // Rank 3: Struct `pl011::Resource { handle: *mut u8 }`.
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_mut_u8 = m.types.intern(Ty::Ptr(u8_ty, Mutability::Mut));
+    let f_handle = field_layout_named(&mut m, "handle", ptr_mut_u8);
+    let (res_item, res_ty) =
+        install_struct_with_layout(&mut m, "pl011::Resource", vec![], vec![f_handle]);
+    let _ = push_struct_instance_local(&mut m, res_item, res_ty);
+
+    // Rank 4: Enum `pl011::Mode { Off, Tx }`.
+    let off_name = m.strings.intern("Off");
+    let tx_name = m.strings.intern("Tx");
+    let mode_tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8_ty,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let mode_shape = EnumShape::Multiple {
+        tag: mode_tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            VariantLayout {
+                name: off_name,
+                fields: vec![],
+                uninhabited: false,
+                discriminant: 0,
+                tag_value: Some(0),
+            },
+            VariantLayout {
+                name: tx_name,
+                fields: vec![],
+                uninhabited: false,
+                discriminant: 1,
+                tag_value: Some(1),
+            },
+        ],
+    };
+    let (mode_item, mode_ty) = install_enum_with_shape(&mut m, "pl011::Mode", vec![], mode_shape);
+    let _ = push_enum_instance_local(&mut m, mode_item, mode_ty);
+
+    // Rank 5: Union `pl011::RegBytes { word: u32, bytes: [u8; 4] }`.
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 4));
+    let f_word = field_layout_named(&mut m, "word", u32_ty);
+    let f_bytes = field_layout_named(&mut m, "bytes", arr_ty);
+    let (union_item, union_ty) =
+        install_union_with_layout(&mut m, "pl011::RegBytes", vec![], vec![f_word, f_bytes]);
+    let _ = push_union_instance_local(&mut m, union_item, union_ty);
+
+    // Full rank-grouping spectrum: Function (0) -> Static (1) ->
+    // Const (2) -> Struct (3) -> Enum (4) -> Union (5) per §10.3.2.
+    // Uniform `"\n\n"` separator per §10.3.3; no rank-group header.
+    assert_snapshot!(m.pretty().render(), @r###"
+    fn pl011::ping() -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+
+    static pl011::CFG: u32 = 42_u32;
+
+    const pl011::MAGIC: u32 = 170_u32;
+
+    struct pl011::Resource {
+        handle: *mut u8,
+    }
+
+    enum pl011::Mode {
+        Off,
+        Tx,
+    }
+
+    union pl011::RegBytes {
+        word: u32,
+        bytes: [u8; 4],
+    }
+    "###);
+}
+
+// ------------------------------------------------------------------
+// Options propagation: `with_options` flags reach the per-construct
+// emission sites end-to-end. Exercises the call path
+// `render` -> `render_instance` (P1a-PP-05a) -> `render_basic_block`
+// -> `render_statement` (P1a-PP-03) and the locals-block debug-name
+// lines (P1a-PP-05a §4.4).
+// ------------------------------------------------------------------
+
+#[test]
+fn render_top_level_options_propagation_end_to_end() {
+    // One Function with a non-synthesized Statement.span and a
+    // LocalDecl.debug_name = Some("counter"). Toggle the two flags
+    // through all four combinations and assert each combination
+    // reaches the body-level emission sites.
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+
+    let path_id = m.strings.intern("pl011.rs");
+    let file_id = m.source_files.push(SourceFile {
+        path: path_id,
+        content: Some("let counter: u32 = 0;\n".into()),
+        line_starts: vec![0],
+    });
+    let stmt_span = Span {
+        file: file_id,
+        lo: 0,
+        hi: 21,
+    };
+
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(&mut m, "pl011::tick");
+
+    let mut body = Body {
+        arg_count: 0,
+        ..Body::default()
+    };
+    // _0: return-place.
+    body.local_decls.push(LocalDecl {
+        ty: unit_ty,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: None,
+    });
+    // _1: counter (with debug_name set).
+    let counter_name = m.strings.intern("counter");
+    body.local_decls.push(LocalDecl {
+        ty: u32_ty,
+        mutability: Mutability::Not,
+        span: Span::dummy(),
+        debug_name: Some(counter_name),
+    });
+    // bb0: { _1 = 0_u32; return -> []; }
+    let zero_const = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let assign_stmt = Statement {
+        kind: StatementKind::Assign(
+            Place {
+                local: LocalId::from_u32(1),
+                projection: Box::new([]),
+            },
+            Rvalue::Use(Operand::Constant(zero_const)),
+        ),
+        span: stmt_span,
+    };
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([assign_stmt]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: Span::dummy(),
+        },
+    });
+    let _ = push_function_instance_local(&mut m, fn_item, sig, Some(body));
+
+    // Combination 1: defaults (both flags off).
+    let default_render = m.pretty().render();
+    assert!(
+        !default_render.contains("// pl011.rs:"),
+        "default options must not emit Statement span comment: {default_render}"
+    );
+    assert!(
+        !default_render.contains("debug counter"),
+        "default options must not emit debug-name line: {default_render}"
+    );
+
+    // Combination 2: spans only.
+    let spans_only = PrettyPrinter::with_options(
+        &m,
+        PrettyPrintOptions {
+            include_spans: true,
+            include_debug_names: false,
+        },
+    )
+    .render();
+    assert!(
+        spans_only.contains("// pl011.rs:1:1: 1:22"),
+        "include_spans must emit Statement span comment: {spans_only}"
+    );
+    assert!(
+        !spans_only.contains("debug counter"),
+        "include_debug_names false must suppress debug-name line: {spans_only}"
+    );
+
+    // Combination 3: debug-names only.
+    let debug_only = PrettyPrinter::with_options(
+        &m,
+        PrettyPrintOptions {
+            include_spans: false,
+            include_debug_names: true,
+        },
+    )
+    .render();
+    assert!(
+        !debug_only.contains("// pl011.rs:"),
+        "include_spans false must suppress Statement span comment: {debug_only}"
+    );
+    assert!(
+        debug_only.contains("debug counter => _1;"),
+        "include_debug_names must emit debug-name line: {debug_only}"
+    );
+
+    // Combination 4: both on.
+    let both = PrettyPrinter::with_options(
+        &m,
+        PrettyPrintOptions {
+            include_spans: true,
+            include_debug_names: true,
+        },
+    )
+    .render();
+    assert!(
+        both.contains("// pl011.rs:1:1: 1:22"),
+        "include_spans must emit Statement span comment: {both}"
+    );
+    assert!(
+        both.contains("debug counter => _1;"),
+        "include_debug_names must emit debug-name line: {both}"
+    );
+}

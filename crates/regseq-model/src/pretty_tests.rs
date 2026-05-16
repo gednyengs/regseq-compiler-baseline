@@ -169,18 +169,242 @@ fn render_def_path_value_handles_primary_crate_paths() {
 }
 
 // ------------------------------------------------------------------
-// Stage-N stubs: each must panic with an informative message that
-// names the stage filling the method. Tests pin the exact wording
-// fragment so any change to the stub messages is a deliberate
-// event.
+// Top-level `render(&self)` (§10.3) + `PrettyPrintOptions` (§4.1)
+// wiring. The composer is purely scaffolding over `render_instance`;
+// these tests cover the iteration / separator / empty-model logic
+// in isolation. Per-Instance content (Function / Static / Const /
+// ADT) is covered by the §9.11 specimens 110-128.
+//
+// Wrapped in its own `mod render_top_level_tests` block so its
+// imports do not collide with the file-level `use` clusters scoped
+// to the other test sections that follow.
 // ------------------------------------------------------------------
 
-#[test]
-#[should_panic(expected = "stage 12+")]
-fn render_top_level_is_unimplemented_at_stage_one() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let _ = m.pretty().render();
-}
+#[allow(clippy::module_inception)]
+mod render_top_level_tests {
+    use super::{RegseqModel, SourceFileId, Span, StableCrateId};
+    use crate::body::{Body, LocalDecl};
+    use crate::ids::{InstanceId, ItemId, TyId};
+    use crate::instance::{FunctionInstanceData, FunctionInstanceFlavor, Instance, InstanceKind};
+    use crate::layout::{Layout, LayoutKind, UNIT_LAYOUT};
+    use crate::ty::{FnAbi, Mutability, Safety, Ty};
+    use crate::PrettyPrintOptions;
+
+    #[test]
+    fn pretty_print_options_default_has_all_flags_off() {
+        let opts = PrettyPrintOptions::default();
+        assert!(!opts.include_spans);
+        assert!(!opts.include_debug_names);
+    }
+
+    #[test]
+    fn pretty_printer_new_carries_default_options() {
+        let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let printer = crate::PrettyPrinter::new(&m);
+        assert_eq!(printer.options, PrettyPrintOptions::default());
+    }
+
+    #[test]
+    fn pretty_printer_with_options_carries_caller_options() {
+        let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let opts = PrettyPrintOptions {
+            include_spans: true,
+            include_debug_names: true,
+        };
+        let printer = crate::PrettyPrinter::with_options(&m, opts);
+        assert_eq!(printer.options, opts);
+    }
+
+    /// Helper: synthesized span shorthand for fixtures.
+    fn synth_span() -> Span {
+        Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        }
+    }
+
+    /// Helper: install an `Item` of the given `kind` whose def-path
+    /// rendering string is `rendered`. All discretionary flags default-off.
+    fn install_item(m: &mut RegseqModel, kind: crate::ItemKind, rendered: &str) -> ItemId {
+        let rendered_id = m.strings.intern(rendered);
+        m.items.push(crate::item::Item {
+            def_path: crate::DefPath {
+                crate_id: m.primary_crate,
+                segments: vec![crate::DefPathSegment {
+                    data: crate::DefPathData::CrateRoot,
+                    disambiguator: 0,
+                }],
+                rendered: rendered_id,
+            },
+            kind,
+            span: synth_span(),
+            linkage: crate::Linkage::Default,
+            link_section: None,
+            inline_hint: crate::InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        })
+    }
+
+    /// Helper: install a zero-arg `fn() -> ()` Function Instance returning
+    /// the assigned `InstanceId` plus the unit `TyId`. Body is `Some(_)`
+    /// with a single `bb0: { return -> []; }` block; one local (RETURN_PLACE).
+    fn push_zero_arg_unit_fn(m: &mut RegseqModel, rendered: &str) -> (InstanceId, TyId) {
+        let item = install_item(m, crate::ItemKind::Function, rendered);
+        let unit_ty = m.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: UNIT_LAYOUT,
+        });
+        let sig = m.sigs.intern(crate::FnSig {
+            inputs: vec![],
+            output: unit_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        let mut body = Body {
+            arg_count: 0,
+            ..Body::default()
+        };
+        body.local_decls.push(LocalDecl {
+            ty: unit_ty,
+            mutability: Mutability::Mut,
+            span: synth_span(),
+            debug_name: None,
+        });
+        body.basic_blocks.push(crate::BasicBlock {
+            statements: Box::new([]),
+            terminator: crate::Terminator {
+                kind: crate::TerminatorKind::Return,
+                span: synth_span(),
+            },
+        });
+        let emission = m.strings.intern("emission");
+        let id = m.instances.push(Instance {
+            item,
+            generic_args: vec![],
+            emission_name: emission,
+            span: synth_span(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: sig,
+                body: Some(body),
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        });
+        (id, unit_ty)
+    }
+
+    /// Helper: install a single Struct Item + matching `Ty::Struct` and
+    /// push an InstanceKind::Struct Instance referring to it. Returns the
+    /// new `InstanceId`.
+    fn push_unit_struct_instance(m: &mut RegseqModel, rendered: &str) -> InstanceId {
+        let item = install_item(m, crate::ItemKind::Struct, rendered);
+        let layout = Layout {
+            size: 0,
+            align: 1,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Struct { fields: vec![] },
+        };
+        let ty = m.types.intern(Ty::Struct {
+            item,
+            args: vec![],
+            layout,
+        });
+        let emission = m.strings.intern("emission");
+        m.instances.push(Instance {
+            item,
+            generic_args: vec![],
+            emission_name: emission,
+            span: synth_span(),
+            kind: InstanceKind::Struct { layout: ty },
+        })
+    }
+
+    #[test]
+    fn render_top_level_empty_model_returns_empty_string() {
+        let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        assert!(m.instances.is_empty());
+        assert_eq!(m.pretty().render(), "");
+    }
+
+    #[test]
+    fn render_top_level_single_instance_has_no_separator() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let (id, _unit) = push_zero_arg_unit_fn(&mut m, "pl011::solo");
+        let single = m.pretty().render_instance(id);
+        let composed = m.pretty().render();
+        assert_eq!(composed, single);
+        // No leading or trailing separator bytes.
+        assert!(!composed.starts_with('\n'));
+        assert!(!composed.ends_with('\n'));
+    }
+
+    #[test]
+    fn render_top_level_two_instances_join_with_blank_line_separator() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let (id_a, _) = push_zero_arg_unit_fn(&mut m, "pl011::alpha");
+        let (id_b, _) = push_zero_arg_unit_fn(&mut m, "pl011::beta");
+        let a = m.pretty().render_instance(id_a);
+        let b = m.pretty().render_instance(id_b);
+        assert_eq!(m.pretty().render(), format!("{a}\n\n{b}"));
+    }
+
+    #[test]
+    fn render_top_level_three_instances_join_each_pair_with_blank_line() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let (id_a, _) = push_zero_arg_unit_fn(&mut m, "pl011::a");
+        let (id_b, _) = push_zero_arg_unit_fn(&mut m, "pl011::b");
+        let (id_c, _) = push_zero_arg_unit_fn(&mut m, "pl011::c");
+        let a = m.pretty().render_instance(id_a);
+        let b = m.pretty().render_instance(id_b);
+        let c = m.pretty().render_instance(id_c);
+        let composed = m.pretty().render();
+        assert_eq!(composed, format!("{a}\n\n{b}\n\n{c}"));
+        // First Instance contributes the first byte; last contributes
+        // the last byte. No file-level header / trailer.
+        assert!(composed.starts_with(a.as_bytes()[0] as char));
+        assert_eq!(composed.as_bytes().last(), c.as_bytes().last());
+    }
+
+    #[test]
+    fn render_top_level_walks_index_vec_order_without_resort() {
+        // Construct a model whose `instances` order disagrees with the
+        // F4-2 rank-grouped order (Struct (rank 3) at index 0; Function
+        // (rank 0) at index 1). `render` must trust the IndexVec order
+        // verbatim per §10.3.2 -- enforcement lives in P1a-VAL-02, not
+        // the renderer.
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let struct_id = push_unit_struct_instance(&mut m, "pl011::Resource");
+        let (fn_id, _) = push_zero_arg_unit_fn(&mut m, "pl011::ping");
+        let struct_text = m.pretty().render_instance(struct_id);
+        let fn_text = m.pretty().render_instance(fn_id);
+        assert_eq!(m.pretty().render(), format!("{struct_text}\n\n{fn_text}"));
+        // Sanity: the second-pushed Function is rank 0 and would precede
+        // the Struct under F4-2; the renderer ignores that.
+        assert!(struct_text.starts_with("struct "));
+        assert!(fn_text.starts_with("fn "));
+    }
+
+    #[test]
+    fn render_top_level_with_empty_indexvec_is_independent_of_options() {
+        let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let on = PrettyPrintOptions {
+            include_spans: true,
+            include_debug_names: true,
+        };
+        assert_eq!(crate::PrettyPrinter::with_options(&m, on).render(), "");
+        assert_eq!(
+            crate::PrettyPrinter::with_options(&m, PrettyPrintOptions::default()).render(),
+            ""
+        );
+    }
+} // mod render_top_level_tests
 
 // ------------------------------------------------------------------
 // render_item_attribute_block: §5.6 shared Stream-1 helper.
