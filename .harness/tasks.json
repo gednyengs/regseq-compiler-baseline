@@ -3149,7 +3149,7 @@
           "id": "regseq-model-88",
           "name": "P1a-PP-03: Body-level renderers + \u00a74 body-level span gating",
           "spec": ".harness/tasks/regseq-model/88-render-body-level.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-87",
             "regseq-model-76",
