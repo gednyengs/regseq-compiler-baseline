@@ -448,6 +448,11 @@ type Callback = for<'a> fn(&'a u32, &'a u32);
 type CleanCallback = for<'a> fn(&'a u32);
 type RawCallback = for<'a> fn(*const &'a u32);
 type TupleCallback = for<'a> fn((&'a u32,));
+// Spec.md section 17.1 lines 6243-6246: `&'a &'b T` is TWO
+// immediate-input-ref slots; both bound regions are used once each
+// so the binder must be ACCEPTED (audit-finding MEDIUM-37-3
+// Codex revision).
+type ChainRefCallback = for<'a, 'b> fn(&'a &'b u32);
 type Alias = u32;
 pub auto trait MyAuto {}
 pub trait Trait<T> {}
@@ -461,6 +466,7 @@ pub fn hrtb(_: Callback) {}
 pub fn clean_hrtb(_: CleanCallback) {}
 pub fn raw_hrtb(_: RawCallback) {}
 pub fn tuple_hrtb(_: TupleCallback) {}
+pub fn chain_ref_hrtb(_: ChainRefCallback) {}
 pub fn dynamic_hrtb(_: &dyn for<'a> Trait<&'a u32>) {}
 pub fn coroutine_holder() {
     let _c = #[coroutine] || {
@@ -557,6 +563,15 @@ pub fn coroutine_closure_holder() {
 
         let tuple_hrtb = translate_ty(cx, param_ty(tcx, "tuple_hrtb", 0)).unwrap_err();
         assert!(matches!(tuple_hrtb, BridgeError::SubstantiveHrtb { .. }));
+
+        // Spec.md section 17.1 lines 6243-6246: `&'a &'b u32` is two
+        // immediate-input-ref slots, each bound region used once;
+        // must be ACCEPTED (audit-finding MEDIUM-37-3 Codex revision).
+        let chain_ref = translate_ty(cx, param_ty(tcx, "chain_ref_hrtb", 0));
+        assert!(
+            chain_ref.is_ok(),
+            "for<'a, 'b> fn(&'a &'b u32) must be accepted per spec section 17.1 lines 6243-6246; got {chain_ref:?}"
+        );
 
         let dynamic_hrtb = translate_ty(cx, param_ty(tcx, "dynamic_hrtb", 0)).unwrap_err();
         assert!(matches!(dynamic_hrtb, BridgeError::SubstantiveHrtb { .. }));

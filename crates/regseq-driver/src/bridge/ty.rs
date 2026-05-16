@@ -997,17 +997,28 @@ impl<'tcx> HrtbChecker<'tcx> {
         if self.substantive {
             return;
         }
-        if let TyKind::Ref(region, pointee, _) = ty.kind() {
-            // Immediate input ref slot: the lifetime is allowed to be
-            // bound (counted for condition 4); the pointee is
-            // non-ref-slot context for any nested bound regions.
-            self.position = PositionContext::ImmediateInputRefSlot;
-            self.visit_region(*region);
-            self.position = PositionContext::NonImmediateInput;
-            self.descend_into(*pointee);
-        } else {
-            self.position = PositionContext::NonImmediateInput;
-            self.descend_into(ty);
+        // Per spec.md section 17.1 lines 6243-6246, `&'r1 &'r2 T` is
+        // TWO immediate-input-ref positions (the outer ref's lifetime
+        // AND the inner ref's lifetime). Walk every leading `Ref`
+        // layer as an immediate slot, then switch to non-immediate
+        // context for the first non-Ref pointee found.
+        let mut cursor = ty;
+        loop {
+            if self.substantive {
+                return;
+            }
+            match cursor.kind() {
+                TyKind::Ref(region, pointee, _) => {
+                    self.position = PositionContext::ImmediateInputRefSlot;
+                    self.visit_region(*region);
+                    cursor = *pointee;
+                }
+                _ => {
+                    self.position = PositionContext::NonImmediateInput;
+                    self.descend_into(cursor);
+                    return;
+                }
+            }
         }
     }
 
