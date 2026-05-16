@@ -61,10 +61,23 @@ pub fn materialise_function_body<'tcx>(
         });
     }
 
-    let mut body_cx = BodyCtxt::new(&rustc_body.local_decls);
-    for block in rustc_body.basic_blocks.iter() {
-        body.basic_blocks
-            .push(translate_basic_block(cx, &mut body_cx, block)?);
+    // Collect basic blocks one at a time so the mutable Body borrow
+    // held by `BodyCtxt::new_with_model_body` is released between
+    // iterations -- the Drop-as-Call collapse and any future
+    // synthetic-local allocator inside `translate_basic_block` write
+    // to `body.local_decls` directly. Per audit finding
+    // regseq-driver-42-2 + spec section 25.7.1.
+    let blocks: Vec<_> = rustc_body.basic_blocks.iter().cloned().collect();
+    let mut translated_blocks = Vec::with_capacity(blocks.len());
+    for block in &blocks {
+        let translated = {
+            let mut body_cx = BodyCtxt::new_with_model_body(&rustc_body.local_decls, &mut body);
+            translate_basic_block(cx, &mut body_cx, block)?
+        };
+        translated_blocks.push(translated);
+    }
+    for translated in translated_blocks {
+        body.basic_blocks.push(translated);
     }
 
     Ok(body)

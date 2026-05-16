@@ -79,7 +79,12 @@ where
     impl<R: Send + 'static> rustc_driver::Callbacks for Callbacks<R> {
         fn config(&mut self, config: &mut rustc_interface::interface::Config) {
             config.opts.unstable_opts.no_codegen = true;
-            config.opts.unstable_opts.mir_opt_level = Some(0);
+            // mir_opt_level >= 1 enables `RemoveStorageMarkers` so
+            // body materialisation (newly active after audit finding
+            // regseq-driver-42-4 introduced `construct_function_instances`)
+            // does not trip on StorageLive/StorageDead rejections at
+            // the statement level.
+            config.opts.unstable_opts.mir_opt_level = Some(1);
             config
                 .opts
                 .unstable_opts
@@ -147,13 +152,31 @@ fn find_fn_def_id(tcx: TyCtxt<'_>, name: &str) -> LocalDefId {
 
 fn translate_calls<'tcx>(tcx: TyCtxt<'tcx>, cx: &mut BridgeCtxt<'tcx>, caller: &str) {
     let body = tcx.optimized_mir(find_fn_def_id(tcx, caller).to_def_id());
+    // Pre-walk every call terminator so the callee FnDef types are
+    // interned (and their Item handles fresh) before invoking
+    // `flush_pending_items_for_tests`. The flush binds final ItemIds
+    // so the lookup_or_create_direct_instance path in
+    // translate_call_callee resolves callee Items through real
+    // ItemIds rather than placeholder ones (audit finding 42-4).
+    for block in body.basic_blocks.iter() {
+        let Some(term) = &block.terminator else {
+            continue;
+        };
+        if let rustc_middle::mir::TerminatorKind::Call { func, .. } = &term.kind {
+            let func_ty = func.ty(&body.local_decls, tcx);
+            let _ = regseq_driver::bridge::ty::translate_ty(cx, func_ty);
+        }
+    }
+    regseq_driver::bridge::flush_pending_items_for_tests(cx).unwrap();
+    regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
     let mut body_cx = BodyCtxt::new(&body.local_decls);
+    let mut statements: Vec<regseq_model::Statement> = Vec::new();
     for terminator in body
         .basic_blocks
         .iter()
         .filter_map(|block| block.terminator.clone())
     {
-        let _ = translate_terminator(cx, &mut body_cx, terminator).unwrap();
+        let _ = translate_terminator(cx, &mut body_cx, &mut statements, terminator).unwrap();
     }
 }
 

@@ -1135,7 +1135,7 @@
           "id": "regseq-driver-42",
           "name": "P1a-BR-06: Terminator + Drop-as-Call collapse + basic-block bridge",
           "spec": ".harness/tasks/regseq-driver/42-terminator-and-drop-as-call-bridge.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-41",
             "regseq-driver-40",

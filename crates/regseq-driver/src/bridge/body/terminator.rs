@@ -1,15 +1,19 @@
 //! MIR `Terminator` bridge translation.
 
 use regseq_model::{
-    AssertKind, BlockId, CallCallee, ClosureCallKind, InstanceId, LocalId, Operand, Place,
-    PlaceElem, SwitchTargets, Terminator, TerminatorKind, Ty,
+    args_key_for_generic_args_with_pending, AssertKind, BlockId, CallCallee, ClosureCallKind,
+    FieldIdx, FnAbi, FnSig, FnSigId, FunctionInstanceData, FunctionInstanceFlavor, GenericArg,
+    Instance, InstanceId, InstanceKind, ItemId, Mutability, Operand, Place, PlaceElem, Rvalue,
+    Safety, Span, Statement, StatementKind, SwitchTargets, Terminator, TerminatorKind, Ty,
+    UNIT_LAYOUT,
 };
 use rustc_hir::LangItem;
 use rustc_middle::mir;
 use rustc_middle::ty;
 
 use crate::bridge::{
-    diag_log, synth, ty::translate_ty, BridgeCtxt, BridgeError, DslRejectionKind, ItemHandle,
+    diag_log, function_instance_flavor_for_kind, synth, ty::translate_ty, BridgeCtxt, BridgeError,
+    DslRejectionKind, ItemHandle,
 };
 
 use super::{
@@ -20,10 +24,16 @@ use super::{
 /// Translate a rustc `mir::Terminator` into a
 /// `regseq_model::Terminator`. Per spec.md section 23.7. Rustc
 /// `Drop` collapses into `Call` per spec.md sections 23.4 and
-/// 25.7.1.
+/// 25.7.1 inside the atomic per-rustc-terminator translation envelope.
+///
+/// The caller threads the basic block's mutable statement accumulator
+/// through `statements` so this function can append the Drop-as-Call
+/// structural prelude (`&raw mut place` Assign) before returning the
+/// synthesised Call terminator. Per audit finding regseq-driver-42-1.
 pub fn translate_terminator<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
     term: rustc_middle::mir::Terminator<'tcx>,
 ) -> Result<regseq_model::Terminator, BridgeError> {
     let span = translate_span(cx, term.source_info.span);
@@ -41,35 +51,7 @@ pub fn translate_terminator<'tcx>(
             destination,
             target,
             ..
-        } => {
-            // Spec section 13.1 closure-call shim rewrite (audit-finding
-            // F1c, regseq-driver-37 v4 task spec lines 286-299):
-            // every `Fn::call` / `FnMut::call_mut` / `FnOnce::call_once`
-            // direct call against a closure captures struct must be
-            // lowered into a Rust-ABI `ClosureCall` synthetic Function
-            // Item with the call arguments tuple-normalised.
-            if let Some((callee, normalised_args)) =
-                rewrite_closure_call_shim(cx, body_cx, &func, &args)?
-            {
-                TerminatorKind::Call {
-                    callee,
-                    args: normalised_args.into_boxed_slice(),
-                    destination: translate_place(cx, body_cx, destination)?,
-                    target: target.map(block_id),
-                }
-            } else {
-                TerminatorKind::Call {
-                    callee: translate_call_callee(cx, body_cx, &func)?,
-                    args: args
-                        .iter()
-                        .map(|arg| translate_operand(cx, body_cx, arg.node.clone()))
-                        .collect::<Result<Vec<_>, _>>()?
-                        .into_boxed_slice(),
-                    destination: translate_place(cx, body_cx, destination)?,
-                    target: target.map(block_id),
-                }
-            }
-        }
+        } => translate_call(cx, body_cx, func, &args, destination, target)?,
         mir::TerminatorKind::Assert {
             cond,
             expected,
@@ -83,7 +65,7 @@ pub fn translate_terminator<'tcx>(
             target: block_id(target),
         },
         mir::TerminatorKind::Drop { place, target, .. } => {
-            translate_drop_as_call(cx, body_cx, place, target)?
+            translate_drop_as_call(cx, body_cx, statements, span, place, target)?
         }
         mir::TerminatorKind::FalseEdge { .. } => {
             return rejected_terminator(
@@ -145,20 +127,49 @@ fn translate_switch_targets(targets: mir::SwitchTargets) -> SwitchTargets {
     }
 }
 
+fn translate_call<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    func: mir::Operand<'tcx>,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+    destination: mir::Place<'tcx>,
+    target: Option<mir::BasicBlock>,
+) -> Result<TerminatorKind, BridgeError> {
+    // Spec section 13.1 closure-call shim rewrite (audit-finding F1c,
+    // regseq-driver-37 v4 task spec lines 286-299): every
+    // `Fn::call` / `FnMut::call_mut` / `FnOnce::call_once` direct call
+    // against a closure captures struct must be lowered into a
+    // Rust-ABI `ClosureCall` synthetic Function Item with the call
+    // arguments tuple-normalised.
+    if let Some((callee, normalised_args)) = rewrite_closure_call_shim(cx, body_cx, &func, args)? {
+        return Ok(TerminatorKind::Call {
+            callee,
+            args: normalised_args.into_boxed_slice(),
+            destination: translate_place(cx, body_cx, destination)?,
+            target: target.map(block_id),
+        });
+    }
+    Ok(TerminatorKind::Call {
+        callee: translate_call_callee(cx, body_cx, &func)?,
+        args: args
+            .iter()
+            .map(|arg| translate_operand(cx, body_cx, arg.node.clone()))
+            .collect::<Result<Vec<_>, _>>()?
+            .into_boxed_slice(),
+        destination: translate_place(cx, body_cx, destination)?,
+        target: target.map(block_id),
+    })
+}
+
 /// Detect calls to `Fn::call` / `FnMut::call_mut` / `FnOnce::call_once`
 /// against a closure receiver and rewrite them to call the
 /// `synth/closure.rs`-produced `ClosureCall` Function Item directly.
 /// The rustc closure-trait `RustCall` ABI passes args as a single
 /// tuple operand; per spec 13.1 the synth shim takes positional
 /// arguments instead, so this function untuples them.
-///
-/// Returns `Some((callee, args))` with the rewritten callee and the
-/// flattened positional arguments when the call matches the
-/// closure-trait shim pattern; returns `None` otherwise so the caller
-/// falls back to the standard call-translation path.
 fn rewrite_closure_call_shim<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     func: &mir::Operand<'tcx>,
     args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
 ) -> Result<Option<(CallCallee, Vec<Operand>)>, BridgeError> {
@@ -174,8 +185,6 @@ fn rewrite_closure_call_shim<'tcx>(
     let Some(closure_kind) = cx.input.tcx.fn_trait_kind_from_def_id(trait_def_id) else {
         return Ok(None);
     };
-    // The closure-trait method's Self type is the closure type, in
-    // generic-arg slot 0. Slot 1 is the tupled call args.
     let receiver_ty = method_args.type_at(0);
     let ty::TyKind::Closure(closure_def_id, closure_args) = receiver_ty.kind() else {
         return Ok(None);
@@ -187,9 +196,6 @@ fn rewrite_closure_call_shim<'tcx>(
         Some(LangItem::FnOnce) => ClosureCallKind::CallOnce,
         _ => return Ok(None),
     };
-    // `closure_kind` is unused beyond confirming this is a closure-
-    // trait method call; the synth handle is keyed on the method's
-    // trait, not the closure's intrinsic kind.
     let _ = closure_kind;
 
     let handles = synth::closure::synthesise_closure_for_def_id(
@@ -201,11 +207,6 @@ fn rewrite_closure_call_shim<'tcx>(
         return Ok(None);
     };
 
-    // Translate the receiver (args[0]) and the tupled call args
-    // (args[1]). Untuple the second operand by emitting one
-    // field-projected operand per tuple field so the synth shim,
-    // which takes positional inputs, sees the same argument list
-    // shape it was synthesised for.
     let mut normalised: Vec<Operand> = Vec::new();
     if let Some(receiver) = args.first() {
         normalised.push(translate_operand(cx, body_cx, receiver.node.clone())?);
@@ -220,9 +221,6 @@ fn rewrite_closure_call_shim<'tcx>(
             })?;
         let tuple_ty = tuple_arg.node.ty(local_decls, cx.input.tcx);
         let ty::TyKind::Tuple(tuple_fields) = tuple_ty.kind() else {
-            // RustCall trait method invoked with a non-tuple second
-            // operand is malformed; let the caller's strict path
-            // surface the error.
             return Ok(None);
         };
         match &tuple_arg.node {
@@ -233,7 +231,7 @@ fn rewrite_closure_call_shim<'tcx>(
                     let model_field_ty = translate_ty(cx, field_ty)?;
                     let mut projection: Vec<PlaceElem> = base.projection.to_vec();
                     projection.push(PlaceElem::Field(
-                        regseq_model::FieldIdx::from_u32(idx as u32),
+                        FieldIdx::from_u32(idx as u32),
                         model_field_ty,
                     ));
                     let projected = Place {
@@ -247,16 +245,78 @@ fn rewrite_closure_call_shim<'tcx>(
                     });
                 }
             }
-            _ => {
-                // ConstantOperand for the tuple is unusual at a
-                // closure-call shim site; fall back so the caller's
-                // path reports an explicit rejection if needed.
-                return Ok(None);
-            }
+            _ => return Ok(None),
         }
     }
 
-    let callee = CallCallee::Direct(InstanceId::from_u32(call_handle.as_u32()));
+    // Audit-finding Codex review item 3: the closure-call shim's
+    // direct callee MUST reference a real `model.instances` entry
+    // rather than a raw `ItemHandle` cast to `InstanceId`. Resolve
+    // the ItemHandle to a final ItemId post-Phase-4, then look up
+    // (or lazy-create) the matching Function Instance through
+    // `function_instance_for_item` keyed by
+    // `(ItemId, ArgsKey, FunctionInstanceFlavor::Item)`. The synth
+    // path treats every closure-call shim as a regular Function
+    // body, so flavor is `Item`.
+    let call_item = match cx.handles.resolve(call_handle) {
+        Some(item) => item,
+        None => {
+            crate::bridge::assign_late_pending_items_for_terminator(cx);
+            match cx.handles.resolve(call_handle) {
+                Some(item) => item,
+                None => {
+                    return Ok(None);
+                }
+            }
+        }
+    };
+    // Look up (or lazy-create) the closure-call Instance using a
+    // best-effort FnSig derived from the synth-side `ClosureCall`
+    // type. Closure-call shims have FnAbi::Rust per spec section
+    // 13.1; the input list mirrors the rewritten positional args.
+    let arg_tys: Vec<regseq_model::TyId> = normalised
+        .iter()
+        .map(|operand| {
+            let local_decls = body_cx.local_decls().expect("set above");
+            match operand {
+                Operand::Copy(place) | Operand::Move(place) => {
+                    let local = rustc_middle::mir::Local::from_u32(place.local.as_u32());
+                    let rustc_ty = local_decls[local].ty;
+                    translate_ty(cx, rustc_ty).unwrap_or_else(|_| {
+                        cx.model.types.intern(Ty::Tuple {
+                            fields: Vec::new(),
+                            layout: UNIT_LAYOUT,
+                        })
+                    })
+                }
+                Operand::Constant(_) => cx.model.types.intern(Ty::Tuple {
+                    fields: Vec::new(),
+                    layout: UNIT_LAYOUT,
+                }),
+            }
+        })
+        .collect();
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let instance_id = lookup_or_create_direct_instance(
+        cx,
+        call_item,
+        Vec::new(),
+        FunctionInstanceFlavor::Item,
+        None,
+        move |cx| {
+            Ok(cx.model.sigs.intern(FnSig {
+                inputs: arg_tys,
+                output: unit_ty,
+                abi: FnAbi::Rust,
+                c_variadic: false,
+                safety: Safety::Safe,
+            }))
+        },
+    )?;
+    let callee = CallCallee::Direct(instance_id);
     Ok(Some((callee, normalised)))
 }
 
@@ -265,16 +325,6 @@ fn pick_closure_call_handle(
     handles: &crate::bridge::synth::ClosureSynthHandles,
     call_kind: ClosureCallKind,
 ) -> Option<ItemHandle> {
-    // The synth path records call-method handles in the order
-    // `closure_call_kinds` returns them, which depends on the
-    // closure's intrinsic kind:
-    //   Fn    -> [Call, CallMut, CallOnce]
-    //   FnMut -> [CallMut, CallOnce]
-    //   FnOnce-> [CallOnce]
-    //   _     -> [CallOnce]
-    // The pending item carries the discriminator in
-    // `SyntheticItemKind::ClosureCall { call_kind, .. }`; scan the
-    // pending list for the matching variant.
     handles.calls.iter().copied().find(|handle| {
         let placeholder = crate::bridge::placeholder_item_id_for_handle(*handle);
         match cx.lookup_item_synthetic_kind(placeholder) {
@@ -288,16 +338,23 @@ fn pick_closure_call_handle(
 
 fn translate_call_callee<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     func: &mir::Operand<'tcx>,
 ) -> Result<CallCallee, BridgeError> {
     let func_ty = body_cx
         .local_decls()
         .map(|local_decls| func.ty(local_decls, cx.input.tcx));
     if let mir::Operand::Constant(constant) = func {
-        if let ty::TyKind::FnDef(def_id, _) = constant.const_.ty().kind() {
+        if let ty::TyKind::FnDef(def_id, generic_args) = constant.const_.ty().kind() {
+            // Audit finding regseq-driver-42-7 + spec section 15.1:
+            // reject atomic / fence / volatile intrinsics BEFORE the
+            // callee Item is interned so a rejection does not leave a
+            // stray pending Item behind.
+            reject_call_site_intrinsics(cx, *def_id)?;
+
             let model_ty = translate_ty(cx, constant.const_.ty())?;
-            let Ty::FnDef(callee_item, _) = cx.model.types.resolve(model_ty).clone() else {
+            let Ty::FnDef(callee_item, model_args) = cx.model.types.resolve(model_ty).clone()
+            else {
                 return rejected_terminator(format!("unsupported call callee {func:?}"));
             };
             // Source-derived Items carry placeholder ItemIds until
@@ -313,10 +370,37 @@ fn translate_call_callee<'tcx>(
                 &callee_def_path,
                 *def_id,
             )?;
-            return Ok(CallCallee::Direct(instance_id_for_def_path(cx, *def_id)));
+            // Audit finding regseq-driver-42-4 + spec section 23.7:
+            // resolve direct callees through `function_instance_for_item`
+            // keyed by `(ItemId, ArgsKey, FunctionInstanceFlavor)`.
+            // Per spec section 11 + 23.7 dyn-Trait method calls
+            // surface as `InstanceKind::Virtual(_, idx)`; the resulting
+            // Regseq Instance is Direct-flavored Virtual with
+            // virtual_idx = Some(idx) so the stage-11 vtable-indirect
+            // rewrite can replace the Direct callee with a vtable load.
+            let (flavor, virtual_idx) = resolve_callsite_flavor(cx, *def_id, generic_args);
+            let def_id_copy = *def_id;
+            let generic_args_copy = *generic_args;
+            let instance_id = lookup_or_create_direct_instance(
+                cx,
+                callee_item,
+                model_args,
+                flavor,
+                virtual_idx,
+                |cx| callsite_fn_sig(cx, def_id_copy, generic_args_copy),
+            )?;
+            return Ok(CallCallee::Direct(instance_id));
         }
     }
     if matches!(func_ty.map(|ty| ty.kind()), Some(ty::TyKind::FnPtr(..))) {
+        // Section 15.1 call-site rejections (Codex review item 4):
+        // intrinsic-style def_ids cannot appear behind an FnPtr
+        // (rustc forbids taking a function pointer to an intrinsic
+        // or the volatile/fence shim wrappers because they are not
+        // ABI-stable concrete functions). The rejection is therefore
+        // vacuous here, but the structure mirrors the FnDef branch
+        // so a future surface that admits FnPtr intrinsics will
+        // surface through the same path.
         return Ok(CallCallee::Indirect(translate_operand(
             cx,
             body_cx,
@@ -326,9 +410,113 @@ fn translate_call_callee<'tcx>(
     rejected_terminator(format!("unsupported call callee {func:?}"))
 }
 
+/// Audit-finding regseq-driver-42-7 / spec section 15.1: reject
+/// atomic/fence/volatile intrinsic call sites with
+/// `DslRejectionKind::Terminator` BEFORE the callee type is interned.
+fn reject_call_site_intrinsics<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    def_id: rustc_span::def_id::DefId,
+) -> Result<(), BridgeError> {
+    if let Some(intrinsic) = cx.input.tcx.intrinsic(def_id) {
+        let name = intrinsic.name.as_str();
+        if name.starts_with("atomic_") || name.starts_with("volatile_") {
+            return rejected_terminator(format!(
+                "call to intrinsic `{name}` is rejected per spec section 15.1"
+            ));
+        }
+    }
+    // `core::sync::atomic::{fence, compiler_fence}` and
+    // `core::ptr::{read,write}_volatile` are stable shim wrappers
+    // around the underlying intrinsics. Reject by their stable
+    // DefPath strings so DSL-source calls that go through the shim
+    // surface are caught at the bridge.
+    let path_str = cx.input.tcx.def_path_str(def_id);
+    if matches!(
+        path_str.as_str(),
+        "core::sync::atomic::fence"
+            | "std::sync::atomic::fence"
+            | "core::sync::atomic::compiler_fence"
+            | "std::sync::atomic::compiler_fence"
+            | "core::ptr::read_volatile"
+            | "std::ptr::read_volatile"
+            | "core::ptr::write_volatile"
+            | "std::ptr::write_volatile"
+    ) {
+        return rejected_terminator(format!(
+            "call to `{path_str}` is rejected per spec section 15.1"
+        ));
+    }
+    Ok(())
+}
+
+fn resolve_callsite_flavor<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    def_id: rustc_span::def_id::DefId,
+    generic_args: ty::GenericArgsRef<'tcx>,
+) -> (FunctionInstanceFlavor, Option<u32>) {
+    let typing_env = ty::TypingEnv::fully_monomorphized();
+    match ty::Instance::try_resolve(cx.input.tcx, typing_env, def_id, generic_args) {
+        Ok(Some(instance)) => match instance.def {
+            ty::InstanceKind::Virtual(_, idx) => {
+                (FunctionInstanceFlavor::Virtual, Some(idx as u32))
+            }
+            other => (function_instance_flavor_for_kind(other), None),
+        },
+        _ => (FunctionInstanceFlavor::Item, None),
+    }
+}
+
+fn callsite_fn_sig<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    def_id: rustc_span::def_id::DefId,
+    generic_args: ty::GenericArgsRef<'tcx>,
+) -> Result<FnSigId, BridgeError> {
+    let poly = cx
+        .input
+        .tcx
+        .fn_sig(def_id)
+        .instantiate(cx.input.tcx, generic_args);
+    crate::bridge::fnsig::translate_fn_sig(cx, poly)
+}
+
+fn lookup_or_create_direct_instance<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    item: ItemId,
+    generic_args: regseq_model::GenericArgs,
+    flavor: FunctionInstanceFlavor,
+    virtual_idx: Option<u32>,
+    make_fn_sig: impl FnOnce(&mut BridgeCtxt<'tcx>) -> Result<FnSigId, BridgeError>,
+) -> Result<InstanceId, BridgeError> {
+    let pending = cx.pending_def_path_hashes();
+    let args_key = args_key_for_generic_args_with_pending(&cx.model, &generic_args, &pending);
+    let key = (item, args_key, flavor);
+    if let Some(existing) = cx.function_instance_for_item.get(&key) {
+        return Ok(*existing);
+    }
+    let fn_sig = make_fn_sig(cx)?;
+    let emission_name = cx.model.items[item].def_path.rendered;
+    let span = cx.model.items[item].span;
+    let instance_id = cx.model.instances.push(Instance {
+        item,
+        generic_args,
+        emission_name,
+        span,
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig,
+            body: None,
+            flavor,
+            virtual_idx,
+        }),
+    });
+    cx.function_instance_for_item.insert(key, instance_id);
+    Ok(instance_id)
+}
+
 fn translate_drop_as_call<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
+    span: Span,
     place: mir::Place<'tcx>,
     target: mir::BasicBlock,
 ) -> Result<TerminatorKind, BridgeError> {
@@ -337,23 +525,123 @@ fn translate_drop_as_call<'tcx>(
     };
     let place_ty = place.ty(local_decls, cx.input.tcx).ty;
     let model_ty = translate_ty(cx, place_ty)?;
-    let handle = if let Some(handle) = cx.drop_glue_synth_cache.get(&model_ty) {
-        *handle
+
+    // Resolve (or eagerly synthesise) the drop-glue Item handle and
+    // bind it to a final ItemId per spec section 23.4 step 1. The
+    // Phase-2 cache holds an `ItemHandle`; the HandleTable resolves
+    // it to a `ItemId` post-Phase-4. Cache misses during Phase 5
+    // (eager synthesis at the drop site) are drained through the
+    // late Phase-4 assignment path so the freshly minted handle
+    // picks up a real `ItemId` before the Call is emitted (Codex
+    // review fix item 1).
+    let drop_glue_item = if let Some(handle) = cx.drop_glue_synth_cache.get(&model_ty).copied() {
+        if let Some(item) = cx.handles.resolve(handle) {
+            item
+        } else {
+            crate::bridge::assign_late_pending_items_for_terminator(cx);
+            cx.handles.resolve(handle).ok_or_else(|| {
+                BridgeError::Phase5(format!(
+                    "drop-glue handle {} could not be bound after late assignment",
+                    handle.as_u32()
+                ))
+            })?
+        }
     } else {
-        synth::synthesise_drop_glue(cx, model_ty)?
+        let handle = synth::synthesise_drop_glue(cx, model_ty)?;
+        crate::bridge::assign_late_pending_items_for_terminator(cx);
+        cx.handles.resolve(handle).ok_or_else(|| {
+            BridgeError::Phase5(format!(
+                "drop-glue handle {} could not be bound after eager synthesis",
+                handle.as_u32()
+            ))
+        })?
     };
-    let place = translate_place(cx, body_cx, place)?;
+
+    // Audit finding regseq-driver-42-6 + spec section 23.4: dyn-Trait
+    // drops resolve to `ty::InstanceKind::Virtual(drop_fn.def_id(), 0)`;
+    // the Regseq Instance is Virtual-flavored with virtual_idx = 0.
+    // Concrete drops resolve to `ty::InstanceKind::DropGlue(_, Some(ty))`;
+    // the Regseq Instance is DropGlue-flavored with virtual_idx = None.
+    let is_dynamic = matches!(place_ty.kind(), ty::TyKind::Dynamic(..));
+    let (flavor, virtual_idx) = if is_dynamic {
+        (FunctionInstanceFlavor::Virtual, Some(0u32))
+    } else {
+        (FunctionInstanceFlavor::DropGlue, None)
+    };
+
+    // Allocate the drop-glue fn_sig: `fn(*mut place_ty) -> ()` (or
+    // `fn(*mut ()) -> ()` for the erased Virtual case) per spec
+    // section 25.7.1.
+    let ptr_to_place_ty = cx.model.types.intern(Ty::Ptr(model_ty, Mutability::Mut));
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let drop_glue_input_ty = if is_dynamic {
+        cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut))
+    } else {
+        ptr_to_place_ty
+    };
+
+    let instance_id = lookup_or_create_direct_instance(
+        cx,
+        drop_glue_item,
+        vec![GenericArg::Type(model_ty)],
+        flavor,
+        virtual_idx,
+        |cx| {
+            Ok(cx.model.sigs.intern(FnSig {
+                inputs: vec![drop_glue_input_ty],
+                output: unit_ty,
+                abi: FnAbi::Rust,
+                c_variadic: false,
+                safety: Safety::Unsafe,
+            }))
+        },
+    )?;
+
+    // Allocate the two synthetic locals through the mutable model
+    // body per audit finding regseq-driver-42-2. Without a mutable
+    // body slot the Drop-as-Call collapse cannot run; tests that
+    // exercise the collapse must use
+    // `BodyCtxt::new_with_model_body`.
+    let model_body = body_cx.model_body_mut().ok_or_else(|| {
+        BridgeError::DslRejection {
+            kind: DslRejectionKind::Terminator,
+            ty_repr:
+                "Drop-as-Call collapse requires BodyCtxt::new_with_model_body for synthetic-local allocation"
+                    .to_string(),
+        }
+    })?;
+    let drop_arg = model_body.push_synthetic_local(ptr_to_place_ty);
+    let drop_ret = model_body.push_synthetic_local(unit_ty);
+
+    // Translate the drop place through the standard path AFTER
+    // synthetic-local allocation so the place projections see the
+    // pre-existing local table.
+    let model_place = translate_place(cx, body_cx, place)?;
+
+    // Append the structural prelude per spec section 23.4 step 4:
+    // `Statement::Assign(_t_drop_arg, Rvalue::RawPtr(Mut, place))`.
+    statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::from(drop_arg),
+            Rvalue::RawPtr(Mutability::Mut, model_place),
+        ),
+        span,
+    });
+
     Ok(TerminatorKind::Call {
-        callee: CallCallee::Direct(InstanceId::from_u32(handle.as_u32())),
-        args: Box::new([Operand::Move(place)]),
-        destination: Place::from(LocalId::RETURN_PLACE),
+        callee: CallCallee::Direct(instance_id),
+        args: Box::new([Operand::Move(Place::from(drop_arg))]),
+        destination: Place::from(drop_ret),
         target: Some(block_id(target)),
     })
 }
 
 fn translate_assert_kind<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     msg: mir::AssertKind<mir::Operand<'tcx>>,
 ) -> Result<AssertKind, BridgeError> {
     Ok(match msg {
@@ -391,11 +679,6 @@ fn translate_assert_kind<'tcx>(
             return rejected_terminator("coroutine assert kind survived coroutine rejection");
         }
     })
-}
-
-fn instance_id_for_def_path(cx: &BridgeCtxt<'_>, def_id: rustc_span::def_id::DefId) -> InstanceId {
-    let hash = cx.input.tcx.def_path_hash(def_id).local_hash().as_u64();
-    InstanceId::from_u32(hash as u32)
 }
 
 fn rejected_terminator<T>(construct: impl Into<String>) -> Result<T, BridgeError> {

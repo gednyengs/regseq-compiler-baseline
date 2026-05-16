@@ -9,9 +9,9 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use regseq_model::{
-    args_key_for_generic_args_with_pending, canonical_ty_bytes_with_pending, DefPathHash,
-    GenericArg, Item, PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId,
-    SyntheticItemKind, Ty, TyId,
+    args_key_for_generic_args_with_pending, canonical_ty_bytes_with_pending, ArgsKey, DefPathHash,
+    FunctionInstanceFlavor, GenericArg, InstanceId, Item, ItemId, PrincipalTraitKey,
+    ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, Ty, TyId,
 };
 
 mod assign;
@@ -105,6 +105,15 @@ pub struct BridgeCtxt<'tcx> {
     /// `TyInterner::patch_nominal_item_id` for each entry once the
     /// handles bind their final `ItemId`s.
     pub source_ty_pending: HashMap<ItemHandle, Vec<TyId>>,
+    /// Direct-callee resolution table per audit finding
+    /// regseq-driver-42-4. Keyed by `(ItemId, ArgsKey,
+    /// FunctionInstanceFlavor)` so generic monomorphisations and shim
+    /// flavors do NOT collapse to a single Instance. Populated by
+    /// `construct_function_instances` in Phase 4 and extended lazily
+    /// at terminator-translation time when a `(ItemId, args, flavor)`
+    /// triple is observed at a call site that the Phase-4 walk had no
+    /// way to reach in advance.
+    pub function_instance_for_item: HashMap<(ItemId, ArgsKey, FunctionInstanceFlavor), InstanceId>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -128,6 +137,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             dynamic_vtable_ty_pending: HashMap::new(),
             source_item_handles: HashMap::new(),
             source_ty_pending: HashMap::new(),
+            function_instance_for_item: HashMap::new(),
         }
     }
 }
@@ -243,6 +253,23 @@ pub fn flush_pending_items_for_tests(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Br
     sort::f4_sort(&ctxt.model, &mut ctxt.pending_items)?;
     assign::assign_item_ids_and_populate_sidetables(ctxt)?;
     Ok(())
+}
+
+/// Drain any late pending items appended during a Phase-5 terminator
+/// translation (e.g., the eager drop-glue synthesis fallback for a
+/// drop site whose `place_ty` was not reached during the Phase-2
+/// walk). Used by `bridge::body::terminator::translate_drop_as_call`
+/// to bind freshly-minted synthetic-Item handles before they are
+/// resolved at the call emission site. Phase-5 placement is fine
+/// because the F4 sort over the late additions is bridge-internal
+/// (post-Phase-4 ItemIds are dense and append-only); the production
+/// path also relies on this via the post-body-passes flush in
+/// `construct_instances_and_resolve_cross_references`.
+pub(crate) fn assign_late_pending_items_for_terminator(ctxt: &mut BridgeCtxt<'_>) {
+    if ctxt.pending_items.is_empty() {
+        return;
+    }
+    assign::assign_late_pending_items(ctxt);
 }
 
 /// Derive the Phase-2 placeholder `ItemId` for a Phase-2 `ItemHandle`.
@@ -576,6 +603,17 @@ fn scan_terminator_for_synthesis<'tcx>(
         scan_call_ty_for_vtable(ctxt, func.ty(local_decls, ctxt.input.tcx))?;
         scan_operand_move_for_drop_glue(ctxt, local_decls, func)?;
         if let rustc_middle::mir::Operand::Constant(constant) = func {
+            if let TyKind::FnDef(_, _) = constant.const_.ty().kind() {
+                // Audit finding regseq-driver-42-4: pre-translate
+                // every constant FnDef callee so the Phase-5
+                // `translate_call_callee` path resolves the callee
+                // Item through a real (post-Phase-4) ItemId rather
+                // than a Phase-2 placeholder. Reaching translate_ty
+                // here interns the source FnDef Item in
+                // `cx.pending_items` so Phase-3/4 binds it before
+                // body materialisation runs.
+                let _ = ty::translate_ty(ctxt, constant.const_.ty());
+            }
             if let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() {
                 if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, *def_id).is_some() {
                     let model_ty = ty::translate_ty(ctxt, constant.const_.ty())?;
@@ -809,6 +847,14 @@ fn construct_instances_and_resolve_cross_references(
     ctxt: &mut BridgeCtxt<'_>,
 ) -> Result<(), BridgeError> {
     synth::rekey_synthesis_in_phase5(ctxt)?;
+    // Audit-finding regseq-driver-42-4 + 42-5: construct one Function
+    // Instance per (ItemKind::Function ItemId, identity-args,
+    // FunctionInstanceFlavor::Item) tuple before body materialisation
+    // so terminator translation can resolve `CallCallee::Direct`
+    // targets through `function_instance_for_item`. Lazy expansion at
+    // call sites (different `(item, args, flavor)` triples) extends
+    // the map during terminator translation.
+    construct_function_instances(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     // Body materialisation calls `translate_const`, which can synthesise
     // late `ConstMemoryStatic` pending items for reference-typed const
@@ -821,4 +867,154 @@ fn construct_instances_and_resolve_cross_references(
     }
     const_::construct_const_memory_static_instances(ctxt)?;
     Ok(())
+}
+
+/// Construct one `InstanceKind::Function` Instance per `ItemKind::Function`
+/// model Item per audit finding regseq-driver-42-4. Each Instance is
+/// keyed in `function_instance_for_item` by `(ItemId, ArgsKey,
+/// FunctionInstanceFlavor)` so generic monomorphisations and shim
+/// flavors do NOT collapse. Per spec section 16.2 (F4-2) the table is
+/// built in `(F4-2 rank, item, generic_args_key, shim_flavor)` order;
+/// Function (rank 0) instances precede Static (rank 1) instances
+/// (which the existing vtable / const_memory_static passes push
+/// afterwards). The final `model.sort_instances_by_f4_2()` call at the
+/// end of `run_bridge` is what guarantees F4-2 ordering across the
+/// whole table; this pass just produces the Function-side rows.
+fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    use regseq_model::{FunctionInstanceData, Instance, InstanceKind, ItemKind};
+    // Walk every `ItemKind::Function` model Item per audit finding
+    // regseq-driver-42-4 (Codex review item 2). Synthetic Items (drop
+    // glue, vtable shims, closure call shims) are NOT filtered here;
+    // for those, the rustc resolution via `source_item_def_id` will
+    // return `None` (synthetic DefPathHashes do not correspond to
+    // rustc DefIds) and we skip Instance creation in this pass. The
+    // direct-callee resolution path in `translate_call_callee` and
+    // `translate_drop_as_call` then lazy-creates Instances for them
+    // through `lookup_or_create_direct_instance`, which records the
+    // synthesis flavor on the Instance.
+    let function_items: Vec<ItemId> = ctxt
+        .model
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let item_id = ItemId::from_u32(idx as u32);
+            if !matches!(item.kind, ItemKind::Function) {
+                return None;
+            }
+            Some(item_id)
+        })
+        .collect();
+
+    for item_id in function_items {
+        let def_path_hash = ctxt.model.item_def_paths[item_id];
+        let Some(def_id) = source_item_def_id(ctxt.input.tcx, def_path_hash) else {
+            // Item without a rustc DefId in this compilation (e.g.,
+            // cross-crate references); the call site that needs
+            // its Instance will lazy-construct one through
+            // `lookup_or_create_direct_instance`.
+            continue;
+        };
+        // Skip items that are not actually rustc functions; the
+        // bridge's `ItemKind::Function` covers both FnDef and
+        // closure-call shims, but the latter carry synthetic kinds
+        // and were filtered above.
+        if !is_rustc_function(ctxt.input.tcx, def_id) {
+            continue;
+        }
+        let identity_args =
+            rustc_middle::ty::GenericArgs::identity_for_item(ctxt.input.tcx, def_id);
+        let Ok(rustc_instance) = rustc_middle::ty::Instance::try_resolve(
+            ctxt.input.tcx,
+            rustc_middle::ty::TypingEnv::fully_monomorphized(),
+            def_id,
+            identity_args,
+        ) else {
+            continue;
+        };
+        let Some(rustc_instance) = rustc_instance else {
+            continue;
+        };
+        let flavor = function_instance_flavor_for_kind(rustc_instance.def);
+        let virtual_idx = match rustc_instance.def {
+            rustc_middle::ty::InstanceKind::Virtual(_, idx) => Some(idx as u32),
+            _ => None,
+        };
+        let poly_fn_sig = ctxt
+            .input
+            .tcx
+            .fn_sig(def_id)
+            .instantiate(ctxt.input.tcx, identity_args);
+        let Ok(fn_sig) = fnsig::translate_fn_sig(ctxt, poly_fn_sig) else {
+            continue;
+        };
+        let emission_name = ctxt.model.items[item_id].def_path.rendered;
+        let span = ctxt.model.items[item_id].span;
+        let args_key =
+            args_key_for_generic_args_with_pending(&ctxt.model, &Vec::new(), &HashMap::new());
+        let instance_id = ctxt.model.instances.push(Instance {
+            item: item_id,
+            generic_args: Vec::new(),
+            emission_name,
+            span,
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig,
+                body: None,
+                flavor,
+                virtual_idx,
+            }),
+        });
+        ctxt.function_instance_for_item
+            .insert((item_id, args_key, flavor), instance_id);
+    }
+    Ok(())
+}
+
+/// Map a `rustc_middle::ty::InstanceKind` to the closed
+/// `FunctionInstanceFlavor` tag. Per spec section 9.3 +
+/// `rustc_instance_kind_sort_rank`.
+pub(crate) fn function_instance_flavor_for_kind(
+    kind: rustc_middle::ty::InstanceKind<'_>,
+) -> FunctionInstanceFlavor {
+    use rustc_middle::ty::InstanceKind as RK;
+    match kind {
+        RK::Item(_) => FunctionInstanceFlavor::Item,
+        RK::Intrinsic(_) => FunctionInstanceFlavor::Intrinsic,
+        RK::VTableShim(_) => FunctionInstanceFlavor::VTableShim,
+        RK::ReifyShim(_, _) => FunctionInstanceFlavor::ReifyShim,
+        RK::FnPtrShim(_, _) => FunctionInstanceFlavor::FnPtrShim,
+        RK::Virtual(_, _) => FunctionInstanceFlavor::Virtual,
+        RK::ClosureOnceShim { .. } => FunctionInstanceFlavor::ClosureOnceShim,
+        RK::ConstructCoroutineInClosureShim { .. } => {
+            FunctionInstanceFlavor::ConstructCoroutineInClosureShim
+        }
+        RK::ThreadLocalShim(_) => FunctionInstanceFlavor::ThreadLocalShim,
+        RK::FutureDropPollShim(_, _, _) => FunctionInstanceFlavor::FutureDropPollShim,
+        RK::DropGlue(_, _) => FunctionInstanceFlavor::DropGlue,
+        RK::CloneShim(_, _) => FunctionInstanceFlavor::CloneShim,
+        RK::FnPtrAddrShim(_, _) => FunctionInstanceFlavor::FnPtrAddrShim,
+        RK::AsyncDropGlueCtorShim(_, _) => FunctionInstanceFlavor::AsyncDropGlueCtorShim,
+        RK::AsyncDropGlue(_, _) => FunctionInstanceFlavor::AsyncDropGlue,
+    }
+}
+
+fn source_item_def_id(tcx: TyCtxt<'_>, wanted: DefPathHash) -> Option<DefId> {
+    for local_def_id in tcx.hir_body_owners() {
+        let actual = tcx.def_path_hash(local_def_id.to_def_id());
+        if actual.stable_crate_id().as_u64() == wanted.stable_crate_id.0
+            && actual.local_hash().as_u64() == wanted.local_hash
+        {
+            return Some(local_def_id.to_def_id());
+        }
+    }
+    None
+}
+
+fn is_rustc_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
+    matches!(
+        tcx.def_kind(def_id),
+        rustc_hir::def::DefKind::Fn
+            | rustc_hir::def::DefKind::AssocFn
+            | rustc_hir::def::DefKind::Closure
+    )
 }

@@ -15,7 +15,7 @@ use super::{operand::translate_operand, place::translate_place, BodyCtxt};
 /// spec.md section 21.6.
 pub fn translate_rvalue<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
     rvalue: mir::Rvalue<'tcx>,
 ) -> Result<Rvalue, BridgeError> {
     let rvalue_ty = body_cx
