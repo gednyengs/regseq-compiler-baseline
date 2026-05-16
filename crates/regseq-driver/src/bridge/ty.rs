@@ -7,8 +7,8 @@ use rustc_span::def_id::DefId;
 use regseq_model::{
     AutoTrait, CrateId, CrateInfo, DefPath, DefPathData, DefPathHash, DefPathSegment, FieldLayout,
     FloatKind, FnAbi, FnSig, GenericArg, GenericArgs, InlineHint, IntKind, Item, ItemId, ItemKind,
-    Layout, LayoutKind, Linkage, Mutability, Provenance, Safety, Span, StableCrateId,
-    SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
+    Layout, LayoutKind, Linkage, Mutability, PrincipalTraitKey, Provenance, Safety, Span,
+    StableCrateId, SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
 };
 
 use super::{BridgeCtxt, BridgeError, DslRejectionKind, NonRigidTyKind};
@@ -105,8 +105,35 @@ fn translate_erased_ty<'tcx>(
         TyKind::FnPtr(sig_tys, header) => {
             reject_substantive_fn_ptr_binder(&ty.to_string())?;
             let sig = sig_tys.with(*header).skip_binder();
-            let inputs = sig
-                .inputs()
+            // Spec section 13.1 closure-call shim rewrite: a RustCall
+            // FnPtr that survived monomorphisation is the reified
+            // function pointer of a closure-trait call method. The
+            // bridge un-tuples the trailing RustCall args tuple to
+            // positional inputs and remaps the ABI to FnAbi::Rust
+            // BEFORE the strict section 14.2 abi check. A RustCall
+            // FnPtr whose last input is NOT a tuple is malformed
+            // (no valid closure-call shape) and falls through to
+            // `translate_abi`'s RustCall rejection.
+            let (raw_inputs, abi) = if let (rustc_abi::ExternAbi::RustCall, Some((last, prefix))) =
+                (sig.abi, sig.inputs().split_last())
+            {
+                if let TyKind::Tuple(tuple_fields) = last.kind() {
+                    let mut normalised: Vec<rustc_middle::ty::Ty<'_>> = Vec::new();
+                    normalised.extend_from_slice(prefix);
+                    for field in tuple_fields.iter() {
+                        normalised.push(field);
+                    }
+                    (normalised, rustc_abi::ExternAbi::Rust)
+                } else {
+                    // RustCall without a tupled args slot is
+                    // outside the closure-call shim shape; let
+                    // translate_abi reject it explicitly.
+                    (sig.inputs().to_vec(), sig.abi)
+                }
+            } else {
+                (sig.inputs().to_vec(), sig.abi)
+            };
+            let inputs = raw_inputs
                 .iter()
                 .map(|input| translate_ty(cx, *input))
                 .collect::<Result<Vec<_>, _>>()?;
@@ -114,20 +141,24 @@ fn translate_erased_ty<'tcx>(
             let sig = FnSig {
                 inputs,
                 output,
-                abi: translate_abi(sig.abi)?,
+                abi: translate_abi(abi)?,
                 c_variadic: sig.c_variadic,
                 safety: translate_safety(sig.safety),
             };
             Ty::FnPtr(cx.model.sigs.intern(sig))
         }
         TyKind::Dynamic(predicates, _) => {
-            if !allow_unsized_marker {
-                return Err(BridgeError::UnsupportedTy {
+            // DynStar carries its own dedicated rejection row per
+            // spec section 15.1 and must be detected BEFORE the
+            // bare-unsized check so a top-level `dyn* Trait` is
+            // not misclassified as `UnsupportedTy`.
+            if ty.to_string().starts_with("dyn*") {
+                return Err(BridgeError::DynStar {
                     ty_repr: ty.to_string(),
                 });
             }
-            if ty.to_string().starts_with("dyn*") {
-                return Err(BridgeError::DynStar {
+            if !allow_unsized_marker {
+                return Err(BridgeError::UnsupportedTy {
                     ty_repr: ty.to_string(),
                 });
             }
@@ -137,12 +168,22 @@ fn translate_erased_ty<'tcx>(
                 });
             }
             let auto_traits = translate_auto_traits(cx.input.tcx, predicates, &ty.to_string())?;
-            if !dynamic_has_principal_trait(predicates, &ty.to_string()) {
+            let Some(principal_ref) = predicates
+                .principal()
+                .map(|principal| principal.skip_binder())
+            else {
                 return Err(BridgeError::DynAutoOnly {
                     ty_repr: ty.to_string(),
                 });
-            }
-            let vtable_ty = synthesize_dynamic_vtable_ty(cx, &ty.to_string());
+            };
+            // Spec 13.2: vtable_ty references a real Ty::Struct whose
+            // Item carries SyntheticItemKind::VTableType { principal }.
+            // The slot count comes from `tcx.vtable_entries`; each slot
+            // is pointer-width.
+            let projection_bindings = super::projection_bindings_key(cx, predicates);
+            let principal = super::principal_trait_key(cx, principal_ref, projection_bindings);
+            let vtable_ty =
+                synthesize_dynamic_vtable_ty(cx, principal, principal_ref, &ty.to_string());
             Ty::Dynamic {
                 auto_traits,
                 vtable_ty,
@@ -150,7 +191,18 @@ fn translate_erased_ty<'tcx>(
         }
         TyKind::Closure(def_id, args) => {
             let item = intern_item(cx, *def_id, ItemKind::Struct, SpecialAdt::None);
-            Ty::Closure(item, translate_generic_args(cx, args)?)
+            let model_args = translate_generic_args(cx, args)?;
+            let closure_ty_id = cx.model.types.intern(Ty::Closure(item, model_args.clone()));
+            // Spec 13.1: the closure has two parallel `Ty` views
+            // sharing one `Item`. Intern the captures-struct view now
+            // and record the mapping so consumers can recover the
+            // layout-bearing struct from the closure type-identity.
+            let captures_struct_ty_id =
+                intern_closure_captures_struct_view(cx, ty, item, &model_args, args.as_closure())?;
+            cx.model
+                .closure_captures_struct_ty
+                .insert(closure_ty_id, captures_struct_ty_id);
+            return Ok(closure_ty_id);
         }
         TyKind::Foreign(_) => {
             return Err(BridgeError::Foreign {
@@ -388,23 +440,18 @@ fn translate_ptr_mutability(mutability: rustc_ast::Mutability) -> Mutability {
 }
 
 fn translate_abi(abi: rustc_abi::ExternAbi) -> Result<FnAbi, BridgeError> {
-    // Spec section 14.2 mandates that RustCall be rejected EXCEPT on
-    // rewritten synthesized closure-call shim items per section 13.1.
-    // The shim-substitution rewrite is owned by regseq-driver-37 and
-    // is currently pending re-execution; until it lands, closure-call
-    // MIR surfaces TyKind::FnPtr with RustCall ABI through this
-    // path. Accept here to keep MIR translation functional, while
-    // fnsig.rs::translate_abi remains strict (the load-bearing
-    // section-14 conformance check on the FnSig interner path).
-    // TODO(regseq-driver-37 re-execution): once the section 13.1
-    // closure-call shim rewrite substitutes every RustCall FnPtr with
-    // a Rust-ABI shim before this point is reached, drop RustCall
-    // from the accept arm to match fnsig.rs.
+    // Spec section 14.2: only `Rust` and `C { unwind: false }` are
+    // accepted. `RustCall` is rejected per the "RustCall does not
+    // appear in the IR" rule; closure-call methods are routed
+    // through the spec 13.1 closure-call shim rewrite which
+    // substitutes the rustc closure-trait method (RustCall) with
+    // the synth Rust-ABI ClosureCall callee BEFORE FnPtr
+    // translation runs.
     match abi {
-        rustc_abi::ExternAbi::Rust | rustc_abi::ExternAbi::RustCall => Ok(FnAbi::Rust),
+        rustc_abi::ExternAbi::Rust => Ok(FnAbi::Rust),
         rustc_abi::ExternAbi::C { unwind: false } => Ok(FnAbi::C),
-        _ => Err(BridgeError::UnsupportedTy {
-            ty_repr: format!("extern ABI {abi:?}"),
+        _ => Err(BridgeError::UnsupportedAbi {
+            abi_repr: format!("{abi:?}"),
         }),
     }
 }
@@ -484,19 +531,42 @@ fn translate_auto_traits<'tcx>(
     Ok(traits)
 }
 
-fn dynamic_has_principal_trait<'tcx>(
-    predicates: &'tcx rustc_middle::ty::List<
-        rustc_middle::ty::Binder<'tcx, rustc_middle::ty::ExistentialPredicate<'tcx>>,
-    >,
-    _rendered: &str,
-) -> bool {
-    predicates.principal().is_some()
-}
-
-fn synthesize_dynamic_vtable_ty(cx: &mut BridgeCtxt<'_>, rendered: &str) -> TyId {
-    let name = format!("vtable::{rendered}");
-    let item_id = synthesize_item(cx, &name, ItemKind::Struct);
-    let layout = placeholder_nominal_layout(cx);
+/// Synthesize the `Ty::Struct` view of the vtable type referenced by
+/// `Ty::Dynamic.vtable_ty` per spec.md sections 13.0 / 13.2. The
+/// returned struct's `Item` carries
+/// `SyntheticItemKind::VTableType { principal }` and its layout is
+/// built from `tcx.vtable_entries(principal_ref)`: one pointer-width
+/// slot per vtable entry. Caches by `PrincipalTraitKey` so repeated
+/// translations of the same dyn type share the same `Item` and
+/// `Ty::Struct`. NOTE: registration goes through `model.items`
+/// directly here (and is also routed through `pending_items` by the
+/// Phase-2 scan in `bridge::mod.rs::scan_ty_for_synthesis`); the
+/// `synthetic_kind` marker is what allows downstream consumers to
+/// recognise this as the canonical vtable Type Item.
+fn synthesize_dynamic_vtable_ty<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    principal: PrincipalTraitKey,
+    principal_ref: ty::ExistentialTraitRef<'tcx>,
+    rendered: &str,
+) -> TyId {
+    if let Some(existing) = cx.model.vtables.get(&principal).copied() {
+        if let Some(ty_id) =
+            cx.model
+                .types
+                .find_nominal(regseq_model::NominalKind::Struct, existing, &Vec::new())
+        {
+            return ty_id;
+        }
+        let layout = vtable_struct_layout(cx, principal_ref);
+        return cx.model.types.intern(Ty::Struct {
+            item: existing,
+            args: Vec::new(),
+            layout,
+        });
+    }
+    let item_id = synthesize_vtable_type_item(cx, principal.clone(), rendered);
+    cx.model.vtables.insert(principal, item_id);
+    let layout = vtable_struct_layout(cx, principal_ref);
     cx.model.types.intern(Ty::Struct {
         item: item_id,
         args: Vec::new(),
@@ -504,9 +574,14 @@ fn synthesize_dynamic_vtable_ty(cx: &mut BridgeCtxt<'_>, rendered: &str) -> TyId
     })
 }
 
-fn synthesize_item(cx: &mut BridgeCtxt<'_>, rendered: &str, kind: ItemKind) -> ItemId {
-    let rendered_id = cx.model.strings.intern(rendered);
-    let leaf_id = cx.model.strings.intern(rendered);
+fn synthesize_vtable_type_item(
+    cx: &mut BridgeCtxt<'_>,
+    principal: PrincipalTraitKey,
+    rendered: &str,
+) -> ItemId {
+    let name = format!("<vtable_ty for {rendered}>");
+    let rendered_id = cx.model.strings.intern(&name);
+    let leaf_id = cx.model.strings.intern(&name);
     let item = Item {
         def_path: DefPath {
             crate_id: cx.model.primary_crate,
@@ -516,7 +591,7 @@ fn synthesize_item(cx: &mut BridgeCtxt<'_>, rendered: &str, kind: ItemKind) -> I
             }],
             rendered: rendered_id,
         },
-        kind,
+        kind: ItemKind::Struct,
         span: Span::dummy(),
         linkage: Linkage::Default,
         link_section: None,
@@ -530,11 +605,127 @@ fn synthesize_item(cx: &mut BridgeCtxt<'_>, rendered: &str, kind: ItemKind) -> I
     let item_id = cx.model.items.push(item);
     cx.model.item_def_paths.push(DefPathHash {
         stable_crate_id: StableCrateId(0),
-        local_hash: item_id.as_u32() as u64,
+        local_hash: 0x71AB_1E00_0000_0000_u64.wrapping_add(item_id.as_u32() as u64),
     });
-    cx.model.item_synthetic_kinds.push(SyntheticItemKind::None);
+    cx.model
+        .item_synthetic_kinds
+        .push(SyntheticItemKind::VTableType { principal });
     cx.model.domain_attrs.item_attrs.push(Vec::new());
     item_id
+}
+
+fn vtable_struct_layout<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    principal_ref: ty::ExistentialTraitRef<'tcx>,
+) -> Layout {
+    let pointer_size = (cx.model.target.pointer_width / 8) as u64;
+    let pointer_align = pointer_size;
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let ptr_ty = cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut));
+    let empty_name = cx.model.strings.intern("");
+    let slot_count = vtable_entry_count(cx, principal_ref) as u64;
+    let fields = (0..slot_count)
+        .map(|idx| FieldLayout {
+            name: empty_name,
+            ty: ptr_ty,
+            offset: idx * pointer_size,
+        })
+        .collect::<Vec<_>>();
+    Layout {
+        size: slot_count * pointer_size,
+        align: pointer_align.max(1),
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields },
+    }
+}
+
+fn vtable_entry_count<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    principal_ref: ty::ExistentialTraitRef<'tcx>,
+) -> u32 {
+    // `tcx.vtable_entries(poly_trait_ref)` requires a fully-resolved
+    // trait ref (with a self type that actually implements the
+    // trait) and therefore cannot be called for the existential
+    // alone (no concrete impl is available at `Ty::Dynamic`
+    // translation time). Mirror rustc's internal `vtable_min_entries`
+    // approximation: 3 common slots (drop_in_place, size, align)
+    // plus the count of every method in the principal trait and its
+    // supertraits via `own_existential_vtable_entries`. This matches
+    // the same slot count rustc uses for `&dyn Trait` layout, which
+    // is the load-bearing requirement on the vtable-Struct layout.
+    use rustc_middle::ty::Upcast;
+    let tcx = cx.input.tcx;
+    let mut count = 3u32; // COMMON_VTABLE_ENTRIES: drop_in_place + size + align
+    let mut seen: std::collections::HashSet<DefId> = std::collections::HashSet::new();
+    let mut stack = vec![principal_ref.def_id];
+    seen.insert(principal_ref.def_id);
+    while let Some(def_id) = stack.pop() {
+        count += tcx.own_existential_vtable_entries(def_id).len() as u32;
+        let super_predicates = tcx.explicit_super_predicates_of(def_id).skip_binder();
+        for (clause, _) in super_predicates.iter() {
+            let predicate: ty::Predicate<'_> = (*clause).upcast(tcx);
+            if let ty::PredicateKind::Clause(ty::ClauseKind::Trait(data)) =
+                predicate.kind().skip_binder()
+            {
+                if seen.insert(data.def_id()) {
+                    stack.push(data.def_id());
+                }
+            }
+        }
+    }
+    count
+}
+
+fn intern_closure_captures_struct_view<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    closure_ty: ty::Ty<'tcx>,
+    item: ItemId,
+    model_args: &GenericArgs,
+    closure_args: ty::ClosureArgs<ty::TyCtxt<'tcx>>,
+) -> Result<TyId, BridgeError> {
+    let upvar_tys = closure_args
+        .upvar_tys()
+        .iter()
+        .map(|upvar| translate_ty(cx, upvar))
+        .collect::<Result<Vec<_>, _>>()?;
+    let rustc_layout = cx
+        .input
+        .tcx
+        .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(closure_ty))
+        .map_err(|_| BridgeError::Layout {
+            ty_repr: closure_ty.to_string(),
+        })?;
+    let empty = cx.model.strings.intern("");
+    let fields = upvar_tys
+        .iter()
+        .copied()
+        .enumerate()
+        .map(|(idx, ty)| FieldLayout {
+            name: empty,
+            ty,
+            offset: if idx < rustc_layout.fields.count() {
+                rustc_layout.fields.offset(idx).bytes()
+            } else {
+                0
+            },
+        })
+        .collect();
+    let layout = Layout {
+        size: rustc_layout.size.bytes(),
+        align: rustc_layout.align.abi.bytes(),
+        pack: None,
+        uninhabited: rustc_layout.uninhabited,
+        kind: LayoutKind::Struct { fields },
+    };
+    Ok(cx.model.types.intern(Ty::Struct {
+        item,
+        args: model_args.clone(),
+        layout,
+    }))
 }
 
 fn tuple_layout<'tcx>(
@@ -611,23 +802,6 @@ fn nominal_layout<'tcx>(
         uninhabited: rustc_layout.uninhabited,
         kind,
     })
-}
-
-fn placeholder_nominal_layout(cx: &mut BridgeCtxt<'_>) -> Layout {
-    let empty = cx.model.strings.intern("");
-    Layout {
-        size: 0,
-        align: 1,
-        pack: None,
-        uninhabited: false,
-        kind: LayoutKind::Struct {
-            fields: vec![FieldLayout {
-                name: empty,
-                ty: TyId::ZERO,
-                offset: 0,
-            }],
-        },
-    }
 }
 
 fn has_substantive_hrtb(rendered: &str) -> bool {

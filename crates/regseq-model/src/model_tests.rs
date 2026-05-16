@@ -175,6 +175,7 @@ fn root_struct_exposes_spec_field_set() {
         sig_c_abi_lowerings,
         instances,
         vtables,
+        closure_captures_struct_ty,
         domain_attrs,
     } = m;
 
@@ -193,6 +194,7 @@ fn root_struct_exposes_spec_field_set() {
     assert!(sig_c_abi_lowerings.is_empty());
     assert!(instances.is_empty());
     assert!(vtables.is_empty());
+    assert!(closure_captures_struct_ty.is_empty());
     assert_eq!(domain_attrs, crate::DomainAttrTables::default());
 }
 

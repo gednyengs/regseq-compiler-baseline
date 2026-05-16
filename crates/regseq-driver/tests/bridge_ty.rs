@@ -1,10 +1,12 @@
 #![feature(rustc_private)]
 
+extern crate rustc_abi;
 extern crate rustc_driver;
 extern crate rustc_hir;
 extern crate rustc_interface;
 extern crate rustc_middle;
 extern crate rustc_session;
+extern crate rustc_span;
 
 use std::path::{Path, PathBuf};
 use std::process::Command;
@@ -13,7 +15,10 @@ use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::ty::{erase_regions_or_reject, translate_ty};
 use regseq_driver::bridge::{BridgeCtxt, BridgeError, BridgeInput, DslRejectionKind};
-use regseq_model::{AutoTrait, FloatKind, IntKind, Mutability, Provenance, Ty, UintKind};
+use regseq_model::{
+    AutoTrait, FloatKind, IntKind, LayoutKind, Mutability, Provenance, SyntheticItemKind, Ty,
+    UintKind,
+};
 use rustc_hir::def::DefKind;
 use rustc_hir::def_id::{LocalDefId, LocalModDefId};
 use rustc_middle::mir::RETURN_PLACE;
@@ -581,5 +586,218 @@ pub fn coroutine_closure_holder() {
             translate_ty(cx, *bare_dynamic),
             Err(BridgeError::UnsupportedTy { .. })
         ));
+    });
+}
+
+#[test]
+fn rejects_tykind_error_when_it_surfaces_in_post_normalisation_input() {
+    // `TyKind::Error` is one of the section 15.1 non-rigid TyKinds.
+    // Post-monomorphization it should not appear, but if the bridge
+    // is handed an error type by a malformed input it must reject
+    // explicitly rather than silently translating it. We synthesise
+    // a TyKind::Error by emitting a real diagnostic to obtain an
+    // `ErrorGuaranteed`, then constructing `Ty::new_error` with it.
+    // We reset the diagnostic counter afterwards so the test
+    // harness does not surface the synthetic error as a real
+    // compile failure.
+    let source = r#"pub fn f(_: u32) {}"#;
+    with_bridge("bridge_ty_error_kind", source, |tcx, cx| {
+        let dcx = tcx.dcx();
+        let guar = dcx.err("synthetic TyKind::Error fixture for bridge rejection test");
+        let error_ty = RustcTy::new_error(tcx, guar);
+        let err = translate_ty(cx, error_ty).unwrap_err();
+        assert!(matches!(
+            err,
+            BridgeError::NonRigidTy {
+                kind: regseq_driver::bridge::NonRigidTyKind::Error,
+                ..
+            }
+        ));
+        // Reset the diagnostic state so the fixture does not surface
+        // as a real rustc error to the test harness.
+        dcx.reset_err_count();
+    });
+}
+
+#[test]
+fn closure_interns_both_ty_closure_and_parallel_ty_struct_view() {
+    // Spec section 13.1: every closure interns a `Ty::Closure(item,
+    // args)` plus a parallel `Ty::Struct { item, layout }` captures
+    // view sharing the same `ItemId`. The mapping is recorded on the
+    // model via `closure_captures_struct_ty`.
+    let source = r#"
+pub fn closure_holder() {
+    let captured = 7u32;
+    let other = 13u64;
+    let _c = move || (captured, other);
+}
+"#;
+    with_bridge("bridge_ty_closure_captures_view", source, |tcx, cx| {
+        let closure_def = tcx
+            .hir_body_owners()
+            .map(LocalDefId::to_def_id)
+            .find(|def_id| matches!(tcx.def_kind(*def_id), DefKind::Closure))
+            .expect("closure body should be present");
+        let closure_ty = tcx.type_of(closure_def).instantiate_identity();
+        let closure_id = translate_ty(cx, closure_ty).unwrap();
+
+        let Ty::Closure(closure_item, _) = cx.model.types.resolve(closure_id).clone() else {
+            panic!("closure should translate as Ty::Closure");
+        };
+        let captures_struct_id = *cx
+            .model
+            .closure_captures_struct_ty
+            .get(&closure_id)
+            .expect("closure_captures_struct_ty mapping should exist");
+        let Ty::Struct {
+            item: struct_item,
+            layout,
+            ..
+        } = cx.model.types.resolve(captures_struct_id).clone()
+        else {
+            panic!("captures view should be Ty::Struct");
+        };
+        assert_eq!(closure_item, struct_item, "two views share one ItemId");
+        let LayoutKind::Struct { fields } = layout.kind else {
+            panic!("captures struct layout should be Struct-kind");
+        };
+        assert_eq!(
+            fields.len(),
+            2,
+            "captures struct should have one field per upvar"
+        );
+        // The captured upvar field types match the closure body's
+        // upvar tys.
+        let rustc_upvars = if let rustc_middle::ty::TyKind::Closure(_, args) = closure_ty.kind() {
+            args.as_closure().upvar_tys().iter().collect::<Vec<_>>()
+        } else {
+            panic!("closure_ty should be a closure");
+        };
+        for (field, expected) in fields.iter().zip(rustc_upvars.iter()) {
+            let translated = translate_ty(cx, *expected).unwrap();
+            assert_eq!(
+                field.ty, translated,
+                "captures struct field type should match closure upvar"
+            );
+        }
+    });
+}
+
+#[test]
+fn dynamic_vtable_ty_resolves_to_vtable_type_backed_struct() {
+    // Spec section 13.2: `Ty::Dynamic.vtable_ty` must reference a
+    // real `Ty::Struct { item, layout, .. }` whose `Item` carries
+    // `SyntheticItemKind::VTableType { principal }`. The struct
+    // layout carries one pointer-width slot per vtable entry.
+    let source = r#"
+pub trait Device {
+    fn poll(&self) {}
+}
+
+pub fn dyn_holder(_: &dyn Device) {}
+"#;
+    with_bridge("bridge_ty_vtable_type_backed_struct", source, |tcx, cx| {
+        let dyn_ref = translate_ty(cx, param_ty(tcx, "dyn_holder", 0)).unwrap();
+        let Ty::Ref(dynamic_id, _) = cx.model.types.resolve(dyn_ref).clone() else {
+            panic!("dyn parameter should sit behind a reference");
+        };
+        let Ty::Dynamic { vtable_ty, .. } = cx.model.types.resolve(dynamic_id).clone() else {
+            panic!("dynamic should translate as Ty::Dynamic");
+        };
+        let Ty::Struct {
+            item: vtable_item,
+            layout,
+            ..
+        } = cx.model.types.resolve(vtable_ty).clone()
+        else {
+            panic!("vtable_ty should be Ty::Struct");
+        };
+        match &cx.model.item_synthetic_kinds[vtable_item] {
+            SyntheticItemKind::VTableType { .. } => {}
+            other => panic!("vtable item should be SyntheticItemKind::VTableType, got {other:?}"),
+        }
+        let LayoutKind::Struct { fields } = layout.kind else {
+            panic!("vtable struct layout should be Struct-kind");
+        };
+        // Common slots (drop, size, align) + poll method = 4 slots.
+        assert!(
+            fields.len() >= 4,
+            "vtable should expose drop/size/align + per-method slots, got {} fields",
+            fields.len()
+        );
+        // All slots are pointer-width.
+        let pointer_size = cx.model.target.pointer_width as u64 / 8;
+        assert_eq!(layout.size, fields.len() as u64 * pointer_size);
+    });
+}
+
+#[test]
+fn fn_ptr_with_rust_call_abi_is_rejected_at_fnsig_interner_path() {
+    // Spec section 14.2: `RustCall` is rejected. The closure-call
+    // shim rewrite (section 13.1) un-tuples the trailing args slot
+    // and remaps the ABI to `FnAbi::Rust` BEFORE the
+    // section-14.2 abi check; a RustCall FnPtr whose shape does
+    // not match the closure-call shim (no tupled trailing slot)
+    // falls through to the strict `translate_abi` rejection. The
+    // FnSig interner path mirrors this: any RustCall FnSig that
+    // was not pre-substituted must be rejected with
+    // `BridgeError::UnsupportedAbi`. We exercise both paths.
+    use regseq_driver::bridge::fnsig::translate_fn_sig;
+    use regseq_driver::bridge::ty::translate_ty;
+    let source = r#"pub fn dummy() {}"#;
+    with_bridge("bridge_ty_rust_call_rejected", source, |tcx, cx| {
+        let unit = tcx.types.unit;
+        // FnSig interner path: RustCall rejected outright.
+        let fn_sig = ty::Binder::dummy(tcx.mk_fn_sig(
+            [unit],
+            unit,
+            false,
+            rustc_hir::Safety::Safe,
+            rustc_abi::ExternAbi::RustCall,
+        ));
+        let err = translate_fn_sig(cx, fn_sig).unwrap_err();
+        assert!(matches!(err, BridgeError::UnsupportedAbi { .. }));
+
+        // FnPtr translation path: a RustCall FnPtr whose last input
+        // is NOT a tuple (i.e., outside the closure-call shim
+        // shape) is rejected via `translate_abi`.
+        let non_tuple_rust_call_sig = ty::Binder::dummy(tcx.mk_fn_sig(
+            [tcx.types.u32],
+            tcx.types.u32,
+            false,
+            rustc_hir::Safety::Safe,
+            rustc_abi::ExternAbi::RustCall,
+        ));
+        let non_tuple_fn_ptr = RustcTy::new_fn_ptr(tcx, non_tuple_rust_call_sig);
+        let err = translate_ty(cx, non_tuple_fn_ptr).unwrap_err();
+        assert!(matches!(err, BridgeError::UnsupportedAbi { .. }));
+
+        // FnPtr translation path: a RustCall FnPtr with a tupled
+        // trailing slot (the closure-call shim shape) is normalised
+        // to FnAbi::Rust per spec section 13.1 and translates
+        // successfully; it is NOT rejected because the rewrite has
+        // already substituted away the RustCall.
+        let tuple_input = tcx.mk_ty_from_kind(rustc_middle::ty::TyKind::Tuple(
+            tcx.mk_type_list(&[tcx.types.u32, tcx.types.bool]),
+        ));
+        let tuple_rust_call_sig = ty::Binder::dummy(tcx.mk_fn_sig(
+            [tuple_input],
+            tcx.types.u32,
+            false,
+            rustc_hir::Safety::Safe,
+            rustc_abi::ExternAbi::RustCall,
+        ));
+        let tuple_fn_ptr = RustcTy::new_fn_ptr(tcx, tuple_rust_call_sig);
+        let translated = translate_ty(cx, tuple_fn_ptr).unwrap();
+        let Ty::FnPtr(sig_id) = cx.model.types.resolve(translated).clone() else {
+            panic!("RustCall FnPtr with tupled trailing slot should remain Ty::FnPtr");
+        };
+        let sig = cx.model.sigs.resolve(sig_id);
+        assert_eq!(sig.abi, regseq_model::FnAbi::Rust);
+        assert_eq!(
+            sig.inputs.len(),
+            2,
+            "trailing tuple slot should be un-tupled"
+        );
     });
 }

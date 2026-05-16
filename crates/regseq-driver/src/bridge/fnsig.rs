@@ -208,9 +208,7 @@ impl<'a, 'tcx> CAbiChecker<'a, 'tcx> {
         }
         let admissible = match self.cx.model.types.resolve(ty_id).clone() {
             Ty::Bool | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) => Ok(()),
-            Ty::Ptr(pointee, _) | Ty::Ref(pointee, _)
-                if !self.is_c_field_bad_pointee(pointee) =>
-            {
+            Ty::Ptr(pointee, _) | Ty::Ref(pointee, _) if !self.is_c_field_bad_pointee(pointee) => {
                 Ok(())
             }
             Ty::FnPtr(sig_id) => {

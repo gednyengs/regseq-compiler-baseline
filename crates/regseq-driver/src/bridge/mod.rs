@@ -531,7 +531,7 @@ fn concrete_impl_ty<'tcx>(ty: rustc_middle::ty::Ty<'tcx>) -> rustc_middle::ty::T
     }
 }
 
-fn principal_trait_key<'tcx>(
+pub(crate) fn principal_trait_key<'tcx>(
     ctxt: &mut BridgeCtxt<'tcx>,
     principal: rustc_middle::ty::ExistentialTraitRef<'tcx>,
     projection_bindings: ProjectionBindingsKey,
@@ -567,7 +567,7 @@ fn dynamic_projection_bindings_key<'tcx>(
     }
 }
 
-fn projection_bindings_key<'tcx>(
+pub(crate) fn projection_bindings_key<'tcx>(
     ctxt: &mut BridgeCtxt<'tcx>,
     predicates: &'tcx rustc_middle::ty::List<
         rustc_middle::ty::Binder<'tcx, rustc_middle::ty::ExistentialPredicate<'tcx>>,

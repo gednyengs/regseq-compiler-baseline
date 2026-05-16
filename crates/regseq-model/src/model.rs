@@ -22,7 +22,6 @@ use crate::fn_sig_interner::FnSigInterner;
 use crate::ids::{
     BlockId, ConstId, CrateId, FnSigId, InstanceId, ItemId, SourceFileId, StringId, TyId,
 };
-use crate::terminator::{CallCallee, TerminatorKind};
 use crate::index_vec::IndexVec;
 use crate::instance::{
     regseq_instance_kind_rank, rustc_instance_kind_sort_rank, Instance, InstanceKind,
@@ -37,6 +36,7 @@ use crate::source::{SourceFile, Span};
 use crate::string_interner::StringInterner;
 use crate::synthetic::{PrincipalTraitKey, SyntheticItemKind};
 use crate::target::{default_scalar_layouts, Endian, SizeAlign, TargetInfo};
+use crate::terminator::{CallCallee, TerminatorKind};
 use crate::ty::{FloatKind, IntKind, Mutability, Ty, UintKind};
 use crate::ty_interner::{TyIdentityKey, TyInterner};
 
@@ -83,6 +83,17 @@ pub struct RegseqModel {
     /// Bridge-side vtable dedup table rebuilt after deserialization.
     #[serde(skip)]
     pub vtables: HashMap<PrincipalTraitKey, ItemId>,
+
+    /// Bridge-side mapping from a `Ty::Closure` TyId to the parallel
+    /// `Ty::Struct` captures-view TyId per spec.md section 13.1. Both
+    /// `Ty` entries share the same `ItemId`; this side table records
+    /// the dual view so consumers can recover the layout-bearing
+    /// captures struct from a closure type-identity reference.
+    /// Rebuilt after deserialization (the `Ty` entries themselves
+    /// suffice for round-tripping, so the map is recomputed lazily by
+    /// consumers).
+    #[serde(skip)]
+    pub closure_captures_struct_ty: HashMap<TyId, TyId>,
 
     /// Domain attribute sibling tables.
     pub domain_attrs: DomainAttrTables,
@@ -668,6 +679,7 @@ impl RegseqModel {
             sig_c_abi_lowerings: IndexVec::new(),
             instances: IndexVec::new(),
             vtables: HashMap::new(),
+            closure_captures_struct_ty: HashMap::new(),
             domain_attrs: DomainAttrTables::default(),
         }
     }
@@ -1294,7 +1306,7 @@ impl RegseqModel {
                 reason: "StringInterner table is empty; spec mandates StringId(0) sentinel",
             });
         }
-        if self.strings.resolve(StringId::from_u32(0)) != "" {
+        if !self.strings.resolve(StringId::from_u32(0)).is_empty() {
             return Err(InvariantViolation::StringInternerSentinelInvalid {
                 reason: "StringId(0) does not resolve to the empty string",
             });
@@ -1302,10 +1314,7 @@ impl RegseqModel {
         let mut seen: HashMap<&str, StringId> = HashMap::with_capacity(self.strings.len());
         for (id, value) in self.strings.iter() {
             if let Some(first) = seen.insert(value, id) {
-                return Err(InvariantViolation::DuplicateString {
-                    first,
-                    second: id,
-                });
+                return Err(InvariantViolation::DuplicateString { first, second: id });
             }
         }
         Ok(())

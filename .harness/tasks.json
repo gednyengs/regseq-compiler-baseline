@@ -964,7 +964,7 @@
           "id": "regseq-driver-37",
           "name": "P1a-BR-02: TyKind translation + special-ADT + \u00a715.1 rejections + Appendix A.1",
           "spec": ".harness/tasks/regseq-driver/37-tykind-translation-and-rejections.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-36",
             "regseq-model-66",
