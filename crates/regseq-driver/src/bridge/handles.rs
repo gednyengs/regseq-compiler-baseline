@@ -9,6 +9,10 @@ use regseq_model::ItemId;
 pub struct ItemHandle(u32);
 
 impl ItemHandle {
+    pub(crate) const fn from_u32(raw: u32) -> Self {
+        Self(raw)
+    }
+
     /// Returns the raw handle index for deterministic tests and diagnostics.
     pub const fn as_u32(self) -> u32 {
         self.0

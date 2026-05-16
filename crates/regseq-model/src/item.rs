@@ -594,6 +594,7 @@ mod tests {
             local_hash: 1,
         });
         model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
 
         assert_eq!(model.validate(&BridgeInput::matching(&model)), Ok(()));
     }

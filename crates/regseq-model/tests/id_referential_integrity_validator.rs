@@ -72,6 +72,7 @@ fn push_item(model: &mut RegseqModel, name: &str, kind: ItemKind, local_hash: u6
     let id = model.items.push(item);
     model.item_def_paths.push(hash(local_hash));
     model.item_synthetic_kinds.push(SyntheticItemKind::None);
+    model.domain_attrs.item_attrs.push(Vec::new());
     id
 }
 
@@ -117,6 +118,7 @@ fn push_item_with_data_in_crate(
     let id = model.items.push(item);
     model.item_def_paths.push(hash(local_hash));
     model.item_synthetic_kinds.push(SyntheticItemKind::None);
+    model.domain_attrs.item_attrs.push(Vec::new());
     id
 }
 
@@ -163,6 +165,7 @@ fn base_model() -> RegseqModel {
 
 fn add_function_instance(model: &mut RegseqModel, item: ItemId) {
     let sig = model.sigs.intern(sig());
+    model.sig_c_abi_lowerings.push(None);
     model.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -189,6 +192,7 @@ fn invariant_1_pass_full_closure() {
         c_variadic: false,
         safety: Safety::Safe,
     });
+    model.sig_c_abi_lowerings.push(None);
     model.instances.push(Instance {
         item,
         generic_args: vec![GenericArg::Type(TyId::ZERO), GenericArg::Const(c)],
@@ -237,6 +241,7 @@ fn invariant_6_reject_def_path_crate_id_out_of_bounds() {
     model.items.push(item);
     model.item_def_paths.push(hash(1));
     model.item_synthetic_kinds.push(SyntheticItemKind::None);
+    model.domain_attrs.item_attrs.push(Vec::new());
     assert!(matches!(
         validate(&mut model),
         Err(InvariantViolation::DefPathCrateIdOutOfBounds { crate_id, .. })
@@ -301,6 +306,7 @@ fn invariant_11_ty_interner_pass_and_reject_duplicate() {
 fn invariant_11_fn_sig_interner_pass_and_reject_duplicate() {
     let mut passing = base_model();
     passing.sigs.intern(sig());
+    passing.sig_c_abi_lowerings.push(None);
     assert_eq!(validate(&mut passing), Ok(()));
 
     let mut failing = base_model();
@@ -308,6 +314,8 @@ fn invariant_11_fn_sig_interner_pass_and_reject_duplicate() {
     storage.push(sig());
     storage.push(sig());
     failing.sigs = FnSigInterner::from_storage_unchecked_for_validation(storage);
+    failing.sig_c_abi_lowerings.push(None);
+    failing.sig_c_abi_lowerings.push(None);
     assert!(matches!(
         validate(&mut failing),
         Err(InvariantViolation::DuplicateInternerEntry { interner, first: 0, second: 1 })
@@ -398,6 +406,7 @@ fn f4_sort_pass_ties_admitted() {
     model.items.push(duplicate_key);
     model.item_def_paths.push(hash(2));
     model.item_synthetic_kinds.push(SyntheticItemKind::None);
+    model.domain_attrs.item_attrs.push(Vec::new());
     assert_eq!(validate(&mut model), Ok(()));
 }
 
@@ -406,6 +415,7 @@ fn f4_2_sort_reject() {
     let mut model = base_model();
     let item = push_item(&mut model, "driver", ItemKind::Function, 1);
     let sig = model.sigs.intern(sig());
+    model.sig_c_abi_lowerings.push(None);
     model.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -439,6 +449,7 @@ fn f4_2_sort_pass() {
     let mut model = base_model();
     let item = push_item(&mut model, "driver", ItemKind::Function, 1);
     let sig = model.sigs.intern(sig());
+    model.sig_c_abi_lowerings.push(None);
     model.instances.push(Instance {
         item,
         generic_args: vec![],
@@ -597,6 +608,14 @@ fn phase_c_vtables_rebuild_pass() {
     model.item_synthetic_kinds[second] = SyntheticItemKind::VTableType {
         principal: second_principal.clone(),
     };
+    model.item_def_paths[first] = DefPathHash {
+        stable_crate_id: StableCrateId(0),
+        local_hash: 1,
+    };
+    model.item_def_paths[second] = DefPathHash {
+        stable_crate_id: StableCrateId(0),
+        local_hash: 2,
+    };
     assert_eq!(validate(&mut model), Ok(()));
     assert_eq!(model.vtables.get(&first_principal), Some(&first));
     assert_eq!(model.vtables.get(&second_principal), Some(&second));
@@ -612,6 +631,14 @@ fn phase_c_vtables_rebuild_reject_duplicate_principal() {
         principal: principal.clone(),
     };
     model.item_synthetic_kinds[second] = SyntheticItemKind::VTableType { principal };
+    model.item_def_paths[first] = DefPathHash {
+        stable_crate_id: StableCrateId(0),
+        local_hash: 1,
+    };
+    model.item_def_paths[second] = DefPathHash {
+        stable_crate_id: StableCrateId(0),
+        local_hash: 2,
+    };
     assert!(matches!(
         validate(&mut model),
         Err(InvariantViolation::DuplicateVTablePrincipal { first: a, second: b, .. })

@@ -1201,7 +1201,7 @@
           "id": "regseq-driver-44",
           "name": "P1a-BR-08a: Diagnostic-logging recognition + attribute population",
           "spec": ".harness/tasks/regseq-driver/44-diag-logging-recognition.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-43",
             "regseq-model-74"
@@ -3066,7 +3066,7 @@
           "id": "regseq-model-85",
           "name": "P1a-VAL-03: Layout + invariants 14/19/20 + \u00a73.3 surfaces",
           "spec": ".harness/tasks/regseq-model/85-layout-and-section-3-3-validator.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-67",
             "regseq-model-71",

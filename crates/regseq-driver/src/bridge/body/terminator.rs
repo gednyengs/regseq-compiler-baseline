@@ -2,12 +2,14 @@
 
 use regseq_model::{
     AssertKind, BlockId, CallCallee, InstanceId, LocalId, Operand, Place, SwitchTargets,
-    Terminator, TerminatorKind,
+    Terminator, TerminatorKind, Ty,
 };
 use rustc_middle::mir;
 use rustc_middle::ty;
 
-use crate::bridge::{synth, ty::translate_ty, BridgeCtxt, BridgeError, DslRejectionKind};
+use crate::bridge::{
+    diag_log, synth, ty::translate_ty, BridgeCtxt, BridgeError, DslRejectionKind, ItemHandle,
+};
 
 use super::{
     operand::translate_operand, place::translate_place, rvalue::translate_bin_op,
@@ -133,6 +135,17 @@ fn translate_call_callee<'tcx>(
         .map(|local_decls| func.ty(local_decls, cx.input.tcx));
     if let mir::Operand::Constant(constant) = func {
         if let ty::TyKind::FnDef(def_id, _) = constant.const_.ty().kind() {
+            let model_ty = translate_ty(cx, constant.const_.ty())?;
+            let Ty::FnDef(callee_item, _) = cx.model.types.resolve(model_ty).clone() else {
+                return rejected_terminator(format!("unsupported call callee {func:?}"));
+            };
+            let callee_def_path = cx.model.items[callee_item].def_path.clone();
+            diag_log::recognise_log_intrinsic_def_id(
+                cx,
+                ItemHandle::from_u32(callee_item.as_u32()),
+                &callee_def_path,
+                *def_id,
+            )?;
             return Ok(CallCallee::Direct(instance_id_for_def_path(cx, *def_id)));
         }
     }
