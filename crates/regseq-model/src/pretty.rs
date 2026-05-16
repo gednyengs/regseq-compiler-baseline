@@ -38,11 +38,12 @@ use crate::args_key::{GenericArg, GenericArgs};
 use crate::basic_block::BasicBlock;
 use crate::body::Body;
 use crate::body_ty::{operand_ty, place_ty, TypeRecovery};
+use crate::const_value::Const;
 use crate::def_path::{render_def_path, DefPath};
 use crate::ids::{ConstId, InstanceId, ItemId, SourceFileId, TyId};
 use crate::instance::InstanceKind;
 use crate::item::{InlineHint, ItemKind, Linkage};
-use crate::layout::{EnumShape, LayoutKind};
+use crate::layout::{EnumShape, FieldLayout, LayoutKind};
 use crate::model::RegseqModel;
 use crate::operand::Operand;
 use crate::place::{Place, PlaceElem};
@@ -341,18 +342,276 @@ impl<'a> PrettyPrinter<'a> {
         format!("<{}>", parts.join(", "))
     }
 
-    /// Const rendering. Deferred to stage 14 because complete
-    /// rendering depends on const bodies, type rendering, def-path
-    /// rendering, and instance rendering.
+    /// Per-variant Const value renderer.
     ///
-    /// Signature is the locked pair-form `render_const(ConstId, TyId)`
-    /// per `pretty-printer.md` §8 ownership table (stage-14 D-14-4.9):
-    /// the consumer-context `TyId` flows from operand call sites
-    /// (`render_operand` Constant arm) so that type-context-dependent
-    /// Const arms (Bytes / Aggregate / ZST / NullPtr / Reloc) can
-    /// render correctly. P1a-PP-04a/b fills the body.
-    pub fn render_const(&self, _c: ConstId, _expected_ty: TyId) -> String {
-        unimplemented!("stage 14 fills render_const (deferred per D-4-K)")
+    /// Pair-form per `pretty-printer.md` §8 ownership table and
+    /// D-14-4.1 LOCKED: takes the consumer-context `TyId` at the use
+    /// site so type-context-dependent arms (`ZST` / aggregate / bytes
+    /// / null-pointer / reloc) can dispatch on `Ty.kind()`.
+    ///
+    /// Dispatch per `pretty-printer.md` §10.1:
+    /// - `Bool / Char / Int / Uint / Float` key on the variant tag
+    ///   and ignore the consumer Ty (§10.1.1).
+    /// - `ZST` keys on the consumer `Ty.kind()` and recurses on the
+    ///   same `ConstId` for composite cases (§10.1.2).
+    /// - `Aggregate / EnumValue / Bytes / NullPtr / Reloc` are owned
+    ///   by P1a-PP-04b (regseq-model-90) and stay `todo!()` until
+    ///   that task lands.
+    pub fn render_const(&self, id: ConstId, expected_ty: TyId) -> String {
+        match &self.model.consts[id] {
+            Const::Bool(value) => render_const_bool(*value),
+            Const::Char(code_point) => render_const_char(*code_point),
+            Const::Int(kind, bits) => self.render_const_int(*kind, *bits),
+            Const::Uint(kind, bits) => self.render_const_uint(*kind, *bits),
+            Const::Float(kind, bits) => render_const_float(*kind, *bits),
+            Const::ZST => self.render_const_zst(id, expected_ty),
+            Const::Aggregate(_) => {
+                todo!("render_const Aggregate arm lands with P1a-PP-04b (regseq-model-90)")
+            }
+            Const::EnumValue { .. } => {
+                todo!("render_const EnumValue arm lands with P1a-PP-04b (regseq-model-90)")
+            }
+            Const::Bytes(_) => {
+                todo!("render_const Bytes arm lands with P1a-PP-04b (regseq-model-90)")
+            }
+            Const::NullPtr(_) => {
+                todo!("render_const NullPtr arm lands with P1a-PP-04b (regseq-model-90)")
+            }
+            Const::Reloc(_) => {
+                todo!("render_const Reloc arm lands with P1a-PP-04b (regseq-model-90)")
+            }
+        }
+    }
+
+    /// `Int` per-arm rendering per §10.1.1.
+    ///
+    /// Applies D-14-4.10 sentinel collapsing first; falls back to the
+    /// underscore-decimal form. `Isize` uses the target-pointer-width
+    /// column of `target.scalar_layouts.int[Isize]` to size the
+    /// sentinel comparison, but always renders symbolically (no
+    /// per-target decimal substitution).
+    fn render_const_int(&self, kind: IntKind, bits: u128) -> String {
+        let width = self.int_width_bits(kind);
+        let decoded = decode_int(width, bits);
+        if let Some(sentinel) = int_sentinel_label(kind, width, decoded) {
+            return sentinel.to_owned();
+        }
+        format!("{decoded}_{}", int_kind_name(kind))
+    }
+
+    /// `Uint` per-arm rendering per §10.1.1.
+    ///
+    /// Per D-14-4.10 sentinel-collapsing: only `MAX` collapses (no
+    /// unsigned MIN collapsing). `Usize` follows the same
+    /// target-pointer-width sourcing rule as `Isize`.
+    fn render_const_uint(&self, kind: UintKind, bits: u128) -> String {
+        let width = self.uint_width_bits(kind);
+        let decoded = decode_uint(width, bits);
+        if decoded == uint_max(width) {
+            return format!("{}::MAX", uint_kind_name(kind));
+        }
+        format!("{decoded}_{}", uint_kind_name(kind))
+    }
+
+    /// Pointer-width-sized `Int` / `Uint` width selector.
+    ///
+    /// Reads `target.scalar_layouts.int[Isize].size` (and the parallel
+    /// `uint[Usize].size`) per `spec.md` §11 `ScalarLayouts`; falls
+    /// back to the target's `pointer_width` if the ABI table has the
+    /// zero default. The rendered form remains symbolic (`isize::MAX`
+    /// / `usize::MAX`) regardless of the resolved width.
+    fn int_width_bits(&self, kind: IntKind) -> u32 {
+        match kind {
+            IntKind::I8 => 8,
+            IntKind::I16 => 16,
+            IntKind::I32 => 32,
+            IntKind::I64 => 64,
+            IntKind::I128 => 128,
+            IntKind::Isize => self.isize_width_bits(),
+        }
+    }
+
+    fn uint_width_bits(&self, kind: UintKind) -> u32 {
+        match kind {
+            UintKind::U8 => 8,
+            UintKind::U16 => 16,
+            UintKind::U32 => 32,
+            UintKind::U64 => 64,
+            UintKind::U128 => 128,
+            UintKind::Usize => self.usize_width_bits(),
+        }
+    }
+
+    fn isize_width_bits(&self) -> u32 {
+        let size = self.model.target.scalar_layouts.int[IntKind::Isize as usize].size;
+        self.scalar_size_to_width_bits(size)
+    }
+
+    fn usize_width_bits(&self) -> u32 {
+        let size = self.model.target.scalar_layouts.uint[UintKind::Usize as usize].size;
+        self.scalar_size_to_width_bits(size)
+    }
+
+    fn scalar_size_to_width_bits(&self, size: u64) -> u32 {
+        if size == 0 {
+            u32::from(self.model.target.pointer_width)
+        } else {
+            (size as u32) * 8
+        }
+    }
+
+    /// `ZST` per-Ty.kind() dispatch per §10.1.2.
+    ///
+    /// Recurses on the same `ConstId` for composite-ZST cases so the
+    /// canonical-form rule (§9.7) is preserved at the storage level
+    /// even when the rendered form expands per sub-field Ty.
+    fn render_const_zst(&self, id: ConstId, expected_ty: TyId) -> String {
+        match self.model.types.resolve(expected_ty) {
+            Ty::Tuple { fields, .. } => self.render_zst_tuple(id, fields),
+            Ty::Array(elem, n) => self.render_zst_array(id, *elem, *n),
+            Ty::Struct { item, args, layout } => self.render_zst_struct(id, *item, args, layout),
+            Ty::Enum { item, args, layout } => self.render_zst_enum(id, *item, args, layout),
+            Ty::Union { item, args, .. } => self.render_value_namespace_path(*item, args),
+            Ty::FnDef(item, args) => self.render_value_namespace_path(*item, args),
+            Ty::Closure(item, args) => self.render_value_namespace_path(*item, args),
+            other => panic!(
+                "render_const: Const::ZST consumed by non-ZST Ty.kind() {:?}; the bridge \
+                 produces a non-ZST Const variant for non-ZST consumer types per \
+                 spec.md §9.7",
+                other
+            ),
+        }
+    }
+
+    fn render_zst_tuple(&self, id: ConstId, fields: &[TyId]) -> String {
+        match fields {
+            [] => "()".to_owned(),
+            [only] => format!("({},)", self.render_const(id, *only)),
+            many => {
+                let parts: Vec<String> = many.iter().map(|t| self.render_const(id, *t)).collect();
+                format!("({})", parts.join(", "))
+            }
+        }
+    }
+
+    fn render_zst_array(&self, id: ConstId, elem: TyId, n: u64) -> String {
+        if n == 0 {
+            "[]".to_owned()
+        } else {
+            format!("[{}; {}]", self.render_const(id, elem), n)
+        }
+    }
+
+    fn render_zst_struct(
+        &self,
+        id: ConstId,
+        item: ItemId,
+        args: &GenericArgs,
+        layout: &crate::layout::Layout,
+    ) -> String {
+        let fields = match &layout.kind {
+            LayoutKind::Struct { fields } => fields,
+            _ => panic!(
+                "render_const: Ty::Struct ZST consumer carries non-Struct layout kind \
+                 (item {}); validation rejects this shape per spec.md §11",
+                item.as_u32()
+            ),
+        };
+        let head = self.render_value_namespace_path(item, args);
+        if fields.is_empty() {
+            return head;
+        }
+        let body = self.render_zst_aggregate_fields(id, fields);
+        format!("{head}{body}")
+    }
+
+    fn render_zst_enum(
+        &self,
+        id: ConstId,
+        item: ItemId,
+        args: &GenericArgs,
+        layout: &crate::layout::Layout,
+    ) -> String {
+        let shape = match &layout.kind {
+            LayoutKind::Enum { shape } => shape,
+            _ => panic!(
+                "render_const: Ty::Enum ZST consumer carries non-Enum layout kind \
+                 (item {}); validation rejects this shape per spec.md §11",
+                item.as_u32()
+            ),
+        };
+        let variant = match shape {
+            EnumShape::Single { variant, .. } => variant,
+            EnumShape::Multiple { .. } => panic!(
+                "render_const: Const::ZST cannot be consumed by a multi-variant Ty::Enum \
+                 (item {}); a multi-variant enum carries a discriminant tag of nonzero \
+                 size and cannot be ZST",
+                item.as_u32()
+            ),
+            EnumShape::Empty => panic!(
+                "render_const: Const::ZST cannot be consumed by a zero-variant Ty::Enum \
+                 (item {}); an empty enum has no inhabitants",
+                item.as_u32()
+            ),
+        };
+        let enum_path = self.render_value_namespace_path(item, args);
+        let variant_name = self.model.strings.resolve(variant.name).to_owned();
+        if variant.fields.is_empty() {
+            return format!("{enum_path}::{variant_name}");
+        }
+        let body = self.render_zst_aggregate_fields(id, &variant.fields);
+        format!("{enum_path}::{variant_name}{body}")
+    }
+
+    /// Emits the parenthesized tuple-style or brace-wrapped named-style
+    /// body for a struct or enum variant whose fields are all ZST,
+    /// recursing on the same `ConstId` per §10.1.2.
+    fn render_zst_aggregate_fields(&self, id: ConstId, fields: &[FieldLayout]) -> String {
+        if self.fields_are_tuple_synthetic(fields) {
+            let parts: Vec<String> = fields.iter().map(|f| self.render_const(id, f.ty)).collect();
+            format!("({})", parts.join(", "))
+        } else {
+            let parts: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let name = self.model.strings.resolve(f.name);
+                    format!("{name}: {}", self.render_const(id, f.ty))
+                })
+                .collect();
+            format!(" {{ {} }}", parts.join(", "))
+        }
+    }
+
+    /// §3.4 tuple-vs-named dispatch test for ZST aggregate-field
+    /// rendering: returns `true` when every field name matches the
+    /// synthetic pattern `_<index>` (`_0`, `_1`, ...). Empty fields
+    /// signal unit-style and are handled by the caller; this helper
+    /// is only invoked when `!fields.is_empty()`.
+    fn fields_are_tuple_synthetic(&self, fields: &[FieldLayout]) -> bool {
+        if fields.is_empty() {
+            return false;
+        }
+        for (i, field) in fields.iter().enumerate() {
+            let name = self.model.strings.resolve(field.name);
+            if name != format!("_{i}") {
+                return false;
+            }
+        }
+        true
+    }
+
+    /// Renders a value-namespace path `<def_path>::<args>` per the
+    /// rustc-mirrored convention for value-level FnDef / generic-
+    /// bearing ADT / Closure rendering (Specimens 89, 93). When
+    /// `args.is_empty()`, emits just the def-path (Specimen 88).
+    fn render_value_namespace_path(&self, item: ItemId, args: &GenericArgs) -> String {
+        let path = self.render_def_path(item);
+        if args.is_empty() {
+            path
+        } else {
+            let args_text = self.render_generic_args(args, item);
+            format!("{path}::{args_text}")
+        }
     }
 
     /// Item-keyed `DefPath` rendering. Resolves the eager
@@ -1447,6 +1706,243 @@ fn un_op_glyph(op: &UnOp) -> &'static str {
         UnOp::Not => "!",
         UnOp::Neg => "-",
         UnOp::PtrMetadata => "PtrMetadata",
+    }
+}
+
+/// Renders a `Const::Bool` per §10.1.1 (no suffix).
+fn render_const_bool(value: bool) -> String {
+    if value { "true" } else { "false" }.to_owned()
+}
+
+/// Renders a `Const::Char` per §10.1.1: the `u32` payload is
+/// reconstructed into a `char` (bridge has validated validity per
+/// `spec.md` §9.7) and emitted via the Rust `char::Debug` form.
+fn render_const_char(code_point: u32) -> String {
+    let ch = char::from_u32(code_point).unwrap_or_else(|| {
+        panic!(
+            "render_const: Const::Char({code_point}) is not a valid Unicode scalar; \
+             the bridge must reject invalid code points per spec.md §9.7"
+        )
+    });
+    format!("{ch:?}")
+}
+
+/// Returns the type-name suffix used by the underscore-decimal form
+/// of `Int` (e.g., `i32` in `42_i32`).
+fn int_kind_name(kind: IntKind) -> &'static str {
+    match kind {
+        IntKind::I8 => "i8",
+        IntKind::I16 => "i16",
+        IntKind::I32 => "i32",
+        IntKind::I64 => "i64",
+        IntKind::I128 => "i128",
+        IntKind::Isize => "isize",
+    }
+}
+
+/// Returns the type-name suffix used by the underscore-decimal form
+/// of `Uint` (e.g., `u8` in `255_u8`).
+fn uint_kind_name(kind: UintKind) -> &'static str {
+    match kind {
+        UintKind::U8 => "u8",
+        UintKind::U16 => "u16",
+        UintKind::U32 => "u32",
+        UintKind::U64 => "u64",
+        UintKind::U128 => "u128",
+        UintKind::Usize => "usize",
+    }
+}
+
+/// Re-interprets the low `width` bits of `bits` as a signed two's-
+/// complement integer per `pretty-printer.md:2764-2772`.
+///
+/// For `width < 128`, sign-extends from the width's MSB. For
+/// `width == 128`, `bits as i128` is the identity decoding.
+fn decode_int(width: u32, bits: u128) -> i128 {
+    debug_assert!(width > 0 && width <= 128);
+    if width == 128 {
+        bits as i128
+    } else {
+        let shift = 128 - width;
+        ((bits as i128) << shift) >> shift
+    }
+}
+
+/// Masks `bits` to the low `width` bits per the unsigned decoding
+/// rule at `pretty-printer.md:2773-2776`.
+fn decode_uint(width: u32, bits: u128) -> u128 {
+    debug_assert!(width > 0 && width <= 128);
+    if width == 128 {
+        bits
+    } else {
+        bits & ((1u128 << width) - 1)
+    }
+}
+
+/// Computes the canonical `Uint` MAX value at `width` bits.
+fn uint_max(width: u32) -> u128 {
+    debug_assert!(width > 0 && width <= 128);
+    if width == 128 {
+        u128::MAX
+    } else {
+        (1u128 << width) - 1
+    }
+}
+
+/// Computes the canonical `Int` MIN value at `width` bits.
+fn int_min(width: u32) -> i128 {
+    debug_assert!(width > 0 && width <= 128);
+    if width == 128 {
+        i128::MIN
+    } else {
+        -(1i128 << (width - 1))
+    }
+}
+
+/// Computes the canonical `Int` MAX value at `width` bits.
+fn int_max(width: u32) -> i128 {
+    debug_assert!(width > 0 && width <= 128);
+    if width == 128 {
+        i128::MAX
+    } else {
+        (1i128 << (width - 1)) - 1
+    }
+}
+
+/// D-14-4.10 sentinel-collapsing test for `Int`. Returns the
+/// symbolic label (`i32::MIN`, `i32::MAX`, ...) when `decoded`
+/// equals the `width`-bound MIN or MAX, else `None`.
+fn int_sentinel_label(kind: IntKind, width: u32, decoded: i128) -> Option<&'static str> {
+    if decoded == int_min(width) {
+        Some(match kind {
+            IntKind::I8 => "i8::MIN",
+            IntKind::I16 => "i16::MIN",
+            IntKind::I32 => "i32::MIN",
+            IntKind::I64 => "i64::MIN",
+            IntKind::I128 => "i128::MIN",
+            IntKind::Isize => "isize::MIN",
+        })
+    } else if decoded == int_max(width) {
+        Some(match kind {
+            IntKind::I8 => "i8::MAX",
+            IntKind::I16 => "i16::MAX",
+            IntKind::I32 => "i32::MAX",
+            IntKind::I64 => "i64::MAX",
+            IntKind::I128 => "i128::MAX",
+            IntKind::Isize => "isize::MAX",
+        })
+    } else {
+        None
+    }
+}
+
+/// Renders a `Const::Float` per §10.1.1 plus the D-14-4.12 non-finite
+/// handling rule.
+///
+/// Reconstitutes the IEEE-754 value at the variant's `FloatKind`
+/// width, classifies it (finite / +inf / -inf / NaN), and emits the
+/// rustc-mirrored form. NaN bit-pattern variations collapse to the
+/// single `NaN_f<width>` form.
+fn render_const_float(kind: FloatKind, bits: u128) -> String {
+    let label = float_kind_label(kind);
+    match classify_float(kind, bits) {
+        FloatClass::PositiveInfinity => format!("inf_{label}"),
+        FloatClass::NegativeInfinity => format!("-inf_{label}"),
+        FloatClass::NaN => format!("NaN_{label}"),
+        FloatClass::Finite => render_finite_float(kind, bits, label),
+    }
+}
+
+/// Float classification per D-14-4.12.
+///
+/// Inspects the IEEE-754 exponent / mantissa bit fields directly
+/// (rather than relying on a native Rust type) so F16 and F128 are
+/// classified faithfully even though the Rust language pin has no
+/// stable native types for them.
+enum FloatClass {
+    Finite,
+    PositiveInfinity,
+    NegativeInfinity,
+    NaN,
+}
+
+fn classify_float(kind: FloatKind, bits: u128) -> FloatClass {
+    let (mantissa_bits, exponent_bits) = float_layout(kind);
+    let total = mantissa_bits + exponent_bits + 1;
+    let bits_mask = if total == 128 {
+        u128::MAX
+    } else {
+        (1u128 << total) - 1
+    };
+    let bits = bits & bits_mask;
+    let exp_mask: u128 = (1u128 << exponent_bits) - 1;
+    let mantissa_mask: u128 = (1u128 << mantissa_bits) - 1;
+    let sign = (bits >> (mantissa_bits + exponent_bits)) & 1;
+    let exp = (bits >> mantissa_bits) & exp_mask;
+    let mantissa = bits & mantissa_mask;
+    if exp == exp_mask {
+        if mantissa == 0 {
+            if sign == 0 {
+                FloatClass::PositiveInfinity
+            } else {
+                FloatClass::NegativeInfinity
+            }
+        } else {
+            FloatClass::NaN
+        }
+    } else {
+        FloatClass::Finite
+    }
+}
+
+fn float_layout(kind: FloatKind) -> (u32, u32) {
+    // (mantissa bits, exponent bits)
+    match kind {
+        FloatKind::F16 => (10, 5),
+        FloatKind::F32 => (23, 8),
+        FloatKind::F64 => (52, 11),
+        FloatKind::F128 => (112, 15),
+    }
+}
+
+fn float_kind_label(kind: FloatKind) -> &'static str {
+    match kind {
+        FloatKind::F16 => "f16",
+        FloatKind::F32 => "f32",
+        FloatKind::F64 => "f64",
+        FloatKind::F128 => "f128",
+    }
+}
+
+/// Renders a finite IEEE-754 value at `kind` width per
+/// `pretty-printer.md` §10.1.1's "shortest round-trippable decimal"
+/// rule.
+///
+/// F32 and F64 use native Rust types -- their `Display` already
+/// produces the shortest round-trippable decimal. F16 and F128 use
+/// `rustc_apfloat`'s `Half` and `Quad` types, mirroring rustc's MIR
+/// pretty-printer at `rustc_middle/src/ty/print/pretty.rs:1788-1803`,
+/// which is the canonical source for the shortest-round-trippable
+/// rule the spec inherits.
+///
+/// Integer-valued finite floats render without a fractional part
+/// (`1f32`, `0f64`, `-0f32`, `42f64`); non-integer finite floats
+/// render with one (`1.5f32`, `3.14f64`). Negative zero is finite
+/// and renders as `-0f<w>`. Both the native types and apfloat
+/// observe this convention.
+fn render_finite_float(kind: FloatKind, bits: u128, label: &str) -> String {
+    use rustc_apfloat::Float as ApFloat;
+    match kind {
+        FloatKind::F32 => format!("{}{label}", f32::from_bits(bits as u32)),
+        FloatKind::F64 => format!("{}{label}", f64::from_bits(bits as u64)),
+        FloatKind::F16 => {
+            let val = rustc_apfloat::ieee::Half::from_bits(bits);
+            format!("{val}{label}")
+        }
+        FloatKind::F128 => {
+            let val = rustc_apfloat::ieee::Quad::from_bits(bits);
+            format!("{val}{label}")
+        }
     }
 }
 

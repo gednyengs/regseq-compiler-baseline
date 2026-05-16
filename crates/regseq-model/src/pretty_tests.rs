@@ -8,7 +8,7 @@
 //! event picked up by the test suite.
 
 use crate::{
-    render_def_path, ConstId, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, InstanceId,
+    render_def_path, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, InstanceId,
     RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId,
 };
 
@@ -180,15 +180,6 @@ fn render_def_path_value_handles_primary_crate_paths() {
 fn render_top_level_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render();
-}
-
-#[test]
-#[should_panic(expected = "stage 14 fills render_const")]
-fn render_const_is_unimplemented_at_stage_one() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    // Pair-form signature per stage-14 D-14-4.9; the `TyId` argument
-    // is ignored by the stub body but required at the call site.
-    let _ = m.pretty().render_const(ConstId::ZERO, crate::TyId::ZERO);
 }
 
 #[test]
@@ -1018,13 +1009,13 @@ fn render_operand_move_renders_move_prefix() {
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_operand_constant_threads_expected_ty_into_render_const() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let const_id = m.consts.intern(crate::Const::Uint(UintKind::U32, 42));
     let body = Body::default();
-    let op = Operand::Constant(crate::ConstId::ZERO);
-    let _ = m.pretty().render_operand(&op, &body, u32_ty);
+    let op = Operand::Constant(const_id);
+    assert_eq!(m.pretty().render_operand(&op, &body, u32_ty), "42_u32");
 }
 
 // ----- render_rvalue -----------------------------------------------
@@ -2316,4 +2307,755 @@ fn render_terminator_include_spans_suppresses_synthesized_span() {
     };
     let rendered = PrettyPrinter::with_options(&m, opts).render_terminator(&term, &body);
     assert_eq!(rendered, "return -> []");
+}
+
+// ------------------------------------------------------------------
+// render_const: P1a-PP-04a per-arm dispatch (scalar / ZST).
+//
+// Spec coverage:
+// - §10.1.1 Bool / Char / Int / Uint / Float scalar dispatch.
+// - D-14-4.10 sentinel collapsing for Int / Uint widths.
+// - D-14-4.12 non-finite Float classification + single-form NaN.
+// - §10.1.2 ZST per-Ty.kind() dispatch and composite recursion.
+// ------------------------------------------------------------------
+
+use crate::const_value::Const;
+use crate::layout::{TagEncoding, TagScalar, WrappingRange};
+use crate::target::default_scalar_layouts;
+use crate::UNIT_LAYOUT;
+
+// ----- Bool ---------------------------------------------------------
+
+#[test]
+fn render_const_bool_true_renders_without_suffix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let id = m.consts.intern(Const::Bool(true));
+    assert_eq!(m.pretty().render_const(id, bool_ty), "true");
+}
+
+#[test]
+fn render_const_bool_false_renders_without_suffix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let id = m.consts.intern(Const::Bool(false));
+    assert_eq!(m.pretty().render_const(id, bool_ty), "false");
+}
+
+// ----- Char ---------------------------------------------------------
+
+#[test]
+fn render_const_char_ascii_printable_renders_via_debug() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let char_ty = m.types.intern(Ty::Char);
+    let id = m.consts.intern(Const::Char(0x61));
+    assert_eq!(m.pretty().render_const(id, char_ty), "'a'");
+}
+
+#[test]
+fn render_const_char_escape_renders_via_debug() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let char_ty = m.types.intern(Ty::Char);
+    let id = m.consts.intern(Const::Char(0x0A));
+    assert_eq!(m.pretty().render_const(id, char_ty), "'\\n'");
+}
+
+#[test]
+fn render_const_char_non_ascii_renders_unicode_escape() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let char_ty = m.types.intern(Ty::Char);
+    // U+1F600 -- 😀 -- standard Rust char Debug emits the literal,
+    // not the `\u{...}` escape, because it's printable. Pick a
+    // control point that is not printable to exercise the escape
+    // form. U+007F (DEL) renders as '\u{7f}' per char::Debug.
+    let id = m.consts.intern(Const::Char(0x7F));
+    assert_eq!(m.pretty().render_const(id, char_ty), "'\\u{7f}'");
+}
+
+// ----- Int -- decimal form -----------------------------------------
+
+#[test]
+fn render_const_int_i32_non_sentinel_renders_underscore_decimal() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m.consts.intern(Const::Int(IntKind::I32, 42));
+    assert_eq!(m.pretty().render_const(id, ty), "42_i32");
+}
+
+#[test]
+fn render_const_int_i8_sign_extended_negative_renders_decimal() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I8));
+    // (-1_i8 as i128) as u128 -- sign-extended storage per spec §9.7.
+    let id = m
+        .consts
+        .intern(Const::Int(IntKind::I8, (-1_i8 as i128) as u128));
+    assert_eq!(m.pretty().render_const(id, ty), "-1_i8");
+}
+
+#[test]
+fn render_const_int_each_kind_renders_with_kind_suffix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i8_ty = m.types.intern(Ty::Int(IntKind::I8));
+    let i16_ty = m.types.intern(Ty::Int(IntKind::I16));
+    let i64_ty = m.types.intern(Ty::Int(IntKind::I64));
+    let i128_ty = m.types.intern(Ty::Int(IntKind::I128));
+    let isize_ty = m.types.intern(Ty::Int(IntKind::Isize));
+    let i8 = m.consts.intern(Const::Int(IntKind::I8, 7));
+    let i16 = m.consts.intern(Const::Int(IntKind::I16, 1000));
+    let i64 = m.consts.intern(Const::Int(IntKind::I64, 999999));
+    let i128 = m.consts.intern(Const::Int(IntKind::I128, 1));
+    let isize = m.consts.intern(Const::Int(IntKind::Isize, 16));
+    let p = m.pretty();
+    assert_eq!(p.render_const(i8, i8_ty), "7_i8");
+    assert_eq!(p.render_const(i16, i16_ty), "1000_i16");
+    assert_eq!(p.render_const(i64, i64_ty), "999999_i64");
+    assert_eq!(p.render_const(i128, i128_ty), "1_i128");
+    assert_eq!(p.render_const(isize, isize_ty), "16_isize");
+}
+
+// ----- Int / Uint -- D-14-4.10 sentinel collapsing -----------------
+
+#[test]
+fn render_const_int_i32_max_collapses_to_sentinel_no_suffix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m
+        .consts
+        .intern(Const::Int(IntKind::I32, i32::MAX as i128 as u128));
+    assert_eq!(m.pretty().render_const(id, ty), "i32::MAX");
+}
+
+#[test]
+fn render_const_int_i32_min_collapses_to_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m
+        .consts
+        .intern(Const::Int(IntKind::I32, i32::MIN as i128 as u128));
+    assert_eq!(m.pretty().render_const(id, ty), "i32::MIN");
+}
+
+#[test]
+fn render_const_int_i8_min_max_collapse_to_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I8));
+    let min = m
+        .consts
+        .intern(Const::Int(IntKind::I8, i8::MIN as i128 as u128));
+    let max = m
+        .consts
+        .intern(Const::Int(IntKind::I8, i8::MAX as i128 as u128));
+    let p = m.pretty();
+    assert_eq!(p.render_const(min, ty), "i8::MIN");
+    assert_eq!(p.render_const(max, ty), "i8::MAX");
+}
+
+#[test]
+fn render_const_int_i128_min_max_collapse_to_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I128));
+    let min = m
+        .consts
+        .intern(Const::Int(IntKind::I128, i128::MIN as u128));
+    let max = m
+        .consts
+        .intern(Const::Int(IntKind::I128, i128::MAX as u128));
+    let p = m.pretty();
+    assert_eq!(p.render_const(min, ty), "i128::MIN");
+    assert_eq!(p.render_const(max, ty), "i128::MAX");
+}
+
+#[test]
+fn render_const_uint_u8_max_collapses_to_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let id = m.consts.intern(Const::Uint(UintKind::U8, 255));
+    assert_eq!(m.pretty().render_const(id, ty), "u8::MAX");
+}
+
+#[test]
+fn render_const_uint_u128_max_collapses_to_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Uint(UintKind::U128));
+    let id = m.consts.intern(Const::Uint(UintKind::U128, u128::MAX));
+    assert_eq!(m.pretty().render_const(id, ty), "u128::MAX");
+}
+
+#[test]
+fn render_const_uint_zero_does_not_collapse_to_min_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let id = m.consts.intern(Const::Uint(UintKind::U8, 0));
+    // Per D-14-4.10: no unsigned MIN collapsing; renders as decimal.
+    assert_eq!(m.pretty().render_const(id, ty), "0_u8");
+}
+
+#[test]
+fn render_const_uint_non_sentinel_renders_underscore_decimal() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let id = m.consts.intern(Const::Uint(UintKind::U32, 0xDEAD_BEEF));
+    assert_eq!(m.pretty().render_const(id, ty), "3735928559_u32");
+}
+
+// ----- Int / Uint -- Isize / Usize target-pointer-width-independent
+
+fn model_with_pointer_width(pw: u8) -> RegseqModel {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    m.target.pointer_width = pw;
+    m.target.scalar_layouts = default_scalar_layouts(pw);
+    m
+}
+
+#[test]
+fn render_const_usize_max_renders_symbolically_on_32_bit_target() {
+    let mut m = model_with_pointer_width(32);
+    let ty = m.types.intern(Ty::Uint(UintKind::Usize));
+    let id = m.consts.intern(Const::Uint(UintKind::Usize, 0xFFFFFFFF));
+    assert_eq!(m.pretty().render_const(id, ty), "usize::MAX");
+}
+
+#[test]
+fn render_const_usize_max_renders_symbolically_on_64_bit_target() {
+    let mut m = model_with_pointer_width(64);
+    let ty = m.types.intern(Ty::Uint(UintKind::Usize));
+    let id = m
+        .consts
+        .intern(Const::Uint(UintKind::Usize, 0xFFFFFFFF_FFFFFFFF));
+    assert_eq!(m.pretty().render_const(id, ty), "usize::MAX");
+}
+
+#[test]
+fn render_const_isize_min_max_render_symbolically_on_both_targets() {
+    let mut m32 = model_with_pointer_width(32);
+    let ty32 = m32.types.intern(Ty::Int(IntKind::Isize));
+    let min32 = m32
+        .consts
+        .intern(Const::Int(IntKind::Isize, i32::MIN as i128 as u128));
+    let max32 = m32
+        .consts
+        .intern(Const::Int(IntKind::Isize, i32::MAX as i128 as u128));
+    let p = m32.pretty();
+    assert_eq!(p.render_const(min32, ty32), "isize::MIN");
+    assert_eq!(p.render_const(max32, ty32), "isize::MAX");
+
+    let mut m64 = model_with_pointer_width(64);
+    let ty64 = m64.types.intern(Ty::Int(IntKind::Isize));
+    let min64 = m64
+        .consts
+        .intern(Const::Int(IntKind::Isize, i64::MIN as i128 as u128));
+    let max64 = m64
+        .consts
+        .intern(Const::Int(IntKind::Isize, i64::MAX as i128 as u128));
+    let p = m64.pretty();
+    assert_eq!(p.render_const(min64, ty64), "isize::MIN");
+    assert_eq!(p.render_const(max64, ty64), "isize::MAX");
+}
+
+// ----- Float -- finite forms ---------------------------------------
+
+#[test]
+fn render_const_float_f32_integer_valued_renders_without_fractional() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m
+        .consts
+        .intern(Const::Float(FloatKind::F32, 1.0f32.to_bits() as u128));
+    assert_eq!(m.pretty().render_const(id, ty), "1f32");
+}
+
+#[test]
+fn render_const_float_f32_non_integer_renders_with_fractional() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m
+        .consts
+        .intern(Const::Float(FloatKind::F32, 1.5f32.to_bits() as u128));
+    assert_eq!(m.pretty().render_const(id, ty), "1.5f32");
+}
+
+#[test]
+fn render_const_float_f64_negative_zero_finite_renders_as_minus_zero() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    // -0f32 bits = 0x80000000.
+    let id = m.consts.intern(Const::Float(FloatKind::F32, 0x8000_0000));
+    assert_eq!(m.pretty().render_const(id, ty), "-0f32");
+}
+
+#[test]
+fn render_const_float_f64_integer_renders_without_fractional() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F64));
+    let id = m
+        .consts
+        .intern(Const::Float(FloatKind::F64, 42.0f64.to_bits() as u128));
+    assert_eq!(m.pretty().render_const(id, ty), "42f64");
+}
+
+#[test]
+fn render_const_float_f16_integer_value_renders_with_f16_suffix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F16));
+    // f16 1.0 bit pattern: sign=0, exp=15 (biased), mantissa=0
+    // -> 0 011 1100 0000 0000 = 0x3C00.
+    let id = m.consts.intern(Const::Float(FloatKind::F16, 0x3C00));
+    assert_eq!(m.pretty().render_const(id, ty), "1f16");
+}
+
+#[test]
+fn render_const_float_f128_integer_value_renders_with_f128_suffix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F128));
+    // f128 1.0: sign=0, exp=16383 (biased), mantissa=0.
+    let bits = 0x3FFFu128 << 112;
+    let id = m.consts.intern(Const::Float(FloatKind::F128, bits));
+    assert_eq!(m.pretty().render_const(id, ty), "1f128");
+}
+
+#[test]
+fn render_const_float_f128_non_integer_value_renders_with_fractional() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F128));
+    // f128 1.5: sign=0, exp=16383 (biased), mantissa = 1 << 111 (the
+    // leading mantissa bit). The apfloat-based renderer produces the
+    // shortest round-trippable decimal display per pretty-printer.md
+    // §10.1.1 even for widths Rust has no native type for.
+    let bits = (0x3FFFu128 << 112) | (1u128 << 111);
+    let id = m.consts.intern(Const::Float(FloatKind::F128, bits));
+    assert_eq!(m.pretty().render_const(id, ty), "1.5f128");
+}
+
+#[test]
+fn render_const_float_f16_non_integer_value_renders_with_fractional() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F16));
+    // f16 1.5 bit pattern: sign=0, exp=15 (biased), mantissa = 1<<9.
+    let bits = 0x3E00u128;
+    let id = m.consts.intern(Const::Float(FloatKind::F16, bits));
+    assert_eq!(m.pretty().render_const(id, ty), "1.5f16");
+}
+
+// ----- Float -- D-14-4.12 non-finite ------------------------------
+
+#[test]
+fn render_const_float_f32_positive_infinity() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m.consts.intern(Const::Float(FloatKind::F32, 0x7F80_0000));
+    assert_eq!(m.pretty().render_const(id, ty), "inf_f32");
+}
+
+#[test]
+fn render_const_float_f32_negative_infinity() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m.consts.intern(Const::Float(FloatKind::F32, 0xFF80_0000));
+    assert_eq!(m.pretty().render_const(id, ty), "-inf_f32");
+}
+
+#[test]
+fn render_const_float_f32_all_nan_bit_patterns_collapse_to_single_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let quiet = m.consts.intern(Const::Float(FloatKind::F32, 0x7FC0_0000));
+    let signaling = m.consts.intern(Const::Float(FloatKind::F32, 0x7F80_0001));
+    let payload = m.consts.intern(Const::Float(FloatKind::F32, 0x7FC0_1234));
+    let sign_set = m.consts.intern(Const::Float(FloatKind::F32, 0xFFC0_0000));
+    let p = m.pretty();
+    assert_eq!(p.render_const(quiet, ty), "NaN_f32");
+    assert_eq!(p.render_const(signaling, ty), "NaN_f32");
+    assert_eq!(p.render_const(payload, ty), "NaN_f32");
+    assert_eq!(p.render_const(sign_set, ty), "NaN_f32");
+}
+
+#[test]
+fn render_const_float_each_width_non_finite_classifications() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let f16_ty = m.types.intern(Ty::Float(FloatKind::F16));
+    let f64_ty = m.types.intern(Ty::Float(FloatKind::F64));
+    let f128_ty = m.types.intern(Ty::Float(FloatKind::F128));
+
+    // f16: exp 0x1F all-ones, mantissa 0 -> ±inf; mantissa nonzero -> NaN.
+    let f16_inf = m.consts.intern(Const::Float(FloatKind::F16, 0x7C00));
+    let f16_neg_inf = m.consts.intern(Const::Float(FloatKind::F16, 0xFC00));
+    let f16_nan = m.consts.intern(Const::Float(FloatKind::F16, 0x7E00));
+    // f64: 0x7FF0_0000_0000_0000 / 0xFFF0_..._0000 / NaN.
+    let f64_inf = m
+        .consts
+        .intern(Const::Float(FloatKind::F64, 0x7FF0_0000_0000_0000));
+    let f64_neg_inf = m
+        .consts
+        .intern(Const::Float(FloatKind::F64, 0xFFF0_0000_0000_0000));
+    let f64_nan = m
+        .consts
+        .intern(Const::Float(FloatKind::F64, 0x7FF8_0000_0000_0000));
+    // f128: 0x7FFF_<all-zero 112-bit mantissa> -> +inf, 0xFFFF_<0> -> -inf, mantissa != 0 -> NaN.
+    let f128_inf = m
+        .consts
+        .intern(Const::Float(FloatKind::F128, 0x7FFFu128 << 112));
+    let f128_neg_inf = m
+        .consts
+        .intern(Const::Float(FloatKind::F128, 0xFFFFu128 << 112));
+    let f128_nan = m
+        .consts
+        .intern(Const::Float(FloatKind::F128, (0x7FFFu128 << 112) | 1));
+
+    let p = m.pretty();
+    assert_eq!(p.render_const(f16_inf, f16_ty), "inf_f16");
+    assert_eq!(p.render_const(f16_neg_inf, f16_ty), "-inf_f16");
+    assert_eq!(p.render_const(f16_nan, f16_ty), "NaN_f16");
+    assert_eq!(p.render_const(f64_inf, f64_ty), "inf_f64");
+    assert_eq!(p.render_const(f64_neg_inf, f64_ty), "-inf_f64");
+    assert_eq!(p.render_const(f64_nan, f64_ty), "NaN_f64");
+    assert_eq!(p.render_const(f128_inf, f128_ty), "inf_f128");
+    assert_eq!(p.render_const(f128_neg_inf, f128_ty), "-inf_f128");
+    assert_eq!(p.render_const(f128_nan, f128_ty), "NaN_f128");
+}
+
+// ----- ZST -- §10.1.2 dispatch ------------------------------------
+
+#[test]
+fn render_const_zst_unit_renders_as_unit_paren_pair() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, unit), "()");
+}
+
+#[test]
+fn render_const_zst_array_zero_length_renders_empty_brackets() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let array_ty = m.types.intern(Ty::Array(i32_ty, 0));
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, array_ty), "[]");
+}
+
+#[test]
+fn render_const_zst_array_zst_elem_repeats_count_decimal() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let array_ty = m.types.intern(Ty::Array(unit, 100));
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, array_ty), "[(); 100]");
+}
+
+#[test]
+fn render_const_zst_tuple_arity_three_recursion_threads_same_const_id() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let triple = m.types.intern(Ty::Tuple {
+        fields: vec![unit, unit, unit],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, triple), "((), (), ())");
+}
+
+#[test]
+fn render_const_zst_tuple_arity_one_emits_trailing_comma() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let single = m.types.intern(Ty::Tuple {
+        fields: vec![unit],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, single), "((),)");
+}
+
+#[test]
+fn render_const_zst_fieldless_struct_renders_def_path() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::Marker");
+    let item = unit_item(&mut m, ItemKind::Struct, rendered);
+    let struct_ty = m.types.intern(Ty::Struct {
+        item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, struct_ty), "pl011::Marker");
+}
+
+#[test]
+fn render_const_zst_fn_def_renders_value_namespace_path_no_args() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::init");
+    let item = unit_item(&mut m, ItemKind::Function, rendered);
+    let ty = m.types.intern(Ty::FnDef(item, vec![]));
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, ty), "pl011::init");
+}
+
+#[test]
+fn render_const_zst_phantom_data_renders_turbofish_value_namespace() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("core::marker::PhantomData");
+    let item = unit_item(&mut m, ItemKind::Struct, rendered);
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let struct_ty = m.types.intern(Ty::Struct {
+        item,
+        args: vec![GenericArg::Type(u32_ty)],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(
+        m.pretty().render_const(id, struct_ty),
+        "core::marker::PhantomData::<u32>"
+    );
+}
+
+#[test]
+fn render_const_zst_union_renders_path_only_no_field_disambiguation() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::U");
+    let item = unit_item(&mut m, ItemKind::Union, rendered);
+    let union_ty = m.types.intern(Ty::Union {
+        item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, union_ty), "pl011::U");
+}
+
+#[test]
+fn render_const_zst_closure_renders_value_namespace_path() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::caller::{closure#0}");
+    let item = unit_item(&mut m, ItemKind::Function, rendered);
+    let ty = m.types.intern(Ty::Closure(item, vec![]));
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(
+        m.pretty().render_const(id, ty),
+        "pl011::caller::{closure#0}"
+    );
+}
+
+#[test]
+fn render_const_zst_single_unit_variant_enum_renders_enum_path_variant() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::Marker");
+    let item = unit_item(&mut m, ItemKind::Enum, rendered);
+    let variant_name = m.strings.intern("Only");
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum {
+            shape: EnumShape::Single {
+                variant: VariantLayout {
+                    name: variant_name,
+                    fields: vec![],
+                    uninhabited: false,
+                    discriminant: 0,
+                    tag_value: None,
+                },
+                scalar: None,
+            },
+        },
+    };
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(m.pretty().render_const(id, enum_ty), "pl011::Marker::Only");
+}
+
+#[test]
+fn render_const_zst_struct_with_all_zst_tuple_synthetic_fields_renders_paren_list() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::TupleHolder");
+    let item = unit_item(&mut m, ItemKind::Struct, rendered);
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let name0 = m.strings.intern("_0");
+    let name1 = m.strings.intern("_1");
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct {
+            fields: vec![
+                FieldLayout {
+                    name: name0,
+                    ty: unit_ty,
+                    offset: 0,
+                },
+                FieldLayout {
+                    name: name1,
+                    ty: unit_ty,
+                    offset: 0,
+                },
+            ],
+        },
+    };
+    let struct_ty = m.types.intern(Ty::Struct {
+        item,
+        args: vec![],
+        layout,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(
+        m.pretty().render_const(id, struct_ty),
+        "pl011::TupleHolder((), ())"
+    );
+}
+
+#[test]
+fn render_const_zst_struct_with_all_zst_named_fields_renders_brace_list() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::NamedHolder");
+    let item = unit_item(&mut m, ItemKind::Struct, rendered);
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let alpha = m.strings.intern("alpha");
+    let beta = m.strings.intern("beta");
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct {
+            fields: vec![
+                FieldLayout {
+                    name: alpha,
+                    ty: unit_ty,
+                    offset: 0,
+                },
+                FieldLayout {
+                    name: beta,
+                    ty: unit_ty,
+                    offset: 0,
+                },
+            ],
+        },
+    };
+    let struct_ty = m.types.intern(Ty::Struct {
+        item,
+        args: vec![],
+        layout,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_eq!(
+        m.pretty().render_const(id, struct_ty),
+        "pl011::NamedHolder { alpha: (), beta: () }"
+    );
+}
+
+// ----- ZST -- panic / cannot-occur rows ---------------------------
+
+#[test]
+#[should_panic(expected = "Const::ZST consumed by non-ZST Ty.kind()")]
+fn render_const_zst_panics_on_non_zst_consumer_primitive() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let id = m.consts.intern(Const::ZST);
+    let _ = m.pretty().render_const(id, u32_ty);
+}
+
+#[test]
+#[should_panic(expected = "multi-variant Ty::Enum")]
+fn render_const_zst_panics_on_multi_variant_enum() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::Multi");
+    let item = unit_item(&mut m, ItemKind::Enum, rendered);
+    let variant_name = m.strings.intern("A");
+    let variant_b = m.strings.intern("B");
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let layout = Layout {
+        size: 1,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum {
+            shape: EnumShape::Multiple {
+                tag: TagScalar {
+                    offset: 0,
+                    scalar_ty: u8_ty,
+                    valid_range: WrappingRange { start: 0, end: 1 },
+                },
+                encoding: TagEncoding::Direct,
+                variants: vec![
+                    VariantLayout {
+                        name: variant_name,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 0,
+                        tag_value: Some(0),
+                    },
+                    VariantLayout {
+                        name: variant_b,
+                        fields: vec![],
+                        uninhabited: false,
+                        discriminant: 1,
+                        tag_value: Some(1),
+                    },
+                ],
+            },
+        },
+    };
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout,
+    });
+    let id = m.consts.intern(Const::ZST);
+    let _ = m.pretty().render_const(id, enum_ty);
+}
+
+#[test]
+#[should_panic(expected = "zero-variant Ty::Enum")]
+fn render_const_zst_panics_on_empty_enum() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011::Void");
+    let item = unit_item(&mut m, ItemKind::Enum, rendered);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: true,
+        kind: LayoutKind::Enum {
+            shape: EnumShape::Empty,
+        },
+    };
+    let enum_ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout,
+    });
+    let id = m.consts.intern(Const::ZST);
+    let _ = m.pretty().render_const(id, enum_ty);
+}
+
+#[test]
+#[should_panic(expected = "Const::ZST consumed by non-ZST Ty.kind()")]
+fn render_const_zst_panics_on_never_consumer() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let never_ty = m.types.intern(Ty::Never);
+    let id = m.consts.intern(Const::ZST);
+    let _ = m.pretty().render_const(id, never_ty);
 }

@@ -3181,7 +3181,7 @@
           "id": "regseq-model-89",
           "name": "P1a-PP-04a: render_const for scalar/simple variants",
           "spec": ".harness/tasks/regseq-model/89-render-const-scalar.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-87",
             "regseq-model-88",

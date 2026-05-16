@@ -12,7 +12,7 @@
 use insta::assert_snapshot;
 use regseq_model::{
     AggregateKind, AssertKind, AutoTrait, BasicBlock, BinOp, BlockId, Body, CallCallee, CastKind,
-    ConstId, CopyNonOverlapping, DefPath, DefPathData, DefPathSegment, EnumShape, FieldIdx,
+    Const, ConstId, CopyNonOverlapping, DefPath, DefPathData, DefPathSegment, EnumShape, FieldIdx,
     FieldLayout, FloatKind, FnAbi, FnSig, GenericArg, InlineHint, Instance, InstanceKind, IntKind,
     Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, LocalDecl, LocalId, Mutability,
     NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, PrettyPrintOptions,
@@ -716,17 +716,17 @@ fn render_operand_specimen_28_move() {
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_operand_specimen_29_constant_dispatches_to_render_const() {
-    // Specimen 29 (Operand::Constant) inherently routes to
-    // `render_const`, which is the stage-14 / P1a-PP-04a/b owner.
-    // The `#[should_panic]` verifies the dispatch reaches the stub
-    // with the correct pair-form call shape `(id, expected_ty)`.
+    // Specimen 29 (pretty-printer.md:1348-1351): a constant operand
+    // routes through `render_const` with the consumer-context type
+    // threaded from the caller; the pair-form call shape `(id,
+    // expected_ty)` is verified by the rendered output (`42_i32`).
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m.consts.intern(Const::Int(IntKind::I32, 42));
     let body = Body::default();
-    let op = Operand::Constant(ConstId::ZERO);
-    let _ = m.pretty().render_operand(&op, &body, i32_ty);
+    let op = Operand::Constant(id);
+    assert_snapshot!(m.pretty().render_operand(&op, &body, i32_ty), @"42_i32");
 }
 
 // ----- §9.4 render_rvalue specimens --------------------------------
@@ -742,14 +742,14 @@ fn render_rvalue_specimen_30_use_copy() {
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_rvalue_specimen_31_repeat_constant_dispatches_to_render_const() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
     let array_ty = m.types.intern(Ty::Array(u8_ty, 16));
+    let id = m.consts.intern(Const::Uint(UintKind::U8, 0));
     let body = Body::default();
-    let rv = Rvalue::Repeat(Operand::Constant(ConstId::ZERO), 16);
-    let _ = m.pretty().render_rvalue(&rv, &body, array_ty);
+    let rv = Rvalue::Repeat(Operand::Constant(id), 16);
+    assert_snapshot!(m.pretty().render_rvalue(&rv, &body, array_ty), @"[0_u8; 16]");
 }
 
 #[test]
@@ -879,25 +879,29 @@ fn render_rvalue_specimen_40_discriminant() {
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_rvalue_specimen_41_aggregate_array_constants_dispatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
     let array_ty = m.types.intern(Ty::Array(u8_ty, 3));
+    let c1 = m.consts.intern(Const::Uint(UintKind::U8, 1));
+    let c2 = m.consts.intern(Const::Uint(UintKind::U8, 2));
+    let c3 = m.consts.intern(Const::Uint(UintKind::U8, 3));
     let body = Body::default();
     let rv = Rvalue::Aggregate(
         AggregateKind::Array(u8_ty),
         Box::new([
-            Operand::Constant(ConstId::ZERO),
-            Operand::Constant(ConstId::ZERO),
-            Operand::Constant(ConstId::ZERO),
+            Operand::Constant(c1),
+            Operand::Constant(c2),
+            Operand::Constant(c3),
         ]),
     );
-    let _ = m.pretty().render_rvalue(&rv, &body, array_ty);
+    assert_snapshot!(
+        m.pretty().render_rvalue(&rv, &body, array_ty),
+        @"[1_u8, 2_u8, 3_u8]"
+    );
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_rvalue_specimen_42_aggregate_tuple_arity_two_constants_dispatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
@@ -906,36 +910,38 @@ fn render_rvalue_specimen_42_aggregate_tuple_arity_two_constants_dispatch() {
         fields: vec![i32_ty, bool_ty],
         layout: UNIT_LAYOUT,
     });
+    let c_int = m.consts.intern(Const::Int(IntKind::I32, 42));
+    let c_bool = m.consts.intern(Const::Bool(true));
     let body = Body::default();
     let rv = Rvalue::Aggregate(
         AggregateKind::Tuple(tuple_ty),
-        Box::new([
-            Operand::Constant(ConstId::ZERO),
-            Operand::Constant(ConstId::ZERO),
-        ]),
+        Box::new([Operand::Constant(c_int), Operand::Constant(c_bool)]),
     );
-    let _ = m.pretty().render_rvalue(&rv, &body, tuple_ty);
+    assert_snapshot!(
+        m.pretty().render_rvalue(&rv, &body, tuple_ty),
+        @"(42_i32, true)"
+    );
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_rvalue_specimen_43_aggregate_struct_named_fields_dispatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
     let struct_ty = intern_named_struct(&mut m, "geom::Point", vec![("x", i32_ty), ("y", i32_ty)]);
+    let c0 = m.consts.intern(Const::Int(IntKind::I32, 0));
+    let c1 = m.consts.intern(Const::Int(IntKind::I32, 1));
     let body = Body::default();
     let rv = Rvalue::Aggregate(
         AggregateKind::Struct(struct_ty),
-        Box::new([
-            Operand::Constant(ConstId::ZERO),
-            Operand::Constant(ConstId::ZERO),
-        ]),
+        Box::new([Operand::Constant(c0), Operand::Constant(c1)]),
     );
-    let _ = m.pretty().render_rvalue(&rv, &body, struct_ty);
+    assert_snapshot!(
+        m.pretty().render_rvalue(&rv, &body, struct_ty),
+        @"geom::Point { x: 0_i32, y: 1_i32 }"
+    );
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_rvalue_specimen_44_aggregate_enum_tuple_variant_dispatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
@@ -945,12 +951,16 @@ fn render_rvalue_specimen_44_aggregate_enum_tuple_variant_dispatch() {
         vec![GenericArg::Type(u32_ty)],
         vec![("None", vec![]), ("Some", vec![("0", u32_ty)])],
     );
+    let payload = m.consts.intern(Const::Uint(UintKind::U32, 42));
     let body = Body::default();
     let rv = Rvalue::Aggregate(
         AggregateKind::Enum(enum_ty, VariantIdx::from_u32(1)),
-        Box::new([Operand::Constant(ConstId::ZERO)]),
+        Box::new([Operand::Constant(payload)]),
     );
-    let _ = m.pretty().render_rvalue(&rv, &body, enum_ty);
+    assert_snapshot!(
+        m.pretty().render_rvalue(&rv, &body, enum_ty),
+        @"core::option::Option<u32>::Some(42_u32)"
+    );
 }
 
 #[test]
@@ -971,7 +981,6 @@ fn render_rvalue_specimen_45_aggregate_enum_c_style() {
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_rvalue_specimen_46_aggregate_union_dispatch() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
@@ -1002,12 +1011,16 @@ fn render_rvalue_specimen_46_aggregate_union_dispatch() {
             },
         },
     });
+    let payload = m.consts.intern(Const::Uint(UintKind::U8, 0xFF));
     let body = Body::default();
     let rv = Rvalue::Aggregate(
         AggregateKind::Union(union_ty, FieldIdx::from_u32(1)),
-        Box::new([Operand::Constant(ConstId::ZERO)]),
+        Box::new([Operand::Constant(payload)]),
     );
-    let _ = m.pretty().render_rvalue(&rv, &body, union_ty);
+    assert_snapshot!(
+        m.pretty().render_rvalue(&rv, &body, union_ty),
+        @"pl011::regs::MyUnion { byte: u8::MAX }"
+    );
 }
 
 #[test]
@@ -1101,20 +1114,20 @@ fn render_rvalue_specimen_47c_aggregate_raw_ptr_fat() {
 // ----- §9.5 render_statement specimens -----------------------------
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_statement_specimen_48_assign_constant_dispatches() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m.consts.intern(Const::Int(IntKind::I32, 42));
     let mut body = Body::default();
     push_locals(&mut body, 4, i32_ty);
     let stmt = Statement {
         kind: StatementKind::Assign(
             Place::from(LocalId::from_u32(3)),
-            Rvalue::Use(Operand::Constant(ConstId::ZERO)),
+            Rvalue::Use(Operand::Constant(id)),
         ),
         span: Span::dummy(),
     };
-    let _ = m.pretty().render_statement(&stmt, &body);
+    assert_snapshot!(m.pretty().render_statement(&stmt, &body), @"_3 = 42_i32;");
 }
 
 #[test]
@@ -1164,12 +1177,12 @@ fn render_statement_specimen_50_intrinsic_assume() {
 }
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_statement_specimen_51_intrinsic_copy_non_overlapping_count_const_dispatches() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
     let ptr_const = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
     let ptr_mut = m.types.intern(Ty::Ptr(u8_ty, Mutability::Mut));
+    let count = m.consts.intern(Const::Uint(UintKind::Usize, 16));
     let mut body = Body::default();
     body.push_local(dummy_local(ptr_const));
     body.push_local(dummy_local(ptr_const));
@@ -1181,12 +1194,15 @@ fn render_statement_specimen_51_intrinsic_copy_non_overlapping_count_const_dispa
             CopyNonOverlapping {
                 src: Operand::Move(Place::from(LocalId::from_u32(3))),
                 dst: Operand::Move(Place::from(LocalId::from_u32(4))),
-                count: Operand::Constant(ConstId::ZERO),
+                count: Operand::Constant(count),
             },
         )),
         span: Span::dummy(),
     };
-    let _ = m.pretty().render_statement(&stmt, &body);
+    assert_snapshot!(
+        m.pretty().render_statement(&stmt, &body),
+        @"copy_nonoverlapping(move _3, move _4, 16_usize);"
+    );
 }
 
 // ----- §9.6 render_terminator specimens ----------------------------
@@ -1544,10 +1560,11 @@ fn render_assert_kind_specimen_66b_invalid_enum_construction() {
 // ----- §9.8 render_basic_block specimens ---------------------------
 
 #[test]
-#[should_panic(expected = "stage 14 fills render_const")]
 fn render_basic_block_specimen_67_multi_statement_const_dispatches() {
     let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let c42 = m.consts.intern(Const::Int(IntKind::I32, 42));
+    let c1 = m.consts.intern(Const::Int(IntKind::I32, 1));
     let mut body = Body::default();
     push_locals(&mut body, 6, i32_ty);
     body.basic_blocks.push(BasicBlock {
@@ -1555,7 +1572,7 @@ fn render_basic_block_specimen_67_multi_statement_const_dispatches() {
             Statement {
                 kind: StatementKind::Assign(
                     Place::from(LocalId::from_u32(3)),
-                    Rvalue::Use(Operand::Constant(ConstId::ZERO)),
+                    Rvalue::Use(Operand::Constant(c42)),
                 ),
                 span: Span::dummy(),
             },
@@ -1565,7 +1582,7 @@ fn render_basic_block_specimen_67_multi_statement_const_dispatches() {
                     Rvalue::BinaryOp(
                         BinOp::Add,
                         Operand::Copy(Place::from(LocalId::from_u32(3))),
-                        Operand::Constant(ConstId::ZERO),
+                        Operand::Constant(c1),
                     ),
                 ),
                 span: Span::dummy(),
@@ -1577,7 +1594,16 @@ fn render_basic_block_specimen_67_multi_statement_const_dispatches() {
         },
     });
     let block = &body.basic_blocks[BlockId::from_u32(0)];
-    let _ = m.pretty().render_basic_block(block, &body);
+    assert_snapshot!(
+        m.pretty().render_basic_block(block, &body),
+        @r###"
+    bb0: {
+        _3 = 42_i32;
+        _4 = copy _3 + 1_i32;
+        return -> [];
+    }
+    "###
+    );
 }
 
 #[test]
@@ -1719,4 +1745,161 @@ fn body_level_span_gating_include_spans_suppressed_when_synthesized() {
     let p = PrettyPrinter::with_options(&m, opts);
     assert_eq!(p.render_statement(&stmt, &body), "_3 = copy _2;");
     assert_eq!(p.render_terminator(&term, &body), "return -> []");
+}
+
+// ------------------------------------------------------------------
+// §9.10 render_const specimens 76 - 90 (P1a-PP-04a).
+//
+// Specimens 91 - 92 (NullPtr) and 93 - 109 (Reloc / Aggregate /
+// EnumValue / Bytes) belong to P1a-PP-04b (regseq-model-90).
+// ------------------------------------------------------------------
+
+#[test]
+fn render_const_specimen_76_bool_true() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Bool);
+    let id = m.consts.intern(Const::Bool(true));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"true");
+}
+
+#[test]
+fn render_const_specimen_77_bool_false() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Bool);
+    let id = m.consts.intern(Const::Bool(false));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"false");
+}
+
+#[test]
+fn render_const_specimen_78_int_decimal_non_sentinel() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m.consts.intern(Const::Int(IntKind::I32, 42));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"42_i32");
+}
+
+#[test]
+fn render_const_specimen_79_int_sentinel_max() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I32));
+    let id = m
+        .consts
+        .intern(Const::Int(IntKind::I32, i32::MAX as i128 as u128));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"i32::MAX");
+}
+
+#[test]
+fn render_const_specimen_80_int_sentinel_min() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Int(IntKind::I32));
+    // 0xFFFFFFFF80000000 is i32::MIN sign-extended into the u128
+    // storage per spec.md §9.7.
+    let id = m
+        .consts
+        .intern(Const::Int(IntKind::I32, 0xFFFF_FFFF_8000_0000));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"i32::MIN");
+}
+
+#[test]
+fn render_const_specimen_81_uint_sentinel_target_pointer_width_independent() {
+    // 32-bit target: usize::MAX bit pattern = 0xFFFFFFFF; renders
+    // symbolically per D-14-4.10 regardless of target.
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    m.target.pointer_width = 32;
+    m.target.scalar_layouts = regseq_model::default_scalar_layouts(32);
+    let ty = m.types.intern(Ty::Uint(UintKind::Usize));
+    let id = m.consts.intern(Const::Uint(UintKind::Usize, 0xFFFFFFFF));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"usize::MAX");
+}
+
+#[test]
+fn render_const_specimen_82_float_finite() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m.consts.intern(Const::Float(FloatKind::F32, 0x3f80_0000));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"1f32");
+}
+
+#[test]
+fn render_const_specimen_83_float_positive_infinity() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m.consts.intern(Const::Float(FloatKind::F32, 0x7f80_0000));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"inf_f32");
+}
+
+#[test]
+fn render_const_specimen_84_float_nan_collapses_to_single_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Float(FloatKind::F32));
+    let id = m.consts.intern(Const::Float(FloatKind::F32, 0x7fc0_0000));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"NaN_f32");
+}
+
+#[test]
+fn render_const_specimen_85_char_ascii() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Char);
+    let id = m.consts.intern(Const::Char(0x61));
+    assert_snapshot!(m.pretty().render_const(id, ty), @"'a'");
+}
+
+#[test]
+fn render_const_specimen_86_char_escape() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let ty = m.types.intern(Ty::Char);
+    let id = m.consts.intern(Const::Char(0x0A));
+    assert_snapshot!(m.pretty().render_const(id, ty), @r"'\n'");
+}
+
+#[test]
+fn render_const_specimen_87_zst_unit() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_snapshot!(m.pretty().render_const(id, unit), @"()");
+}
+
+#[test]
+fn render_const_specimen_88_zst_fn_def() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let init_item = push_item(&mut m, ItemKind::Function, "pl011::init");
+    let ty = m.types.intern(Ty::FnDef(init_item, vec![]));
+    let id = m.consts.intern(Const::ZST);
+    assert_snapshot!(m.pretty().render_const(id, ty), @"pl011::init");
+}
+
+#[test]
+fn render_const_specimen_89_zst_phantom_data_u32() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_item(&mut m, ItemKind::Struct, "core::marker::PhantomData");
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let struct_ty = m.types.intern(Ty::Struct {
+        item,
+        args: vec![GenericArg::Type(u32_ty)],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_snapshot!(
+        m.pretty().render_const(id, struct_ty),
+        @"core::marker::PhantomData::<u32>"
+    );
+}
+
+#[test]
+fn render_const_specimen_90_zst_composite_tuple_recursion() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let triple = m.types.intern(Ty::Tuple {
+        fields: vec![unit, unit, unit],
+        layout: UNIT_LAYOUT,
+    });
+    let id = m.consts.intern(Const::ZST);
+    assert_snapshot!(m.pretty().render_const(id, triple), @"((), (), ())");
 }
