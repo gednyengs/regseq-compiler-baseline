@@ -8,8 +8,8 @@
 //! event picked up by the test suite.
 
 use crate::{
-    render_def_path, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, InstanceId,
-    RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId,
+    render_def_path, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, RegseqModel,
+    SourceFile, SourceFileId, Span, StableCrateId, StringId,
 };
 
 // ------------------------------------------------------------------
@@ -180,13 +180,6 @@ fn render_def_path_value_handles_primary_crate_paths() {
 fn render_top_level_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render();
-}
-
-#[test]
-#[should_panic(expected = "stage 14 fills render_instance")]
-fn render_instance_is_unimplemented_at_stage_one() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let _ = m.pretty().render_instance(InstanceId::ZERO);
 }
 
 // ------------------------------------------------------------------
@@ -4124,4 +4117,679 @@ fn render_const_reloc_panics_on_const_instance_kind() {
     let ptr = m.types.intern(Ty::Ptr(u32_ty, Mutability::Not));
     let id = m.consts.intern(Const::Reloc(r));
     let _ = m.pretty().render_const(id, ptr);
+}
+
+// ------------------------------------------------------------------
+// render_instance: P1a-PP-05a per-variant dispatch shape, body
+// envelope composition, and §10.2.7 attribute-block streams.
+//
+// Spec coverage (pretty-printer.md):
+// - §10.2.1 Function envelope (all 5 aspects).
+// - §10.2.2 Static rendering (all 4 aspects).
+// - §10.2.3 Const rendering.
+// - §10.2.7 attribute-block empty-cases.
+// - §3.1 body envelope: locals declaration ordering, debug-name
+//   gating, LocalDecl span gating.
+// ------------------------------------------------------------------
+
+use crate::domain_attr::{AttrData, IntrinsicKind, LogLevel};
+use crate::ids::InstanceId;
+use crate::terminator::Terminator as Term2;
+
+fn push_fn_item(m: &mut RegseqModel, rendered: &str) -> ItemId {
+    let r = m.strings.intern(rendered);
+    unit_item(m, ItemKind::Function, r)
+}
+
+fn push_static_item(m: &mut RegseqModel, rendered: &str, mutability: Mutability) -> ItemId {
+    let r = m.strings.intern(rendered);
+    unit_item(m, ItemKind::Static { mutability }, r)
+}
+
+fn push_const_item(m: &mut RegseqModel, rendered: &str) -> ItemId {
+    let r = m.strings.intern(rendered);
+    unit_item(m, ItemKind::Const, r)
+}
+
+fn empty_return_block() -> BasicBlock {
+    BasicBlock {
+        statements: Box::new([]),
+        terminator: Term2 {
+            kind: TerminatorKind::Return,
+            span: Span::dummy(),
+        },
+    }
+}
+
+fn make_function_body(m: &mut RegseqModel, ret_ty: TyId, arg_tys: &[TyId]) -> Body {
+    let mut body = Body {
+        arg_count: arg_tys.len(),
+        ..Body::default()
+    };
+    // local_decls[0] = RETURN_PLACE (the ret-type entry).
+    body.local_decls.push(LocalDecl {
+        ty: ret_ty,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: None,
+    });
+    for ty in arg_tys {
+        body.local_decls.push(LocalDecl {
+            ty: *ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+    }
+    body.basic_blocks.push(empty_return_block());
+    let _ = m; // helper exposed for symmetry; model isn't mutated.
+    body
+}
+
+fn make_function_instance(
+    m: &mut RegseqModel,
+    item: ItemId,
+    sig: crate::FnSigId,
+    body: Option<Body>,
+) -> InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    })
+}
+
+fn make_static_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    ty: TyId,
+    init: Option<ConstId>,
+) -> InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Static { ty, init },
+    })
+}
+
+fn make_const_instance(m: &mut RegseqModel, item: ItemId, ty: TyId, value: ConstId) -> InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Const { ty, value },
+    })
+}
+
+// Ensures domain_attrs.item_attrs has at least one entry per Item.
+fn ensure_item_attrs_capacity(m: &mut RegseqModel) {
+    while m.domain_attrs.item_attrs.len() < m.items.len() {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+}
+
+// --- §10.2.1 Function envelope: arg-list grammar ------------------
+
+#[test]
+fn render_instance_function_empty_arg_list_renders_unit_parens() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::noargs");
+    let body = make_function_body(&mut m, unit, &[]);
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    assert!(out.starts_with("fn pl011::noargs() -> () {"), "got: {out}");
+}
+
+#[test]
+fn render_instance_function_nonempty_arg_list_renders_positional_sigils() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![u8_ty, u8_ty],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::write");
+    let body = make_function_body(&mut m, unit, &[u8_ty, u8_ty]);
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    assert!(
+        out.starts_with("fn pl011::write(_1: u8, _2: u8) -> () {"),
+        "got: {out}"
+    );
+}
+
+#[test]
+fn render_instance_function_c_variadic_appends_dots_after_last_input() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_ty = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_ty],
+        output: i32_ty,
+        abi: FnAbi::C,
+        c_variadic: true,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "libc::printf_variadic");
+    m.items[item].linkage = Linkage::Foreign;
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "#[foreign]\nextern \"C\" fn libc::printf_variadic(_1: *const u8, ...) -> i32;"
+    );
+}
+
+// --- §10.2.1 Function envelope: header keyword decoration ---------
+
+#[test]
+fn render_instance_function_is_unsafe_emits_unsafe_prefix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_ty = m.types.intern(Ty::Ptr(u8_ty, Mutability::Mut));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_ty, u8_ty],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Unsafe,
+    });
+    let item = push_fn_item(&mut m, "pl011::ptr_write");
+    m.items[item].is_unsafe = true;
+    let body = make_function_body(&mut m, unit, &[ptr_ty, u8_ty]);
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    assert!(
+        out.starts_with("unsafe fn pl011::ptr_write(_1: *mut u8, _2: u8) -> () {"),
+        "got: {out}"
+    );
+}
+
+#[test]
+fn render_instance_function_abi_c_emits_extern_c_prefix() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_ty = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_ty],
+        output: i32_ty,
+        abi: FnAbi::C,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "libc::printf");
+    m.items[item].linkage = Linkage::Foreign;
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "#[foreign]\nextern \"C\" fn libc::printf(_1: *const u8) -> i32;"
+    );
+}
+
+// --- §10.2.1 Function envelope: body-vs-declaration trailer -------
+
+#[test]
+fn render_instance_function_body_none_emits_semicolon_trailer() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "decl::only");
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "fn decl::only() -> ();");
+}
+
+#[test]
+fn render_instance_function_body_some_emits_braced_envelope() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::body");
+    let body = make_function_body(&mut m, unit, &[]);
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "fn pl011::body() -> () {\n    let mut _0: ();\n\n    bb0: {\n        return -> [];\n    }\n}"
+    );
+}
+
+// --- §3.1 body envelope: locals declaration ordering --------------
+
+#[test]
+fn render_instance_function_body_envelope_arg_locals_not_redeclared() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![u8_ty, u8_ty],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::pair_args");
+    let mut body = make_function_body(&mut m, unit, &[u8_ty, u8_ty]);
+    // Add a non-arg local (mutable u8): index 3.
+    body.local_decls.push(LocalDecl {
+        ty: u8_ty,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: None,
+    });
+    // Add a non-arg immutable local: index 4.
+    body.local_decls.push(LocalDecl {
+        ty: u8_ty,
+        mutability: Mutability::Not,
+        span: Span::dummy(),
+        debug_name: None,
+    });
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    // The locals block must NOT redeclare _1 / _2 (those are in the
+    // header arg-list); _0 first, then _3 (mut) and _4 (not).
+    assert!(out.contains("    let mut _0: ();\n"), "got: {out}");
+    assert!(out.contains("    let mut _3: u8;\n"), "got: {out}");
+    assert!(out.contains("    let _4: u8;\n"), "got: {out}");
+    assert!(
+        !out.contains("_1: u8;\n    "),
+        "args must not be redeclared in body: {out}"
+    );
+}
+
+#[test]
+fn render_instance_function_body_envelope_debug_names_off_by_default() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::with_debug");
+    let mut body = make_function_body(&mut m, unit, &[]);
+    let name = m.strings.intern("answer");
+    body.local_decls.push(LocalDecl {
+        ty: unit,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: Some(name),
+    });
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    assert!(!out.contains("debug answer"), "got: {out}");
+}
+
+#[test]
+fn render_instance_function_body_envelope_debug_names_gated_on() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::with_debug");
+    let mut body = make_function_body(&mut m, unit, &[]);
+    let a = m.strings.intern("alpha");
+    let b = m.strings.intern("beta");
+    body.local_decls.push(LocalDecl {
+        ty: unit,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: Some(a),
+    });
+    body.local_decls.push(LocalDecl {
+        ty: unit,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: unit,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: Some(b),
+    });
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let opts = PrettyPrintOptions {
+        include_spans: false,
+        include_debug_names: true,
+    };
+    let out = PrettyPrinter::with_options(&m, opts).render_instance(id);
+    // Both `alpha` and `beta` render; LocalId order is _1 < _3
+    // (local at index 2 has no debug_name and is silent).
+    assert!(out.contains("    debug alpha => _1;\n"), "got: {out}");
+    assert!(out.contains("    debug beta => _3;\n"), "got: {out}");
+    let alpha_pos = out.find("alpha").unwrap();
+    let beta_pos = out.find("beta").unwrap();
+    assert!(alpha_pos < beta_pos, "alpha must precede beta: {out}");
+}
+
+#[test]
+fn render_instance_function_body_envelope_local_span_gated_on() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::with_spans");
+    let path = m.strings.intern("pl011.rs");
+    let file = m.source_files.push(SourceFile {
+        path,
+        content: Some("let x = ();\n".into()),
+        line_starts: vec![0],
+    });
+    let mut body = make_function_body(&mut m, unit, &[]);
+    // First non-arg local with a real span -> trailing comment.
+    body.local_decls.push(LocalDecl {
+        ty: unit,
+        mutability: Mutability::Mut,
+        span: Span {
+            file,
+            lo: 0,
+            hi: 11,
+        },
+        debug_name: None,
+    });
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let opts = PrettyPrintOptions {
+        include_spans: true,
+        include_debug_names: false,
+    };
+    let out = PrettyPrinter::with_options(&m, opts).render_instance(id);
+    // The local at index 1 carries a real span.
+    assert!(
+        out.contains("// pl011.rs:1:1: 1:12"),
+        "missing trailing span comment: {out}"
+    );
+}
+
+#[test]
+fn render_instance_function_body_envelope_synthesized_span_suppressed() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::no_span_comment");
+    let body = make_function_body(&mut m, unit, &[]);
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let opts = PrettyPrintOptions {
+        include_spans: true,
+        include_debug_names: false,
+    };
+    let out = PrettyPrinter::with_options(&m, opts).render_instance(id);
+    assert!(
+        !out.contains("// <synthesized>"),
+        "synthesized span must not render: {out}"
+    );
+}
+
+// --- §10.2.2 Static rendering -------------------------------------
+
+#[test]
+fn render_instance_static_immutable_with_init() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let v = m.consts.intern(Const::Uint(UintKind::U32, 268472320));
+    let item = push_static_item(&mut m, "pl011::BASE_ADDR", Mutability::Not);
+    let id = make_static_instance_local(&mut m, item, u32_ty, Some(v));
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "static pl011::BASE_ADDR: u32 = 268472320_u32;");
+}
+
+#[test]
+fn render_instance_static_mutable_with_init() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let v = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let item = push_static_item(&mut m, "pl011::COUNTER", Mutability::Mut);
+    let id = make_static_instance_local(&mut m, item, u32_ty, Some(v));
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "static mut pl011::COUNTER: u32 = 1_u32;");
+}
+
+#[test]
+fn render_instance_static_init_none_drops_eq_segment_and_emits_foreign_attr() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let file_ty_name = m.strings.intern("libc::FILE");
+    let file_ty_item = unit_item(&mut m, ItemKind::Struct, file_ty_name);
+    let file_ty = m.types.intern(Ty::Struct {
+        item: file_ty_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ptr_ty = m.types.intern(Ty::Ptr(file_ty, Mutability::Mut));
+    let item = push_static_item(&mut m, "libc::stderr", Mutability::Not);
+    m.items[item].linkage = Linkage::Foreign;
+    let id = make_static_instance_local(&mut m, item, ptr_ty, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "#[foreign]\nstatic libc::stderr: *mut libc::FILE;");
+}
+
+// --- §10.2.3 Const rendering --------------------------------------
+
+#[test]
+fn render_instance_const_single_line_scalar() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let v = m.consts.intern(Const::Int(IntKind::I32, 16));
+    let item = push_const_item(&mut m, "pl011::TX_FIFO_SIZE");
+    let id = make_const_instance(&mut m, item, i32_ty, v);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "const pl011::TX_FIFO_SIZE: i32 = 16_i32;");
+}
+
+// --- §10.2.7 attribute-block composition empty-cases --------------
+
+#[test]
+fn render_instance_attribute_block_neither_stream() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "no::attrs");
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "fn no::attrs() -> ();");
+}
+
+#[test]
+fn render_instance_attribute_block_stream_one_only() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "only::stream_one");
+    m.items[item].linkage = Linkage::NoMangle;
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "#[no_mangle]\nfn only::stream_one() -> ();");
+}
+
+#[test]
+fn render_instance_attribute_block_stream_two_only() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "only::stream_two");
+    ensure_item_attrs_capacity(&mut m);
+    m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "#[rseq::intrinsic(\"log-info\")]\nfn only::stream_two() -> ();"
+    );
+}
+
+#[test]
+fn render_instance_attribute_block_both_streams_stream_one_first() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "both::streams");
+    m.items[item].inline_hint = InlineHint::Never;
+    ensure_item_attrs_capacity(&mut m);
+    m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn)));
+    let id = make_function_instance(&mut m, item, sig, None);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "#[inline(never)]\n#[rseq::intrinsic(\"log-warn\")]\nfn both::streams() -> ();"
+    );
+}
+
+// --- §10.2.1 specimen 117 divergent return ------------------------
+
+#[test]
+fn render_instance_function_divergent_return_emits_bang() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let never_ty = m.types.intern(Ty::Never);
+    let unit = unit_ty(&mut m);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![unit],
+        output: never_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let item = push_fn_item(&mut m, "pl011::panic_handler");
+    let body = make_function_body(&mut m, never_ty, &[unit]);
+    let id = make_function_instance(&mut m, item, sig, Some(body));
+    let out = m.pretty().render_instance(id);
+    assert!(
+        out.starts_with("fn pl011::panic_handler(_1: ()) -> !"),
+        "got: {out}"
+    );
+    assert!(out.contains("    let mut _0: !;\n"), "got: {out}");
+}
+
+// --- ADT-definition variants stay todo!() until P1a-PP-05b --------
+
+#[test]
+#[should_panic(expected = "P1a-PP-05b")]
+fn render_instance_struct_variant_is_todo_until_p1a_pp_05b() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let s_name = m.strings.intern("S");
+    let item = unit_item(&mut m, ItemKind::Struct, s_name);
+    let layout = m.types.intern(Ty::Struct {
+        item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let emission = m.strings.intern("emission");
+    let id = m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Struct { layout },
+    });
+    let _ = m.pretty().render_instance(id);
+}
+
+// --- Stream 2 helper: empty-attr Item returns empty string --------
+
+#[test]
+fn render_domain_attribute_block_is_empty_for_uninitialized_item_attrs() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_fn_item(&mut m, "no::domain::attrs");
+    // No ensure_item_attrs_capacity call -> sparse vector.
+    assert_eq!(m.pretty().render_domain_attribute_block(item), "");
+}
+
+#[test]
+fn render_domain_attribute_block_dispatches_each_log_level() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let item = push_fn_item(&mut m, "logger");
+    ensure_item_attrs_capacity(&mut m);
+    m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Debug)));
+    m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+    m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn)));
+    m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Error)));
+    let out = m.pretty().render_domain_attribute_block(item);
+    assert_eq!(
+        out,
+        "#[rseq::intrinsic(\"log-debug\")]\n\
+         #[rseq::intrinsic(\"log-info\")]\n\
+         #[rseq::intrinsic(\"log-warn\")]\n\
+         #[rseq::intrinsic(\"log-error\")]\n"
+    );
 }

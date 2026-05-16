@@ -15,7 +15,11 @@
 //! (`render_ty`, `render_const`, `render_def_path(ItemId)`,
 //! `render_instance`, top-level `render`) are stubbed
 //! `unimplemented!(...)` with messages pointing at the stage
-//! that fills them.
+//! that fills them. `render_instance` is now wired per
+//! `pretty-printer.md` §10.2 for the Function / Static / Const
+//! variants by P1a-PP-05a (regseq-model-91); the ADT-definition
+//! variants stay `todo!()` until P1a-PP-05b (regseq-model-92)
+//! lands.
 //!
 //! Sigil-conventions table:
 //!
@@ -40,8 +44,11 @@ use crate::body::Body;
 use crate::body_ty::{operand_ty, place_ty, TypeRecovery};
 use crate::const_value::{Byte, Const};
 use crate::def_path::{render_def_path, DefPath};
-use crate::ids::{ConstId, InstanceId, ItemId, SourceFileId, TyId, VariantIdx};
-use crate::instance::{regseq_instance_kind_rank, rustc_instance_kind_sort_rank, InstanceKind};
+use crate::domain_attr::{AttrData, IntrinsicKind, LogLevel};
+use crate::ids::{ConstId, InstanceId, ItemId, LocalId, SourceFileId, TyId, VariantIdx};
+use crate::instance::{
+    regseq_instance_kind_rank, rustc_instance_kind_sort_rank, FunctionInstanceData, InstanceKind,
+};
 use crate::instance_ref::InstanceRef;
 use crate::item::{InlineHint, ItemKind, Linkage};
 use crate::layout::{EnumShape, FieldLayout, LayoutKind, VariantLayout};
@@ -1399,10 +1406,278 @@ impl<'a> PrettyPrinter<'a> {
         out
     }
 
-    /// Instance rendering. Filled in stage 14
-    /// (domain-specific extensions).
-    pub fn render_instance(&self, _id: InstanceId) -> String {
-        unimplemented!("stage 14 fills render_instance")
+    /// Composer over the closed 6-variant `InstanceKind` enum per
+    /// `pretty-printer.md` §10.2. Per D-14-5.7 LOCKED, does NOT
+    /// call `render_item`; composes the full per-variant envelope
+    /// from scratch, sharing only the §5.6 helper
+    /// `render_item_attribute_block` for Stream 1.
+    ///
+    /// `Function` / `Static` / `Const` are owned by this task
+    /// (P1a-PP-05a / regseq-model-91). `Struct` / `Enum` / `Union`
+    /// (the ADT-definition variants) are owned by P1a-PP-05b
+    /// (regseq-model-92) and panic with `todo!()` here until they
+    /// land.
+    pub fn render_instance(&self, id: InstanceId) -> String {
+        let inst = &self.model.instances[id];
+        match &inst.kind {
+            InstanceKind::Function(data) => self.render_function_instance(inst.item, data),
+            InstanceKind::Static { ty, init } => self.render_static_instance(inst.item, *ty, *init),
+            InstanceKind::Const { ty, value } => self.render_const_instance(inst.item, *ty, *value),
+            InstanceKind::Struct { .. }
+            | InstanceKind::Enum { .. }
+            | InstanceKind::Union { .. } => {
+                todo!(
+                    "render_instance: ADT-definition variants (Struct / Enum / Union) \
+                     owned by P1a-PP-05b (regseq-model-92) per pretty-printer.md \
+                     §10.2.4 - §10.2.6"
+                )
+            }
+        }
+    }
+
+    /// `Function` envelope composer per `pretty-printer.md` §10.2.1.
+    ///
+    /// Composition: `[<attrs>\n][unsafe ][extern "ABI" ]fn <path>
+    /// (<args>[, ...]) -> <ret>[ { <body> };]` per D-14-5.2.
+    /// `flavor` / `virtual_idx` are identity metadata only -- not
+    /// rendering inputs (per pretty-printer.md:3342-3356).
+    fn render_function_instance(&self, item: ItemId, data: &FunctionInstanceData) -> String {
+        let attr_block = self.render_instance_attribute_block(item);
+        let item_record = &self.model.items[item];
+        let sig = self.model.sigs.resolve(data.fn_sig).clone();
+
+        let mut head = String::new();
+        head.push_str(&attr_block);
+
+        // §10.2.1 Aspect 2 -- header keyword decoration.
+        // Order: [unsafe ][extern "ABI" ]fn <path>.
+        // `Item.is_unsafe` (NOT `fn_sig.safety`) is authoritative
+        // per pretty-printer.md:3472-3477.
+        if item_record.is_unsafe {
+            head.push_str("unsafe ");
+        }
+        if !matches!(sig.abi, FnAbi::Rust) {
+            let abi_label = match sig.abi {
+                FnAbi::Rust => "Rust",
+                FnAbi::C => "C",
+            };
+            head.push_str("extern \"");
+            head.push_str(abi_label);
+            head.push_str("\" ");
+        }
+        head.push_str("fn ");
+        head.push_str(&self.render_def_path(item));
+
+        // §10.2.1 Aspect 3 -- arg-list grammar with `_N` sigils
+        // per §3.1 / spec.md §25.1 (locals 1..=arg_count are
+        // positional arguments).
+        head.push('(');
+        for (i, input_ty) in sig.inputs.iter().enumerate() {
+            if i > 0 {
+                head.push_str(", ");
+            }
+            head.push_str(&format!("_{}: {}", i + 1, self.render_ty(*input_ty)));
+        }
+        if sig.c_variadic {
+            // §14.3 invariant: c_variadic implies inputs.len() >= 1,
+            // so the leading comma is guaranteed.
+            head.push_str(", ...");
+        }
+        head.push(')');
+
+        // §10.2.1 Aspect 4 -- always-render return type, even unit
+        // and divergent. Header-vs-locals consistency: body envelope
+        // always declares `let mut _0: <ret>;`.
+        head.push_str(" -> ");
+        head.push_str(&self.render_ty(sig.output));
+
+        // §10.2.1 Aspect 5 -- body-vs-declaration trailer.
+        match &data.body {
+            None => {
+                // Foreign-declaration form (`Item.linkage == Foreign`).
+                head.push(';');
+                head
+            }
+            Some(body) => {
+                let envelope = self.render_function_body_envelope(body, sig.output);
+                format!("{head} {{\n{envelope}\n}}")
+            }
+        }
+    }
+
+    /// Function-body envelope per `pretty-printer.md` §3.1.
+    ///
+    /// Composition rules (per pretty-printer.md:3534-3563):
+    /// - Locals declaration block: `let mut _0: <ret>;` for
+    ///   `RETURN_PLACE`, then non-arg locals (`arg_count + 1..`)
+    ///   in `LocalId` order with mut / non-mut discrimination from
+    ///   `LocalDecl.mutability`. Arg-locals `_1..=_arg_count` are
+    ///   NOT redeclared (declared in the header arg-list).
+    /// - LocalDecl span trailing comment per §4.2 / §4.3 (only
+    ///   when `include_spans == true` and the span is not
+    ///   synthesized).
+    /// - Debug-name lines per §4.4 (only when
+    ///   `include_debug_names == true`): one `debug NAME => _N;`
+    ///   per local with `debug_name = Some(_)` in `LocalId` order.
+    ///   Preceded by a blank line separator.
+    /// - Basic blocks via `render_basic_block` (§7.10), separated
+    ///   by blank lines, preceded by a blank line separator.
+    fn render_function_body_envelope(&self, body: &Body, ret_ty: TyId) -> String {
+        let indent = "    ";
+
+        // Section 1: locals declarations (always non-empty -- at
+        // least `let mut _0: <ret>;`).
+        let mut locals_lines: Vec<String> = Vec::new();
+
+        // RETURN_PLACE: always `let mut _0: <render_ty(fn_sig.output)>;`.
+        let return_line = format!("{indent}let mut _0: {};", self.render_ty(ret_ty));
+        let return_span = if body.local_decls.is_empty() {
+            Span::dummy()
+        } else {
+            body.local_decls[LocalId::RETURN_PLACE].span
+        };
+        locals_lines.push(self.maybe_with_span_comment(return_line, return_span));
+
+        // Non-arg locals (skip `_1..=_arg_count`).
+        for i in (body.arg_count + 1)..body.local_decls.len() {
+            let local = &body.local_decls[LocalId::from_u32(i as u32)];
+            let prefix = match local.mutability {
+                Mutability::Mut => "let mut ",
+                Mutability::Not => "let ",
+            };
+            let line = format!("{indent}{prefix}_{i}: {};", self.render_ty(local.ty));
+            locals_lines.push(self.maybe_with_span_comment(line, local.span));
+        }
+        let locals_section = locals_lines.join("\n");
+
+        // Section 2: debug-name lines (gated by include_debug_names;
+        // walks ALL locals in LocalId order, only emits those with
+        // debug_name = Some(_)).
+        let mut sections: Vec<String> = vec![locals_section];
+        if self.options.include_debug_names {
+            let mut debug_lines: Vec<String> = Vec::new();
+            for (i, local) in body.local_decls.iter().enumerate() {
+                if let Some(name_id) = local.debug_name {
+                    let name = self.model.strings.resolve(name_id);
+                    debug_lines.push(format!("{indent}debug {name} => _{i};"));
+                }
+            }
+            if !debug_lines.is_empty() {
+                sections.push(debug_lines.join("\n"));
+            }
+        }
+
+        // Section 3: basic blocks via render_basic_block, separated
+        // by blank lines.
+        if !body.basic_blocks.is_empty() {
+            let block_texts: Vec<String> = body
+                .basic_blocks
+                .iter()
+                .map(|block| self.render_basic_block(block, body))
+                .collect();
+            sections.push(block_texts.join("\n\n"));
+        }
+
+        sections.join("\n\n")
+    }
+
+    /// `Static` composer per `pretty-printer.md` §10.2.2.
+    ///
+    /// Form: `[<attrs>\n]static [mut ]<path>: <ty>[ = <const>];`.
+    /// The mutability prefix reads from
+    /// `model.items[inst.item].kind` (the Item-side mutability is
+    /// authoritative since statics can't be generic so the 1:1
+    /// Item:Instance mapping always holds).
+    fn render_static_instance(&self, item: ItemId, ty: TyId, init: Option<ConstId>) -> String {
+        let attr_block = self.render_instance_attribute_block(item);
+        let item_record = &self.model.items[item];
+        let prefix = match &item_record.kind {
+            ItemKind::Static {
+                mutability: Mutability::Not,
+            } => "static ",
+            ItemKind::Static {
+                mutability: Mutability::Mut,
+            } => "static mut ",
+            other => panic!(
+                "render_instance: InstanceKind::Static Item carries non-Static ItemKind \
+                 {other:?}; the 1:1 Item:Instance mapping per spec.md §8.0 + §9.4 is \
+                 violated"
+            ),
+        };
+        let path = self.render_def_path(item);
+        let ty_text = self.render_ty(ty);
+        let trailer = match init {
+            // D-14-4.1 pair-form: thread the Instance's `ty` as the
+            // consumer-context type.
+            Some(c) => format!(" = {};", self.render_const(c, ty)),
+            // Foreign-extern declaration form: trailing `;` only.
+            None => ";".to_owned(),
+        };
+        format!("{attr_block}{prefix}{path}: {ty_text}{trailer}")
+    }
+
+    /// `Const` composer per `pretty-printer.md` §10.2.3.
+    ///
+    /// Form: `[<attrs>\n]const <path>: <ty> = <const>;`. No
+    /// mutability prefix (`const mut` is invalid Rust). No
+    /// foreign-declaration form (`value: ConstId` is always
+    /// populated per stage-12 D-12-2).
+    fn render_const_instance(&self, item: ItemId, ty: TyId, value: ConstId) -> String {
+        let attr_block = self.render_instance_attribute_block(item);
+        let path = self.render_def_path(item);
+        let ty_text = self.render_ty(ty);
+        // D-14-4.1 pair-form: thread the Instance's `ty` as the
+        // consumer-context type.
+        let value_text = self.render_const(value, ty);
+        format!("{attr_block}const {path}: {ty_text} = {value_text};")
+    }
+
+    /// §10.2.7 attribute-block composition per D-14-5.6 LOCKED.
+    ///
+    /// Concatenates Stream 1 (the §5.6 shared helper
+    /// `render_item_attribute_block`) followed by Stream 2 (the
+    /// `render_domain_attribute_block` helper). Each stream emits
+    /// a multi-line block ending in `\n` when non-empty or empty
+    /// string otherwise; the empty-cases at
+    /// pretty-printer.md:4153-4161 fall out of plain concatenation.
+    fn render_instance_attribute_block(&self, item: ItemId) -> String {
+        let stream1 = self.render_item_attribute_block(item);
+        let stream2 = self.render_domain_attribute_block(item);
+        format!("{stream1}{stream2}")
+    }
+
+    /// §10.2.7 Stream 2 helper per pretty-printer.md:4124-4139.
+    ///
+    /// Walks `model.domain_attrs.item_attrs[item]` in Vec-index
+    /// order, dispatching per `AttrData` variant per the
+    /// pretty-printer.md:4100-4106 render table. Returns a
+    /// multi-line block ending in `\n` when non-empty or an empty
+    /// string when there are no surviving rows.
+    ///
+    /// Stage-14 ships only the `Intrinsic(IntrinsicKind::Log(_))`
+    /// dispatch (-> `#[rseq::intrinsic("log-<sev>")]`). Phase-2
+    /// stages append new `AttrData` variants and their render
+    /// rules per pretty-printer.md:4115-4122 (closed-append-only).
+    fn render_domain_attribute_block(&self, item: ItemId) -> String {
+        if item.index() >= self.model.domain_attrs.item_attrs.len() {
+            return String::new();
+        }
+        let attrs = &self.model.domain_attrs.item_attrs[item];
+        let mut out = String::new();
+        for attr in attrs {
+            match attr {
+                AttrData::Intrinsic(IntrinsicKind::Log(level)) => {
+                    let label = match level {
+                        LogLevel::Debug => "log-debug",
+                        LogLevel::Info => "log-info",
+                        LogLevel::Warn => "log-warn",
+                        LogLevel::Error => "log-error",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
+            }
+        }
+        out
     }
 
     // ------------------------------------------------------------------

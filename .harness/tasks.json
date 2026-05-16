@@ -3231,7 +3231,7 @@
           "id": "regseq-model-91",
           "name": "P1a-PP-05a: render_instance for Function/Static/Const variants + \u00a73 envelope",
           "spec": ".harness/tasks/regseq-model/91-render-instance-function-static-const.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-86",
             "regseq-model-90",

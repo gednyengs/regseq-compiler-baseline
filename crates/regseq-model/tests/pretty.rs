@@ -11,15 +11,16 @@
 
 use insta::assert_snapshot;
 use regseq_model::{
-    AggregateKind, AssertKind, AutoTrait, BasicBlock, BinOp, BlockId, Body, Byte, CallCallee,
-    CastKind, Const, ConstId, ContentHash, CopyNonOverlapping, DefPath, DefPathData, DefPathHash,
-    DefPathSegment, EnumShape, FieldIdx, FieldLayout, FloatKind, FnAbi, FnSig, GenericArg,
-    InlineHint, Instance, InstanceKind, InstanceRef, IntKind, Item, ItemId, ItemKind, Layout,
-    LayoutKind, Linkage, LocalDecl, LocalId, Mutability, NonDivergingIntrinsic, Operand, Place,
-    PlaceElem, PointerCoercion, PrettyPrintOptions, PrettyPrinter, Provenance, RegseqModel, Rvalue,
-    Safety, SourceFile, SourceFileId, Span, StableCrateId, Statement, StatementKind, SwitchTargets,
-    SyntheticItemKind, TagEncoding, TagScalar, Terminator, TerminatorKind, Ty, TyId, UintKind,
-    UnOp, VariantIdx, VariantLayout, WrappingRange, UNIT_LAYOUT,
+    AggregateKind, AssertKind, AttrData, AutoTrait, BasicBlock, BinOp, BlockId, Body, Byte,
+    CallCallee, CastKind, Const, ConstId, ContentHash, CopyNonOverlapping, DefPath, DefPathData,
+    DefPathHash, DefPathSegment, EnumShape, FieldIdx, FieldLayout, FloatKind, FnAbi, FnSig,
+    GenericArg, InlineHint, Instance, InstanceKind, InstanceRef, IntKind, IntrinsicKind, Item,
+    ItemId, ItemKind, Layout, LayoutKind, Linkage, LocalDecl, LocalId, LogLevel, Mutability,
+    NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, PrettyPrintOptions,
+    PrettyPrinter, Provenance, RegseqModel, Rvalue, Safety, SourceFile, SourceFileId, Span,
+    StableCrateId, Statement, StatementKind, SwitchTargets, SyntheticItemKind, TagEncoding,
+    TagScalar, Terminator, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx, VariantLayout,
+    WrappingRange, UNIT_LAYOUT,
 };
 use regseq_model::{FunctionInstanceData, FunctionInstanceFlavor};
 
@@ -2496,5 +2497,553 @@ fn render_const_specimen_109_bytes_structural_fallback() {
     assert_snapshot!(
         m.pretty().render_const(id, struct_ty),
         @"bytes![0x00, <uninit>, 0xff, <reloc: pl011::some_item>]"
+    );
+}
+
+// ------------------------------------------------------------------
+// §9.11 render_instance specimens 110 - 122 (P1a-PP-05a).
+//
+// Each specimen pins the exact textual contract for one
+// `InstanceKind` envelope (Function / Static / Const). The body
+// content inside `{ ... }` is fully determined here (no `...`
+// placeholder) so the snapshot is byte-exact.
+// ------------------------------------------------------------------
+
+/// Helper: push a function `Item` with the given rendered path and
+/// return its ItemId.
+fn push_fn_item(m: &mut RegseqModel, rendered: &str) -> ItemId {
+    push_item(m, ItemKind::Function, rendered)
+}
+
+/// Helper: minimal function body with locals `[_0: ret, _1..=N: args]`
+/// and a single `bb0: { return -> []; }` block.
+fn minimal_function_body(ret_ty: TyId, arg_tys: &[TyId]) -> Body {
+    let mut body = Body {
+        arg_count: arg_tys.len(),
+        ..Body::default()
+    };
+    body.local_decls.push(LocalDecl {
+        ty: ret_ty,
+        mutability: Mutability::Mut,
+        span: Span::dummy(),
+        debug_name: None,
+    });
+    for ty in arg_tys {
+        body.local_decls.push(LocalDecl {
+            ty: *ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+    }
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: Span::dummy(),
+        },
+    });
+    body
+}
+
+/// Helper: push a function `Instance` and return its `InstanceId`.
+fn push_function_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    sig: regseq_model::FnSigId,
+    body: Option<Body>,
+) -> regseq_model::InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    })
+}
+
+/// Helper: push a Static `Instance` and return its `InstanceId`.
+fn push_static_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    ty: TyId,
+    init: Option<ConstId>,
+) -> regseq_model::InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Static { ty, init },
+    })
+}
+
+/// Helper: push a Const `Instance` and return its `InstanceId`.
+fn push_const_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    ty: TyId,
+    value: ConstId,
+) -> regseq_model::InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Const { ty, value },
+    })
+}
+
+/// Helper: ensure `domain_attrs.item_attrs` is parallel to `model.items`.
+fn ensure_item_attrs_capacity_inttest(m: &mut RegseqModel) {
+    while m.domain_attrs.item_attrs.len() < m.items.len() {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+}
+
+#[test]
+fn render_instance_specimen_110_plain_function_unit_return() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let pl011_item = push_item(&mut m, ItemKind::Struct, "pl011::PL011");
+    let pl011_ty = m.types.intern(Ty::Struct {
+        item: pl011_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ref_pl011 = m.types.intern(Ty::Ref(pl011_ty, Provenance::SharedBorrow));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ref_pl011, u8_ty],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(&mut m, "pl011::write_byte");
+    let body = minimal_function_body(unit_ty, &[ref_pl011, u8_ty]);
+    let id = push_function_instance_local(&mut m, fn_item, sig, Some(body));
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    fn pl011::write_byte(_1: &pl011::PL011, _2: u8) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_111_unsafe_function_with_raw_pointer_arg() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_mut_u8 = m.types.intern(Ty::Ptr(u8_ty, Mutability::Mut));
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_mut_u8, u8_ty],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Unsafe,
+    });
+    let fn_item = push_fn_item(&mut m, "pl011::ptr_write");
+    m.items[fn_item].is_unsafe = true;
+    let body = minimal_function_body(unit_ty, &[ptr_mut_u8, u8_ty]);
+    let id = push_function_instance_local(&mut m, fn_item, sig, Some(body));
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    unsafe fn pl011::ptr_write(_1: *mut u8, _2: u8) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_112_function_with_full_stream_one_attribute_block() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let pl011_item = push_item(&mut m, ItemKind::Struct, "pl011::PL011");
+    let pl011_ty = m.types.intern(Ty::Struct {
+        item: pl011_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ptr_mut = m.types.intern(Ty::Ptr(pl011_ty, Mutability::Mut));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_mut],
+        output: i32_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Unsafe,
+    });
+    let fn_item = push_fn_item(&mut m, "pl011::init");
+    let section = m.strings.intern(".text.boot");
+    {
+        let item = &mut m.items[fn_item];
+        item.linkage = Linkage::NoMangle;
+        item.inline_hint = InlineHint::Always;
+        item.link_section = Some(section);
+        item.is_unsafe = true;
+    }
+    let body = minimal_function_body(i32_ty, &[ptr_mut]);
+    let id = push_function_instance_local(&mut m, fn_item, sig, Some(body));
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    #[no_mangle]
+    #[inline(always)]
+    #[link_section = ".text.boot"]
+    unsafe fn pl011::init(_1: *mut pl011::PL011) -> i32 {
+        let mut _0: i32;
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_113_foreign_c_function_declaration() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_const_u8 = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_const_u8],
+        output: i32_ty,
+        abi: FnAbi::C,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(&mut m, "libc::printf");
+    m.items[fn_item].linkage = Linkage::Foreign;
+    let id = push_function_instance_local(&mut m, fn_item, sig, None);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @r###"
+    #[foreign]
+    extern "C" fn libc::printf(_1: *const u8) -> i32;
+    "###
+    );
+}
+
+#[test]
+fn render_instance_specimen_114_foreign_c_variadic_declaration() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let ptr_const_u8 = m.types.intern(Ty::Ptr(u8_ty, Mutability::Not));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_const_u8],
+        output: i32_ty,
+        abi: FnAbi::C,
+        c_variadic: true,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(&mut m, "libc::printf_variadic");
+    m.items[fn_item].linkage = Linkage::Foreign;
+    let id = push_function_instance_local(&mut m, fn_item, sig, None);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @r###"
+    #[foreign]
+    extern "C" fn libc::printf_variadic(_1: *const u8, ...) -> i32;
+    "###
+    );
+}
+
+#[test]
+fn render_instance_specimen_115_diagnostic_logging_intrinsic() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let str_ty = m.types.intern(Ty::Str);
+    let ref_str = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+    let log_arg_item = push_item(&mut m, ItemKind::Struct, "regseq::log::LogArg<'_>");
+    let log_arg_ty = m.types.intern(Ty::Struct {
+        item: log_arg_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let slice_log_arg = m.types.intern(Ty::Slice(log_arg_ty));
+    let ref_slice = m
+        .types
+        .intern(Ty::Ref(slice_log_arg, Provenance::SharedBorrow));
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ref_str, ref_slice],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(&mut m, "regseq::log::intrinsics::log_info");
+    m.items[fn_item].inline_hint = InlineHint::Never;
+    ensure_item_attrs_capacity_inttest(&mut m);
+    m.domain_attrs.item_attrs[fn_item]
+        .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+    let body = minimal_function_body(unit_ty, &[ref_str, ref_slice]);
+    let id = push_function_instance_local(&mut m, fn_item, sig, Some(body));
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    #[inline(never)]
+    #[rseq::intrinsic("log-info")]
+    fn regseq::log::intrinsics::log_info(_1: &str, _2: &[regseq::log::LogArg<'_>]) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_116_bridge_synthesised_drop_glue() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let pl011_item = push_item(&mut m, ItemKind::Struct, "pl011::PL011");
+    let pl011_ty = m.types.intern(Ty::Struct {
+        item: pl011_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ptr_mut = m.types.intern(Ty::Ptr(pl011_ty, Mutability::Mut));
+    let unit_ty = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ptr_mut],
+        output: unit_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    // The DefPath encodes the synthesised family (per spec.md §13.4):
+    // `core::ptr::drop_in_place::<pl011::PL011>`.
+    let fn_item = push_fn_item(&mut m, "core::ptr::drop_in_place::<pl011::PL011>");
+    let body = minimal_function_body(unit_ty, &[ptr_mut]);
+    let inst_id = m.instances.push(regseq_model::Instance {
+        item: fn_item,
+        generic_args: vec![],
+        emission_name: m.strings.intern("drop_in_place_PL011"),
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::DropGlue,
+            virtual_idx: None,
+        }),
+    });
+    assert_snapshot!(m.pretty().render_instance(inst_id), @r###"
+    fn core::ptr::drop_in_place::<pl011::PL011>(_1: *mut pl011::PL011) -> () {
+        let mut _0: ();
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_117_divergent_return() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let panic_info_item = push_item(&mut m, ItemKind::Struct, "core::panic::PanicInfo");
+    let panic_info_ty = m.types.intern(Ty::Struct {
+        item: panic_info_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ref_panic_info = m
+        .types
+        .intern(Ty::Ref(panic_info_ty, Provenance::SharedBorrow));
+    let never_ty = m.types.intern(Ty::Never);
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![ref_panic_info],
+        output: never_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let fn_item = push_fn_item(&mut m, "pl011::panic_handler");
+    let body = minimal_function_body(never_ty, &[ref_panic_info]);
+    let id = push_function_instance_local(&mut m, fn_item, sig, Some(body));
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    fn pl011::panic_handler(_1: &core::panic::PanicInfo) -> ! {
+        let mut _0: !;
+
+        bb0: {
+            return -> [];
+        }
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_118_defined_immutable_static() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let value = m.consts.intern(Const::Uint(UintKind::U32, 268472320));
+    let item = push_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "pl011::BASE_ADDR",
+    );
+    let id = push_static_instance_local(&mut m, item, u32_ty, Some(value));
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @"static pl011::BASE_ADDR: u32 = 268472320_u32;"
+    );
+}
+
+#[test]
+fn render_instance_specimen_119_defined_mutable_static_with_struct_initializer() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let initialised_name = m.strings.intern("initialised");
+    let count_name = m.strings.intern("count");
+    let state_item = push_item(&mut m, ItemKind::Struct, "pl011::State");
+    let state_layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct {
+            fields: vec![
+                FieldLayout {
+                    name: initialised_name,
+                    ty: bool_ty,
+                    offset: 0,
+                },
+                FieldLayout {
+                    name: count_name,
+                    ty: u32_ty,
+                    offset: 4,
+                },
+            ],
+        },
+    };
+    let state_ty = m.types.intern(Ty::Struct {
+        item: state_item,
+        args: vec![],
+        layout: state_layout,
+    });
+    let bool_const = m.consts.intern(Const::Bool(false));
+    let u32_zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let agg = m
+        .consts
+        .intern(Const::Aggregate(vec![bool_const, u32_zero]));
+    let item = push_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Mut,
+        },
+        "pl011::DRIVER_STATE",
+    );
+    let id = push_static_instance_local(&mut m, item, state_ty, Some(agg));
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @"static mut pl011::DRIVER_STATE: pl011::State = pl011::State { initialised: false, count: 0_u32 };"
+    );
+}
+
+#[test]
+fn render_instance_specimen_120_foreign_extern_static() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let file_item = push_item(&mut m, ItemKind::Struct, "libc::FILE");
+    let file_ty = m.types.intern(Ty::Struct {
+        item: file_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ptr_mut_file = m.types.intern(Ty::Ptr(file_ty, Mutability::Mut));
+    let item = push_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "libc::stderr",
+    );
+    m.items[item].linkage = Linkage::Foreign;
+    let id = push_static_instance_local(&mut m, item, ptr_mut_file, None);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @r###"
+    #[foreign]
+    static libc::stderr: *mut libc::FILE;
+    "###
+    );
+}
+
+#[test]
+fn render_instance_specimen_121_scalar_const() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let v = m.consts.intern(Const::Int(IntKind::I32, 16));
+    let item = push_item(&mut m, ItemKind::Const, "pl011::TX_FIFO_SIZE");
+    let id = push_const_instance_local(&mut m, item, i32_ty, v);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @"const pl011::TX_FIFO_SIZE: i32 = 16_i32;"
+    );
+}
+
+#[test]
+fn render_instance_specimen_122_reference_typed_const_string_literal() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let str_ty = m.types.intern(Ty::Str);
+    let ref_str = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+    // Install the ConstMemoryStatic synthetic carrying b"hello".
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let bytes_const = m.consts.intern(Const::Bytes(
+        b"hello".iter().map(|b| Byte::Value(*b)).collect(),
+    ));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 5));
+    let synth = SyntheticItemKind::ConstMemoryStatic {
+        content_hash: ContentHash(0xCAFE_BABE),
+    };
+    let static_ref = install_static_with_synth(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "<regseq_synth>::ConstMemoryStatic::a1b2",
+        arr_ty,
+        Some(bytes_const),
+        synth,
+    );
+    // Aggregate([Reloc, Uint(usize, len)]) is the fat-pointer shape.
+    let reloc_const = m.consts.intern(Const::Reloc(static_ref));
+    let len_const = m.consts.intern(Const::Uint(UintKind::Usize, 5));
+    let agg = m
+        .consts
+        .intern(Const::Aggregate(vec![reloc_const, len_const]));
+    let item = push_item(&mut m, ItemKind::Const, "pl011::GREETING");
+    align_synthetic_kinds(&mut m, SyntheticItemKind::None);
+    let id = push_const_instance_local(&mut m, item, ref_str, agg);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @r###"const pl011::GREETING: &str = "hello";"###
     );
 }
