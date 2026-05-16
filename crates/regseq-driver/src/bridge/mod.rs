@@ -114,6 +114,14 @@ pub struct BridgeCtxt<'tcx> {
     /// triple is observed at a call site that the Phase-4 walk had no
     /// way to reach in advance.
     pub function_instance_for_item: HashMap<(ItemId, ArgsKey, FunctionInstanceFlavor), InstanceId>,
+    /// Reverse lookup from model `TyId` to its originating
+    /// `rustc_middle::ty::Ty<'tcx>` (after region erasure). Populated
+    /// on every successful return from `ty::translate_erased_ty` per
+    /// audit-finding regseq-driver-43-2: Phase-5 body materialisation
+    /// reconstitutes per-Instance rustc generic args from the model's
+    /// `Instance.generic_args` by mapping each `GenericArg::Type(TyId)`
+    /// back through this cache.
+    pub ty_forward_cache: HashMap<TyId, rustc_middle::ty::Ty<'tcx>>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -138,6 +146,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             source_item_handles: HashMap::new(),
             source_ty_pending: HashMap::new(),
             function_instance_for_item: HashMap::new(),
+            ty_forward_cache: HashMap::new(),
         }
     }
 }
@@ -265,11 +274,43 @@ pub fn flush_pending_items_for_tests(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Br
 /// (post-Phase-4 ItemIds are dense and append-only); the production
 /// path also relies on this via the post-body-passes flush in
 /// `construct_instances_and_resolve_cross_references`.
+///
+/// Per audit-finding regseq-driver-43-2 (body materialisation
+/// triggers translate_ty on local types, which can intern fresh
+/// source-derived items mid-translation): after assigning ItemIds we
+/// also drain `source_ty_pending` so any nominal `Ty` views that
+/// embed the freshly-bound placeholder are patched to the real
+/// `ItemId`. Without this, subsequent `args_key_for_generic_args_*`
+/// calls during the same Phase-5 sub-step panic on an unresolved
+/// placeholder.
 pub(crate) fn assign_late_pending_items_for_terminator(ctxt: &mut BridgeCtxt<'_>) {
-    if ctxt.pending_items.is_empty() {
+    if ctxt.pending_items.is_empty() && ctxt.source_ty_pending.is_empty() {
         return;
     }
-    assign::assign_late_pending_items(ctxt);
+    if !ctxt.pending_items.is_empty() {
+        assign::assign_late_pending_items(ctxt);
+    }
+    patch_resolved_source_ty_pending(ctxt);
+}
+
+/// Patch every `source_ty_pending` entry whose handle now resolves to
+/// a final `ItemId`. Entries whose handle is still unbound are left
+/// in place so a later drain can pick them up. Per audit-finding
+/// regseq-driver-43-2.
+pub(crate) fn patch_resolved_source_ty_pending(ctxt: &mut BridgeCtxt<'_>) {
+    let snapshot: Vec<(ItemHandle, Vec<TyId>)> = ctxt.source_ty_pending.drain().collect();
+    for (handle, ty_ids) in snapshot {
+        if let Some(item_id) = ctxt.handles.resolve(handle) {
+            for ty_id in ty_ids {
+                ctxt.model.types.patch_nominal_item_id(ty_id, item_id);
+            }
+        } else {
+            // Handle still unbound (its pending item has not been
+            // drained yet); reinstate the entry so the next drain
+            // can pick it up.
+            ctxt.source_ty_pending.insert(handle, ty_ids);
+        }
+    }
 }
 
 /// Derive the Phase-2 placeholder `ItemId` for a Phase-2 `ItemHandle`.

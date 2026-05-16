@@ -476,6 +476,194 @@ fn populate_trait_object_dispatch_model(model: &mut RegseqModel) -> regseq_model
 }
 
 #[test]
+fn real_mir_drop_terminator_exposes_drop_as_call_prelude_and_validates() {
+    // Audit-finding regseq-driver-43 test plan: a real-MIR fixture
+    // containing a `Drop` terminator passes through
+    // `run_phase5_body_passes`; the Drop-as-Call prelude is
+    // observable and joint validation passes.
+    let source = r#"
+pub struct NeedsDrop(pub u8);
+impl Drop for NeedsDrop { fn drop(&mut self) {} }
+pub fn with_drop() { let _d = NeedsDrop(7); }
+"#;
+    with_bridge("bridge_body_passes_real_drop", source, |tcx, cx| {
+        let instance = push_function_instance(tcx, cx, "with_drop");
+
+        run_phase5_body_passes(cx).unwrap();
+
+        let function = cx.model.instances[instance]
+            .kind
+            .as_function()
+            .expect("with_drop is a function instance");
+        let body = function
+            .body
+            .as_ref()
+            .expect("Phase 5 should attach the materialised body");
+        // The Drop-as-Call prelude allocates `_t_drop_arg` and
+        // `_t_drop_ret` via push_synthetic_local; the originating
+        // function's body therefore has strictly more locals than
+        // the source MIR plus contains at least one
+        // `Rvalue::RawPtr(Mutability::Mut, ...)` statement preceding
+        // a Call whose first arg is `Operand::Move(...)`. Per spec
+        // section 25.7.1 step 3.
+        let has_raw_ptr = body.basic_blocks.iter().any(|block| {
+            block.statements.iter().any(|stmt| {
+                matches!(
+                    stmt.kind,
+                    StatementKind::Assign(_, regseq_model::Rvalue::RawPtr(Mutability::Mut, _))
+                )
+            })
+        });
+        assert!(
+            has_raw_ptr,
+            "expected the Drop-as-Call prelude `Assign(RawPtr(Mut, ...))` statement"
+        );
+        let drop_call_arg = body.basic_blocks.iter().find_map(|block| {
+            if let TerminatorKind::Call { args, .. } = &block.terminator.kind {
+                if !args.is_empty() {
+                    return Some(args[0].clone());
+                }
+            }
+            None
+        });
+        assert!(
+            matches!(drop_call_arg, Some(Operand::Move(_))),
+            "expected the Drop-as-Call args[0] to be Operand::Move(...), got {drop_call_arg:?}"
+        );
+        validate_body_places(&cx.model, body).expect("joint validation passes");
+    });
+}
+
+#[test]
+fn real_mir_dyn_trait_call_is_rewritten_to_indirect_and_validates() {
+    // Audit-finding regseq-driver-43 test plan: a real-MIR fixture
+    // containing a `dyn Trait` method call passes through
+    // `run_phase5_body_passes`; the pre-rewrite Direct callee has
+    // `FunctionInstanceFlavor::Virtual` with `virtual_idx: Some(_)`,
+    // the post-rewrite Call has `CallCallee::Indirect`, the rewrite
+    // allocated 4-5 synthetic locals, and joint validation passes.
+    //
+    // `caller` is `#[no_mangle] pub extern "C"` so the bridge's
+    // Phase-1 mono-item discovery roots it; its `&x as &dyn Reader`
+    // unsize cast triggers Phase-2 vtable synthesis for
+    // `dyn Reader / u32`.
+    let source = r#"
+pub trait Reader { fn read(&self) -> u8; }
+impl Reader for u32 { fn read(&self) -> u8 { 0 } }
+pub fn dispatch(r: &dyn Reader) -> u8 { r.read() }
+#[no_mangle]
+pub extern "C" fn caller() -> u8 { let x: u32 = 1; dispatch(&x) }
+"#;
+    with_bridge("bridge_body_passes_real_dyn", source, |tcx, _cx| {
+        let dispatch_def_id = find_fn_def_id(tcx, "dispatch").to_def_id();
+        let dispatch_def_path_hash = tcx.def_path_hash(dispatch_def_id);
+        let input = regseq_driver::bridge::BridgeInput::new(tcx);
+        let model = regseq_driver::bridge::run_bridge(input).expect("bridge runs end-to-end");
+
+        // Locate the `dispatch` Function instance by matching its
+        // rustc DefPathHash.
+        let dispatch_instance = model
+            .instances
+            .iter()
+            .enumerate()
+            .find_map(|(idx, inst)| {
+                if !matches!(inst.kind, InstanceKind::Function(_)) {
+                    return None;
+                }
+                let hash = model.item_def_paths[inst.item];
+                if hash.stable_crate_id.0 == dispatch_def_path_hash.stable_crate_id().as_u64()
+                    && hash.local_hash == dispatch_def_path_hash.local_hash().as_u64()
+                {
+                    Some(regseq_model::InstanceId::from_u32(idx as u32))
+                } else {
+                    None
+                }
+            })
+            .expect("dispatch Function instance must exist post-bridge");
+        let function = model.instances[dispatch_instance]
+            .kind
+            .as_function()
+            .expect("dispatch is a function instance");
+        let body = function
+            .body
+            .as_ref()
+            .expect("Phase 5 should attach the materialised body");
+
+        // Post-rewrite Indirect callee per spec section 25.7.2 step 6.
+        let indirect_call = body.basic_blocks.iter().any(|block| {
+            matches!(
+                block.terminator.kind,
+                TerminatorKind::Call {
+                    callee: CallCallee::Indirect(_),
+                    ..
+                }
+            )
+        });
+        assert!(
+            indirect_call,
+            "expected post-rewrite Indirect callee on dyn Trait dispatch"
+        );
+
+        // Pre-rewrite Direct Virtual audit: the bridge created a
+        // Function Instance with `flavor: Virtual` + `virtual_idx:
+        // Some(slot)` whose owning Item carries the trait method
+        // `Reader::read`'s rustc DefPathHash. That Instance was the
+        // Direct callee consumed by the vtable-indirect rewrite per
+        // spec section 25.7.2. It survives in the model (with
+        // `body=None` per spec section 25.7.2) so the shape is
+        // observable post-rewrite. Finding it keyed by the trait
+        // method's DefPathHash ties the assertion to the specific
+        // call site that got rewritten, not just "some" Virtual
+        // instance.
+        let read_def_id = tcx
+            .associated_items(
+                tcx.hir_module_items(LocalModDefId::CRATE_DEF_ID)
+                    .free_items()
+                    .find(|item_id| {
+                        let item = tcx.hir_item(*item_id);
+                        matches!(&item.kind, rustc_hir::ItemKind::Trait(..))
+                    })
+                    .expect("Reader trait def-id")
+                    .owner_id
+                    .def_id
+                    .to_def_id(),
+            )
+            .in_definition_order()
+            .next()
+            .expect("trait method")
+            .def_id;
+        let read_hash = tcx.def_path_hash(read_def_id);
+        let pre_rewrite_virtual = model.instances.iter().any(|inst| {
+            let function = match inst.kind.as_function() {
+                Some(f) => f,
+                None => return false,
+            };
+            let item_hash = model.item_def_paths[inst.item];
+            function.flavor == FunctionInstanceFlavor::Virtual
+                && function.virtual_idx.is_some()
+                && item_hash.stable_crate_id.0 == read_hash.stable_crate_id().as_u64()
+                && item_hash.local_hash == read_hash.local_hash().as_u64()
+        });
+        assert!(
+            pre_rewrite_virtual,
+            "expected a Virtual {{ virtual_idx: Some(_) }} Function Instance keyed by Reader::read's DefPathHash"
+        );
+
+        // Spec section 25.7.2 allocates 4-5 synthetic locals per
+        // rewrite site (raw-pointer receiver: 4; reference
+        // receiver: 5).
+        let rustc_body = tcx.optimized_mir(dispatch_def_id);
+        let grew_by = body.local_decls.len() - rustc_body.local_decls.len();
+        assert!(
+            (4..=5).contains(&grew_by),
+            "expected the vtable rewrite to allocate 4-5 synthetic locals, got {grew_by}"
+        );
+
+        validate_body_places(&model, body).expect("joint validation passes");
+    });
+}
+
+#[test]
 fn trait_object_dispatch_rewrites_before_drop_call_and_joint_validation() {
     let source = r#"
 pub trait Reader { fn read(&self) -> u8; }

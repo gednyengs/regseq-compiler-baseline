@@ -47,6 +47,21 @@ fn translate_erased_ty<'tcx>(
     ty: rustc_middle::ty::Ty<'tcx>,
     allow_unsized_marker: bool,
 ) -> Result<TyId, BridgeError> {
+    let ty_id = translate_erased_ty_inner(cx, ty, allow_unsized_marker)?;
+    // Audit-finding regseq-driver-43-2: cache the (TyId,
+    // erased-rustc-Ty) pairing so Phase-5 body materialisation can
+    // reconstitute per-Instance rustc generic args from the model's
+    // `Instance.generic_args`. `entry(...).or_insert(ty)` keeps the
+    // first-seen rustc Ty stable across repeated translation calls.
+    cx.ty_forward_cache.entry(ty_id).or_insert(ty);
+    Ok(ty_id)
+}
+
+fn translate_erased_ty_inner<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+    allow_unsized_marker: bool,
+) -> Result<TyId, BridgeError> {
     let model_ty = match ty.kind() {
         TyKind::Bool => Ty::Bool,
         TyKind::Char => Ty::Char,
@@ -460,12 +475,38 @@ fn translate_generic_args<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     args: rustc_middle::ty::GenericArgsRef<'tcx>,
 ) -> Result<GenericArgs, BridgeError> {
-    args.iter()
-        .filter_map(|arg| match arg.kind() {
-            ty::GenericArgKind::Type(ty) => Some(translate_ty(cx, ty).map(GenericArg::Type)),
-            ty::GenericArgKind::Const(_) | ty::GenericArgKind::Lifetime(_) => None,
-        })
-        .collect()
+    // Audit-finding regseq-driver-43-2: forward (here) and reverse
+    // (`bridge/body/materialise.rs::translate_model_generic_args`)
+    // resolution of generic args MUST be coordinated. Lifetimes are
+    // dropped (they round-trip to `re_erased` on the reverse side);
+    // type args translate recursively; const args are explicitly
+    // rejected. Both paths must either preserve or reject scalar
+    // const generics. The reverse side rejects, so we reject here
+    // too rather than silently expanding the spec gap.
+    //
+    // Type args are translated with `allow_unsized_marker=true`:
+    // trait-method `FnDef` args carry the unsized `Self` of
+    // dyn-dispatch (per spec section 13.2 the Self of an
+    // `<dyn Trait as Trait>::method` FnDef is the `dyn Trait`
+    // itself), so disallowing unsized markers here would reject the
+    // trait shape. Sized-ness of non-Self params is rustc-side
+    // `?Sized` resolution; the bridge does not duplicate it.
+    let mut translated = GenericArgs::new();
+    for arg in args.iter() {
+        match arg.kind() {
+            ty::GenericArgKind::Type(ty) => {
+                let ty = erase_regions_or_reject(cx.input.tcx, ty)?;
+                translated.push(GenericArg::Type(translate_erased_ty(cx, ty, true)?));
+            }
+            ty::GenericArgKind::Const(konst) => {
+                return Err(BridgeError::UnsupportedConst {
+                    const_repr: format!("{konst:?}"),
+                });
+            }
+            ty::GenericArgKind::Lifetime(_) => {}
+        }
+    }
+    Ok(translated)
 }
 
 fn translate_int_kind(kind: ty::IntTy) -> IntKind {

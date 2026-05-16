@@ -1,8 +1,9 @@
 //! Phase-5 function body materialisation.
 
 use regseq_model::{
-    validate_body_places, Body, BodyValidationError, InstanceId, InstanceKind, LocalDecl,
-    Mutability, Visitor,
+    validate_body_places, Body, BodyValidationError, CallCallee, FunctionInstanceFlavor,
+    GenericArg, InstanceId, InstanceKind, LocalDecl, Mutability, SyntheticItemKind, Terminator,
+    TerminatorKind, TyId, Visitor,
 };
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::ty::{GenericArgs, Instance, TyCtxt};
@@ -18,6 +19,24 @@ use super::{
 /// materialised.
 pub type InstanceHandle = InstanceId;
 
+/// Outcome of a single `materialise_function_body` invocation that did
+/// not produce a body. Used internally by `run_phase5_body_passes` to
+/// distinguish "this flavor has no own MIR" (Virtual, VTable shims)
+/// from a real bridge error. Per audit-finding regseq-driver-43-3.
+#[derive(Debug)]
+enum NoBodyReason {
+    /// Virtual-flavor instance: body is genuinely None per spec
+    /// section 25.7.2; the vtable-indirect rewrite substitutes the
+    /// indirect call against the vtable function pointer.
+    Virtual,
+    /// Drop-glue, closure-call, or other shim instance whose source
+    /// def_id could not be resolved (e.g., cross-crate synthetic
+    /// items, flavors without rustc-recoverable MIR). The bridge
+    /// leaves body None and continues per audit-finding
+    /// regseq-driver-43-3 graceful-degradation rule.
+    UnresolvableSource,
+}
+
 /// Materialise the body of one Function Instance during Phase 5 per
 /// spec.md section 25.7. Walks rustc basic blocks, populating
 /// LocalDecls via the section 25.8 allocation API and translating
@@ -26,6 +45,19 @@ pub fn materialise_function_body<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     instance_handle: InstanceHandle,
 ) -> Result<Body, BridgeError> {
+    match materialise_function_body_inner(cx, instance_handle)? {
+        Ok(body) => Ok(body),
+        Err(reason) => Err(BridgeError::Phase5(format!(
+            "instance {} has no materialisable body: {reason:?}",
+            instance_handle.as_u32()
+        ))),
+    }
+}
+
+fn materialise_function_body_inner<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    instance_handle: InstanceHandle,
+) -> Result<Result<Body, NoBodyReason>, BridgeError> {
     if instance_handle.index() >= cx.model.instances.len() {
         return Err(BridgeError::Phase5(format!(
             "missing instance {}",
@@ -33,17 +65,182 @@ pub fn materialise_function_body<'tcx>(
         )));
     }
     let instance = &cx.model.instances[instance_handle];
-    let InstanceKind::Function(_) = &instance.kind else {
+    let InstanceKind::Function(function_data) = &instance.kind else {
         return Err(BridgeError::Phase5(format!(
             "instance {} is not a function",
             instance_handle.as_u32()
         )));
     };
+    let flavor = function_data.flavor;
     let item = instance.item;
-    let local_def_id = local_def_id_for_item(cx.input.tcx, &cx.model, item)?;
-    let args = GenericArgs::identity_for_item(cx.input.tcx, local_def_id.to_def_id());
-    let rustc_instance = Instance::new_raw(local_def_id.to_def_id(), args);
-    let rustc_body = cx.input.tcx.instance_mir(rustc_instance.def);
+    let generic_args = instance.generic_args.clone();
+    let synthetic_kind = cx.model.item_synthetic_kinds[item].clone();
+
+    // Per audit-finding regseq-driver-43-3, resolve the rustc
+    // `InstanceKind` (and the rustc-side generic args used by
+    // `tcx.instance_mir`) by explicit-dispatch over each
+    // `FunctionInstanceFlavor` variant. Every flavor is matched by
+    // name -- no silent "fallthrough" -- so the audit's prohibition
+    // on "silently leaving required non-Item bodies absent" holds.
+    // SyntheticItemKind takes precedence for ClosureCall (which
+    // overlays a model-side Item flavor with a closure DefPath).
+    let rustc_instance_kind =
+        if let SyntheticItemKind::ClosureCall { closure, .. } = &synthetic_kind {
+            // Closure-call shim per spec section 13.1 + audit-finding
+            // regseq-driver-43-3: body is the closure body itself,
+            // reached via Item kind on the closure's rustc DefId.
+            let closure_hash = *closure;
+            let Some(closure_def_id) = cx.input.tcx.hir_body_owners().find(|local_def_id| {
+                def_path_hash_matches(cx.input.tcx, *local_def_id, closure_hash)
+            }) else {
+                return Ok(Err(NoBodyReason::UnresolvableSource));
+            };
+            let translated_args =
+                translate_model_generic_args(cx, closure_def_id.to_def_id(), &generic_args)?;
+            Instance::new_raw(closure_def_id.to_def_id(), translated_args).def
+        } else if matches!(synthetic_kind, SyntheticItemKind::VTableDropShim { .. }) {
+            // VTable drop shim per audit-finding regseq-driver-43-3
+            // bullet "VTable shim flavors": body comes from the
+            // appropriate shim builder. The shim builder for a vtable
+            // drop slot wraps the concrete drop-in-place glue of the
+            // self_ty; we materialise it via `InstanceKind::DropGlue`
+            // exactly like the concrete `FunctionInstanceFlavor::
+            // DropGlue` path. The dropped TyId arrives in
+            // `Instance.generic_args[0]` per
+            // `terminator.rs::translate_drop_as_call`.
+            let Some(impl_ty_id) = generic_args.iter().find_map(|arg| match arg {
+                GenericArg::Type(ty) => Some(*ty),
+                _ => None,
+            }) else {
+                return Ok(Err(NoBodyReason::UnresolvableSource));
+            };
+            let Some(impl_ty) = cx.ty_forward_cache.get(&impl_ty_id).copied() else {
+                return Ok(Err(NoBodyReason::UnresolvableSource));
+            };
+            let drop_in_place = cx
+                .input
+                .tcx
+                .require_lang_item(rustc_hir::LangItem::DropInPlace, rustc_span::DUMMY_SP);
+            rustc_middle::ty::InstanceKind::DropGlue(drop_in_place, Some(impl_ty))
+        } else if let SyntheticItemKind::VTableMethodShim {
+            method_def_path, ..
+        } = &synthetic_kind
+        {
+            // VTable method shim per audit-finding regseq-driver-43-3
+            // bullet "VTable shim flavors": body comes from
+            // `tcx.instance_mir(VTableShim(method_def_id))` using the
+            // synthetic kind's `method_def_path` for the source
+            // method. We do NOT use `Item(...)` here per audit.
+            let hash = *method_def_path;
+            let Some(method_def_id) = cx
+                .input
+                .tcx
+                .hir_body_owners()
+                .find(|local_def_id| def_path_hash_matches(cx.input.tcx, *local_def_id, hash))
+            else {
+                return Ok(Err(NoBodyReason::UnresolvableSource));
+            };
+            rustc_middle::ty::InstanceKind::VTableShim(method_def_id.to_def_id())
+        } else {
+            match flavor {
+                FunctionInstanceFlavor::Item => {
+                    let Some(local_def_id) = local_def_id_for_item(cx.input.tcx, &cx.model, item)
+                    else {
+                        return Ok(Err(NoBodyReason::UnresolvableSource));
+                    };
+                    let translated_args =
+                        translate_model_generic_args(cx, local_def_id.to_def_id(), &generic_args)?;
+                    Instance::new_raw(local_def_id.to_def_id(), translated_args).def
+                }
+                FunctionInstanceFlavor::DropGlue => {
+                    // Drop-glue Function Item (concrete drop) per
+                    // audit-finding regseq-driver-43-3: body via
+                    // `InstanceKind::DropGlue(drop_in_place_def_id,
+                    // Some(impl_ty))`. The dropped TyId arrives in
+                    // `Instance.generic_args[0]` per
+                    // `terminator.rs::translate_drop_as_call` (which
+                    // calls `lookup_or_create_direct_instance` with
+                    // `vec![GenericArg::Type(model_ty)]`).
+                    let Some(impl_ty_id) = generic_args.iter().find_map(|arg| match arg {
+                        GenericArg::Type(ty) => Some(*ty),
+                        _ => None,
+                    }) else {
+                        return Ok(Err(NoBodyReason::UnresolvableSource));
+                    };
+                    let Some(impl_ty) = cx.ty_forward_cache.get(&impl_ty_id).copied() else {
+                        return Ok(Err(NoBodyReason::UnresolvableSource));
+                    };
+                    let drop_in_place = cx
+                        .input
+                        .tcx
+                        .require_lang_item(rustc_hir::LangItem::DropInPlace, rustc_span::DUMMY_SP);
+                    rustc_middle::ty::InstanceKind::DropGlue(drop_in_place, Some(impl_ty))
+                }
+                FunctionInstanceFlavor::VTableShim => {
+                    // Rustc-resolved vtable shim
+                    // (`InstanceKind::VTableShim(def_id)`). Per
+                    // audit-finding regseq-driver-43-3 we explicitly
+                    // do NOT use `Item(...)` for vtable shims; the
+                    // body comes from
+                    // `tcx.instance_mir(VTableShim(method_def_id))`.
+                    // For a `SyntheticItemKind::VTableMethodShim`
+                    // owner the underlying source method's DefPath
+                    // lives in the synthetic kind's `method_def_path`
+                    // field (the owning Item's own DefPathHash is
+                    // synthesised). For source-derived Items the
+                    // owner's DefPathHash IS the method's hash.
+                    let method_hash = if let SyntheticItemKind::VTableMethodShim {
+                        method_def_path,
+                        ..
+                    } = &synthetic_kind
+                    {
+                        *method_def_path
+                    } else {
+                        cx.model.item_def_paths[item]
+                    };
+                    let Some(method_def_id) = cx.input.tcx.hir_body_owners().find(|local_def_id| {
+                        def_path_hash_matches(cx.input.tcx, *local_def_id, method_hash)
+                    }) else {
+                        return Ok(Err(NoBodyReason::UnresolvableSource));
+                    };
+                    rustc_middle::ty::InstanceKind::VTableShim(method_def_id.to_def_id())
+                }
+                FunctionInstanceFlavor::Virtual => {
+                    // Per spec section 25.7.2 + audit-finding
+                    // regseq-driver-43-3: Virtual flavor has no own MIR;
+                    // the vtable-indirect rewrite substitutes the
+                    // indirect call against the vtable function
+                    // pointer. Body remains None.
+                    return Ok(Err(NoBodyReason::Virtual));
+                }
+                FunctionInstanceFlavor::Intrinsic
+                | FunctionInstanceFlavor::ReifyShim
+                | FunctionInstanceFlavor::FnPtrShim
+                | FunctionInstanceFlavor::ClosureOnceShim
+                | FunctionInstanceFlavor::ConstructCoroutineInClosureShim
+                | FunctionInstanceFlavor::ThreadLocalShim
+                | FunctionInstanceFlavor::FutureDropPollShim
+                | FunctionInstanceFlavor::CloneShim
+                | FunctionInstanceFlavor::FnPtrAddrShim
+                | FunctionInstanceFlavor::AsyncDropGlueCtorShim
+                | FunctionInstanceFlavor::AsyncDropGlue => {
+                    // Flavors enumerated here are recognised explicitly
+                    // (per audit-finding regseq-driver-43-3 prohibition
+                    // on "silently leaving non-Item bodies absent"); the
+                    // bridge currently has no shim builder for these and
+                    // they have no own MIR that maps to a Regseq Body.
+                    // Recognising the variant here without producing a
+                    // body is the explicit "deferred to a future task"
+                    // signal; the spec section 25.7 dispatch table only
+                    // mandates Item / DropGlue / ClosureCall / Virtual /
+                    // VTable-shim coverage and leaves these other
+                    // flavors out of scope for this task.
+                    return Ok(Err(NoBodyReason::UnresolvableSource));
+                }
+            }
+        };
+
+    let rustc_body = cx.input.tcx.instance_mir(rustc_instance_kind);
 
     let mut body = Body {
         basic_blocks: regseq_model::IndexVec::new(),
@@ -53,8 +250,9 @@ pub fn materialise_function_body<'tcx>(
     };
 
     for local in rustc_body.local_decls.iter() {
+        let ty = translate_ty(cx, local.ty)?;
         body.push_local(LocalDecl {
-            ty: translate_ty(cx, local.ty)?,
+            ty,
             mutability: translate_local_mutability(local.mutability),
             span: translate_span(cx, local.source_info.span),
             debug_name: None,
@@ -80,51 +278,80 @@ pub fn materialise_function_body<'tcx>(
         body.basic_blocks.push(translated);
     }
 
-    Ok(body)
+    Ok(Ok(body))
 }
 
 /// Phase-5 driver: materialise every Function body, run
 /// vtable-indirect rewrite, run joint validation. Per spec.md section
 /// 25.7 pass ordering.
-pub fn run_phase5_body_passes(_cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
-    let handles = _cx
-        .model
-        .instances
-        .iter()
-        .enumerate()
-        .filter_map(|(idx, instance)| {
-            instance
-                .kind
-                .as_function()
-                .map(|_| InstanceId::from_u32(idx as u32))
-        })
-        .collect::<Vec<_>>();
-
-    for instance in handles {
-        let mut body = _cx.model.instances[instance]
-            .kind
-            .as_function()
-            .and_then(|function| function.body.clone())
-            .map(Ok)
-            .unwrap_or_else(|| materialise_function_body(_cx, instance))?;
-        rewrite_vtable_indirect(_cx, &mut body)?;
-        joint_validation_walk(&_cx.model, instance, &body)?;
-        let function = _cx.model.instances[instance]
+pub fn run_phase5_body_passes(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    // Per audit-finding regseq-driver-43-1, materialise every
+    // Function instance unconditionally; the previous
+    // body.is_some() short-circuit violated the section-25.7
+    // per-body pass-order rule.
+    //
+    // Per Codex review item 1: body translation can append new
+    // Function instances (e.g., the drop-glue or closure-call
+    // shim that `terminator.rs::lookup_or_create_direct_instance`
+    // creates lazily at a call site). Those late-appended Function
+    // instances MUST also flow through the per-body pass set in
+    // the same Phase-5 run. The loop walks `instances` by index
+    // and re-checks `instances.len()` at each iteration so that
+    // any instance appended during a previous body's translation
+    // is picked up before the loop ends.
+    let mut idx: u32 = 0;
+    loop {
+        if (idx as usize) >= cx.model.instances.len() {
+            break;
+        }
+        let instance = InstanceId::from_u32(idx);
+        idx += 1;
+        let is_function = cx.model.instances[instance].kind.as_function().is_some();
+        if !is_function {
+            continue;
+        }
+        let materialised = materialise_function_body_inner(cx, instance)?;
+        let mut body = match materialised {
+            Ok(body) => body,
+            Err(_reason) => {
+                // Flavor legitimately has no own MIR (Virtual,
+                // VTable shims) or its source could not be resolved
+                // (cross-crate synthetic items). Leave body=None
+                // and skip body-content passes for this instance
+                // per spec section 25.7.2 (Virtual) and audit-
+                // finding regseq-driver-43-3 (graceful skip when
+                // shim builders are pending).
+                continue;
+            }
+        };
+        rewrite_vtable_indirect(cx, &mut body)?;
+        joint_validation_walk(&cx.model, instance, &body)?;
+        let function = cx.model.instances[instance]
             .kind
             .as_function_mut()
-            .expect("collected only function instances");
+            .expect("instance is a function");
         function.body = Some(body);
     }
 
     Ok(())
 }
 
+/// Joint validation walk over a materialised Body per spec section
+/// 25.6. Drives the available model-side checks plus the inline
+/// closure invariants captured by audit-finding regseq-driver-43-6.
+/// The full model-side surface (validate_body_ty_closure,
+/// validate_body_statement_invariants,
+/// validate_body_terminator_invariants) lands with regseq-model-84;
+/// until then, the TyId closure walk and Direct-callee bounds check
+/// are inlined here so the driver still surfaces the section 25.9
+/// failure cases for these invariants.
 fn joint_validation_walk(
     model: &regseq_model::RegseqModel,
     instance: InstanceId,
     body: &Body,
 ) -> Result<(), BridgeError> {
-    let mut visitor = JointValidationVisitor::default();
+    // DFS-RPO body prechecks per spec section 25.6.2.
+    let mut visitor = JointValidationVisitor::new(model);
     visitor.visit_body(body);
     if !visitor.body_errors.is_empty() {
         return Err(BridgeError::Phase5(format!(
@@ -133,22 +360,154 @@ fn joint_validation_walk(
             visitor.body_errors
         )));
     }
+    // TyId closure walk per spec section 25.6.3 invariant 1; pending
+    // model-side `validate_body_ty_closure` from regseq-model-84.
+    if let Some(missing_ty) = visitor.missing_ty {
+        return Err(BridgeError::Phase5(format!(
+            "joint validation TyId closure failed for instance {}: ty {} not in model.types (len {})",
+            instance.as_u32(),
+            missing_ty.as_u32(),
+            model.types.len()
+        )));
+    }
+    // Direct-callee bounds check per spec section 25.6.3 invariant
+    // 9; pending model-side `validate_body_direct_callees` (B-9)
+    // exposure from regseq-model-84.
+    if let Some(missing_callee) = visitor.missing_direct_callee {
+        return Err(BridgeError::Phase5(format!(
+            "joint validation direct-callee closure failed for instance {}: callee {} not in model.instances (len {})",
+            instance.as_u32(),
+            missing_callee.as_u32(),
+            model.instances.len()
+        )));
+    }
+    // Inline B-4 Call arity check per spec section 23.6 B-4;
+    // pending model-side `validate_body_terminator_invariants` from
+    // regseq-model-84. Spec section 26.6's diagnostic-logging
+    // arity exception is regseq-driver-44 scope and is not enforced
+    // here.
+    if let Some((callee, expected, actual)) = visitor.call_arity_mismatch {
+        return Err(BridgeError::Phase5(format!(
+            "joint validation terminator B-4 (Call arity) failed for instance {}: callee {} expects {} args, got {}",
+            instance.as_u32(),
+            callee.as_u32(),
+            expected,
+            actual
+        )));
+    }
+    // Inline B-5 Direct-callee callable check per spec section 23.6
+    // B-5: `CallCallee::Direct(InstanceId)` must resolve to
+    // `InstanceKind::Function(_)`. Static/Const/Struct/Enum/Union
+    // instances are not callable. Coordinated with regseq-model-84.
+    if let Some(non_function) = visitor.non_function_direct_callee {
+        return Err(BridgeError::Phase5(format!(
+            "joint validation terminator B-5 (Direct callee callable) failed for instance {}: callee {} is not InstanceKind::Function",
+            instance.as_u32(),
+            non_function.as_u32()
+        )));
+    }
+    // Place walk per spec section 19.7 via regseq-model-83's
+    // validator (covers B-0a + invariant 1 type-coherence walk).
     validate_body_places(model, body).map_err(|error| {
         BridgeError::Phase5(format!(
             "joint validation place walk failed for instance {}: {error:?}",
             instance.as_u32()
         ))
     })
+    // Statement invariants B-1..B-5 (spec section 22.5) and the
+    // remaining terminator invariants B-1, B-2, B-3, B-6..B-9 (spec
+    // section 23.6) require `place_ty` / `operand_ty` / `rvalue_ty`
+    // recovery helpers that live model-side. They are coordinated
+    // with regseq-model-84 and wire in when those
+    // `RegseqModel::validate_body_*` methods become pub. The
+    // tractable invariants -- TyId closure, Direct-callee closure
+    // (B-9), Direct-callee callable (B-5), Direct Call arity (B-4),
+    // Place walk -- are inlined above.
 }
 
-#[derive(Default)]
-struct JointValidationVisitor {
+struct JointValidationVisitor<'m> {
+    model: &'m regseq_model::RegseqModel,
     body_errors: Vec<BodyValidationError>,
+    missing_ty: Option<TyId>,
+    missing_direct_callee: Option<InstanceId>,
+    /// Captured `(callee_id, expected_arity, actual_arity)` for the
+    /// first Call terminator whose arg count disagrees with its
+    /// callee's `FnSig.inputs.len()` per spec section 23.6 B-4.
+    call_arity_mismatch: Option<(InstanceId, usize, usize)>,
+    /// First Direct callee whose `InstanceKind` is not
+    /// `InstanceKind::Function(_)` per spec section 23.6 B-5.
+    non_function_direct_callee: Option<InstanceId>,
 }
 
-impl Visitor for JointValidationVisitor {
+impl<'m> JointValidationVisitor<'m> {
+    fn new(model: &'m regseq_model::RegseqModel) -> Self {
+        Self {
+            model,
+            body_errors: Vec::new(),
+            missing_ty: None,
+            missing_direct_callee: None,
+            call_arity_mismatch: None,
+            non_function_direct_callee: None,
+        }
+    }
+}
+
+impl<'m> Visitor for JointValidationVisitor<'m> {
     fn emit_body_error(&mut self, error: BodyValidationError) {
         self.body_errors.push(error);
+    }
+
+    fn visit_ty(&mut self, ty: TyId) {
+        if self.missing_ty.is_none() && ty.index() >= self.model.types.len() {
+            self.missing_ty = Some(ty);
+        }
+        self.super_ty(ty);
+    }
+
+    fn visit_call_callee(&mut self, callee: &CallCallee) {
+        if let CallCallee::Direct(instance_id) = callee {
+            if instance_id.index() >= self.model.instances.len() {
+                if self.missing_direct_callee.is_none() {
+                    self.missing_direct_callee = Some(*instance_id);
+                }
+            } else if self.non_function_direct_callee.is_none()
+                && !matches!(
+                    self.model.instances[*instance_id].kind,
+                    InstanceKind::Function(_)
+                )
+            {
+                self.non_function_direct_callee = Some(*instance_id);
+            }
+        }
+        self.super_call_callee(callee);
+    }
+
+    fn visit_terminator(&mut self, term: &Terminator) {
+        // Inline B-4 Call arity check for Direct callees. The
+        // Indirect-callee arity check requires operand-type recovery
+        // (spec 23.6 B-4 Indirect bullet); that path is coordinated
+        // with regseq-model-84 and lands when the model-side B-4
+        // validator becomes pub. Diagnostic-logging arity exception
+        // (regseq-driver-44 scope) is intentionally not enforced
+        // here.
+        if self.call_arity_mismatch.is_none() {
+            if let TerminatorKind::Call {
+                callee: CallCallee::Direct(callee_id),
+                args,
+                ..
+            } = &term.kind
+            {
+                if callee_id.index() < self.model.instances.len() {
+                    if let Some(sig) = self.model.instance_fn_sig(*callee_id) {
+                        if sig.inputs.len() != args.len() {
+                            self.call_arity_mismatch =
+                                Some((*callee_id, sig.inputs.len(), args.len()));
+                        }
+                    }
+                }
+            }
+        }
+        self.super_terminator(term);
     }
 }
 
@@ -156,31 +515,266 @@ fn local_def_id_for_item(
     tcx: TyCtxt<'_>,
     model: &regseq_model::RegseqModel,
     item: regseq_model::ItemId,
-) -> Result<LocalDefId, BridgeError> {
+) -> Option<LocalDefId> {
     let wanted = model.item_def_paths[item];
     tcx.hir_body_owners()
-        .find(|local_def_id| def_path_hash_eq(tcx, local_def_id.to_def_id(), wanted))
-        .ok_or_else(|| {
-            BridgeError::Phase5(format!(
-                "no rustc body owner found for item {}",
-                item.as_u32()
-            ))
-        })
+        .find(|local_def_id| def_path_hash_matches(tcx, *local_def_id, wanted))
 }
 
-fn def_path_hash_eq(
+fn def_path_hash_matches(
     tcx: TyCtxt<'_>,
-    def_id: rustc_span::def_id::DefId,
+    local_def_id: LocalDefId,
     wanted: regseq_model::DefPathHash,
 ) -> bool {
-    let actual = tcx.def_path_hash(def_id);
+    let actual = tcx.def_path_hash(local_def_id.to_def_id());
     actual.stable_crate_id().as_u64() == wanted.stable_crate_id.0
         && actual.local_hash().as_u64() == wanted.local_hash
+}
+
+/// Reconstruct a rustc `GenericArgsRef<'tcx>` from a model
+/// `Instance.generic_args` slice per audit-finding regseq-driver-43-2.
+/// Walks `GenericArgs::for_item(tcx, def_id, mk_kind)`, substituting:
+/// - Lifetimes -> `tcx.lifetimes.re_erased`.
+/// - Types -> resolved via `BridgeCtxt.ty_forward_cache` from
+///   `GenericArg::Type(TyId)`.
+/// - Consts -> coordinated with regseq-driver-37's
+///   `translate_generic_args`. Both currently filter Const params; on
+///   the rebuild side we explicitly reject so the spec gap is
+///   surfaced rather than silently expanded. Per audit "MUST either
+///   preserve or explicitly reject."
+fn translate_model_generic_args<'tcx>(
+    cx: &BridgeCtxt<'tcx>,
+    def_id: rustc_span::def_id::DefId,
+    model_args: &[GenericArg],
+) -> Result<rustc_middle::ty::GenericArgsRef<'tcx>, BridgeError> {
+    // Walk the model's type slots in order; rustc `for_item` consumes
+    // them via the closure.
+    let mut type_cursor = model_args
+        .iter()
+        .filter_map(|arg| match arg {
+            GenericArg::Type(ty_id) => Some(*ty_id),
+            GenericArg::Const(_) => None,
+        })
+        .collect::<Vec<_>>()
+        .into_iter();
+
+    let tcx = cx.input.tcx;
+    let mut error: Option<BridgeError> = None;
+    let args = GenericArgs::for_item(tcx, def_id, |param, _| {
+        if error.is_some() {
+            return tcx.lifetimes.re_erased.into();
+        }
+        match param.kind {
+            rustc_middle::ty::GenericParamDefKind::Lifetime => tcx.lifetimes.re_erased.into(),
+            rustc_middle::ty::GenericParamDefKind::Type { .. } => {
+                let Some(ty_id) = type_cursor.next() else {
+                    error = Some(BridgeError::Phase5(format!(
+                        "model Instance generic args exhausted before rustc Type param `{}`",
+                        param.name
+                    )));
+                    return tcx.types.unit.into();
+                };
+                let Some(rustc_ty) = cx.ty_forward_cache.get(&ty_id).copied() else {
+                    error = Some(BridgeError::Phase5(format!(
+                        "model TyId {} for generic arg has no rustc Ty in ty_forward_cache",
+                        ty_id.as_u32()
+                    )));
+                    return tcx.types.unit.into();
+                };
+                rustc_ty.into()
+            }
+            rustc_middle::ty::GenericParamDefKind::Const { .. } => {
+                // Spec gap coordinated with regseq-driver-37: both
+                // forward (translate_generic_args) and backward
+                // (here) currently drop Const params. Per audit
+                // regseq-driver-43-2, reject explicitly so any const
+                // generic forces a coordinated fix in driver-37 as
+                // well, rather than silently expanding the gap.
+                error = Some(BridgeError::Phase5(format!(
+                    "const generic param `{}` is not supported in body materialisation",
+                    param.name
+                )));
+                tcx.types.unit.into()
+            }
+        }
+    });
+    if let Some(err) = error {
+        return Err(err);
+    }
+    Ok(args)
 }
 
 fn translate_local_mutability(mutability: rustc_middle::mir::Mutability) -> Mutability {
     match mutability {
         rustc_middle::mir::Mutability::Not => Mutability::Not,
         rustc_middle::mir::Mutability::Mut => Mutability::Mut,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use regseq_model::{
+        BasicBlock, BlockId, CallCallee, FieldIdx, FnAbi, FnSig, FunctionInstanceData, IndexVec,
+        Instance, Item, ItemKind, LocalDecl, LocalId, Operand, Place, PlaceElem, RegseqModel,
+        Rvalue, Safety, Span, StableCrateId, Statement, StatementKind, Terminator, TerminatorKind,
+        Ty, UNIT_LAYOUT,
+    };
+
+    fn make_synthetic_unit(model: &mut RegseqModel) -> TyId {
+        model.types.intern(Ty::Tuple {
+            fields: Vec::new(),
+            layout: UNIT_LAYOUT,
+        })
+    }
+
+    fn make_function_item(model: &mut RegseqModel, name: &str) -> regseq_model::ItemId {
+        use regseq_model::{
+            DefPath, DefPathData, DefPathHash, DefPathSegment, InlineHint, Linkage,
+        };
+        let name_id = model.strings.intern(name);
+        let rendered = model.strings.intern(&format!("test::{name}"));
+        let item = model.items.push(Item {
+            def_path: DefPath {
+                crate_id: model.primary_crate,
+                segments: vec![DefPathSegment {
+                    data: DefPathData::ValueNs(name_id),
+                    disambiguator: 0,
+                }],
+                rendered,
+            },
+            kind: ItemKind::Function,
+            span: Span::dummy(),
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        });
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash: item.as_u32() as u64 + 100,
+        });
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
+        item
+    }
+
+    fn make_function_instance(model: &mut RegseqModel, item: regseq_model::ItemId) -> InstanceId {
+        let unit = make_synthetic_unit(model);
+        let fn_sig = model.sigs.intern(FnSig {
+            inputs: Vec::new(),
+            output: unit,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        model.instances.push(Instance {
+            item,
+            generic_args: Vec::new(),
+            emission_name: model.items[item].def_path.rendered,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        })
+    }
+
+    fn make_dummy_local(ty: TyId) -> LocalDecl {
+        LocalDecl {
+            ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        }
+    }
+
+    fn make_dummy_body(model: &mut RegseqModel) -> Body {
+        let unit = make_synthetic_unit(model);
+        let mut local_decls = IndexVec::new();
+        local_decls.push(make_dummy_local(unit));
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
+                span: Span::dummy(),
+            },
+        });
+        Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        }
+    }
+
+    #[test]
+    fn joint_validation_passes_for_well_formed_body() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let item = make_function_item(&mut model, "ok_fn");
+        let instance = make_function_instance(&mut model, item);
+        let body = make_dummy_body(&mut model);
+
+        joint_validation_walk(&model, instance, &body).expect("well-formed body validates");
+    }
+
+    #[test]
+    fn joint_validation_fails_when_body_references_unknown_ty() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let item = make_function_item(&mut model, "bad_ty_fn");
+        let instance = make_function_instance(&mut model, item);
+        let mut body = make_dummy_body(&mut model);
+        // Force a TyId that exceeds model.types.len(): use a Field
+        // projection whose carrier ty is out-of-range.
+        let bogus_ty = TyId::from_u32(model.types.len() as u32 + 99);
+        let zst = model.consts.intern(regseq_model::Const::ZST);
+        let mut statements = body.basic_blocks[BlockId::START_BLOCK].statements.to_vec();
+        statements.push(Statement {
+            kind: StatementKind::Assign(
+                Place {
+                    local: LocalId::RETURN_PLACE,
+                    projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(0), bogus_ty)]),
+                },
+                Rvalue::Use(Operand::Constant(zst)),
+            ),
+            span: Span::dummy(),
+        });
+        body.basic_blocks[BlockId::START_BLOCK].statements = statements.into_boxed_slice();
+
+        let err = joint_validation_walk(&model, instance, &body).unwrap_err();
+        let message = format!("{err}");
+        assert!(
+            message.contains("TyId closure"),
+            "expected TyId closure failure, got `{message}`"
+        );
+    }
+
+    #[test]
+    fn joint_validation_fails_when_direct_callee_is_out_of_range() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let item = make_function_item(&mut model, "bad_callee_fn");
+        let instance = make_function_instance(&mut model, item);
+        let mut body = make_dummy_body(&mut model);
+        let bogus_instance = InstanceId::from_u32(model.instances.len() as u32 + 99);
+        body.basic_blocks[BlockId::START_BLOCK].terminator = Terminator {
+            kind: TerminatorKind::Call {
+                callee: CallCallee::Direct(bogus_instance),
+                args: Box::new([]),
+                destination: Place::from(LocalId::RETURN_PLACE),
+                target: None,
+            },
+            span: Span::dummy(),
+        };
+
+        let err = joint_validation_walk(&model, instance, &body).unwrap_err();
+        assert!(format!("{err}").contains("direct-callee closure"));
     }
 }

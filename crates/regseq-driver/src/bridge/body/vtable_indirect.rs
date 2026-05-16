@@ -37,7 +37,7 @@ fn rewrite_vtable_indirect_in_model(
         let receiver_ty = operand_ty(model, body, &receiver)?;
         let (dynamic_ty, data_mutability, needs_raw) = receiver_dynamic_ty(model, receiver_ty)?;
         consume_vtable_artifacts(model, dynamic_ty, target.vtable_key.as_ref(), target.slot)?;
-        let fn_sig = model.instances[instance_id]
+        let fallback_fn_sig = model.instances[instance_id]
             .kind
             .as_function()
             .map(|function| function.fn_sig)
@@ -51,7 +51,19 @@ fn rewrite_vtable_indirect_in_model(
         let recv = body.push_synthetic_local(receiver_ty);
         let meta_ty = metadata_ty(model, dynamic_ty)?;
         let meta = body.push_synthetic_local(meta_ty);
-        let fn_ptr_ty = model.types.intern(Ty::FnPtr(fn_sig));
+        // Per spec section 25.7.2 step 4, the Field projection at
+        // the vtable slot must declare the slot's actual layout-
+        // declared type so the joint-validation place walker's
+        // FieldTypeMismatch check (spec 19.7) succeeds. The synth
+        // path may declare method slots with a canonical-vacant
+        // FnPtr signature (`extern "C" fn(*mut ()) -> ()` per spec
+        // section 13.2) rather than the Virtual instance's per-
+        // monomorphisation signature; we therefore read the field's
+        // declared `TyId` directly from the vtable struct layout
+        // and fall back to the Virtual fn_sig only when no layout
+        // is available (hand-built test fixtures).
+        let fn_ptr_ty = vtable_slot_field_ty(model, dynamic_ty, target.slot)
+            .unwrap_or_else(|| model.types.intern(Ty::FnPtr(fallback_fn_sig)));
         let func = body.push_synthetic_local(fn_ptr_ty);
         let unit = model.types.intern(Ty::Tuple {
             fields: Vec::new(),
@@ -144,6 +156,15 @@ fn virtual_call_slot(
     model: &regseq_model::RegseqModel,
     instance: regseq_model::InstanceId,
 ) -> Option<VtableCallTarget> {
+    // Audit-finding regseq-driver-43-5: the rewrite predicate is
+    // `FunctionInstanceFlavor::Virtual { virtual_idx: Some(slot) }`,
+    // period. Earlier revisions also required a
+    // `SyntheticItemKind::VTable*Shim` tag on the callee Item; per
+    // spec section 25.7.2 the correct identity is the Instance's
+    // flavor alone. The synthetic-kind tag (when present) still
+    // carries the (principal, self_ty) used to validate the matching
+    // VTableInstance / VTableShim Items, but it is no longer part of
+    // the trigger predicate.
     if instance.index() >= model.instances.len() {
         return None;
     }
@@ -152,22 +173,16 @@ fn virtual_call_slot(
         return None;
     }
     let slot = function.virtual_idx?;
-    match &model.item_synthetic_kinds[model.instances[instance].item] {
+    let vtable_key = match &model.item_synthetic_kinds[model.instances[instance].item] {
         SyntheticItemKind::VTableMethodShim {
-            principal,
-            self_ty,
-            vtable_entry_index: _,
-            ..
-        } => Some(VtableCallTarget {
-            slot,
-            vtable_key: Some((principal.clone(), *self_ty)),
-        }),
-        SyntheticItemKind::VTableDropShim { principal, self_ty } => Some(VtableCallTarget {
-            slot,
-            vtable_key: Some((principal.clone(), *self_ty)),
-        }),
+            principal, self_ty, ..
+        }
+        | SyntheticItemKind::VTableDropShim { principal, self_ty } => {
+            Some((principal.clone(), *self_ty))
+        }
         _ => None,
-    }
+    };
+    Some(VtableCallTarget { slot, vtable_key })
 }
 
 fn operand_ty(
@@ -274,6 +289,29 @@ fn expect_dynamic(model: &regseq_model::RegseqModel, ty: TyId) -> Result<(), Bri
             model.types.resolve(ty)
         )))
     }
+}
+
+/// Read the declared `TyId` of the vtable struct's slot at
+/// `slot_idx` from the layout-bearing `Ty::Struct` view referenced
+/// by `dynamic_ty.vtable_ty`. Returns `None` when the layout is
+/// missing the requested slot, the vtable view is not a Struct, or
+/// the layout's `kind` is not `LayoutKind::Struct`. Per spec section
+/// 13.2 + 25.7.2 step 4.
+fn vtable_slot_field_ty(
+    model: &regseq_model::RegseqModel,
+    dynamic_ty: TyId,
+    slot_idx: u32,
+) -> Option<TyId> {
+    let Ty::Dynamic { vtable_ty, .. } = model.types.resolve(dynamic_ty) else {
+        return None;
+    };
+    let Ty::Struct { layout, .. } = model.types.resolve(*vtable_ty) else {
+        return None;
+    };
+    let regseq_model::LayoutKind::Struct { fields } = &layout.kind else {
+        return None;
+    };
+    fields.get(slot_idx as usize).map(|field| field.ty)
 }
 
 fn metadata_ty(

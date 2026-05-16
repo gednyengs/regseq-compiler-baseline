@@ -1169,7 +1169,7 @@
           "id": "regseq-driver-43",
           "name": "P1a-BR-07: Body materialisation + vtable-indirect rewrite + joint validation",
           "spec": ".harness/tasks/regseq-driver/43-body-materialisation-and-vtable-indirect.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-42",
             "regseq-driver-40",

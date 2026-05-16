@@ -487,6 +487,29 @@ fn lookup_or_create_direct_instance<'tcx>(
     virtual_idx: Option<u32>,
     make_fn_sig: impl FnOnce(&mut BridgeCtxt<'tcx>) -> Result<FnSigId, BridgeError>,
 ) -> Result<InstanceId, BridgeError> {
+    // Audit-finding regseq-driver-43-3 + spec section 3.4 D-12-5.3:
+    // the callee `Item` may still be a Phase-2 placeholder at this
+    // point if it was first interned during this body's
+    // materialisation (e.g., a trait method's `FnDef` reached
+    // through a virtual call site that the Phase-2 scan never
+    // walked). Drain any outstanding `pending_items` AND resolve
+    // the placeholder ItemId to its final value BEFORE keying the
+    // `function_instance_for_item` table -- otherwise the
+    // pre-resolution key would record a placeholder-keyed entry
+    // that later lookups (always using real ItemIds) cannot find.
+    let item = if item.as_u32() as usize >= cx.model.items.len() {
+        crate::bridge::assign_late_pending_items_for_terminator(cx);
+        let handle_idx = ItemId::MAX_AS_U32.saturating_sub(item.as_u32());
+        let handle = crate::bridge::ItemHandle::from_u32(handle_idx);
+        cx.handles.resolve(handle).ok_or_else(|| {
+            BridgeError::Phase5(format!(
+                "callee placeholder {} could not be bound to a final ItemId",
+                item.as_u32()
+            ))
+        })?
+    } else {
+        item
+    };
     let pending = cx.pending_def_path_hashes();
     let args_key = args_key_for_generic_args_with_pending(&cx.model, &generic_args, &pending);
     let key = (item, args_key, flavor);
