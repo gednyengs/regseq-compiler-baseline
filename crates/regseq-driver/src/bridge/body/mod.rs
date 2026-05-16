@@ -21,53 +21,24 @@ pub use terminator::translate_terminator;
 pub use vtable_indirect::rewrite_vtable_indirect;
 
 /// Per-body translation context shared by Place, Operand, Rvalue, and Statement translation.
-///
-/// `model_body` is set by `materialise_function_body` so the
-/// terminator-side Drop-as-Call prelude can allocate synthetic locals
-/// in the model body (`Body::push_synthetic_local`, spec.md section
-/// 25.7.1). Test entry points that exercise individual translators
-/// (`translate_terminator`, `translate_statement`, etc.) leave it
-/// unset; Drop-as-Call returns an error when the model body is
-/// missing.
-pub struct BodyCtxt<'tcx, 'mb> {
+pub struct BodyCtxt<'tcx> {
     local_decls: Option<&'tcx mir::LocalDecls<'tcx>>,
-    model_body: Option<&'mb mut regseq_model::Body>,
 }
 
-impl<'tcx, 'mb> BodyCtxt<'tcx, 'mb> {
+impl<'tcx> BodyCtxt<'tcx> {
     /// Creates a body context without local declarations.
     pub fn empty() -> Self {
-        Self {
-            local_decls: None,
-            model_body: None,
-        }
+        Self { local_decls: None }
     }
 
     /// Creates a body context over rustc MIR local declarations.
     pub fn new(local_decls: &'tcx mir::LocalDecls<'tcx>) -> Self {
         Self {
             local_decls: Some(local_decls),
-            model_body: None,
-        }
-    }
-
-    /// Creates a body context over rustc MIR local declarations with a
-    /// mutable model `Body` for synthetic-local allocation.
-    pub fn new_with_model_body(
-        local_decls: &'tcx mir::LocalDecls<'tcx>,
-        model_body: &'mb mut regseq_model::Body,
-    ) -> Self {
-        Self {
-            local_decls: Some(local_decls),
-            model_body: Some(model_body),
         }
     }
 
     pub(crate) fn local_decls(&self) -> Option<&'tcx mir::LocalDecls<'tcx>> {
         self.local_decls
-    }
-
-    pub(crate) fn model_body_mut(&mut self) -> Option<&mut regseq_model::Body> {
-        self.model_body.as_deref_mut()
     }
 }

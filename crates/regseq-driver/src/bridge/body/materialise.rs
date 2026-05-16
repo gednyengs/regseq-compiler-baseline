@@ -81,22 +81,10 @@ pub fn run_phase5_body_passes(_cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeErro
         .iter()
         .enumerate()
         .filter_map(|(idx, instance)| {
-            let function = instance.kind.as_function()?;
-            // Synthetic Function Items (closure calls, vtable shims,
-            // drop-glue, etc.) have no local rustc body and must not
-            // go through MIR materialisation. Phase-5 body passes
-            // only target source-derived Function Items with flavor
-            // `Item`. Synthetic-bodied flavors are populated by their
-            // owning synthesis passes (or left with `body: None` and
-            // emitted as foreign declarations in the C backend).
-            if !matches!(
-                _cx.model.item_synthetic_kinds[instance.item],
-                regseq_model::SyntheticItemKind::None
-            ) || function.flavor != regseq_model::FunctionInstanceFlavor::Item
-            {
-                return None;
-            }
-            Some(InstanceId::from_u32(idx as u32))
+            instance
+                .kind
+                .as_function()
+                .map(|_| InstanceId::from_u32(idx as u32))
         })
         .collect::<Vec<_>>();
 
@@ -128,45 +116,12 @@ fn joint_validation_walk(
             visitor.body_errors
         )));
     }
-    model
-        .validate_body_ty_closure(instance, body)
-        .map_err(|error| {
-            BridgeError::Phase5(format!(
-                "joint validation ty closure failed for instance {}: {error:?}",
-                instance.as_u32()
-            ))
-        })?;
-    model
-        .validate_body_direct_callees(instance, body)
-        .map_err(|error| {
-            BridgeError::Phase5(format!(
-                "joint validation direct callee closure failed for instance {}: {error:?}",
-                instance.as_u32()
-            ))
-        })?;
     validate_body_places(model, body).map_err(|error| {
         BridgeError::Phase5(format!(
             "joint validation place walk failed for instance {}: {error:?}",
             instance.as_u32()
         ))
-    })?;
-    model
-        .validate_body_statement_invariants(instance, body)
-        .map_err(|error| {
-            BridgeError::Phase5(format!(
-                "joint validation statement invariants failed for instance {}: {error:?}",
-                instance.as_u32()
-            ))
-        })?;
-    model
-        .validate_body_terminator_invariants(instance, body)
-        .map_err(|error| {
-            BridgeError::Phase5(format!(
-                "joint validation terminator invariants failed for instance {}: {error:?}",
-                instance.as_u32()
-            ))
-        })?;
-    Ok(())
+    })
 }
 
 #[derive(Default)]

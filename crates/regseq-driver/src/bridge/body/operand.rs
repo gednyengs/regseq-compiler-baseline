@@ -12,7 +12,7 @@ use super::{place::translate_place, BodyCtxt};
 /// Per spec.md section 20.3.
 pub fn translate_operand<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx, '_>,
+    body_cx: &mut BodyCtxt<'tcx>,
     operand: mir::Operand<'tcx>,
 ) -> Result<Operand, BridgeError> {
     match operand {
@@ -31,7 +31,7 @@ pub fn translate_operand<'tcx>(
 /// Lower the RuntimeChecks operand surface per spec.md section 20.3.1.
 pub fn lower_runtime_check_operand<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    _body_cx: &mut BodyCtxt<'tcx, '_>,
+    _body_cx: &mut BodyCtxt<'tcx>,
     check: mir::Operand<'tcx>,
 ) -> Result<Operand, BridgeError> {
     let mir::Operand::RuntimeChecks(checks) = check else {
@@ -45,7 +45,7 @@ pub fn lower_runtime_check_operand<'tcx>(
 
 fn synthesize_move_drop_glue<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &BodyCtxt<'tcx, '_>,
+    body_cx: &BodyCtxt<'tcx>,
     place: mir::Place<'tcx>,
 ) -> Result<(), BridgeError> {
     let Some(local_decls) = body_cx.local_decls() else {

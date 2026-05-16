@@ -17,7 +17,7 @@ use super::{
 /// Per spec.md section 22.6 and section 22.5.1 statement-site rejections.
 pub fn translate_statement<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx, '_>,
+    body_cx: &mut BodyCtxt<'tcx>,
     stmt: mir::Statement<'tcx>,
 ) -> Result<Option<Statement>, BridgeError> {
     let kind = match stmt.kind {
@@ -90,7 +90,7 @@ pub fn translate_statement<'tcx>(
 
 fn translate_non_diverging_intrinsic<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
-    body_cx: &mut BodyCtxt<'tcx, '_>,
+    body_cx: &mut BodyCtxt<'tcx>,
     intrinsic: mir::NonDivergingIntrinsic<'tcx>,
 ) -> Result<NonDivergingIntrinsic, BridgeError> {
     match intrinsic {

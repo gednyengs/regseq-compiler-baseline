@@ -176,7 +176,6 @@ fn root_struct_exposes_spec_field_set() {
         instances,
         vtables,
         domain_attrs,
-        ..
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);

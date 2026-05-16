@@ -5,7 +5,7 @@ use regseq_model::RegseqModel;
 use super::{BridgeError, PendingItem};
 
 /// Sorts Phase-2 pending items by the model F4 comparator contract.
-pub fn f4_sort(
+pub(crate) fn f4_sort(
     model: &RegseqModel,
     pending_items: &mut [PendingItem],
 ) -> Result<(), BridgeError> {

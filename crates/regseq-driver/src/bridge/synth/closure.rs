@@ -2,13 +2,12 @@
 
 use regseq_model::{
     ClosureCallKind, CrateId, CrateInfo, DefPath, DefPathData, DefPathHash, DefPathSegment,
-    FieldLayout, InlineHint, Item, ItemKind, Layout, LayoutKind, Linkage, Span, StableCrateId,
-    SyntheticItemKind, Ty,
+    InlineHint, Item, ItemKind, Linkage, Span, StableCrateId, SyntheticItemKind,
 };
 use rustc_span::def_id::DefId;
 
 use super::ClosureSynthHandles;
-use crate::bridge::{ty::translate_ty, BridgeCtxt, BridgeError, PendingItem};
+use crate::bridge::{BridgeCtxt, BridgeError, PendingItem};
 
 /// Synthesise the closure captures, call, and drop-glue Items.
 pub fn synthesise_closure<'tcx>(
@@ -34,14 +33,6 @@ pub(crate) fn synthesise_closure_for_def_id<'tcx>(
     {
         return Ok(handles.clone());
     }
-
-    // Record the rustc closure `Ty<'tcx>` so the Phase-5 captures-struct
-    // view synthesis pass (spec.md section 13.1) can compute the
-    // parallel `Ty::Struct` layout via `tcx.layout_of` without
-    // re-discovering the closure from MIR.
-    let closure_ty =
-        rustc_middle::ty::Ty::new_closure(cx.input.tcx, closure_def_id, closure_def.args);
-    cx.closure_synth_rustc_ty.insert(closure, closure_ty);
 
     let captures = push_closure_captures_item(cx, closure_def_id, closure);
     Ok(synthesise_closure_tail(cx, closure, closure_def, captures))
@@ -261,97 +252,6 @@ fn def_path_hash(tcx: rustc_middle::ty::TyCtxt<'_>, def_id: DefId) -> DefPathHas
         stable_crate_id: StableCrateId(hash.stable_crate_id().as_u64()),
         local_hash: hash.local_hash().as_u64(),
     }
-}
-
-/// Intern the parallel `Ty::Struct` view of each synthesised closure's
-/// captures field-by-field and record the `Ty::Closure -> Ty::Struct`
-/// mapping in `model.closure_captures_struct_ty`. Per spec.md section
-/// 13.1 (lines 4571-4587): a closure has two `Ty` entries sharing one
-/// `Item` -- `Ty::Closure(item, args)` and
-/// `Ty::Struct { item, args, layout }`. Both views share the same
-/// captures `ItemId` because `intern_item` in `bridge/ty.rs` dedupes on
-/// the closure's source-derived `DefPathHash`, which by Phase 5 is
-/// already present in `model.item_def_paths` after the captures Item
-/// was assigned in Phase 4.
-///
-/// Runs after `rekey_synthesis_in_phase5` so captures handles resolve
-/// to final `ItemId`s.
-pub(crate) fn synthesise_closure_captures_struct_views<'tcx>(
-    cx: &mut BridgeCtxt<'tcx>,
-) -> Result<(), BridgeError> {
-    let entries = cx
-        .closure_synth_cache
-        .iter()
-        .map(|handles| (handles.closure, handles.captures))
-        .collect::<Vec<_>>();
-    for (closure_hash, captures_handle) in entries {
-        let captures_item_id = cx.handles.resolve(captures_handle).ok_or_else(|| {
-            BridgeError::Phase5(format!(
-                "ClosureCaptures handle {} was not assigned an ItemId",
-                captures_handle.as_u32()
-            ))
-        })?;
-        let Some(closure_ty) = cx.closure_synth_rustc_ty.get(&closure_hash).copied() else {
-            continue;
-        };
-        let upvar_tys = match closure_ty.kind() {
-            rustc_middle::ty::TyKind::Closure(_, args) => args.as_closure().upvar_tys(),
-            _ => continue,
-        };
-        let mut field_tys = Vec::with_capacity(upvar_tys.len());
-        for upvar in upvar_tys {
-            field_tys.push(translate_ty(cx, upvar)?);
-        }
-        let rustc_layout = cx
-            .input
-            .tcx
-            .layout_of(
-                rustc_middle::ty::TypingEnv::fully_monomorphized().as_query_input(closure_ty),
-            )
-            .map_err(|err| {
-                BridgeError::Phase5(format!(
-                    "closure captures layout unavailable for {closure_ty}: {err:?}"
-                ))
-            })?;
-        let empty = cx.model.strings.intern("");
-        let fields = field_tys
-            .iter()
-            .copied()
-            .enumerate()
-            .map(|(idx, ty)| FieldLayout {
-                name: empty,
-                ty,
-                offset: if idx < rustc_layout.fields.count() {
-                    rustc_layout.fields.offset(idx).bytes()
-                } else {
-                    0
-                },
-            })
-            .collect();
-        let layout = Layout {
-            size: rustc_layout.size.bytes(),
-            align: rustc_layout.align.abi.bytes(),
-            pack: None,
-            uninhabited: rustc_layout.uninhabited,
-            kind: LayoutKind::Struct { fields },
-        };
-        // Translate the closure type to obtain the model `Ty::Closure`
-        // TyId so the parallel-view map can be keyed on it.
-        let closure_ty_id = translate_ty(cx, closure_ty)?;
-        let model_args = match cx.model.types.resolve(closure_ty_id) {
-            Ty::Closure(_, args) => args.clone(),
-            _ => continue,
-        };
-        let captures_struct_ty_id = cx.model.types.intern(Ty::Struct {
-            item: captures_item_id,
-            args: model_args,
-            layout,
-        });
-        cx.model
-            .closure_captures_struct_ty
-            .insert(closure_ty_id, captures_struct_ty_id);
-    }
-    Ok(())
 }
 
 #[cfg(test)]

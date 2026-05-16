@@ -9,19 +9,17 @@ use std::collections::HashMap;
 use thiserror::Error;
 
 use regseq_model::{
-    args_key_for_generic_args, canonical_ty_bytes, DefPathHash, FnAbi, FnSig, FunctionInstanceData,
-    FunctionInstanceFlavor, GenericArg, Instance, InstanceId, InstanceKind, Item, ItemId, ItemKind,
-    Mutability, PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, Safety, Span, StableCrateId,
-    SyntheticItemKind, Ty, TyId, UNIT_LAYOUT,
+    args_key_for_generic_args, canonical_ty_bytes, DefPathHash, GenericArg, Item,
+    PrincipalTraitKey, ProjectionBindingsKey, RegseqModel, StableCrateId, SyntheticItemKind, TyId,
 };
 
-pub mod assign;
+mod assign;
 pub mod body;
 pub mod const_;
 mod discovery;
 pub mod fnsig;
 mod handles;
-pub mod sort;
+mod sort;
 pub mod synth;
 pub mod ty;
 
@@ -85,20 +83,6 @@ pub struct BridgeCtxt<'tcx> {
     /// `translate_erased_ty`; used by Phase-5 body materialisation to
     /// reconstruct rustc `GenericArgs` from model `Instance.generic_args`.
     pub ty_forward_cache: HashMap<TyId, rustc_middle::ty::Ty<'tcx>>,
-    /// Cache mapping a Function-kind `ItemId` to the `InstanceId` of
-    /// the model `Instance` of `InstanceKind::Function` that
-    /// monomorphises it. Populated by the Phase-4 Function-Instance
-    /// creation pass and by lazy creation in `translate_call_callee`.
-    /// Used by terminator translation to resolve `CallCallee::Direct`
-    /// through `model.instances` instead of fabricating an
-    /// `InstanceId` from a raw hash (spec.md section 23.7 Direct
-    /// callee identity rule).
-    pub function_instance_for_item: HashMap<ItemId, InstanceId>,
-    /// Phase-2 side cache from closure `DefPathHash` back to its rustc
-    /// `Ty<'tcx>`. Populated by closure synthesis; consumed by the
-    /// Phase-5 captures-struct view synthesis pass that interns
-    /// `Ty::Struct { item, args, layout }` per spec.md section 13.1.
-    pub closure_synth_rustc_ty: HashMap<DefPathHash, rustc_middle::ty::Ty<'tcx>>,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -119,8 +103,6 @@ impl<'tcx> BridgeCtxt<'tcx> {
             vtable_synth_cache: HashMap::new(),
             drop_glue_synth_cache: HashMap::new(),
             ty_forward_cache: HashMap::new(),
-            function_instance_for_item: HashMap::new(),
-            closure_synth_rustc_ty: HashMap::new(),
         }
     }
 }
@@ -705,152 +687,7 @@ fn construct_instances_and_resolve_cross_references(
     ctxt: &mut BridgeCtxt<'_>,
 ) -> Result<(), BridgeError> {
     synth::rekey_synthesis_in_phase5(ctxt)?;
-    synth::closure::synthesise_closure_captures_struct_views(ctxt)?;
     const_::construct_const_memory_static_instances(ctxt)?;
-    construct_function_instances(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     Ok(())
-}
-
-/// Phase-4 Function-Instance creation pass. After `ItemId` assignment
-/// and synthesis re-keying, ensure every `ItemKind::Function` model
-/// `Item` has a matching `Instance` of `InstanceKind::Function` in
-/// `model.instances`. The mapping is recorded in
-/// `BridgeCtxt::function_instance_for_item` so terminator translation
-/// can resolve `CallCallee::Direct` callees through `model.instances`
-/// rather than fabricating an `InstanceId` from a `DefPathHash`
-/// truncation (spec.md section 23.7 Direct callee identity rule).
-///
-/// Items that already have an `Instance` (for example, test fixtures
-/// that push a Function instance manually) are recorded in the map and
-/// not duplicated. Drop-glue Items carry a `DropGlue` flavor; every
-/// other Function-kind Item is assigned `Item` flavor by default.
-fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
-    for (instance_idx, instance) in ctxt.model.instances.iter().enumerate() {
-        if matches!(instance.kind, InstanceKind::Function(_)) {
-            ctxt.function_instance_for_item
-                .entry(instance.item)
-                .or_insert_with(|| InstanceId::from_u32(instance_idx as u32));
-        }
-    }
-
-    for item_idx in 0..ctxt.model.items.len() {
-        let item_id = ItemId::from_u32(item_idx as u32);
-        if !matches!(ctxt.model.items[item_id].kind, ItemKind::Function) {
-            continue;
-        }
-        if ctxt.function_instance_for_item.contains_key(&item_id) {
-            continue;
-        }
-        let synthetic_kind = ctxt.model.item_synthetic_kinds[item_id].clone();
-        let flavor = match &synthetic_kind {
-            SyntheticItemKind::DropGlue { .. } => FunctionInstanceFlavor::DropGlue,
-            _ => FunctionInstanceFlavor::Item,
-        };
-        let (fn_sig, generic_args) = synthesise_function_instance_sig(ctxt, item_id, &synthetic_kind);
-        let emission_name = ctxt.model.items[item_id].def_path.rendered;
-        let instance_id = ctxt.model.instances.push(Instance {
-            item: item_id,
-            generic_args,
-            emission_name,
-            span: Span::dummy(),
-            kind: InstanceKind::Function(FunctionInstanceData {
-                fn_sig,
-                body: None,
-                flavor,
-                virtual_idx: None,
-            }),
-        });
-        ctxt.function_instance_for_item.insert(item_id, instance_id);
-    }
-
-    Ok(())
-}
-
-/// Build a `FnSigId` and `generic_args` for a Function-kind Item that
-/// has no pre-existing Instance. Drop-glue Items get `fn(*mut T) -> ()`
-/// per the spec's drop-glue calling convention; source-derived Items
-/// translate the rustc `fn_sig` (with regions erased) so the synthesised
-/// Instance carries spec-correct arity. Falls back to `fn() -> ()` for
-/// synthetic Items without recoverable rustc signatures.
-fn synthesise_function_instance_sig(
-    ctxt: &mut BridgeCtxt<'_>,
-    item: ItemId,
-    synthetic_kind: &SyntheticItemKind,
-) -> (regseq_model::FnSigId, Vec<GenericArg>) {
-    let unit_ty = ctxt.model.types.intern(Ty::Tuple {
-        fields: Vec::new(),
-        layout: UNIT_LAYOUT,
-    });
-    let (inputs, output, generic_args) = match synthetic_kind {
-        SyntheticItemKind::DropGlue { self_ty: _ } => {
-            let drop_target_ty = ctxt
-                .drop_glue_synth_cache
-                .iter()
-                .find_map(|(ty, handle)| {
-                    ctxt.handles
-                        .resolve(*handle)
-                        .filter(|resolved| *resolved == item)
-                        .map(|_| *ty)
-                })
-                .unwrap_or(unit_ty);
-            let ptr_ty = ctxt
-                .model
-                .types
-                .intern(Ty::Ptr(drop_target_ty, Mutability::Mut));
-            (
-                vec![ptr_ty],
-                unit_ty,
-                vec![GenericArg::Type(drop_target_ty)],
-            )
-        }
-        SyntheticItemKind::None => match translate_source_fn_signature(ctxt, item) {
-            Some((inputs, output)) => (inputs, output, Vec::new()),
-            None => (Vec::new(), unit_ty, Vec::new()),
-        },
-        _ => (Vec::new(), unit_ty, Vec::new()),
-    };
-    let sig = FnSig {
-        inputs,
-        output,
-        abi: FnAbi::Rust,
-        c_variadic: false,
-        safety: Safety::Safe,
-    };
-    let sig_id = ctxt.model.sigs.intern(sig);
-    while ctxt.model.sig_c_abi_lowerings.len() < ctxt.model.sigs.len() {
-        ctxt.model.sig_c_abi_lowerings.push(None);
-    }
-    (sig_id, generic_args)
-}
-
-/// Translate the rustc `fn_sig` of a source-derived Function Item into
-/// model `TyId`s. Erases regions on each input/output before
-/// translation so substantive-HRTB binders (`for<'a> fn(&'a T)`) do
-/// not block callee-instance synthesis. Returns `None` when the Item's
-/// `DefPathHash` does not resolve to a rustc `DefId` or any type fails
-/// to translate.
-fn translate_source_fn_signature(
-    ctxt: &mut BridgeCtxt<'_>,
-    item: ItemId,
-) -> Option<(Vec<TyId>, TyId)> {
-    let wanted = ctxt.model.item_def_paths[item];
-    let tcx = ctxt.input.tcx;
-    let rustc_hash = rustc_hir::definitions::DefPathHash(
-        rustc_data_structures::fingerprint::Fingerprint::new(
-            wanted.stable_crate_id.0,
-            wanted.local_hash,
-        ),
-    );
-    let def_id = tcx.def_path_hash_to_def_id(rustc_hash)?;
-    let poly_sig = tcx.fn_sig(def_id).instantiate_identity();
-    let sig = poly_sig.skip_binder();
-    let mut inputs = Vec::with_capacity(sig.inputs().len());
-    for input in sig.inputs() {
-        let erased = tcx.erase_and_anonymize_regions(*input);
-        inputs.push(ty::translate_ty(ctxt, erased).ok()?);
-    }
-    let erased_output = tcx.erase_and_anonymize_regions(sig.output());
-    let output = ty::translate_ty(ctxt, erased_output).ok()?;
-    Some((inputs, output))
 }
