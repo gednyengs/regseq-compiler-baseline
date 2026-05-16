@@ -3047,3 +3047,265 @@ fn render_instance_specimen_122_reference_typed_const_string_literal() {
         @r###"const pl011::GREETING: &str = "hello";"###
     );
 }
+
+// ------------------------------------------------------------------
+// §9.11 render_instance specimens 123 - 128 (P1a-PP-05b).
+//
+// ADT-definition envelopes (`Struct` / `Enum` / `Union`) per
+// pretty-printer.md §10.2.4 - §10.2.6 + §10.2.7 attribute-block
+// composition.
+// ------------------------------------------------------------------
+
+/// Helper: install a Struct Item plus a matching `Ty::Struct` and
+/// return the `(ItemId, TyId)` pair.
+fn install_struct_with_layout(
+    m: &mut RegseqModel,
+    rendered: &str,
+    args: Vec<GenericArg>,
+    fields: Vec<FieldLayout>,
+) -> (ItemId, TyId) {
+    let item = push_item(m, ItemKind::Struct, rendered);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields },
+    };
+    let ty = m.types.intern(Ty::Struct { item, args, layout });
+    (item, ty)
+}
+
+/// Helper: install an Enum Item plus a matching `Ty::Enum` and
+/// return the `(ItemId, TyId)` pair.
+fn install_enum_with_shape(
+    m: &mut RegseqModel,
+    rendered: &str,
+    args: Vec<GenericArg>,
+    shape: EnumShape,
+) -> (ItemId, TyId) {
+    let item = push_item(m, ItemKind::Enum, rendered);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: matches!(shape, EnumShape::Empty),
+        kind: LayoutKind::Enum { shape },
+    };
+    let ty = m.types.intern(Ty::Enum { item, args, layout });
+    (item, ty)
+}
+
+/// Helper: install a Union Item plus a matching `Ty::Union` and
+/// return the `(ItemId, TyId)` pair.
+fn install_union_with_layout(
+    m: &mut RegseqModel,
+    rendered: &str,
+    args: Vec<GenericArg>,
+    fields: Vec<FieldLayout>,
+) -> (ItemId, TyId) {
+    let item = push_item(m, ItemKind::Union, rendered);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Union { fields },
+    };
+    let ty = m.types.intern(Ty::Union { item, args, layout });
+    (item, ty)
+}
+
+fn push_struct_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    layout: TyId,
+) -> regseq_model::InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Struct { layout },
+    })
+}
+
+fn push_enum_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    layout: TyId,
+) -> regseq_model::InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Enum { layout },
+    })
+}
+
+fn push_union_instance_local(
+    m: &mut RegseqModel,
+    item: ItemId,
+    layout: TyId,
+) -> regseq_model::InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Union { layout },
+    })
+}
+
+fn field_layout_named(m: &mut RegseqModel, name: &str, ty: TyId) -> FieldLayout {
+    FieldLayout {
+        name: m.strings.intern(name),
+        ty,
+        offset: 0,
+    }
+}
+
+#[test]
+fn render_instance_specimen_123_unit_struct() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (item, ty) = install_struct_with_layout(&mut m, "pl011::Marker", vec![], vec![]);
+    let id = push_struct_instance_local(&mut m, item, ty);
+    assert_snapshot!(m.pretty().render_instance(id), @"struct pl011::Marker;");
+}
+
+#[test]
+fn render_instance_specimen_124_tuple_struct_with_synthetic_names() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let f0 = field_layout_named(&mut m, "_0", i32_ty);
+    let f1 = field_layout_named(&mut m, "_1", i32_ty);
+    let (item, ty) = install_struct_with_layout(&mut m, "pl011::Coord", vec![], vec![f0, f1]);
+    let id = push_struct_instance_local(&mut m, item, ty);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @"struct pl011::Coord(i32, i32);"
+    );
+}
+
+#[test]
+fn render_instance_specimen_125_named_field_struct_with_lang_flag_and_generic_args() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let resource_item = push_item(&mut m, ItemKind::Struct, "pl011::Resource");
+    let resource_ty = m.types.intern(Ty::Struct {
+        item: resource_item,
+        args: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let f_value = field_layout_named(&mut m, "value", resource_ty);
+    let (item, ty) = install_struct_with_layout(
+        &mut m,
+        "core::mem::ManuallyDrop",
+        vec![GenericArg::Type(resource_ty)],
+        vec![f_value],
+    );
+    m.items[item].is_manually_drop = true;
+    let id = push_struct_instance_local(&mut m, item, ty);
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    #[lang = "manually_drop"]
+    struct core::mem::ManuallyDrop<pl011::Resource> {
+        value: pl011::Resource,
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_126_multi_variant_enum_with_mixed_ctor_forms() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+
+    let ready_name = m.strings.intern("Ready");
+    let busy_name = m.strings.intern("Busy");
+    let error_name = m.strings.intern("Error");
+    let busy_f0 = field_layout_named(&mut m, "_0", u32_ty);
+    let err_code = field_layout_named(&mut m, "code", i32_ty);
+    let err_retry = field_layout_named(&mut m, "retry", bool_ty);
+
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8_ty,
+        valid_range: WrappingRange { start: 0, end: 2 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            VariantLayout {
+                name: ready_name,
+                fields: vec![],
+                uninhabited: false,
+                discriminant: 0,
+                tag_value: Some(0),
+            },
+            VariantLayout {
+                name: busy_name,
+                fields: vec![busy_f0],
+                uninhabited: false,
+                discriminant: 1,
+                tag_value: Some(1),
+            },
+            VariantLayout {
+                name: error_name,
+                fields: vec![err_code, err_retry],
+                uninhabited: false,
+                discriminant: 2,
+                tag_value: Some(2),
+            },
+        ],
+    };
+    let (item, ty) = install_enum_with_shape(&mut m, "pl011::Status", vec![], shape);
+    let id = push_enum_instance_local(&mut m, item, ty);
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    enum pl011::Status {
+        Ready,
+        Busy(u32),
+        Error { code: i32, retry: bool },
+    }
+    "###);
+}
+
+#[test]
+fn render_instance_specimen_127_empty_enum() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (item, ty) = install_enum_with_shape(
+        &mut m,
+        "core::convert::Infallible",
+        vec![],
+        EnumShape::Empty,
+    );
+    let id = push_enum_instance_local(&mut m, item, ty);
+    assert_snapshot!(
+        m.pretty().render_instance(id),
+        @"enum core::convert::Infallible {}"
+    );
+}
+
+#[test]
+fn render_instance_specimen_128_simple_union() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 4));
+    let f_word = field_layout_named(&mut m, "word", u32_ty);
+    let f_bytes = field_layout_named(&mut m, "bytes", arr_ty);
+    let (item, ty) =
+        install_union_with_layout(&mut m, "pl011::RegBytes", vec![], vec![f_word, f_bytes]);
+    let id = push_union_instance_local(&mut m, item, ty);
+    assert_snapshot!(m.pretty().render_instance(id), @r###"
+    union pl011::RegBytes {
+        word: u32,
+        bytes: [u8; 4],
+    }
+    "###);
+}

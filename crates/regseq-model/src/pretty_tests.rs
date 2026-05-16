@@ -4741,28 +4741,354 @@ fn render_instance_function_divergent_return_emits_bang() {
     assert!(out.contains("    let mut _0: !;\n"), "got: {out}");
 }
 
-// --- ADT-definition variants stay todo!() until P1a-PP-05b --------
+// --- §10.2.4 / §10.2.5 / §10.2.6 ADT-definition variants ----------
 
-#[test]
-#[should_panic(expected = "P1a-PP-05b")]
-fn render_instance_struct_variant_is_todo_until_p1a_pp_05b() {
-    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let s_name = m.strings.intern("S");
-    let item = unit_item(&mut m, ItemKind::Struct, s_name);
-    let layout = m.types.intern(Ty::Struct {
+/// Helper: install a Struct Item plus a matching `Ty::Struct` with
+/// the supplied `fields` and return the `(ItemId, TyId)` pair.
+fn install_struct_with_layout(
+    m: &mut RegseqModel,
+    rendered: &str,
+    fields: Vec<FieldLayout>,
+) -> (ItemId, TyId) {
+    let r = m.strings.intern(rendered);
+    let item = unit_item(m, ItemKind::Struct, r);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields },
+    };
+    let ty = m.types.intern(Ty::Struct {
         item,
         args: vec![],
-        layout: UNIT_LAYOUT,
+        layout,
     });
+    (item, ty)
+}
+
+/// Helper: install an Enum Item plus a matching `Ty::Enum` with the
+/// supplied `shape` and return the `(ItemId, TyId)` pair.
+fn install_enum_with_shape(
+    m: &mut RegseqModel,
+    rendered: &str,
+    shape: EnumShape,
+) -> (ItemId, TyId) {
+    let r = m.strings.intern(rendered);
+    let item = unit_item(m, ItemKind::Enum, r);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: matches!(shape, EnumShape::Empty),
+        kind: LayoutKind::Enum { shape },
+    };
+    let ty = m.types.intern(Ty::Enum {
+        item,
+        args: vec![],
+        layout,
+    });
+    (item, ty)
+}
+
+/// Helper: install a Union Item plus a matching `Ty::Union` with
+/// the supplied `fields` and return the `(ItemId, TyId)` pair.
+fn install_union_with_layout(
+    m: &mut RegseqModel,
+    rendered: &str,
+    fields: Vec<FieldLayout>,
+) -> (ItemId, TyId) {
+    let r = m.strings.intern(rendered);
+    let item = unit_item(m, ItemKind::Union, r);
+    let layout = Layout {
+        size: 0,
+        align: 1,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Union { fields },
+    };
+    let ty = m.types.intern(Ty::Union {
+        item,
+        args: vec![],
+        layout,
+    });
+    (item, ty)
+}
+
+fn make_field(m: &mut RegseqModel, name: &str, ty: TyId) -> FieldLayout {
+    FieldLayout {
+        name: m.strings.intern(name),
+        ty,
+        offset: 0,
+    }
+}
+
+fn push_struct_instance(m: &mut RegseqModel, item: ItemId, layout: TyId) -> InstanceId {
     let emission = m.strings.intern("emission");
-    let id = m.instances.push(Instance {
+    m.instances.push(Instance {
         item,
         generic_args: vec![],
         emission_name: emission,
         span: Span::dummy(),
         kind: InstanceKind::Struct { layout },
-    });
-    let _ = m.pretty().render_instance(id);
+    })
+}
+
+fn push_enum_instance(m: &mut RegseqModel, item: ItemId, layout: TyId) -> InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Enum { layout },
+    })
+}
+
+fn push_union_instance(m: &mut RegseqModel, item: ItemId, layout: TyId) -> InstanceId {
+    let emission = m.strings.intern("emission");
+    m.instances.push(Instance {
+        item,
+        generic_args: vec![],
+        emission_name: emission,
+        span: Span::dummy(),
+        kind: InstanceKind::Union { layout },
+    })
+}
+
+// §10.2.4 Struct: 3-row dispatch on (fields.len(),
+// first-field-name-pattern).
+
+#[test]
+fn render_instance_struct_empty_fields_renders_unit_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (item, ty) = install_struct_with_layout(&mut m, "pl011::Marker", vec![]);
+    let id = push_struct_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "struct pl011::Marker;");
+}
+
+#[test]
+fn render_instance_struct_tuple_synthetic_names_renders_tuple_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let f0 = make_field(&mut m, "_0", i32_ty);
+    let f1 = make_field(&mut m, "_1", i32_ty);
+    let (item, ty) = install_struct_with_layout(&mut m, "pl011::Coord", vec![f0, f1]);
+    let id = push_struct_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "struct pl011::Coord(i32, i32);");
+}
+
+#[test]
+fn render_instance_struct_real_names_renders_named_field_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let f0 = make_field(&mut m, "baud_rate", u32_ty);
+    let f1 = make_field(&mut m, "parity", bool_ty);
+    let (item, ty) = install_struct_with_layout(&mut m, "pl011::Config", vec![f0, f1]);
+    let id = push_struct_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "struct pl011::Config {\n    baud_rate: u32,\n    parity: bool,\n}"
+    );
+}
+
+#[test]
+fn render_instance_struct_lang_flag_emits_stream_one_then_kind_keyword() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let f0 = make_field(&mut m, "value", u32_ty);
+    let (item, ty) = install_struct_with_layout(&mut m, "core::mem::ManuallyDrop", vec![f0]);
+    m.items[item].is_manually_drop = true;
+    let id = push_struct_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "#[lang = \"manually_drop\"]\n\
+         struct core::mem::ManuallyDrop {\n    value: u32,\n}"
+    );
+}
+
+// §10.2.5 Enum: EnumShape dispatch.
+
+#[test]
+fn render_instance_enum_empty_shape_renders_one_line_empty_body() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (item, ty) = install_enum_with_shape(&mut m, "core::convert::Infallible", EnumShape::Empty);
+    let id = push_enum_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "enum core::convert::Infallible {}");
+}
+
+#[test]
+fn render_instance_enum_single_unit_variant_renders_single_arm() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let only_name = m.strings.intern("Only");
+    let shape = EnumShape::Single {
+        variant: VariantLayout {
+            name: only_name,
+            fields: vec![],
+            uninhabited: false,
+            discriminant: 0,
+            tag_value: None,
+        },
+        scalar: None,
+    };
+    let (item, ty) = install_enum_with_shape(&mut m, "pl011::Singleton", shape);
+    let id = push_enum_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "enum pl011::Singleton {\n    Only,\n}");
+}
+
+#[test]
+fn render_instance_enum_single_tuple_variant_renders_tuple_arm() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let variant_name = m.strings.intern("Single");
+    let f0 = make_field(&mut m, "_0", i32_ty);
+    let shape = EnumShape::Single {
+        variant: VariantLayout {
+            name: variant_name,
+            fields: vec![f0],
+            uninhabited: false,
+            discriminant: 0,
+            tag_value: None,
+        },
+        scalar: None,
+    };
+    let (item, ty) = install_enum_with_shape(&mut m, "pl011::Wrap", shape);
+    let id = push_enum_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "enum pl011::Wrap {\n    Single(i32),\n}");
+}
+
+#[test]
+fn render_instance_enum_single_named_field_variant_renders_named_arm() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let variant_name = m.strings.intern("Cell");
+    let f0 = make_field(&mut m, "value", i32_ty);
+    let shape = EnumShape::Single {
+        variant: VariantLayout {
+            name: variant_name,
+            fields: vec![f0],
+            uninhabited: false,
+            discriminant: 0,
+            tag_value: None,
+        },
+        scalar: None,
+    };
+    let (item, ty) = install_enum_with_shape(&mut m, "pl011::Named", shape);
+    let id = push_enum_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "enum pl011::Named {\n    Cell { value: i32 },\n}");
+}
+
+#[test]
+fn render_instance_enum_multiple_mixed_ctor_renders_with_trailing_comma() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+    let bool_ty = m.types.intern(Ty::Bool);
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+
+    let ready_name = m.strings.intern("Ready");
+    let busy_name = m.strings.intern("Busy");
+    let error_name = m.strings.intern("Error");
+    let busy_f0 = make_field(&mut m, "_0", u32_ty);
+    let err_code = make_field(&mut m, "code", i32_ty);
+    let err_retry = make_field(&mut m, "retry", bool_ty);
+
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8_ty,
+        valid_range: WrappingRange { start: 0, end: 2 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            VariantLayout {
+                name: ready_name,
+                fields: vec![],
+                uninhabited: false,
+                discriminant: 0,
+                tag_value: Some(0),
+            },
+            VariantLayout {
+                name: busy_name,
+                fields: vec![busy_f0],
+                uninhabited: false,
+                discriminant: 1,
+                tag_value: Some(1),
+            },
+            VariantLayout {
+                name: error_name,
+                fields: vec![err_code, err_retry],
+                uninhabited: false,
+                discriminant: 2,
+                tag_value: Some(2),
+            },
+        ],
+    };
+    let (item, ty) = install_enum_with_shape(&mut m, "pl011::Status", shape);
+    let id = push_enum_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "enum pl011::Status {\n    \
+         Ready,\n    \
+         Busy(u32),\n    \
+         Error { code: i32, retry: bool },\n\
+         }"
+    );
+}
+
+// §10.2.6 Union: named-field unconditional form.
+
+#[test]
+fn render_instance_union_named_field_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+    let arr_ty = m.types.intern(Ty::Array(u8_ty, 4));
+    let f_word = make_field(&mut m, "word", u32_ty);
+    let f_bytes = make_field(&mut m, "bytes", arr_ty);
+    let (item, ty) = install_union_with_layout(&mut m, "pl011::RegBytes", vec![f_word, f_bytes]);
+    let id = push_union_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "union pl011::RegBytes {\n    word: u32,\n    bytes: [u8; 4],\n}"
+    );
+}
+
+#[test]
+fn render_instance_union_empty_fields_renders_bare_braces() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let (item, ty) = install_union_with_layout(&mut m, "pl011::EmptyUnion", vec![]);
+    let id = push_union_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(out, "union pl011::EmptyUnion {}");
+}
+
+#[test]
+fn render_instance_union_lang_unsafe_cell_flag_emits_stream_one() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+    let f_value = make_field(&mut m, "value", u32_ty);
+    let (item, ty) = install_union_with_layout(&mut m, "core::cell::UnsafeCell", vec![f_value]);
+    m.items[item].is_unsafe_cell = true;
+    let id = push_union_instance(&mut m, item, ty);
+    let out = m.pretty().render_instance(id);
+    assert_eq!(
+        out,
+        "#[lang = \"unsafe_cell\"]\n\
+         union core::cell::UnsafeCell {\n    value: u32,\n}"
+    );
 }
 
 // --- Stream 2 helper: empty-attr Item returns empty string --------

@@ -15,11 +15,12 @@
 //! (`render_ty`, `render_const`, `render_def_path(ItemId)`,
 //! `render_instance`, top-level `render`) are stubbed
 //! `unimplemented!(...)` with messages pointing at the stage
-//! that fills them. `render_instance` is now wired per
-//! `pretty-printer.md` §10.2 for the Function / Static / Const
-//! variants by P1a-PP-05a (regseq-model-91); the ADT-definition
-//! variants stay `todo!()` until P1a-PP-05b (regseq-model-92)
-//! lands.
+//! that fills them. `render_instance` is fully wired per
+//! `pretty-printer.md` §10.2 across the closed 6-variant
+//! `InstanceKind` enum: the Function / Static / Const variants
+//! by P1a-PP-05a (regseq-model-91) and the ADT-definition
+//! Struct / Enum / Union variants by P1a-PP-05b
+//! (regseq-model-92).
 //!
 //! Sigil-conventions table:
 //!
@@ -1412,26 +1413,19 @@ impl<'a> PrettyPrinter<'a> {
     /// from scratch, sharing only the §5.6 helper
     /// `render_item_attribute_block` for Stream 1.
     ///
-    /// `Function` / `Static` / `Const` are owned by this task
-    /// (P1a-PP-05a / regseq-model-91). `Struct` / `Enum` / `Union`
-    /// (the ADT-definition variants) are owned by P1a-PP-05b
-    /// (regseq-model-92) and panic with `todo!()` here until they
-    /// land.
+    /// `Function` / `Static` / `Const` are owned by P1a-PP-05a
+    /// (regseq-model-91). `Struct` / `Enum` / `Union` (the
+    /// ADT-definition variants) are owned by P1a-PP-05b
+    /// (regseq-model-92) per `pretty-printer.md` §10.2.4 - §10.2.6.
     pub fn render_instance(&self, id: InstanceId) -> String {
         let inst = &self.model.instances[id];
         match &inst.kind {
             InstanceKind::Function(data) => self.render_function_instance(inst.item, data),
             InstanceKind::Static { ty, init } => self.render_static_instance(inst.item, *ty, *init),
             InstanceKind::Const { ty, value } => self.render_const_instance(inst.item, *ty, *value),
-            InstanceKind::Struct { .. }
-            | InstanceKind::Enum { .. }
-            | InstanceKind::Union { .. } => {
-                todo!(
-                    "render_instance: ADT-definition variants (Struct / Enum / Union) \
-                     owned by P1a-PP-05b (regseq-model-92) per pretty-printer.md \
-                     §10.2.4 - §10.2.6"
-                )
-            }
+            InstanceKind::Struct { layout } => self.render_struct_instance(inst.item, *layout),
+            InstanceKind::Enum { layout } => self.render_enum_instance(inst.item, *layout),
+            InstanceKind::Union { layout } => self.render_union_instance(inst.item, *layout),
         }
     }
 
@@ -1630,6 +1624,220 @@ impl<'a> PrettyPrinter<'a> {
         // consumer-context type.
         let value_text = self.render_const(value, ty);
         format!("{attr_block}const {path}: {ty_text} = {value_text};")
+    }
+
+    /// `Struct` composer per `pretty-printer.md` §10.2.4.
+    ///
+    /// Resolves `layout_ty: TyId` to `Ty::Struct { item, args, layout
+    /// = Layout { kind: LayoutKind::Struct { fields }, .. } }` and
+    /// dispatches on `(fields.len(),
+    /// first-field-name-pattern per §3.4)`:
+    /// - `fields.is_empty()` -> unit form `struct <path><args>;`
+    ///   collapsing Rust's three syntactic empty-struct shapes.
+    /// - All field names match `_<idx>` synthetic pattern -> tuple
+    ///   form `struct <path><args>(<T0>, <T1>, ...);`.
+    /// - Otherwise (real source names) -> named-field multi-line
+    ///   form.
+    ///
+    /// `item` (the Item-record back-reference from the Instance) is
+    /// used for the Stream 1 / Stream 2 attribute block lookup. The
+    /// `item` and `args` rendered into the kind-keyword line are
+    /// read from the resolved `Ty::Struct` per the §10.2.4
+    /// "Sources" enumeration; for `InstanceKind::Struct` the two
+    /// `ItemId`s coincide per the 1:1 Item:Instance mapping
+    /// (`spec.md` §9.4).
+    fn render_struct_instance(&self, item: ItemId, layout_ty: TyId) -> String {
+        let (ty_item, args, fields) = match self.model.types.resolve(layout_ty) {
+            Ty::Struct {
+                item: ty_item,
+                args,
+                layout,
+            } => match &layout.kind {
+                LayoutKind::Struct { fields } => (*ty_item, args.clone(), fields.clone()),
+                _ => panic!(
+                    "render_instance: InstanceKind::Struct expected Ty::Struct.layout.kind = \
+                     LayoutKind::Struct; got {:?}",
+                    layout.kind
+                ),
+            },
+            other => panic!(
+                "render_instance: InstanceKind::Struct expected Ty::Struct payload; \
+                 got {:?}",
+                other
+            ),
+        };
+        let attr_block = self.render_instance_attribute_block(item);
+        let path = self.render_def_path(ty_item);
+        let args_text = self.render_generic_args(&args, ty_item);
+        let header = format!("{attr_block}struct {path}{args_text}");
+
+        if fields.is_empty() {
+            // §10.2.4 unit form: collapses Rust's three syntactic
+            // empty-struct shapes to `struct <path><args>;`.
+            format!("{header};")
+        } else if self.fields_are_tuple_synthetic(&fields) {
+            // §10.2.4 tuple form: one-line `struct <path><args>(T0,
+            // T1, ...);`.
+            let parts: Vec<String> = fields.iter().map(|f| self.render_ty(f.ty)).collect();
+            format!("{header}({});", parts.join(", "))
+        } else {
+            // §10.2.4 named-field form: multi-line block with one
+            // `<name>: <ty>,` per field, four-space indent.
+            let lines: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let name = self.model.strings.resolve(f.name);
+                    let ty_text = self.render_ty(f.ty);
+                    format!("    {name}: {ty_text},")
+                })
+                .collect();
+            format!("{header} {{\n{}\n}}", lines.join("\n"))
+        }
+    }
+
+    /// `Enum` composer per `pretty-printer.md` §10.2.5.
+    ///
+    /// Resolves `layout_ty: TyId` to `Ty::Enum { item, args, layout
+    /// = Layout { kind: LayoutKind::Enum { shape }, .. } }` and
+    /// dispatches on `shape: EnumShape` per `spec.md` §11.1:
+    /// - `Empty` -> `enum <path><args> {}` one-line empty body.
+    /// - `Single { variant, .. }` -> one variant arm inside
+    ///   `{ ... }`, trailing comma after the arm.
+    /// - `Multiple { variants, .. }` -> per-variant arms inside
+    ///   `{ ... }`, comma-separated, trailing comma after the last
+    ///   variant arm.
+    ///
+    /// v1 omits discriminant values (`VariantLayout.discriminant` /
+    /// `tag_value` are IR-internal) and `EnumShape::Single {
+    /// scalar: Some(_) }` tag-scalar surfacing
+    /// (pretty-printer.md:3969-3971).
+    fn render_enum_instance(&self, item: ItemId, layout_ty: TyId) -> String {
+        let (ty_item, args, shape) = match self.model.types.resolve(layout_ty) {
+            Ty::Enum {
+                item: ty_item,
+                args,
+                layout,
+            } => match &layout.kind {
+                LayoutKind::Enum { shape } => (*ty_item, args.clone(), shape.clone()),
+                _ => panic!(
+                    "render_instance: InstanceKind::Enum expected Ty::Enum.layout.kind = \
+                     LayoutKind::Enum; got {:?}",
+                    layout.kind
+                ),
+            },
+            other => panic!(
+                "render_instance: InstanceKind::Enum expected Ty::Enum payload; \
+                 got {:?}",
+                other
+            ),
+        };
+        let attr_block = self.render_instance_attribute_block(item);
+        let path = self.render_def_path(ty_item);
+        let args_text = self.render_generic_args(&args, ty_item);
+        let header = format!("{attr_block}enum {path}{args_text}");
+
+        match shape {
+            EnumShape::Empty => format!("{header} {{}}"),
+            EnumShape::Single { variant, .. } => {
+                let arm = self.render_variant_arm(&variant);
+                format!("{header} {{\n    {arm},\n}}")
+            }
+            EnumShape::Multiple { variants, .. } => {
+                let arms: Vec<String> = variants
+                    .iter()
+                    .map(|v| format!("    {},", self.render_variant_arm(v)))
+                    .collect();
+                format!("{header} {{\n{}\n}}", arms.join("\n"))
+            }
+        }
+    }
+
+    /// `Union` composer per `pretty-printer.md` §10.2.6.
+    ///
+    /// Resolves `layout_ty: TyId` to `Ty::Union { item, args, layout
+    /// = Layout { kind: LayoutKind::Union { fields }, .. } }` and
+    /// unconditionally produces the named-field form (Rust source
+    /// admits no tuple-union or unit-union). If `fields.is_empty()`
+    /// the IR-structurally-allowed shape renders bare as
+    /// `union <path><args> {}` with no defensive special-case;
+    /// validation per `spec.md` §11 catches construction bugs
+    /// upstream. Field offsets carried by `LayoutKind::Union.fields`
+    /// are not rendered in v1.
+    fn render_union_instance(&self, item: ItemId, layout_ty: TyId) -> String {
+        let (ty_item, args, fields) = match self.model.types.resolve(layout_ty) {
+            Ty::Union {
+                item: ty_item,
+                args,
+                layout,
+            } => match &layout.kind {
+                LayoutKind::Union { fields } => (*ty_item, args.clone(), fields.clone()),
+                _ => panic!(
+                    "render_instance: InstanceKind::Union expected Ty::Union.layout.kind = \
+                     LayoutKind::Union; got {:?}",
+                    layout.kind
+                ),
+            },
+            other => panic!(
+                "render_instance: InstanceKind::Union expected Ty::Union payload; \
+                 got {:?}",
+                other
+            ),
+        };
+        let attr_block = self.render_instance_attribute_block(item);
+        let path = self.render_def_path(ty_item);
+        let args_text = self.render_generic_args(&args, ty_item);
+        let header = format!("{attr_block}union {path}{args_text}");
+
+        if fields.is_empty() {
+            // No defensive special-case: the structurally-allowed
+            // shape renders bare per pretty-printer.md:4038-4040.
+            format!("{header} {{}}")
+        } else {
+            let lines: Vec<String> = fields
+                .iter()
+                .map(|f| {
+                    let name = self.model.strings.resolve(f.name);
+                    let ty_text = self.render_ty(f.ty);
+                    format!("    {name}: {ty_text},")
+                })
+                .collect();
+            format!("{header} {{\n{}\n}}", lines.join("\n"))
+        }
+    }
+
+    /// Renders one enum-variant arm per `pretty-printer.md`
+    /// §10.2.5's per-variant-arm dispatch table.
+    ///
+    /// Dispatches on `(variant.fields.len(),
+    /// first-field-name-pattern per §3.4)`:
+    /// - empty fields -> unit arm `<variant.name>`.
+    /// - all synthetic `_<idx>` names -> tuple arm
+    ///   `<variant.name>(<T0>, <T1>, ...)`.
+    /// - real source names -> named-field arm
+    ///   `<variant.name> { <name>: <T>, ... }`.
+    fn render_variant_arm(&self, variant: &VariantLayout) -> String {
+        let name = self.model.strings.resolve(variant.name).to_owned();
+        if variant.fields.is_empty() {
+            name
+        } else if self.fields_are_tuple_synthetic(&variant.fields) {
+            let parts: Vec<String> = variant
+                .fields
+                .iter()
+                .map(|f| self.render_ty(f.ty))
+                .collect();
+            format!("{name}({})", parts.join(", "))
+        } else {
+            let parts: Vec<String> = variant
+                .fields
+                .iter()
+                .map(|f| {
+                    let field_name = self.model.strings.resolve(f.name);
+                    let ty_text = self.render_ty(f.ty);
+                    format!("{field_name}: {ty_text}")
+                })
+                .collect();
+            format!("{name} {{ {} }}", parts.join(", "))
+        }
     }
 
     /// §10.2.7 attribute-block composition per D-14-5.6 LOCKED.

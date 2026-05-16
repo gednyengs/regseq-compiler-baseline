@@ -3259,7 +3259,7 @@
           "id": "regseq-model-92",
           "name": "P1a-PP-05b: render_instance for ADT-definition + attribute-stream composition",
           "spec": ".harness/tasks/regseq-model/92-render-instance-adt-and-attribute-streams.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-91",
             "regseq-model-74",
