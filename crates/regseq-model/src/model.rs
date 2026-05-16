@@ -709,6 +709,121 @@ impl RegseqModel {
             })
     }
 
+    /// Sort `model.instances` by the F4-2 instance sort key per
+    /// spec.md section 16.3, remapping every `CallCallee::Direct`
+    /// `InstanceId` reference in materialised function bodies so the
+    /// terminator graph survives the permutation. Idempotent: a model
+    /// already in F4-2 order stays unchanged.
+    ///
+    /// The sort key is
+    /// `(regseq_kind_rank, item_id, generic_args_key, fn_shim_disambig)`
+    /// per `RegseqInstanceKey`. Function instances (rank 0) precede
+    /// Static instances (rank 1), satisfying the F4-2 constraint that
+    /// vtable Static initialisers land after every Function instance
+    /// even when the bridge's per-phase push order does not.
+    /// Audit-finding HIGH-40-2.
+    pub fn sort_instances_by_f4_2(&mut self) {
+        use crate::args_key::args_key_for_generic_args;
+        use crate::basic_block::BasicBlock;
+        use crate::ids::InstanceId;
+        use crate::instance::{
+            regseq_instance_kind_rank, rustc_instance_kind_sort_rank, InstanceKind,
+        };
+        use crate::terminator::{CallCallee, TerminatorKind};
+
+        if self.instances.len() <= 1 {
+            return;
+        }
+
+        // 1. Compute the F4-2 key for every existing instance.
+        type F42Key = (u8, u32, u128, u8);
+        let keys: Vec<F42Key> = self
+            .instances
+            .iter()
+            .map(|inst| {
+                let kind_rank = regseq_instance_kind_rank(&inst.kind);
+                let item_id = inst.item.as_u32();
+                let args_key = args_key_for_generic_args(self, &inst.generic_args).0;
+                let fn_shim_disambig = match &inst.kind {
+                    InstanceKind::Function(data) => rustc_instance_kind_sort_rank(data.flavor),
+                    _ => 0,
+                };
+                (kind_rank, item_id, args_key, fn_shim_disambig)
+            })
+            .collect();
+
+        // 2. Sort indices by key to derive the permutation.
+        let mut order: Vec<usize> = (0..keys.len()).collect();
+        order.sort_by_key(|&idx| keys[idx]);
+
+        // Bail out early if already sorted -- avoids quadratic body
+        // walks on repeat invocations.
+        if order.iter().enumerate().all(|(new, old)| new == *old) {
+            return;
+        }
+
+        // 3. Build the old->new remap and apply it to the storage.
+        let mut remap = vec![InstanceId::ZERO; self.instances.len()];
+        for (new_idx, &old_idx) in order.iter().enumerate() {
+            remap[old_idx] = InstanceId::from_u32(new_idx as u32);
+        }
+        let mut old_vec = std::mem::take(&mut self.instances).into_inner();
+        let mut taken: Vec<Option<_>> = old_vec.drain(..).map(Some).collect();
+        let mut sorted: Vec<_> = Vec::with_capacity(taken.len());
+        for &old_idx in &order {
+            sorted.push(
+                taken[old_idx]
+                    .take()
+                    .expect("permutation visits each old index once"),
+            );
+        }
+        self.instances.replace_inner(sorted);
+
+        // 4. Remap every `CallCallee::Direct(InstanceId)` reference
+        // inside materialised function bodies. `InstanceRef`
+        // (used by `Const::Reloc`) is content-addressed and stable
+        // across permutation, so const-side cross-references need no
+        // patching. Per spec.md section 23.2 the only InstanceId-bearing
+        // shape on the IR side is `CallCallee::Direct`.
+        let mut bodies_to_patch: Vec<(InstanceId, crate::body::Body)> = Vec::new();
+        for (idx, inst) in self.instances.iter().enumerate() {
+            if let Some(function) = inst.kind.as_function() {
+                if let Some(body) = function.body.as_ref() {
+                    bodies_to_patch.push((InstanceId::from_u32(idx as u32), body.clone()));
+                }
+            }
+        }
+        for (instance_id, mut body) in bodies_to_patch {
+            remap_body_call_callees(&mut body, &remap);
+            let function = self
+                .instances
+                .iter_mut()
+                .nth(instance_id.as_u32() as usize)
+                .and_then(|inst| inst.kind.as_function_mut())
+                .expect("function instance must remain after permutation");
+            function.body = Some(body);
+        }
+
+        fn remap_body_call_callees(body: &mut crate::body::Body, remap: &[crate::ids::InstanceId]) {
+            for block in body.basic_blocks.iter_mut() {
+                remap_block_callees(block, remap);
+            }
+        }
+
+        fn remap_block_callees(block: &mut BasicBlock, remap: &[crate::ids::InstanceId]) {
+            if let TerminatorKind::Call {
+                callee: CallCallee::Direct(id),
+                ..
+            } = &mut block.terminator.kind
+            {
+                let old = id.as_u32() as usize;
+                if old < remap.len() {
+                    *id = remap[old];
+                }
+            }
+        }
+    }
+
     /// Validates construction invariants enforceable at this phase.
     pub fn validate(&mut self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
         self.validate_synthesized_sentinel()?;

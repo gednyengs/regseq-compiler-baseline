@@ -662,3 +662,146 @@ pub fn f() {
         last_rank = rank;
     }
 }
+
+#[test]
+fn final_sort_orders_function_before_static_instances() {
+    // Audit-finding HIGH-40-2: `model.sort_instances_by_f4_2`
+    // must order Function instances (rank 0) before Static
+    // instances (rank 1) regardless of which Phase-5 sub-pass
+    // pushed each first. Force a model with at least one of each
+    // shape and confirm the post-sort order.
+    use regseq_model::{
+        regseq_instance_kind_rank, Const, ConstId, FunctionInstanceData, FunctionInstanceFlavor,
+        Instance, InstanceKind, Mutability, Span, Ty, UNIT_LAYOUT,
+    };
+
+    let mut model = regseq_model::RegseqModel::with_primary("f4_2", regseq_model::StableCrateId(1));
+    // Two minimal Items: one Function, one Static. Both share the
+    // primary crate so they only diverge on kind for the F4-2
+    // comparator's leading discriminator.
+    let func_name = model.strings.intern("the_fn");
+    let static_name = model.strings.intern("the_static");
+    let render_fn = model.strings.intern("test::the_fn");
+    let render_static = model.strings.intern("test::the_static");
+    let item_fn = model.items.push(regseq_model::Item {
+        def_path: regseq_model::DefPath {
+            crate_id: model.primary_crate,
+            segments: vec![regseq_model::DefPathSegment {
+                data: regseq_model::DefPathData::ValueNs(func_name),
+                disambiguator: 0,
+            }],
+            rendered: render_fn,
+        },
+        kind: regseq_model::ItemKind::Function,
+        span: Span::dummy(),
+        linkage: regseq_model::Linkage::Default,
+        link_section: None,
+        inline_hint: regseq_model::InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    });
+    let item_static = model.items.push(regseq_model::Item {
+        def_path: regseq_model::DefPath {
+            crate_id: model.primary_crate,
+            segments: vec![regseq_model::DefPathSegment {
+                data: regseq_model::DefPathData::ValueNs(static_name),
+                disambiguator: 0,
+            }],
+            rendered: render_static,
+        },
+        kind: regseq_model::ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        span: Span::dummy(),
+        linkage: regseq_model::Linkage::Default,
+        link_section: None,
+        inline_hint: regseq_model::InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    });
+    model.item_def_paths.push(regseq_model::DefPathHash {
+        stable_crate_id: regseq_model::StableCrateId(1),
+        local_hash: 1,
+    });
+    model.item_def_paths.push(regseq_model::DefPathHash {
+        stable_crate_id: regseq_model::StableCrateId(1),
+        local_hash: 2,
+    });
+    model
+        .item_synthetic_kinds
+        .push(regseq_model::SyntheticItemKind::None);
+    model
+        .item_synthetic_kinds
+        .push(regseq_model::SyntheticItemKind::None);
+    model.domain_attrs.item_attrs.push(Vec::new());
+    model.domain_attrs.item_attrs.push(Vec::new());
+
+    // Push Static FIRST, Function SECOND. The pre-sort order is
+    // [Static, Function]; F4-2 demands [Function, Static].
+    let unit_ty = model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let zst_const = model.consts.intern(Const::ZST);
+    model.instances.push(Instance {
+        item: item_static,
+        generic_args: Vec::new(),
+        emission_name: render_static,
+        span: Span::dummy(),
+        kind: InstanceKind::Static {
+            ty: unit_ty,
+            init: Some(zst_const),
+        },
+    });
+    let fn_sig = model.sigs.intern(regseq_model::FnSig {
+        inputs: Vec::new(),
+        output: unit_ty,
+        abi: regseq_model::FnAbi::Rust,
+        c_variadic: false,
+        safety: regseq_model::Safety::Safe,
+    });
+    model.instances.push(Instance {
+        item: item_fn,
+        generic_args: Vec::new(),
+        emission_name: render_fn,
+        span: Span::dummy(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    let _ = ConstId::from_u32(0);
+    assert_eq!(model.instances.len(), 2);
+    assert_eq!(
+        regseq_instance_kind_rank(&model.instances[regseq_model::InstanceId::from_u32(0)].kind),
+        1,
+        "pre-sort: Static is first"
+    );
+    assert_eq!(
+        regseq_instance_kind_rank(&model.instances[regseq_model::InstanceId::from_u32(1)].kind),
+        0,
+        "pre-sort: Function is second"
+    );
+
+    model.sort_instances_by_f4_2();
+
+    assert_eq!(
+        regseq_instance_kind_rank(&model.instances[regseq_model::InstanceId::from_u32(0)].kind),
+        0,
+        "post-sort: Function must precede Static (F4-2 rank 0)"
+    );
+    assert_eq!(
+        regseq_instance_kind_rank(&model.instances[regseq_model::InstanceId::from_u32(1)].kind),
+        1,
+        "post-sort: Static must follow Function (F4-2 rank 1)"
+    );
+}

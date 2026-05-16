@@ -450,6 +450,17 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
     sort::f4_sort(&ctxt.model, &mut ctxt.pending_items)?;
     assign::assign_item_ids_and_populate_sidetables(&mut ctxt)?;
     construct_instances_and_resolve_cross_references(&mut ctxt)?;
+    // Audit-finding HIGH-40-2 (spec.md section 16.2 / 16.3): the
+    // bridge pushes Function and Static instances during distinct
+    // Phase-5 sub-passes (`body::run_phase5_body_passes` for
+    // Function bodies, `synth::rekey_synthesis_in_phase5` for
+    // vtable Static initialisers, `const_::construct_const_memory_static_instances`
+    // for reference-typed const Statics). Push order does not by
+    // itself satisfy F4-2 (Function rank 0 must precede Static rank
+    // 1). A final F4-2 sort guarantees the ordering regardless of
+    // push interleaving and remaps every `CallCallee::Direct`
+    // InstanceId so terminator references survive the permutation.
+    ctxt.model.sort_instances_by_f4_2();
 
     Ok(ctxt.model)
 }

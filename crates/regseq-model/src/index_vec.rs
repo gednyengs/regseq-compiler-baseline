@@ -72,6 +72,19 @@ impl<I, T> IndexVec<I, T> {
     pub fn iter_mut(&mut self) -> core::slice::IterMut<'_, T> {
         self.inner.iter_mut()
     }
+
+    /// Consume the `IndexVec`, returning the underlying `Vec<T>` in
+    /// index order. Used by post-Phase-5 F4-2 instance sort to reorder
+    /// `model.instances` per spec.md section 16.3.
+    pub fn into_inner(self) -> Vec<T> {
+        self.inner
+    }
+
+    /// Replace the storage with the supplied `Vec<T>`. Paired with
+    /// `into_inner` for permutation-style reorderings.
+    pub fn replace_inner(&mut self, inner: Vec<T>) {
+        self.inner = inner;
+    }
 }
 
 impl<I: Idx, T> IndexVec<I, T> {
