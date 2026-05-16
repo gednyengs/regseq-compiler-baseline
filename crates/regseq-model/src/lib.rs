@@ -90,7 +90,7 @@ pub use place::{Place, PlaceElem};
 pub use place_validator::{
     validate_body_places, PlaceLocation, PlaceSite, PlaceValidationError, PlaceValidationErrorKind,
 };
-pub use pretty::PrettyPrinter;
+pub use pretty::{PrettyPrintOptions, PrettyPrinter};
 pub use rvalue::{AggregateKind, BinOp, CastKind, PointerCoercion, Rvalue, UnOp};
 pub use source::{Position, SourceFile, Span};
 pub use statement::{CopyNonOverlapping, NonDivergingIntrinsic, Statement, StatementKind};

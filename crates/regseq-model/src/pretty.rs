@@ -35,9 +35,34 @@
 //! and 11 alongside the IDs themselves.
 
 use crate::def_path::{render_def_path, DefPath};
-use crate::ids::{ConstId, InstanceId, ItemId, TyId};
+use crate::ids::{ConstId, InstanceId, ItemId, SourceFileId, TyId};
+use crate::item::{InlineHint, ItemKind, Linkage};
 use crate::model::RegseqModel;
 use crate::source::Span;
+use crate::ty::Mutability;
+
+/// Column at which trailing `// <span>` comments are aligned per
+/// `pretty-printer.md` §4.2. Matches rustc's `mir/pretty.rs:21`
+/// `ALIGN = 40`.
+const ALIGN: usize = 40;
+
+/// Renderer options per `pretty-printer.md` §4.1.
+///
+/// Two independent flags gate optional output:
+/// - `include_spans` enables trailing `// <span>` comments per §4.2.
+/// - `include_debug_names` enables `debug NAME => _N;` lines per
+///   §4.4 (consumed by body-level renderers).
+///
+/// Defaults are off; consumers opt in via [`PrettyPrinter::with_options`].
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct PrettyPrintOptions {
+    /// Emit trailing `// <render_span(...)>` comments on Item,
+    /// Statement, Terminator, and LocalDecl lines.
+    pub include_spans: bool,
+    /// Emit `debug NAME => _N;` debug-info lines after locals
+    /// declarations.
+    pub include_debug_names: bool,
+}
 
 /// Context-bearing renderer over a `RegseqModel`.
 ///
@@ -46,12 +71,21 @@ use crate::source::Span;
 /// land.
 pub struct PrettyPrinter<'a> {
     model: &'a RegseqModel,
+    options: PrettyPrintOptions,
 }
 
 impl<'a> PrettyPrinter<'a> {
-    /// Constructs a printer over `model`.
+    /// Constructs a printer over `model` with default-off options.
     pub fn new(model: &'a RegseqModel) -> Self {
-        Self { model }
+        Self {
+            model,
+            options: PrettyPrintOptions::default(),
+        }
+    }
+
+    /// Constructs a printer over `model` with caller-supplied options.
+    pub fn with_options(model: &'a RegseqModel, options: PrettyPrintOptions) -> Self {
+        Self { model, options }
     }
 
     /// Renders a `Span` per the spec sigil
@@ -113,16 +147,120 @@ impl<'a> PrettyPrinter<'a> {
         unimplemented!("stage 14 fills render_const (deferred per D-4-K)")
     }
 
-    /// Item-keyed `DefPath` rendering. Filled in stage 12 (Items).
-    /// Stage 12's body resolves
-    /// `self.model.strings.resolve(self.model.items[id].def_path.rendered).to_owned()`
-    /// -- no re-rendering, just resolving the cached canonical
-    /// form (the eager `rendered` field is the cached result of
-    /// `render_def_path` at construction time).
-    pub fn render_def_path(&self, _item: ItemId) -> String {
-        unimplemented!(
-            "stage 12 fills render_def_path by reading Item.def_path.rendered (an interned StringId); use render_def_path_value(&DefPath) at stage 1"
-        )
+    /// Item-keyed `DefPath` rendering. Resolves the eager
+    /// `Item.def_path.rendered` cache (per pretty-printer.md §8
+    /// ownership table; stage-12 D-12-6 cached-lookup
+    /// convention) -- no re-rendering, just resolving the cached
+    /// canonical form interned at construction time.
+    pub fn render_def_path(&self, item: ItemId) -> String {
+        self.model
+            .strings
+            .resolve(self.model.items[item].def_path.rendered)
+            .to_owned()
+    }
+
+    /// Item-level wrapper per `pretty-printer.md` §5: attribute
+    /// block (one `#[...]` per line, §5.3 row order, §5.2
+    /// default-suppression) plus kind-keyword (with `unsafe`
+    /// prefix on `fn` when `Item.is_unsafe` per §5.4) plus the
+    /// rendered DefPath. Owns the §4 / §4.2 / §4.3 span gating
+    /// for the Item header source position (`Item.span`).
+    pub fn render_item(&self, id: ItemId) -> String {
+        let item = &self.model.items[id];
+        let attr_block = self.render_item_attribute_block(id);
+        let kind_keyword = match &item.kind {
+            ItemKind::Function => {
+                if item.is_unsafe {
+                    "unsafe fn"
+                } else {
+                    "fn"
+                }
+            }
+            ItemKind::Static {
+                mutability: Mutability::Not,
+            } => "static",
+            ItemKind::Static {
+                mutability: Mutability::Mut,
+            } => "static mut",
+            ItemKind::Const => "const",
+            ItemKind::Struct => "struct",
+            ItemKind::Enum => "enum",
+            ItemKind::Union => "union",
+        };
+        let path = self.render_def_path(id);
+        let header_line = format!("{kind_keyword} {path}");
+
+        // §4 Item-header span gating: emit `// <render_span(span)>`
+        // aligned to column ALIGN, only when `include_spans == true`
+        // AND `span.file != SourceFileId::SYNTHESIZED` (§4.3).
+        let header = if self.options.include_spans && item.span.file != SourceFileId::SYNTHESIZED {
+            let span_text = self.render_span(item.span);
+            // Match rustc mir/pretty.rs ALIGN convention: pad the
+            // header to width ALIGN, then ` // <comment>`. When the
+            // header is longer than ALIGN, the format spec leaves
+            // the header at natural width so the trailing comment
+            // follows after the single literal space.
+            format!("{header_line:ALIGN$} // {span_text}")
+        } else {
+            header_line
+        };
+
+        format!("{attr_block}{header}")
+    }
+
+    /// Shared §5.6 helper: walks the §5.3 per-flag attribute table
+    /// in row order, emits surviving `#[...]` rows per §5.2
+    /// default-suppression. Returns a multi-line block ending in a
+    /// trailing `\n` when non-empty, or an empty string when zero
+    /// attributes survive. Consumed by both `render_item` (§5.4)
+    /// and the future `render_instance` composer (§10.2.7 Stream 1)
+    /// for byte-identical Item-flag attribute output.
+    fn render_item_attribute_block(&self, id: ItemId) -> String {
+        let item = &self.model.items[id];
+        let mut out = String::new();
+
+        // Row 1: linkage (Default suppresses).
+        match item.linkage {
+            Linkage::NoMangle => out.push_str("#[no_mangle]\n"),
+            Linkage::Foreign => out.push_str("#[foreign]\n"),
+            Linkage::Weak => out.push_str("#[linkage = \"weak\"]\n"),
+            Linkage::Default => {}
+        }
+
+        // Row 2: inline_hint (None suppresses).
+        match item.inline_hint {
+            InlineHint::Hint => out.push_str("#[inline]\n"),
+            InlineHint::Always => out.push_str("#[inline(always)]\n"),
+            InlineHint::Never => out.push_str("#[inline(never)]\n"),
+            InlineHint::None => {}
+        }
+
+        // Row 3: lang-item flags in field declaration order
+        // (`is_phantom_data`, `is_unsafe_cell`, `is_manually_drop`
+        // per spec.md §8.0). `is_unsafe` is intentionally NOT
+        // surfaced here per pretty-printer.md:576-583.
+        if item.is_phantom_data {
+            out.push_str("#[lang = \"phantom_data\"]\n");
+        }
+        if item.is_unsafe_cell {
+            out.push_str("#[lang = \"unsafe_cell\"]\n");
+        }
+        if item.is_manually_drop {
+            out.push_str("#[lang = \"manually_drop\"]\n");
+        }
+
+        // Row 4: link_section (None suppresses).
+        if let Some(section_id) = item.link_section {
+            let resolved = self.model.strings.resolve(section_id);
+            out.push_str(&format!("#[link_section = \"{resolved}\"]\n"));
+        }
+
+        // Row 5: opaque_handle_eligible (false suppresses).
+        if item.opaque_handle_eligible {
+            out.push_str("#[opaque_handle]\n");
+        }
+
+        out
     }
 
     /// Instance rendering. Filled in stage 14

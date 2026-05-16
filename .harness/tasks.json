@@ -3095,7 +3095,7 @@
           "id": "regseq-model-86",
           "name": "P1a-PP-01: render_item + attribute block + \u00a74 Item-header span gating",
           "spec": ".harness/tasks/regseq-model/86-render-item.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-71"
           ],

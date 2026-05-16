@@ -9,7 +9,7 @@
 
 use crate::{
     render_def_path, ConstId, CrateId, CrateInfo, DefPath, DefPathData, DefPathSegment, InstanceId,
-    ItemId, RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId, TyId,
+    RegseqModel, SourceFile, SourceFileId, Span, StableCrateId, StringId, TyId,
 };
 
 // ------------------------------------------------------------------
@@ -183,13 +183,6 @@ fn render_top_level_is_unimplemented_at_stage_one() {
 }
 
 #[test]
-#[should_panic(expected = "stage 12 fills render_def_path")]
-fn render_def_path_by_item_id_is_unimplemented_at_stage_one() {
-    let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-    let _ = m.pretty().render_def_path(ItemId::ZERO);
-}
-
-#[test]
 #[should_panic(expected = "stage 13 fills render_ty")]
 fn render_ty_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
@@ -208,4 +201,192 @@ fn render_const_is_unimplemented_at_stage_one() {
 fn render_instance_is_unimplemented_at_stage_one() {
     let m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
     let _ = m.pretty().render_instance(InstanceId::ZERO);
+}
+
+// ------------------------------------------------------------------
+// render_item_attribute_block: §5.6 shared Stream-1 helper.
+//
+// These tests exercise the private dispatch logic of the helper
+// (per the §5.3 per-flag table, §5.2 default-suppression, and the
+// §5.5 trailing-newline-when-non-empty rule). Access to the private
+// method works because `mod tests` is a child of the `pretty`
+// module.
+// ------------------------------------------------------------------
+
+use crate::item::{InlineHint, Item, ItemKind, Linkage};
+use crate::ty::Mutability;
+use crate::ItemId;
+
+fn unit_item(model: &mut RegseqModel, kind: ItemKind, rendered: StringId) -> ItemId {
+    let item = Item {
+        def_path: DefPath {
+            crate_id: model.primary_crate,
+            segments: vec![DefPathSegment {
+                data: DefPathData::CrateRoot,
+                disambiguator: 0,
+            }],
+            rendered,
+        },
+        kind,
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        linkage: Linkage::Default,
+        link_section: None,
+        inline_hint: InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    };
+    model.items.push(item)
+}
+
+#[test]
+fn render_item_attribute_block_is_empty_for_all_defaults() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Function, rendered);
+    assert_eq!(m.pretty().render_item_attribute_block(id), "");
+}
+
+#[test]
+fn render_item_attribute_block_walks_stream_one_rows_in_table_order() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let section = m.strings.intern(".init_array");
+    let id = unit_item(&mut m, ItemKind::Struct, rendered);
+    {
+        let item = &mut m.items[id];
+        item.linkage = Linkage::NoMangle;
+        item.inline_hint = InlineHint::Always;
+        item.is_unsafe_cell = true;
+        item.link_section = Some(section);
+        item.opaque_handle_eligible = true;
+    }
+    let expected = "#[no_mangle]\n\
+                    #[inline(always)]\n\
+                    #[lang = \"unsafe_cell\"]\n\
+                    #[link_section = \".init_array\"]\n\
+                    #[opaque_handle]\n";
+    assert_eq!(m.pretty().render_item_attribute_block(id), expected);
+}
+
+#[test]
+fn render_item_attribute_block_does_not_surface_is_unsafe() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Function, rendered);
+    m.items[id].is_unsafe = true;
+    // `is_unsafe` is the kind-keyword prefix's responsibility, not
+    // the helper's: the helper produces no attribute row for it.
+    assert_eq!(m.pretty().render_item_attribute_block(id), "");
+}
+
+#[test]
+fn render_item_attribute_block_phantom_data_row_in_isolation() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Struct, rendered);
+    m.items[id].is_phantom_data = true;
+    assert_eq!(
+        m.pretty().render_item_attribute_block(id),
+        "#[lang = \"phantom_data\"]\n"
+    );
+}
+
+#[test]
+fn render_item_attribute_block_unsafe_cell_row_in_isolation() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Union, rendered);
+    m.items[id].is_unsafe_cell = true;
+    assert_eq!(
+        m.pretty().render_item_attribute_block(id),
+        "#[lang = \"unsafe_cell\"]\n"
+    );
+}
+
+#[test]
+fn render_item_attribute_block_manually_drop_row_in_isolation() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Struct, rendered);
+    m.items[id].is_manually_drop = true;
+    assert_eq!(
+        m.pretty().render_item_attribute_block(id),
+        "#[lang = \"manually_drop\"]\n"
+    );
+}
+
+#[test]
+fn render_item_attribute_block_trailing_newline_when_non_empty() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Function, rendered);
+    m.items[id].linkage = Linkage::NoMangle;
+    let out = m.pretty().render_item_attribute_block(id);
+    assert!(
+        out.ends_with('\n'),
+        "expected helper to end in a trailing newline when non-empty, got {out:?}"
+    );
+}
+
+#[test]
+fn render_item_attribute_block_static_kind_does_not_inject_unsafe_attribute() {
+    // `unsafe static` is non-syntactic; the helper has no row for
+    // is_unsafe regardless of kind, so a Static with is_unsafe set
+    // is still attribute-empty.
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Mut,
+        },
+        rendered,
+    );
+    m.items[id].is_unsafe = true;
+    assert_eq!(m.pretty().render_item_attribute_block(id), "");
+}
+
+#[test]
+fn render_item_attribute_block_linkage_foreign_emits_foreign() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Function, rendered);
+    m.items[id].linkage = Linkage::Foreign;
+    assert_eq!(m.pretty().render_item_attribute_block(id), "#[foreign]\n");
+}
+
+#[test]
+fn render_item_attribute_block_linkage_weak_emits_key_value_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+    let id = unit_item(&mut m, ItemKind::Function, rendered);
+    m.items[id].linkage = Linkage::Weak;
+    assert_eq!(
+        m.pretty().render_item_attribute_block(id),
+        "#[linkage = \"weak\"]\n"
+    );
+}
+
+#[test]
+fn render_item_attribute_block_inline_hint_each_form() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    let rendered = m.strings.intern("pl011-spec");
+
+    let hint = unit_item(&mut m, ItemKind::Function, rendered);
+    m.items[hint].inline_hint = InlineHint::Hint;
+    assert_eq!(m.pretty().render_item_attribute_block(hint), "#[inline]\n");
+
+    let never = unit_item(&mut m, ItemKind::Function, rendered);
+    m.items[never].inline_hint = InlineHint::Never;
+    assert_eq!(
+        m.pretty().render_item_attribute_block(never),
+        "#[inline(never)]\n"
+    );
 }
