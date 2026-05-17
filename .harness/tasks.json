@@ -1276,6 +1276,56 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-47",
+          "name": "P1a-BR-10: F4 ordering across Phase-5 late items + global ItemId remap",
+          "spec": ".harness/tasks/regseq-driver/47-f4-late-item-reordering-and-id-remap.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-45",
+            "regseq-driver-46"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#16"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-17T02:51:56Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-48",
+          "name": "P1a-BR-11: Post-DiagLogPeel dead-Item / dead-Ty elimination (LogArg-survival)",
+          "spec": ".harness/tasks/regseq-driver/48-dead-item-elimination-after-diag-log-peel.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-45",
+            "regseq-driver-47"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#25",
+            "spec.md#26"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-17T02:51:56Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
