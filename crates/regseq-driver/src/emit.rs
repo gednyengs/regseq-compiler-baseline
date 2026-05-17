@@ -94,7 +94,17 @@ fn ensure_parent(dest: &Path) -> std::io::Result<()> {
 mod tests {
     use super::*;
     use regseq_model::{RegseqModel, StableCrateId};
+    use std::sync::Mutex;
     use std::time::{SystemTime, UNIX_EPOCH};
+
+    /// Serialises any unit test that mutates the process current
+    /// directory (e.g. via `std::env::set_current_dir`). Cargo runs
+    /// unit tests in parallel within a single test binary by default,
+    /// so CWD mutations without a guard race against any concurrent
+    /// test that observes CWD or uses a relative path. Mirrors the
+    /// `COMPILER_LOCK` pattern at
+    /// `crates/regseq-driver/tests/emit_dispatch.rs:28`.
+    static CWD_MUTEX: Mutex<()> = Mutex::new(());
 
     fn small_model() -> RegseqModel {
         RegseqModel::with_primary("emit_test_crate", StableCrateId(7))
@@ -211,6 +221,13 @@ mod tests {
         // must treat that as "no directory to create" and write to
         // the current working directory successfully. We run this
         // in a temp dir to avoid polluting the project workspace.
+        //
+        // CWD_MUTEX serialises this test against any future
+        // CWD-mutating sibling so the chdir window doesn't race with
+        // another test observing CWD or using a relative path.
+        let _guard = CWD_MUTEX
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
         let dir = fresh_dir("relative-cwd");
         fs::create_dir_all(&dir).expect("mkdir");
         let prev_cwd = std::env::current_dir().expect("cwd");
