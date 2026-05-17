@@ -443,25 +443,40 @@ fn closure_synthesis_and_struct_layout_view() {
 
     // F. Snapshot (Test Plan F27-F28).
     //
-    // SPEC DEVIATION (forced by bridge architecture). Test Plan F28
-    // expects the snapshot to render (a) the `ClosureCaptures`
+    // BRIDGE GAP (tracked separately as regseq-driver-51). Test Plan
+    // F28 expects the snapshot to render (a) the `ClosureCaptures`
     // struct as a separate ADT-definition Instance and (b) at
     // least one `ClosureCall` Function Instance with a
-    // `<regseq_synth>::...` DefPath head. The bridge does NOT
-    // create `Instance` entries for synthesised Items unless they
-    // are reached via a concrete call site (see
-    // `crates/regseq-driver/src/bridge/mod.rs:1100-1112` --
-    // `construct_function_instances` skips items whose
-    // `source_item_def_id` is `None`, i.e. all synthetic Items, and
-    // closure-call sites lazy-allocate Instances through
-    // `lookup_or_create_direct_instance`). The fixture cannot
-    // legally invoke the closure via the `Fn` trait without
-    // triggering the bridge's `non-rigid TyKind::Alias` rejection
-    // on `<closure as FnOnce<(u32,)>>::Output` (the rustc-emitted
-    // projection survives normalisation; see
-    // `crates/regseq-driver/src/bridge/ty.rs:20-28`), so no
-    // `ClosureCall` Instance is constructible for this fixture.
-    // The snapshot consequently renders only the `make_inc` and
+    // `<regseq_synth>::...` DefPath head. spec.md:4531-4541 and
+    // spec.md:778-781 require every synthesised ClosureCall Function
+    // Item to have a corresponding Function `Instance` whose body
+    // `is_some()` (non-Foreign linkage). The pretty-printer at
+    // pretty-printer.md:1150-1151 walks `model.instances`, so without
+    // Instances no rendering occurs.
+    //
+    // The bridge today eagerly constructs Instances only for items
+    // whose `source_item_def_id` resolves to a rustc DefId in this
+    // compilation (`crates/regseq-driver/src/bridge/mod.rs:1114-1121`
+    // skips the synthetic case), and closure-call sites lazy-allocate
+    // Instances through `lookup_or_create_direct_instance`. This is a
+    // missed synthesis path -- the materialisation machinery in
+    // `crates/regseq-driver/src/bridge/body/materialise.rs:87-100`
+    // already knows how to resolve closure-call bodies via
+    // `tcx.hir_body_owners().find()` against the closure's
+    // `DefPathHash`; what is missing is the eager construction of the
+    // Instance entry (and selection of the per-kind receiver shape
+    // per spec.md:4531-4541) during Phase-2 or Phase-4 synthesis.
+    //
+    // The fixture additionally cannot invoke the closure via the
+    // `Fn` trait without triggering the bridge's `non-rigid
+    // TyKind::Alias` rejection on `<closure as FnOnce<(u32,)>>::Output`
+    // (`crates/regseq-driver/src/bridge/ty.rs:278`), so no concrete
+    // call site can lazy-construct the Instance either. After
+    // regseq-driver-51 lands the eager-Instance synthesis, the
+    // snapshot can be re-baselined via `cargo insta review` to
+    // capture the proper ClosureCall + ClosureCaptures rendering.
+    //
+    // Today's snapshot renders only the `make_inc` and
     // `core::mem::drop` Function Instances; the captures struct
     // DefPath (`closure::make_inc::{closure#0}`) still appears as
     // the generic-argument type printed inside `core::mem::drop`'s
