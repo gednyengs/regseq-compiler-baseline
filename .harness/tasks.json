@@ -1332,6 +1332,31 @@
               "reason": "Audit-derived amendment: rustc rlib materialisation makes strict residue-driven scope unsatisfiable for \u00a726.6. Formalise the agent's pragmatic widening (Change B step 1.2) + step-0 log-intrinsic FnSig rewrite (Change B step 0) + HandleTable drop+remap pattern (revised Change B step 6) + Test Plan item 9 rewording + validate() deferral to regseq-driver-49 (revised Test Plan items 10 + 14). Spec_version 1 -> 2."
             }
           ]
+        },
+        {
+          "id": "regseq-driver-49",
+          "name": "P1a-BR-12: Validator B-4/B-6 \u00a726.6 exception + instance_intrinsic implementation",
+          "spec": ".harness/tasks/regseq-driver/49-validator-diag-log-call-arity-exception.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-48"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#23",
+            "spec.md#26",
+            "spec.md#3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-17T08:06:06Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
