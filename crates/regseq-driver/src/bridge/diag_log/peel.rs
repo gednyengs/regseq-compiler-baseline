@@ -498,6 +498,37 @@ fn peel_log_arg_from_wrapper(
 /// 26.4. There is no closed-vocabulary intrinsic marker for the
 /// `From` impls (only the four `log-<sev>` callees are marked); the
 /// rendered DefPath heuristic is the fall-back.
+/// Structural recognition of `<LogArg<'_> as From<T>>::from` Call
+/// callees per spec.md section 26.4 + section 26.5. Rustc lowers
+/// the macro expansion `LogArg::from($arg)` to a Call whose `func`
+/// is `FnDef(<trait method def_id>, [Self, T])`; the bridge interns
+/// it as a Direct Instance whose `.item` points at the trait method
+/// (`core::convert::From::from`) and whose `.generic_args` carries
+/// the dispatch info `[Type(Self), Type(T)]`. The impl method's
+/// def_path is not interned -- the bridge represents trait-method
+/// calls through their trait-side Item, not the resolved impl Item.
+///
+/// The earlier rendered-path heuristic
+/// (`path.contains("LogArg") && path.ends_with("from")`) never
+/// matched real fixture bodies for that reason: the bridge only
+/// ever exposes `"core::convert::From::from"` here, so the
+/// substring check on "LogArg" always failed and the carrier's
+/// inner operand fell through unchanged. The post-peel D4
+/// admissibility check (`validate_operand_type_admissibility`) then
+/// rejected the surviving `LogArg<'_>` operand. See the regseq-
+/// driver-45 audit-fix sequence for the diagnostic walk.
+///
+/// The structural check:
+/// 1. The callee Item's rendered def_path ends with `::From::from`
+///    (the only trait-method path that should appear inside a
+///    DiagLogPeel carrier walk per spec.md section 26.5).
+/// 2. `generic_args[0]` (the `Self` type substitution; first slot
+///    by rustc generic-arg order for a trait method) resolves to a
+///    nominal ADT (`Ty::Enum` / `Ty::Struct` / `Ty::Union`) whose
+///    Item's def_path terminal segment renders as the bare name
+///    `LogArg`. The terminal-segment match is stricter than a
+///    substring check (which would false-positive on user-named
+///    `MyLogArg` ADTs).
 fn callee_is_from_logarg(model: &RegseqModel, callee: &CallCallee) -> bool {
     let CallCallee::Direct(instance_id) = callee else {
         return false;
@@ -505,13 +536,33 @@ fn callee_is_from_logarg(model: &RegseqModel, callee: &CallCallee) -> bool {
     if instance_id.index() >= model.instances.len() {
         return false;
     }
-    let item = model.instances[*instance_id].item;
+    let instance = &model.instances[*instance_id];
+    let item = instance.item;
     if item.index() >= model.items.len() {
         return false;
     }
     let rendered = model.items[item].def_path.rendered;
     let path = model.strings.resolve(rendered);
-    path.contains("LogArg") && path.ends_with("from")
+    if !path.ends_with("::From::from") {
+        return false;
+    }
+    let Some(regseq_model::GenericArg::Type(self_ty_id)) = instance.generic_args.first() else {
+        return false;
+    };
+    let self_item = match model.types.resolve(*self_ty_id) {
+        Ty::Enum { item, .. } | Ty::Struct { item, .. } | Ty::Union { item, .. } => *item,
+        _ => return false,
+    };
+    if self_item.index() >= model.items.len() {
+        return false;
+    }
+    let self_path_id = model.items[self_item].def_path.rendered;
+    let self_path = model.strings.resolve(self_path_id);
+    self_path
+        .rsplit("::")
+        .next()
+        .map(|seg| seg == "LogArg")
+        .unwrap_or(false)
 }
 
 /// Outcome of `locate_log_arg_carrier`: either an Aggregate carrier
@@ -1329,6 +1380,329 @@ mod tests {
                 "carrier local {local:?} ty must be nulled to unit"
             );
         }
+    }
+
+    /// Build a nominal Enum Item whose rendered def_path terminal
+    /// segment matches `terminal_segment` (intended to be `"LogArg"`
+    /// for the carrier-recognition tests). Mirrors
+    /// `make_log_function_item`'s scaffolding shape so the new test
+    /// composes with the existing Item / Instance fixtures.
+    fn make_named_enum_item(model: &mut RegseqModel, terminal_segment: &str) -> ItemId {
+        use regseq_model::{DefPath, DefPathData, DefPathHash, DefPathSegment};
+        let name_id = model.strings.intern(terminal_segment);
+        let rendered = model.strings.intern(&format!("test::{terminal_segment}"));
+        let item = model.items.push(Item {
+            def_path: DefPath {
+                crate_id: model.primary_crate,
+                segments: vec![DefPathSegment {
+                    data: DefPathData::TypeNs(name_id),
+                    disambiguator: 0,
+                }],
+                rendered,
+            },
+            kind: ItemKind::Enum,
+            span: Span::dummy(),
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        });
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash: item.as_u32() as u64 + 200,
+        });
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
+        item
+    }
+
+    /// Build an Item whose rendered def_path is the canonical
+    /// trait-method path `core::convert::From::from` -- the exact
+    /// string the bridge interns for `<T as From<U>>::from` Call
+    /// callees (probed against the real fixture; see the
+    /// regseq-driver-45 audit-fix sequence). The Item's `kind` is
+    /// `Function` because the trait method itself is a function
+    /// item.
+    fn make_from_trait_method_item(model: &mut RegseqModel) -> ItemId {
+        use regseq_model::{DefPath, DefPathData, DefPathHash, DefPathSegment};
+        let rendered = model.strings.intern("core::convert::From::from");
+        let core_seg = model.strings.intern("core");
+        let convert_seg = model.strings.intern("convert");
+        let from_seg = model.strings.intern("From");
+        let from_method = model.strings.intern("from");
+        let item = model.items.push(Item {
+            def_path: DefPath {
+                crate_id: model.primary_crate,
+                segments: vec![
+                    DefPathSegment {
+                        data: DefPathData::TypeNs(core_seg),
+                        disambiguator: 0,
+                    },
+                    DefPathSegment {
+                        data: DefPathData::TypeNs(convert_seg),
+                        disambiguator: 0,
+                    },
+                    DefPathSegment {
+                        data: DefPathData::TypeNs(from_seg),
+                        disambiguator: 0,
+                    },
+                    DefPathSegment {
+                        data: DefPathData::ValueNs(from_method),
+                        disambiguator: 0,
+                    },
+                ],
+                rendered,
+            },
+            kind: ItemKind::Function,
+            span: Span::dummy(),
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        });
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash: item.as_u32() as u64 + 300,
+        });
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
+        item
+    }
+
+    /// Regression for the `callee_is_from_logarg` structural
+    /// recognition. Constructs the trait-method Instance shape the
+    /// bridge produces for `<LogArg<'_> as From<u32>>::from(x)`
+    /// (Item = `core::convert::From::from`, generic_args =
+    /// `[Type(LogArg-enum-ty), Type(u32)]`) and a two-block body:
+    ///
+    /// ```text
+    /// block 0:
+    ///   _t_src = copy _1
+    ///   Call { callee = From::from, args: [move _t_src],
+    ///          destination = _t_wrapper, target: bb1 }
+    /// block 1:
+    ///   _t_arr       = [move _t_wrapper]      // Aggregate(Array)
+    ///   _t_slice_ref = &_t_arr                // Ref
+    ///   Call { callee = log_intrinsic, args: [fmt, Move(_t_slice_ref)],
+    ///          destination = _0, target: None }
+    /// ```
+    ///
+    /// After peel:
+    /// - block 0's wrapper Call terminator is collapsed to a
+    ///   `Goto(block 1)` (the From wrapper does not survive).
+    /// - block 1's carrier statements are dropped.
+    /// - block 1's log Call args become `[fmt, move _t_src]` --
+    ///   the inner u32 operand recovered through the wrapper.
+    /// - The wrapper destination local's `LocalDecl.ty` is nulled
+    ///   to unit (so the `LogArg` type does not survive in
+    ///   `local_decls`).
+    ///
+    /// The brittle pre-fix heuristic
+    /// (`path.contains("LogArg") && path.ends_with("from")`) would
+    /// fail this body because the bridge-interned Item path is
+    /// `core::convert::From::from` (no "LogArg" substring); the
+    /// wrapper would not be recognised and `move _t_wrapper` (a
+    /// `LogArg`-typed Operand) would flow through to D4
+    /// admissibility unchanged.
+    #[test]
+    fn peels_logarg_from_wrapper_via_structural_recognition() {
+        use regseq_model::{CallCallee, GenericArg};
+
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+
+        // Item + Instance for `<LogArg<'_> as From<u32>>::from`.
+        // Order matters: build LogArg first so the type interner
+        // can resolve generic_args[0] to its Item handle.
+        let logarg_item = make_named_enum_item(&mut model, "LogArg");
+        let logarg_ty = model.types.intern(Ty::Enum {
+            item: logarg_item,
+            args: Vec::new(),
+            layout: regseq_model::Layout {
+                size: 0,
+                align: 1,
+                pack: None,
+                uninhabited: false,
+                kind: regseq_model::LayoutKind::Struct { fields: Vec::new() },
+            },
+        });
+        let u32_ty = model.types.intern(Ty::Uint(regseq_model::UintKind::U32));
+        let from_item = make_from_trait_method_item(&mut model);
+
+        // The From-trait-method Instance carries the dispatch info
+        // (Self, source-type) in `generic_args`.
+        let unit = intern_unit(&mut model);
+        let from_sig = model.sigs.intern(FnSig {
+            inputs: vec![u32_ty],
+            output: logarg_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        let from_instance = model.instances.push(Instance {
+            item: from_item,
+            generic_args: vec![GenericArg::Type(logarg_ty), GenericArg::Type(u32_ty)],
+            emission_name: model.items[from_item].def_path.rendered,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: from_sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        });
+
+        // Item + Instance for `log_<sev>` (the actual diagnostic-
+        // logging callee). Decorated with the Log intrinsic attr
+        // so `call_is_log_intrinsic` recognises it.
+        let log_item = make_log_function_item(&mut model, "log_info");
+        model.domain_attrs.item_attrs[log_item]
+            .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+        let log_instance = make_function_instance(&mut model, log_item, 2);
+
+        // Body locals: _0 unit return, _1 u32 source arg, _2 u32
+        // temp, _3 LogArg wrapper destination, _4 [LogArg; N] array,
+        // _5 &[LogArg; N] slice reference.
+        let array_ty = model.types.intern(Ty::Array(logarg_ty, 1));
+        let slice_ref_ty = model
+            .types
+            .intern(Ty::Ref(array_ty, Provenance::SharedBorrow));
+        let mut local_decls = IndexVec::new();
+        let return_local = local_decls.push(local_decl(unit));
+        debug_assert_eq!(return_local, LocalId::RETURN_PLACE);
+        let src_arg_local = local_decls.push(local_decl(u32_ty)); // _1
+        let src_temp_local = local_decls.push(local_decl(u32_ty)); // _2
+        let wrapper_dest_local = local_decls.push(local_decl(logarg_ty)); // _3
+        let arr_local = local_decls.push(local_decl(array_ty)); // _4
+        let slice_ref_local = local_decls.push(local_decl(slice_ref_ty)); // _5
+
+        let fmt_const = model.consts.intern(regseq_model::Const::ZST);
+
+        // block 0 -- wrapper Call.
+        let src_temp_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(src_temp_local),
+                Rvalue::Use(Operand::Copy(Place::from(src_arg_local))),
+            ),
+            span: Span::dummy(),
+        };
+        let wrapper_block = BasicBlock {
+            statements: vec![src_temp_statement].into_boxed_slice(),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Direct(from_instance),
+                    args: vec![Operand::Move(Place::from(src_temp_local))].into_boxed_slice(),
+                    destination: Place::from(wrapper_dest_local),
+                    target: Some(BlockId::from_u32(1)),
+                },
+                span: Span::dummy(),
+            },
+        };
+
+        // block 1 -- carrier setup + log Call.
+        let aggregate_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(arr_local),
+                Rvalue::Aggregate(
+                    AggregateKind::Array(array_ty),
+                    vec![Operand::Move(Place::from(wrapper_dest_local))].into_boxed_slice(),
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let ref_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(slice_ref_local),
+                Rvalue::Ref(Provenance::SharedBorrow, Place::from(arr_local)),
+            ),
+            span: Span::dummy(),
+        };
+        let log_block = BasicBlock {
+            statements: vec![aggregate_statement, ref_statement].into_boxed_slice(),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Direct(log_instance),
+                    args: vec![
+                        Operand::Constant(fmt_const),
+                        Operand::Move(Place::from(slice_ref_local)),
+                    ]
+                    .into_boxed_slice(),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: None,
+                },
+                span: Span::dummy(),
+            },
+        };
+
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(wrapper_block);
+        basic_blocks.push(log_block);
+        let mut body = Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 1,
+            span: Span::dummy(),
+        };
+
+        let pre_peel_local_count = body.local_decls.len();
+        let pre_peel_wrapper_ty = body.local_decls[wrapper_dest_local].ty;
+
+        peel_body_against_model(&mut model, &mut body)
+            .expect("peel succeeds through the structural From-recognition path");
+
+        // block 1's log Call now carries the recovered u32 operand,
+        // NOT the LogArg-typed wrapper destination.
+        let TerminatorKind::Call { args, .. } =
+            &body.basic_blocks[BlockId::from_u32(1)].terminator.kind
+        else {
+            panic!("expected log Call terminator post-peel");
+        };
+        assert_eq!(args.len(), 2, "post-peel arg count = 1 fmt + 1 inner");
+        assert!(matches!(args[0], Operand::Constant(_)));
+        assert_eq!(
+            args[1],
+            Operand::Move(Place::from(src_temp_local)),
+            "the recovered operand must be the u32 source local that the From wrapper consumed, \
+             NOT the LogArg-typed wrapper destination"
+        );
+
+        // block 0's wrapper Call terminator was collapsed to Goto(bb1).
+        match &body.basic_blocks[BlockId::from_u32(0)].terminator.kind {
+            TerminatorKind::Goto(target) => assert_eq!(*target, BlockId::from_u32(1)),
+            other => panic!("expected Goto(bb1) post-peel, got {other:?}"),
+        }
+
+        // The carrier statements in block 1 are dropped.
+        assert!(
+            body.basic_blocks[BlockId::from_u32(1)]
+                .statements
+                .is_empty(),
+            "block 1 carrier statements must be dropped"
+        );
+
+        // LocalDecls are stable in length and the wrapper destination's
+        // ty was nulled to unit (the LogArg-typed local must not
+        // survive in `body.local_decls`).
+        assert_eq!(body.local_decls.len(), pre_peel_local_count);
+        assert_ne!(
+            body.local_decls[wrapper_dest_local].ty, pre_peel_wrapper_ty,
+            "wrapper destination ty must be overwritten"
+        );
+        assert_eq!(
+            body.local_decls[wrapper_dest_local].ty, unit,
+            "wrapper destination ty must be nulled to unit"
+        );
+        // The carrier-path locals also nulled to unit.
+        assert_eq!(body.local_decls[arr_local].ty, unit);
+        assert_eq!(body.local_decls[slice_ref_local].ty, unit);
     }
 
     #[test]
