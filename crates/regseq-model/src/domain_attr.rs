@@ -1,7 +1,6 @@
 //! Domain attribute sibling-table data shapes.
 
-use std::collections::HashMap;
-use std::hash::Hash;
+use std::collections::BTreeMap;
 
 use serde::{Deserialize, Serialize};
 
@@ -23,19 +22,26 @@ pub struct DomainAttrTables {
     ///
     /// The table is indexed by `FieldPath` and sparse via absence in
     /// the map. Phase-2 families append future occupants.
-    #[serde(with = "hash_map_vec")]
-    pub field_attrs: HashMap<FieldPath, Vec<AttrData>>,
+    #[serde(with = "ordered_map_vec")]
+    pub field_attrs: BTreeMap<FieldPath, Vec<AttrData>>,
 
     /// Attributes attached to source-code spans.
     ///
     /// This table is reserved for future diagnostic annotations and
     /// lint-style markers. It is sparse via absence in the map.
-    #[serde(with = "hash_map_vec")]
-    pub span_attrs: HashMap<Span, Vec<AttrData>>,
+    #[serde(with = "ordered_map_vec")]
+    pub span_attrs: BTreeMap<Span, Vec<AttrData>>,
 }
 
 /// Composite key for the field-attribute sibling table.
-#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// The derived `Ord` performs field-order lex comparison over
+/// `(item, variant, field)`. All three component types use the
+/// `newtype_index!`-generated hand-written `Ord` impl over
+/// `as_u32()` (see `idx.rs`), so the ordering matches the
+/// canonical walk: items first (F4-sorted post-Phase-4), then
+/// variants within an item, then fields within a variant.
+#[derive(Clone, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct FieldPath {
     /// Parent ADT Item.
     pub item: ItemId,
@@ -101,13 +107,22 @@ impl IntrinsicKind {
     }
 }
 
-mod hash_map_vec {
+/// Serde adapter that serializes a `BTreeMap` as a JSON array of
+/// `(key, value)` pairs.
+///
+/// The array-of-pairs JSON shape is required because `FieldPath`
+/// and `Span` are struct keys (not strings), and JSON object keys
+/// must be strings. `BTreeMap` iteration is naturally sorted by
+/// key, so the emitted `Vec` is deterministic across runs
+/// regardless of insertion order.
+mod ordered_map_vec {
     use super::*;
     use serde::{Deserializer, Serializer};
+    use std::collections::BTreeMap;
 
-    pub fn serialize<K, V, S>(map: &HashMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
+    pub fn serialize<K, V, S>(map: &BTreeMap<K, V>, serializer: S) -> Result<S::Ok, S::Error>
     where
-        K: Serialize + Eq + Hash,
+        K: Serialize + Ord,
         V: Serialize,
         S: Serializer,
     {
@@ -115,9 +130,9 @@ mod hash_map_vec {
         entries.serialize(serializer)
     }
 
-    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<HashMap<K, V>, D::Error>
+    pub fn deserialize<'de, K, V, D>(deserializer: D) -> Result<BTreeMap<K, V>, D::Error>
     where
-        K: Deserialize<'de> + Eq + Hash,
+        K: Deserialize<'de> + Ord,
         V: Deserialize<'de>,
         D: Deserializer<'de>,
     {
@@ -372,5 +387,135 @@ mod tests {
             .insert(span(5, 8), vec![attr(LogLevel::Warn)]);
 
         assert_json_round_trip(tables);
+    }
+
+    #[test]
+    fn domain_attrs_json_is_deterministic_across_insert_order() {
+        let entries = [
+            (
+                FieldPath {
+                    item: ItemId::from_u32(5),
+                    variant: VariantIdx::ZERO,
+                    field: FieldIdx::from_u32(2),
+                },
+                vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Debug))],
+            ),
+            (
+                FieldPath {
+                    item: ItemId::from_u32(2),
+                    variant: VariantIdx::ZERO,
+                    field: FieldIdx::from_u32(7),
+                },
+                vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info))],
+            ),
+            (
+                FieldPath {
+                    item: ItemId::from_u32(9),
+                    variant: VariantIdx::ZERO,
+                    field: FieldIdx::from_u32(0),
+                },
+                vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn))],
+            ),
+        ];
+
+        let mut a = DomainAttrTables::default();
+        for (k, v) in entries.iter() {
+            a.field_attrs.insert(k.clone(), v.clone());
+        }
+
+        let mut b = DomainAttrTables::default();
+        for (k, v) in entries.iter().rev() {
+            b.field_attrs.insert(k.clone(), v.clone());
+        }
+
+        let json_a = serde_json::to_string(&a).unwrap();
+        let json_b = serde_json::to_string(&b).unwrap();
+        assert_eq!(
+            json_a, json_b,
+            "JSON output must be byte-identical regardless of insertion order"
+        );
+    }
+
+    #[test]
+    fn span_attrs_json_is_deterministic_across_insert_order() {
+        let entries = [
+            (
+                Span {
+                    file: SourceFileId::SYNTHESIZED,
+                    lo: 30,
+                    hi: 40,
+                },
+                vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Debug))],
+            ),
+            (
+                Span {
+                    file: SourceFileId::SYNTHESIZED,
+                    lo: 5,
+                    hi: 12,
+                },
+                vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info))],
+            ),
+            (
+                Span {
+                    file: SourceFileId::SYNTHESIZED,
+                    lo: 100,
+                    hi: 110,
+                },
+                vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn))],
+            ),
+        ];
+
+        let mut a = DomainAttrTables::default();
+        for (k, v) in entries.iter() {
+            a.span_attrs.insert(*k, v.clone());
+        }
+
+        let mut b = DomainAttrTables::default();
+        for (k, v) in entries.iter().rev() {
+            b.span_attrs.insert(*k, v.clone());
+        }
+
+        let json_a = serde_json::to_string(&a).unwrap();
+        let json_b = serde_json::to_string(&b).unwrap();
+        assert_eq!(
+            json_a, json_b,
+            "JSON output must be byte-identical regardless of insertion order"
+        );
+    }
+
+    #[test]
+    fn domain_attr_tables_json_round_trip_preserves_all_entries() {
+        let mut tables = DomainAttrTables::default();
+
+        let field_entries = [
+            (path(7, 0, 3), vec![attr(LogLevel::Debug)]),
+            (path(2, 0, 5), vec![attr(LogLevel::Info)]),
+            (path(11, 0, 1), vec![attr(LogLevel::Warn)]),
+        ];
+        for (k, v) in field_entries.iter() {
+            tables.field_attrs.insert(k.clone(), v.clone());
+        }
+
+        let span_entries = [
+            (span(50, 60), vec![attr(LogLevel::Debug)]),
+            (span(10, 20), vec![attr(LogLevel::Info)]),
+            (span(200, 210), vec![attr(LogLevel::Warn)]),
+        ];
+        for (k, v) in span_entries.iter() {
+            tables.span_attrs.insert(*k, v.clone());
+        }
+
+        let encoded = serde_json::to_string(&tables).expect("serialize");
+        let decoded: DomainAttrTables = serde_json::from_str(&encoded).expect("deserialize");
+
+        assert_eq!(decoded.field_attrs.len(), field_entries.len());
+        for (k, v) in field_entries.iter() {
+            assert_eq!(decoded.field_attrs.get(k), Some(v));
+        }
+
+        assert_eq!(decoded.span_attrs.len(), span_entries.len());
+        for (k, v) in span_entries.iter() {
+            assert_eq!(decoded.span_attrs.get(k), Some(v));
+        }
     }
 }

@@ -1130,7 +1130,7 @@ impl RegseqModel {
     /// - Side-table values: `vtables`'s
     ///   `HashMap<PrincipalTraitKey, ItemId>` values.
     /// - Side-table keys: `domain_attrs.field_attrs`'s
-    ///   `FieldPath.item` field. The HashMap is rebuilt with
+    ///   `FieldPath.item` field. The map is rebuilt with
     ///   remapped keys so subsequent lookups find the entries
     ///   under their new `FieldPath`.
     ///
@@ -1159,7 +1159,9 @@ impl RegseqModel {
             f(item);
         }
 
-        let drained: Vec<_> = self.domain_attrs.field_attrs.drain().collect();
+        let drained: Vec<_> = std::mem::take(&mut self.domain_attrs.field_attrs)
+            .into_iter()
+            .collect();
         for (mut key, value) in drained {
             f(&mut key.item);
             let prev = self.domain_attrs.field_attrs.insert(key, value);

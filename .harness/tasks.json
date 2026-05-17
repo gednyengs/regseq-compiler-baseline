@@ -3594,7 +3594,7 @@
           "id": "regseq-model-96",
           "name": "Deterministic DomainAttrTables JSON serialization (HashMap -> BTreeMap)",
           "spec": ".harness/tasks/regseq-model/96-deterministic-domain-attrs-json-serialization.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-95"
           ],

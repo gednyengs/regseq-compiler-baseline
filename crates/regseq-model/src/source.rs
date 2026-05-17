@@ -114,7 +114,14 @@ pub struct Position {
 /// `BytePos`. Bridge code translates from global to file-local
 /// (in a later step). Spans appear inline in IR nodes; there is
 /// no span-deduplication table (per F2).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+///
+/// The derived `Ord` performs field-order lex comparison over
+/// `(file, lo, hi)`. `SourceFileId`'s `Ord` impl is the
+/// hand-written one in `idx.rs` (logical-index order via
+/// `as_u32()`), so spans are first ordered by file, then by
+/// `lo`, then by `hi`. This is the natural canonical ordering
+/// for spans within a model.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, PartialOrd, Ord, Serialize, Deserialize)]
 pub struct Span {
     pub file: SourceFileId,
     /// File-local byte offset, inclusive.
