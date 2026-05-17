@@ -3416,14 +3416,14 @@
           "id": "regseq-model-94",
           "name": "P1a-E2E-02: Diagnostic-logging end-to-end fixture",
           "spec": ".harness/tasks/regseq-model/94-e2e-diagnostic-logging.md",
-          "status": "failed",
+          "status": "pending",
           "depends_on": [
             "test-ir-fixtures-01",
             "regseq-driver-44",
             "regseq-driver-45"
           ],
           "artifacts": [],
-          "fail_reason": "Blocked by a tracer gap in regseq-driver-45's DiagLogPeel pass (Non-Goals: bridge implementation is out of scope for this task).\n\nThe canonical diag_logging fixture (crates/test-ir-fixtures/fixtures/diag_logging.rs as authored by test-ir-fixtures-01) declares 'use regseq::log;' but the workspace 'regseq' facade crate currently has no 'log' submodule (crates/regseq/src/lib.rs is the empty placeholder). With test-ir-fixtures-01's helper compiling each fixture as a standalone rlib without --extern regseq=..., the fixture cannot compile as shipped. Mirroring the inline 'pub mod regseq { pub mod log { ... } }' shim used by crates/regseq-driver/tests/bridge_diag_log_recognition.rs makes it compile, after which the bridge reaches DiagLogPeel.\n\nDiagLogPeel then fails with: 'phase 5 body pass failed: DiagLogPeel: Log-intrinsic Call at block 1 has a non-canonical args[1] carrier shape per spec.md section 25.7.3 step 1 (operand Move(Place { local: LocalId(7), projection: [] }))'.\n\nRoot cause: real rustc-emitted MIR at the helper's pinned mir_opt_level=0 lowers '&[LogArg::from(x)]' through a reborrow pair:\n  _5 = &_4;\n  _6 = &(*_5);\n  _7 = move _6 as &[LogArg<'_>] (Unsize, Implicit);\n  _8 = log_debug(fmt_lit, move _7) -> bb_next;\n\ncrates/regseq-driver/src/bridge/diag_log/peel.rs::locate_log_arg_carrier (lines 547-607) explicitly rejects non-empty projections at line 561, so the trace bottoms out at 'Untraceable' when chasing the Rvalue::Ref(_, Place{local: _5, projection: [Deref]}) emitted by the reborrow. peel.rs::tests only exercise hand-constructed bodies (build_pre_peel_body, lines 890-953) without reborrows; bridge_diag_log_recognition.rs / bridge_diag_log_peel.rs only exercise empty-slice carriers, which bypass the aggregate-trace path. Bumping mir_opt_level to 1 elides the reborrow, but the helper's mir_opt_level=0 is set by test-ir-fixtures-01 and the workspace's regseq_mir_passes() whitelist.\n\nFixes belong in regseq-driver-45 (extend locate_log_arg_carrier to traverse Place{local, [Deref]} as a transparent reborrow) and possibly test-ir-fixtures-01 (revisit mir_opt_level=0 vs. the bridge's recognition contract). Both are explicit Non-Goals for regseq-model-94 ('this task only asserts the bridge's output shape').",
+          "fail_reason": null,
           "phase": "1a",
           "spec_refs": [
             "spec.md#26",
