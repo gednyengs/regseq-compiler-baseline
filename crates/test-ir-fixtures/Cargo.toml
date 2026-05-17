@@ -1,0 +1,15 @@
+[package]
+name = "test-ir-fixtures"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[dependencies]
+regseq-model = { path = "../regseq-model" }
+regseq-driver = { path = "../regseq-driver" }
+
+[dev-dependencies]
+insta = { version = "1", features = ["yaml"] }

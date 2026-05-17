@@ -1,0 +1,12 @@
+---
+source: crates/test-ir-fixtures/tests/no_op_smoke.rs
+assertion_line: 36
+expression: rendered
+---
+fn no_op::no_op() -> () {
+    let mut _0: ();
+
+    bb0: {
+        return -> [];
+    }
+}
