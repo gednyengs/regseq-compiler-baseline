@@ -48,6 +48,18 @@ fn diag_logging_post_peel_shape_and_attrs() {
     );
 
     // Section C: assert post-peel arity + flat-arg shape per Call.
+    //
+    // Note on args[0] Ty recovery: `regseq_model::operand_ty` returns
+    // `Malformed` for `Operand::Constant(_)` carrying a
+    // `Const::Aggregate` because aggregate consts do not store a
+    // surface Ty. We therefore pin the fmt template's Ty via TWO
+    // structural checks rather than one operand_ty call:
+    //   (1) the const's payload matches the §9.7 reference-typed
+    //       Const::Aggregate([Reloc, Uint(Usize, len)]) shape, AND
+    //   (2) the callee's declared FnSig inputs[0] is
+    //       Ty::Ref(Ty::Str, SharedBorrow) per §26.6.
+    // Together (1)+(2) constrain the same invariant a single
+    // operand_ty assertion would constrain if recovery were possible.
     for call in &calls {
         // C5: arity = 1 fmt + 1 flat for the one-`u32` fixture (per
         // spec.md:11792+ post-DiagLogPeel arity is 1 + N).
@@ -133,12 +145,24 @@ fn diag_logging_post_peel_shape_and_attrs() {
     assert_levels_match_fixture(&observed_levels);
 
     // E12: no spurious AttrData variants on the four callee Items.
+    //
+    // The irrefutable `let` pattern below is intentional and
+    // load-bearing AS A COMPILE-TIME GUARD. Today AttrData has only
+    // the Intrinsic variant and IntrinsicKind has only the Log
+    // variant, so the pattern is irrefutable and the loop body is a
+    // no-op at runtime. When future variants land per spec.md
+    // §1474-1489 (anticipated additions to AttrData / IntrinsicKind),
+    // the `let` becomes refutable and this file stops compiling --
+    // forcing the variant to be handled explicitly here. The correct
+    // response to that future compile failure is to decide whether
+    // the new variant is permitted on a log callee Item and either
+    // (a) extend the pattern with explicit handling, or (b) panic
+    // with a "spurious AttrData on log callee" message. Do NOT relax
+    // the pattern (e.g. `let _ = attr;` or `if let ... = attr {}`)
+    // because that silently admits the new variant.
     for call in &calls {
         let attrs = &model.domain_attrs.item_attrs[call.callee_item];
         for attr in attrs.iter() {
-            // The only phase-1a AttrData variant is Intrinsic(Log(_));
-            // matching exhaustively here surfaces any future variant
-            // that lands on a log callee Item.
             let AttrData::Intrinsic(IntrinsicKind::Log(_)) = attr;
         }
     }
@@ -165,19 +189,21 @@ fn collect_log_calls(model: &RegseqModel) -> Vec<LogCall<'_>> {
         let CallCallee::Direct(callee_inst) = callee else {
             continue;
         };
-        if callee_inst.index() >= model.instances.len() {
+        // Spec.md §26.6 names the canonical predicate as
+        // `model.instance_intrinsic(id) == Some(IntrinsicKind::Log(_))`;
+        // the helper landed by regseq-driver-49 (model.rs:1810-1833)
+        // wraps the bounds-checked `domain_attrs.item_attrs[item]`
+        // lookup. Routing through it (rather than indexing
+        // `domain_attrs.item_attrs` here) keeps the test aligned with
+        // the spec's canonical form and inherits any future
+        // preconditions the helper grows.
+        if !matches!(
+            model.instance_intrinsic(*callee_inst),
+            Some(IntrinsicKind::Log(_)),
+        ) {
             continue;
         }
         let callee_item = model.instances[*callee_inst].item;
-        if callee_item.index() >= model.domain_attrs.item_attrs.len() {
-            continue;
-        }
-        let is_log = model.domain_attrs.item_attrs[callee_item]
-            .iter()
-            .any(|attr| matches!(attr, AttrData::Intrinsic(IntrinsicKind::Log(_))));
-        if !is_log {
-            continue;
-        }
         out.push(LogCall {
             args: args.as_ref(),
             body: emit_logs_body,
