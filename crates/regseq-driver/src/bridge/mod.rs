@@ -1009,6 +1009,27 @@ fn construct_instances_and_resolve_cross_references(
         sort::f4_sort(&ctxt.model, &mut ctxt.pending_items)?;
         assign::assign_late_pending_items(ctxt);
     }
+    // Body materialisation can have left placeholder `ItemId`s in
+    // the type interner (`source_ty_pending` entries whose handles
+    // bound to real `ItemId`s in the drain above). Patch them
+    // before `sort_items_by_f4` walks the interner, otherwise the
+    // remap step would index past `model.items.len()` per
+    // `placeholder_item_id_for_handle`'s high-end encoding.
+    patch_resolved_source_ty_pending(ctxt);
+    // Audit-finding regseq-driver-47 (spec.md sections 3.4 + 16.1):
+    // `assign_late_pending_items` appends late synthesis items past
+    // the original F4-sorted batch, which can interleave them out
+    // of order with the existing items per spec section 16.1. A
+    // global items-side F4 sort + ItemId remap restores invariant
+    // 3 (`ItemsSortedAtConstruction`) before the next Phase-5 step
+    // (`construct_const_memory_static_instances`) consults
+    // `handles.resolve` for the ConstMemoryStatic Item handles
+    // assigned in the late-pending drain. The unconditional call
+    // is idempotent for fixtures with no late items and provides
+    // forward safety for any future bridge addition that introduces
+    // another late-item path.
+    let item_remap = ctxt.model.sort_items_by_f4();
+    ctxt.handles.remap_item_ids(&item_remap);
     const_::construct_const_memory_static_instances(ctxt)?;
     Ok(())
 }

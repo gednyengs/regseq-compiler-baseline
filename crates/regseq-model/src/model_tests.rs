@@ -1133,3 +1133,363 @@ fn instance_intrinsic_helper_signature_compiles() {
     let (m, id) = helper_fixture();
     let _ = m.instance_intrinsic(id);
 }
+
+// ------------------------------------------------------------------
+// regseq-driver-47: sort_items_by_f4 + global ItemId remap
+// (spec.md section 3.4 Phase 3/4 + section 16.1).
+// ------------------------------------------------------------------
+
+mod sort_items_by_f4 {
+    use super::*;
+    use crate::{
+        domain_attr::{AttrData, FieldPath, IntrinsicKind, LogLevel},
+        ids::{FieldIdx, VariantIdx},
+        synthetic::{ContentHash, PrincipalTraitKey, ProjectionBindingsKey, SyntheticItemKind},
+        ArgsKey, DefPathHash,
+    };
+
+    fn named_item(model: &mut RegseqModel, leaf: &str) -> Item {
+        let leaf_id = model.strings.intern(leaf);
+        let rendered = model.strings.intern(&format!("pl011-spec::{leaf}"));
+        Item {
+            def_path: DefPath {
+                crate_id: model.primary_crate,
+                segments: vec![
+                    DefPathSegment {
+                        data: DefPathData::CrateRoot,
+                        disambiguator: 0,
+                    },
+                    DefPathSegment {
+                        data: DefPathData::ValueNs(leaf_id),
+                        disambiguator: 0,
+                    },
+                ],
+                rendered,
+            },
+            kind: ItemKind::Function,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        }
+    }
+
+    fn push_named(model: &mut RegseqModel, leaf: &str, local_hash: u64) -> ItemId {
+        let item = named_item(model, leaf);
+        let id = model.items.push(item);
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash,
+        });
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
+        id
+    }
+
+    fn principal(local_hash: u64) -> PrincipalTraitKey {
+        PrincipalTraitKey {
+            trait_path: DefPathHash {
+                stable_crate_id: StableCrateId(2),
+                local_hash,
+            },
+            trait_args: ArgsKey::EMPTY,
+            projection_bindings: ProjectionBindingsKey(0),
+        }
+    }
+
+    fn field_path(item: ItemId) -> FieldPath {
+        FieldPath {
+            item,
+            variant: VariantIdx::from_u32(0),
+            field: FieldIdx::from_u32(0),
+        }
+    }
+
+    fn attr_vec() -> Vec<AttrData> {
+        vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info))]
+    }
+
+    // Test Plan item 1.
+    #[test]
+    fn already_sorted_model_is_unchanged_by_sort() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let _alpha = push_named(&mut m, "alpha", 1);
+        let _beta = push_named(&mut m, "beta", 2);
+        let before_items = m.items.clone();
+        let before_def_paths = m.item_def_paths.clone();
+        let before_synth = m.item_synthetic_kinds.clone();
+        let remap = m.sort_items_by_f4();
+        assert_eq!(
+            remap,
+            vec![ItemId::from_u32(0), ItemId::from_u32(1)],
+            "idempotent sort returns identity remap"
+        );
+        assert_eq!(m.items, before_items);
+        assert_eq!(m.item_def_paths, before_def_paths);
+        assert_eq!(m.item_synthetic_kinds, before_synth);
+    }
+
+    // Test Plan item 2.
+    #[test]
+    fn two_item_reverse_order_sorts_and_remaps_instance_item() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let beta = push_named(&mut m, "beta", 1);
+        let alpha = push_named(&mut m, "alpha", 2);
+        let sig = m.sigs.intern(default_sig());
+        m.sig_c_abi_lowerings.push(None);
+        let beta_inst = m.instances.push(Instance {
+            item: beta,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            kind: function_kind(sig, None),
+        });
+        let alpha_inst = m.instances.push(Instance {
+            item: alpha,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            kind: function_kind(sig, None),
+        });
+
+        let remap = m.sort_items_by_f4();
+
+        // Items now in F4 order (alpha, beta).
+        let leaf_at = |id: ItemId| -> String {
+            let segment = &m.items[id].def_path.segments[1];
+            match &segment.data {
+                DefPathData::ValueNs(name) => m.strings.resolve(*name).to_string(),
+                other => panic!("expected ValueNs segment, got {:?}", other),
+            }
+        };
+        assert_eq!(leaf_at(ItemId::from_u32(0)), "alpha");
+        assert_eq!(leaf_at(ItemId::from_u32(1)), "beta");
+        // Old beta (ItemId 0) was permuted to ItemId 1.
+        assert_eq!(remap[beta.index()], ItemId::from_u32(1));
+        assert_eq!(remap[alpha.index()], ItemId::from_u32(0));
+        assert_eq!(m.instances[beta_inst].item, ItemId::from_u32(1));
+        assert_eq!(m.instances[alpha_inst].item, ItemId::from_u32(0));
+    }
+
+    // Test Plan item 3: every nominal Ty variant
+    // (Struct/Enum/Union/FnDef/Closure) carrying an ItemId must be
+    // remapped in lock-step with the items permutation per
+    // .harness/tasks/regseq-driver/47-...md Implementation Notes A.2
+    // step 5 (Ty::Enum/Struct/Union/FnDef/Closure).
+    #[test]
+    fn ty_nominal_item_id_remap_lockstep_with_items() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let beta = push_named(&mut m, "beta", 1);
+        let alpha = push_named(&mut m, "alpha", 2);
+        let trivial_layout = crate::Layout {
+            size: 0,
+            align: 1,
+            pack: None,
+            uninhabited: false,
+            kind: crate::LayoutKind::Struct { fields: vec![] },
+        };
+        let struct_ty = m.types.intern(Ty::Struct {
+            item: beta,
+            args: vec![],
+            layout: trivial_layout.clone(),
+        });
+        let enum_ty = m.types.intern(Ty::Enum {
+            item: beta,
+            args: vec![],
+            layout: trivial_layout.clone(),
+        });
+        let union_ty = m.types.intern(Ty::Union {
+            item: beta,
+            args: vec![],
+            layout: trivial_layout,
+        });
+        let fn_def_ty = m.types.intern(Ty::FnDef(alpha, vec![]));
+        let closure_ty = m.types.intern(Ty::Closure(alpha, vec![]));
+
+        let remap = m.sort_items_by_f4();
+        assert_eq!(remap[beta.index()], ItemId::from_u32(1));
+        assert_eq!(remap[alpha.index()], ItemId::from_u32(0));
+
+        match m.types.resolve(struct_ty) {
+            Ty::Struct { item, .. } => assert_eq!(*item, ItemId::from_u32(1)),
+            other => panic!("expected Ty::Struct, got {:?}", other),
+        }
+        match m.types.resolve(enum_ty) {
+            Ty::Enum { item, .. } => assert_eq!(*item, ItemId::from_u32(1)),
+            other => panic!("expected Ty::Enum, got {:?}", other),
+        }
+        match m.types.resolve(union_ty) {
+            Ty::Union { item, .. } => assert_eq!(*item, ItemId::from_u32(1)),
+            other => panic!("expected Ty::Union, got {:?}", other),
+        }
+        match m.types.resolve(fn_def_ty) {
+            Ty::FnDef(item, _) => assert_eq!(*item, ItemId::from_u32(0)),
+            other => panic!("expected Ty::FnDef, got {:?}", other),
+        }
+        match m.types.resolve(closure_ty) {
+            Ty::Closure(item, _) => assert_eq!(*item, ItemId::from_u32(0)),
+            other => panic!("expected Ty::Closure, got {:?}", other),
+        }
+
+        // Lookup map has been rebuilt: find_nominal under the new
+        // ItemIds resolves each entry to its original TyId.
+        assert_eq!(
+            m.types
+                .find_nominal(crate::NominalKind::Struct, ItemId::from_u32(1), &vec![]),
+            Some(struct_ty)
+        );
+        assert_eq!(
+            m.types
+                .find_nominal(crate::NominalKind::Enum, ItemId::from_u32(1), &vec![]),
+            Some(enum_ty)
+        );
+        assert_eq!(
+            m.types
+                .find_nominal(crate::NominalKind::Union, ItemId::from_u32(1), &vec![]),
+            Some(union_ty)
+        );
+        assert_eq!(
+            m.types
+                .find_nominal(crate::NominalKind::FnDef, ItemId::from_u32(0), &vec![]),
+            Some(fn_def_ty)
+        );
+        assert_eq!(
+            m.types
+                .find_nominal(crate::NominalKind::Closure, ItemId::from_u32(0), &vec![]),
+            Some(closure_ty)
+        );
+    }
+
+    // Test Plan item 4.
+    #[test]
+    fn vtables_hashmap_value_is_remapped() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let beta = push_named(&mut m, "beta", 1);
+        let _alpha = push_named(&mut m, "alpha", 2);
+        m.vtables.insert(principal(7), beta);
+        let _ = m.sort_items_by_f4();
+        assert_eq!(m.vtables.get(&principal(7)), Some(&ItemId::from_u32(1)));
+    }
+
+    // Test Plan item 5: every IndexVec<ItemId, _> side table must be
+    // permuted (not remapped) by sort_items_by_f4 per
+    // .harness/tasks/regseq-driver/47-...md Implementation Notes A.2
+    // step 3: `item_def_paths`, `item_synthetic_kinds`, and
+    // `domain_attrs.item_attrs`.
+    #[test]
+    fn indexvec_side_tables_are_permuted_in_lockstep() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let gamma = push_named(&mut m, "gamma", 1);
+        let alpha = push_named(&mut m, "alpha", 2);
+        let beta = push_named(&mut m, "beta", 3);
+
+        let gamma_kind = SyntheticItemKind::ConstMemoryStatic {
+            content_hash: ContentHash(0x11),
+        };
+        let alpha_kind = SyntheticItemKind::ConstMemoryStatic {
+            content_hash: ContentHash(0x22),
+        };
+        let beta_kind = SyntheticItemKind::ConstMemoryStatic {
+            content_hash: ContentHash(0x33),
+        };
+        m.item_synthetic_kinds[gamma] = gamma_kind.clone();
+        m.item_synthetic_kinds[alpha] = alpha_kind.clone();
+        m.item_synthetic_kinds[beta] = beta_kind.clone();
+
+        let gamma_def_path = m.item_def_paths[gamma];
+        let alpha_def_path = m.item_def_paths[alpha];
+        let beta_def_path = m.item_def_paths[beta];
+
+        let gamma_attrs = vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Debug))];
+        let alpha_attrs = vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info))];
+        let beta_attrs = vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn))];
+        m.domain_attrs.item_attrs[gamma] = gamma_attrs.clone();
+        m.domain_attrs.item_attrs[alpha] = alpha_attrs.clone();
+        m.domain_attrs.item_attrs[beta] = beta_attrs.clone();
+
+        let remap = m.sort_items_by_f4();
+        // After F4 sort alpha < beta < gamma by leaf-segment name.
+        assert_eq!(remap[alpha.index()], ItemId::from_u32(0));
+        assert_eq!(remap[beta.index()], ItemId::from_u32(1));
+        assert_eq!(remap[gamma.index()], ItemId::from_u32(2));
+
+        // item_synthetic_kinds (IndexVec<ItemId, SyntheticItemKind>).
+        assert_eq!(m.item_synthetic_kinds[remap[alpha.index()]], alpha_kind);
+        assert_eq!(m.item_synthetic_kinds[remap[beta.index()]], beta_kind);
+        assert_eq!(m.item_synthetic_kinds[remap[gamma.index()]], gamma_kind);
+
+        // item_def_paths (IndexVec<ItemId, DefPathHash>).
+        assert_eq!(m.item_def_paths[remap[alpha.index()]], alpha_def_path);
+        assert_eq!(m.item_def_paths[remap[beta.index()]], beta_def_path);
+        assert_eq!(m.item_def_paths[remap[gamma.index()]], gamma_def_path);
+
+        // domain_attrs.item_attrs (IndexVec<ItemId, Vec<AttrData>>).
+        assert_eq!(m.domain_attrs.item_attrs[remap[alpha.index()]], alpha_attrs);
+        assert_eq!(m.domain_attrs.item_attrs[remap[beta.index()]], beta_attrs);
+        assert_eq!(m.domain_attrs.item_attrs[remap[gamma.index()]], gamma_attrs);
+    }
+
+    // Test Plan item 6.
+    #[test]
+    fn domain_attrs_field_attrs_key_is_remapped() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let beta = push_named(&mut m, "beta", 1);
+        let _alpha = push_named(&mut m, "alpha", 2);
+        let value = attr_vec();
+        m.domain_attrs
+            .field_attrs
+            .insert(field_path(beta), value.clone());
+
+        let remap = m.sort_items_by_f4();
+        // beta moved from ItemId(0) to ItemId(1).
+        assert_eq!(remap[beta.index()], ItemId::from_u32(1));
+        assert_eq!(
+            m.domain_attrs
+                .field_attrs
+                .get(&field_path(ItemId::from_u32(1))),
+            Some(&value)
+        );
+        assert!(m
+            .domain_attrs
+            .field_attrs
+            .get(&field_path(ItemId::from_u32(0)))
+            .is_none());
+    }
+
+    // Test Plan item 7 is bridge-side (HandleTable::remap_item_ids)
+    // and lives in the regseq-driver test surface so it can reach
+    // `HandleTable` without inverting the crate dependency
+    // (regseq-model does not depend on regseq-driver).
+
+    // Test Plan item 8.
+    #[test]
+    fn post_sort_f4_monotonicity_debug_check_passes() {
+        let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+        let _beta = push_named(&mut m, "beta", 1);
+        let _alpha = push_named(&mut m, "alpha", 2);
+        let _gamma = push_named(&mut m, "gamma", 3);
+        // The implementation runs its debug-build monotonicity check
+        // inside sort_items_by_f4; this call must not panic.
+        let _ = m.sort_items_by_f4();
+        // Re-validate via the public validator -- the F4 monotonicity
+        // check fires here too (validate_f4_item_order).
+        assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
+    }
+}

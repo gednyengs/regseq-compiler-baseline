@@ -52,6 +52,30 @@ impl HandleTable {
     pub fn resolve(&self, handle: ItemHandle) -> Option<ItemId> {
         self.handle_to_item_id.get(&handle).copied()
     }
+
+    /// Apply `remap` to every `ItemId` bound to a handle in
+    /// `handle_to_item_id`. `remap[old_idx]` must hold the new
+    /// `ItemId` for the item formerly at `old_idx`.
+    ///
+    /// Used after `RegseqModel::sort_items_by_f4` reorders
+    /// `model.items` so a subsequent `resolve(handle)` returns the
+    /// post-sort `ItemId` rather than the stale Phase-4 binding.
+    /// Scoped specifically to that post-F4-sort window and the
+    /// future post-DCE window owned by `regseq-driver-48`.
+    pub fn remap_item_ids(&mut self, remap: &[ItemId]) {
+        for item_id in self.handle_to_item_id.values_mut() {
+            let old = item_id.index();
+            debug_assert!(
+                old < remap.len(),
+                "HandleTable bound ItemId({}) outside remap table of length {}",
+                old,
+                remap.len(),
+            );
+            if old < remap.len() {
+                *item_id = remap[old];
+            }
+        }
+    }
 }
 
 #[cfg(test)]
@@ -59,6 +83,34 @@ mod tests {
     use std::collections::HashSet;
 
     use super::*;
+
+    #[test]
+    fn remap_item_ids_rebinds_each_handle_through_remap_table() {
+        // Test Plan item 7 for regseq-driver-47: bind two handles to
+        // ItemIds 0 and 1, then swap them via remap_item_ids and
+        // assert resolve returns the post-swap ItemId.
+        let mut table = HandleTable::new();
+        let first = table.fresh_handle();
+        let second = table.fresh_handle();
+        table.bind_final_item_id(first, ItemId::from_u32(0));
+        table.bind_final_item_id(second, ItemId::from_u32(1));
+
+        let remap = vec![ItemId::from_u32(1), ItemId::from_u32(0)];
+        table.remap_item_ids(&remap);
+
+        assert_eq!(table.resolve(first), Some(ItemId::from_u32(1)));
+        assert_eq!(table.resolve(second), Some(ItemId::from_u32(0)));
+    }
+
+    #[test]
+    fn remap_item_ids_is_identity_for_identity_remap_table() {
+        let mut table = HandleTable::new();
+        let handle = table.fresh_handle();
+        table.bind_final_item_id(handle, ItemId::from_u32(3));
+        let remap: Vec<ItemId> = (0..4).map(ItemId::from_u32).collect();
+        table.remap_item_ids(&remap);
+        assert_eq!(table.resolve(handle), Some(ItemId::from_u32(3)));
+    }
 
     #[test]
     fn handle_table_resolves_unique_dense_item_ids() {

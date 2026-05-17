@@ -154,6 +154,41 @@ impl TyInterner {
         }
     }
 
+    /// Apply `f` to the `ItemId` of every nominal type entry
+    /// (`Ty::Struct`, `Ty::Enum`, `Ty::Union`, `Ty::FnDef`,
+    /// `Ty::Closure`) currently in storage, then rebuild the
+    /// content-keyed lookup map from scratch.
+    ///
+    /// Callers must apply a bijective remap; under that contract
+    /// each nominal identity key embeds its `ItemId` value, so the
+    /// post-call lookup remains injective by construction. The
+    /// rebuilt lookup is asserted unique in debug builds.
+    pub(crate) fn for_each_nominal_item_id_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut ItemId),
+    {
+        for ty in self.storage.iter_mut() {
+            match ty {
+                Ty::Struct { item, .. }
+                | Ty::Enum { item, .. }
+                | Ty::Union { item, .. }
+                | Ty::FnDef(item, _)
+                | Ty::Closure(item, _) => f(item),
+                _ => {}
+            }
+        }
+        self.lookup.clear();
+        for (idx, ty) in self.storage.iter().enumerate() {
+            let key = TyIdentityKey::from_ty(ty);
+            let prev = self.lookup.insert(key, TyId::from_u32(idx as u32));
+            debug_assert!(
+                prev.is_none(),
+                "TyInterner identity collision after ItemId remap at TyId {}",
+                idx,
+            );
+        }
+    }
+
     /// Patches the `item: ItemId` field on a nominal type entry and
     /// re-keys the lookup map to reflect the new identity.
     ///

@@ -1045,6 +1045,127 @@ impl RegseqModel {
         }
     }
 
+    /// Apply `f` to every `ItemId` reference in the model. Visits:
+    /// - Type-interner nominal entries: `Ty::Enum`, `Ty::Struct`,
+    ///   `Ty::Union`, `Ty::FnDef`, and `Ty::Closure`. The
+    ///   `TyInterner` rebuilds its content-keyed lookup map after
+    ///   the walk so subsequent intern lookups resolve through the
+    ///   remapped identity keys.
+    /// - `Instance.item` for every instance.
+    /// - Side-table values: `vtables`'s
+    ///   `HashMap<PrincipalTraitKey, ItemId>` values.
+    /// - Side-table keys: `domain_attrs.field_attrs`'s
+    ///   `FieldPath.item` field. The HashMap is rebuilt with
+    ///   remapped keys so subsequent lookups find the entries
+    ///   under their new `FieldPath`.
+    ///
+    /// Does NOT visit `IndexVec<ItemId, _>` side tables -- those
+    /// are positional and must be permuted (not remapped) by
+    /// callers via the shared permutation table.
+    ///
+    /// Does NOT visit bridge-side `HandleTable` -- `HandleTable`
+    /// lives on the driver side
+    /// (`crates/regseq-driver/src/bridge/handles.rs`,
+    /// re-exported from `crates/regseq-driver/src/bridge/mod.rs`)
+    /// and is not part of `RegseqModel`. Bridge-side callers apply
+    /// the same remap separately via
+    /// `HandleTable::remap_item_ids`.
+    pub(crate) fn for_each_item_id_mut<F>(&mut self, mut f: F)
+    where
+        F: FnMut(&mut ItemId),
+    {
+        self.types.for_each_nominal_item_id_mut(&mut f);
+
+        for instance in self.instances.iter_mut() {
+            f(&mut instance.item);
+        }
+
+        for item in self.vtables.values_mut() {
+            f(item);
+        }
+
+        let drained: Vec<_> = self.domain_attrs.field_attrs.drain().collect();
+        for (mut key, value) in drained {
+            f(&mut key.item);
+            let prev = self.domain_attrs.field_attrs.insert(key, value);
+            debug_assert!(
+                prev.is_none(),
+                "domain_attrs.field_attrs collision after ItemId remap",
+            );
+        }
+    }
+
+    /// Sort `model.items` by `compare_items_f4` per spec.md section
+    /// 16.1, remapping every `ItemId` reference everywhere it
+    /// appears in the model so the type / instance / side-table
+    /// graph survives the permutation. Idempotent: a model already
+    /// in F4 order stays unchanged.
+    ///
+    /// Mirrors `sort_instances_by_f4_2` (spec.md section 16.2)
+    /// for the items-side ordering. The instance-side method exists
+    /// because Phase-5 sub-passes push Function and Static instances
+    /// in distinct orders; this items-side method exists because
+    /// `assign_late_pending_items`
+    /// (`crates/regseq-driver/src/bridge/assign.rs`) appends late
+    /// synthesis items past the original F4-sorted batch, which
+    /// can interleave them out of order with the existing items
+    /// per spec.md section 16.1 ranking.
+    ///
+    /// Returns the old-to-new `ItemId` remap table
+    /// (`Vec<ItemId>` indexed by the old `ItemId`'s `index()`).
+    /// Callers MUST apply the same remap to any bridge-side state
+    /// that holds `ItemId`s outside the model (e.g.,
+    /// `HandleTable.handle_to_item_id` via
+    /// `HandleTable::remap_item_ids`).
+    pub fn sort_items_by_f4(&mut self) -> Vec<ItemId> {
+        let len = self.items.len();
+        let identity: Vec<ItemId> = (0..len).map(|idx| ItemId::from_u32(idx as u32)).collect();
+        if len <= 1 {
+            return identity;
+        }
+
+        let mut order: Vec<usize> = (0..len).collect();
+        order.sort_by(|&a, &b| {
+            self.compare_items_f4(
+                &self.items[ItemId::from_u32(a as u32)],
+                &self.items[ItemId::from_u32(b as u32)],
+            )
+        });
+
+        if order.iter().enumerate().all(|(new, &old)| new == old) {
+            return identity;
+        }
+
+        permute_index_vec(&mut self.items, &order);
+        permute_index_vec(&mut self.item_def_paths, &order);
+        permute_index_vec(&mut self.item_synthetic_kinds, &order);
+        permute_index_vec(&mut self.domain_attrs.item_attrs, &order);
+
+        let mut remap = vec![ItemId::ZERO; len];
+        for (new_idx, &old_idx) in order.iter().enumerate() {
+            remap[old_idx] = ItemId::from_u32(new_idx as u32);
+        }
+
+        self.for_each_item_id_mut(|item| {
+            let new = remap[item.index()];
+            *item = new;
+        });
+
+        #[cfg(debug_assertions)]
+        for idx in 0..self.items.len().saturating_sub(1) {
+            let first = ItemId::from_u32(idx as u32);
+            let second = ItemId::from_u32((idx + 1) as u32);
+            debug_assert!(
+                !self.compare_item_f4(first, second).is_gt(),
+                "F4 monotonicity broken after sort_items_by_f4 between {:?} and {:?}",
+                first,
+                second,
+            );
+        }
+
+        remap
+    }
+
     /// Validates construction invariants enforceable at this phase.
     pub fn validate(&mut self, bridge_input: &BridgeInput) -> Result<(), InvariantViolation> {
         // Phase B step 1 (spec section 12, line 676-680 ordering):
@@ -2830,6 +2951,21 @@ fn def_path_data_string_id(data: &DefPathData) -> Option<StringId> {
         | DefPathData::SyntheticCoroutineBody
         | DefPathData::NestedStatic => None,
     }
+}
+
+fn permute_index_vec<I: crate::idx::Idx, T>(table: &mut IndexVec<I, T>, order: &[usize]) {
+    debug_assert_eq!(table.len(), order.len());
+    let taken_vec = std::mem::take(table).into_inner();
+    let mut taken: Vec<Option<T>> = taken_vec.into_iter().map(Some).collect();
+    let mut sorted: Vec<T> = Vec::with_capacity(order.len());
+    for &old_idx in order {
+        sorted.push(
+            taken[old_idx]
+                .take()
+                .expect("permutation visits each old index exactly once"),
+        );
+    }
+    table.replace_inner(sorted);
 }
 
 fn function_instance_disambig(kind: &InstanceKind) -> u8 {
