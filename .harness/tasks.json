@@ -1435,6 +1435,42 @@
               "reason": "Codex round-4 amendment: fix residual stale 4538-4543 citation in the Review prompt block (now 4531-4535)"
             }
           ]
+        },
+        {
+          "id": "regseq-driver-52",
+          "name": "Wire bridge emit dispatcher (--emit model = pretty-printed, --emit json = JSON)",
+          "spec": ".harness/tasks/regseq-driver/52-emit-dispatcher-wiring.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-51",
+            "test-ir-fixtures-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "pretty-printer.md#10.3"
+          ],
+          "spec_version": 3,
+          "history": [
+            {
+              "ts": "2026-05-17T22:10:30Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-17T22:10:35Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex round-1 amendments: consolidate Change 2 + Change 4 (warning loop integrated); add collect_unsupported_warnings helper for unit-testable warning content; strict json.foo rejection; explicit comment fix at cli.rs:181-184; ensure_parent edge case tests"
+            },
+            {
+              "ts": "2026-05-17T22:12:00Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "Codex round-2 amendment: fix typo in Acceptance Criteria (model.validate(&mut self) -> model.validate(&bridge_input))"
+            }
+          ]
         }
       ]
     },
