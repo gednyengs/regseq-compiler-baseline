@@ -33,7 +33,8 @@ pub struct Cli {
     pub output_dir: PathBuf,
 
     /// What to emit (repeatable; default: model). Supported specs:
-    /// model[=PATH], driver[=MATCH_ID], analysis[.NAME][=PATH].
+    /// model[=PATH], json[=PATH], driver[=MATCH_ID],
+    /// analysis[.NAME][=PATH].
     #[arg(long = "emit", value_name = "SPEC")]
     pub emit: Vec<EmitSpec>,
 
@@ -179,9 +180,11 @@ impl Cli {
         } = self;
 
         if emit.is_empty() {
-            // Default emit during the RegseqModel-only rebuild: produce the
-            // normalized RegseqModel JSON. Driver and Analysis emit are
-            // stubbed in regseq-driver until backends and analyses are wired in.
+            // Default emit during the RegseqModel-only rebuild: produce
+            // the pretty-printed RegseqModel text. Pass `--emit json`
+            // explicitly for the machine-readable form. Driver and
+            // Analysis emit are stubbed in regseq-driver until backends
+            // and analyses are wired in.
             emit.push(EmitSpec::Model { path: None });
         }
         emit.dedup();

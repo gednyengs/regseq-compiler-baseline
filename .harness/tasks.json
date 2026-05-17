@@ -1440,7 +1440,7 @@
           "id": "regseq-driver-52",
           "name": "Wire bridge emit dispatcher (--emit model = pretty-printed, --emit json = JSON)",
           "spec": ".harness/tasks/regseq-driver/52-emit-dispatcher-wiring.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-51",
             "test-ir-fixtures-01"

@@ -121,17 +121,51 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
     fn after_analysis<'tcx>(
         &mut self,
         _compiler: &rustc_interface::interface::Compiler,
-        _tcx: rustc_middle::ty::TyCtxt<'tcx>,
+        tcx: rustc_middle::ty::TyCtxt<'tcx>,
     ) -> rustc_driver::Compilation {
-        // Bridge entry point. Currently empty: the RegseqModel-producing
-        // bridge is being built bottom-up. Until the bridge can produce
-        // a RegseqModel for the configured emit specs, this method just
-        // stops compilation cleanly.
-        eprintln!(
-            "regseq-driver: after_analysis reached for target_os={:?}; \
-             bridge not yet wired -- skipping all extraction.",
-            self.options.target_os,
-        );
+        // 1. Bridge rustc HIR/MIR into a RegseqModel.
+        let input = crate::bridge::BridgeInput::new(tcx);
+        let mut model = match crate::bridge::run_bridge(input) {
+            Ok(model) => model,
+            Err(err) => {
+                tcx.dcx()
+                    .fatal(format!("regseq-driver: bridge failed: {err}"));
+            }
+        };
+
+        // 2. Joint validate. `RegseqModel::validate` takes `&mut self`
+        // because it rebuilds the vtables side table (per
+        // `crates/regseq-model/src/model.rs:91,3207`); subsequent
+        // steps only need an immutable borrow.
+        let bridge_input = regseq_model::BridgeInput::matching(&model);
+        if let Err(err) = model.validate(&bridge_input) {
+            tcx.dcx()
+                .fatal(format!("regseq-driver: model.validate failed: {err:?}"));
+        }
+
+        // 3. Honor `--check`: validate-only path skips ALL emission
+        // (per `crates/cargo-regseq/src/cli.rs:40`).
+        if self.options.check {
+            return rustc_driver::Compilation::Stop;
+        }
+
+        // 4. Warn on unsupported emit specs (`Driver` / `Analysis`
+        // are documented but phase-1b territory per
+        // `pipeline-refactor.md:879`). The warning logic lives in
+        // `emit::collect_unsupported_warnings` so it is unit-testable
+        // without a `TyCtxt`.
+        for warning in crate::emit::collect_unsupported_warnings(&self.options.emit) {
+            tcx.dcx().warn(warning);
+        }
+
+        // 5. Dispatch each emit spec. Any emit failure is fatal.
+        for spec in &self.options.emit {
+            if let Err(err) = crate::emit::emit_one(&model, spec, &self.options.output_dir) {
+                tcx.dcx()
+                    .fatal(format!("regseq-driver: emit {spec} failed: {err}"));
+            }
+        }
+
         rustc_driver::Compilation::Stop
     }
 }

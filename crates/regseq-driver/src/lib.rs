@@ -14,6 +14,7 @@ extern crate rustc_span;
 pub mod args;
 pub mod bridge;
 mod callbacks;
+pub mod emit;
 pub use callbacks::{regseq_mir_passes, RegseqAwareCallbacks, RegseqCallbacks};
 
 const BUG_REPORT_URL: &str = "https://github.com/gednyengs/regseq-compiler-asplos/issues";

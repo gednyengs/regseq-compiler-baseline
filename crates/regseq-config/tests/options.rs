@@ -37,6 +37,32 @@ fn serde_round_trip_emit_spec_driver() {
 }
 
 #[test]
+fn serde_round_trip_emit_spec_model() {
+    let value = EmitSpec::Model { path: None };
+    let encoded = serde_json::to_string(&value).unwrap();
+    let decoded: EmitSpec = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, value);
+}
+
+#[test]
+fn serde_round_trip_emit_spec_json_without_path() {
+    let value = EmitSpec::Json { path: None };
+    let encoded = serde_json::to_string(&value).unwrap();
+    let decoded: EmitSpec = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, value);
+}
+
+#[test]
+fn serde_round_trip_emit_spec_json_with_path() {
+    let value = EmitSpec::Json {
+        path: Some(PathBuf::from("out.json")),
+    };
+    let encoded = serde_json::to_string(&value).unwrap();
+    let decoded: EmitSpec = serde_json::from_str(&encoded).unwrap();
+    assert_eq!(decoded, value);
+}
+
+#[test]
 fn serde_round_trip_emit_spec_analysis_with_name_and_path() {
     let value = EmitSpec::Analysis {
         analysis_name: Some("resources".to_string()),

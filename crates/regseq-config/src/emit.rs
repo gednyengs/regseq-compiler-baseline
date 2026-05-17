@@ -9,7 +9,7 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum EmitParseError {
     /// Unsupported emit type prefix.
-    #[error("unknown emit type '{0}'; expected 'driver', 'analysis', or 'model'")]
+    #[error("unknown emit type '{0}'; expected 'driver', 'analysis', 'model', or 'json'")]
     UnknownType(String),
 }
 
@@ -29,12 +29,25 @@ pub enum EmitSpec {
         /// Output path, or None for default location.
         path: Option<PathBuf>,
     },
-    /// Emit the normalized `RegseqModel` as JSON.
+    /// Emit the pretty-printed textual `RegseqModel` per
+    /// `pretty-printer.md` section 10.3.
     ///
-    /// The compiler builds a `RegseqModel` from rustc HIR/MIR and writes
-    /// its JSON form to the output tree.
+    /// The compiler builds a `RegseqModel` from rustc HIR/MIR and
+    /// renders it via `regseq_model::PrettyPrinter::new(&model).render()`
+    /// into a single text file.
     Model {
-        /// Output path, or None for default location under `drivers/`.
+        /// Output path, or None for default location under `output_dir`.
+        path: Option<PathBuf>,
+    },
+    /// Emit the normalized `RegseqModel` as JSON via
+    /// `serde_json::to_writer_pretty`.
+    ///
+    /// The compiler builds a `RegseqModel` from rustc HIR/MIR and
+    /// writes its JSON form (using `RegseqModel`'s `Serialize`
+    /// derive at `crates/regseq-model/src/model.rs:53`) to the
+    /// output tree.
+    Json {
+        /// Output path, or None for default location under `output_dir`.
         path: Option<PathBuf>,
     },
 }
@@ -64,6 +77,14 @@ impl FromStr for EmitSpec {
             "model" => Ok(Self::Model {
                 path: value.map(PathBuf::from),
             }),
+            // The `json` emit spec has no subtypes; reject
+            // `json.<anything>` explicitly so a typo does not silently
+            // succeed. The legacy `model.<anything>` leniency is
+            // preserved above for backward compatibility.
+            "json" if subtype.is_none() => Ok(Self::Json {
+                path: value.map(PathBuf::from),
+            }),
+            "json" => Err(EmitParseError::UnknownType(type_spec.to_string())),
             _ => Err(EmitParseError::UnknownType(base_type.to_string())),
         }
     }
@@ -94,6 +115,8 @@ impl fmt::Display for EmitSpec {
             } => write!(f, "analysis.{name}={}", path.to_string_lossy()),
             Self::Model { path: None } => f.write_str("model"),
             Self::Model { path: Some(path) } => write!(f, "model={}", path.to_string_lossy()),
+            Self::Json { path: None } => f.write_str("json"),
+            Self::Json { path: Some(path) } => write!(f, "json={}", path.to_string_lossy()),
         }
     }
 }

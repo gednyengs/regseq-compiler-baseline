@@ -124,6 +124,36 @@ fn help_documents_model_as_default_emit() {
 }
 
 #[test]
+fn parses_emit_json_with_and_without_path() {
+    {
+        let (_platform, mut args) = base_args();
+        args.extend(["--emit".to_string(), "json".to_string()]);
+        let cli = parse_ok(args);
+        assert_eq!(cli.emit, vec![EmitSpec::Json { path: None }]);
+    }
+    {
+        let (_platform, mut args) = base_args();
+        args.extend(["--emit".to_string(), "json=foo.json".to_string()]);
+        let cli = parse_ok(args);
+        assert_eq!(
+            cli.emit,
+            vec![EmitSpec::Json {
+                path: Some(PathBuf::from("foo.json"))
+            }]
+        );
+    }
+}
+
+#[test]
+fn help_lists_json_emit_spec() {
+    let help = Cli::command().render_help().to_string();
+    assert!(
+        help.contains("json[=PATH]"),
+        "help must document the json emit spec spelling:\n{help}"
+    );
+}
+
+#[test]
 fn parse_emit_analysis() {
     let (_platform, mut args) = base_args();
     args.extend(["--emit".to_string(), "analysis".to_string()]);

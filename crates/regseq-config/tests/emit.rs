@@ -84,6 +84,44 @@ fn emit_parses_model_with_path() {
 }
 
 #[test]
+fn emit_parses_json_without_path() {
+    assert_eq!(
+        EmitSpec::from_str("json").unwrap(),
+        EmitSpec::Json { path: None }
+    );
+}
+
+#[test]
+fn emit_parses_json_with_path() {
+    assert_eq!(
+        EmitSpec::from_str("json=out/pl011.model.json").unwrap(),
+        EmitSpec::Json {
+            path: Some(PathBuf::from("out/pl011.model.json"))
+        }
+    );
+}
+
+#[test]
+fn emit_parse_json_rejects_subtype() {
+    // The `json` spec has no subtypes; `json.foo` MUST fail rather
+    // than silently dropping the subtype (which would be a footgun).
+    // The legacy `model.foo` lenient behavior is intentionally
+    // preserved and is NOT asserted here.
+    let result = EmitSpec::from_str("json.foo");
+    assert!(matches!(result, Err(EmitParseError::UnknownType(_))));
+}
+
+#[test]
+fn emit_unknown_type_message_lists_json() {
+    let err = EmitSpec::from_str("nonsense").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("json"),
+        "UnknownType message must list 'json': {message}"
+    );
+}
+
+#[test]
 fn emit_parse_unknown_type_fails() {
     assert!(matches!(
         EmitSpec::from_str("unknown"),
@@ -110,6 +148,8 @@ fn emit_display_round_trip_for_supported_forms() {
         "analysis=report.json",
         "model",
         "model=out/pl011.model.json",
+        "json",
+        "json=out/pl011.model.json",
     ];
 
     for input in cases {
