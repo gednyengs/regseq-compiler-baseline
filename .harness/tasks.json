@@ -1318,12 +1318,18 @@
             "spec.md#25",
             "spec.md#26"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-17T02:51:56Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-17T06:34:11Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Audit-derived amendment: rustc rlib materialisation makes strict residue-driven scope unsatisfiable for \u00a726.6. Formalise the agent's pragmatic widening (Change B step 1.2) + step-0 log-intrinsic FnSig rewrite (Change B step 0) + HandleTable drop+remap pattern (revised Change B step 6) + Test Plan item 9 rewording + validate() deferral to regseq-driver-49 (revised Test Plan items 10 + 14). Spec_version 1 -> 2."
             }
           ]
         }

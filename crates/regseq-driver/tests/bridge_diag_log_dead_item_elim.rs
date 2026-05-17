@@ -8,18 +8,23 @@
 //! <LogArg-item> }` entry in the TyInterner, and the LogArg ADT
 //! Item itself are pruned after Phase 5 completes.
 //!
-//! `model.validate()` is intentionally NOT asserted here: the
+//! `model.validate()` is intentionally NOT asserted here per the
+//! audit-derived amendment to Spec 48 (spec_version 2): the
 //! post-elim log Calls have args whose types (e.g., `u32`) do
 //! not match the rewritten `log_<sev>` `FnSig.inputs` (now
-//! `&str`-only after the step-0 FnSig rewrite). The model-
-//! validator's B-4 / B-6 §26.6 exception that exempts log-
-//! intrinsic Calls is owned by a separate validator update (the
-//! spec for regseq-driver-48 only requires the structural LogArg
-//! removal). The structural assertions below verify the §26.6
-//! contract end-to-end -- no LogArg-typed Item, no LogArg-typed
-//! Ty, no LogArg-typed LocalDecl, no surviving
-//! `<LogArg as From<T>>::from` Instance -- which is the
-//! load-bearing piece of regseq-model-94's D7 / D8 negatives.
+//! `&str`-only after the step-0 FnSig rewrite). spec.md
+//! §23.6.2 B-4 / B-6 (`spec.md:9650+` / `spec.md:11792+`) pin
+//! an `I-DiagLog-CallArity` exception that permits exactly this
+//! arg/input mismatch for Log-intrinsic Calls, but the current
+//! validator does not yet honour the exception. The follow-up
+//! task `regseq-driver-49` lands the validator's B-4 / B-6
+//! §26.6 exception and restores the `model.validate()`
+//! assertion at this site. Until then, the structural
+//! assertions below verify the §26.6 contract end-to-end -- no
+//! LogArg-typed Item, no LogArg-typed Ty, no LogArg-typed
+//! LocalDecl, no surviving `<LogArg as From<T>>::from`
+//! Instance -- which is the load-bearing piece of
+//! regseq-model-94's D7 / D8 negatives.
 
 extern crate rustc_driver;
 extern crate rustc_interface;

@@ -41,6 +41,69 @@ unreferenced entry (orphan closures, unused drop-glue, dead
 synthesised statics) is explicitly out of scope and stays as
 the deferred §26.10 contract.
 
+### Audit-derived amendment (spec_version 2, 2026-05-17)
+
+The initial spec scoped removal to "the wrapper Instances
+DiagLogPeel collapsed plus the LogArg Item (when no surviving
+Ty references it)". That contract is **unsatisfiable for any
+real fixture** because rustc materialises every impl method in
+an rlib crate type, not only the ones an author call site
+invokes. For the canonical `diag_logging.rs` fixture (which
+uses only `From<u32>` calls), the `<LogArg as From<&'a str>>::from`
+impl is still emitted as a Function Instance whose body's
+return-place `LocalDecl` pins LogArg via the type interner.
+Strict residue-driven scope keeps that sibling alive, which
+keeps LogArg alive, which makes spec.md §26.6's "the `LogArg`
+type does NOT appear in RegseqModel" clause unsatisfiable.
+
+Plus three subordinate contract gaps the original spec did not
+account for:
+
+- **Log-intrinsic FnSig pinning.** The four `log_<sev>`
+  intrinsic Items have FnSig `(fmt: &'static str,
+  &[LogArg<'_>]) -> ()`. The `&[LogArg<'_>]` input is a
+  load-bearing reference to LogArg via the type interner even
+  after every wrapper Call's runtime args are peeled. Removing
+  LogArg requires either removing the log_<sev> Items
+  themselves (NOT desirable -- they remain the
+  diagnostic-logging emit points and carry the
+  `IntrinsicKind::Log(_)` AttrData) or rewriting their FnSigs
+  to drop the `&[LogArg<'_>]` input. The latter is the
+  pragmatic shape that preserves §26.3 + §26.6 intent.
+- **HandleTable "MUST not remove handle-bound Items" rule.**
+  Phase 4 binds *every* Item via `HandleTable::bind_final_item_id`
+  at `crates/regseq-driver/src/bridge/assign.rs:33`, not just
+  bridge-synthesised entries. The original Change B step 6
+  rule ("panic if any still-bound handle maps to a removed
+  Item") is therefore unsatisfiable: every removable Item is
+  handle-bound. The contract is preserved in spirit by the
+  pass running LAST in Phase 5 (no post-Phase-5 consumer
+  calls `handles.resolve`), with handle bindings for removed
+  Items dropped and the dense ItemId remap applied.
+- **`model.validate()` post-elim.** The intrinsic FnSig
+  rewrite creates a per-Call mismatch between the surviving
+  log Call's `args` (e.g., `u32` post-DiagLogPeel) and the
+  rewritten `log_<sev>` `FnSig.inputs` (now just `&str fmt`).
+  The model validator's per-Call arg/input type-coherence
+  check at `crates/regseq-model/src/model.rs` flags this.
+  spec.md §23.6.2 B-4 / B-6 already pin an `I-DiagLog-CallArity`
+  exception for Log-intrinsic Calls' arity vs. signature
+  mismatch (`spec.md:9650+` / `spec.md:11792+`), but the
+  validator does NOT currently honour the exception. The fix
+  belongs in a sibling task (proposed `regseq-driver-49`,
+  validator B-4/B-6 §26.6 exception); this task's integration
+  test temporarily skips `model.validate()` and locks the
+  structural §26.6 contract via direct walks instead.
+
+This amendment formalises four contract relaxations and one
+contract addition, and acknowledges the deferred `validate()`
+piece. The full set: **Change F** (widened seed predicate),
+**Change G** (step-0 log-intrinsic FnSig rewrite),
+**revised Change B step 6** (HandleTable drop+remap pattern
+instead of panic), **revised Test Plan item 9** (sibling
+From-impl-for-LogArg removed, not surviving), **revised Test
+Plan item 10** (`validate()` deferred to regseq-driver-49).
+
 ## Input Context
 
 - `docs/discussions/regseq-model/spec.md` §25.7.3 (DiagLogPeel
@@ -184,15 +247,80 @@ pub fn eliminate_diag_log_peel_residue(
 Implementation, in dependency order (downstream depends on
 upstream's keep-set being computed first):
 
-1. **Seed dead-Instance set** from
+0. **Step-0 log-intrinsic FnSig rewrite** (audit-derived
+   amendment). Gated on the residue accumulator being
+   non-empty (idempotent no-op when DiagLogPeel collapsed
+   nothing in any body; preserves Step 1's strict
+   residue-driven no-op invariant for empty-`&[]` recognition
+   / peel integration tests). When the gate holds, rewrite
+   every `log_<sev>` intrinsic Function Instance's FnSig per
+   the contract introduced above. Implementation function:
+   `rewrite_log_intrinsic_signatures(cx) -> HashSet<FnSigId>`
+   in `crates/regseq-driver/src/bridge/diag_log/dead_item_elim.rs`.
+   For each `instance_is_log_intrinsic`-matching Function
+   Instance whose current FnSig has a LogArg-bearing input
+   (i.e., any input Ty whose resolution touches a LogArg
+   ADT, walked transitively through `Ty::Ref`, `Ty::Slice`,
+   `Ty::Array`, `Ty::Ptr`, `Ty::Tuple.fields`, etc.):
+   - Build a new FnSig with `inputs = vec![original_fmt_input]`
+     (the `&'static str` fmt operand at position 0 only),
+     `output = unit_ty`, ABI / variadic / safety preserved.
+   - Intern the new FnSig; record the old FnSigId in the
+     `orphaned_log_intrinsic_fn_sigs` set so the dead-FnSig
+     computation in step 3 picks it up.
+   - Pad `sig_c_abi_lowerings` to `sigs.len()` with `None`.
+   - Update the Instance: `data.fn_sig = new_sig_id`;
+     `data.body = None` (the intrinsic body is a stub
+     `unimplemented!()` per spec.md §26.3 anyway, and the
+     C backend lowering at §26.9 owns body synthesis per
+     the deferred phase-1b contract).
+
+   This step is idempotent: any Instance whose current FnSig
+   already has no LogArg-bearing inputs is skipped (re-runs
+   are no-ops). Runs FIRST so the dead-FnSig + dead-TyId
+   walks (steps 3 + 4) see the rewritten FnSigs as the
+   "surviving" reference set.
+
+   Rationale: the LogArg ADT cannot be removed while any
+   surviving FnSig's inputs / outputs resolve to a LogArg-
+   bearing Ty. The log_<sev> intrinsic FnSigs are the only
+   surviving pinning references after the widening seed
+   admits all From-impl Instances; rewriting them is the
+   final structural step that makes the §26.6 contract
+   satisfiable.
+
+1. **Seed dead-Instance set** in two phases per the audit-
+   derived amendment above:
+
+   1.1. **Primary seeds** from
    `cx.diag_log_peel_residue.collapsed_wrapper_instances`,
    filtered through the structural-recognition predicate
-   (mirrors `peel.rs::callee_is_from_logarg`; lift it to a
-   `pub(crate)` helper in `diag_log/mod.rs` for shared use).
-   The predicate confirms `instance.item`'s def_path ends
-   with `::From::from` AND `generic_args[0]` resolves to a
-   nominal ADT whose Item def_path terminal segment equals
-   `"LogArg"`.
+   (`is_from_logarg_instance`; lifted to a `pub(crate)`
+   helper in `diag_log/mod.rs` and shared with
+   `peel.rs::callee_is_from_logarg`). The predicate confirms
+   `instance.item`'s def_path ends with `::From::from` AND
+   `generic_args[0]` resolves to a nominal ADT whose Item
+   def_path terminal segment equals `"LogArg"`.
+
+   1.2. **Widening (anchored at the primary seeds)** -- iff
+   at least one primary seed was added in step 1.1, walk
+   every Function Instance in `model.instances` and admit
+   any that satisfies the structural LogArg-From-impl
+   predicate to the dead set. The widening is REQUIRED for
+   the §26.6 contract on real fixtures (rustc materialises
+   every impl method in an rlib; sibling From-impl Instances
+   are emitted whether or not their wrappers are collapsed).
+   Anchoring at "primary seeds non-empty" preserves the
+   residue-driven invariant: the pass is a strict no-op when
+   no wrapper was collapsed; it only widens once DiagLogPeel
+   has confirmed at least one LogArg-related residue exists.
+
+   Both trait-side recognition (`is_from_logarg_instance`,
+   matching the bridge's `<T as Trait>::method` interning
+   shape) AND impl-side recognition (`instance_is_logarg_impl_from`,
+   matching the post-monomorphisation impl-method def_path
+   shape) must run -- the bridge may produce either form
+   depending on the rustc resolution path.
 
 2. **Seed dead-Item set** from the From-impl Items whose
    only surviving Instances are all in the dead-Instance
@@ -241,17 +369,25 @@ upstream's keep-set being computed first):
    - `model.remove_items_and_remap(&item_keep)` last (Item
      removal is the load-bearing remap and uses the shared
      `for_each_item_id_mut` walker).
-   - After `remove_items_and_remap`, build a dense
-     `Vec<ItemId>` from the returned `Vec<Option<ItemId>>` --
-     unwrap the Options for the surviving Items, panic on any
-     `None` for an ItemId the HandleTable still binds (a
-     debug-assertion: if Phase 4 + the const_memory_static
-     synthesis bound a handle to an Item that this pass then
-     removed, that would be a bridge invariant violation; the
-     pass MUST not remove handle-bound Items).
-   - Call `cx.handles.remap_item_ids(&surviving_item_remap)`
-     for forward safety (per `regseq-driver-47`'s
-     HandleTable contract).
+   - **HandleTable drop + dense-remap pattern** (audit-
+     derived amendment): Phase 4 binds *every* Item via
+     `HandleTable::bind_final_item_id` (`assign.rs:33`), so
+     the prior spec rule "MUST not remove handle-bound
+     Items" is unsatisfiable -- every removable Item is
+     handle-bound. The contract is preserved in spirit by
+     the pass running LAST in Phase 5 (no post-Phase-5
+     consumer calls `handles.resolve`); operationally:
+     (a) walk `cx.handles.handle_to_item_id` and DROP every
+     binding whose target ItemId index appears as `None`
+     in the returned `Vec<Option<ItemId>>` (the slot was
+     removed), then (b) build a dense `Vec<ItemId>` from
+     the remap by mapping `None` slots to `ItemId::ZERO`
+     (sentinel for "removed; unreachable after step (a)"),
+     and (c) call `cx.handles.remap_item_ids(&dense_remap)`
+     for forward safety. Step (a) ensures no surviving
+     handle binding resolves to an unrelated post-removal
+     Item; step (b/c) updates surviving bindings through
+     `regseq-driver-47`'s HandleTable contract.
 
 7. **Drain the residue accumulator** so the pass is
    idempotent (re-running it is a no-op).
@@ -492,6 +628,18 @@ The elimination runs LAST in Phase 5 because:
   REMOVED TyId, that signals a residue-driven-contract
   violation -- panic in debug builds rather than silently
   drop the entry.
+- **`model.validate()` post-elim compliance** (audit-derived
+  amendment). The step-0 log-intrinsic FnSig rewrite creates
+  a per-Call arg-vs-signature input-type mismatch that the
+  current validator flags but `spec.md` §23.6.2 B-4 / B-6
+  exception permits (`spec.md:9650+` / `spec.md:11792+`).
+  Updating the validator to honour the exception is **NOT**
+  in scope for this task; it lands in the proposed follow-
+  up `regseq-driver-49` task. This task's integration test
+  asserts the structural §26.6 contract via direct walks
+  and explicitly skips `model.validate()`. regseq-model-94
+  reset and the validate() restoration also defer to
+  regseq-driver-49.
 
 ## Test Plan
 
@@ -612,35 +760,63 @@ The elimination runs LAST in Phase 5 because:
    - The LogArg ADT Item is removed (no surviving Ty refs
      remain).
 
-9. **`eliminate_diag_log_peel_residue` -- partial removal
-   (sibling From impl still referenced).** Build a model with
-   two From impls (`From<u32>` and `From<&str>`), but only
-   the `From<u32>` wrapper was collapsed. Assert only the
-   `From<u32>` Item + Instance + FnSig + the LogArg Ty
-   referenced exclusively from `From<u32>` are removed; the
-   `From<&str>` Item + Instance + FnSig + the LogArg Item +
-   any LogArg Ty still referenced from `From<&str>` survive.
+9. **`eliminate_diag_log_peel_residue` -- sibling From-impl-
+   for-LogArg removal (revised per audit-derived amendment).**
+   Build a model with two From-impl-for-LogArg Instances
+   (`<LogArg as From<u32>>::from` and
+   `<LogArg as From<&str>>::from`), but only the `From<u32>`
+   wrapper is in `cx.diag_log_peel_residue.collapsed_wrapper_instances`.
+   Call the pass. Assert (the widening clause per Change B
+   step 1.2):
+   - Both `<LogArg as From<T>>::from` Items are removed
+     (residue widening: any From-impl whose Self is LogArg
+     is dead when the residue accumulator is non-empty).
+   - Both Instances are removed.
+   - The LogArg ADT Item is removed (no surviving Self
+     reference remains after the widening).
+   - No surviving `Ty::Enum { item: <LogArg> }` entry
+     remains in the TyInterner.
+
+   This test locks the §26.6 contract on the realistic rustc-
+   rlib materialisation pattern (the sibling From<&str> Instance
+   exists because rustc emits every impl method in an rlib,
+   not because the fixture calls `From<&str>`).
 
 ### Integration test (`crates/regseq-driver/tests/bridge_diag_log_dead_item_elim.rs`)
 
-10. **`diag_logging` fixture -- LogArg fully removed.** Bridge
-    the `crates/test-ir-fixtures/fixtures/diag_logging.rs`
-    fixture. Assert (the full §26.6 contract):
-    - `model.validate()` returns `Ok(())` (composes with
-      `regseq-driver-47`'s F4-1 fix).
+10. **`diag_logging` fixture -- LogArg fully removed
+    (revised per audit-derived amendment).** Bridge the
+    `crates/test-ir-fixtures/fixtures/diag_logging.rs`
+    fixture. Assert the structural §26.6 contract via
+    direct walks (NOT via `model.validate()` -- that
+    assertion is deferred to the follow-up
+    `regseq-driver-49` task that lands the validator's
+    B-4/B-6 §26.6 exception per `spec.md:9650+` /
+    `spec.md:11792+`; the step-0 intrinsic FnSig rewrite
+    creates a per-Call arg / signature input-type
+    mismatch that the current validator flags but the
+    spec §23.6.2 exception explicitly permits):
     - Walk every `Item` in `model.items`; assert no
       `def_path.segments` terminal segment renders as
       `"LogArg"`. (D8 from regseq-model-94.)
-    - Walk every `Ty` in the TyInterner via `model.types.iter()`;
-      assert no `Ty::Enum/Struct/Union { item, .. }` where
-      the resolved Item's def_path terminal segment renders
+    - Walk every `Ty` in the TyInterner via
+      `model.types.iter()`; assert no
+      `Ty::Enum/Struct/Union { item, .. }` where the
+      resolved Item's def_path terminal segment renders
       as `"LogArg"`. (D7 from regseq-model-94.)
     - Walk every Function `Body.local_decls`; assert no
       LocalDecl `ty` resolves to a LogArg-named ADT.
     - Walk every `Instance`; assert no Instance's `item`
       resolves to a From-LogArg impl method.
-    - The four post-peel log Calls remain present, with the
-      canonical post-peel arity (1 fmt + 1 u32 per call).
+    - The four post-peel log Calls remain present, with
+      the canonical post-peel arity (1 fmt + 1 u32 per
+      call).
+    - The integration test file MUST include a header
+      comment that explicitly cites `regseq-driver-49`
+      as the follow-up that restores the
+      `model.validate()` assertion. The comment serves as
+      the documentation trail so a future audit
+      cross-references the deferred-contract piece.
 
 11. **`diag_logging` fixture -- snapshot.** Take an `insta`
     snapshot of `render_default(&model)` and lock in the
@@ -669,12 +845,20 @@ The elimination runs LAST in Phase 5 because:
     shims that produce no LogArg::from wrappers; the
     elimination pass is a no-op for them.
 
-14. **`regseq-model-94` (P1a-E2E-02) -- unblocked.** Once
-    this task lands, reset `regseq-model-94` and re-run its
-    Test Plan A1-F15. All assertions should pass (D7
-    LogArg-survival walk + D8 Item-DefPath walk satisfied by
-    the TyInterner + Items pruning; the snapshot baseline
-    locks in the post-elimination shape).
+14. **`regseq-model-94` (P1a-E2E-02) -- unblocked
+    (audit-derived deferral).** Resetting and re-running
+    `regseq-model-94` is **NOT** in scope for this task's
+    completion: regseq-model-94's Test Plan begins with
+    `model.validate().expect("validate must pass")` (its
+    own Section A), which currently trips on the step-0
+    intrinsic-FnSig-rewrite-induced arg/input mismatch.
+    The reset + re-run sequence becomes applicable ONLY
+    after the follow-up `regseq-driver-49` task lands the
+    validator's §23.6.2 B-4 / B-6 §26.6 exception. Once
+    that lands: `task.py reset regseq-model-94 --reason
+    "regseq-driver-48 + regseq-driver-49 jointly unblock
+    Test Plan §A validate() + §D LogArg-survival
+    assertions"` and re-run unchanged.
 
 ## Review
 
@@ -727,10 +911,28 @@ Focus on:
   body passes + late-pending drain + sort_items_by_f4 + const
   static synthesis), before sort_instances_by_f4_2 in
   run_bridge.
-- Post-removal: model.validate() succeeds; the TyInterner +
-  model.items walks find no LogArg reference.
+- Post-removal: the TyInterner walk + the model.items walk
+  find no LogArg reference. `model.validate()` is INTENTIONALLY
+  SKIPPED in the integration test per the audit-derived
+  amendment -- the step-0 intrinsic FnSig rewrite creates a
+  per-Call arg-vs-signature input-type mismatch the spec
+  §23.6.2 B-4 / B-6 §26.6 exception permits but the
+  validator does not yet honour. Restoring the validate()
+  assertion is owned by the follow-up `regseq-driver-49`
+  task; verify the integration test file's header cites
+  that follow-up.
+- Step-0 intrinsic FnSig rewrite (Change B step 0) is gated
+  on the residue accumulator being non-empty (idempotent
+  no-op for empty-`&[]` fixtures).
+- Test Plan item 9 asserts BOTH `<LogArg as From<T>>::from`
+  Items are removed (sibling widening per Change B step 1.2),
+  NOT that the sibling survives.
+- HandleTable handling: bindings whose target is a removed
+  Item are dropped from `cx.handles.handle_to_item_id`
+  before remap; the dense remap maps removed slots to
+  `ItemId::ZERO` (sentinel; unreachable after the drop).
 - Test coverage covers each removal-candidate class explicitly,
-  including the partial-removal sibling From impl test (item 9).
+  including the audit-revised sibling From impl test (item 9).
 Do NOT flag anything explicitly marked out of scope (Non-Goals).
 </task>
 
@@ -799,16 +1001,28 @@ Requirements. The above commands are dev-time guidance.
   - `for_each_ty_id_mut` walker per Change D.
   - `for_each_fn_sig_id_mut` walker per Change D.
 - `crates/regseq-driver/tests/bridge_diag_log_dead_item_elim.rs`
-  created with Test Plan items 10-12.
+  created with Test Plan items 10-12. The file header MUST
+  cite the deferred `regseq-driver-49` follow-up that
+  restores the `model.validate()` assertion (per the
+  audit-derived amendment).
 - Unit tests for Test Plan items 1-9 added.
-- After this task lands: `task.py reset regseq-model-94 --reason
-  "regseq-driver-48 unblocks Test Plan §D LogArg-survival
-  assertions"` and re-run that task unchanged.
-- `cargo test --workspace` passes; in particular, bridging the
-  `diag_logging` fixture yields a model with NO LogArg-typed
-  Item, NO LogArg-typed Ty in the TyInterner, NO LogArg-typed
-  LocalDecl, and NO surviving `<LogArg as From<T>>::from`
-  Instance.
+- After this task lands: a new follow-up task
+  `regseq-driver-49` is registered to land the validator's
+  §23.6.2 B-4 / B-6 §26.6 exception (`spec.md:9650+` /
+  `spec.md:11792+`) so the per-Call arg-vs-signature
+  input-type mismatch the step-0 intrinsic FnSig rewrite
+  introduces stops tripping `model.validate()`. ONLY after
+  `regseq-driver-49` lands does this task's
+  `task.py reset regseq-model-94 --reason ...`
+  step apply -- regseq-model-94's Test Plan D assertions
+  call `model.validate()` first, which currently fails.
+- `cargo test --workspace` passes; in particular, bridging
+  the `diag_logging` fixture yields a model with NO
+  LogArg-typed Item, NO LogArg-typed Ty in the TyInterner,
+  NO LogArg-typed LocalDecl, and NO surviving
+  `<LogArg as From<T>>::from` Instance. The integration
+  test does NOT assert `model.validate()` (deferred to
+  `regseq-driver-49`).
 - `cargo fmt --all -- --check` and
   `cargo clippy --workspace -- -D warnings` pass.
 - Codex Task Review returns VERDICT: APPROVED.

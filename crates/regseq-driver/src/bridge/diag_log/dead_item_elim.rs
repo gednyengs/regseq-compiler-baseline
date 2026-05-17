@@ -959,11 +959,13 @@ mod tests {
             );
             rustc_driver::init_rustc_env_logger(&early);
         });
-        let test_box: Arc<Mutex<Option<Box<dyn for<'tcx> FnOnce(&mut BridgeCtxt<'tcx>) + Send>>>> =
-            Arc::new(Mutex::new(Some(Box::new(test))));
+        type TestCallback = Box<dyn for<'tcx> FnOnce(&mut BridgeCtxt<'tcx>) + Send>;
+        type TestCallbackSlot = Arc<Mutex<Option<TestCallback>>>;
+
+        let test_box: TestCallbackSlot = Arc::new(Mutex::new(Some(Box::new(test))));
 
         struct Cb {
-            inner: Arc<Mutex<Option<Box<dyn for<'tcx> FnOnce(&mut BridgeCtxt<'tcx>) + Send>>>>,
+            inner: TestCallbackSlot,
         }
         impl Callbacks for Cb {
             fn config(&mut self, c: &mut rustc_interface::interface::Config) {
