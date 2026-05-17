@@ -18,8 +18,9 @@
 use std::collections::HashSet;
 
 use regseq_model::{
-    AggregateKind, AttrData, BlockId, Body, CallCallee, IntrinsicKind, LocalId, Operand,
-    RegseqModel, Rvalue, Statement, StatementKind, TerminatorKind,
+    AggregateKind, AttrData, BlockId, Body, CallCallee, IntrinsicKind, LocalId, Operand, Place,
+    PlaceElem, RegseqModel, Rvalue, Statement, StatementKind, TerminatorKind, Ty, TyId,
+    UNIT_LAYOUT,
 };
 
 use super::validation::{
@@ -62,7 +63,7 @@ fn peel_body_against_model_with_cx(
     cx: &mut BridgeCtxt<'_>,
     body: &mut Body,
 ) -> Result<(), BridgeError> {
-    peel_body_against_model(&cx.model, body)?;
+    peel_body_against_model(&mut cx.model, body)?;
     validate_log_call_fingerprints(cx, body)
 }
 
@@ -225,7 +226,7 @@ fn extract_format_template_literal(
 /// `BridgeCtxt`. The public `diag_log_peel_pass` is the wiring point
 /// invoked by `bridge/body/materialise.rs::run_phase5_body_passes`.
 pub(crate) fn peel_body_against_model(
-    model: &RegseqModel,
+    model: &mut RegseqModel,
     body: &mut Body,
 ) -> Result<(), BridgeError> {
     // Collect the indices of Call blocks whose callee is a Log
@@ -235,6 +236,20 @@ pub(crate) fn peel_body_against_model(
         .map(|idx| BlockId::from_u32(idx as u32))
         .filter(|block_id| call_is_log_intrinsic(model, body, *block_id))
         .collect();
+
+    // The carrier ADT references must not survive into RegseqModel
+    // per spec.md section 25.7.3 step 3 + section 26.6
+    // `I-DiagLog-CallArity` ("the `LogArg<'_>` type and the
+    // `&[LogArg<'_>]` slice type do not appear anywhere in the
+    // resulting Body"). LocalDecls are never popped (LocalId
+    // indexing is stable per spec.md section 25.8); the cleanup
+    // instead overwrites each carrier-local's `LocalDecl.ty` with
+    // unit so no surviving Place can resolve to a `LogArg`-typed
+    // local. Intern the unit Ty once per peel pass.
+    let unit_ty = model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
 
     for block_id in log_call_blocks {
         // Canonical pre-peel shape assertion per spec.md section
@@ -295,6 +310,16 @@ pub(crate) fn peel_body_against_model(
         // preceding LogArg::from Call is found (the simplified
         // hand-constructed body shape used by the unit tests).
         let mut wrapper_blocks_to_collapse: Vec<BlockId> = Vec::new();
+        // The destination local of each collapsed wrapper Call holds
+        // a `LogArg<'_>` value at its `LocalDecl.ty`. It is not part
+        // of the slice-aggregate trace (which only touches the array
+        // / reference / cast chain), so it would not otherwise land
+        // in `carrier_locals`. Track it here so the ty-cleanup pass
+        // below nulls its declared type per spec.md section 25.7.3
+        // step 3 ("intermediate temporaries holding `LogArg<'_>`
+        // values, the array itself, the slice reference ... are not
+        // translated").
+        let mut wrapper_destination_locals: HashSet<LocalId> = HashSet::new();
         let recovered_operands: Vec<Operand> = carrier
             .inner_operands
             .iter()
@@ -302,6 +327,11 @@ pub(crate) fn peel_body_against_model(
                 let (peeled, wrapper_block) = peel_log_arg_from_wrapper(model, body, inner);
                 if let Some(block) = wrapper_block {
                     wrapper_blocks_to_collapse.push(block);
+                    if let Operand::Move(p) | Operand::Copy(p) = inner {
+                        if p.projection.is_empty() {
+                            wrapper_destination_locals.insert(p.local);
+                        }
+                    }
                 }
                 peeled
             })
@@ -355,6 +385,20 @@ pub(crate) fn peel_body_against_model(
         // RegseqModel per spec.md section 26.6 "LogArg type does
         // NOT appear in RegseqModel after the bridge runs".
         collapse_wrapper_calls(body, &wrapper_blocks_to_collapse);
+
+        // Overwrite each carrier-local's `LocalDecl.ty` with unit so
+        // the carrier ADT references do not survive into the
+        // post-peel Body per spec.md section 25.7.3 step 3 + section
+        // 26.6 `I-DiagLog-CallArity`. Covers both the slice-aggregate
+        // path (array / reference / reborrow / unsizing-cast locals
+        // in `carrier_locals`) and the `LogArg::from` wrapper Call
+        // destinations (`wrapper_destination_locals`).
+        null_carrier_local_decl_types(
+            body,
+            unit_ty,
+            &carrier.carrier_locals,
+            &wrapper_destination_locals,
+        );
 
         // Replace the Call's argument vector with the flat-arg form.
         if let TerminatorKind::Call { args, .. } = &mut body.basic_blocks[block_id].terminator.kind
@@ -577,7 +621,22 @@ fn locate_log_arg_carrier(body: &Body, slice_operand: &Operand) -> CarrierTrace 
                 });
             }
             Rvalue::Ref(_, inner) | Rvalue::RawPtr(_, inner) => {
-                current_place = inner.clone();
+                // Collapse the canonical reborrow shape `&*x` into
+                // chasing `x` directly. rustc emits this at
+                // `mir_opt_level=0` for slice unsizing per
+                // `regseq_mir_passes()` (`crates/regseq-driver/src/
+                // callbacks.rs`): `_t = &(*_s)` is materialised as
+                // `Rvalue::Ref(_, Place { local: _s, projection:
+                // [Deref] })`. Treating `[Deref]` as a transparent
+                // indirection preserves the loop invariant that
+                // `current_place` is always a bare local (enforced
+                // at the top of the loop body); any other
+                // projection still bottoms out at `Untraceable`.
+                current_place = match &*inner.projection {
+                    [] => inner.clone(),
+                    [PlaceElem::Deref] => Place::from(inner.local),
+                    _ => return CarrierTrace::Untraceable,
+                };
             }
             // Cast Rvalue: chase the operand. Covers
             // `PointerCoercion(Unsize, _)` (`&[T; N]` -> `&[T]`)
@@ -783,6 +842,36 @@ fn drop_log_arg_carrier_statements(body: &mut Body, carrier_locals: &HashSet<Loc
     }
 }
 
+/// Overwrite each carrier-local's `LocalDecl.ty` with `unit_ty` so
+/// the carrier ADT (`LogArg<'_>`, `[LogArg<'_>; N]`, `&[LogArg<'_>]`,
+/// any reborrow / unsizing-cast indirection in the slice-aggregate
+/// path) is unreachable from `body.local_decls` after the peel
+/// completes per spec.md section 25.7.3 step 3 + section 26.6
+/// `I-DiagLog-CallArity` ("the `LogArg<'_>` type and the
+/// `&[LogArg<'_>]` slice type do not appear anywhere in the
+/// resulting Body").
+///
+/// LocalDecls are intentionally not popped: `LocalId`s are stable
+/// positional indices per spec.md section 25.8 and any pop would
+/// invalidate every other Place in the body. The nulling preserves
+/// `local_decls.len()` while removing the carrier ADT references --
+/// the carrier locals have no surviving readers after
+/// `drop_log_arg_carrier_statements` + `collapse_wrapper_calls`, so
+/// their declared type carries no semantic content.
+fn null_carrier_local_decl_types(
+    body: &mut Body,
+    unit_ty: TyId,
+    carrier_locals: &HashSet<LocalId>,
+    wrapper_destination_locals: &HashSet<LocalId>,
+) {
+    for &local in carrier_locals
+        .iter()
+        .chain(wrapper_destination_locals.iter())
+    {
+        body.local_decls[local].ty = unit_ty;
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -976,11 +1065,21 @@ mod tests {
         );
 
         // Capture the pre-peel local count so we can assert the
-        // carrier statements were dropped (locals stay; only their
-        // Assign statements are removed).
+        // carrier statements were dropped (`local_decls` length is
+        // preserved -- LocalIds are stable positional indices per
+        // spec.md section 25.8 and any pop would invalidate every
+        // other Place in the body; the cleanup instead nulls each
+        // carrier-local's `ty` to unit so no LogArg-typed local
+        // survives).
         let pre_peel_local_count = body.local_decls.len();
+        // Snapshot the array + slice-ref locals' pre-peel tys so we
+        // can prove the cleanup overwrote them.
+        let arr_local = LocalId::from_u32(1); // matches build_pre_peel_body
+        let slice_ref_local = LocalId::from_u32(2);
+        let pre_peel_arr_ty = body.local_decls[arr_local].ty;
+        let pre_peel_slice_ref_ty = body.local_decls[slice_ref_local].ty;
 
-        peel_body_against_model(&model, &mut body).expect("peel succeeds");
+        peel_body_against_model(&mut model, &mut body).expect("peel succeeds");
 
         // After peel: Call.args.len() == 1 + N (template + 2 args).
         let TerminatorKind::Call { args, .. } =
@@ -1004,10 +1103,232 @@ mod tests {
         );
 
         // Locals are still present (LocalDecls are never popped by
-        // the peel pass per spec.md section 25.7.3 step 3 / 25.8 --
-        // "drop the slice aggregate" refers to the Rvalue, not the
-        // local-decls table).
+        // the peel pass per spec.md section 25.8 -- LocalIds are
+        // stable positional indices and popping any would invalidate
+        // every other Place in the body).
         assert_eq!(body.local_decls.len(), pre_peel_local_count);
+
+        // The carrier locals' declared types were overwritten with
+        // unit so the carrier ADT references (`[LogArg; N]` /
+        // `&[LogArg; N]`) do not survive in `body.local_decls` per
+        // spec.md section 25.7.3 step 3 + section 26.6
+        // `I-DiagLog-CallArity`. The unit Ty interned by the pass
+        // matches the empty-tuple form per `UNIT_LAYOUT`.
+        let unit = intern_unit(&mut model);
+        assert_ne!(
+            body.local_decls[arr_local].ty, pre_peel_arr_ty,
+            "carrier array local ty must be overwritten"
+        );
+        assert_ne!(
+            body.local_decls[slice_ref_local].ty, pre_peel_slice_ref_ty,
+            "carrier slice-ref local ty must be overwritten"
+        );
+        assert_eq!(body.local_decls[arr_local].ty, unit);
+        assert_eq!(body.local_decls[slice_ref_local].ty, unit);
+    }
+
+    /// Mirror the canonical macro-expansion shape rustc emits at
+    /// `mir_opt_level=0` per `regseq_mir_passes()`
+    /// (`crates/regseq-driver/src/callbacks.rs`): the slice unsizing
+    /// goes through a reborrow `_reborrow = &(*_slice_ref)` before
+    /// the `Unsize` cast. The walker must traverse the
+    /// `Place { local, projection: [Deref] }` shape transparently so
+    /// the trace reaches the underlying `Aggregate(Array, _)`.
+    ///
+    /// Body laid out as:
+    ///
+    /// ```text
+    /// block 0:
+    ///   _arr      = [<inner_operands>]                       // Aggregate(Array)
+    ///   _slice    = &_arr                                    // Ref(_, _arr)
+    ///   _reborrow = &(*_slice)                               // Ref(_, *_slice)  -- the reborrow
+    ///   _unsized  = move _reborrow as &[T]   (Unsize)        // Cast
+    ///   Call { callee, args: [fmt, Move(_unsized)] }
+    /// ```
+    fn build_pre_peel_body_with_reborrow(
+        model: &mut RegseqModel,
+        instance_id: regseq_model::InstanceId,
+        inner_operands: Vec<Operand>,
+    ) -> Body {
+        use regseq_model::{CastKind, PointerCoercion};
+        let unit = intern_unit(model);
+        let array_ty = intern_logarg_array(model);
+        let ref_ty = model
+            .types
+            .intern(Ty::Ref(array_ty, Provenance::SharedBorrow));
+        // The unsizing cast lowers `&[T; N]` to `&[T]`. The slice
+        // element type is not material to the peel pass; reuse the
+        // array's element-type stand-in via the same `array_ty`'s
+        // referent for consistency.
+        let slice_ref_ty = model
+            .types
+            .intern(Ty::Ref(array_ty, Provenance::SharedBorrow));
+
+        let mut local_decls = IndexVec::new();
+        let return_local = local_decls.push(local_decl(unit)); // _0
+        debug_assert_eq!(return_local, LocalId::RETURN_PLACE);
+        let arr_local = local_decls.push(local_decl(array_ty)); // _1
+        let slice_local = local_decls.push(local_decl(ref_ty)); // _2
+        let reborrow_local = local_decls.push(local_decl(ref_ty)); // _3
+        let unsized_local = local_decls.push(local_decl(slice_ref_ty)); // _4
+
+        let fmt_const = model.consts.intern(regseq_model::Const::ZST);
+        let fmt_operand = Operand::Constant(fmt_const);
+        let slice_operand = Operand::Move(Place::from(unsized_local));
+
+        let aggregate_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(arr_local),
+                Rvalue::Aggregate(
+                    AggregateKind::Array(array_ty),
+                    inner_operands.into_boxed_slice(),
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let slice_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(slice_local),
+                Rvalue::Ref(Provenance::SharedBorrow, Place::from(arr_local)),
+            ),
+            span: Span::dummy(),
+        };
+        // The load-bearing piece: the reborrow's inner Place has a
+        // single `Deref` projection. The pre-fix walker rejected
+        // this shape at the bare-local invariant; the post-fix
+        // walker collapses `&*x` to chasing `x`.
+        let reborrow_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(reborrow_local),
+                Rvalue::Ref(
+                    Provenance::SharedBorrow,
+                    Place {
+                        local: slice_local,
+                        projection: Box::new([PlaceElem::Deref]),
+                    },
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let unsize_statement = Statement {
+            kind: StatementKind::Assign(
+                Place::from(unsized_local),
+                Rvalue::Cast(
+                    CastKind::PointerCoercion(PointerCoercion::Unsize),
+                    Operand::Move(Place::from(reborrow_local)),
+                    slice_ref_ty,
+                ),
+            ),
+            span: Span::dummy(),
+        };
+
+        let block = BasicBlock {
+            statements: vec![
+                aggregate_statement,
+                slice_statement,
+                reborrow_statement,
+                unsize_statement,
+            ]
+            .into_boxed_slice(),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Direct(instance_id),
+                    args: vec![fmt_operand, slice_operand].into_boxed_slice(),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: None,
+                },
+                span: Span::dummy(),
+            },
+        };
+
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(block);
+        Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        }
+    }
+
+    /// Regression test for the canonical rustc-emitted reborrow
+    /// shape (`_reborrow = &(*_slice)`) at `mir_opt_level=0`. Without
+    /// the `Rvalue::Ref(_, Place { projection: [Deref] })` reborrow
+    /// collapse, the carrier walker bottoms out at `Untraceable` and
+    /// the peel pass surfaces a `BridgeError::Phase5(...)` error.
+    /// With the collapse, the trace reaches the underlying
+    /// `Aggregate(Array, _)` and the flat-arg Call is synthesised
+    /// correctly. Also locks in the LocalDecl-ty nulling for every
+    /// link in the carrier chain (array, slice-ref, reborrow,
+    /// unsized-cast destination).
+    #[test]
+    fn peels_carrier_through_reborrow_and_unsize() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let log_item = make_log_function_item(&mut model, "log_info");
+        model.domain_attrs.item_attrs[log_item]
+            .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+        let instance_id = make_function_instance(&mut model, log_item, 2);
+
+        let inner_op = Operand::Constant(model.consts.intern(regseq_model::Const::Bool(true)));
+        let mut body =
+            build_pre_peel_body_with_reborrow(&mut model, instance_id, vec![inner_op.clone()]);
+
+        let pre_peel_local_count = body.local_decls.len();
+        // _1=arr, _2=slice, _3=reborrow, _4=unsized. Snapshot every
+        // carrier local's pre-peel ty so we can prove the cleanup
+        // walked the whole chain (not just the leaf the trace
+        // started from).
+        let arr_local = LocalId::from_u32(1);
+        let slice_local = LocalId::from_u32(2);
+        let reborrow_local = LocalId::from_u32(3);
+        let unsized_local = LocalId::from_u32(4);
+        let pre_peel_tys = [
+            body.local_decls[arr_local].ty,
+            body.local_decls[slice_local].ty,
+            body.local_decls[reborrow_local].ty,
+            body.local_decls[unsized_local].ty,
+        ];
+
+        peel_body_against_model(&mut model, &mut body)
+            .expect("peel succeeds through the reborrow shape");
+
+        let TerminatorKind::Call { args, .. } =
+            &body.basic_blocks[BlockId::from_u32(0)].terminator.kind
+        else {
+            panic!("expected Call terminator post-peel");
+        };
+        // Flat-arg shape: fmt + the one recovered inner operand.
+        assert_eq!(args.len(), 2);
+        assert!(matches!(args[0], Operand::Constant(_)));
+        assert_eq!(args[1], inner_op);
+
+        // Every carrier statement (aggregate, slice ref, reborrow,
+        // unsize cast) was dropped.
+        assert!(
+            body.basic_blocks[BlockId::from_u32(0)]
+                .statements
+                .is_empty(),
+            "expected all four carrier statements to be dropped"
+        );
+
+        // LocalIds are stable; the cleanup nulls types in place.
+        assert_eq!(body.local_decls.len(), pre_peel_local_count);
+        let unit = intern_unit(&mut model);
+        for (local, pre_ty) in [
+            (arr_local, pre_peel_tys[0]),
+            (slice_local, pre_peel_tys[1]),
+            (reborrow_local, pre_peel_tys[2]),
+            (unsized_local, pre_peel_tys[3]),
+        ] {
+            assert_ne!(
+                body.local_decls[local].ty, pre_ty,
+                "carrier local {local:?} ty must be overwritten"
+            );
+            assert_eq!(
+                body.local_decls[local].ty, unit,
+                "carrier local {local:?} ty must be nulled to unit"
+            );
+        }
     }
 
     #[test]
@@ -1026,7 +1347,7 @@ mod tests {
         };
         let pre_peel_statement_count = body.basic_blocks[BlockId::from_u32(0)].statements.len();
 
-        peel_body_against_model(&model, &mut body).expect("peel runs as a no-op");
+        peel_body_against_model(&mut model, &mut body).expect("peel runs as a no-op");
 
         let post_peel_args_len = match &body.basic_blocks[BlockId::from_u32(0)].terminator.kind {
             TerminatorKind::Call { args, .. } => args.len(),
@@ -1052,7 +1373,7 @@ mod tests {
 
         let mut body = build_pre_peel_body(&mut model, instance_id, Vec::new());
 
-        peel_body_against_model(&model, &mut body).expect("peel succeeds on empty carrier");
+        peel_body_against_model(&mut model, &mut body).expect("peel succeeds on empty carrier");
 
         let TerminatorKind::Call { args, .. } =
             &body.basic_blocks[BlockId::from_u32(0)].terminator.kind
