@@ -11,13 +11,14 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
+use regseq_driver::bridge::synth::vtable::canonical_vacant_fn_ptr_ty;
 use regseq_driver::bridge::synth::{
     rekey_synthesis_in_phase5, synthesise_closure, synthesise_drop_glue, synthesise_vtable,
 };
 use regseq_driver::bridge::{run_bridge, BridgeCtxt, BridgeInput};
 use regseq_model::{
-    ArgsKey, Const, DefPathHash, InstanceKind, ItemId, PrincipalTraitKey, ProjectionBindingsKey,
-    StableCrateId, SyntheticItemKind, Ty, UintKind,
+    ArgsKey, CAbiShape, Const, DefPathHash, FnAbi, InstanceKind, ItemId, PrincipalTraitKey,
+    ProjectionBindingsKey, StableCrateId, SyntheticItemKind, Ty, UintKind,
 };
 use rustc_hir::def_id::LocalModDefId;
 use rustc_middle::ty::{self, TyCtxt, TyKind};
@@ -825,5 +826,57 @@ fn final_sort_orders_function_before_static_instances() {
         regseq_instance_kind_rank(&model.instances[regseq_model::InstanceId::from_u32(1)].kind),
         1,
         "post-sort: Static must follow Function (F4-2 rank 1)"
+    );
+}
+
+#[test]
+fn canonical_vacant_fn_ptr_ty_populates_c_abi_lowering_side_table() {
+    // Per spec.md section 13.2 (lines 4633-4641) the canonical vacant
+    // FnPtr signature is `extern "C" fn(*mut ()) -> ()`. Per spec.md
+    // section 3.3 step 5 every `FnAbi::C` FnSig must carry a
+    // `Some(CAbiLowering)` entry in the parallel
+    // `sig_c_abi_lowerings` side table; this test guards the audit-
+    // fix in regseq-driver-50 that wires
+    // `bridge::fnsig::compute_cabi_lowering` into
+    // `canonical_vacant_fn_ptr_ty` so the side table stays in sync
+    // with `sigs`.
+    let source = "";
+    with_bridge(
+        "bridge_synth_canonical_vacant_fn_ptr",
+        source,
+        |_tcx, cx| {
+            let fn_ptr_ty = canonical_vacant_fn_ptr_ty(cx);
+            let Ty::FnPtr(sig_id) = cx.model.types.resolve(fn_ptr_ty) else {
+                panic!("canonical_vacant_fn_ptr_ty must return a Ty::FnPtr");
+            };
+            let sig_id = *sig_id;
+            let sig = cx.model.sigs.resolve(sig_id).clone();
+            assert_eq!(sig.abi, FnAbi::C, "canonical vacant FnSig must be FnAbi::C");
+            assert!(
+            sig_id.index() < cx.model.sig_c_abi_lowerings.len(),
+            "sig_c_abi_lowerings side table must have a slot for every interned FnSig per spec.md section 3.3 step 5"
+        );
+            let lowering = cx.model.sig_c_abi_lowerings[sig_id]
+            .clone()
+            .expect("canonical vacant FnSig must carry Some(CAbiLowering) per spec.md section 3.3 step 5");
+            assert_eq!(
+                lowering.inputs.len(),
+                1,
+                "canonical vacant FnSig has exactly one input (`*mut ()`)"
+            );
+            assert!(
+                matches!(lowering.inputs[0], CAbiShape::Direct),
+                "the `*mut ()` input is leaf-admissible (Direct) per spec.md section 14.5"
+            );
+            assert!(
+                matches!(lowering.output, CAbiShape::Direct),
+                "the unit output is leaf-admissible (Direct) per spec.md section 14.5"
+            );
+            let output_ty = cx.model.types.resolve(sig.output);
+            assert!(
+                matches!(output_ty, Ty::Tuple { fields, .. } if fields.is_empty()),
+                "canonical vacant FnSig output is unit"
+            );
+        },
     );
 }

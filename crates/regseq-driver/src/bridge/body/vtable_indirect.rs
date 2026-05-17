@@ -261,18 +261,23 @@ fn receiver_dynamic_ty(
     model: &regseq_model::RegseqModel,
     receiver_ty: TyId,
 ) -> Result<(TyId, Mutability, bool), BridgeError> {
+    // Per spec.md section 13.2 (lines 4607-4618), the erased
+    // receiver type is uniformly `Ty::Ptr(ErasedPointee,
+    // Mutability::Mut)` regardless of the source borrow flavor.
+    // A shared-receiver erasure would not be sound across all
+    // admissible impls (e.g. `UnsafeCell`-bearing impls that
+    // legitimately mutate through `&self`). This collapse also
+    // matches the canonical vacant FnSig's `inputs[0] = *mut ()`
+    // so the joint-validator B-6 per-arg type-match check
+    // (spec.md section 23.6.2) succeeds.
     match model.types.resolve(receiver_ty) {
-        Ty::Ref(dynamic_ty, provenance) => {
-            let mutability = match provenance {
-                regseq_model::Provenance::SharedBorrow => Mutability::Not,
-                regseq_model::Provenance::UniqueBorrow => Mutability::Mut,
-            };
+        Ty::Ref(dynamic_ty, _) => {
             expect_dynamic(model, *dynamic_ty)?;
-            Ok((*dynamic_ty, mutability, true))
+            Ok((*dynamic_ty, Mutability::Mut, true))
         }
-        Ty::Ptr(dynamic_ty, mutability) => {
+        Ty::Ptr(dynamic_ty, _) => {
             expect_dynamic(model, *dynamic_ty)?;
-            Ok((*dynamic_ty, *mutability, false))
+            Ok((*dynamic_ty, Mutability::Mut, false))
         }
         other => Err(BridgeError::Phase5(format!(
             "virtual call receiver must be ref or ptr to dyn Trait, got {other:?}"
@@ -736,6 +741,82 @@ mod tests {
         let err = rewrite_vtable_indirect_in_model(&mut model, &mut body).unwrap_err();
 
         assert!(format!("{err}").contains("VTableInstance"));
+    }
+
+    #[test]
+    fn erased_receiver_t_data_is_uniformly_mut_for_shared_borrow_source() {
+        // Per spec.md section 13.2 (lines 4607-4618), the rewrite's
+        // erased receiver is uniformly `Ty::Ptr(ErasedPointee,
+        // Mutability::Mut)` regardless of the source borrow flavor.
+        // `model_with_call` constructs a `&dyn Trait` receiver with
+        // `Provenance::SharedBorrow` (the flavor that previously
+        // produced `Mutability::Not` and tripped the B-6 per-arg
+        // type-match check at validation).
+        let (mut model, mut body, _callee) =
+            model_with_call(method_shim_kind(), FunctionInstanceFlavor::Virtual, Some(0));
+        let receiver_ty = body.local_decls[regseq_model::LocalId::from_u32(1)].ty;
+        assert!(
+            matches!(
+                model.types.resolve(receiver_ty),
+                Ty::Ref(_, regseq_model::Provenance::SharedBorrow)
+            ),
+            "fixture sanity: receiver must be a shared borrow"
+        );
+        let before = body.local_decls.len();
+
+        rewrite_vtable_indirect_in_model(&mut model, &mut body).unwrap();
+
+        // Locals pushed in order: recv, meta, func, data (= _t_data),
+        // raw. `_t_data` lives at index `before + 3`.
+        let t_data = regseq_model::LocalId::from_u32((before + 3) as u32);
+        let t_data_ty = body.local_decls[t_data].ty;
+        let unit_ty = model.types.intern(Ty::Tuple {
+            fields: Vec::new(),
+            layout: UNIT_LAYOUT,
+        });
+        let expected_data_ty = model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut));
+        assert_eq!(
+            t_data_ty, expected_data_ty,
+            "_t_data must be Ty::Ptr(unit, Mutability::Mut) regardless of source borrow flavor per spec.md section 13.2 lines 4607-4618"
+        );
+        match model.types.resolve(t_data_ty) {
+            Ty::Ptr(pointee, mutability) => {
+                assert_eq!(
+                    *mutability,
+                    Mutability::Mut,
+                    "_t_data mutability must be Mut"
+                );
+                assert!(
+                    matches!(model.types.resolve(*pointee), Ty::Tuple { fields, .. } if fields.is_empty()),
+                    "_t_data pointee must be unit per the erased-receiver rule"
+                );
+            }
+            other => panic!("_t_data ty must be Ty::Ptr, got {other:?}"),
+        }
+
+        let TerminatorKind::Call { args, .. } = &body.basic_blocks
+            [regseq_model::BlockId::START_BLOCK]
+            .terminator
+            .kind
+        else {
+            panic!("rewritten terminator must still be a Call");
+        };
+        let arg0 = args[0].clone();
+        match &arg0 {
+            Operand::Move(place) => {
+                assert_eq!(place.local, t_data, "args[0] must move _t_data");
+                assert!(
+                    place.projection.is_empty(),
+                    "args[0] place must be unprojected"
+                );
+            }
+            other => panic!("args[0] must be Operand::Move(Place::from(_t_data)), got {other:?}"),
+        }
+        let arg0_ty = super::operand_ty(&mut model, &body, &arg0).unwrap();
+        assert_eq!(
+            arg0_ty, expected_data_ty,
+            "operand_ty(args[0]) must be Ty::Ptr(unit, Mutability::Mut) to satisfy spec.md section 23.6.2 B-6"
+        );
     }
 
     #[test]

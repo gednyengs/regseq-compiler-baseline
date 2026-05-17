@@ -5,10 +5,10 @@ use std::collections::HashMap;
 use regseq_model::{
     args_key_for_generic_args_with_pending, render_def_path, synthetic_def_path_hash,
     synthetic_def_path_segments, ArgsKey, Const, ConstId, CrateId, DefPath, DefPathData,
-    DefPathHash, DefPathSegment, FieldLayout, FunctionInstanceFlavor, GenericArg, InlineHint,
-    Instance, InstanceKind, InstanceRef, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage,
-    Mutability, PrincipalTraitKey, ProjectionBindingsKey, Span, StableCrateId, SyntheticItemKind,
-    Ty, TyId, UintKind, UNIT_LAYOUT,
+    DefPathHash, DefPathSegment, FieldLayout, FnAbi, FnSigId, FunctionInstanceFlavor, GenericArg,
+    InlineHint, Instance, InstanceKind, InstanceRef, Item, ItemId, ItemKind, Layout, LayoutKind,
+    Linkage, Mutability, PrincipalTraitKey, ProjectionBindingsKey, Safety, Span, StableCrateId,
+    SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
 };
 use rustc_middle::ty::{self as rustc_ty};
 use rustc_span::def_id::DefId;
@@ -93,12 +93,14 @@ pub(crate) fn synthesise_vtable_with_rustc_entries<'tcx>(
             rustc_ty::VtblEntry::Method(instance) => {
                 let method_def_path = def_path_hash(cx.input.tcx, instance.def_id());
                 let method_name = cx.input.tcx.item_name(instance.def_id()).to_string();
+                let shim_fn_sig = compute_method_shim_fn_sig(cx, *instance)?;
                 method_entries.push((slot_idx, method_def_path));
                 slot_seeds.push(VTableSlot::Method {
                     handle: ItemHandle::from_u32(0),
                     method_def_path,
                     vtable_entry_index: slot_idx,
                     method_name,
+                    shim_fn_sig,
                 });
             }
             rustc_ty::VtblEntry::Vacant => {
@@ -146,6 +148,48 @@ pub(crate) fn synthesise_vtable_with_rustc_entries<'tcx>(
         needs_drop,
         Some(layout),
     )
+}
+
+/// Compute the per-method vtable-shim signature from a rustc method
+/// `Instance` per spec.md section 13.2 "Method shim and drop shim ABI
+/// is `FnAbi::C` uniformly... Their erased signatures are checked
+/// with CAbiPositionAdmissible (§14.5) after receiver erasure to
+/// `*mut ()`". Translates the source method's per-monomorphisation
+/// `PolyFnSig`, replaces the receiver (`inputs[0]`) with
+/// `Ty::Ptr(unit, Mutability::Mut)`, forces `abi = FnAbi::C` /
+/// `safety = Safety::Safe`, interns the resulting `FnSig`, and
+/// populates the `sig_c_abi_lowerings` side-table entry so spec.md
+/// section 3.3 step 5 stays satisfied. The vtable struct's per-method
+/// slot field type uses `Ty::FnPtr(shim_fn_sig)` so the post-rewrite
+/// Indirect Call preserves the source return type per spec.md section
+/// 23.6.2 B-3.
+fn compute_method_shim_fn_sig<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    instance: rustc_ty::Instance<'tcx>,
+) -> Result<FnSigId, BridgeError> {
+    let poly_sig = cx
+        .input
+        .tcx
+        .fn_sig(instance.def_id())
+        .instantiate(cx.input.tcx, instance.args);
+    let base_sig_id = crate::bridge::fnsig::translate_fn_sig(cx, poly_sig)?;
+    let unit_ty = cx.model.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    });
+    let unit_ptr = cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut));
+    let mut sig = cx.model.sigs.resolve(base_sig_id).clone();
+    if sig.inputs.is_empty() {
+        return Err(BridgeError::Phase5(
+            "method shim signature must have at least one input (receiver)".to_string(),
+        ));
+    }
+    sig.inputs[0] = unit_ptr;
+    sig.abi = FnAbi::C;
+    sig.safety = Safety::Safe;
+    let erased_sig_id = cx.model.sigs.intern(sig);
+    let _ = crate::bridge::fnsig::compute_cabi_lowering(cx, erased_sig_id);
+    Ok(erased_sig_id)
 }
 
 fn synthesise_vtable_inner(
@@ -283,6 +327,92 @@ pub(crate) fn push_vtable_instance_statics(
                 ty: vtable_struct_ty,
                 init: Some(init_const),
             },
+        });
+
+        // The Static's init aggregate above carries `Const::Reloc`
+        // entries that reference each method-shim Item and the
+        // drop-shim Item (when present) by `InstanceRef`. For the
+        // joint-validation walk's instance-closure check (spec.md
+        // section 23.6.2 B-7) to succeed, the bridge must materialise
+        // a corresponding Function Instance for every cited shim
+        // Item. Without this push, the relocation dangles because
+        // the only path that creates shim Instances today is a
+        // Direct Call from a source body -- but for trait-object
+        // dispatch the source body Calls the `Virtual` flavor, not
+        // the shim, so the shim Instance would otherwise never be
+        // created. Match the InstanceRef encoding in
+        // `build_vtable_init_aggregate`: `regseq_kind_rank: 0`
+        // (Function), `args_key: EMPTY` (empty `generic_args`),
+        // `fn_shim_disambig: VTableShim`.
+        push_vtable_shim_function_instances(cx, handles)?;
+    }
+    Ok(())
+}
+
+fn push_vtable_shim_function_instances(
+    cx: &mut BridgeCtxt<'_>,
+    handles: &VTableSynthHandles,
+) -> Result<(), BridgeError> {
+    use regseq_model::FunctionInstanceData;
+
+    for shim_handle in &handles.method_shims {
+        let shim_item = super::resolve_handle(cx, *shim_handle, "VTableMethodShim")?;
+        let shim_fn_sig = handles
+            .slots
+            .iter()
+            .find_map(|slot| match slot {
+                super::VTableSlot::Method {
+                    handle,
+                    shim_fn_sig,
+                    ..
+                } if *handle == *shim_handle => Some(*shim_fn_sig),
+                _ => None,
+            })
+            .ok_or_else(|| {
+                BridgeError::Phase5(format!(
+                    "VTableMethodShim handle {} has no matching VTableSlot::Method",
+                    shim_handle.as_u32()
+                ))
+            })?;
+        let emission_name = cx.model.items[shim_item].def_path.rendered;
+        cx.model.instances.push(Instance {
+            item: shim_item,
+            generic_args: Vec::new(),
+            emission_name,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: shim_fn_sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::VTableShim,
+                virtual_idx: None,
+            }),
+        });
+    }
+
+    if let Some(drop_handle) = handles.drop_shim {
+        let drop_item = super::resolve_handle(cx, drop_handle, "VTableDropShim")?;
+        // Drop shims have a fixed canonical-vacant erased signature
+        // (`extern "C" fn(*mut ()) -> ()`) per spec.md section 13.2
+        // "Method shim and drop shim ABI is FnAbi::C uniformly".
+        let drop_fn_sig_ty = canonical_vacant_fn_ptr_ty(cx);
+        let Ty::FnPtr(drop_fn_sig) = cx.model.types.resolve(drop_fn_sig_ty) else {
+            return Err(BridgeError::Phase5(
+                "canonical_vacant_fn_ptr_ty must return Ty::FnPtr".to_string(),
+            ));
+        };
+        let drop_fn_sig = *drop_fn_sig;
+        let emission_name = cx.model.items[drop_item].def_path.rendered;
+        cx.model.instances.push(Instance {
+            item: drop_item,
+            generic_args: Vec::new(),
+            emission_name,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: drop_fn_sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::VTableShim,
+                virtual_idx: None,
+            }),
         });
     }
     Ok(())
@@ -483,6 +613,7 @@ fn vtable_layout_for_slots(cx: &mut BridgeCtxt<'_>, slots: &[VTableSlot]) -> Lay
             VTableSlot::Method {
                 vtable_entry_index,
                 method_name,
+                shim_fn_sig,
                 ..
             } => {
                 let name = if method_name_seen.insert(method_name.clone()) {
@@ -490,7 +621,16 @@ fn vtable_layout_for_slots(cx: &mut BridgeCtxt<'_>, slots: &[VTableSlot]) -> Lay
                 } else {
                     format!("{method_name}#{vtable_entry_index}")
                 };
-                (name, canonical_vacant_fn_ptr)
+                // Per spec.md section 13.2 + section 23.6.2 B-3, the
+                // method slot field type is the per-method shim
+                // signature (receiver erased to `*mut ()`, return
+                // type preserved) so the post-rewrite Indirect Call
+                // satisfies "destination_ty == operand_ty(callee_
+                // operand).output()". Vacant slots below still use
+                // the canonical vacant FnPtr per spec.md section
+                // 13.2 "Vacant slot canonical type".
+                let shim_fn_ptr = cx.model.types.intern(Ty::FnPtr(*shim_fn_sig));
+                (name, shim_fn_ptr)
             }
             VTableSlot::Vacant => (format!("__vacant_{idx}"), canonical_vacant_fn_ptr),
             VTableSlot::TraitVPtr {
@@ -522,8 +662,12 @@ fn vtable_layout_for_slots(cx: &mut BridgeCtxt<'_>, slots: &[VTableSlot]) -> Lay
 }
 
 /// Intern the canonical vacant FnPtr signature
-/// `extern "C" fn(*mut ()) -> ()` per spec.md section 13.2.
-fn canonical_vacant_fn_ptr_ty(cx: &mut BridgeCtxt<'_>) -> TyId {
+/// `extern "C" fn(*mut ()) -> ()` per spec.md section 13.2. The
+/// interned FnSig has `FnAbi::C`, so spec.md section 3.3 step 5
+/// requires a matching `Some(CAbiLowering)` in the parallel
+/// `sig_c_abi_lowerings` side table; populate it via the canonical
+/// `bridge::fnsig::compute_cabi_lowering` helper.
+pub fn canonical_vacant_fn_ptr_ty(cx: &mut BridgeCtxt<'_>) -> TyId {
     use regseq_model::{FnAbi, FnSig, Safety};
     let unit_ty = cx.model.types.intern(Ty::Tuple {
         fields: Vec::new(),
@@ -538,6 +682,7 @@ fn canonical_vacant_fn_ptr_ty(cx: &mut BridgeCtxt<'_>) -> TyId {
         safety: Safety::Safe,
     };
     let sig_id = cx.model.sigs.intern(sig);
+    let _ = crate::bridge::fnsig::compute_cabi_lowering(cx, sig_id);
     cx.model.types.intern(Ty::FnPtr(sig_id))
 }
 

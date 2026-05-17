@@ -1,6 +1,6 @@
 //! Phase-2 synthesis entry points for bridge-only Items.
 
-use regseq_model::{DefPathHash, Layout, PrincipalTraitKey, TyId};
+use regseq_model::{DefPathHash, FnSigId, Layout, PrincipalTraitKey, TyId};
 
 use super::{BridgeCtxt, BridgeError, ItemHandle};
 
@@ -87,6 +87,18 @@ pub(crate) enum VTableSlot {
         vtable_entry_index: u32,
         /// Source method name for vtable struct field naming.
         method_name: String,
+        /// Per-method shim signature with the receiver erased to
+        /// `*mut ()` and `abi = FnAbi::C` per spec.md section 13.2
+        /// "Method shim and drop shim ABI is `FnAbi::C` uniformly...
+        /// Their erased signatures are checked with
+        /// CAbiPositionAdmissible (§14.5) after receiver erasure to
+        /// `*mut ()`". The vtable struct's per-method slot field
+        /// type is `Ty::FnPtr(shim_fn_sig)`; this preserves the
+        /// source return type, so spec.md section 23.6.2 B-3 ("Call
+        /// destination type matches callee return type;
+        /// rewrite preserves return type") holds for the
+        /// post-rewrite Indirect Call.
+        shim_fn_sig: FnSigId,
     },
     /// Vacant slot (non-dispatchable method).
     Vacant,
