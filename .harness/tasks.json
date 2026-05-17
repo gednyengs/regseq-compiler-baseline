@@ -3589,6 +3589,35 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-model-96",
+          "name": "Deterministic DomainAttrTables JSON serialization (HashMap -> BTreeMap)",
+          "spec": ".harness/tasks/regseq-model/96-deterministic-domain-attrs-json-serialization.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-95"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3"
+          ],
+          "spec_version": 2,
+          "history": [
+            {
+              "ts": "2026-05-17T23:05:12Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-17T23:08:13Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex round-1 amendments: name the existing domain_attrs_field_attrs_key_is_remapped test at model_tests.rs:1597-1619 (drop the conditional grep); add doc-comment update requirement at model.rs:1132-1135 (HashMap -> BTreeMap wording)"
+            }
+          ]
         }
       ]
     },
