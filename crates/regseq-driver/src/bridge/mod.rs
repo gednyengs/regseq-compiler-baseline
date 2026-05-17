@@ -1024,6 +1024,15 @@ fn construct_instances_and_resolve_cross_references(
     // call sites (different `(item, args, flavor)` triples) extends
     // the map during terminator translation.
     construct_function_instances(ctxt)?;
+    // Per regseq-driver-51 (spec.md:4531-4546 + 778-781): bridge-
+    // synthesised ClosureCall Function Items have no rustc DefId, so
+    // `construct_function_instances` (`mod.rs:1114-1121`) skips them.
+    // This parallel walk constructs one `Function` `Instance` per
+    // synthesised ClosureCall Item BEFORE `run_phase5_body_passes` so
+    // the Phase-5 materialiser at `body/materialise.rs:303-338` can
+    // fill in `body` via the existing closure-body resolution at
+    // `body/materialise.rs:87-100`.
+    construct_closure_call_instances(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     // Body materialisation calls `translate_const`, which can synthesise
     // late `ConstMemoryStatic` pending items for reference-typed const
@@ -1173,6 +1182,309 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             .insert((item_id, args_key, flavor), instance_id);
     }
     Ok(())
+}
+
+/// Per regseq-driver-51: bridge-side eager construction of the
+/// closure family's `model.instances` entries. Runs AFTER Phase-4
+/// ItemId assignment (because `Instance.item: ItemId` requires final
+/// IDs, per `regseq-model/src/instance.rs:134-144`) and BEFORE
+/// `run_phase5_body_passes` so the materialiser loop at
+/// `bridge/body/materialise.rs:303-338` can fill in `body` via the
+/// closure-body resolution at `bridge/body/materialise.rs:87-100`.
+///
+/// Two Instance shapes per discovered closure:
+///
+/// - One `InstanceKind::Function` per synthesised
+///   `SyntheticItemKind::ClosureCall { closure, call_kind }` Item.
+///   `fn_sig` carries the substituted signature derived from the
+///   closure's `closure_sig_as_fn_ptr_ty`, with a per-
+///   `ClosureCallKind` receiver shape per spec.md:4542-4546:
+///   - `Call`     -> `Ref(captures_struct, SharedBorrow)` (`&Captures`).
+///   - `CallMut`  -> `Ref(captures_struct, UniqueBorrow)` (`&mut Captures`).
+///   - `CallOnce` -> `captures_struct` by value (no `Ref`).
+///
+/// - One `InstanceKind::Struct { layout }` per
+///   `SyntheticItemKind::ClosureCaptures { closure }` Item, where
+///   `layout` is the parallel `Ty::Struct(captures_item, args, layout)`
+///   TyId per stage-3 D6.3. This satisfies the spec.md:778-781
+///   `body.is_some()` / `init.is_some()` invariant for non-Foreign
+///   Items at the Instance side and is required by the
+///   `pretty-printer.md` §10.2.4 ADT-definition rendering rule the
+///   `regseq-model-95` snapshot exercises.
+///
+/// Instance-level idempotency uses the
+/// `(ItemId, ArgsKey, FunctionInstanceFlavor)` lookup pattern shared
+/// with `bridge/body/terminator.rs::lookup_or_create_direct_instance`
+/// (lines 513-534) for the Function arm and a per-captures
+/// "first-seen" guard for the Struct arm (the closure's captures Item
+/// is unique per closure DefPathHash via the existing
+/// `synth/closure.rs::closure_synth_cache` dedup). The lazy
+/// closure-call path at `terminator.rs:303` keys on the same
+/// translated closure args, so post-Phase-4 the eager and lazy paths
+/// converge on one Instance per ClosureCall Item.
+fn construct_closure_call_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    use regseq_model::{
+        ClosureCallKind, FnAbi, FnSig, FunctionInstanceData, Instance, InstanceKind, Provenance,
+        Safety, SyntheticItemKind, Ty,
+    };
+
+    // Snapshot every closure-family synthetic Item before iterating;
+    // the loop body interns new `TyId`s, `FnSigId`s, and `Instance`
+    // rows, any of which would invalidate a live borrow of
+    // `model.item_synthetic_kinds`.
+    #[derive(Clone)]
+    enum ClosureArm {
+        Captures(ItemId, DefPathHash),
+        Call(ItemId, DefPathHash, ClosureCallKind),
+    }
+    let closure_arms: Vec<ClosureArm> = ctxt
+        .model
+        .item_synthetic_kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, kind)| {
+            let item_id = ItemId::from_u32(idx as u32);
+            match kind {
+                SyntheticItemKind::ClosureCaptures { closure } => {
+                    Some(ClosureArm::Captures(item_id, *closure))
+                }
+                SyntheticItemKind::ClosureCall { closure, call_kind } => {
+                    Some(ClosureArm::Call(item_id, *closure, *call_kind))
+                }
+                _ => None,
+            }
+        })
+        .collect();
+
+    // Per-closure shared scratch: rustc def_id, model TyId for the
+    // closure (Ty::Closure view), translated identity args, captures
+    // struct TyId. Built once per closure on first arm encountered.
+    let mut closure_cache: std::collections::HashMap<
+        DefPathHash,
+        Option<(
+            rustc_span::def_id::DefId,
+            regseq_model::TyId,
+            GenericArg,
+            TyId,
+        )>,
+    > = std::collections::HashMap::new();
+    // Track captures Items already populated with a Struct Instance so
+    // a second arm referencing the same closure does not push a
+    // duplicate (the captures Item is unique per closure, but this
+    // guard remains correct under any future fixture that re-enters
+    // the helper).
+    let mut captures_instance_pushed: std::collections::HashSet<ItemId> =
+        std::collections::HashSet::new();
+
+    for arm in closure_arms {
+        let closure_hash = match &arm {
+            ClosureArm::Captures(_, hash) => *hash,
+            ClosureArm::Call(_, hash, _) => *hash,
+        };
+
+        // Resolve / cache the per-closure scratch state on first hit.
+        // The cache distinguishes "tried and failed to resolve" (None
+        // entry, encoded by a sentinel below) from "not yet tried";
+        // a None-entry caller falls through with `continue`.
+        let resolved = if let Some(slot) = closure_cache.get(&closure_hash) {
+            slot.clone()
+        } else {
+            let resolved = resolve_closure_scratch(ctxt, closure_hash)?;
+            closure_cache.insert(closure_hash, resolved.clone());
+            resolved
+        };
+        let Some((_closure_def_id, closure_ty_id, closure_model_args_arg, captures_struct_ty_id)) =
+            resolved
+        else {
+            continue;
+        };
+        // `closure_model_args_arg` is encoded as a single
+        // `GenericArg::Type(_)` slot so the cache can stay `Copy`-able.
+        // Real Instance keying / construction below uses the full
+        // translated args vec recovered from the `Ty::Closure` view
+        // (a `Clone`).
+        let closure_model_args = match ctxt.model.types.resolve(closure_ty_id) {
+            Ty::Closure(_, args) => args.clone(),
+            _ => continue,
+        };
+        let _ = closure_model_args_arg;
+
+        match arm {
+            ClosureArm::Captures(item_id, _) => {
+                if !captures_instance_pushed.insert(item_id) {
+                    continue;
+                }
+                // Pretty-printer §10.2.4 dispatches on
+                // `InstanceKind::Struct { layout }` whose `layout`
+                // TyId resolves to a `Ty::Struct { item, args, layout }`
+                // entry. `closure_captures_struct_ty` already maps the
+                // closure's `Ty::Closure` view to that parallel
+                // `Ty::Struct` view per stage-3 D6.3.
+                let emission_name = ctxt.model.items[item_id].def_path.rendered;
+                let span = ctxt.model.items[item_id].span;
+                ctxt.model.instances.push(Instance {
+                    item: item_id,
+                    generic_args: closure_model_args.clone(),
+                    emission_name,
+                    span,
+                    kind: InstanceKind::Struct {
+                        layout: captures_struct_ty_id,
+                    },
+                });
+            }
+            ClosureArm::Call(item_id, _, call_kind) => {
+                // Resolve the closure's rustc `DefId` so we can pull
+                // the closure's `ClosureArgs` and rebuild the call
+                // signature. The cached `_closure_def_id` is already
+                // bound; re-grab it via the closure type for clarity.
+                let closure_rustc_ty = *ctxt
+                    .ty_forward_cache
+                    .get(&closure_ty_id)
+                    .expect("Ty::Closure forward-cache entry exists after translate_ty");
+                let TyKind::Closure(_, closure_generic_args) = closure_rustc_ty.kind() else {
+                    continue;
+                };
+                let closure_args = closure_generic_args.as_closure();
+
+                // Per spec.md:4542-4546 receiver shape per `ClosureCallKind`.
+                let receiver_ty = match call_kind {
+                    ClosureCallKind::Call => ctxt
+                        .model
+                        .types
+                        .intern(Ty::Ref(captures_struct_ty_id, Provenance::SharedBorrow)),
+                    ClosureCallKind::CallMut => ctxt
+                        .model
+                        .types
+                        .intern(Ty::Ref(captures_struct_ty_id, Provenance::UniqueBorrow)),
+                    ClosureCallKind::CallOnce => captures_struct_ty_id,
+                };
+
+                // Untuple `closure_sig_as_fn_ptr_ty.inputs[0]` (the
+                // tupled argument struct) into flat positional inputs
+                // per spec.md:4531-4541 and the existing untupling
+                // pattern at `bridge/body/terminator.rs:219-249`.
+                let closure_fn_sig = closure_args.sig().skip_binder();
+                let tupled_input_rustc =
+                    ty::erase_regions_or_reject(ctxt.input.tcx, closure_fn_sig.inputs()[0])?;
+                let output_rustc =
+                    ty::erase_regions_or_reject(ctxt.input.tcx, closure_fn_sig.output())?;
+                let TyKind::Tuple(tuple_fields) = tupled_input_rustc.kind() else {
+                    continue;
+                };
+                let mut inputs = Vec::with_capacity(1 + tuple_fields.len());
+                inputs.push(receiver_ty);
+                for field_ty in tuple_fields.iter() {
+                    inputs.push(ty::translate_ty(ctxt, field_ty)?);
+                }
+                let output = ty::translate_ty(ctxt, output_rustc)?;
+
+                // Closure-call FnSigs are `FnAbi::Rust` per
+                // spec.md:4561-4566 (the synth rewrite normalises away
+                // `RustCall`); the C-ABI lowering side table receives a
+                // `None` entry to stay dense per spec.md section 3.3
+                // step 5.
+                let fn_sig_id = ctxt.model.sigs.intern(FnSig {
+                    inputs,
+                    output,
+                    abi: FnAbi::Rust,
+                    c_variadic: false,
+                    safety: Safety::Safe,
+                });
+                while ctxt.model.sig_c_abi_lowerings.len() < ctxt.model.sigs.len() {
+                    ctxt.model.sig_c_abi_lowerings.push(None);
+                }
+
+                // Instance-level idempotency per the
+                // `(ItemId, ArgsKey, FunctionInstanceFlavor)` lookup at
+                // `bridge/body/terminator.rs:513-534`. The Instance's
+                // `generic_args` are the closure's translated identity
+                // args so `bridge/body/materialise.rs::translate_model_generic_args`
+                // can rebuild the rustc closure args for the body-fetch.
+                let flavor = FunctionInstanceFlavor::Item;
+                let generic_args: regseq_model::GenericArgs = closure_model_args.clone();
+                let pending = ctxt.pending_def_path_hashes();
+                let args_key =
+                    args_key_for_generic_args_with_pending(&ctxt.model, &generic_args, &pending);
+                let key = (item_id, args_key, flavor);
+                if ctxt.function_instance_for_item.contains_key(&key) {
+                    continue;
+                }
+
+                let emission_name = ctxt.model.items[item_id].def_path.rendered;
+                let span = ctxt.model.items[item_id].span;
+                let instance_id = ctxt.model.instances.push(Instance {
+                    item: item_id,
+                    generic_args,
+                    emission_name,
+                    span,
+                    kind: InstanceKind::Function(FunctionInstanceData {
+                        fn_sig: fn_sig_id,
+                        body: None,
+                        flavor,
+                        virtual_idx: None,
+                    }),
+                });
+                ctxt.function_instance_for_item.insert(key, instance_id);
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Resolve per-closure scratch shared across the captures-Item and
+/// call-Item passes of `construct_closure_call_instances`. Returns
+/// `Ok(None)` when the closure DefPathHash does not resolve to a
+/// rustc local DefId (cross-crate closures, currently out of scope)
+/// or when type translation produces an unexpected shape; the caller
+/// skips the arm in that case.
+fn resolve_closure_scratch(
+    ctxt: &mut BridgeCtxt<'_>,
+    closure_hash: DefPathHash,
+) -> Result<Option<(rustc_span::def_id::DefId, TyId, GenericArg, TyId)>, BridgeError> {
+    use regseq_model::Ty;
+
+    let Some(closure_local_def_id) = ctxt.input.tcx.hir_body_owners().find(|local_def_id| {
+        let actual = ctxt.input.tcx.def_path_hash(local_def_id.to_def_id());
+        actual.stable_crate_id().as_u64() == closure_hash.stable_crate_id.0
+            && actual.local_hash().as_u64() == closure_hash.local_hash
+    }) else {
+        return Ok(None);
+    };
+    let closure_def_id = closure_local_def_id.to_def_id();
+    let closure_rustc_ty = ctxt
+        .input
+        .tcx
+        .type_of(closure_def_id)
+        .instantiate_identity();
+    if !matches!(closure_rustc_ty.kind(), TyKind::Closure(..)) {
+        return Ok(None);
+    }
+    let closure_ty_id = ty::translate_ty(ctxt, closure_rustc_ty)?;
+    let captures_struct_ty_id = match ctxt
+        .model
+        .closure_captures_struct_ty
+        .get(&closure_ty_id)
+        .copied()
+    {
+        Some(ty_id) => ty_id,
+        None => return Ok(None),
+    };
+    // Confirm the Ty::Closure view is reachable; the explicit resolve
+    // here is also a structural sanity check before the caller pushes
+    // an Instance keyed off `closure_ty_id`.
+    if !matches!(ctxt.model.types.resolve(closure_ty_id), Ty::Closure(..)) {
+        return Ok(None);
+    }
+    // Sentinel `GenericArg` payload kept solely so the cache value
+    // stays `Clone` without re-cloning the (potentially large)
+    // closure args slice on every cache hit. The caller recovers the
+    // real args from the `Ty::Closure` interner entry.
+    Ok(Some((
+        closure_def_id,
+        closure_ty_id,
+        GenericArg::Type(closure_ty_id),
+        captures_struct_ty_id,
+    )))
 }
 
 /// Map a `rustc_middle::ty::InstanceKind` to the closed

@@ -1390,7 +1390,7 @@
           "id": "regseq-driver-51",
           "name": "Eager closure-call Function Instance synthesis (bridge gap surfaced by regseq-model-95)",
           "spec": ".harness/tasks/regseq-driver/51-eager-closure-call-instance-synthesis.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-40",
             "regseq-model-95"

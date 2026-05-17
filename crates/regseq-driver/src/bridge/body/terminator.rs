@@ -300,10 +300,23 @@ fn rewrite_closure_call_shim<'tcx>(
         fields: Vec::new(),
         layout: UNIT_LAYOUT,
     });
+    // Per regseq-driver-51, recover the closure's translated identity
+    // args from the `Ty::Closure(captures_item, args)` interner entry
+    // so this lazy-allocation `(ItemId, ArgsKey, FunctionInstanceFlavor)`
+    // key matches the eager Instance constructed by
+    // `bridge::construct_closure_call_instances`. With matching keys,
+    // the `function_instance_for_item` lookup at
+    // `lookup_or_create_direct_instance` (lines 513-518) returns the
+    // eager Instance instead of creating a duplicate.
+    let closure_model_ty = translate_ty(cx, receiver_ty)?;
+    let closure_model_args = match cx.model.types.resolve(closure_model_ty) {
+        Ty::Closure(_, args) => args.clone(),
+        _ => Vec::new(),
+    };
     let instance_id = lookup_or_create_direct_instance(
         cx,
         call_item,
-        Vec::new(),
+        closure_model_args,
         FunctionInstanceFlavor::Item,
         None,
         move |cx| {

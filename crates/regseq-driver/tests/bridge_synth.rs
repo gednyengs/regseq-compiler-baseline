@@ -880,3 +880,406 @@ fn canonical_vacant_fn_ptr_ty_populates_c_abi_lowering_side_table() {
         },
     );
 }
+
+// =========================================================
+// regseq-driver-51: eager ClosureCall Function Instance synthesis
+// =========================================================
+//
+// The closure source fixture mirrors `crates/test-ir-fixtures/fixtures/
+// closure.rs`: a zero-capture `|x: u32| x + 1` reified into a local and
+// passed to `core::mem::drop` so the closure type is forced through the
+// bridge without exercising any `Fn::call` projection (which the bridge
+// rejects at `crates/regseq-driver/src/bridge/ty.rs:278`).
+//
+// Tests cover Test Plan A1 / B2 / B2b / B2c / C3 / C4 / D5 / D6 / D7
+// / D'.7b / D'.7c at .harness/tasks/regseq-driver/51-eager-closure-call-
+// instance-synthesis.md:343-429.
+const REGSEQ_DRIVER_51_CLOSURE_SOURCE: &str = r#"
+#[allow(dropping_copy_types)]
+pub fn make_inc() {
+    let f = |x: u32| x + 1;
+    core::mem::drop(f);
+}
+"#;
+
+/// Collect every `(InstanceId, ClosureCallKind, ClosureCall ItemId)`
+/// triple from the bridge output for the closure fixture, in the order
+/// they appear in `model.instances` post-Phase-5 F4-2 sort. Returned
+/// triples drive the per-arm assertions in Test Plan B / C / D below.
+fn closure_call_instances(
+    model: &regseq_model::RegseqModel,
+) -> Vec<(
+    regseq_model::InstanceId,
+    regseq_model::ClosureCallKind,
+    ItemId,
+)> {
+    model
+        .instances
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, instance)| {
+            let item_id = instance.item;
+            if item_id.index() >= model.item_synthetic_kinds.len() {
+                return None;
+            }
+            match &model.item_synthetic_kinds[item_id] {
+                SyntheticItemKind::ClosureCall { call_kind, .. } => Some((
+                    regseq_model::InstanceId::from_u32(idx as u32),
+                    *call_kind,
+                    item_id,
+                )),
+                _ => None,
+            }
+        })
+        .collect()
+}
+
+#[test]
+fn closure_call_function_instances_constructed_eagerly_one_per_arm() {
+    // Test Plan A1 + D'.7c: every `SyntheticItemKind::ClosureCall`
+    // Item has exactly one corresponding `InstanceKind::Function`
+    // entry in `model.instances` post-bridge.
+    let model = compile_model("regseq_driver_51_a1", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let call_items: Vec<ItemId> = model
+        .item_synthetic_kinds
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, kind)| match kind {
+            SyntheticItemKind::ClosureCall { .. } => Some(ItemId::from_u32(idx as u32)),
+            _ => None,
+        })
+        .collect();
+    assert!(
+        !call_items.is_empty(),
+        "fixture must synthesise at least one ClosureCall Item",
+    );
+
+    for item in &call_items {
+        let function_instance_count = model
+            .instances
+            .iter()
+            .filter(|instance| {
+                instance.item == *item && matches!(instance.kind, InstanceKind::Function(_))
+            })
+            .count();
+        assert_eq!(
+            function_instance_count,
+            1,
+            "ClosureCall Item {} must have exactly one Function Instance (Test Plan A1 + D'.7c)",
+            item.as_u32(),
+        );
+    }
+}
+
+#[test]
+fn closure_call_instance_kinds_are_function_with_body() {
+    // Test Plan A1 (kind) + D5: each ClosureCall Instance is
+    // `InstanceKind::Function` and its body is `Some(Body)` per
+    // spec.md:778-781.
+    let model = compile_model("regseq_driver_51_d5", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    assert!(
+        !arms.is_empty(),
+        "fixture must yield at least one ClosureCall Function Instance",
+    );
+
+    for (instance_id, _, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            panic!(
+                "ClosureCall Instance {} must be InstanceKind::Function; got {:?}",
+                instance_id.as_u32(),
+                instance.kind
+            );
+        };
+        assert!(
+            data.body.is_some(),
+            "ClosureCall Instance {} body must be Some per spec.md:778-781",
+            instance_id.as_u32(),
+        );
+    }
+}
+
+#[test]
+fn closure_call_fn_sig_receiver_shapes_per_kind() {
+    // Test Plan B2: per-`ClosureCallKind` `inputs[0]` shape per
+    // spec.md:4542-4546:
+    //   Call     -> Ref(captures_struct, SharedBorrow)
+    //   CallMut  -> Ref(captures_struct, UniqueBorrow)
+    //   CallOnce -> captures_struct (by value)
+    let model = compile_model("regseq_driver_51_b2", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    // Recover the captures struct TyId via the
+    // `closure_captures_struct_ty` side table; the fixture has a
+    // single closure so a single entry exists.
+    let captures_struct_ty = model
+        .closure_captures_struct_ty
+        .values()
+        .next()
+        .copied()
+        .expect("closure_captures_struct_ty must carry the single fixture closure");
+    let captures_item_id = match model.types.resolve(captures_struct_ty) {
+        Ty::Struct { item, .. } => *item,
+        other => panic!("expected Ty::Struct for captures view; got {:?}", other),
+    };
+
+    for (instance_id, call_kind, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            unreachable!()
+        };
+        let sig = model.sigs.resolve(data.fn_sig);
+        let input0 = model.types.resolve(sig.inputs[0]);
+        match call_kind {
+            regseq_model::ClosureCallKind::Call => match input0 {
+                Ty::Ref(pointee, regseq_model::Provenance::SharedBorrow) => {
+                    let pointee_ty = model.types.resolve(*pointee);
+                    let Ty::Struct { item, .. } = pointee_ty else {
+                        panic!(
+                            "Call receiver pointee must be Ty::Struct; got {:?}",
+                            pointee_ty
+                        );
+                    };
+                    assert_eq!(
+                        *item, captures_item_id,
+                        "Call receiver Ty::Ref pointee must resolve to the closure captures Item",
+                    );
+                }
+                other => panic!(
+                    "Call receiver must be Ref(_, SharedBorrow); got {:?}",
+                    other
+                ),
+            },
+            regseq_model::ClosureCallKind::CallMut => match input0 {
+                Ty::Ref(pointee, regseq_model::Provenance::UniqueBorrow) => {
+                    let pointee_ty = model.types.resolve(*pointee);
+                    let Ty::Struct { item, .. } = pointee_ty else {
+                        panic!(
+                            "CallMut receiver pointee must be Ty::Struct; got {:?}",
+                            pointee_ty
+                        );
+                    };
+                    assert_eq!(
+                        *item, captures_item_id,
+                        "CallMut receiver Ty::Ref pointee must resolve to the closure captures Item",
+                    );
+                }
+                other => panic!(
+                    "CallMut receiver must be Ref(_, UniqueBorrow); got {:?}",
+                    other
+                ),
+            },
+            regseq_model::ClosureCallKind::CallOnce => match input0 {
+                Ty::Struct { item, .. } => {
+                    assert_eq!(
+                        *item, captures_item_id,
+                        "CallOnce receiver must be the by-value captures struct Item",
+                    );
+                }
+                other => panic!(
+                    "CallOnce receiver must be Ty::Struct by value; got {:?}",
+                    other
+                ),
+            },
+        }
+    }
+}
+
+#[test]
+fn closure_call_fn_sig_inputs_after_receiver_match_closure_args() {
+    // Test Plan B2b: `FnSig.inputs[1..]` must be the closure's
+    // untupled argument types per `closure_sig_as_fn_ptr_ty.inputs[0]`.
+    // For `|x: u32| x + 1` the untupled args slice is `[Ty::Uint(U32)]`.
+    let model = compile_model("regseq_driver_51_b2b", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    for (instance_id, _, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            unreachable!()
+        };
+        let sig = model.sigs.resolve(data.fn_sig);
+        assert_eq!(
+            sig.inputs.len(),
+            2,
+            "ClosureCall FnSig for `|x| x + 1` must have 2 inputs (receiver + x); got {}",
+            sig.inputs.len()
+        );
+        assert!(
+            matches!(
+                model.types.resolve(sig.inputs[1]),
+                Ty::Uint(regseq_model::UintKind::U32)
+            ),
+            "ClosureCall FnSig inputs[1] must be u32 for `|x: u32| ...`; got {:?}",
+            model.types.resolve(sig.inputs[1]),
+        );
+    }
+}
+
+#[test]
+fn closure_call_fn_sig_output_matches_closure_return_type() {
+    // Test Plan B2c: `FnSig.output` is the closure's return type. For
+    // `|x: u32| x + 1` the output is `u32`.
+    let model = compile_model("regseq_driver_51_b2c", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    for (instance_id, _, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            unreachable!()
+        };
+        let sig = model.sigs.resolve(data.fn_sig);
+        assert!(
+            matches!(
+                model.types.resolve(sig.output),
+                Ty::Uint(regseq_model::UintKind::U32)
+            ),
+            "ClosureCall FnSig.output must be u32; got {:?}",
+            model.types.resolve(sig.output),
+        );
+    }
+}
+
+#[test]
+fn closure_call_fn_sig_invariants_rust_abi_safe_non_variadic() {
+    // Test Plan C3: every ClosureCall FnSig has FnAbi::Rust,
+    // c_variadic=false, safety=Safe per spec.md:4561-4566.
+    let model = compile_model("regseq_driver_51_c3", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    for (instance_id, _, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            unreachable!()
+        };
+        let sig = model.sigs.resolve(data.fn_sig);
+        assert_eq!(
+            sig.abi,
+            FnAbi::Rust,
+            "ClosureCall FnSig.abi must be FnAbi::Rust",
+        );
+        assert!(
+            !sig.c_variadic,
+            "ClosureCall FnSig.c_variadic must be false",
+        );
+        assert!(
+            matches!(sig.safety, regseq_model::Safety::Safe),
+            "ClosureCall FnSig.safety must be Safe",
+        );
+    }
+}
+
+#[test]
+fn closure_call_sig_c_abi_lowering_side_table_is_none() {
+    // Test Plan C4: `sig_c_abi_lowerings` slot for each ClosureCall
+    // FnSig is `None` (FnAbi::Rust carries None lowering per
+    // spec.md section 3.3 step 5).
+    let model = compile_model("regseq_driver_51_c4", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    for (instance_id, _, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            unreachable!()
+        };
+        assert!(
+            data.fn_sig.index() < model.sig_c_abi_lowerings.len(),
+            "sig_c_abi_lowerings must have a slot per interned FnSig",
+        );
+        let slot = &model.sig_c_abi_lowerings[data.fn_sig];
+        assert!(
+            slot.is_none(),
+            "FnAbi::Rust ClosureCall FnSig {} must carry None lowering; got {:?}",
+            data.fn_sig.as_u32(),
+            slot,
+        );
+    }
+}
+
+#[test]
+fn closure_call_body_basic_blocks_non_empty_and_return_local_matches_output() {
+    // Test Plan D6 + D7: materialised body has at least one
+    // BasicBlock and the return-place LocalDecl (LocalId::ZERO)
+    // carries the FnSig's output type.
+    let model = compile_model("regseq_driver_51_d6_d7", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let arms = closure_call_instances(&model);
+    for (instance_id, _, _) in &arms {
+        let instance = &model.instances[*instance_id];
+        let InstanceKind::Function(data) = &instance.kind else {
+            unreachable!()
+        };
+        let body = data
+            .body
+            .as_ref()
+            .expect("ClosureCall body must be Some post-Phase-5");
+        assert!(
+            !body.basic_blocks.is_empty(),
+            "ClosureCall body must have >= 1 basic block (Test Plan D6); got {}",
+            body.basic_blocks.len(),
+        );
+        let sig = model.sigs.resolve(data.fn_sig);
+        let return_local = &body.local_decls[regseq_model::LocalId::ZERO];
+        assert_eq!(
+            return_local.ty, sig.output,
+            "ClosureCall body return-place LocalDecl[0].ty must equal FnSig.output (Test Plan D7)",
+        );
+    }
+}
+
+#[test]
+fn closure_call_instances_are_idempotent_across_rebuilds() {
+    // Test Plan D'.7b: rebuild the bridge for the same closure
+    // fixture a second time and assert each ClosureCall Item carries
+    // exactly one Function Instance after the rerun, with stable
+    // `(ItemId, args_key, FunctionInstanceFlavor)` keys. We
+    // approximate the rerun by re-running the full bridge a second
+    // time and re-checking the count; the
+    // `function_instance_for_item` guard inside
+    // `construct_closure_call_instances` would otherwise allow a
+    // duplicate per rerun.
+    let model_first = compile_model("regseq_driver_51_d7b_a", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+    let model_second = compile_model("regseq_driver_51_d7b_b", REGSEQ_DRIVER_51_CLOSURE_SOURCE);
+
+    let count_arms =
+        |model: &regseq_model::RegseqModel| -> usize { closure_call_instances(model).len() };
+    let count_first = count_arms(&model_first);
+    let count_second = count_arms(&model_second);
+    assert!(
+        count_first >= 1,
+        "first rebuild must yield at least one ClosureCall Function Instance",
+    );
+    assert_eq!(
+        count_first, count_second,
+        "rerun-with-same-fixture must yield the same ClosureCall Instance count (Test Plan D'.7b)",
+    );
+
+    // For each ClosureCall Item present in both models, verify
+    // exactly one Function Instance per Item. The
+    // `(ItemId, args_key, flavor)` guard at
+    // `bridge/body/terminator.rs:513-534` is the load-bearing
+    // mechanism.
+    for model in [&model_first, &model_second] {
+        for (idx, kind) in model.item_synthetic_kinds.iter().enumerate() {
+            if !matches!(kind, SyntheticItemKind::ClosureCall { .. }) {
+                continue;
+            }
+            let item = ItemId::from_u32(idx as u32);
+            let count = model
+                .instances
+                .iter()
+                .filter(|inst| inst.item == item && matches!(inst.kind, InstanceKind::Function(_)))
+                .count();
+            assert_eq!(
+                count,
+                1,
+                "ClosureCall Item {} must carry exactly one Function Instance per rebuild",
+                item.as_u32(),
+            );
+        }
+    }
+    let _ = ArgsKey::EMPTY;
+}
