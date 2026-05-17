@@ -1,8 +1,8 @@
 //! Closure-family bridge item synthesis.
 
 use regseq_model::{
-    ClosureCallKind, CrateId, CrateInfo, DefPath, DefPathHash, DefPathSegment, InlineHint, Item,
-    ItemKind, Linkage, Span, StableCrateId, SyntheticItemKind,
+    render_def_path, ClosureCallKind, CrateId, CrateInfo, DefPath, DefPathHash, DefPathSegment,
+    InlineHint, Item, ItemKind, Linkage, Span, StableCrateId, SyntheticItemKind,
 };
 use rustc_span::def_id::DefId;
 
@@ -169,10 +169,8 @@ fn push_closure_captures_item(
 
 fn source_item(cx: &mut BridgeCtxt<'_>, def_id: DefId, kind: ItemKind) -> Item {
     let crate_id = crate_id(cx, def_id);
-    let rendered = cx.input.tcx.def_path_str(def_id);
-    let rendered_id = cx.model.strings.intern(&rendered);
     let rustc_def_path = cx.input.tcx.def_path(def_id);
-    let segments = rustc_def_path
+    let segments: Vec<DefPathSegment> = rustc_def_path
         .data
         .iter()
         .map(|segment| DefPathSegment {
@@ -180,6 +178,23 @@ fn source_item(cx: &mut BridgeCtxt<'_>, def_id: DefId, kind: ItemKind) -> Item {
             disambiguator: segment.disambiguator,
         })
         .collect();
+    // The rendered form MUST come from `render_def_path` so it matches
+    // the validator's canonical re-rendering at validate_items (the
+    // same pattern used by synth/vtable.rs:597-605 for synthetic
+    // Items). `tcx.def_path_str` drops the crate prefix and trips
+    // `DefPathRenderMismatch` for source-derived discriminator Items
+    // like `ClosureCaptures` (whose def_path is rustc's verbatim per
+    // spec.md:5200-5203's invariant-2 carve-out).
+    let rendered = render_def_path(
+        &DefPath {
+            crate_id,
+            segments: segments.clone(),
+            rendered: regseq_model::StringId::ZERO,
+        },
+        &cx.model.crates,
+        &cx.model.strings,
+    );
+    let rendered_id = cx.model.strings.intern(&rendered);
     Item {
         def_path: DefPath {
             crate_id,
