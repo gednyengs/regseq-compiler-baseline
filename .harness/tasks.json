@@ -3482,7 +3482,7 @@
           "id": "regseq-model-95",
           "name": "P1a-E2E-03: Synthesis end-to-end fixture (vtable + closure)",
           "spec": ".harness/tasks/regseq-model/95-e2e-synthesis-vtable-and-closure.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "test-ir-fixtures-01",
             "regseq-driver-40",

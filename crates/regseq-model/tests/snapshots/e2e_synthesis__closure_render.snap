@@ -1,0 +1,18 @@
+---
+source: crates/regseq-model/tests/e2e_synthesis.rs
+expression: render_default(&model)
+---
+fn closure::make_inc() -> () {
+    let mut _0: ();
+    let _1: ();
+
+    bb0: {
+        _1 = core::mem::drop<closure::make_inc::{closure#0}<i8, fn(u32) -> u32, ()>>(closure::make_inc::{closure#0}::<i8, fn(u32) -> u32, ()>) -> [return: bb1];
+    }
+
+    bb1: {
+        return -> [];
+    }
+}
+
+fn core::mem::drop(_1: closure::make_inc::{closure#0}<i8, fn(u32) -> u32, ()>) -> ();

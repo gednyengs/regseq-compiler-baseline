@@ -153,6 +153,16 @@ fn compile_and_bridge(name: &str, src: &Path) -> RegseqModel {
             .to_str()
             .expect("temporary out_dir path is not valid UTF-8")
             .to_string(),
+        // Phase-1a body materialisation expects panic=abort cleanup-
+        // block pruning per `bridge/body/mod.rs`. Without this flag
+        // fixtures that emit MIR Drop / closure-call cleanup blocks
+        // (anything past trivial signatures) retain unwind successors
+        // that trip the body translator's panic=abort assertion.
+        // Mirrors the production `RegseqCallbacks` shape consumed by
+        // `cargo-regseq` and the in-tree `bridge_synth` / vtable
+        // end-to-end harnesses.
+        "-C".to_string(),
+        "panic=abort".to_string(),
     ];
 
     let result: Arc<Mutex<Option<Result<RegseqModel, String>>>> = Arc::new(Mutex::new(None));
