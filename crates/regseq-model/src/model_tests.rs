@@ -974,9 +974,9 @@ fn model_json_top_level_shape_has_named_fields() {
 }
 
 #[test]
-fn invariant_registry_has_twenty_non_empty_descriptors() {
+fn invariant_registry_has_full_non_empty_descriptors() {
     let ids = all_invariant_ids();
-    assert_eq!(ids.len(), 20);
+    assert_eq!(ids.len(), 23);
     for id in ids {
         assert!(!crate::invariant_descriptor(id).is_empty());
     }
@@ -1006,12 +1006,15 @@ fn invariant_registry_match_is_closed() {
             InvariantId::ItemDefPathGlobalUniqueness => 18,
             InvariantId::OpaqueHandleEligibilityConsistency => 19,
             InvariantId::StableCrateIdZeroReserved => 20,
+            InvariantId::DiagLogCallArg0IsStrRef => 21,
+            InvariantId::DiagLogCallArityFloor => 22,
+            InvariantId::DiagLogCallArgAdmissibleLogArgSource => 23,
         };
-        assert!((1..=20).contains(&n));
+        assert!((1..=23).contains(&n));
     }
 }
 
-fn all_invariant_ids() -> [InvariantId; 20] {
+fn all_invariant_ids() -> [InvariantId; 23] {
     [
         InvariantId::TablesPopulatedBeforeReference,
         InvariantId::ItemSideTablesMirrorItems,
@@ -1033,6 +1036,9 @@ fn all_invariant_ids() -> [InvariantId; 20] {
         InvariantId::ItemDefPathGlobalUniqueness,
         InvariantId::OpaqueHandleEligibilityConsistency,
         InvariantId::StableCrateIdZeroReserved,
+        InvariantId::DiagLogCallArg0IsStrRef,
+        InvariantId::DiagLogCallArityFloor,
+        InvariantId::DiagLogCallArgAdmissibleLogArgSource,
     ]
 }
 
@@ -1126,12 +1132,152 @@ fn instance_opaque_handle_eligible_helper_signature_compiles() {
     assert!(!m.instance_opaque_handle_eligible(id));
 }
 
+// ------------------------------------------------------------------
+// regseq-driver-49 Change A: instance_intrinsic helper
+// (spec.md section 3.5.2 + section 3.6.4).
+// ------------------------------------------------------------------
+
 #[test]
-#[ignore]
-fn instance_intrinsic_helper_signature_compiles() {
-    // IGNORE-UNTIL: P1a-DS-09
+fn instance_intrinsic_returns_log_kind_when_attr_present() {
+    let (mut m, id) = helper_fixture();
+    let item = m.instances[id].item;
+    m.domain_attrs.item_attrs[item].push(crate::AttrData::Intrinsic(crate::IntrinsicKind::Log(
+        crate::LogLevel::Info,
+    )));
+    assert_eq!(
+        m.instance_intrinsic(id),
+        Some(&crate::IntrinsicKind::Log(crate::LogLevel::Info))
+    );
+}
+
+#[test]
+fn instance_intrinsic_returns_none_when_item_attrs_empty() {
     let (m, id) = helper_fixture();
-    let _ = m.instance_intrinsic(id);
+    // helper_fixture pushes an empty Vec onto item_attrs.
+    let item = m.instances[id].item;
+    assert!(m.domain_attrs.item_attrs[item].is_empty());
+    assert_eq!(m.instance_intrinsic(id), None);
+}
+
+#[test]
+fn instance_intrinsic_returns_none_for_out_of_range_instance_id() {
+    let (m, _id) = helper_fixture();
+    let ghost = InstanceId::from_u32(999);
+    assert!(ghost.index() >= m.instances.len());
+    assert_eq!(m.instance_intrinsic(ghost), None);
+}
+
+#[test]
+fn instance_intrinsic_returns_none_when_item_attrs_table_too_short() {
+    // Guard the defensive `item.index() >= item_attrs.len()` branch.
+    let (mut m, id) = helper_fixture();
+    // Empty the side table so the Instance's item index is now out
+    // of range vs item_attrs.
+    m.domain_attrs.item_attrs.replace_inner(Vec::new());
+    assert_eq!(m.instance_intrinsic(id), None);
+}
+
+#[test]
+fn instance_intrinsic_stable_across_f4_2_permutation() {
+    let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
+    // Build two function instances with distinct rendered names so
+    // the F4-2 ordering produces a deterministic non-identity sort.
+    let beta_leaf = m.strings.intern("beta");
+    let beta_rendered = m.strings.intern("pl011-spec::beta");
+    let alpha_leaf = m.strings.intern("alpha");
+    let alpha_rendered = m.strings.intern("pl011-spec::alpha");
+    let mut beta = fixture_item(&mut m);
+    beta.def_path.segments[1] = DefPathSegment {
+        data: DefPathData::ValueNs(beta_leaf),
+        disambiguator: 0,
+    };
+    beta.def_path.rendered = beta_rendered;
+    let beta_item = m.items.push(beta);
+    m.item_def_paths.push(crate::DefPathHash {
+        stable_crate_id: StableCrateId(1),
+        local_hash: 1,
+    });
+    m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs
+        .item_attrs
+        .push(vec![crate::AttrData::Intrinsic(crate::IntrinsicKind::Log(
+            crate::LogLevel::Warn,
+        ))]);
+
+    let mut alpha = fixture_item(&mut m);
+    alpha.def_path.segments[1] = DefPathSegment {
+        data: DefPathData::ValueNs(alpha_leaf),
+        disambiguator: 0,
+    };
+    alpha.def_path.rendered = alpha_rendered;
+    let alpha_item = m.items.push(alpha);
+    m.item_def_paths.push(crate::DefPathHash {
+        stable_crate_id: StableCrateId(1),
+        local_hash: 2,
+    });
+    m.item_synthetic_kinds.push(Default::default());
+    m.domain_attrs
+        .item_attrs
+        .push(vec![crate::AttrData::Intrinsic(crate::IntrinsicKind::Log(
+            crate::LogLevel::Debug,
+        ))]);
+
+    let sig = m.sigs.intern(default_sig());
+    m.sig_c_abi_lowerings.push(None);
+
+    let beta_inst = m.instances.push(Instance {
+        item: beta_item,
+        generic_args: vec![],
+        emission_name: m.strings.intern("beta_sym"),
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        kind: function_kind(sig, None),
+    });
+    let alpha_inst = m.instances.push(Instance {
+        item: alpha_item,
+        generic_args: vec![],
+        emission_name: m.strings.intern("alpha_sym"),
+        span: Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        },
+        kind: function_kind(sig, None),
+    });
+
+    // Pre-permutation observations.
+    let beta_kind_before = m.instance_intrinsic(beta_inst).cloned();
+    let alpha_kind_before = m.instance_intrinsic(alpha_inst).cloned();
+    assert_eq!(
+        beta_kind_before,
+        Some(crate::IntrinsicKind::Log(crate::LogLevel::Warn))
+    );
+    assert_eq!(
+        alpha_kind_before,
+        Some(crate::IntrinsicKind::Log(crate::LogLevel::Debug))
+    );
+
+    // `sort_instances_by_f4_2` permutes in place; recover the new
+    // ids by matching the surviving Instance.item against the items
+    // we constructed above (each item appears in exactly one
+    // Instance in this fixture).
+    m.sort_instances_by_f4_2();
+    let beta_after = (0..m.instances.len())
+        .map(|i| InstanceId::from_u32(i as u32))
+        .find(|id| m.instances[*id].item == beta_item)
+        .expect("beta instance survives");
+    let alpha_after = (0..m.instances.len())
+        .map(|i| InstanceId::from_u32(i as u32))
+        .find(|id| m.instances[*id].item == alpha_item)
+        .expect("alpha instance survives");
+    assert_eq!(m.instance_intrinsic(beta_after).cloned(), beta_kind_before);
+    assert_eq!(
+        m.instance_intrinsic(alpha_after).cloned(),
+        alpha_kind_before
+    );
 }
 
 // ------------------------------------------------------------------
@@ -2406,5 +2552,534 @@ mod dead_item_elim_helpers {
                 count: Operand::Constant(ConstId::ZERO),
             },
         );
+    }
+}
+
+// ------------------------------------------------------------------
+// regseq-driver-49 Change B: I-DiagLog-CallArity exception in
+// `validate_call` (spec.md section 23.6.2 B-4 / B-6 +
+// section 26.4 + section 26.6).
+// ------------------------------------------------------------------
+
+mod validate_log_intrinsic_call {
+    use super::*;
+    use crate::ids::{BlockId, LocalId};
+    use crate::{
+        AttrData, BasicBlock, CallCallee, IndexVec, IntKind, IntrinsicKind, LocalDecl, LogLevel,
+        Mutability, Operand, Place, Provenance, Terminator, TerminatorKind, UintKind,
+    };
+
+    /// Build a fresh model with a single primary crate set up for
+    /// the validator's per-terminator pass.
+    fn fresh_model() -> RegseqModel {
+        RegseqModel::with_primary("pl011-spec", StableCrateId(0xAAAA))
+    }
+
+    /// Push an Item with a given leaf name and synthesise its side
+    /// tables. Returns the resulting `ItemId`.
+    fn push_named_item(m: &mut RegseqModel, leaf: &str, hash: u64) -> ItemId {
+        let leaf_id = m.strings.intern(leaf);
+        let rendered = m.strings.intern(&format!("pl011-spec::{leaf}"));
+        let item = Item {
+            def_path: DefPath {
+                crate_id: m.primary_crate,
+                segments: vec![
+                    DefPathSegment {
+                        data: DefPathData::CrateRoot,
+                        disambiguator: 0,
+                    },
+                    DefPathSegment {
+                        data: DefPathData::ValueNs(leaf_id),
+                        disambiguator: 0,
+                    },
+                ],
+                rendered,
+            },
+            kind: ItemKind::Function,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        };
+        let id = m.items.push(item);
+        m.item_def_paths.push(crate::DefPathHash {
+            stable_crate_id: StableCrateId(0xAAAA),
+            local_hash: hash,
+        });
+        m.item_synthetic_kinds.push(Default::default());
+        m.domain_attrs.item_attrs.push(Vec::new());
+        id
+    }
+
+    fn unit_layout() -> crate::Layout {
+        crate::UNIT_LAYOUT
+    }
+
+    fn unit_ty(m: &mut RegseqModel) -> TyId {
+        m.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: unit_layout(),
+        })
+    }
+
+    fn str_ref_ty(m: &mut RegseqModel) -> TyId {
+        let str_ty = m.types.intern(Ty::Str);
+        m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow))
+    }
+
+    /// Build a Function instance with no body and the given FnSig.
+    fn push_function(m: &mut RegseqModel, item: ItemId, sig: FnSigId) -> InstanceId {
+        m.instances.push(Instance {
+            item,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            kind: function_kind(sig, None),
+        })
+    }
+
+    fn intern_sig(m: &mut RegseqModel, inputs: Vec<TyId>, output: TyId) -> FnSigId {
+        let sig = m.sigs.intern(FnSig {
+            inputs,
+            output,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        m.sig_c_abi_lowerings.push(None);
+        sig
+    }
+
+    /// Construct a caller body whose `_0` is the unit destination
+    /// and remaining locals carry the supplied `arg_tys`. Returns
+    /// the body and a parallel `Vec<LocalId>` for `_1..` so callers
+    /// can build `Operand::Move(...)` references.
+    fn build_caller_body(
+        m: &mut RegseqModel,
+        callee_callee: CallCallee,
+        arg_tys: &[TyId],
+        args_override: Option<Box<[Operand]>>,
+    ) -> Body {
+        let unit = unit_ty(m);
+        let mut local_decls = IndexVec::new();
+        // _0: return place (unit).
+        local_decls.push(LocalDecl {
+            ty: unit,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let mut arg_operands: Vec<Operand> = Vec::with_capacity(arg_tys.len());
+        for ty in arg_tys.iter().copied() {
+            let local_id = LocalId::from_u32(local_decls.len() as u32);
+            local_decls.push(LocalDecl {
+                ty,
+                mutability: Mutability::Mut,
+                span: Span::dummy(),
+                debug_name: None,
+            });
+            arg_operands.push(Operand::Move(Place::from(local_id)));
+        }
+        let args: Box<[Operand]> = match args_override {
+            Some(boxed) => boxed,
+            None => arg_operands.into_boxed_slice(),
+        };
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: callee_callee,
+                    args,
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: Some(BlockId::from_u32(1)),
+                },
+                span: Span::dummy(),
+            },
+        });
+        // BlockId 1: the post-Call resume block (a trivial Return).
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
+                span: Span::dummy(),
+            },
+        });
+        Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        }
+    }
+
+    /// Convenience: install a Log-intrinsic Function callee whose
+    /// FnSig matches the post-`regseq-driver-48` rewritten shape
+    /// `(&'static str,) -> ()`. The callee's item carries an
+    /// `AttrData::Intrinsic(IntrinsicKind::Log(_))` entry.
+    fn install_log_callee(
+        m: &mut RegseqModel,
+        leaf: &str,
+        hash: u64,
+        level: LogLevel,
+    ) -> InstanceId {
+        let str_ref = str_ref_ty(m);
+        let unit = unit_ty(m);
+        let sig = intern_sig(m, vec![str_ref], unit);
+        let item = push_named_item(m, leaf, hash);
+        m.domain_attrs.item_attrs[item].push(AttrData::Intrinsic(IntrinsicKind::Log(level)));
+        push_function(m, item, sig)
+    }
+
+    /// Convenience: install a non-Log Function callee with the
+    /// given input/output types.
+    fn install_plain_callee(
+        m: &mut RegseqModel,
+        leaf: &str,
+        hash: u64,
+        inputs: Vec<TyId>,
+        output: TyId,
+    ) -> InstanceId {
+        let sig = intern_sig(m, inputs, output);
+        let item = push_named_item(m, leaf, hash);
+        push_function(m, item, sig)
+    }
+
+    /// Run the validator's per-call check on the given owner /
+    /// body. Bypasses the rest of `validate()` so the focused
+    /// invariants under test are isolated.
+    fn run_validate(
+        m: &RegseqModel,
+        owner: InstanceId,
+        body: &Body,
+    ) -> Result<(), InvariantViolation> {
+        m.validate_body_terminator_invariants(owner, body)
+    }
+
+    // -------- Test Plan item 5 --------
+    #[test]
+    fn accepts_canonical_post_peel_shape_str_ref_and_u32() {
+        // Per spec, args = [Operand::Constant(<&str>),
+        // Operand::Move(<u32_local>)] -- the post-DiagLogPeel shape
+        // wraps the format-template literal as `Operand::Constant`
+        // and the peeled value-typed expression as `Operand::Move`.
+        let mut m = fresh_model();
+        let log_callee = install_log_callee(&mut m, "log_info", 0x10, LogLevel::Info);
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let caller_item = push_named_item(&mut m, "caller_a", 0x20);
+        let unit = unit_ty(&mut m);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        // Format-template `&'static str` literal lives in a const
+        // slot; the bridge surfaces it as `Operand::Constant`. The
+        // model-side `const_ty` resolves a `Const::Bytes` to
+        // `NotApplicable` per spec.md section 20.5 (operand-context
+        // typing for non-scalar constants is owned upstream), so
+        // the validator's `args[0]` check skips per the
+        // `TypeRecovery::NotApplicable` arm. The acceptance via a
+        // recovered `Ty::Ref(Ty::Str, _)` is locked in by
+        // `accepts_args_one_str_ref` (Test Plan item 11).
+        let fmt_const = m.consts.intern(crate::Const::Bytes(vec![]));
+        // _0: return, _1: u32 arg slot.
+        let mut local_decls = crate::IndexVec::new();
+        local_decls.push(LocalDecl {
+            ty: unit,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let u32_local = LocalId::from_u32(local_decls.len() as u32);
+        local_decls.push(LocalDecl {
+            ty: u32_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let mut basic_blocks = crate::IndexVec::new();
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Direct(log_callee),
+                    args: Box::new([
+                        Operand::Constant(fmt_const),
+                        Operand::Move(Place::from(u32_local)),
+                    ]),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: Some(BlockId::from_u32(1)),
+                },
+                span: Span::dummy(),
+            },
+        });
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
+                span: Span::dummy(),
+            },
+        });
+        let body = Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        };
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        m.instances[caller].kind = function_kind(caller_sig, Some(body.clone()));
+        assert_eq!(run_validate(&m, caller, &body), Ok(()));
+    }
+
+    // -------- Test Plan item 6 --------
+    #[test]
+    fn rejects_args_zero_not_str_ref() {
+        let mut m = fresh_model();
+        let log_callee = install_log_callee(&mut m, "log_info", 0x10, LogLevel::Info);
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let caller_item = push_named_item(&mut m, "caller_b", 0x20);
+        let unit = unit_ty(&mut m);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        // args[0] = u32 local, args[1] = u32 local. The first arg
+        // breaks the &str-ref contract on `args[0]`.
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(log_callee),
+            &[u32_ty, u32_ty],
+            None,
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::DiagLogCallArg0NotStrRef { actual_ty, .. }) => {
+                assert_eq!(actual_ty, u32_ty);
+            }
+            other => panic!("expected DiagLogCallArg0NotStrRef, got {other:?}"),
+        }
+    }
+
+    // -------- Test Plan item 7 --------
+    #[test]
+    fn rejects_args_one_not_admissible_log_arg_source() {
+        let mut m = fresh_model();
+        let log_callee = install_log_callee(&mut m, "log_info", 0x10, LogLevel::Info);
+        let str_ref = str_ref_ty(&mut m);
+        // Tuple unit -- not in the admissible-LogArg-source set.
+        let unit = unit_ty(&mut m);
+        let caller_item = push_named_item(&mut m, "caller_c", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(log_callee),
+            &[str_ref, unit],
+            None,
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::DiagLogCallArgNotAdmissible { idx, actual_ty, .. }) => {
+                assert_eq!(idx, 1);
+                assert_eq!(actual_ty, unit);
+            }
+            other => panic!("expected DiagLogCallArgNotAdmissible, got {other:?}"),
+        }
+    }
+
+    // -------- Test Plan item 8 --------
+    #[test]
+    fn rejects_empty_args() {
+        let mut m = fresh_model();
+        let log_callee = install_log_callee(&mut m, "log_info", 0x10, LogLevel::Info);
+        let unit = unit_ty(&mut m);
+        let caller_item = push_named_item(&mut m, "caller_d", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(log_callee),
+            &[],
+            Some(Box::new([])),
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::DiagLogCallArityBelowMinimum { .. }) => {}
+            other => panic!("expected DiagLogCallArityBelowMinimum, got {other:?}"),
+        }
+    }
+
+    // -------- Test Plan item 9 --------
+    #[test]
+    fn non_log_direct_call_uses_generic_b4() {
+        let mut m = fresh_model();
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let unit = unit_ty(&mut m);
+        // Plain callee with one declared input.
+        let plain_callee = install_plain_callee(&mut m, "plain_callee", 0x10, vec![u32_ty], unit);
+        // Caller passes two args -- arity mismatch.
+        let caller_item = push_named_item(&mut m, "caller_e", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(plain_callee),
+            &[u32_ty, u32_ty],
+            None,
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::CallArgsArityMismatch {
+                expected, actual, ..
+            }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 2);
+            }
+            other => panic!("expected CallArgsArityMismatch, got {other:?}"),
+        }
+    }
+
+    // -------- Test Plan item 10 --------
+    #[test]
+    fn indirect_call_does_not_receive_log_exception() {
+        let mut m = fresh_model();
+        let str_ref = str_ref_ty(&mut m);
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let unit = unit_ty(&mut m);
+        // FnSig with a single u32 input mismatches the two-arg call
+        // shape; the generic B-4 path must fire because the
+        // Log-intrinsic exception applies only to Direct callees
+        // per spec.md section 23.6.2 B-5.
+        let target_sig = intern_sig(&mut m, vec![u32_ty], unit);
+        let fn_ptr_ty = m.types.intern(Ty::FnPtr(target_sig));
+        let caller_item = push_named_item(&mut m, "caller_f", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        // Caller body has _0 (return), _1 (fn_ptr), then two args.
+        let mut local_decls = IndexVec::new();
+        local_decls.push(LocalDecl {
+            ty: unit,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let fnptr_local = LocalId::from_u32(local_decls.len() as u32);
+        local_decls.push(LocalDecl {
+            ty: fn_ptr_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let str_local = LocalId::from_u32(local_decls.len() as u32);
+        local_decls.push(LocalDecl {
+            ty: str_ref,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let u32_local = LocalId::from_u32(local_decls.len() as u32);
+        local_decls.push(LocalDecl {
+            ty: u32_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Indirect(Operand::Copy(Place::from(fnptr_local))),
+                    args: Box::new([
+                        Operand::Move(Place::from(str_local)),
+                        Operand::Move(Place::from(u32_local)),
+                    ]),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: Some(BlockId::from_u32(1)),
+                },
+                span: Span::dummy(),
+            },
+        });
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
+                span: Span::dummy(),
+            },
+        });
+        let body = Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        };
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::CallArgsArityMismatch {
+                expected, actual, ..
+            }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 2);
+            }
+            other => panic!("expected CallArgsArityMismatch, got {other:?}"),
+        }
+    }
+
+    // -------- Test Plan item 11 --------
+    #[test]
+    fn accepts_args_one_str_ref() {
+        let mut m = fresh_model();
+        let log_callee = install_log_callee(&mut m, "log_warn", 0x10, LogLevel::Warn);
+        let str_ref = str_ref_ty(&mut m);
+        let caller_item = push_named_item(&mut m, "caller_g", 0x20);
+        let unit = unit_ty(&mut m);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(log_callee),
+            &[str_ref, str_ref],
+            None,
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        assert_eq!(run_validate(&m, caller, &body), Ok(()));
+    }
+
+    // -------- Test Plan item 12 --------
+    #[test]
+    fn accepts_every_admissible_log_arg_source_at_args_one() {
+        let mut m = fresh_model();
+        let log_callee = install_log_callee(&mut m, "log_debug", 0x10, LogLevel::Debug);
+        let str_ref = str_ref_ty(&mut m);
+        let unit = unit_ty(&mut m);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        // Build admissible-Ty matrix in one go.
+        let bool_ty = m.types.intern(Ty::Bool);
+        let u8_ty = m.types.intern(Ty::Uint(UintKind::U8));
+        let u16_ty = m.types.intern(Ty::Uint(UintKind::U16));
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let u64_ty = m.types.intern(Ty::Uint(UintKind::U64));
+        let i8_ty = m.types.intern(Ty::Int(IntKind::I8));
+        let i16_ty = m.types.intern(Ty::Int(IntKind::I16));
+        let i32_ty = m.types.intern(Ty::Int(IntKind::I32));
+        let i64_ty = m.types.intern(Ty::Int(IntKind::I64));
+        let admissibles = [
+            bool_ty, u8_ty, u16_ty, u32_ty, u64_ty, i8_ty, i16_ty, i32_ty, i64_ty,
+        ];
+        for (idx, ty) in admissibles.iter().copied().enumerate() {
+            let caller_item =
+                push_named_item(&mut m, &format!("caller_h_{idx}"), 0x30 + idx as u64);
+            let body =
+                build_caller_body(&mut m, CallCallee::Direct(log_callee), &[str_ref, ty], None);
+            let caller = push_function(&mut m, caller_item, caller_sig);
+            assert_eq!(
+                run_validate(&m, caller, &body),
+                Ok(()),
+                "Ty index {idx} ({:?}) must be admissible",
+                m.types.resolve(ty)
+            );
+        }
     }
 }

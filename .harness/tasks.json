@@ -1337,7 +1337,7 @@
           "id": "regseq-driver-49",
           "name": "P1a-BR-12: Validator B-4/B-6 \u00a726.6 exception + instance_intrinsic implementation",
           "spec": ".harness/tasks/regseq-driver/49-validator-diag-log-call-arity-exception.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-48"
           ],

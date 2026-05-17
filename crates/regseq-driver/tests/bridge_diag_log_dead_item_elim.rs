@@ -2,29 +2,16 @@
 
 //! Integration tests for the post-DiagLogPeel residue-driven DCE
 //! pass (`regseq-driver-48`). Bridges the canonical `diag_logging`
-//! fixture and asserts the §26.6 carrier-survival contract: every
-//! `<LogArg as From<T>>::from(...)` wrapper Instance, every From-
-//! impl Item, every per-Item FnSig, every `Ty::Enum { item:
-//! <LogArg-item> }` entry in the TyInterner, and the LogArg ADT
-//! Item itself are pruned after Phase 5 completes.
+//! fixture and asserts the section 26.6 carrier-survival contract:
+//! every `<LogArg as From<T>>::from(...)` wrapper Instance, every
+//! From-impl Item, every per-Item FnSig, every
+//! `Ty::Enum { item: <LogArg-item> }` entry in the TyInterner, and
+//! the LogArg ADT Item itself are pruned after Phase 5 completes.
 //!
-//! `model.validate()` is intentionally NOT asserted here per the
-//! audit-derived amendment to Spec 48 (spec_version 2): the
-//! post-elim log Calls have args whose types (e.g., `u32`) do
-//! not match the rewritten `log_<sev>` `FnSig.inputs` (now
-//! `&str`-only after the step-0 FnSig rewrite). spec.md
-//! §23.6.2 B-4 / B-6 (`spec.md:9650+` / `spec.md:11792+`) pin
-//! an `I-DiagLog-CallArity` exception that permits exactly this
-//! arg/input mismatch for Log-intrinsic Calls, but the current
-//! validator does not yet honour the exception. The follow-up
-//! task `regseq-driver-49` lands the validator's B-4 / B-6
-//! §26.6 exception and restores the `model.validate()`
-//! assertion at this site. Until then, the structural
-//! assertions below verify the §26.6 contract end-to-end -- no
-//! LogArg-typed Item, no LogArg-typed Ty, no LogArg-typed
-//! LocalDecl, no surviving `<LogArg as From<T>>::from`
-//! Instance -- which is the load-bearing piece of
-//! regseq-model-94's D7 / D8 negatives.
+//! `model.validate()` is asserted as the first check per
+//! `regseq-driver-49`, which lands the validator's section 23.6.2
+//! B-4 / B-6 I-DiagLog-CallArity exception (`spec.md:9649-9778`)
+//! so the post-elim log Calls' flat-arg shape passes validation.
 
 extern crate rustc_driver;
 extern crate rustc_interface;
@@ -37,7 +24,9 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::{run_bridge, BridgeInput as DriverBridgeInput};
-use regseq_model::{AttrData, DefPathData, IntrinsicKind, PrettyPrinter, RegseqModel, Ty};
+use regseq_model::{
+    AttrData, BridgeInput, DefPathData, IntrinsicKind, PrettyPrinter, RegseqModel, Ty,
+};
 use rustc_driver::{run_compiler, Callbacks, Compilation};
 use rustc_middle::ty::TyCtxt;
 
@@ -71,12 +60,13 @@ fn fresh_test_dir(crate_name: &str) -> PathBuf {
 
 /// Run `regseq-driver`'s bridge against the canonical
 /// `crates/test-ir-fixtures/fixtures/<name>.rs` fixture and return
-/// the resulting `RegseqModel`. Skips `model.validate()` (the
-/// `bridge_fixture` helper from `test-ir-fixtures` validates by
-/// default; this helper bypasses that step so the §26.6 structural
-/// assertions can run on the post-elim model even when validation
-/// would surface a downstream B-4 / B-6 mismatch on the rewritten
-/// log Calls).
+/// the resulting `RegseqModel`. Skips the `test-ir-fixtures`
+/// `bridge_fixture` helper's built-in `model.validate()` call so
+/// the caller controls when to run validation; the diagnostic-
+/// logging carrier-survival test now runs `model.validate()` itself
+/// as its first assertion per the `regseq-driver-49`
+/// I-DiagLog-CallArity exception (spec.md section 23.6.2 B-4 / B-6
+/// at `spec.md:9649-9778`).
 fn bridge_fixture_no_validate(name: &str) -> RegseqModel {
     let _lock = LOCK
         .lock()
@@ -164,10 +154,20 @@ fn def_path_terminal_segment_name<'a>(
 }
 
 /// Test Plan item 10: bridge the `diag_logging` fixture and assert
-/// the §26.6 carrier-survival contract.
+/// the section 26.6 carrier-survival contract.
 #[test]
 fn diag_logging_post_elim_removes_every_logarg_artifact() {
-    let model = bridge_fixture_no_validate("diag_logging");
+    let mut model = bridge_fixture_no_validate("diag_logging");
+
+    // 0. The post-elim model satisfies the construction
+    //    invariants, including the spec.md section 23.6.2 B-4 / B-6
+    //    I-DiagLog-CallArity exception added by `regseq-driver-49`
+    //    that admits the post-DiagLogPeel flat-arg shape on the
+    //    surviving log Calls.
+    let bridge_input = BridgeInput::matching(&model);
+    model.validate(&bridge_input).expect(
+        "validate succeeds post-elim per regseq-driver-49's B-4 / B-6 section 26.6 exception",
+    );
 
     // 1. No Item's def_path terminal segment renders as "LogArg".
     //    (D8 from regseq-model-94.)

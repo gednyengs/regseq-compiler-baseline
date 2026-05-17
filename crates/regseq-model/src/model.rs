@@ -18,6 +18,7 @@ use crate::crate_info::{CrateInfo, StableCrateId};
 use crate::def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash,
 };
+use crate::domain_attr::AttrData;
 use crate::domain_attr::DomainAttrTables;
 use crate::domain_attr::IntrinsicKind;
 use crate::fn_sig::FnSig;
@@ -691,6 +692,48 @@ pub enum InvariantViolation {
         /// Brief reason describing the inconsistency.
         reason: &'static str,
     },
+
+    /// Log-intrinsic `Call.args[0]` is not `Ty::Ref(Ty::Str, _)` per
+    /// the spec.md section 26.6 post-DiagLogPeel flat-arg shape
+    /// (`spec.md:12705+`); the format-template slot must carry the
+    /// `&'static str` literal operand. Surfaced through the spec.md
+    /// section 23.6.2 B-4 / B-6 I-DiagLog-CallArity exception
+    /// branch (`spec.md:9649-9778`).
+    DiagLogCallArg0NotStrRef {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Recovered `args[0]` type, or `TyId::ZERO` when the
+        /// operand's type recovery was `Malformed`.
+        actual_ty: TyId,
+    },
+
+    /// Log-intrinsic `Call.args` is empty; the post-DiagLogPeel
+    /// flat-arg shape per spec.md section 26.6 must guarantee at
+    /// least the format-template slot at `args[0]`.
+    DiagLogCallArityBelowMinimum {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+    },
+
+    /// Log-intrinsic `Call.args[idx]` (`idx >= 1`) does not resolve
+    /// to a value-typed `Ty` in the spec.md section 26.4 admissible
+    /// LogArg-source set (`Ty::Uint(U8..U64)`, `Ty::Int(I8..I64)`,
+    /// `Ty::Bool`, or `Ty::Ref(Ty::Str, _)`).
+    DiagLogCallArgNotAdmissible {
+        /// Function instance whose body contains the violation.
+        owner: InstanceId,
+        /// Block containing the violation.
+        block: BlockId,
+        /// Offending argument index (always `>= 1`).
+        idx: usize,
+        /// Recovered argument type, or `TyId::ZERO` when the
+        /// operand's type recovery was `Malformed`.
+        actual_ty: TyId,
+    },
 }
 
 /// Construction-invariant identifier.
@@ -736,6 +779,12 @@ pub enum InvariantId {
     OpaqueHandleEligibilityConsistency,
     /// 20. `StableCrateId(0)` is reserved as the synthetic-domain sentinel.
     StableCrateIdZeroReserved,
+    /// 21. Log-intrinsic `Call.args[0]` is `Ty::Ref(Ty::Str, _)` per spec.md section 23.6.2 B-4 / B-6 I-DiagLog-CallArity exception (`spec.md:9649-9778`) over the section 26.6 post-DiagLogPeel flat-arg shape.
+    DiagLogCallArg0IsStrRef,
+    /// 22. Log-intrinsic `Call.args` carries at least one operand (the format-template slot at `args[0]`) per spec.md section 26.6 post-DiagLogPeel flat-arg shape.
+    DiagLogCallArityFloor,
+    /// 23. Log-intrinsic `Call.args[idx]` for `idx >= 1` resolves to a value-typed entry in the spec.md section 26.4 admissible LogArg-source set.
+    DiagLogCallArgAdmissibleLogArgSource,
 }
 
 /// Returns the locked spec wording for a construction invariant.
@@ -845,6 +894,32 @@ pub fn invariant_descriptor(id: InvariantId) -> &'static str {
         }
         InvariantId::StableCrateIdZeroReserved => {
             "`StableCrateId(0)` reserved as synthetic-domain sentinel. No real source crate carries `StableCrateId(0)`; synthetic-item `DefPathHash`es use `stable_crate_id == 0`."
+        }
+        InvariantId::DiagLogCallArg0IsStrRef => {
+            concat!(
+                "Log-intrinsic Call args[0] is `Ty::Ref(Ty::Str, _)`. The post-DiagLogPeel ",
+                "flat-arg shape per spec.md section 26.6 pins the format-template slot at ",
+                "args[0] as a `&'static str` operand; the section 23.6.2 B-4 / B-6 ",
+                "I-DiagLog-CallArity exception checks this shape instead of the declared ",
+                "callee FnSig's first input."
+            )
+        }
+        InvariantId::DiagLogCallArityFloor => {
+            concat!(
+                "Log-intrinsic Call args has at least one operand. The post-DiagLogPeel ",
+                "flat-arg shape per spec.md section 26.6 guarantees `args.len() >= 1` ",
+                "(the format-template slot at args[0]); the validator enforces this as a ",
+                "defensive precondition before any args[0] access."
+            )
+        }
+        InvariantId::DiagLogCallArgAdmissibleLogArgSource => {
+            concat!(
+                "Log-intrinsic Call args[idx] for `idx >= 1` is in the admissible ",
+                "LogArg-source set per spec.md section 26.4: `Ty::Uint(U8..U64)`, ",
+                "`Ty::Int(I8..I64)`, `Ty::Bool`, or `Ty::Ref(Ty::Str, _)`. The post-",
+                "DiagLogPeel flat-arg shape replaces the declared callee FnSig's ",
+                "`&[LogArg<'_>]` input with these peeled value operands."
+            )
         }
     }
 }
@@ -1706,9 +1781,56 @@ impl RegseqModel {
         }
     }
 
-    /// Returns the domain intrinsic marker for an instance's item.
-    pub fn instance_intrinsic(&self, _id: InstanceId) -> Option<&IntrinsicKind> {
-        todo!("P1a-DS-09 adds DomainAttrTables contents")
+    /// Returns the closed-vocabulary intrinsic marker for an
+    /// instance's item per spec.md section 3.5.2. Walks
+    /// `domain_attrs.item_attrs[item]` for the first
+    /// `AttrData::Intrinsic(_)` entry. The bridge populates this
+    /// during Phase-2 translation per spec.md section 3.6.4 (see
+    /// `regseq-driver-44`'s Phase-2 recognition codepath).
+    ///
+    /// Returns `None` when:
+    /// - `id` is out of range (defensive bound; surfaces as a skip
+    ///   rather than a panic, mirroring the bridge-side
+    ///   `call_is_log_intrinsic` discipline at
+    ///   `crates/regseq-driver/src/bridge/diag_log/peel.rs:556-580`).
+    /// - The Instance's item has no `IntrinsicKind` entry in
+    ///   `domain_attrs.item_attrs`.
+    /// - Bridge ordering: the Instance's `item.index() >=
+    ///   domain_attrs.item_attrs.len()` (Phase-4 side-table sizing;
+    ///   should not occur post-Phase-4 but guarded defensively).
+    ///
+    /// `item_attrs[item]` is a `Vec<AttrData>` that may carry multiple
+    /// per-domain payloads per item; this helper returns the first
+    /// `AttrData::Intrinsic(_)` discriminant. At most one `Intrinsic`
+    /// entry per item is expected per spec.md section 3.6.4 (the
+    /// Phase-2 recognition codepath pushes exactly one), but if
+    /// multiple are present (a bridge bug), the helper returns the
+    /// first -- downstream validators read the discriminant only, so
+    /// first-wins is well-defined.
+    pub fn instance_intrinsic(&self, id: InstanceId) -> Option<&IntrinsicKind> {
+        if id.index() >= self.instances.len() {
+            return None;
+        }
+        let item = self.instances[id].item;
+        if item.index() >= self.domain_attrs.item_attrs.len() {
+            return None;
+        }
+        // Explicit `for` + `if let` rather than `find_map` so a
+        // future non-Intrinsic `AttrData` variant is naturally
+        // skipped (the equivalent `find_map(|attr| match attr {
+        // AttrData::Intrinsic(k) => Some(k) })` collapses to
+        // `map(..).next()` under clippy because the single arm
+        // always returns Some, defeating the future-proof intent
+        // documented above). The `if let` is currently irrefutable
+        // because `AttrData::Intrinsic` is the only variant, hence
+        // the per-block allow.
+        #[allow(irrefutable_let_patterns)]
+        for attr in self.domain_attrs.item_attrs[item].iter() {
+            if let AttrData::Intrinsic(kind) = attr {
+                return Some(kind);
+            }
+        }
+        None
     }
 
     fn instance_item(&self, id: InstanceId) -> &Item {
@@ -2760,41 +2882,68 @@ impl RegseqModel {
             return Ok(());
         };
 
-        // B-4: arity match.
-        if args.len() != inputs.len() {
-            return Err(InvariantViolation::CallArgsArityMismatch {
-                owner,
-                block,
-                expected: inputs.len(),
-                actual: args.len(),
-            });
-        }
+        // I-DiagLog-CallArity exception per spec.md section 23.6.2
+        // B-4 / B-6 (`spec.md:9649-9778`): Log-intrinsic Direct
+        // callees carry the post-DiagLogPeel flat-arg shape
+        // `[fmt_literal, expr_1, ..., expr_N]` (spec.md section 26.6),
+        // which does NOT match the declared callee FnSig's
+        // `(fmt, &[LogArg<'_>])` inputs nor the post-regseq-driver-48
+        // rewritten `(fmt,) -> ()` inputs. Route Log-intrinsic Direct
+        // callees through the dedicated validator that honours the
+        // peeled shape's invariants for B-4 + B-6 only; B-3
+        // (destination type) + B-9 (target / divergence coherence)
+        // below still apply uniformly because the post-rewrite callee
+        // FnSig output is `unit` (matching the post-peel destination
+        // place) and `target = Some(_)` (the Call is not divergent).
+        // Indirect callees do NOT receive this exception per spec.md
+        // section 23.6.2 B-5: `IntrinsicKind` is keyed by Instance
+        // identity, and indirect callees do not pin an InstanceId.
+        let is_log_intrinsic = match callee {
+            CallCallee::Direct(id) => {
+                matches!(self.instance_intrinsic(*id), Some(IntrinsicKind::Log(_)))
+            }
+            CallCallee::Indirect(_) => false,
+        };
 
-        // B-6: per-arg type match. NotApplicable arms are skipped per
-        // the spec narrowing (operand-context typing for constants is
-        // upstream's responsibility).
-        for (i, arg) in args.iter().enumerate() {
-            match operand_ty(self, body, arg) {
-                TypeRecovery::Recovered(ty) => {
-                    if ty != inputs[i] {
+        if is_log_intrinsic {
+            self.validate_log_intrinsic_call(owner, block, body, args)?;
+        } else {
+            // B-4: arity match.
+            if args.len() != inputs.len() {
+                return Err(InvariantViolation::CallArgsArityMismatch {
+                    owner,
+                    block,
+                    expected: inputs.len(),
+                    actual: args.len(),
+                });
+            }
+
+            // B-6: per-arg type match. NotApplicable arms are skipped
+            // per the spec narrowing (operand-context typing for
+            // constants is upstream's responsibility).
+            for (i, arg) in args.iter().enumerate() {
+                match operand_ty(self, body, arg) {
+                    TypeRecovery::Recovered(ty) => {
+                        if ty != inputs[i] {
+                            return Err(InvariantViolation::CallArgTypeMismatch {
+                                owner,
+                                block,
+                                idx: i,
+                                expected_ty: inputs[i],
+                                actual_ty: ty,
+                            });
+                        }
+                    }
+                    TypeRecovery::NotApplicable => {}
+                    TypeRecovery::Malformed => {
                         return Err(InvariantViolation::CallArgTypeMismatch {
                             owner,
                             block,
                             idx: i,
                             expected_ty: inputs[i],
-                            actual_ty: ty,
+                            actual_ty: TyId::ZERO,
                         });
                     }
-                }
-                TypeRecovery::NotApplicable => {}
-                TypeRecovery::Malformed => {
-                    return Err(InvariantViolation::CallArgTypeMismatch {
-                        owner,
-                        block,
-                        idx: i,
-                        expected_ty: inputs[i],
-                        actual_ty: TyId::ZERO,
-                    });
                 }
             }
         }
@@ -2846,6 +2995,132 @@ impl RegseqModel {
             }
         }
         Ok(())
+    }
+
+    /// Validate a Log-intrinsic `Call` per the spec.md section 23.6.2
+    /// B-4 / B-6 I-DiagLog-CallArity exception (`spec.md:9649-9778`).
+    ///
+    /// Honours the post-DiagLogPeel flat-arg shape per spec.md
+    /// section 26.6:
+    /// - `args[0]` is `Ty::Ref(Ty::Str, _)` (the `&'static str`
+    ///   format-template operand; literal-ness is validated at
+    ///   DiagLogPeel synthesis time per spec.md section 25.7.3
+    ///   step 1, not here).
+    /// - `args[i]` for `i in 1..args.len()` is a value-typed `Ty` in
+    ///   the admissible LogArg-source set per spec.md section 26.4:
+    ///   `Ty::Uint(UintKind::U8..U64)`, `Ty::Int(IntKind::I8..I64)`,
+    ///   `Ty::Bool`, or `Ty::Ref(Ty::Str, _)`.
+    /// - Arity: `args.len() >= 1` (at least the fmt slot). The
+    ///   stronger arity-vs-`{}`-placeholder-count check (`args.len()
+    ///   == 1 + N`) is performed at DiagLogPeel synthesis time per
+    ///   `crates/regseq-driver/src/bridge/diag_log/peel.rs::validate_log_call_fingerprints`
+    ///   (D1 per spec.md section 26.8); the validator does NOT
+    ///   re-derive the placeholder count from the literal because
+    ///   the model does not pin the literal's content (the bytes
+    ///   live in a `ConstMemoryStatic` per spec.md section 9.7 and
+    ///   are not accessible without bridge-side
+    ///   `const_memory_static_cache` state). This validator runs
+    ///   structural shape checks only.
+    fn validate_log_intrinsic_call(
+        &self,
+        owner: InstanceId,
+        block: BlockId,
+        body: &Body,
+        args: &[Operand],
+    ) -> Result<(), InvariantViolation> {
+        // Spec.md section 26.6: the post-DiagLogPeel flat-arg shape
+        // requires at least the format-template slot at `args[0]`.
+        // Validate-don't-assume discipline: an empty-args
+        // `args[0]` access would panic.
+        if args.is_empty() {
+            return Err(InvariantViolation::DiagLogCallArityBelowMinimum { owner, block });
+        }
+
+        // Spec.md section 26.6: `args[0]` must resolve to
+        // `Ty::Ref(Ty::Str, _)`.
+        match operand_ty(self, body, &args[0]) {
+            TypeRecovery::Recovered(ty) => {
+                if !self.is_str_ref(ty) {
+                    return Err(InvariantViolation::DiagLogCallArg0NotStrRef {
+                        owner,
+                        block,
+                        actual_ty: ty,
+                    });
+                }
+            }
+            TypeRecovery::Malformed => {
+                return Err(InvariantViolation::DiagLogCallArg0NotStrRef {
+                    owner,
+                    block,
+                    actual_ty: TyId::ZERO,
+                });
+            }
+            // NotApplicable arises when `args[0]` is a constant whose
+            // `Ty` is not recoverable from inline data per spec.md
+            // section 20.5; skip per the existing TypeRecovery
+            // discipline.
+            TypeRecovery::NotApplicable => {}
+        }
+
+        // Spec.md section 26.4: `args[i]` for `i >= 1` must resolve
+        // to a value-typed `Ty` in the admissible LogArg-source set.
+        for (idx, arg) in args.iter().enumerate().skip(1) {
+            match operand_ty(self, body, arg) {
+                TypeRecovery::Recovered(ty) => {
+                    if !self.is_admissible_log_arg(ty) {
+                        return Err(InvariantViolation::DiagLogCallArgNotAdmissible {
+                            owner,
+                            block,
+                            idx,
+                            actual_ty: ty,
+                        });
+                    }
+                }
+                TypeRecovery::Malformed => {
+                    return Err(InvariantViolation::DiagLogCallArgNotAdmissible {
+                        owner,
+                        block,
+                        idx,
+                        actual_ty: TyId::ZERO,
+                    });
+                }
+                TypeRecovery::NotApplicable => {}
+            }
+        }
+
+        Ok(())
+    }
+
+    /// Returns whether `ty` resolves to `Ty::Ref(pointee, _)` whose
+    /// `pointee` resolves to `Ty::Str`. Spec.md section 26.6
+    /// args[0] shape predicate.
+    fn is_str_ref(&self, ty: TyId) -> bool {
+        if ty.index() >= self.types.len() {
+            return false;
+        }
+        match self.types.resolve(ty) {
+            Ty::Ref(pointee, _) => {
+                pointee.index() < self.types.len()
+                    && matches!(self.types.resolve(*pointee), Ty::Str)
+            }
+            _ => false,
+        }
+    }
+
+    /// Returns whether `ty` is in the spec.md section 26.4 admissible
+    /// LogArg-source set: `Ty::Uint(U8..U64)`, `Ty::Int(I8..I64)`,
+    /// `Ty::Bool`, or `Ty::Ref(Ty::Str, _)`.
+    fn is_admissible_log_arg(&self, ty: TyId) -> bool {
+        if ty.index() >= self.types.len() {
+            return false;
+        }
+        match self.types.resolve(ty) {
+            Ty::Bool => true,
+            Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32 | UintKind::U64) => true,
+            Ty::Int(IntKind::I8 | IntKind::I16 | IntKind::I32 | IntKind::I64) => true,
+            Ty::Ref(_, _) => self.is_str_ref(ty),
+            _ => false,
+        }
     }
 
     fn validate_value_consts(&self) -> Result<(), InvariantViolation> {
