@@ -69,6 +69,71 @@ impl FnSigInterner {
             .enumerate()
             .map(|(idx, sig)| (FnSigId::from_u32(idx as u32), sig))
     }
+
+    /// Apply `f` to every stored `FnSig` entry by mutable reference,
+    /// without touching the content-keyed lookup map. Callers must
+    /// invoke `rebuild_lookup` after the walk if mutations change
+    /// any entry's identity key (e.g., a `TyId` substitution inside
+    /// `FnSig.inputs` or `FnSig.output`).
+    pub(crate) fn for_each_fn_sig_mut<F: FnMut(&mut FnSig)>(&mut self, mut f: F) {
+        for sig in self.storage.iter_mut() {
+            f(sig);
+        }
+    }
+
+    /// Rebuild the content-keyed lookup map from the current
+    /// storage. Used after mutations that change one or more
+    /// entries' identity keys (`for_each_fn_sig_mut`,
+    /// `compact_by_keep`). Asserts identity-key uniqueness in debug
+    /// builds.
+    pub(crate) fn rebuild_lookup(&mut self) {
+        self.lookup.clear();
+        for (idx, sig) in self.storage.iter().enumerate() {
+            let prev = self
+                .lookup
+                .insert(sig.clone(), FnSigId::from_u32(idx as u32));
+            debug_assert!(
+                prev.is_none(),
+                "FnSigInterner identity collision at FnSigId {}",
+                idx,
+            );
+        }
+    }
+
+    /// Compact storage in place, retaining only entries where
+    /// `keep[idx]` is `true`. Clears the content-keyed lookup map
+    /// (callers MUST invoke `rebuild_lookup` after remapping every
+    /// surviving entry's nested `TyId` references through the
+    /// returned remap).
+    ///
+    /// Returns the old-to-new `FnSigId` remap as
+    /// `Vec<Option<FnSigId>>` indexed by the old `FnSigId`'s
+    /// `index()`. `None` marks a removed entry; `Some(new_id)`
+    /// marks a surviving entry's new index.
+    ///
+    /// Panics if `keep.len() != storage.len()`.
+    pub(crate) fn compact_by_keep(&mut self, keep: &[bool]) -> Vec<Option<FnSigId>> {
+        assert_eq!(
+            keep.len(),
+            self.storage.len(),
+            "FnSigInterner::compact_by_keep keep slice length must match storage length",
+        );
+        let old_storage = std::mem::take(&mut self.storage).into_inner();
+        let mut new_storage: Vec<FnSig> = Vec::with_capacity(old_storage.len());
+        let mut remap: Vec<Option<FnSigId>> = Vec::with_capacity(old_storage.len());
+        for (idx, sig) in old_storage.into_iter().enumerate() {
+            if keep[idx] {
+                let new_idx = FnSigId::from_u32(new_storage.len() as u32);
+                new_storage.push(sig);
+                remap.push(Some(new_idx));
+            } else {
+                remap.push(None);
+            }
+        }
+        self.storage.replace_inner(new_storage);
+        self.lookup.clear();
+        remap
+    }
 }
 
 impl Default for FnSigInterner {

@@ -1306,7 +1306,7 @@
           "id": "regseq-driver-48",
           "name": "P1a-BR-11: Post-DiagLogPeel dead-Item / dead-Ty elimination (LogArg-survival)",
           "spec": ".harness/tasks/regseq-driver/48-dead-item-elimination-after-diag-log-peel.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-45",
             "regseq-driver-47"

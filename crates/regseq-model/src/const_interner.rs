@@ -80,6 +80,34 @@ impl ConstInterner {
             .enumerate()
             .map(|(idx, c)| (ConstId::from_u32(idx as u32), c))
     }
+
+    /// Apply `f` to every stored `Const` entry by mutable reference,
+    /// without touching the content-keyed lookup map. Callers must
+    /// invoke `rebuild_lookup` after the walk if mutations change
+    /// any entry's identity key (e.g., a `TyId` substitution inside
+    /// `Const::NullPtr`).
+    pub(crate) fn for_each_const_mut<F: FnMut(&mut Const)>(&mut self, mut f: F) {
+        for value in self.storage.iter_mut() {
+            f(value);
+        }
+    }
+
+    /// Rebuild the content-keyed lookup map from the current
+    /// storage. Used after mutations that change one or more
+    /// entries' identity keys (`for_each_const_mut`). Asserts
+    /// identity-key uniqueness in debug builds.
+    pub(crate) fn rebuild_lookup(&mut self) {
+        self.lookup.clear();
+        for (idx, value) in self.storage.iter().enumerate() {
+            let key = ConstIdentityKey::from_const(value);
+            let prev = self.lookup.insert(key, ConstId::from_u32(idx as u32));
+            debug_assert!(
+                prev.is_none(),
+                "ConstInterner identity collision at ConstId {}",
+                idx,
+            );
+        }
+    }
 }
 
 impl Default for ConstInterner {

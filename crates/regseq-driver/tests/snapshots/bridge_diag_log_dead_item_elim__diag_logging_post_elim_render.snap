@@ -1,0 +1,100 @@
+---
+source: crates/regseq-driver/tests/bridge_diag_log_dead_item_elim.rs
+assertion_line: 318
+expression: rendered
+---
+fn core::panicking::panic(_1: &str) -> !;
+
+#[rseq::intrinsic("log-debug")]
+fn diag_logging::regseq::log::intrinsics::log_debug(_1: &str) -> ();
+
+#[rseq::intrinsic("log-error")]
+fn diag_logging::regseq::log::intrinsics::log_error(_1: &str) -> ();
+
+#[rseq::intrinsic("log-info")]
+fn diag_logging::regseq::log::intrinsics::log_info(_1: &str) -> ();
+
+#[rseq::intrinsic("log-warn")]
+fn diag_logging::regseq::log::intrinsics::log_warn(_1: &str) -> ();
+
+fn diag_logging::emit_logs(_1: u32) -> () {
+    let mut _0: ();
+    let mut _2: u32;
+    let mut _3: ();
+    let _4: ();
+    let _5: ();
+    let mut _6: ();
+    let mut _7: ();
+    let _8: ();
+    let mut _9: u32;
+    let mut _10: ();
+    let _11: ();
+    let _12: ();
+    let mut _13: ();
+    let mut _14: ();
+    let _15: ();
+    let mut _16: u32;
+    let mut _17: ();
+    let _18: ();
+    let _19: ();
+    let mut _20: ();
+    let mut _21: ();
+    let _22: ();
+    let mut _23: u32;
+    let mut _24: ();
+    let _25: ();
+    let _26: ();
+    let mut _27: ();
+    let mut _28: ();
+    let _29: ();
+
+    bb0: {
+        _2 = copy _1;
+        goto -> [bb1];
+    }
+
+    bb1: {
+        _8 = diag_logging::regseq::log::intrinsics::log_debug("debug event x={}", move _2) -> [return: bb2];
+    }
+
+    bb2: {
+        _9 = copy _1;
+        goto -> [bb3];
+    }
+
+    bb3: {
+        _15 = diag_logging::regseq::log::intrinsics::log_info("info event x={}", move _9) -> [return: bb4];
+    }
+
+    bb4: {
+        _16 = copy _1;
+        goto -> [bb5];
+    }
+
+    bb5: {
+        _22 = diag_logging::regseq::log::intrinsics::log_warn("warn event x={}", move _16) -> [return: bb6];
+    }
+
+    bb6: {
+        _23 = copy _1;
+        goto -> [bb7];
+    }
+
+    bb7: {
+        _29 = diag_logging::regseq::log::intrinsics::log_error("error event x={}", move _23) -> [return: bb8];
+    }
+
+    bb8: {
+        return -> [];
+    }
+}
+
+static diag_logging::<regseq_synth>::const_memory_static::02f99733541076ab7decc8436487d8c8: [u8; 16] = *b"debug event x={}";
+
+static diag_logging::<regseq_synth>::const_memory_static::567bdda798bd9248acb1a76654c2cb51: [u8; 16] = *b"error event x={}";
+
+static diag_logging::<regseq_synth>::const_memory_static::b13f201a866c91e5f10ab9edd4d32efc: [u8; 15] = *b"not implemented";
+
+static diag_logging::<regseq_synth>::const_memory_static::b73bbf081a7aa9d04cb388f778faeb90: [u8; 15] = *b"warn event x={}";
+
+static diag_logging::<regseq_synth>::const_memory_static::c902e5707a1c41a5c42f7e24413dd4db: [u8; 15] = *b"info event x={}";

@@ -61,6 +61,24 @@ pub struct PendingItem {
     pub synthetic_kind: SyntheticItemKind,
 }
 
+/// Bridge-side accumulator for DiagLogPeel residue per spec.md
+/// section 26.6 (`spec.md:12705-12707`). Populated during
+/// `peel_body_against_model` per collapsed wrapper Call; drained
+/// by `eliminate_diag_log_peel_residue` after every Body has been
+/// peeled in the Phase-5 sub-pass order. The accumulator carries
+/// the seed set for the post-DiagLogPeel residue-driven DCE: the
+/// wrapper Call's `CallCallee::Direct(instance_id)` captured BEFORE
+/// `collapse_wrapper_calls` rewrites the terminator, so the seeds
+/// survive the collapse.
+#[derive(Clone, Debug, Default)]
+pub struct DiagLogPeelResidue {
+    /// `InstanceId`s of the `<LogArg as From<T>>::from(...)` wrapper
+    /// Calls that DiagLogPeel collapsed to `Goto`. Each is a seed
+    /// for the transitive dead-set computation in
+    /// `eliminate_diag_log_peel_residue`.
+    pub collapsed_wrapper_instances: Vec<InstanceId>,
+}
+
 /// Mutable working state threaded through every bridge phase.
 pub struct BridgeCtxt<'tcx> {
     /// Rustc-side bridge input and Phase-1 discovery output.
@@ -123,6 +141,12 @@ pub struct BridgeCtxt<'tcx> {
     /// `Instance.generic_args` by mapping each `GenericArg::Type(TyId)`
     /// back through this cache.
     pub ty_forward_cache: HashMap<TyId, rustc_middle::ty::Ty<'tcx>>,
+    /// Bridge-side accumulator for DiagLogPeel residue per
+    /// regseq-driver-48 Change A. Populated by
+    /// `peel_body_against_model` per collapsed wrapper Call;
+    /// drained by `diag_log::dead_item_elim::eliminate_diag_log_peel_residue`
+    /// at the end of Phase 5. See `DiagLogPeelResidue`.
+    pub diag_log_peel_residue: DiagLogPeelResidue,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -148,6 +172,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             source_ty_pending: HashMap::new(),
             function_instance_for_item: HashMap::new(),
             ty_forward_cache: HashMap::new(),
+            diag_log_peel_residue: DiagLogPeelResidue::default(),
         }
     }
 }
@@ -1031,6 +1056,21 @@ fn construct_instances_and_resolve_cross_references(
     let item_remap = ctxt.model.sort_items_by_f4();
     ctxt.handles.remap_item_ids(&item_remap);
     const_::construct_const_memory_static_instances(ctxt)?;
+    // Audit-finding regseq-driver-48 (spec.md section 26.6
+    // `I-DiagLog-CallArity` carrier-survival contract): the
+    // DiagLogPeel body pass collapses every `<LogArg as From<T>>::
+    // from(...)` wrapper Call to a Goto but the wrapper Items,
+    // their Instances, their per-Item FnSig entries, and the
+    // `Ty::Enum { item: <LogArg-item> }` entries in the TyInterner
+    // all survive. Section 26.6 pins "the `LogArg::from(...)`
+    // wrappers, the slice aggregate, and the `LogArg` type do NOT
+    // appear in RegseqModel". This pass runs the residue-driven
+    // DCE that removes those entries (instances -> fn_sigs -> tys
+    // -> items in dependency order) and remaps every surviving
+    // reference. Scope is residue-driven, not generalised DCE:
+    // removal seeds come from the DiagLogPeelResidue accumulator
+    // populated during `run_phase5_body_passes` above.
+    diag_log::dead_item_elim::eliminate_diag_log_peel_residue(ctxt)?;
     Ok(())
 }
 

@@ -1493,3 +1493,918 @@ mod sort_items_by_f4 {
         assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));
     }
 }
+
+// ------------------------------------------------------------------
+// regseq-driver-48: removal helpers + Ty/FnSig walkers
+// (spec.md section 26.6 carrier-survival contract).
+// ------------------------------------------------------------------
+
+mod dead_item_elim_helpers {
+    use super::*;
+    use crate::cabi::{CAbiLowering, CAbiShape, SubstReason};
+    use crate::ids::{BlockId, FieldIdx, LocalId, VariantIdx};
+    use crate::synthetic::SyntheticItemKind;
+    use crate::Const;
+    use crate::{
+        AggregateKind, AssertKind, BasicBlock, BinOp, CallCallee, CastKind, CopyNonOverlapping,
+        DefPathHash, EnumShape, FieldLayout, FloatKind, IndexVec, IntKind, Layout, LayoutKind,
+        LocalDecl, Mutability, NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion,
+        Provenance, Rvalue, Statement, StatementKind, SwitchTargets, TagEncoding, TagScalar,
+        Terminator, TerminatorKind, UintKind, UnOp, VariantLayout, VariantRange, WrappingRange,
+    };
+
+    fn named_item(model: &mut RegseqModel, leaf: &str, kind: ItemKind) -> ItemId {
+        let leaf_id = model.strings.intern(leaf);
+        let rendered = model.strings.intern(&format!("pl011-spec::{leaf}"));
+        let item = Item {
+            def_path: DefPath {
+                crate_id: model.primary_crate,
+                segments: vec![
+                    DefPathSegment {
+                        data: DefPathData::CrateRoot,
+                        disambiguator: 0,
+                    },
+                    DefPathSegment {
+                        data: DefPathData::TypeNs(leaf_id),
+                        disambiguator: 0,
+                    },
+                ],
+                rendered,
+            },
+            kind,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            linkage: Linkage::Default,
+            link_section: None,
+            inline_hint: InlineHint::None,
+            is_unsafe: false,
+            is_phantom_data: false,
+            is_unsafe_cell: false,
+            is_manually_drop: false,
+            opaque_handle_eligible: false,
+        };
+        let id = model.items.push(item);
+        model.item_def_paths.push(DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash: id.as_u32() as u64 + 100,
+        });
+        model.item_synthetic_kinds.push(SyntheticItemKind::None);
+        model.domain_attrs.item_attrs.push(Vec::new());
+        id
+    }
+
+    fn unit_layout() -> Layout {
+        crate::UNIT_LAYOUT
+    }
+
+    fn empty_struct_layout() -> Layout {
+        Layout {
+            size: 0,
+            align: 1,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Struct { fields: vec![] },
+        }
+    }
+
+    fn push_function_instance(
+        model: &mut RegseqModel,
+        item: ItemId,
+        fn_sig: FnSigId,
+        body: Option<Body>,
+    ) -> InstanceId {
+        model.instances.push(Instance {
+            item,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span {
+                file: SourceFileId::SYNTHESIZED,
+                lo: 0,
+                hi: 0,
+            },
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig,
+                body,
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        })
+    }
+
+    fn default_unit_sig(model: &mut RegseqModel) -> FnSigId {
+        let unit_ty = model.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: unit_layout(),
+        });
+        let sig = model.sigs.intern(FnSig {
+            inputs: vec![],
+            output: unit_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        sig
+    }
+
+    // ----------------- Test Plan items 1-4 + 7: removal helpers -----------------
+
+    /// Test Plan item 1: `remove_items_and_remap` -- middle-item
+    /// removal compacts `model.items`, every IndexVec<ItemId, _>
+    /// side table, and remaps the surviving Instance.item reference.
+    #[test]
+    fn remove_items_and_remap_compacts_middle_item_and_remaps_reference() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        let _item_0 = named_item(&mut m, "item_a", ItemKind::Function);
+        let _item_1 = named_item(&mut m, "item_b", ItemKind::Function);
+        let item_2 = named_item(&mut m, "item_c", ItemKind::Function);
+        let sig = default_unit_sig(&mut m);
+        let _inst = push_function_instance(&mut m, item_2, sig, None);
+
+        let item_keep = vec![true, false, true];
+        let remap = m.remove_items_and_remap(&item_keep);
+        assert_eq!(remap.len(), 3);
+        assert_eq!(remap[0], Some(ItemId::from_u32(0)));
+        assert_eq!(remap[1], None);
+        assert_eq!(remap[2], Some(ItemId::from_u32(1)));
+        assert_eq!(m.items.len(), 2);
+        assert_eq!(m.item_def_paths.len(), 2);
+        assert_eq!(m.item_synthetic_kinds.len(), 2);
+        assert_eq!(m.domain_attrs.item_attrs.len(), 2);
+        // The surviving Instance now references the new index of the
+        // former item_2 (post-compaction position 1).
+        assert_eq!(m.instances[InstanceId::ZERO].item, ItemId::from_u32(1));
+    }
+
+    /// Test Plan item 2: `remove_instances_and_remap` -- removal
+    /// with surviving Call terminator remap.
+    #[test]
+    fn remove_instances_and_remap_remaps_call_callee_inside_body() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        let item = named_item(&mut m, "caller", ItemKind::Function);
+        let sig = default_unit_sig(&mut m);
+
+        let _inst_0 = push_function_instance(&mut m, item, sig, None);
+        let _inst_1 = push_function_instance(&mut m, item, sig, None);
+        let inst_2 = push_function_instance(&mut m, item, sig, None);
+
+        // Body containing a Call terminator targeting Instance 2.
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Direct(inst_2),
+                    args: Box::new([]),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: None,
+                },
+                span: Span {
+                    file: SourceFileId::SYNTHESIZED,
+                    lo: 0,
+                    hi: 0,
+                },
+            },
+        });
+        let unit_ty = m.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: unit_layout(),
+        });
+        let mut local_decls = IndexVec::new();
+        local_decls.push(LocalDecl {
+            ty: unit_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let body = Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        };
+        let inst_with_body = push_function_instance(&mut m, item, sig, Some(body));
+
+        // Remove Instance 1.
+        let mut keep = vec![true; m.instances.len()];
+        keep[1] = false;
+        let remap = m.remove_instances_and_remap(&keep);
+        assert_eq!(remap[1], None);
+        assert_eq!(remap[2], Some(InstanceId::from_u32(1)));
+
+        // The body's Call callee was remapped from Instance 2 to
+        // the new position 1 (post-compaction).
+        let new_inst_with_body = match remap[inst_with_body.index()] {
+            Some(id) => id,
+            None => panic!("expected the body-carrying instance to survive"),
+        };
+        let kind = &m.instances[new_inst_with_body].kind;
+        let body_ref = kind.as_function().unwrap().body.as_ref().unwrap();
+        match &body_ref.basic_blocks[BlockId::from_u32(0)].terminator.kind {
+            TerminatorKind::Call {
+                callee: CallCallee::Direct(id),
+                ..
+            } => {
+                assert_eq!(*id, InstanceId::from_u32(1));
+            }
+            other => panic!("expected Call terminator, got {other:?}"),
+        }
+    }
+
+    /// Test Plan item 3: `remove_tys_and_remap` remaps TyId
+    /// references and rebuilds `closure_captures_struct_ty`.
+    #[test]
+    fn remove_tys_and_remap_remaps_ty_id_refs_and_rebuilds_capture_map() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        // Three Tys: a marker struct (Ty 0), a slated-for-removal
+        // marker (Ty 1), and a second struct (Ty 2).
+        let item_a = named_item(&mut m, "a", ItemKind::Struct);
+        let item_b = named_item(&mut m, "b", ItemKind::Struct);
+        let item_c = named_item(&mut m, "c", ItemKind::Struct);
+        let ty_0 = m.types.intern(Ty::Struct {
+            item: item_a,
+            args: vec![],
+            layout: empty_struct_layout(),
+        });
+        let ty_1 = m.types.intern(Ty::Struct {
+            item: item_b,
+            args: vec![],
+            layout: empty_struct_layout(),
+        });
+        let ty_2 = m.types.intern(Ty::Struct {
+            item: item_c,
+            args: vec![],
+            layout: empty_struct_layout(),
+        });
+        // Ty::Ref(Ty 2, _).
+        let ref_ty = m.types.intern(Ty::Ref(ty_2, Provenance::SharedBorrow));
+
+        // Instance whose Function body has a LocalDecl referencing Ty 2.
+        let item_fn = named_item(&mut m, "f", ItemKind::Function);
+        let unit_ty = m.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: unit_layout(),
+        });
+        let sig = m.sigs.intern(FnSig {
+            inputs: vec![],
+            output: unit_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        m.sig_c_abi_lowerings.push(None);
+        let mut local_decls = IndexVec::new();
+        local_decls.push(LocalDecl {
+            ty: unit_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        local_decls.push(LocalDecl {
+            ty: ty_2,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        });
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Return,
+                span: Span::dummy(),
+            },
+        });
+        let body = Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: Span::dummy(),
+        };
+        let _inst = push_function_instance(&mut m, item_fn, sig, Some(body));
+
+        // closure_captures_struct_ty entry (Ty 0 -> Ty 2). Neither
+        // side is slated for removal but both should be remapped.
+        m.closure_captures_struct_ty.insert(ty_0, ty_2);
+
+        // Mark Ty 1 (the middle marker) for removal.
+        let mut keep = vec![true; m.types.len()];
+        keep[ty_1.index()] = false;
+        let remap = m.remove_tys_and_remap(&keep);
+        assert_eq!(remap[ty_1.index()], None);
+        assert!(remap[ty_0.index()].is_some());
+        assert!(remap[ty_2.index()].is_some());
+        let new_ty_0 = remap[ty_0.index()].unwrap();
+        let new_ty_2 = remap[ty_2.index()].unwrap();
+        let new_ref_ty = remap[ref_ty.index()].unwrap();
+
+        // LocalDecl.ty is the new index of Ty 2.
+        let inst_idx = m.instances.len() - 1;
+        let body_ref = m.instances[InstanceId::from_u32(inst_idx as u32)]
+            .kind
+            .as_function()
+            .unwrap()
+            .body
+            .as_ref()
+            .unwrap();
+        assert_eq!(body_ref.local_decls[LocalId::from_u32(1)].ty, new_ty_2);
+
+        // The Ty::Ref's inner TyId is the new index of Ty 2.
+        match m.types.resolve(new_ref_ty) {
+            Ty::Ref(pointee, _) => assert_eq!(*pointee, new_ty_2),
+            other => panic!("expected Ty::Ref, got {other:?}"),
+        }
+
+        // TyInterner iter() yields the surviving Tys in insertion
+        // order minus the removed. Starting Tys: ty_0/ty_1/ty_2
+        // (structs), ref_ty, unit_ty = 5; minus ty_1 = 4 surviving.
+        assert_eq!(m.types.len(), 4);
+        // closure_captures_struct_ty has exactly one entry
+        // `(new_ty_0, new_ty_2)`.
+        assert_eq!(m.closure_captures_struct_ty.len(), 1);
+        assert_eq!(m.closure_captures_struct_ty.get(&new_ty_0), Some(&new_ty_2));
+    }
+
+    /// Test Plan item 4: `remove_fn_sigs_and_remap` remaps FnSigId
+    /// references and compacts `sig_c_abi_lowerings` in lock-step.
+    #[test]
+    fn remove_fn_sigs_and_remap_compacts_lockstep_and_remaps_refs() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        // Two distinct FnSigs.
+        let sig_0 = m.sigs.intern(FnSig {
+            inputs: vec![u32_ty],
+            output: u32_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        let sig_1 = m.sigs.intern(FnSig {
+            inputs: vec![],
+            output: u32_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        // sig_c_abi_lowerings populated for both.
+        m.sig_c_abi_lowerings.push(Some(CAbiLowering {
+            inputs: vec![CAbiShape::Direct],
+            output: CAbiShape::Direct,
+        }));
+        m.sig_c_abi_lowerings.push(Some(CAbiLowering {
+            inputs: vec![],
+            output: CAbiShape::Substituted {
+                emit_as: u32_ty,
+                reason: SubstReason::TransparentChain,
+            },
+        }));
+
+        // Function Instance referencing FnSig 1.
+        let item_fn = named_item(&mut m, "f", ItemKind::Function);
+        let inst = push_function_instance(&mut m, item_fn, sig_1, None);
+
+        // Ty::FnPtr(FnSig 1).
+        let fn_ptr_ty = m.types.intern(Ty::FnPtr(sig_1));
+
+        // Remove FnSig 0.
+        let keep = vec![false, true];
+        let remap = m.remove_fn_sigs_and_remap(&keep);
+        assert_eq!(remap[sig_0.index()], None);
+        assert_eq!(remap[sig_1.index()], Some(FnSigId::from_u32(0)));
+
+        // The Instance's fn_sig is the new index of FnSig 1.
+        let inst_data = m.instances[inst].kind.as_function().unwrap();
+        assert_eq!(inst_data.fn_sig, FnSigId::from_u32(0));
+
+        // Ty::FnPtr's inner FnSigId is the new index of FnSig 1.
+        match m.types.resolve(fn_ptr_ty) {
+            Ty::FnPtr(sig) => assert_eq!(*sig, FnSigId::from_u32(0)),
+            other => panic!("expected Ty::FnPtr, got {other:?}"),
+        }
+
+        // sig_c_abi_lowerings compacted in lock-step.
+        assert_eq!(m.sig_c_abi_lowerings.len(), m.sigs.len());
+        assert_eq!(m.sig_c_abi_lowerings.len(), 1);
+        // The surviving entry is the one originally at sig_1.
+        let surviving = m.sig_c_abi_lowerings[FnSigId::ZERO]
+            .as_ref()
+            .expect("FnSig 1 lowering preserved");
+        match &surviving.output {
+            CAbiShape::Substituted { reason, .. } => {
+                assert_eq!(*reason, SubstReason::TransparentChain);
+            }
+            other => panic!("expected substituted output, got {other:?}"),
+        }
+    }
+
+    /// Test Plan item 7: empty removal (no-op): every keep entry
+    /// is `true` so storage is unchanged and every remap is
+    /// identity.
+    #[test]
+    fn no_op_removal_is_identity_for_every_helper() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        let item = named_item(&mut m, "a", ItemKind::Function);
+        let sig = default_unit_sig(&mut m);
+        let _inst = push_function_instance(&mut m, item, sig, None);
+
+        let items_before = m.items.clone();
+        let instances_before = m.instances.clone();
+        let types_len_before = m.types.len();
+        let sigs_len_before = m.sigs.len();
+
+        let item_remap = m.remove_items_and_remap(&vec![true; m.items.len()]);
+        let inst_remap = m.remove_instances_and_remap(&vec![true; m.instances.len()]);
+        let ty_remap = m.remove_tys_and_remap(&vec![true; m.types.len()]);
+        let sig_remap = m.remove_fn_sigs_and_remap(&vec![true; m.sigs.len()]);
+
+        assert_eq!(m.items, items_before);
+        assert_eq!(m.instances, instances_before);
+        assert_eq!(m.types.len(), types_len_before);
+        assert_eq!(m.sigs.len(), sigs_len_before);
+
+        for (idx, slot) in item_remap.iter().enumerate() {
+            assert_eq!(*slot, Some(ItemId::from_u32(idx as u32)));
+        }
+        for (idx, slot) in inst_remap.iter().enumerate() {
+            assert_eq!(*slot, Some(InstanceId::from_u32(idx as u32)));
+        }
+        for (idx, slot) in ty_remap.iter().enumerate() {
+            assert_eq!(*slot, Some(TyId::from_u32(idx as u32)));
+        }
+        for (idx, slot) in sig_remap.iter().enumerate() {
+            assert_eq!(*slot, Some(FnSigId::from_u32(idx as u32)));
+        }
+    }
+
+    // ----------------- Test Plan items 5-6: walker coverage -----------------
+
+    /// Test Plan item 5: `for_each_ty_id_mut` visits every TyId
+    /// reference enumerated in regseq-driver-48 Change D. Build a
+    /// model exercising every surface and assert the visited count
+    /// matches the expected total.
+    #[test]
+    fn for_each_ty_id_mut_visits_every_enumerated_surface() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        // Primitive seeds.
+        let unit_ty = m.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: unit_layout(),
+        });
+        let bool_ty = m.types.intern(Ty::Bool);
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+
+        // Ty variants carrying TyIds.
+        let array_ty = m.types.intern(Ty::Array(u32_ty, 4)); // 1 TyId
+        let slice_ty = m.types.intern(Ty::Slice(u32_ty)); // 1 TyId
+        let ref_ty = m.types.intern(Ty::Ref(u32_ty, Provenance::SharedBorrow)); // 1 TyId
+        let ptr_ty = m.types.intern(Ty::Ptr(u32_ty, Mutability::Not)); // 1 TyId
+        let dyn_ty = m.types.intern(Ty::Dynamic {
+            auto_traits: vec![],
+            vtable_ty: u32_ty,
+        }); // 1 TyId
+        let tuple_with_layout = m.types.intern(Ty::Tuple {
+            fields: vec![u32_ty, bool_ty],
+            layout: Layout {
+                size: 5,
+                align: 4,
+                pack: None,
+                uninhabited: false,
+                kind: LayoutKind::Struct {
+                    fields: vec![
+                        FieldLayout {
+                            name: StringId::ZERO,
+                            ty: u32_ty,
+                            offset: 0,
+                        },
+                        FieldLayout {
+                            name: StringId::ZERO,
+                            ty: bool_ty,
+                            offset: 4,
+                        },
+                    ],
+                },
+            },
+        }); // 2 Tuple.fields + 2 layout fields = 4 TyIds
+
+        // Struct with nominal payload (GenericArgs + Layout).
+        let item_struct = named_item(&mut m, "s", ItemKind::Struct);
+        let struct_ty = m.types.intern(Ty::Struct {
+            item: item_struct,
+            args: vec![GenericArg::Type(u32_ty)], // 1 TyId via GenericArg
+            layout: Layout {
+                size: 4,
+                align: 4,
+                pack: None,
+                uninhabited: false,
+                kind: LayoutKind::Struct {
+                    fields: vec![FieldLayout {
+                        name: StringId::ZERO,
+                        ty: u32_ty,
+                        offset: 0,
+                    }],
+                },
+            },
+        }); // 1 args + 1 layout = 2 TyIds
+
+        // Enum with multiple-variant layout including a TagScalar.
+        let item_enum = named_item(&mut m, "e", ItemKind::Enum);
+        let enum_ty = m.types.intern(Ty::Enum {
+            item: item_enum,
+            args: vec![GenericArg::Type(bool_ty)],
+            layout: Layout {
+                size: 4,
+                align: 4,
+                pack: None,
+                uninhabited: false,
+                kind: LayoutKind::Enum {
+                    shape: EnumShape::Multiple {
+                        tag: TagScalar {
+                            offset: 0,
+                            scalar_ty: u32_ty,
+                            valid_range: WrappingRange { start: 0, end: 1 },
+                        },
+                        encoding: TagEncoding::Direct,
+                        variants: vec![VariantLayout {
+                            name: StringId::ZERO,
+                            fields: vec![FieldLayout {
+                                name: StringId::ZERO,
+                                ty: bool_ty,
+                                offset: 0,
+                            }],
+                            uninhabited: false,
+                            discriminant: 0,
+                            tag_value: None,
+                        }],
+                    },
+                },
+            },
+        }); // 1 args + 1 tag.scalar_ty + 1 variant field = 3 TyIds
+
+        // Union with simple layout.
+        let item_union = named_item(&mut m, "u", ItemKind::Union);
+        let union_ty = m.types.intern(Ty::Union {
+            item: item_union,
+            args: vec![GenericArg::Type(u32_ty)],
+            layout: Layout {
+                size: 4,
+                align: 4,
+                pack: None,
+                uninhabited: false,
+                kind: LayoutKind::Union {
+                    fields: vec![FieldLayout {
+                        name: StringId::ZERO,
+                        ty: u32_ty,
+                        offset: 0,
+                    }],
+                },
+            },
+        }); // 1 args + 1 layout = 2 TyIds
+
+        // FnDef + Closure with GenericArgs.
+        let item_fn = named_item(&mut m, "f", ItemKind::Function);
+        let fn_def_ty = m
+            .types
+            .intern(Ty::FnDef(item_fn, vec![GenericArg::Type(u32_ty)])); // 1
+        let closure_ty = m
+            .types
+            .intern(Ty::Closure(item_fn, vec![GenericArg::Type(bool_ty)])); // 1
+
+        // FnSig with inputs + output.
+        let sig = m.sigs.intern(FnSig {
+            inputs: vec![u32_ty, bool_ty],
+            output: u32_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        }); // 2 inputs + 1 output = 3 TyIds
+        m.sig_c_abi_lowerings.push(Some(CAbiLowering {
+            inputs: vec![CAbiShape::Substituted {
+                emit_as: u32_ty,
+                reason: SubstReason::TransparentChain,
+            }],
+            output: CAbiShape::Substituted {
+                emit_as: bool_ty,
+                reason: SubstReason::TransparentChain,
+            },
+        })); // 1 input substituted + 1 output substituted = 2 TyIds
+
+        // Const::NullPtr.
+        let null_const = m.consts.intern(Const::NullPtr(u32_ty)); // 1 TyId
+
+        // Body with every TyId-bearing surface (LocalDecl.ty,
+        // Rvalue::Cast, every AggregateKind variant, PlaceElem::Field,
+        // every TerminatorKind, NonDivergingIntrinsic).
+        let mut local_decls: IndexVec<LocalId, LocalDecl> = IndexVec::new();
+        local_decls.push(LocalDecl {
+            ty: unit_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        }); // _0 = return: 1 TyId
+        local_decls.push(LocalDecl {
+            ty: u32_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        }); // _1 = u32 arg: 1 TyId
+        local_decls.push(LocalDecl {
+            ty: bool_ty,
+            mutability: Mutability::Mut,
+            span: Span::dummy(),
+            debug_name: None,
+        }); // _2 = bool tmp: 1 TyId
+
+        let const_u32 = m.consts.intern(Const::Uint(UintKind::U32, 42));
+        let l1 = LocalId::from_u32(1);
+        let l2 = LocalId::from_u32(2);
+
+        // Statement::Assign with PlaceElem::Field on lhs + Rvalue::Cast.
+        let s1 = Statement {
+            kind: StatementKind::Assign(
+                Place {
+                    local: l1,
+                    projection: Box::new([PlaceElem::Field(FieldIdx::ZERO, u32_ty)]),
+                }, // 1 TyId (Field)
+                Rvalue::Cast(
+                    CastKind::PointerCoercion(PointerCoercion::Unsize),
+                    Operand::Constant(const_u32),
+                    u32_ty,
+                ), // 1 TyId
+            ),
+            span: Span::dummy(),
+        };
+        // Statement::Assign with every AggregateKind variant -- 7
+        // total, each carrying one TyId.
+        let s2 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(
+                    AggregateKind::Array(u32_ty),
+                    Box::new([Operand::Constant(const_u32)]),
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let s3 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(AggregateKind::Tuple(u32_ty), Box::new([])),
+            ),
+            span: Span::dummy(),
+        };
+        let s4 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(AggregateKind::Struct(u32_ty), Box::new([])),
+            ),
+            span: Span::dummy(),
+        };
+        let s5 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(u32_ty, VariantIdx::from_u32(0)),
+                    Box::new([]),
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let s6 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(
+                    AggregateKind::Union(u32_ty, FieldIdx::from_u32(0)),
+                    Box::new([]),
+                ),
+            ),
+            span: Span::dummy(),
+        };
+        let s7 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(AggregateKind::Closure(u32_ty), Box::new([])),
+            ),
+            span: Span::dummy(),
+        };
+        let s8 = Statement {
+            kind: StatementKind::Assign(
+                Place::from(l1),
+                Rvalue::Aggregate(AggregateKind::RawPtr(u32_ty, Mutability::Not), Box::new([])),
+            ),
+            span: Span::dummy(),
+        };
+
+        let block_with_assigns = BasicBlock {
+            statements: vec![s1, s2, s3, s4, s5, s6, s7, s8].into_boxed_slice(),
+            terminator: Terminator {
+                kind: TerminatorKind::Goto(BlockId::from_u32(1)),
+                span: Span::dummy(),
+            },
+        };
+        // Block 1 -- terminator visits operands with a Field
+        // projection on destination.
+        let block_with_call = BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind: TerminatorKind::Call {
+                    callee: CallCallee::Indirect(Operand::Copy(Place {
+                        local: l1,
+                        projection: Box::new([PlaceElem::Field(FieldIdx::ZERO, u32_ty)]),
+                    })), // 1 TyId via callee operand place
+                    args: Box::new([Operand::Copy(Place {
+                        local: l1,
+                        projection: Box::new([PlaceElem::Field(FieldIdx::ZERO, bool_ty)]),
+                    })]), // 1 TyId via arg place
+                    destination: Place {
+                        local: l1,
+                        projection: Box::new([PlaceElem::Field(FieldIdx::ZERO, u32_ty)]),
+                    }, // 1 TyId via destination place
+                    target: None,
+                },
+                span: Span::dummy(),
+            },
+        };
+        let mut basic_blocks = IndexVec::new();
+        basic_blocks.push(block_with_assigns);
+        basic_blocks.push(block_with_call);
+
+        let body = Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 1,
+            span: Span::dummy(),
+        };
+        // Instance carrying generic_args + body. The Static
+        // /Const/Struct/Enum/Union instance kinds carrying a TyId
+        // are exercised by separate instance pushes below.
+        let function_instance = push_function_instance(&mut m, item_fn, sig, Some(body));
+        m.instances[function_instance].generic_args = vec![GenericArg::Type(u32_ty)];
+        // Static instance: 1 TyId via kind.
+        let _static_instance_id = m.instances.push(Instance {
+            item: item_struct,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span::dummy(),
+            kind: InstanceKind::Static {
+                ty: struct_ty,
+                init: None,
+            },
+        });
+        // Const instance: 1 TyId via kind.
+        let const_zst = m.consts.intern(Const::ZST);
+        let _const_instance_id = m.instances.push(Instance {
+            item: item_struct,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span::dummy(),
+            kind: InstanceKind::Const {
+                ty: u32_ty,
+                value: const_zst,
+            },
+        });
+        // Struct/Enum/Union instances: 1 TyId each via kind.layout.
+        let _struct_instance_id = m.instances.push(Instance {
+            item: item_struct,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span::dummy(),
+            kind: InstanceKind::Struct { layout: struct_ty },
+        });
+        let _enum_instance_id = m.instances.push(Instance {
+            item: item_enum,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span::dummy(),
+            kind: InstanceKind::Enum { layout: enum_ty },
+        });
+        let _union_instance_id = m.instances.push(Instance {
+            item: item_union,
+            generic_args: vec![],
+            emission_name: StringId::ZERO,
+            span: Span::dummy(),
+            kind: InstanceKind::Union { layout: union_ty },
+        });
+
+        // Build an enumerator closure that counts visits.
+        let mut visited = 0usize;
+        m.for_each_ty_id_mut(|_| visited += 1);
+
+        // Expected count, by surface (mirroring the comments above):
+        //   Ty interner entries:
+        //     Array (1) + Slice (1) + Ref (1) + Ptr (1) + Dynamic (1)
+        //     + Tuple_with_layout: 2 fields + 2 layout fields = 4
+        //     + Struct {args=1, layout=1} = 2
+        //     + Enum {args=1, tag.scalar_ty=1, variant field=1} = 3
+        //     + Union {args=1, layout=1} = 2
+        //     + FnDef.args = 1
+        //     + Closure.args = 1
+        //   = 18 from TyInterner.
+        //   FnSig inputs (2) + output (1) = 3.
+        //   sig_c_abi_lowerings substituted: 1 input + 1 output = 2.
+        //   Body: 3 local_decls + s1(2 PlaceField + Cast) + s2..s8(7
+        //         AggregateKind one each) + block_with_call(3 place
+        //         field TyIds) = 3 + 2 + 7 + 3 = 15.
+        //     Detailed: 3 local_decls + 1 s1.lhs.PlaceField +
+        //               1 s1.Cast + 7 s2..s8 AggregateKinds + 3
+        //               block_with_call PlaceFields = 15.
+        //   Const::NullPtr = 1.
+        //   Instance: 1 generic_arg(function_instance) +
+        //             1 static.kind.ty + 1 const.kind.ty +
+        //             1 struct.kind.layout + 1 enum.kind.layout +
+        //             1 union.kind.layout = 6.
+        let expected_total = 18 + 3 + 2 + 15 + 1 + 6;
+        assert_eq!(visited, expected_total);
+        // The lookup map is rebuilt: a no-op walk preserves
+        // identity, so each Ty resolves to its original TyId.
+        assert_eq!(m.types.find(&Ty::Uint(UintKind::U32)), Some(u32_ty));
+        assert_eq!(m.types.find(&Ty::Bool), Some(bool_ty));
+        // Silence unused-binding warnings for IDs we constructed
+        // to populate the model graph.
+        let _ = (
+            array_ty,
+            slice_ty,
+            ref_ty,
+            ptr_ty,
+            dyn_ty,
+            tuple_with_layout,
+            struct_ty,
+            enum_ty,
+            union_ty,
+            fn_def_ty,
+            closure_ty,
+            null_const,
+            l2,
+            const_u32,
+        );
+    }
+
+    /// Test Plan item 6: `for_each_fn_sig_id_mut` visits every
+    /// FnSigId reference enumerated in regseq-driver-48 Change D.
+    #[test]
+    fn for_each_fn_sig_id_mut_visits_function_instances_and_fn_ptr_ty() {
+        let mut m = RegseqModel::with_primary("primary", StableCrateId(1));
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let sig = m.sigs.intern(FnSig {
+            inputs: vec![],
+            output: u32_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        m.sig_c_abi_lowerings.push(None);
+        let _fn_ptr_ty = m.types.intern(Ty::FnPtr(sig));
+        let item_fn = named_item(&mut m, "f", ItemKind::Function);
+        let _i1 = push_function_instance(&mut m, item_fn, sig, None);
+        let _i2 = push_function_instance(&mut m, item_fn, sig, None);
+
+        let mut visited = 0usize;
+        m.for_each_fn_sig_id_mut(|_| visited += 1);
+        // 2 InstanceKind::Function.fn_sig + 1 Ty::FnPtr = 3.
+        assert_eq!(visited, 3);
+    }
+
+    // Test Plan items 8-9 (eliminate_diag_log_peel_residue) live in
+    // `crates/regseq-driver/src/bridge/diag_log/dead_item_elim.rs::mod tests`
+    // so they can reach BridgeCtxt + DiagLogPeelResidue without
+    // pulling regseq-driver into regseq-model's dependency graph.
+    // The integration test at
+    // `crates/regseq-driver/tests/bridge_diag_log_dead_item_elim.rs`
+    // covers Test Plan items 10-12.
+
+    // Compile-time touch: bring in unused imports for clippy parity.
+    #[test]
+    fn imports_compile() {
+        let _ = (
+            BinOp::Add,
+            UnOp::Not,
+            Mutability::Mut,
+            FloatKind::F32,
+            IntKind::I32,
+            SwitchTargets {
+                cases: Box::new([]),
+                otherwise: BlockId::from_u32(0),
+            },
+            VariantRange {
+                start: VariantIdx::ZERO,
+                end: VariantIdx::ZERO,
+            },
+            VariantLayout {
+                name: StringId::ZERO,
+                fields: vec![],
+                uninhabited: false,
+                discriminant: 0,
+                tag_value: None,
+            },
+            TagEncoding::Direct,
+            AssertKind::NullPointerDereference,
+            NonDivergingIntrinsic::Assume(Operand::Constant(ConstId::ZERO)),
+            CopyNonOverlapping {
+                src: Operand::Constant(ConstId::ZERO),
+                dst: Operand::Constant(ConstId::ZERO),
+                count: Operand::Constant(ConstId::ZERO),
+            },
+        );
+    }
+}

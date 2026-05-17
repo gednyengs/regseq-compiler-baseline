@@ -11,7 +11,7 @@ use crate::body_ty::{
 };
 use crate::bridge_input::BridgeInput;
 use crate::build::BuildInfo;
-use crate::cabi::CAbiLowering;
+use crate::cabi::{CAbiLowering, CAbiShape};
 use crate::const_interner::{ConstIdentityKey, ConstInterner};
 use crate::const_value::{Byte, Const};
 use crate::crate_info::{CrateInfo, StableCrateId};
@@ -1163,6 +1163,291 @@ impl RegseqModel {
             );
         }
 
+        remap
+    }
+
+    /// Apply `f` to every `TyId` reference in the model. Visits the
+    /// surfaces enumerated in `regseq-driver-48` Change D:
+    ///
+    /// - Type-interner entries: every `Ty` variant that embeds a
+    ///   `TyId` (`Array`, `Slice`, `Ref`, `Ptr`, `Dynamic.vtable_ty`,
+    ///   `Tuple.fields`, `Enum/Struct/Union.args` + nested
+    ///   `GenericArg::Type`, `FnDef.args`, `Closure.args`), plus
+    ///   every inline `Layout` TyId (`FieldLayout.ty`,
+    ///   `TagScalar.scalar_ty`).
+    /// - `FnSig` entries: every `inputs[*]` and `output`.
+    /// - `sig_c_abi_lowerings[*]`: every `Some(CAbiLowering)`'s
+    ///   per-position `CAbiShape::Substituted { emit_as, .. }`.
+    /// - Body local_decls: `LocalDecl.ty`.
+    /// - Body statements + terminators: every `Rvalue::Cast` TyId,
+    ///   every `Rvalue::Aggregate(AggregateKind, _)` TyId,
+    ///   `PlaceElem::Field(_, TyId)` reachable through any Place
+    ///   projection (in Assign LHS, Rvalue, Operand, or
+    ///   Terminator).
+    /// - Const interner: `Const::NullPtr(TyId)`.
+    /// - Instances: `InstanceKind::Static.ty`,
+    ///   `InstanceKind::Const.ty`, `InstanceKind::Struct.layout`,
+    ///   `InstanceKind::Enum.layout`, `InstanceKind::Union.layout`,
+    ///   plus every `Instance.generic_args[*]::Type(TyId)`.
+    ///
+    /// Does NOT visit `closure_captures_struct_ty` (its HashMap
+    /// keys require re-insertion; callers performing TyId remap
+    /// rebuild that map separately, e.g.,
+    /// `remove_tys_and_remap`).
+    ///
+    /// Rebuilds the content-keyed lookup maps on the TyInterner,
+    /// FnSigInterner, and ConstInterner after the walk because
+    /// every interner's identity key embeds at least one of the
+    /// visited surfaces.
+    pub(crate) fn for_each_ty_id_mut<F: FnMut(&mut TyId)>(&mut self, mut f: F) {
+        self.types
+            .for_each_ty_mut(|ty| visit_ty_ids_in_ty(ty, &mut f));
+        self.sigs.for_each_fn_sig_mut(|sig| {
+            for input in sig.inputs.iter_mut() {
+                f(input);
+            }
+            f(&mut sig.output);
+        });
+        for lowering in self.sig_c_abi_lowerings.iter_mut().flatten() {
+            for shape in lowering.inputs.iter_mut() {
+                if let CAbiShape::Substituted { emit_as, .. } = shape {
+                    f(emit_as);
+                }
+            }
+            if let CAbiShape::Substituted { emit_as, .. } = &mut lowering.output {
+                f(emit_as);
+            }
+        }
+        for instance in self.instances.iter_mut() {
+            for arg in instance.generic_args.iter_mut() {
+                if let GenericArg::Type(ty) = arg {
+                    f(ty);
+                }
+            }
+            match &mut instance.kind {
+                InstanceKind::Function(data) => {
+                    if let Some(body) = &mut data.body {
+                        visit_ty_ids_in_body(body, &mut f);
+                    }
+                }
+                InstanceKind::Static { ty, .. } => f(ty),
+                InstanceKind::Const { ty, .. } => f(ty),
+                InstanceKind::Struct { layout } => f(layout),
+                InstanceKind::Enum { layout } => f(layout),
+                InstanceKind::Union { layout } => f(layout),
+            }
+        }
+        self.consts.for_each_const_mut(|value| {
+            if let Const::NullPtr(ty) = value {
+                f(ty);
+            }
+        });
+        self.types.rebuild_lookup();
+        self.sigs.rebuild_lookup();
+        self.consts.rebuild_lookup();
+    }
+
+    /// Apply `f` to every `FnSigId` reference in the model. Visits
+    /// the surfaces enumerated in `regseq-driver-48` Change D:
+    ///
+    /// - Type-interner: `Ty::FnPtr(FnSigId)`.
+    /// - Every `InstanceKind::Function.fn_sig`.
+    ///
+    /// Does NOT visit the `sig_c_abi_lowerings` `IndexVec` indexer
+    /// (`sig_c_abi_lowerings` is positional and is permuted in
+    /// lock-step with FnSig removal by `remove_fn_sigs_and_remap`).
+    ///
+    /// Rebuilds the content-keyed lookup map on the TyInterner
+    /// after the walk because `Ty::FnPtr` identity embeds the
+    /// visited `FnSigId`.
+    pub(crate) fn for_each_fn_sig_id_mut<F: FnMut(&mut FnSigId)>(&mut self, mut f: F) {
+        self.types.for_each_ty_mut(|ty| {
+            if let Ty::FnPtr(sig) = ty {
+                f(sig);
+            }
+        });
+        for instance in self.instances.iter_mut() {
+            if let InstanceKind::Function(data) = &mut instance.kind {
+                f(&mut data.fn_sig);
+            }
+        }
+        self.types.rebuild_lookup();
+    }
+
+    /// Remove `Item` entries at every index where
+    /// `item_keep[idx] == false`, compacting `model.items` and
+    /// every `IndexVec<ItemId, _>` side table (`item_def_paths`,
+    /// `item_synthetic_kinds`, `domain_attrs.item_attrs`) in
+    /// lock-step, and remap every surviving `ItemId` reference
+    /// through the shared `for_each_item_id_mut` walker.
+    ///
+    /// Returns the old-to-new `ItemId` remap as
+    /// `Vec<Option<ItemId>>`. `None` marks a removed item;
+    /// `Some(new_id)` marks a surviving item's new index.
+    ///
+    /// Removed items must have NO surviving references in the
+    /// model -- this is a caller responsibility. The method does
+    /// NOT verify the absence of references; callers performing a
+    /// residue-driven DCE (`regseq-driver-48`) compute the keep
+    /// set so this contract holds.
+    ///
+    /// Panics if `item_keep.len() != self.items.len()`.
+    pub fn remove_items_and_remap(&mut self, item_keep: &[bool]) -> Vec<Option<ItemId>> {
+        assert_eq!(
+            item_keep.len(),
+            self.items.len(),
+            "remove_items_and_remap keep slice length must match items length",
+        );
+        let old_len = self.items.len();
+        let mut remap: Vec<Option<ItemId>> = vec![None; old_len];
+        let mut next: u32 = 0;
+        for (idx, keep) in item_keep.iter().enumerate() {
+            if *keep {
+                remap[idx] = Some(ItemId::from_u32(next));
+                next += 1;
+            }
+        }
+        permute_index_vec_with_keep(&mut self.items, item_keep);
+        permute_index_vec_with_keep(&mut self.item_def_paths, item_keep);
+        permute_index_vec_with_keep(&mut self.item_synthetic_kinds, item_keep);
+        permute_index_vec_with_keep(&mut self.domain_attrs.item_attrs, item_keep);
+        self.for_each_item_id_mut(|item| {
+            let new = remap[item.index()].expect(
+                "remove_items_and_remap: surviving ItemId reference points to a removed item",
+            );
+            *item = new;
+        });
+        remap
+    }
+
+    /// Remove `Instance` entries at every index where
+    /// `instance_keep[idx] == false`, compacting `model.instances`
+    /// and remapping every surviving `CallCallee::Direct`
+    /// `InstanceId` reference inside materialised function bodies.
+    ///
+    /// Returns the old-to-new `InstanceId` remap as
+    /// `Vec<Option<InstanceId>>`. `None` marks a removed instance;
+    /// `Some(new_id)` marks a surviving instance's new index.
+    ///
+    /// Removed instances must have NO surviving references; the
+    /// method does NOT verify.
+    ///
+    /// Panics if `instance_keep.len() != self.instances.len()`.
+    pub fn remove_instances_and_remap(
+        &mut self,
+        instance_keep: &[bool],
+    ) -> Vec<Option<InstanceId>> {
+        assert_eq!(
+            instance_keep.len(),
+            self.instances.len(),
+            "remove_instances_and_remap keep slice length must match instances length",
+        );
+        let old_len = self.instances.len();
+        let mut remap: Vec<Option<InstanceId>> = vec![None; old_len];
+        let mut next: u32 = 0;
+        for (idx, keep) in instance_keep.iter().enumerate() {
+            if *keep {
+                remap[idx] = Some(InstanceId::from_u32(next));
+                next += 1;
+            }
+        }
+        permute_index_vec_with_keep(&mut self.instances, instance_keep);
+        for instance in self.instances.iter_mut() {
+            if let InstanceKind::Function(data) = &mut instance.kind {
+                if let Some(body) = &mut data.body {
+                    remap_body_call_callees_optional(body, &remap);
+                }
+            }
+        }
+        remap
+    }
+
+    /// Remove `Ty` entries at every `TyId` where
+    /// `ty_keep[idx] == false`, compacting the `TyInterner`'s
+    /// internal slab, and remap every surviving `TyId` reference
+    /// through the shared `for_each_ty_id_mut` walker.
+    ///
+    /// In addition to walking the `for_each_ty_id_mut` surface,
+    /// this method REBUILDS `model.closure_captures_struct_ty`
+    /// with remapped keys + values. `HashMap` key mutation
+    /// requires re-insertion; TyInterner compaction shifts every
+    /// surviving `TyId`, so the keys (and values) must be
+    /// rewritten even when no LogArg `TyId` is itself a key.
+    /// Pairs whose key OR value resolves to a REMOVED `TyId`
+    /// panic in debug builds rather than silently drop (the
+    /// residue-driven contract requires the caller to compute a
+    /// keep set that preserves every closure-capture `TyId`).
+    ///
+    /// Returns the old-to-new `TyId` remap as `Vec<Option<TyId>>`.
+    /// `None` marks a removed entry; `Some(new_id)` marks a
+    /// surviving entry's new index.
+    ///
+    /// Removed `Ty` entries must have NO surviving references; the
+    /// method does NOT verify.
+    ///
+    /// Panics if `ty_keep.len() != self.types.len()`.
+    pub fn remove_tys_and_remap(&mut self, ty_keep: &[bool]) -> Vec<Option<TyId>> {
+        assert_eq!(
+            ty_keep.len(),
+            self.types.len(),
+            "remove_tys_and_remap keep slice length must match TyInterner storage length",
+        );
+        let remap = self.types.compact_by_keep(ty_keep);
+        self.for_each_ty_id_mut(|ty_id| {
+            let new = remap[ty_id.index()]
+                .expect("remove_tys_and_remap: surviving TyId reference points to a removed entry");
+            *ty_id = new;
+        });
+        let drained: Vec<(TyId, TyId)> = self.closure_captures_struct_ty.drain().collect();
+        for (key, value) in drained {
+            let new_key = remap[key.index()].expect(
+                "remove_tys_and_remap: closure_captures_struct_ty key points to a removed Ty",
+            );
+            let new_value = remap[value.index()].expect(
+                "remove_tys_and_remap: closure_captures_struct_ty value points to a removed Ty",
+            );
+            let prev = self.closure_captures_struct_ty.insert(new_key, new_value);
+            debug_assert!(
+                prev.is_none(),
+                "closure_captures_struct_ty key collision after TyId remap",
+            );
+        }
+        remap
+    }
+
+    /// Remove `FnSig` entries at every `FnSigId` where
+    /// `fn_sig_keep[idx] == false`, compacting both the
+    /// `FnSigInterner`'s internal slab AND
+    /// `model.sig_c_abi_lowerings` in lock-step (the latter is a
+    /// `IndexVec<FnSigId, Option<CAbiLowering>>` parallel side
+    /// table; validation requires
+    /// `sig_c_abi_lowerings.len() == sigs.len()`). Remap every
+    /// surviving `FnSigId` reference via the shared
+    /// `for_each_fn_sig_id_mut` walker.
+    ///
+    /// Returns the old-to-new `FnSigId` remap as
+    /// `Vec<Option<FnSigId>>`. `None` marks a removed entry;
+    /// `Some(new_id)` marks a surviving entry's new index.
+    ///
+    /// Removed `FnSig` entries must have NO surviving references;
+    /// the method does NOT verify.
+    ///
+    /// Panics if `fn_sig_keep.len() != self.sigs.len()`.
+    pub fn remove_fn_sigs_and_remap(&mut self, fn_sig_keep: &[bool]) -> Vec<Option<FnSigId>> {
+        assert_eq!(
+            fn_sig_keep.len(),
+            self.sigs.len(),
+            "remove_fn_sigs_and_remap keep slice length must match FnSigInterner storage length",
+        );
+        let remap = self.sigs.compact_by_keep(fn_sig_keep);
+        permute_index_vec_with_keep(&mut self.sig_c_abi_lowerings, fn_sig_keep);
+        self.for_each_fn_sig_id_mut(|sig_id| {
+            let new = remap[sig_id.index()].expect(
+                "remove_fn_sigs_and_remap: surviving FnSigId reference points to a removed entry",
+            );
+            *sig_id = new;
+        });
+        self.sigs.rebuild_lookup();
         remap
     }
 
@@ -2966,6 +3251,253 @@ fn permute_index_vec<I: crate::idx::Idx, T>(table: &mut IndexVec<I, T>, order: &
         );
     }
     table.replace_inner(sorted);
+}
+
+/// Compact an `IndexVec<I, T>` in place, retaining only entries
+/// where `keep[idx] == true`. Used by the model-side removal
+/// helpers to compact `IndexVec<ItemId, _>` /
+/// `IndexVec<InstanceId, _>` / `IndexVec<FnSigId, _>` side tables
+/// in lock-step with the corresponding primary table.
+fn permute_index_vec_with_keep<I: crate::idx::Idx, T>(table: &mut IndexVec<I, T>, keep: &[bool]) {
+    debug_assert_eq!(table.len(), keep.len());
+    let taken = std::mem::take(table).into_inner();
+    let mut retained: Vec<T> = Vec::with_capacity(taken.len());
+    for (value, keep) in taken.into_iter().zip(keep.iter()) {
+        if *keep {
+            retained.push(value);
+        }
+    }
+    table.replace_inner(retained);
+}
+
+/// Apply a `Vec<Option<InstanceId>>` remap to every
+/// `CallCallee::Direct(InstanceId)` reference inside a `Body`.
+/// Mirrors `remap_body_call_callees` in `sort_instances_by_f4_2`
+/// but accepts the `Option<InstanceId>` shape produced by the
+/// removal-style remap (`None` is a panic in debug builds; a
+/// surviving Direct callee MUST not point to a removed Instance
+/// per the residue-driven contract).
+fn remap_body_call_callees_optional(body: &mut crate::body::Body, remap: &[Option<InstanceId>]) {
+    for block in body.basic_blocks.iter_mut() {
+        if let TerminatorKind::Call {
+            callee: CallCallee::Direct(id),
+            ..
+        } = &mut block.terminator.kind
+        {
+            let old = id.as_u32() as usize;
+            if old < remap.len() {
+                if let Some(new) = remap[old] {
+                    *id = new;
+                } else {
+                    debug_assert!(
+                        false,
+                        "remap_body_call_callees_optional: surviving CallCallee::Direct({}) points to a removed Instance",
+                        old,
+                    );
+                }
+            }
+        }
+    }
+}
+
+/// Visit every `TyId` reference inside a stored `Ty` value via
+/// the shared `for_each_ty_id_mut` walker. Mirrors the surface
+/// enumerated in `regseq-driver-48` Change D.
+fn visit_ty_ids_in_ty<F: FnMut(&mut TyId)>(ty: &mut Ty, f: &mut F) {
+    match ty {
+        Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) | Ty::Str | Ty::Never => {}
+        Ty::Array(elem, _) | Ty::Slice(elem) | Ty::Ref(elem, _) | Ty::Ptr(elem, _) => f(elem),
+        Ty::FnPtr(_) => {}
+        Ty::Dynamic { vtable_ty, .. } => f(vtable_ty),
+        Ty::FnDef(_, args) | Ty::Closure(_, args) => visit_ty_ids_in_generic_args(args, f),
+        Ty::Tuple { fields, layout } => {
+            for field in fields.iter_mut() {
+                f(field);
+            }
+            visit_ty_ids_in_layout(layout, f);
+        }
+        Ty::Struct { args, layout, .. }
+        | Ty::Enum { args, layout, .. }
+        | Ty::Union { args, layout, .. } => {
+            visit_ty_ids_in_generic_args(args, f);
+            visit_ty_ids_in_layout(layout, f);
+        }
+    }
+}
+
+/// Visit every `TyId` inside a `GenericArgs` vector.
+fn visit_ty_ids_in_generic_args<F: FnMut(&mut TyId)>(args: &mut [GenericArg], f: &mut F) {
+    for arg in args.iter_mut() {
+        if let GenericArg::Type(ty) = arg {
+            f(ty);
+        }
+    }
+}
+
+/// Visit every inline `Layout` `TyId` field reachable from a
+/// nominal or tuple type's resolved layout: `FieldLayout.ty` per
+/// `crates/regseq-model/src/layout.rs:58-62` and
+/// `TagScalar.scalar_ty` per
+/// `crates/regseq-model/src/layout.rs:146-154`.
+fn visit_ty_ids_in_layout<F: FnMut(&mut TyId)>(layout: &mut Layout, f: &mut F) {
+    match &mut layout.kind {
+        LayoutKind::Struct { fields } | LayoutKind::Union { fields } => {
+            for field in fields.iter_mut() {
+                f(&mut field.ty);
+            }
+        }
+        LayoutKind::Enum { shape } => match shape {
+            EnumShape::Empty => {}
+            EnumShape::Single { variant, scalar } => {
+                for field in variant.fields.iter_mut() {
+                    f(&mut field.ty);
+                }
+                if let Some(scalar) = scalar {
+                    f(&mut scalar.scalar_ty);
+                }
+            }
+            EnumShape::Multiple { tag, variants, .. } => {
+                f(&mut tag.scalar_ty);
+                for variant in variants.iter_mut() {
+                    for field in variant.fields.iter_mut() {
+                        f(&mut field.ty);
+                    }
+                }
+            }
+        },
+    }
+}
+
+/// Visit every `TyId` inside a function body: `LocalDecl.ty` for
+/// every local plus every statement's and terminator's
+/// `TyId`-bearing payload (Rvalue::Cast, Rvalue::Aggregate,
+/// `PlaceElem::Field`).
+fn visit_ty_ids_in_body<F: FnMut(&mut TyId)>(body: &mut crate::body::Body, f: &mut F) {
+    for decl in body.local_decls.iter_mut() {
+        f(&mut decl.ty);
+    }
+    for block in body.basic_blocks.iter_mut() {
+        for stmt in block.statements.iter_mut() {
+            visit_ty_ids_in_statement_kind(&mut stmt.kind, f);
+        }
+        visit_ty_ids_in_terminator_kind(&mut block.terminator.kind, f);
+    }
+}
+
+fn visit_ty_ids_in_statement_kind<F: FnMut(&mut TyId)>(kind: &mut StatementKind, f: &mut F) {
+    match kind {
+        StatementKind::Assign(place, rvalue) => {
+            visit_ty_ids_in_place(place, f);
+            visit_ty_ids_in_rvalue(rvalue, f);
+        }
+        StatementKind::SetDiscriminant(place, _) => visit_ty_ids_in_place(place, f),
+        StatementKind::Intrinsic(intrinsic) => match intrinsic {
+            NonDivergingIntrinsic::Assume(operand) => visit_ty_ids_in_operand(operand, f),
+            NonDivergingIntrinsic::CopyNonOverlapping(payload) => {
+                visit_ty_ids_in_operand(&mut payload.src, f);
+                visit_ty_ids_in_operand(&mut payload.dst, f);
+                visit_ty_ids_in_operand(&mut payload.count, f);
+            }
+        },
+    }
+}
+
+fn visit_ty_ids_in_terminator_kind<F: FnMut(&mut TyId)>(kind: &mut TerminatorKind, f: &mut F) {
+    match kind {
+        TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        TerminatorKind::SwitchInt { discr, .. } => visit_ty_ids_in_operand(discr, f),
+        TerminatorKind::Call {
+            callee,
+            args,
+            destination,
+            ..
+        } => {
+            if let CallCallee::Indirect(operand) = callee {
+                visit_ty_ids_in_operand(operand, f);
+            }
+            for arg in args.iter_mut() {
+                visit_ty_ids_in_operand(arg, f);
+            }
+            visit_ty_ids_in_place(destination, f);
+        }
+        TerminatorKind::Assert { cond, msg, .. } => {
+            visit_ty_ids_in_operand(cond, f);
+            visit_ty_ids_in_assert_kind(msg, f);
+        }
+    }
+}
+
+fn visit_ty_ids_in_assert_kind<F: FnMut(&mut TyId)>(kind: &mut AssertKind, f: &mut F) {
+    match kind {
+        AssertKind::BoundsCheck { len, index } => {
+            visit_ty_ids_in_operand(len, f);
+            visit_ty_ids_in_operand(index, f);
+        }
+        AssertKind::Overflow(_, left, right) => {
+            visit_ty_ids_in_operand(left, f);
+            visit_ty_ids_in_operand(right, f);
+        }
+        AssertKind::OverflowNeg(operand)
+        | AssertKind::DivisionByZero(operand)
+        | AssertKind::RemainderByZero(operand)
+        | AssertKind::InvalidEnumConstruction(operand) => visit_ty_ids_in_operand(operand, f),
+        AssertKind::MisalignedPointerDereference { required, found } => {
+            visit_ty_ids_in_operand(required, f);
+            visit_ty_ids_in_operand(found, f);
+        }
+        AssertKind::NullPointerDereference => {}
+    }
+}
+
+fn visit_ty_ids_in_rvalue<F: FnMut(&mut TyId)>(rvalue: &mut Rvalue, f: &mut F) {
+    match rvalue {
+        Rvalue::Use(operand) | Rvalue::Repeat(operand, _) | Rvalue::UnaryOp(_, operand) => {
+            visit_ty_ids_in_operand(operand, f);
+        }
+        Rvalue::Ref(_, place) | Rvalue::RawPtr(_, place) => visit_ty_ids_in_place(place, f),
+        Rvalue::Cast(_, operand, ty) => {
+            visit_ty_ids_in_operand(operand, f);
+            f(ty);
+        }
+        Rvalue::BinaryOp(_, left, right) => {
+            visit_ty_ids_in_operand(left, f);
+            visit_ty_ids_in_operand(right, f);
+        }
+        Rvalue::Discriminant(place) => visit_ty_ids_in_place(place, f),
+        Rvalue::Aggregate(kind, operands) => {
+            visit_ty_ids_in_aggregate_kind(kind, f);
+            for operand in operands.iter_mut() {
+                visit_ty_ids_in_operand(operand, f);
+            }
+        }
+    }
+}
+
+fn visit_ty_ids_in_aggregate_kind<F: FnMut(&mut TyId)>(kind: &mut AggregateKind, f: &mut F) {
+    match kind {
+        AggregateKind::Array(ty)
+        | AggregateKind::Tuple(ty)
+        | AggregateKind::Struct(ty)
+        | AggregateKind::Enum(ty, _)
+        | AggregateKind::Union(ty, _)
+        | AggregateKind::Closure(ty)
+        | AggregateKind::RawPtr(ty, _) => f(ty),
+    }
+}
+
+fn visit_ty_ids_in_operand<F: FnMut(&mut TyId)>(operand: &mut Operand, f: &mut F) {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => visit_ty_ids_in_place(place, f),
+        Operand::Constant(_) => {}
+    }
+}
+
+fn visit_ty_ids_in_place<F: FnMut(&mut TyId)>(place: &mut crate::place::Place, f: &mut F) {
+    for elem in place.projection.iter_mut() {
+        if let PlaceElem::Field(_, ty) = elem {
+            f(ty);
+        }
+    }
 }
 
 fn function_instance_disambig(kind: &InstanceKind) -> u8 {

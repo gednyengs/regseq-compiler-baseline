@@ -177,16 +177,70 @@ impl TyInterner {
                 _ => {}
             }
         }
+        self.rebuild_lookup();
+    }
+
+    /// Apply `f` to every stored `Ty` entry by mutable reference,
+    /// without touching the content-keyed lookup map. Callers must
+    /// invoke `rebuild_lookup` after the walk if mutations change
+    /// any entry's identity key (e.g., a `TyId` substitution inside
+    /// a nominal entry's `GenericArgs` or inside a structural
+    /// `Ty::Array` payload).
+    pub(crate) fn for_each_ty_mut<F: FnMut(&mut Ty)>(&mut self, mut f: F) {
+        for ty in self.storage.iter_mut() {
+            f(ty);
+        }
+    }
+
+    /// Rebuild the content-keyed lookup map from the current
+    /// storage. Used after mutations that change one or more
+    /// entries' identity keys (`for_each_ty_mut`, `compact_by_keep`).
+    /// Asserts identity-key uniqueness in debug builds.
+    pub(crate) fn rebuild_lookup(&mut self) {
         self.lookup.clear();
         for (idx, ty) in self.storage.iter().enumerate() {
             let key = TyIdentityKey::from_ty(ty);
             let prev = self.lookup.insert(key, TyId::from_u32(idx as u32));
             debug_assert!(
                 prev.is_none(),
-                "TyInterner identity collision after ItemId remap at TyId {}",
+                "TyInterner identity collision at TyId {}",
                 idx,
             );
         }
+    }
+
+    /// Compact storage in place, retaining only entries where
+    /// `keep[idx]` is `true`. Clears the content-keyed lookup map
+    /// (callers MUST invoke `rebuild_lookup` after remapping every
+    /// surviving entry's nested `TyId` references through the
+    /// returned remap).
+    ///
+    /// Returns the old-to-new `TyId` remap as `Vec<Option<TyId>>`
+    /// indexed by the old `TyId`'s `index()`. `None` marks a removed
+    /// entry; `Some(new_id)` marks a surviving entry's new index.
+    ///
+    /// Panics if `keep.len() != storage.len()`.
+    pub(crate) fn compact_by_keep(&mut self, keep: &[bool]) -> Vec<Option<TyId>> {
+        assert_eq!(
+            keep.len(),
+            self.storage.len(),
+            "TyInterner::compact_by_keep keep slice length must match storage length",
+        );
+        let old_storage = std::mem::take(&mut self.storage).into_inner();
+        let mut new_storage: Vec<Ty> = Vec::with_capacity(old_storage.len());
+        let mut remap: Vec<Option<TyId>> = Vec::with_capacity(old_storage.len());
+        for (idx, ty) in old_storage.into_iter().enumerate() {
+            if keep[idx] {
+                let new_idx = TyId::from_u32(new_storage.len() as u32);
+                new_storage.push(ty);
+                remap.push(Some(new_idx));
+            } else {
+                remap.push(None);
+            }
+        }
+        self.storage.replace_inner(new_storage);
+        self.lookup.clear();
+        remap
     }
 
     /// Patches the `item: ItemId` field on a nominal type entry and

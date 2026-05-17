@@ -18,9 +18,9 @@
 use std::collections::HashSet;
 
 use regseq_model::{
-    AggregateKind, AttrData, BlockId, Body, CallCallee, IntrinsicKind, LocalId, Operand, Place,
-    PlaceElem, RegseqModel, Rvalue, Statement, StatementKind, TerminatorKind, Ty, TyId,
-    UNIT_LAYOUT,
+    AggregateKind, AttrData, BlockId, Body, CallCallee, InstanceId, IntrinsicKind, LocalId,
+    Operand, Place, PlaceElem, RegseqModel, Rvalue, Statement, StatementKind, TerminatorKind, Ty,
+    TyId, UNIT_LAYOUT,
 };
 
 use super::validation::{
@@ -58,12 +58,18 @@ pub fn diag_log_peel_pass(cx: &mut BridgeCtxt<'_>, body: &mut Body) -> Result<()
 /// Public-surface entry that resolves the format-template literal
 /// through `cx.const_memory_static_cache` so the per-call fingerprint
 /// validation can run. Mirrors `peel_body_against_model` for the
-/// inner mutation; adds the literal lookup + validation step.
+/// inner mutation; adds the literal lookup + validation step. Pushes
+/// every collapsed wrapper Call's callee `InstanceId` onto the
+/// bridge-side `DiagLogPeelResidue` accumulator per spec.md section
+/// 26.6 + regseq-driver-48 Change A.
 fn peel_body_against_model_with_cx(
     cx: &mut BridgeCtxt<'_>,
     body: &mut Body,
 ) -> Result<(), BridgeError> {
-    peel_body_against_model(&mut cx.model, body)?;
+    let collapsed = peel_body_against_model(&mut cx.model, body)?;
+    cx.diag_log_peel_residue
+        .collapsed_wrapper_instances
+        .extend(collapsed);
     validate_log_call_fingerprints(cx, body)
 }
 
@@ -225,10 +231,18 @@ fn extract_format_template_literal(
 /// tests can exercise the pass without constructing a rustc-backed
 /// `BridgeCtxt`. The public `diag_log_peel_pass` is the wiring point
 /// invoked by `bridge/body/materialise.rs::run_phase5_body_passes`.
+///
+/// Returns the `InstanceId`s of every collapsed `<LogArg as
+/// From<T>>::from(...)` wrapper Call. The `InstanceId` is captured
+/// BEFORE `collapse_wrapper_calls` rewrites the terminator, so the
+/// caller (`peel_body_against_model_with_cx`) can push it onto the
+/// bridge-side `DiagLogPeelResidue` accumulator. The accumulated
+/// seed set drives the post-DiagLogPeel residue-driven DCE per
+/// spec.md section 26.6 + regseq-driver-48 Change A/B.
 pub(crate) fn peel_body_against_model(
     model: &mut RegseqModel,
     body: &mut Body,
-) -> Result<(), BridgeError> {
+) -> Result<Vec<InstanceId>, BridgeError> {
     // Collect the indices of Call blocks whose callee is a Log
     // intrinsic. A two-pass shape (collect then mutate) avoids
     // overlapping borrows of `body.basic_blocks`.
@@ -250,6 +264,14 @@ pub(crate) fn peel_body_against_model(
         fields: Vec::new(),
         layout: UNIT_LAYOUT,
     });
+
+    // Accumulator for every collapsed `<LogArg as From<T>>::from(...)`
+    // wrapper Call's `InstanceId`. Populated BEFORE
+    // `collapse_wrapper_calls` rewrites each wrapper Call terminator
+    // to a `Goto`, so the seeds survive the collapse and can drive
+    // the residue-driven DCE in `dead_item_elim` per spec.md section
+    // 26.6 + regseq-driver-48 Change A.
+    let mut collapsed_wrapper_instances: Vec<InstanceId> = Vec::new();
 
     for block_id in log_call_blocks {
         // Canonical pre-peel shape assertion per spec.md section
@@ -324,9 +346,14 @@ pub(crate) fn peel_body_against_model(
             .inner_operands
             .iter()
             .map(|inner| {
-                let (peeled, wrapper_block) = peel_log_arg_from_wrapper(model, body, inner);
-                if let Some(block) = wrapper_block {
+                let (peeled, wrapper_match) = peel_log_arg_from_wrapper(model, body, inner);
+                if let Some((block, instance_id)) = wrapper_match {
                     wrapper_blocks_to_collapse.push(block);
+                    // Capture the wrapper Call's callee InstanceId
+                    // BEFORE `collapse_wrapper_calls` rewrites the
+                    // terminator (the Goto terminator carries no
+                    // callee reference per spec.md section 23.6).
+                    collapsed_wrapper_instances.push(instance_id);
                     if let Operand::Move(p) | Operand::Copy(p) = inner {
                         if p.projection.is_empty() {
                             wrapper_destination_locals.insert(p.local);
@@ -407,7 +434,7 @@ pub(crate) fn peel_body_against_model(
         }
     }
 
-    Ok(())
+    Ok(collapsed_wrapper_instances)
 }
 
 /// Replace each wrapper block's `LogArg::from` Call terminator with
@@ -442,13 +469,18 @@ fn collapse_wrapper_calls(body: &mut Body, wrapper_blocks: &[BlockId]) {
 /// preceding block's terminator is a `Call` whose destination is
 /// `Place::from(_logarg_i)` and whose args[0] is `<expr_i>`.
 ///
-/// Returns `(peeled_operand, wrapper_block_id)`. The optional
-/// `wrapper_block_id` identifies the block whose Call terminator
-/// must be collapsed to a Goto so the wrapper does not survive into
-/// RegseqModel per spec.md section 26.6. If no preceding
-/// `LogArg::from` Call is located (unit-test bodies that
+/// Returns `(peeled_operand, wrapper_match)`. The optional
+/// `wrapper_match` carries the `(BlockId, InstanceId)` pair for the
+/// wrapper Call whose terminator must be collapsed to a Goto so the
+/// wrapper does not survive into RegseqModel per spec.md section
+/// 26.6. The `InstanceId` is the wrapper Call's
+/// `CallCallee::Direct(instance_id)` callee, captured here so the
+/// caller can push it onto the bridge-side `DiagLogPeelResidue`
+/// accumulator BEFORE `collapse_wrapper_calls` rewrites the
+/// terminator (the post-collapse `Goto` carries no callee). If no
+/// preceding `LogArg::from` Call is located (unit-test bodies that
 /// hand-construct the aggregate's inner operands directly), the
-/// inner operand is returned verbatim and the wrapper block id is
+/// inner operand is returned verbatim and `wrapper_match` is
 /// `None`.
 ///
 /// Reference-companion `From<&T>` / `From<&mut T>` source operands
@@ -463,7 +495,7 @@ fn peel_log_arg_from_wrapper(
     model: &RegseqModel,
     body: &Body,
     inner: &Operand,
-) -> (Operand, Option<BlockId>) {
+) -> (Operand, Option<(BlockId, InstanceId)>) {
     let target_local = match inner {
         Operand::Move(p) | Operand::Copy(p) if p.projection.is_empty() => p.local,
         _ => return (inner.clone(), None),
@@ -481,89 +513,27 @@ fn peel_log_arg_from_wrapper(
         if !(destination.local == target_local && destination.projection.is_empty()) {
             continue;
         }
-        if !callee_is_from_logarg(model, callee) {
+        let CallCallee::Direct(instance_id) = callee else {
+            continue;
+        };
+        if !super::is_from_logarg_instance(model, *instance_id) {
             continue;
         }
         if let Some(arg) = args.first() {
-            return (arg.clone(), Some(BlockId::from_u32(idx as u32)));
+            return (
+                arg.clone(),
+                Some((BlockId::from_u32(idx as u32), *instance_id)),
+            );
         }
     }
     (inner.clone(), None)
 }
 
-/// Returns `true` when `callee` is a Direct callee whose Item's
-/// rendered DefPath mentions `LogArg` and ends in `from`. This is
-/// a structural recognition heuristic for the
-/// `<LogArg<'_> as From<T>>::from` Call shape per spec.md section
-/// 26.4. There is no closed-vocabulary intrinsic marker for the
-/// `From` impls (only the four `log-<sev>` callees are marked); the
-/// rendered DefPath heuristic is the fall-back.
-/// Structural recognition of `<LogArg<'_> as From<T>>::from` Call
-/// callees per spec.md section 26.4 + section 26.5. Rustc lowers
-/// the macro expansion `LogArg::from($arg)` to a Call whose `func`
-/// is `FnDef(<trait method def_id>, [Self, T])`; the bridge interns
-/// it as a Direct Instance whose `.item` points at the trait method
-/// (`core::convert::From::from`) and whose `.generic_args` carries
-/// the dispatch info `[Type(Self), Type(T)]`. The impl method's
-/// def_path is not interned -- the bridge represents trait-method
-/// calls through their trait-side Item, not the resolved impl Item.
-///
-/// The earlier rendered-path heuristic
-/// (`path.contains("LogArg") && path.ends_with("from")`) never
-/// matched real fixture bodies for that reason: the bridge only
-/// ever exposes `"core::convert::From::from"` here, so the
-/// substring check on "LogArg" always failed and the carrier's
-/// inner operand fell through unchanged. The post-peel D4
-/// admissibility check (`validate_operand_type_admissibility`) then
-/// rejected the surviving `LogArg<'_>` operand. See the regseq-
-/// driver-45 audit-fix sequence for the diagnostic walk.
-///
-/// The structural check:
-/// 1. The callee Item's rendered def_path ends with `::From::from`
-///    (the only trait-method path that should appear inside a
-///    DiagLogPeel carrier walk per spec.md section 26.5).
-/// 2. `generic_args[0]` (the `Self` type substitution; first slot
-///    by rustc generic-arg order for a trait method) resolves to a
-///    nominal ADT (`Ty::Enum` / `Ty::Struct` / `Ty::Union`) whose
-///    Item's def_path terminal segment renders as the bare name
-///    `LogArg`. The terminal-segment match is stricter than a
-///    substring check (which would false-positive on user-named
-///    `MyLogArg` ADTs).
-fn callee_is_from_logarg(model: &RegseqModel, callee: &CallCallee) -> bool {
-    let CallCallee::Direct(instance_id) = callee else {
-        return false;
-    };
-    if instance_id.index() >= model.instances.len() {
-        return false;
-    }
-    let instance = &model.instances[*instance_id];
-    let item = instance.item;
-    if item.index() >= model.items.len() {
-        return false;
-    }
-    let rendered = model.items[item].def_path.rendered;
-    let path = model.strings.resolve(rendered);
-    if !path.ends_with("::From::from") {
-        return false;
-    }
-    let Some(regseq_model::GenericArg::Type(self_ty_id)) = instance.generic_args.first() else {
-        return false;
-    };
-    let self_item = match model.types.resolve(*self_ty_id) {
-        Ty::Enum { item, .. } | Ty::Struct { item, .. } | Ty::Union { item, .. } => *item,
-        _ => return false,
-    };
-    if self_item.index() >= model.items.len() {
-        return false;
-    }
-    let self_path_id = model.items[self_item].def_path.rendered;
-    let self_path = model.strings.resolve(self_path_id);
-    self_path
-        .rsplit("::")
-        .next()
-        .map(|seg| seg == "LogArg")
-        .unwrap_or(false)
-}
+// Structural recognition of `<LogArg<'_> as From<T>>::from` Call
+// callees per spec.md section 26.4 + section 26.5 is lifted to
+// `super::is_from_logarg_instance` in `diag_log/mod.rs` so the
+// post-peel `dead_item_elim` pass and this peel pass share a
+// single source of truth (regseq-driver-48 Conventions).
 
 /// Outcome of `locate_log_arg_carrier`: either an Aggregate carrier
 /// was located (with inner operands), or an empty const-slice
