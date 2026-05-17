@@ -9,5 +9,6 @@ serde = { version = "1", features = ["derive", "rc"] }
 sha2 = "0.10"
 
 [dev-dependencies]
-insta = "1"
+insta = { version = "1", features = ["yaml"] }
 serde_json = "1"
+test-ir-fixtures = { path = "../test-ir-fixtures" }

@@ -3416,7 +3416,7 @@
           "id": "regseq-model-94",
           "name": "P1a-E2E-02: Diagnostic-logging end-to-end fixture",
           "spec": ".harness/tasks/regseq-model/94-e2e-diagnostic-logging.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "test-ir-fixtures-01",
             "regseq-driver-44",
