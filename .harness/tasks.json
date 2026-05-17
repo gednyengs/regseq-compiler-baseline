@@ -1403,12 +1403,36 @@
             "spec.md#9",
             "spec.md#3"
           ],
-          "spec_version": 1,
+          "spec_version": 5,
           "history": [
             {
               "ts": "2026-05-17T19:48:59Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-17T19:56:10Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex pre-implementation review amendments: phase placement (Phase-2 -> post-Phase-4), body-fill timing (option a not b), instance-level idempotency guard, citation fix 4531-4541 -> 4531-4546, test plan adds inputs[1..]/output + duplicate-free reruns"
+            },
+            {
+              "ts": "2026-05-17T19:59:38Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "Codex round-2 amendments: fix Conventions section (no Phase-2 inline; instance-level idempotency required); fix body-fill citation (materialise.rs:303-338 not mod.rs:1160-1168); fix stale 4531-4541 citation in Description; rewrite D'.7c to use public-path observation instead of private lookup_or_create_direct_instance call"
+            },
+            {
+              "ts": "2026-05-17T20:01:14Z",
+              "event": "spec_edited",
+              "spec_version": 4,
+              "reason": "Codex round-3 amendment: fix residual citation for ClosureKind -> synthesised-arms mapping (4538-4543 -> 4531-4535)"
+            },
+            {
+              "ts": "2026-05-17T20:02:26Z",
+              "event": "spec_edited",
+              "spec_version": 5,
+              "reason": "Codex round-4 amendment: fix residual stale 4538-4543 citation in the Review prompt block (now 4531-4535)"
             }
           ]
         }

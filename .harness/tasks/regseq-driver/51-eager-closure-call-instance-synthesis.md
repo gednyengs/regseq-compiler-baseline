@@ -12,11 +12,12 @@ Phase-2 / Phase-4 synthesis, leaving them as orphans in
 
 Two spec invariants are violated by the current state:
 
-- **spec.md:4531-4541** -- "For each call-method Function Item,
-  the corresponding Function `Instance`'s `InstanceKind::Function
-  { fn_sig, ... }` ... carries the substituted signature derived
-  from the closure's `closure_sig_as_fn_ptr_ty`, with a per-call-
-  kind receiver shape":
+- **spec.md:4531-4546** -- lines 4531-4541 introduce the rule
+  ("For each call-method Function Item, the corresponding
+  Function `Instance`'s `InstanceKind::Function { fn_sig, ... }`
+  ... carries the substituted signature derived from the
+  closure's `closure_sig_as_fn_ptr_ty`, with a per-call-kind
+  receiver shape"); lines 4542-4546 carry the actual mappings:
   - `Call`     -> receiver `Ref(captures_struct, SharedBorrow)`
                    (i.e., `&Captures`)
   - `CallMut`  -> receiver `Ref(captures_struct, UniqueBorrow)`
@@ -72,10 +73,13 @@ fixture and scoped as its own task.
 - `docs/discussions/regseq-model/spec.md` §13.1 Closure family
   (`spec.md:4503-4567`), in particular:
   - The ClosureCall Function Item shape + per-call-kind
-    receiver rule (`spec.md:4531-4541`) -- the load-bearing
+    receiver rule (`spec.md:4531-4546`) -- the load-bearing
     wording for the FnSig receiver shape this task synthesises.
+    Lines 4531-4541 introduce the rule; lines 4542-4546 carry
+    the actual per-`ClosureCallKind` mappings (`Call` shared
+    ref, `CallMut` unique ref, `CallOnce` by value).
   - The `ClosureKind` -> synthesised-arms mapping
-    (`spec.md:4538-4543`) -- `Fn` -> `{Call, CallMut, CallOnce}`,
+    (`spec.md:4531-4535`) -- `Fn` -> `{Call, CallMut, CallOnce}`,
     `FnMut` -> `{CallMut, CallOnce}`, `FnOnce` -> `{CallOnce}`.
   - The §3.1 invariant 2 carve-out (`spec.md:5200-5203`) --
     ClosureCaptures retains rustc's verbatim DefPath while
@@ -136,19 +140,27 @@ fixture and scoped as its own task.
 
 Two changes, in order:
 
-### Change A: Eagerly construct ClosureCall Function Instances
+### Change A: Construct ClosureCall Function Instances after Phase-4 assignment, before Phase-5 body passes
 
-For each `ClosureCall` Function Item registered during Phase-2
-synthesis (the `push_pending_synthetic_item` call in
-`synthesise_closure_tail` at `synth/closure.rs:48-58`), the
-bridge MUST also construct a `Function` `Instance` entry such
-that after Phase-4 ID rekey:
+Phase placement is load-bearing. `Instance.item` is an `ItemId`
+(`crates/regseq-model/src/instance.rs:134-144`), but during
+Phase-2 the bridge has only `ItemHandle`s -- `ItemId`s are
+assigned by `bridge/assign.rs:28-33` during Phase-4. Construction
+therefore MUST happen AFTER Phase-4 ItemId assignment and
+BEFORE `run_phase5_body_passes` at
+`crates/regseq-driver/src/bridge/mod.rs:1015-1027`.
+
+Phase-2 records the synthetic ClosureCall Items as today
+(`push_pending_synthetic_item` at `synth/closure.rs:48-58`,
+unchanged). The bridge MUST then walk those Items after Phase-4
+assignment and construct one `Function` `Instance` per arm, such
+that:
 
 - `model.instances[<id>].item == <ClosureCall Item's ItemId>`
 - `model.instances[<id>].kind == InstanceKind::Function { ... }`
 - The Instance's `fn_sig` resolves to a `FnSig` with:
   - `inputs[0]` typed per the per-`ClosureCallKind` receiver
-    rule at `spec.md:4531-4541`:
+    rule at `spec.md:4542-4546`:
     - `Call`     -> `Ty::Ref(captures_struct_ty,
                               Provenance::SharedBorrow)`
     - `CallMut`  -> `Ty::Ref(captures_struct_ty,
@@ -165,15 +177,19 @@ that after Phase-4 ID rekey:
     `closure_sig_as_fn_ptr_ty.output`).
   - `abi: FnAbi::Rust`, `c_variadic: false`,
     `safety: Safety::Safe`.
-- The Instance's `body` field is populated by the existing
-  resolution path at `materialise.rs:87-100`: the eager-construction
-  code does NOT need to materialise the body inline; it can either
-  (a) construct an Instance with a placeholder body and let the
-  Phase-5 body pass fill it in, or (b) call into the materialiser
-  during construction. Option (b) is cleaner because it avoids a
-  two-phase null-body window that the validator would have to
-  tolerate. The existing materialiser at `materialise.rs:87-100`
-  is already callable; this task wires it into the synthesis path.
+- The Instance's `body` field is `None` at construction time.
+  The Phase-5 body materialisation pass at
+  `bridge/body/materialise.rs:300-338` then fills it in via the
+  existing closure-body resolution machinery at
+  `materialise.rs:87-100` (which keys off the closure's
+  `DefPathHash` to recover the closure DefId and call into
+  `tcx.instance_mir`). Do NOT call `materialise_function_body`
+  inline from the construction site: it requires an `InstanceId`
+  and reads `cx.model.instances[instance_handle]` /
+  `instance.item` / `item_synthetic_kinds[item]`
+  (`bridge/body/materialise.rs:44-77`); the body-pass loop at
+  `bridge/body/materialise.rs:303-338` is the canonical fill-in
+  path that Phase-5 invokes.
 
 The eager construction is keyed off the `closure_def_id` and the
 `ClosureCallKind` for each pushed arm. The closure's tupled-args
@@ -188,31 +204,59 @@ because ClosureCall FnSigs are `FnAbi::Rust`, but
 `ensure_cabi_lowering_slots` MUST be called to keep the side
 table dense per spec.md §3.3 step 5).
 
-### Change B: Update `construct_function_instances` to skip ClosureCall Items it already constructed
+**Idempotency.** Two layers of idempotency are required:
 
-After Change A, the synthesised ClosureCall Items will have
-Instance entries before Phase-4's `construct_function_instances`
-runs. The walker at `mod.rs:1100-1175` must EITHER:
+- *Item-level*, already handled by the existing
+  `closure_synth_cache` at `synth/closure.rs:29-35,80-81` --
+  repeated synthesis for the same `closure_def_id` returns the
+  cached `ClosureSynthHandles`, so the Items are not duplicated.
+- *Instance-level*, NOT handled today. Construction MUST guard
+  against creating duplicate Function Instances for the same
+  `(ItemId, ArgsKey, FunctionInstanceFlavor)` triple. The
+  canonical guard pattern is the lookup table consulted by
+  `lookup_or_create_direct_instance` at
+  `bridge/body/terminator.rs:513-534`; the new construction site
+  MUST use the same `(item, args_key, fn_shim_disambig)` lookup
+  before pushing a fresh Instance row. After Phase-4 assignment
+  the table is keyed by `ItemId`, so the guard naturally
+  collapses with any lazy-call-site Instance that
+  `lookup_or_create_direct_instance` would otherwise create.
 
-- Skip Items that already have an Instance (idempotent check),
-  OR
-- Continue using the `source_item_def_id` filter, which already
-  skips ClosureCall Items (their `source_item_def_id` is `None`)
-  -- this means the walker is unchanged but its existing skip
-  becomes correct rather than a bug.
+### Change B: Post-assignment ClosureCall Instance pass
 
-The latter is the minimal-diff path; verify by inspecting
-`source_item_def_id`'s behaviour for ClosureCall Items: per
-`mod.rs:1116-1121` it returns `None` for synthetic Items, so
-the walker already skips them. After Change A registers
-Instances directly during Phase-2, no Change B is strictly
-required -- the walker continues to construct Instances for
-source-derived Function Items, and the synthetic ClosureCall
-Items are handled by Change A's eager path.
+Add a new synthetic-walk helper that runs after Phase-4
+assignment (`mod.rs:1015-1027`) and either parallels
+`construct_function_instances` or extends it with a synthetic
+ClosureCall branch. The existing `source_item_def_id` filter at
+`mod.rs:1114-1121` MUST remain intact -- it correctly skips
+items with no rustc DefId; the new synthetic branch handles the
+ClosureCall case explicitly. Two implementation shapes are
+acceptable:
 
-**Recommendation**: Implement Change A only. The walker's
-existing behaviour is correct once the eager path covers the
-synthetic case.
+- **B1 (parallel walk).** A new helper next to
+  `construct_function_instances` that iterates
+  `model.item_synthetic_kinds` for `SyntheticItemKind::ClosureCall
+  { closure, call_kind }` entries and constructs one Instance
+  per entry using the Change-A FnSig + receiver shape rules.
+  Invoked from `mod.rs:1026` (after `construct_function_instances`
+  returns, before `run_phase5_body_passes`).
+- **B2 (extended walker).** Extend
+  `construct_function_instances` itself with a second walk
+  pass over synthetic ClosureCall entries after the existing
+  source-DefId pass. The two-pass shape avoids interleaving
+  source and synthetic logic.
+
+B1 is the preferred shape because it keeps the existing walker
+shape unchanged and the synthetic case isolated; B2 is acceptable
+if the agent finds it more natural.
+
+**No change to `lookup_or_create_direct_instance`.** Its
+existing lazy-allocation path at `terminator.rs:303,384,609`
+becomes a no-op for already-constructed ClosureCall Instances
+(the duplicate guard at `terminator.rs:513-534` finds the eager
+entry). The lazy path remains valid for any late discovery of
+ClosureCall sites the eager pass missed; this task does not
+remove it.
 
 ### Change C: Re-baseline `regseq-model-95`'s closure snapshot
 
@@ -245,15 +289,23 @@ captures the full ClosureCall arms + ClosureCaptures struct.
 
 ### Conventions
 
-- Match the existing closure synth file style (the
-  `synth/closure.rs` module is the natural home for Change A);
-  add the eager Instance construction inline with the existing
-  `synthesise_closure_tail` function.
+- The new post-Phase-4 helper lives next to
+  `construct_function_instances` at
+  `crates/regseq-driver/src/bridge/mod.rs:1088+`, NOT inside
+  `synth/closure.rs` (which only registers Items in Phase-2;
+  `synthesise_closure_tail` itself is unchanged). The helper
+  reads `model.item_synthetic_kinds` for
+  `SyntheticItemKind::ClosureCall { closure, call_kind }`
+  entries and emits one Instance per entry.
 - Doc comments on any new `pub` / `pub(crate)` function citing
   the relevant `spec.md` line range.
-- Idempotency: Change A's construction MUST be guarded against
-  re-running if the closure synthesis cache hits (per
-  `synth/closure.rs:30-35`).
+- Idempotency MUST cover both layers per the Change-A
+  Idempotency block: Item-level via the existing
+  `closure_synth_cache` (unchanged) AND Instance-level via the
+  `(ItemId, ArgsKey, FunctionInstanceFlavor)` lookup pattern at
+  `bridge/body/terminator.rs:513-534`. Cache-only guarding is
+  insufficient because Instance construction now runs post-
+  Phase-4, after the cache's Phase-2 / Phase-3 effect.
 
 ## Non-Goals
 
@@ -306,11 +358,11 @@ end-to-end test in `crates/regseq-model/tests/e2e_synthesis.rs`.
    - The Instance's `kind` is `InstanceKind::Function { fn_sig, .. }`.
    - The Instance's `body.is_some()` (per spec.md:778-781).
 
-### B. Per-`ClosureCallKind` receiver shape
+### B. Per-`ClosureCallKind` receiver shape + closure inputs/output
 
 2. For each constructed ClosureCall Instance (test A1's
    collected set), assert the FnSig's `inputs[0]` Ty matches
-   the spec.md:4531-4541 rule:
+   the spec.md:4542-4546 rule:
    - `Call`     -> `Ty::Ref(<captures_ty>,
                              Provenance::SharedBorrow)`
    - `CallMut`  -> `Ty::Ref(<captures_ty>,
@@ -320,6 +372,17 @@ end-to-end test in `crates/regseq-model/tests/e2e_synthesis.rs`.
    where `<captures_ty>` is the `Ty::Struct(ClosureCaptures
    Item, args, UNIT_LAYOUT)` for the zero-capture fixture's
    closure.
+
+2b. For each constructed Instance, assert the FnSig's
+    `inputs[1..]` matches the closure's argument types per
+    `closure_sig_as_fn_ptr_ty.inputs[0]` (the tupled arg
+    struct, untupled into flat inputs). For the `|x: u32|
+    x + 1` fixture this is exactly `[Ty::Uint(UintKind::U32)]`.
+
+2c. For each constructed Instance, assert the FnSig's `output`
+    matches the closure's return type per
+    `closure_sig_as_fn_ptr_ty.output`. For the fixture this
+    is `Ty::Uint(UintKind::U32)`.
 
 ### C. FnSig invariants
 
@@ -339,6 +402,31 @@ end-to-end test in `crates/regseq-model/tests/e2e_synthesis.rs`.
 7. The materialised body's `local_decls[LocalId::ZERO]` is the
    return-place LocalDecl with type matching the FnSig's
    `output`.
+
+### D'. Idempotency / no-duplicate Instances
+
+7b. Reconstruct the bridge for the same closure fixture a
+    second time (or trigger the synthesis path twice in one
+    bridge run, e.g. by injecting a duplicate
+    `closure_synth_cache` hit) and assert
+    `model.instances` carries EXACTLY ONE Instance per
+    `(ItemId, args_key, fn_shim_disambig)` triple for each
+    ClosureCall Item. The lookup-table guard from
+    `bridge/body/terminator.rs:513-534` MUST catch the
+    duplicate request and return the existing Instance.
+
+7c. The Instance count for any ClosureCall Item MUST remain
+    stable across any subsequent bridge code path that could
+    request a Direct Instance for the same Item. Verifiable
+    indirectly: after the eager pass completes, assert
+    `model.instances.iter().filter(|i| i.item == <closure_call_item>).count() == 1`
+    for each ClosureCall Item; this collapses the eager
+    Instance with any same-key Instance a Phase-5 body-pass
+    consumer (e.g. a Call terminator referencing the closure
+    call) would otherwise materialise via
+    `lookup_or_create_direct_instance`. Direct call to that
+    private helper is NOT required; the public-path
+    observation through `model.instances` is sufficient.
 
 ### E. End-to-end on the closure fixture (regseq-model-95
 re-baseline)
@@ -391,10 +479,13 @@ ALL CHECKS MUST BE SCOPED TO THE TASK DEFINED BY THE TASK SPEC.
 
 Files to audit:
 - crates/regseq-driver/src/bridge/synth/closure.rs
-  (the eager Instance construction call site)
-- crates/regseq-driver/src/bridge/mod.rs (if any change to
-  construct_function_instances; should be minimal per the
-  spec's Change-B recommendation)
+  (Phase-2 ClosureCall Item registration; unchanged by this
+  task)
+- crates/regseq-driver/src/bridge/mod.rs (the post-Phase-4 +
+  pre-Phase-5 Instance construction call site -- a new helper
+  invoked between construct_function_instances and
+  run_phase5_body_passes per Change B1, OR the extended walker
+  per Change B2)
 - crates/regseq-driver/tests/bridge_synth.rs (new unit tests)
 - crates/regseq-model/tests/snapshots/e2e_synthesis__closure_render.snap
   (re-baselined snapshot)
@@ -402,21 +493,35 @@ Files to audit:
   comment)
 
 Focus on:
+- Phase placement: Instance construction MUST happen after
+  Phase-4 ItemId assignment (mod.rs:1015-1027) and before
+  run_phase5_body_passes. Phase-2 inline construction is
+  architecturally wrong because Instance.item requires ItemId.
 - The eager Instance construction MUST cover all
   ClosureCallKind arms produced by closure_call_kinds() per
-  the per-ClosureKind enumeration at spec.md:4538-4543.
-- Per-ClosureCallKind receiver shape MUST match spec.md:4531-4541
+  the per-ClosureKind enumeration at spec.md:4531-4535.
+- Per-ClosureCallKind receiver shape MUST match spec.md:4542-4546
   exactly (Ref/SharedBorrow for Call, Ref/UniqueBorrow for
   CallMut, by-value for CallOnce).
+- FnSig inputs[1..] MUST be the closure's untupled argument
+  types per closure_sig_as_fn_ptr_ty; FnSig.output MUST be the
+  closure's return type.
 - FnSig MUST be FnAbi::Rust with c_variadic=false, safety=Safe.
-- body.is_some() MUST hold after construction per spec.md:778-781.
+- body is None at construction time; the existing Phase-5
+  materialiser at materialise.rs:300-338 fills it in. Do NOT
+  call materialise_function_body inline from construction.
+- body.is_some() MUST hold after Phase-5 per spec.md:778-781.
 - The fnsig::compute_cabi_lowering helper is NOT called for
   ClosureCall FnSigs (FnAbi::Rust), but the
   sig_c_abi_lowerings side table MUST stay dense (None entry
   per ClosureCall sig).
-- Idempotency: re-invoking the synthesis path for the same
-  closure_def_id MUST NOT create duplicate Instances.
-- Test Plan items A1-F14 must all be present.
+- Idempotency: the construction site MUST use the
+  (ItemId, ArgsKey, FunctionInstanceFlavor) lookup guard from
+  bridge/body/terminator.rs:513-534 so reruns and any
+  subsequent lookup_or_create_direct_instance calls return the
+  same Instance.
+- Test Plan items A1, B2, B2b, B2c, C3, C4, D5, D6, D7, D'.7b,
+  D'.7c, E8-E11, F12-F14 must all be present.
 - The lazy-allocation path at lookup_or_create_direct_instance
   remains valid (call-site lazy allocation is not removed by
   this task; it becomes a no-op for already-constructed
@@ -469,13 +574,21 @@ Requirements.
 
 ## Acceptance Criteria
 
-- `crates/regseq-driver/src/bridge/synth/closure.rs`
-  `synthesise_closure_tail` (or equivalent local helper) eagerly
-  constructs a `Function` `Instance` for each pushed `ClosureCall`
-  Item with the per-`ClosureCallKind` receiver shape from
-  spec.md:4531-4541, body materialised via `materialise.rs:87-100`.
+- A new helper invoked between `construct_function_instances`
+  and `run_phase5_body_passes` at `bridge/mod.rs:1015-1027`
+  (per Change B1) constructs one `Function` `Instance` per
+  synthesised `ClosureCall` Item with the per-`ClosureCallKind`
+  receiver shape from spec.md:4542-4546, FnSig inputs[1..] /
+  output from the closure's `closure_sig_as_fn_ptr_ty`, and
+  `body: None` for the existing Phase-5 materialiser
+  (`materialise.rs:300-338`) to fill in.
+- The Instance-level idempotency guard uses the lookup pattern
+  at `bridge/body/terminator.rs:513-534` so reruns and any
+  subsequent `lookup_or_create_direct_instance` calls return
+  the same Instance.
 - `crates/regseq-driver/tests/bridge_synth.rs` carries unit
-  tests covering Test Plan A1, B2, C3, C4, D5, D6, D7.
+  tests covering Test Plan A1, B2, B2b, B2c, C3, C4, D5, D6,
+  D7, D'.7b, D'.7c.
 - `crates/regseq-model/tests/snapshots/e2e_synthesis__closure_render.snap`
   re-baselined per Change C to include ClosureCall + ClosureCaptures
   renderings.
