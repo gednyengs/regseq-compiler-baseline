@@ -1357,6 +1357,34 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-50",
+          "name": "Vtable-indirect end-to-end bringup (erased-receiver mutability + canonical vacant CAbiLowering + fixture extension)",
+          "spec": ".harness/tasks/regseq-driver/50-vtable-indirect-end-to-end-bringup.md",
+          "status": "pending",
+          "depends_on": [
+            "test-ir-fixtures-01",
+            "regseq-driver-40",
+            "regseq-driver-43"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#13",
+            "spec.md#25",
+            "spec.md#3",
+            "spec.md#23"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-17T17:42:46Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
