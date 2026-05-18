@@ -1471,6 +1471,28 @@
               "reason": "Codex round-2 amendment: fix typo in Acceptance Criteria (model.validate(&mut self) -> model.validate(&bridge_input))"
             }
           ]
+        },
+        {
+          "id": "regseq-driver-53",
+          "name": "Bridge nominal and tuple FieldLayout field names",
+          "spec": ".harness/tasks/regseq-driver/53-bridge-nominal-and-tuple-field-names.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#11",
+            "pretty-printer.md#7.3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-18T01:06:26Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
