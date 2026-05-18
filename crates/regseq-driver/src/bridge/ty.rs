@@ -6,9 +6,10 @@ use rustc_span::def_id::DefId;
 
 use regseq_model::{
     render_def_path, AutoTrait, CrateId, CrateInfo, DefPath, DefPathHash, DefPathSegment,
-    FieldLayout, FloatKind, FnAbi, FnSig, GenericArg, GenericArgs, InlineHint, IntKind, Item,
-    ItemId, ItemKind, Layout, LayoutKind, Linkage, Mutability, PrincipalTraitKey, Provenance,
-    Safety, Span, StableCrateId, SyntheticItemKind, Ty, TyId, UintKind, UNIT_LAYOUT,
+    EnumShape, FieldLayout, FloatKind, FnAbi, FnSig, GenericArg, GenericArgs, InlineHint, IntKind,
+    Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, Mutability, PrincipalTraitKey, Provenance,
+    Safety, Span, StableCrateId, SyntheticItemKind, TagEncoding, TagScalar, Ty, TyId, UintKind,
+    VariantIdx as ModelVariantIdx, VariantLayout, VariantRange, WrappingRange, UNIT_LAYOUT,
 };
 
 use super::def_path::translate_def_path_data;
@@ -321,32 +322,40 @@ fn translate_adt<'tcx>(
         ty::AdtKind::Union => ItemKind::Union,
     };
     let (item, handle) = intern_item(cx, adt.did(), item_kind, special);
-    let model_args = translate_generic_args(cx, args)?;
-    let fields = adt
-        .all_fields()
-        .map(|field| {
-            let ty = translate_ty(cx, field.ty(cx.input.tcx, args))?;
-            Ok((field.name, ty))
-        })
-        .collect::<Result<Vec<(rustc_span::Symbol, TyId)>, BridgeError>>()?;
-    let layout = nominal_layout(cx, ty, &fields)?;
-
     let model_ty = match adt.adt_kind() {
-        ty::AdtKind::Struct => Ty::Struct {
-            item,
-            args: model_args,
-            layout,
-        },
-        ty::AdtKind::Enum => Ty::Enum {
-            item,
-            args: model_args,
-            layout,
-        },
-        ty::AdtKind::Union => Ty::Union {
-            item,
-            args: model_args,
-            layout,
-        },
+        ty::AdtKind::Struct | ty::AdtKind::Union => {
+            let model_args = translate_generic_args(cx, args)?;
+            let fields = adt
+                .all_fields()
+                .map(|field| {
+                    let ty = translate_ty(cx, field.ty(cx.input.tcx, args))?;
+                    Ok((field.name, ty))
+                })
+                .collect::<Result<Vec<(rustc_span::Symbol, TyId)>, BridgeError>>()?;
+            let layout = nominal_layout(cx, ty, &fields)?;
+            match adt.adt_kind() {
+                ty::AdtKind::Struct => Ty::Struct {
+                    item,
+                    args: model_args,
+                    layout,
+                },
+                ty::AdtKind::Union => Ty::Union {
+                    item,
+                    args: model_args,
+                    layout,
+                },
+                ty::AdtKind::Enum => unreachable!(),
+            }
+        }
+        ty::AdtKind::Enum => {
+            let model_args = translate_generic_args(cx, args)?;
+            let layout = enum_layout(cx, ty, adt, args)?;
+            Ty::Enum {
+                item,
+                args: model_args,
+                layout,
+            }
+        }
     };
     Ok((model_ty, handle))
 }
@@ -900,6 +909,392 @@ fn tuple_layout<'tcx>(
                 .collect(),
         },
     })
+}
+
+/// Translate an enum `Ty` into a model `Layout` carrying
+/// `LayoutKind::Enum { shape }` per spec.md section 11.1.
+///
+/// Dispatches on `rustc_abi::Variants`:
+///   - `Variants::Empty` -> `EnumShape::Empty` (zero-variant enums).
+///   - `Variants::Single { index }` (one inhabited variant, no tag) ->
+///     `EnumShape::Single { variant, scalar: None }` for the actual
+///     `index`, not hard-coded `VariantIdx::ZERO`.
+///   - `Variants::Multiple` with one variant that is fieldless (rustc
+///     emits this for `#[repr(int)] enum E { A = 5 }` because
+///     `repr.int` inhibits layout optimisation per spec table
+///     3891-3896) -> `EnumShape::Single { variant, scalar: Some(_) }`.
+///   - Any other `Variants::Multiple` ->
+///     `EnumShape::Multiple { tag, encoding, variants }`.
+///
+/// Rejects shapes outside the spec's admitted set
+/// (`Scalar::Union` tag per spec.md lines 3971-3975 and `Float` tag
+/// primitive per spec.md lines 3977-3986) via
+/// `BridgeError::UnsupportedEnumLayout`.
+fn enum_layout<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+    adt: rustc_middle::ty::AdtDef<'tcx>,
+    args: rustc_middle::ty::GenericArgsRef<'tcx>,
+) -> Result<Layout, BridgeError> {
+    let rustc_layout = cx
+        .input
+        .tcx
+        .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(ty))
+        .map_err(|_| BridgeError::Layout {
+            ty_repr: ty.to_string(),
+        })?;
+
+    let shape = match &rustc_layout.variants {
+        rustc_abi::Variants::Empty => EnumShape::Empty,
+
+        rustc_abi::Variants::Single { index } => {
+            let variant = build_variant_layout(
+                cx,
+                adt,
+                args,
+                &rustc_layout.fields,
+                rustc_layout.uninhabited,
+                *index,
+            )?;
+            EnumShape::Single {
+                variant: VariantLayout {
+                    tag_value: None,
+                    ..variant
+                },
+                scalar: None,
+            }
+        }
+
+        rustc_abi::Variants::Multiple {
+            tag,
+            tag_encoding: _,
+            tag_field,
+            variants,
+        } if variants.len() == 1
+            && variant_is_fieldless(adt, rustc_abi::VariantIdx::from_u32(0)) =>
+        {
+            let model_tag = build_tag_scalar(cx, ty, &rustc_layout, *tag, *tag_field)?;
+            let only_idx = rustc_abi::VariantIdx::from_u32(0);
+            let payload = &variants[only_idx];
+            let variant = build_variant_layout(
+                cx,
+                adt,
+                args,
+                &payload.fields,
+                payload.uninhabited,
+                only_idx,
+            )?;
+            let discr = adt.discriminant_for_variant(cx.input.tcx, only_idx).val;
+            EnumShape::Single {
+                variant: VariantLayout {
+                    tag_value: Some(discr),
+                    ..variant
+                },
+                scalar: Some(model_tag),
+            }
+        }
+
+        rustc_abi::Variants::Multiple {
+            tag,
+            tag_encoding,
+            tag_field,
+            variants,
+        } => {
+            let model_tag = build_tag_scalar(cx, ty, &rustc_layout, *tag, *tag_field)?;
+            let model_encoding = build_tag_encoding(tag_encoding);
+            let scalar_width = tag_scalar_bit_width(cx, &model_tag);
+            let mut model_variants = Vec::with_capacity(variants.len());
+            for (idx, payload) in variants.iter_enumerated() {
+                let variant =
+                    build_variant_layout(cx, adt, args, &payload.fields, payload.uninhabited, idx)?;
+                let tag_value =
+                    compute_tag_value(ty, adt, cx.input.tcx, idx, &model_encoding, scalar_width)?;
+                model_variants.push(VariantLayout {
+                    tag_value,
+                    ..variant
+                });
+            }
+            EnumShape::Multiple {
+                tag: model_tag,
+                encoding: model_encoding,
+                variants: model_variants,
+            }
+        }
+    };
+
+    Ok(Layout {
+        size: rustc_layout.size.bytes(),
+        align: rustc_layout.align.abi.bytes(),
+        pack: None,
+        uninhabited: rustc_layout.uninhabited,
+        kind: LayoutKind::Enum { shape },
+    })
+}
+
+/// Returns `true` if `adt`'s variant at `idx` has no source-level
+/// fields. Used by the `Variants::Multiple { len == 1 }` arm of
+/// `enum_layout` to detect rustc's fieldless `repr(int)` single-
+/// variant case (spec.md section 11.1 table 3891-3896).
+fn variant_is_fieldless<'tcx>(
+    adt: rustc_middle::ty::AdtDef<'tcx>,
+    idx: rustc_abi::VariantIdx,
+) -> bool {
+    adt.variant(idx).fields.is_empty()
+}
+
+/// Translate one rustc variant into a `VariantLayout` carrying
+/// source-derived name, field layouts, uninhabited flag, and
+/// `discriminant` per spec.md section 11.1 lines 3905-3913.
+///
+/// `tag_value` is intentionally left as `None` on the returned
+/// value; the caller is responsible for substituting the correct
+/// `tag_value` based on the enclosing `EnumShape` / `TagEncoding`
+/// (see spec.md table at lines 3916-3924).
+///
+/// `field_source` carries the rustc `FieldsShape` whose `offset(i)`
+/// is read for per-variant field offsets. For `Variants::Multiple`
+/// the caller passes the per-variant `LayoutData.fields`; for
+/// `Variants::Single { index }` the caller passes the top-level
+/// `rustc_layout.fields` (per spec.md lines 3866-3870 per-variant
+/// field offsets are enum-object-relative regardless of which arm
+/// produced them, and for `Variants::Single` rustc's top-level
+/// layout IS the variant view).
+fn build_variant_layout<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    adt: rustc_middle::ty::AdtDef<'tcx>,
+    args: rustc_middle::ty::GenericArgsRef<'tcx>,
+    field_source: &rustc_abi::FieldsShape<rustc_abi::FieldIdx>,
+    uninhabited: bool,
+    idx: rustc_abi::VariantIdx,
+) -> Result<VariantLayout, BridgeError> {
+    let variant = adt.variant(idx);
+    let name = cx.model.strings.intern(variant.name.as_str());
+
+    let mut fields = Vec::with_capacity(variant.fields.len());
+    for (field_idx, field_def) in variant.fields.iter_enumerated() {
+        let field_ty = translate_ty(cx, field_def.ty(cx.input.tcx, args))?;
+        let field_name = cx.model.strings.intern(field_def.name.as_str());
+        let offset = if field_idx.as_usize() < field_source.count() {
+            field_source.offset(field_idx.as_usize()).bytes()
+        } else {
+            0
+        };
+        fields.push(FieldLayout {
+            name: field_name,
+            ty: field_ty,
+            offset,
+        });
+    }
+
+    let discriminant = adt.discriminant_for_variant(cx.input.tcx, idx).val;
+
+    Ok(VariantLayout {
+        name,
+        fields,
+        uninhabited,
+        discriminant,
+        tag_value: None,
+    })
+}
+
+/// Build a model `TagScalar` from rustc's `Scalar` tag carried in
+/// `Variants::Multiple.tag`. Per spec.md section 11.2:
+///   - `offset` comes from `rustc_layout.fields.offset(tag_field)`.
+///   - `scalar_ty` resolves to the admitted logical type per the
+///     `Primitive` -> model `Ty` mapping (spec.md lines 3977-3986).
+///   - `valid_range` is populated from `Scalar::Initialized`'s
+///     `valid_range` (spec.md lines 3971-3975 reject `Scalar::Union`).
+fn build_tag_scalar<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    enum_ty: rustc_middle::ty::Ty<'tcx>,
+    rustc_layout: &rustc_middle::ty::layout::TyAndLayout<'tcx>,
+    tag: rustc_abi::Scalar,
+    tag_field: rustc_abi::FieldIdx,
+) -> Result<TagScalar, BridgeError> {
+    let (value, valid_range) = match tag {
+        rustc_abi::Scalar::Initialized { value, valid_range } => (value, valid_range),
+        rustc_abi::Scalar::Union { .. } => {
+            return Err(BridgeError::UnsupportedEnumLayout {
+                ty_repr: enum_ty.to_string(),
+                reason: "tag scalar uses Scalar::Union (no valid_range), \
+                         which is rejected per spec.md section 11.2 lines 3971-3975"
+                    .to_string(),
+            });
+        }
+    };
+
+    let scalar_ty = map_tag_primitive_to_model_ty(cx, enum_ty, value)?;
+    let offset = rustc_layout.fields.offset(tag_field.as_usize()).bytes();
+    Ok(TagScalar {
+        offset,
+        scalar_ty,
+        valid_range: WrappingRange {
+            start: valid_range.start,
+            end: valid_range.end,
+        },
+    })
+}
+
+/// Map a rustc `Primitive` tag value to the model's logical scalar
+/// `TyId`. `Bool`/`Char` recovery is intentionally out of scope per
+/// the regseq-driver-54 spec Change F note: every `Primitive::Int`
+/// maps to `Ty::Int(_)` / `Ty::Uint(_)` via signedness; `Pointer`
+/// maps to `Ty::Ptr(unit_ty, Mut)` per the closure-captures pattern
+/// at ty.rs:741; `Float` is rejected per spec.md lines 3977-3986.
+fn map_tag_primitive_to_model_ty<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    enum_ty: rustc_middle::ty::Ty<'tcx>,
+    primitive: rustc_abi::Primitive,
+) -> Result<TyId, BridgeError> {
+    match primitive {
+        rustc_abi::Primitive::Int(integer, signed) => {
+            let ty = if signed {
+                Ty::Int(integer_to_int_kind(integer))
+            } else {
+                Ty::Uint(integer_to_uint_kind(integer))
+            };
+            Ok(cx.model.types.intern(ty))
+        }
+        rustc_abi::Primitive::Pointer(_) => {
+            let unit_ty = cx.model.types.intern(Ty::Tuple {
+                fields: Vec::new(),
+                layout: UNIT_LAYOUT,
+            });
+            Ok(cx.model.types.intern(Ty::Ptr(unit_ty, Mutability::Mut)))
+        }
+        rustc_abi::Primitive::Float(_) => Err(BridgeError::UnsupportedEnumLayout {
+            ty_repr: enum_ty.to_string(),
+            reason: "tag scalar uses Float primitive, which is rejected per \
+                     spec.md section 11.2 lines 3977-3986"
+                .to_string(),
+        }),
+    }
+}
+
+fn integer_to_int_kind(integer: rustc_abi::Integer) -> IntKind {
+    match integer {
+        rustc_abi::Integer::I8 => IntKind::I8,
+        rustc_abi::Integer::I16 => IntKind::I16,
+        rustc_abi::Integer::I32 => IntKind::I32,
+        rustc_abi::Integer::I64 => IntKind::I64,
+        rustc_abi::Integer::I128 => IntKind::I128,
+    }
+}
+
+fn integer_to_uint_kind(integer: rustc_abi::Integer) -> UintKind {
+    match integer {
+        rustc_abi::Integer::I8 => UintKind::U8,
+        rustc_abi::Integer::I16 => UintKind::U16,
+        rustc_abi::Integer::I32 => UintKind::U32,
+        rustc_abi::Integer::I64 => UintKind::U64,
+        rustc_abi::Integer::I128 => UintKind::U128,
+    }
+}
+
+/// Translate rustc's `TagEncoding<rustc_abi::VariantIdx>` into the
+/// model's `TagEncoding` per spec.md section 11.2.
+fn build_tag_encoding(encoding: &rustc_abi::TagEncoding<rustc_abi::VariantIdx>) -> TagEncoding {
+    match encoding {
+        rustc_abi::TagEncoding::Direct => TagEncoding::Direct,
+        rustc_abi::TagEncoding::Niche {
+            untagged_variant,
+            niche_variants,
+            niche_start,
+        } => TagEncoding::Niche {
+            untagged_variant: ModelVariantIdx::from_u32(untagged_variant.as_u32()),
+            niche_variants: VariantRange {
+                start: ModelVariantIdx::from_u32(niche_variants.start().as_u32()),
+                end: ModelVariantIdx::from_u32(niche_variants.end().as_u32()),
+            },
+            niche_start: *niche_start,
+        },
+    }
+}
+
+/// Compute the `tag_value` for one variant of a `Variants::Multiple`
+/// enum per spec.md section 11.1 table at lines 3916-3924 and the
+/// normative niche formula at lines 3988-4014.
+///
+/// Niche-encoded variants outside `niche_variants` (and not the
+/// `untagged_variant`) are unreachable per spec.md lines 4000-4003
+/// and rustc's own niche-write assertion at
+/// `rustc_const_eval/interpret/discriminant.rs:290-297`; the bridge
+/// rejects these explicitly via `BridgeError::UnsupportedEnumLayout`.
+fn compute_tag_value<'tcx>(
+    enum_ty: rustc_middle::ty::Ty<'tcx>,
+    adt: rustc_middle::ty::AdtDef<'tcx>,
+    tcx: rustc_middle::ty::TyCtxt<'tcx>,
+    idx: rustc_abi::VariantIdx,
+    encoding: &TagEncoding,
+    scalar_width: u32,
+) -> Result<Option<u128>, BridgeError> {
+    match encoding {
+        TagEncoding::Direct => Ok(Some(adt.discriminant_for_variant(tcx, idx).val)),
+        TagEncoding::Niche {
+            untagged_variant,
+            niche_variants,
+            niche_start,
+        } => {
+            let model_idx = ModelVariantIdx::from_u32(idx.as_u32());
+            if model_idx == *untagged_variant {
+                return Ok(None);
+            }
+            if !niche_range_contains(niche_variants, model_idx) {
+                return Err(BridgeError::UnsupportedEnumLayout {
+                    ty_repr: enum_ty.to_string(),
+                    reason: format!(
+                        "variant {} is neither the untagged variant ({}) nor in \
+                         niche_variants {}..={}",
+                        idx.as_u32(),
+                        untagged_variant.as_u32(),
+                        niche_variants.start.as_u32(),
+                        niche_variants.end.as_u32(),
+                    ),
+                });
+            }
+            let offset = (model_idx.as_u32() - niche_variants.start.as_u32()) as u128;
+            let raw = niche_start.wrapping_add(offset);
+            let masked = if scalar_width >= 128 {
+                raw
+            } else {
+                raw & ((1u128 << scalar_width) - 1)
+            };
+            Ok(Some(masked))
+        }
+    }
+}
+
+fn niche_range_contains(range: &VariantRange, idx: ModelVariantIdx) -> bool {
+    range.start.as_u32() <= idx.as_u32() && idx.as_u32() <= range.end.as_u32()
+}
+
+/// Bit width of a model `TagScalar.scalar_ty` per spec.md lines
+/// 4005-4007. Pointer/reference tags use `target.pointer_width`.
+fn tag_scalar_bit_width(cx: &BridgeCtxt<'_>, tag: &TagScalar) -> u32 {
+    let pointer_width = u32::from(cx.model.target.pointer_width);
+    let scalar_ty = cx.model.types.resolve(tag.scalar_ty);
+    match scalar_ty {
+        Ty::Bool => 8,
+        Ty::Char => 32,
+        Ty::Int(kind) => match kind {
+            IntKind::I8 => 8,
+            IntKind::I16 => 16,
+            IntKind::I32 => 32,
+            IntKind::I64 => 64,
+            IntKind::I128 => 128,
+            IntKind::Isize => pointer_width,
+        },
+        Ty::Uint(kind) => match kind {
+            UintKind::U8 => 8,
+            UintKind::U16 => 16,
+            UintKind::U32 => 32,
+            UintKind::U64 => 64,
+            UintKind::U128 => 128,
+            UintKind::Usize => pointer_width,
+        },
+        Ty::Ptr(_, _) | Ty::Ref(_, _) => pointer_width,
+        _ => pointer_width,
+    }
 }
 
 fn nominal_layout<'tcx>(

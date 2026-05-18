@@ -41,6 +41,12 @@ pub mod fixture_names {
     pub const TRAIT_OBJECT: &str = "trait_object";
     /// `|x| x + 1` closure expression. Used by P1a-E2E-03.
     pub const CLOSURE: &str = "closure";
+    /// Enum-layout round-trip fixture exercising every `EnumShape`
+    /// arm (Empty / Single ordinary / Single fieldless `repr(int)` /
+    /// Multiple Direct / Multiple Niche). Used by regseq-driver-54
+    /// to lock the spec-contract `LayoutKind::Enum` shape through
+    /// both `validate` and `render`.
+    pub const ENUM_ROUND_TRIP: &str = "enum_round_trip";
 }
 
 /// Drive the phase-1a `regseq-driver` bridge against the named
@@ -265,6 +271,7 @@ mod tests {
             fixture_names::DIAG_LOGGING,
             fixture_names::TRAIT_OBJECT,
             fixture_names::CLOSURE,
+            fixture_names::ENUM_ROUND_TRIP,
         ] {
             let path = fixture_dir().join(format!("{name}.rs"));
             let metadata = std::fs::metadata(&path).unwrap_or_else(|err| {

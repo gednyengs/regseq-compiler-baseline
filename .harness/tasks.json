@@ -1498,7 +1498,7 @@
           "id": "regseq-driver-54",
           "name": "Bridge Ty::Enum layout construction (LayoutKind::Enum + EnumShape)",
           "spec": ".harness/tasks/regseq-driver/54-bridge-enum-layout-construction.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,

@@ -440,6 +440,17 @@ pub enum BridgeError {
         /// Rendered rustc type.
         ty_repr: String,
     },
+    /// An enum layout shape is outside the spec's admitted set
+    /// (e.g., `Scalar::Union` tag per spec.md section 11.2 lines
+    /// 3971-3975, or a `Float` tag primitive per spec.md lines
+    /// 3977-3986).
+    #[error("unsupported enum layout for {ty_repr}: {reason}")]
+    UnsupportedEnumLayout {
+        /// Rendered rustc type.
+        ty_repr: String,
+        /// Human-readable rejection reason.
+        reason: String,
+    },
     /// A type kind is outside the current bridge task's translation surface.
     #[error("unsupported type: {ty_repr}")]
     UnsupportedTy {
