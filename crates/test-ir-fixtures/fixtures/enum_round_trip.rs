@@ -82,6 +82,12 @@ pub fn make_multi_niche_none() -> MultiNiche {
 // resulting MIR carries `AggregateKind::Enum` constructors and at
 // least one `SetDiscriminant` statement, exercising the body-
 // invariant chain against a direct-encoded multi-variant enum.
+//
+// The `unused_assignments` allow is required: rustc warns that the
+// first assignment to `e` is overwritten before being read, but the
+// overwrite is exactly the point of this fixture (it forces the MIR
+// `SetDiscriminant` emission path).
+#[allow(unused_assignments)]
 pub fn set_discriminant_direct() -> MultiDirect {
     let mut e = MultiDirect::A;
     e = MultiDirect::B;
@@ -94,7 +100,10 @@ pub fn set_discriminant_direct() -> MultiDirect {
 // flips via either a `SetDiscriminant` (for the niched `None`
 // arm) or a payload-store-only path for the untagged arm,
 // depending on the variant ordering. Either way the bridged enum
-// layout survives `model.validate` and `render`.
+// layout survives `model.validate` and `render`. The
+// `unused_assignments` allow is required for the same reason as
+// `set_discriminant_direct` above.
+#[allow(unused_assignments)]
 pub fn set_discriminant_niche(ptr: &'static u32) -> MultiNiche {
     let mut e = MultiNiche::None;
     e = MultiNiche::Some(ptr);
