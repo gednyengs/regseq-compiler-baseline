@@ -110,6 +110,63 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         config.opts.cg.debug_assertions = Some(false);
         config.opts.debug_assertions = false;
 
+        // Force `output_types.should_codegen() == true` so
+        // `reachable_non_generics_provider` in rustc populates the
+        // reachable set, which is what the Phase-1 mono-item
+        // collection seeds from. Without this, `cargo check` passes
+        // `--emit=dep-info,metadata` and rustc's
+        // `reachable_non_generics_provider` (rustc_codegen_ssa/src/
+        // back/symbol_export.rs:49-52) returns the empty map,
+        // `is_reachable_non_generic` returns false for ordinary
+        // non-entry roots (entry fns and items with special codegen
+        // flags like `RUSTC_STD_INTERNAL_SYMBOL` are admitted via a
+        // separate predicate in `RootCollector::is_root` at
+        // `rustc_monomorphize/src/collector.rs:1649-1670`), the Lazy
+        // strategy in `collect_roots`
+        // (`rustc_monomorphize/src/collector.rs:1462-1499`) emits
+        // zero roots for a `pub fn`-only library crate, and the
+        // bridge's `collect_and_partition_mono_items` query
+        // (`crates/regseq-driver/src/bridge/discovery.rs:12`) returns
+        // an empty `MonoItem` set. Result: pretty-printed model is
+        // empty even though the bridge appeared to run.
+        //
+        // `OutputType::Mir` is the lightest member of the set
+        // `should_codegen` accepts (rustc_session/src/config.rs:881-892);
+        // `Compilation::Stop` in `after_analysis` halts rustc before
+        // the MIR-emit phase runs (`rustc_driver_impl/src/lib.rs`
+        // honours `Stop` between analysis and codegen), so no
+        // `.mir` file is written.
+        //
+        // Side effect (positive for the bridge, but a real
+        // user-visible behavior change): `should_codegen() == true`
+        // also triggers extra MIR validation passes that don't run
+        // in pure metadata mode. Specifically,
+        // `mir_drops_elaborated_and_const_checked` runs eagerly for
+        // every body owner before `after_analysis`
+        // (`rustc_interface/src/passes.rs:1111`). This is desirable
+        // for us -- the bridge consumes drop-elaborated MIR -- but
+        // means `cargo regseq` may surface const-check diagnostics
+        // that `cargo check` alone would not. Other
+        // `should_codegen()` gates downstream
+        // (`rustc_metadata/src/rmeta/encoder.rs:1107`,
+        // `rustc_codegen_ssa/src/back/symbol_export.rs:171`,
+        // `rustc_metadata/src/locator.rs:312`) run after
+        // `after_analysis` and are suppressed by `Compilation::Stop`.
+        let mut output_entries: Vec<_> = config
+            .opts
+            .output_types
+            .iter()
+            .map(|(k, v)| (*k, v.clone()))
+            .collect();
+        if !config
+            .opts
+            .output_types
+            .contains_key(&rustc_session::config::OutputType::Mir)
+        {
+            output_entries.push((rustc_session::config::OutputType::Mir, None));
+        }
+        config.opts.output_types = rustc_session::config::OutputTypes::new(&output_entries);
+
         // INTENTIONALLY NOT SET (symmetric register_tool rule, mirrors
         // the matching note in `RegseqAwareCallbacks::config`):
         //   - feature(register_tool) / register_tool(rseq) crate_attr
