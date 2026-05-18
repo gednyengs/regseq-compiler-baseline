@@ -1493,6 +1493,29 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-54",
+          "name": "Bridge Ty::Enum layout construction (LayoutKind::Enum + EnumShape)",
+          "spec": ".harness/tasks/regseq-driver/54-bridge-enum-layout-construction.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#11",
+            "spec.md#3",
+            "pretty-printer.md#7.3"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-18T02:35:43Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
