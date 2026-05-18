@@ -6,7 +6,7 @@ fn trait_object::{impl#0}::read_byte(_1: &trait_object::StaticByte) -> u8 {
     let mut _0: u8;
 
     bb0: {
-        _0 = copy ((*_1).: u8);
+        _0 = copy ((*_1).0: u8);
         return -> [];
     }
 }
@@ -57,7 +57,7 @@ fn trait_object::make_and_drive() -> u8 {
     let mut _4: &dyn trait_object::<regseq_synth>::vtable_ty::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748;
 
     bb0: {
-        _1 = trait_object::StaticByte { : 66_u8 };
+        _1 = trait_object::StaticByte(66_u8);
         _2 = &_1;
         _3 = &(*_2);
         _4 = move _3 as &dyn trait_object::<regseq_synth>::vtable_ty::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 (PointerCoercion(Unsize));

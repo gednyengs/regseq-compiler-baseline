@@ -322,11 +322,14 @@ fn translate_adt<'tcx>(
     };
     let (item, handle) = intern_item(cx, adt.did(), item_kind, special);
     let model_args = translate_generic_args(cx, args)?;
-    let field_tys = adt
+    let fields = adt
         .all_fields()
-        .map(|field| translate_ty(cx, field.ty(cx.input.tcx, args)))
-        .collect::<Result<Vec<_>, _>>()?;
-    let layout = nominal_layout(cx, ty, &field_tys)?;
+        .map(|field| {
+            let ty = translate_ty(cx, field.ty(cx.input.tcx, args))?;
+            Ok((field.name, ty))
+        })
+        .collect::<Result<Vec<(rustc_span::Symbol, TyId)>, BridgeError>>()?;
+    let layout = nominal_layout(cx, ty, &fields)?;
 
     let model_ty = match adt.adt_kind() {
         ty::AdtKind::Struct => Ty::Struct {
@@ -876,7 +879,6 @@ fn tuple_layout<'tcx>(
         .map_err(|_| BridgeError::Layout {
             ty_repr: ty.to_string(),
         })?;
-    let empty = cx.model.strings.intern("");
     Ok(Layout {
         size: rustc_layout.size.bytes(),
         align: rustc_layout.align.abi.bytes(),
@@ -887,10 +889,13 @@ fn tuple_layout<'tcx>(
                 .iter()
                 .copied()
                 .enumerate()
-                .map(|(idx, ty)| FieldLayout {
-                    name: empty,
-                    ty,
-                    offset: rustc_layout.fields.offset(idx).bytes(),
+                .map(|(idx, ty)| {
+                    let name_id = cx.model.strings.intern(&format!("_{idx}"));
+                    FieldLayout {
+                        name: name_id,
+                        ty,
+                        offset: rustc_layout.fields.offset(idx).bytes(),
+                    }
                 })
                 .collect(),
         },
@@ -900,7 +905,7 @@ fn tuple_layout<'tcx>(
 fn nominal_layout<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
-    field_tys: &[TyId],
+    fields: &[(rustc_span::Symbol, TyId)],
 ) -> Result<Layout, BridgeError> {
     let rustc_layout = cx
         .input
@@ -909,24 +914,30 @@ fn nominal_layout<'tcx>(
         .map_err(|_| BridgeError::Layout {
             ty_repr: ty.to_string(),
         })?;
-    let empty = cx.model.strings.intern("");
-    let fields = field_tys
+    let field_layouts = fields
         .iter()
         .copied()
         .enumerate()
-        .map(|(idx, ty)| FieldLayout {
-            name: empty,
-            ty,
-            offset: if idx < rustc_layout.fields.count() {
-                rustc_layout.fields.offset(idx).bytes()
-            } else {
-                0
-            },
+        .map(|(idx, (name, ty))| {
+            let name_id = cx.model.strings.intern(name.as_str());
+            FieldLayout {
+                name: name_id,
+                ty,
+                offset: if idx < rustc_layout.fields.count() {
+                    rustc_layout.fields.offset(idx).bytes()
+                } else {
+                    0
+                },
+            }
         })
         .collect();
     let kind = match ty.kind() {
-        TyKind::Adt(adt, _) if adt.is_union() => LayoutKind::Union { fields },
-        _ => LayoutKind::Struct { fields },
+        TyKind::Adt(adt, _) if adt.is_union() => LayoutKind::Union {
+            fields: field_layouts,
+        },
+        _ => LayoutKind::Struct {
+            fields: field_layouts,
+        },
     };
     Ok(Layout {
         size: rustc_layout.size.bytes(),

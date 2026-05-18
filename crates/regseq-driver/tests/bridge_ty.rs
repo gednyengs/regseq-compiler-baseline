@@ -843,3 +843,79 @@ fn fn_ptr_with_rust_call_abi_is_rejected_at_fnsig_interner_path() {
         );
     });
 }
+
+#[test]
+fn nominal_struct_field_layout_preserves_source_field_name() {
+    // Spec regseq-driver-53 Test Plan B2: bridging
+    // `pub struct Counter { pub value: u32 }` must populate the
+    // first `FieldLayout.name` with the source field name `"value"`,
+    // not the empty interned string.
+    let source = r#"
+pub struct Counter { pub value: u32 }
+pub fn f(_: Counter) {}
+"#;
+    with_bridge("bridge_ty_nominal_field_name", source, |tcx, cx| {
+        let id = translate_ty(cx, param_ty(tcx, "f", 0)).unwrap();
+        let Ty::Struct { layout, .. } = cx.model.types.resolve(id).clone() else {
+            panic!("Counter should translate as Ty::Struct");
+        };
+        let LayoutKind::Struct { fields } = layout.kind else {
+            panic!("Counter layout should be Struct-kind");
+        };
+        assert_eq!(fields.len(), 1, "Counter has one field");
+        let rendered = cx.model.strings.resolve(fields[0].name);
+        assert_eq!(
+            rendered, "value",
+            "Counter's only field must carry the source name `value`"
+        );
+    });
+}
+
+#[test]
+fn tuple_struct_field_layout_uses_rustc_numeric_field_names() {
+    // Spec regseq-driver-53 Test Plan B3: bridging
+    // `pub struct Pair(pub u32, pub u32)` must populate
+    // `FieldLayout.name` with rustc's source-level tuple-struct
+    // field names `"0"` and `"1"` (numeric without underscore),
+    // not the `_0`/`_1` form which is only for bare tuples.
+    let source = r#"
+pub struct Pair(pub u32, pub u32);
+pub fn f(_: Pair) {}
+"#;
+    with_bridge("bridge_ty_tuple_struct_field_name", source, |tcx, cx| {
+        let id = translate_ty(cx, param_ty(tcx, "f", 0)).unwrap();
+        let Ty::Struct { layout, .. } = cx.model.types.resolve(id).clone() else {
+            panic!("Pair should translate as Ty::Struct");
+        };
+        let LayoutKind::Struct { fields } = layout.kind else {
+            panic!("Pair layout should be Struct-kind");
+        };
+        assert_eq!(fields.len(), 2, "Pair has two fields");
+        assert_eq!(cx.model.strings.resolve(fields[0].name), "0");
+        assert_eq!(cx.model.strings.resolve(fields[1].name), "1");
+    });
+}
+
+#[test]
+fn bare_tuple_field_layout_uses_underscore_prefixed_names() {
+    // Spec regseq-driver-53 Test Plan B4: bridging a bare tuple
+    // type `(u32, u32)` must populate `FieldLayout.name` with the
+    // underscore-prefixed form `"_0"`, `"_1"`, ... per the
+    // tuple-field validator contract at
+    // `crates/regseq-model/src/layout_validator.rs:419-431`.
+    let source = r#"
+pub fn f(_: (u32, u32)) {}
+"#;
+    with_bridge("bridge_ty_bare_tuple_field_name", source, |tcx, cx| {
+        let id = translate_ty(cx, param_ty(tcx, "f", 0)).unwrap();
+        let Ty::Tuple { layout, .. } = cx.model.types.resolve(id).clone() else {
+            panic!("(u32, u32) should translate as Ty::Tuple");
+        };
+        let LayoutKind::Struct { fields } = layout.kind else {
+            panic!("bare tuple layout should be Struct-kind");
+        };
+        assert_eq!(fields.len(), 2, "(u32, u32) has two fields");
+        assert_eq!(cx.model.strings.resolve(fields[0].name), "_0");
+        assert_eq!(cx.model.strings.resolve(fields[1].name), "_1");
+    });
+}

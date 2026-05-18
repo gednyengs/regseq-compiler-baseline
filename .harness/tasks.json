@@ -1476,7 +1476,7 @@
           "id": "regseq-driver-53",
           "name": "Bridge nominal and tuple FieldLayout field names",
           "spec": ".harness/tasks/regseq-driver/53-bridge-nominal-and-tuple-field-names.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,
