@@ -1340,7 +1340,7 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
 /// returns `init: None` for them, but the bridge does not
 /// currently surface them as Items.
 fn construct_source_static_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
-    use regseq_model::{Instance, InstanceKind};
+    use regseq_model::{Instance, InstanceKind, Linkage};
 
     // Snapshot the target Items before iterating: the construction
     // loop interns `Ty`s / `Const`s and pushes Instances, any of
@@ -1361,18 +1361,37 @@ fn construct_source_static_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Br
             ) {
                 return None;
             }
+            // Foreign source static declarations
+            // (`extern "C" { static FOO: u32; }`) are out of scope
+            // per regseq-driver-55 Non-Goals 1-2; carve them out so
+            // this pass never pushes an Instance for them. Today
+            // Change A's Phase-2 walker only interns from
+            // `MonoItem::Static`, which rustc never emits for
+            // foreign decls, so the filter is a pin-the-contract
+            // guard rather than a live trigger.
+            if item.linkage == Linkage::Foreign {
+                return None;
+            }
             Some(item_id)
         })
         .collect();
 
     for item_id in static_items {
         let def_path_hash = ctxt.model.item_def_paths[item_id];
-        let Some(def_id) = source_item_def_id(ctxt.input.tcx, def_path_hash) else {
-            // Source static without a rustc DefId in this
-            // compilation (cross-crate reference); no Instance is
-            // constructed here.
-            continue;
-        };
+        // `source_item_def_id` resolves a DefPathHash to a local-crate
+        // `DefId` via `tcx.hir_body_owners()`. Source `ItemKind::Static`
+        // Items are interned by Change A from `MonoItem::Static(def_id)`,
+        // which rustc only emits for statics it is codegen-ing (i.e., the
+        // local crate's body owners). Per spec.md section 2 "No defensive
+        // fallbacks", a precondition that must hold per the spec panics
+        // when violated rather than silently skipping.
+        let def_id = source_item_def_id(ctxt.input.tcx, def_path_hash).unwrap_or_else(|| {
+            panic!(
+                "construct_source_static_instances: source ItemKind::Static {item_id:?} \
+                 (def_path_hash={def_path_hash:?}) has no local-crate DefId; \
+                 Change A's MonoItem::Static walker must only intern local statics"
+            )
+        });
         let rustc_ty = ctxt.input.tcx.type_of(def_id).instantiate_identity();
         let ty = ty::translate_ty(ctxt, rustc_ty)?;
         let init = const_::translate_static_init(ctxt, def_id)?;
@@ -1395,7 +1414,7 @@ fn construct_source_static_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Br
 /// `const` per spec.md section 8.1). Consts cannot be generic, so
 /// the relationship is always 1:1.
 fn construct_source_const_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
-    use regseq_model::{Instance, InstanceKind};
+    use regseq_model::{Instance, InstanceKind, Linkage};
 
     let const_items: Vec<ItemId> = ctxt
         .model
@@ -1413,15 +1432,35 @@ fn construct_source_const_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Bri
             ) {
                 return None;
             }
+            // Foreign source const declarations have no body / init
+            // per spec.md section 3.1 invariant 10 + section 9.4 and
+            // are SPEC-AMBIGUOUS / out of scope per regseq-driver-55
+            // Non-Goals 1-2. Change B's `hir_crate_items` walker
+            // already filters to `DefKind::{Const, AssocConst}` and
+            // would not surface foreign decls, but this guard pins
+            // the contract for any future Phase-2 broadening.
+            if item.linkage == Linkage::Foreign {
+                return None;
+            }
             Some(item_id)
         })
         .collect();
 
     for item_id in const_items {
         let def_path_hash = ctxt.model.item_def_paths[item_id];
-        let Some(def_id) = source_item_def_id(ctxt.input.tcx, def_path_hash) else {
-            continue;
-        };
+        // Source const Items are interned from `tcx.hir_crate_items`
+        // (Change B), which only enumerates local-crate definitions;
+        // `source_item_def_id` must therefore resolve. Per spec.md
+        // section 2 "No defensive fallbacks", a precondition that must
+        // hold per the spec panics when violated rather than silently
+        // skipping.
+        let def_id = source_item_def_id(ctxt.input.tcx, def_path_hash).unwrap_or_else(|| {
+            panic!(
+                "construct_source_const_instances: source ItemKind::Const {item_id:?} \
+                 (def_path_hash={def_path_hash:?}) has no local-crate DefId; \
+                 Change B's hir_crate_items walker must only intern local consts"
+            )
+        });
         let (ty, value) = const_::translate_const_item(ctxt, def_id)?;
         let emission_name = ctxt.model.items[item_id].def_path.rendered;
         let span = ctxt.model.items[item_id].span;
@@ -1465,16 +1504,27 @@ fn construct_source_const_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Bri
 /// (`struct`/`enum`/`union` have no HIR body). The `model.types`
 /// walk is the authoritative enumeration and needs no rustc DefId.
 fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
-    use regseq_model::{GenericArgs, Instance, InstanceKind};
-
     let pending = ctxt.pending_def_path_hashes();
+    nominal_adt_instances_pass(&mut ctxt.model, &pending)
+}
+
+/// Loop body shared by the bridge-side `construct_nominal_adt_instances`
+/// pass and the Test Plan A9 idempotency re-invocation helper
+/// `replay_construct_nominal_adt_instances_for_tests`. Idempotent by
+/// construction: the `existing` `(item, args_key)` set is rebuilt from
+/// the current `model.instances` on entry, so a second call against an
+/// already-populated model adds no Instance rows.
+fn nominal_adt_instances_pass(
+    model: &mut RegseqModel,
+    pending: &HashMap<ItemId, DefPathHash>,
+) -> Result<(), BridgeError> {
+    use regseq_model::{GenericArgs, Instance, InstanceKind};
 
     // Existing `(item, args_key)` coverage for nominal Instances so
     // a re-entry (Test Plan A9 idempotency) or an Instance already
     // produced by another Phase-5 pass is not duplicated (spec.md
     // regseq-driver-55 Change E step 4).
-    let mut existing: std::collections::HashSet<(ItemId, ArgsKey)> = ctxt
-        .model
+    let mut existing: std::collections::HashSet<(ItemId, ArgsKey)> = model
         .instances
         .iter()
         .filter_map(|inst| match &inst.kind {
@@ -1482,7 +1532,7 @@ fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Brid
             | InstanceKind::Enum { .. }
             | InstanceKind::Union { .. } => Some((
                 inst.item,
-                args_key_for_generic_args_with_pending(&ctxt.model, &inst.generic_args, &pending),
+                args_key_for_generic_args_with_pending(model, &inst.generic_args, pending),
             )),
             _ => None,
         })
@@ -1491,8 +1541,7 @@ fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Brid
     // Snapshot the nominal `Ty` rows before pushing Instances (the
     // push borrows `model.instances` mutably while `model.types` is
     // immutably walked).
-    let rows: Vec<(ItemId, GenericArgs, TyId)> = ctxt
-        .model
+    let rows: Vec<(ItemId, GenericArgs, TyId)> = model
         .types
         .iter()
         .filter_map(|(ty_id, ty)| match ty {
@@ -1509,40 +1558,40 @@ fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Brid
         // a Phase-4/5 ordering bug, not a recoverable shape: panic
         // per the README section 2 "No defensive fallbacks" rule.
         assert!(
-            item_id.index() < ctxt.model.items.len(),
+            item_id.index() < model.items.len(),
             "construct_nominal_adt_instances: nominal Ty carries unpatched \
              placeholder ItemId {} (items.len() = {}); \
              rekey_synthesis_in_phase5 must patch every nominal Ty first",
             item_id.as_u32(),
-            ctxt.model.items.len()
+            model.items.len()
         );
-        let item_kind = ctxt.model.items[item_id].kind.clone();
+        let item_kind = model.items[item_id].kind.clone();
         if !matches!(
             item_kind,
             ItemKind::Struct | ItemKind::Enum | ItemKind::Union
         ) {
             continue;
         }
-        match &ctxt.model.item_synthetic_kinds[item_id] {
+        match &model.item_synthetic_kinds[item_id] {
             SyntheticItemKind::None | SyntheticItemKind::VTableType { .. } => {}
             // ClosureCaptures Struct Instances are owned by
             // `construct_closure_call_instances`; any other synth
             // ADT kind is not a definition-site nominal.
             _ => continue,
         }
-        let args_key = args_key_for_generic_args_with_pending(&ctxt.model, &args, &pending);
+        let args_key = args_key_for_generic_args_with_pending(model, &args, pending);
         if !existing.insert((item_id, args_key)) {
             continue;
         }
-        let emission_name = ctxt.model.items[item_id].def_path.rendered;
-        let span = ctxt.model.items[item_id].span;
+        let emission_name = model.items[item_id].def_path.rendered;
+        let span = model.items[item_id].span;
         let kind = match item_kind {
             ItemKind::Struct => InstanceKind::Struct { layout: layout_ty },
             ItemKind::Enum => InstanceKind::Enum { layout: layout_ty },
             ItemKind::Union => InstanceKind::Union { layout: layout_ty },
             _ => unreachable!("filtered to Struct/Enum/Union above"),
         };
-        ctxt.model.instances.push(Instance {
+        model.instances.push(Instance {
             item: item_id,
             generic_args: args,
             emission_name,
@@ -1551,6 +1600,20 @@ fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Brid
         });
     }
     Ok(())
+}
+
+/// Re-invoke the nominal-ADT Instance construction loop on an
+/// already-bridged `RegseqModel` for the Test Plan A9 idempotency
+/// check. Operates with an empty pending-item map (the model is
+/// post-bridge; `BridgeCtxt::pending_items` was drained by the
+/// orchestrator). A second call must add no new Instance rows -- the
+/// `(item, args_key)` dedup set is rebuilt from the live
+/// `model.instances` on entry, so any row produced by the first pass
+/// suppresses a duplicate push here.
+pub fn replay_construct_nominal_adt_instances_for_tests(
+    model: &mut RegseqModel,
+) -> Result<(), BridgeError> {
+    nominal_adt_instances_pass(model, &HashMap::new())
 }
 
 /// Per regseq-driver-51: bridge-side eager construction of the

@@ -1,5 +1,5 @@
 //! regseq-driver-55 Test Plan B: Item-vs-Instance
-//! bridge-completeness check (Change G, spec v2).
+//! bridge-completeness check (Change G, spec v3).
 //!
 //! These tests invoke the new `validate_bridge_completeness`
 //! entry point added by Change G, NOT the `validate(&BridgeInput)`
@@ -8,7 +8,10 @@
 //! returns `Ok(())` for the SAME partial model -- this pins the
 //! deliberately-distinct entry-point contract: the
 //! model-correctness path is permissive about Item-vs-Instance
-//! coverage; the bridge-completeness path is strict. The
+//! coverage; the bridge-completeness path is strict. B4 pins the
+//! v3 Source-`Function`-Item carve-out: Function-Instance coverage
+//! is owned by `construct_function_instances` + lazy call-site
+//! creation, not by `validate_bridge_completeness`. The
 //! partial-model corpus at
 //! `crates/regseq-model/tests/{id_referential_integrity_validator,
 //! layout_validator}.rs` is intentionally left untouched and
@@ -33,15 +36,24 @@ fn base_model() -> RegseqModel {
     model
 }
 
-/// Push one source-derived `ItemKind::Struct` Item with the given
-/// linkage and return its `ItemId`.
-fn push_struct_item(model: &mut RegseqModel, name: &str, linkage: Linkage) -> ItemId {
+/// Push one source-derived Item of the given `kind` and `linkage`,
+/// returning its `ItemId`.
+fn push_source_item(
+    model: &mut RegseqModel,
+    name: &str,
+    kind: ItemKind,
+    linkage: Linkage,
+) -> ItemId {
     let name_id = model.strings.intern(name);
     let crate_name = model
         .strings
         .resolve(model.crates[model.primary_crate].name)
         .to_owned();
     let rendered = model.strings.intern(&format!("{crate_name}::{name}"));
+    let segment_data = match kind {
+        ItemKind::Function => DefPathData::ValueNs(name_id),
+        _ => DefPathData::TypeNs(name_id),
+    };
     let item = Item {
         def_path: DefPath {
             crate_id: model.primary_crate,
@@ -51,13 +63,13 @@ fn push_struct_item(model: &mut RegseqModel, name: &str, linkage: Linkage) -> It
                     disambiguator: 0,
                 },
                 DefPathSegment {
-                    data: DefPathData::TypeNs(name_id),
+                    data: segment_data,
                     disambiguator: 0,
                 },
             ],
             rendered,
         },
-        kind: ItemKind::Struct,
+        kind,
         span: Span::dummy(),
         linkage,
         link_section: None,
@@ -73,6 +85,12 @@ fn push_struct_item(model: &mut RegseqModel, name: &str, linkage: Linkage) -> It
     model.item_synthetic_kinds.push(SyntheticItemKind::None);
     model.domain_attrs.item_attrs.push(Vec::new());
     id
+}
+
+/// Convenience wrapper retained for the existing source-Struct
+/// negative / positive cases (B1, B3, generic-args guard).
+fn push_struct_item(model: &mut RegseqModel, name: &str, linkage: Linkage) -> ItemId {
+    push_source_item(model, name, ItemKind::Struct, linkage)
 }
 
 fn empty_struct_layout() -> Layout {
@@ -155,6 +173,34 @@ fn b3_struct_item_with_matching_instance_is_accepted() {
         model.validate_bridge_completeness(),
         Ok(()),
         "non-foreign Struct Item with a matching Struct Instance must pass bridge-completeness"
+    );
+}
+
+// B4. Source `Function`-Item carve-out (positive): a non-foreign
+// source `ItemKind::Function` with ZERO matching Instance must
+// pass bridge-completeness. The v3 spec narrowing removes
+// `Function` from Change G's kind set: Function-Instance
+// coverage is owned by `construct_function_instances` + lazy
+// call-site creation (`lookup_or_create_direct_instance`), not
+// by this validator. The in-the-wild grounding is the pre-existing
+// `crates/regseq-driver/tests/bridge_synth.rs:399` fixture, where a
+// `pub fn closure_fixture() -> impl Fn(u32) -> u32` is rejected
+// by `translate_fn_sig` as `BridgeError::NonRigidTy` and no body
+// invokes it directly. Any future change that re-adds `Function`
+// to the kind set must explicitly grandfather this case.
+#[test]
+fn b4_function_item_without_instance_is_accepted() {
+    let mut model = base_model();
+    let _item = push_source_item(
+        &mut model,
+        "closure_fixture",
+        ItemKind::Function,
+        Linkage::Default,
+    );
+    assert_eq!(
+        model.validate_bridge_completeness(),
+        Ok(()),
+        "source Function Item without an Instance must be carved out (v3 kind-set narrowing)"
     );
 }
 

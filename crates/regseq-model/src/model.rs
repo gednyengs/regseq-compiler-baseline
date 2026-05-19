@@ -743,14 +743,21 @@ pub enum InvariantViolation {
     /// `(Item, GenericArgs, rustc shim flavor)` tuple; this extends
     /// the section 3.1 invariant 14 `InstanceKind`-consistency
     /// family with the Item-side coverage direction. Scoped to
-    /// source-derived (`SyntheticItemKind::None`) Items; foreign
-    /// source declarations (`linkage == Linkage::Foreign`) are
-    /// carved out (their `body` / `init` is legitimately `None` and
-    /// whether they need an Instance row is SPEC-AMBIGUOUS, out of
-    /// scope per the regseq-driver-55 Non-Goals). Synthetic Items'
-    /// Instance lifecycle is owned by the synth passes + residue
-    /// DCE (Non-Goals 5 + 6) and is not policed here. See
-    /// `validate_bridge_completeness` for the full rationale.
+    /// source-derived (`SyntheticItemKind::None`) Items whose
+    /// `kind` is one of `{ Static, Const, Struct, Enum, Union }`;
+    /// foreign source declarations (`linkage == Linkage::Foreign`)
+    /// are carved out (their `body` / `init` is legitimately `None`
+    /// and whether they need an Instance row is SPEC-AMBIGUOUS, out
+    /// of scope per the regseq-driver-55 Non-Goals). Source
+    /// `Function` Items are carved out per the v3 spec-narrowing:
+    /// Function-Instance coverage is owned by
+    /// `construct_function_instances` plus lazy call-site creation,
+    /// not by this check (the in-the-wild RPIT-uncalled-fn case at
+    /// `crates/regseq-driver/tests/bridge_synth.rs` grounds the
+    /// carve-out). Synthetic Items' Instance lifecycle is owned by
+    /// the synth passes + residue DCE (Non-Goals 5 + 6) and is not
+    /// policed here. See `validate_bridge_completeness` for the
+    /// full rationale.
     ItemMissingInstance {
         /// Item lacking a covering `Instance`.
         item: ItemId,
@@ -3392,14 +3399,11 @@ impl RegseqModel {
     /// `InstanceKind`-consistency family with the Item-side
     /// direction).
     ///
-    /// Enforces: for every `Item` whose `item_synthetic_kinds[i] ==
-    /// SyntheticItemKind::None` AND whose `linkage !=
-    /// Linkage::Foreign`, there is at least one `Instance` whose
-    /// `item` field references it. `ItemKind` is the closed
-    /// 6-variant set per spec.md section 8.0 (`Function` / `Static`
-    /// / `Const` / `Struct` / `Enum` / `Union`), so every
-    /// non-synthetic non-foreign Item is in scope without an
-    /// explicit per-kind filter.
+    /// Enforces: for every `Item` whose `kind` is one of `{ Static,
+    /// Const, Struct, Enum, Union }` AND whose
+    /// `item_synthetic_kinds[i] == SyntheticItemKind::None` AND
+    /// whose `linkage != Linkage::Foreign`, there is at least one
+    /// `Instance` whose `item` field references it.
     ///
     /// This is a SEPARATE public entry point, DELIBERATELY NOT
     /// folded into `RegseqModel::validate(&mut self, &BridgeInput)`.
@@ -3434,6 +3438,20 @@ impl RegseqModel {
     /// the `Instance` of a synth Item while leaving the Item entry;
     /// synth-Item Instance lifecycle is owned by the synth passes +
     /// the residue DCE, not policed here.
+    ///
+    /// Source-`Function`-Item exemption (the v3 kind-set narrowing):
+    /// Function-Instance coverage is owned by the bridge's
+    /// `construct_function_instances` pass plus lazy call-site
+    /// creation via `lookup_or_create_direct_instance`. The bridge
+    /// legitimately leaves a Function Item without an Instance when
+    /// `translate_fn_sig` rejects the declared signature as
+    /// `BridgeError::NonRigidTy` (e.g., RPIT `Alias(Opaque)` return
+    /// types) AND no direct call site lazy-creates one. Such Items
+    /// are bridge-unreachable for downstream rendering
+    /// (pretty-printer.md section 10.3 walks `model.instances`, not
+    /// `model.items`) and the model-correctness check for
+    /// "`Function.body` matches kind/linkage" remains spec.md
+    /// section 3.1 invariant 10's job, not this check's.
     pub fn validate_bridge_completeness(&self) -> Result<(), InvariantViolation> {
         let mut covered = vec![false; self.items.len()];
         for instance in self.instances.iter() {
@@ -3457,6 +3475,20 @@ impl RegseqModel {
             // Source foreign declarations are the carved-out shape.
             if item.linkage == Linkage::Foreign {
                 continue;
+            }
+            // Source-`Function` carve-out per v3 spec: Function-Instance
+            // coverage is owned by `construct_function_instances` plus
+            // lazy call-site creation. RPIT-uncalled source Functions
+            // legitimately reach Phase 5 with zero Instances (see this
+            // method's doc comment for the in-the-wild closure_fixture
+            // example).
+            match item.kind {
+                ItemKind::Function => continue,
+                ItemKind::Static { .. }
+                | ItemKind::Const
+                | ItemKind::Struct
+                | ItemKind::Enum
+                | ItemKind::Union => {}
             }
             return Err(InvariantViolation::ItemMissingInstance {
                 item: item_id,

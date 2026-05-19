@@ -1521,7 +1521,7 @@
           "id": "regseq-driver-55",
           "name": "Phase-5 Instance-construction completeness for source and vtable-type Items",
           "spec": ".harness/tasks/regseq-driver/55-phase5-instance-construction-completeness.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-46",
             "regseq-driver-51",

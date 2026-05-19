@@ -24,7 +24,9 @@ use std::process::Command;
 use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use regseq_driver::bridge::{run_bridge, BridgeInput};
+use regseq_driver::bridge::{
+    replay_construct_nominal_adt_instances_for_tests, run_bridge, BridgeInput,
+};
 use regseq_model::{Const, InstanceKind, ItemKind, Mutability, RegseqModel, SyntheticItemKind};
 
 static INIT: Once = Once::new();
@@ -377,17 +379,20 @@ pub fn make_and_dispatch() -> u32 { let c = Concrete; dispatch(&c) }
     );
 }
 
-// A9. Idempotency: the Phase-5 nominal-ADT pass dedups on
-// `(item, args)`, so the bridged model carries NO duplicate nominal
-// Instance rows. `construct_nominal_adt_instances` is a private
-// Phase-5 pass not callable from an integration test; the
-// observable invariant the spec's "no duplicate Instance rows" arm
-// requires is asserted directly on the produced model (the helper's
-// `existing` HashSet is exactly what enforces it, and would also
-// suppress a re-entry push).
+// A9. Idempotency: re-invoke the nominal-ADT Instance construction
+// loop on the bridged model and assert no duplicate rows. Per the
+// spec's Test Plan A9 implementation note ("extract the loop body
+// into a helper, call twice from a test harness") the bridge exposes
+// `replay_construct_nominal_adt_instances_for_tests` -- a thin
+// wrapper around the shared `nominal_adt_instances_pass` body that
+// uses an empty pending-item map (the model is post-bridge; the
+// bridge orchestrator has already drained `pending_items`). The
+// helper rebuilds its `(item, args_key)` dedup set from the live
+// `model.instances` on entry, so any row produced by the bridge's
+// first pass suppresses a duplicate push here.
 #[test]
 fn a9_no_duplicate_nominal_instances() {
-    let model = compile_with_bridge(
+    let mut model = compile_with_bridge(
         "instcomp_a9",
         r#"#![no_std]
 pub struct Point { x: i32, y: i32 }
@@ -401,6 +406,8 @@ pub fn use_u32(w: &Wrap<u32>) -> u32 { w.v }
 pub fn use_u64(w: &Wrap<u64>) -> u64 { w.v }
 "#,
     );
+    // 1. The bridged model already passed the first pass; assert no
+    // duplicate nominal Instance rows survived.
     let mut seen = std::collections::HashSet::new();
     for inst in model.instances.iter() {
         if matches!(
@@ -414,6 +421,16 @@ pub fn use_u64(w: &Wrap<u64>) -> u64 { w.v }
             );
         }
     }
+    let before = model.instances.len();
+    // 2. Re-invoke the helper. Idempotency: no new Instance rows are
+    // appended (the dedup set is rebuilt from `model.instances`).
+    replay_construct_nominal_adt_instances_for_tests(&mut model)
+        .expect("replay helper must succeed against a bridged model");
+    assert_eq!(
+        model.instances.len(),
+        before,
+        "replay must not append any new Instance row (idempotency)"
+    );
     // Sanity: the two Wrap monomorphisations are present (so the
     // dedup did not over-collapse distinct monomorphisations).
     let wrap_structs = instances_named(&model, "Wrap")
