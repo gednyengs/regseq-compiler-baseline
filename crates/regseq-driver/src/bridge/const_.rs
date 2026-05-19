@@ -233,6 +233,106 @@ pub fn construct_const_memory_static_instances(cx: &mut BridgeCtxt<'_>) -> Resul
     Ok(())
 }
 
+/// Translate a source `static`'s initialiser into an
+/// `Option<ConstId>` for `InstanceKind::Static { init }` per
+/// regseq-driver-55 Change C.
+///
+/// Returns `Ok(None)` for foreign statics
+/// (`extern "C" { static FOO: u32; }`): they carry no initialiser
+/// per spec.md section 9.4's Static-init biconditional. Foreign
+/// statics are out of scope per regseq-driver-55 Non-Goals; the
+/// `None` arm exists only so the foreign carve-out is explicit and
+/// is not exercised by the in-scope fixtures.
+///
+/// For source-defined statics the initialiser is rustc's evaluated
+/// `eval_static_initializer` allocation. It is translated to match
+/// the static's type per spec.md section 9.7's per-`Ty` const
+/// dispatch (which the pretty-printer's `render_const` enforces):
+///
+///   * scalar-typed statics (`bool` / `char` / int / uint / float
+///     and thin `&T` / `*T` / `fn`) read the leading `Scalar` from
+///     the allocation and reuse the existing `translate_scalar`
+///     path, so a `u32` static renders as the scalar `Const`
+///     variant the spec requires (NOT `Const::Bytes`);
+///   * every other (aggregate / array / union) static keeps the
+///     byte-level `allocation_bytes` translation -- the same path
+///     `construct_const_memory_static_instances` and the `Indirect`
+///     const dispatch use -- so relocation-bearing statics
+///     round-trip as `Const::Bytes` with embedded `Byte::Reloc`.
+pub fn translate_static_init<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    def_id: DefId,
+) -> Result<Option<ConstId>, BridgeError> {
+    if cx.input.tcx.is_foreign_item(def_id) {
+        return Ok(None);
+    }
+    let alloc = cx
+        .input
+        .tcx
+        .eval_static_initializer(def_id)
+        .map_err(|err| BridgeError::UnsupportedConst {
+            const_repr: format!("static initializer eval failed for {def_id:?}: {err:?}"),
+        })?;
+    let rustc_ty = cx.input.tcx.type_of(def_id).instantiate_identity();
+    let read_provenance = matches!(
+        rustc_ty.kind(),
+        TyKind::RawPtr(..) | TyKind::Ref(..) | TyKind::FnPtr(..)
+    );
+    let is_scalar = read_provenance
+        || matches!(
+            rustc_ty.kind(),
+            TyKind::Bool | TyKind::Char | TyKind::Int(_) | TyKind::Uint(_) | TyKind::Float(_)
+        );
+    let value = if is_scalar {
+        let layout = cx
+            .input
+            .tcx
+            .layout_of(ty::TypingEnv::fully_monomorphized().as_query_input(rustc_ty))
+            .map_err(|_| BridgeError::Layout {
+                ty_repr: rustc_ty.to_string(),
+            })?;
+        let scalar = alloc
+            .inner()
+            .read_scalar(
+                &cx.input.tcx,
+                alloc_range(rustc_abi::Size::ZERO, layout.size),
+                read_provenance,
+            )
+            .map_err(|err| BridgeError::UnsupportedConst {
+                const_repr: format!("static {def_id:?} scalar read failed: {err:?}"),
+            })?;
+        translate_scalar(cx, scalar, rustc_ty)?
+    } else {
+        Const::Bytes(allocation_bytes(cx, alloc.inner())?)
+    };
+    Ok(Some(cx.model.consts.intern(value)))
+}
+
+/// Translate a source `const` item's `(ty, value)` for
+/// `InstanceKind::Const` per regseq-driver-55 Change D.
+///
+/// The value is evaluated through the existing `translate_const`
+/// path by wrapping the const's `DefId` in a
+/// `mir::Const::Unevaluated` and letting `mir::Const::eval` drive
+/// rustc's CTFE machinery, so the full spec.md section 9.7 const
+/// dispatch (scalars, ZSTs, reference-typed const memory) is reused
+/// verbatim. Consts cannot be generic in the supported subset, so
+/// identity args are correct.
+pub fn translate_const_item<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    def_id: DefId,
+) -> Result<(regseq_model::TyId, ConstId), BridgeError> {
+    let rustc_ty = cx.input.tcx.type_of(def_id).instantiate_identity();
+    let ty = translate_ty(cx, rustc_ty)?;
+    let identity_args = ty::GenericArgs::identity_for_item(cx.input.tcx, def_id);
+    let konst = mir::Const::Unevaluated(
+        mir::UnevaluatedConst::new(def_id, identity_args),
+        rustc_ty,
+    );
+    let value = translate_const(cx, konst)?;
+    Ok((ty, value))
+}
+
 fn translate_const_value<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     value: mir::ConstValue,

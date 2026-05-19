@@ -666,17 +666,59 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
     // `source_item_handles`, making the call idempotent if the
     // body-scan loop later re-discovers the same FnDef via a callee
     // constant.
+    // Per regseq-driver-55 Change A (spec.md section 8.0 + section
+    // 9.4): `MonoItem::Static(def_id)` interns an `ItemKind::Static`
+    // Item alongside the existing `ItemKind::Function` interning so
+    // the Phase-5 `construct_source_static_instances` pass has a
+    // source Item to attach the `InstanceKind::Static` to.
+    // `MonoItem::GlobalAsm` is out of scope (spec.md section 15.1
+    // rejects it at use sites).
     for mono_item in &discovered_mono_items {
-        let MonoItem::Fn(instance) = mono_item else {
-            continue;
-        };
-        let rustc_middle::ty::InstanceKind::Item(def_id) = instance.def else {
-            continue;
-        };
-        if !is_source_derived_function(ctxt.input.tcx, def_id) {
-            continue;
+        match mono_item {
+            MonoItem::Fn(instance) => {
+                let rustc_middle::ty::InstanceKind::Item(def_id) = instance.def else {
+                    continue;
+                };
+                if !is_source_derived_function(ctxt.input.tcx, def_id) {
+                    continue;
+                }
+                let _ = ty::intern_item(ctxt, def_id, ItemKind::Function, ty::SpecialAdt::None);
+            }
+            MonoItem::Static(def_id) => {
+                let mutability = source_static_mutability(ctxt.input.tcx, *def_id);
+                let _ = ty::intern_item(
+                    ctxt,
+                    *def_id,
+                    ItemKind::Static { mutability },
+                    ty::SpecialAdt::None,
+                );
+            }
+            MonoItem::GlobalAsm(_) => continue,
         }
-        let _ = ty::intern_item(ctxt, def_id, ItemKind::Function, ty::SpecialAdt::None);
+    }
+
+    // Per regseq-driver-55 Change B (spec.md section 8.1, esp. the
+    // associated-constant lifting rule): `const` items are NOT
+    // surfaced by rustc's mono-item discovery (they are erased at
+    // codegen time), so a separate HIR walk interns every top-level
+    // `const` AND associated `const` as an `ItemKind::Const` Item.
+    // Both forms share the same `ItemKind::Const` shape per section
+    // 8.1; `intern_item` dedups by `DefPathHash` so the two walks
+    // into the Item table are idempotent by construction.
+    let tcx = ctxt.input.tcx;
+    let const_def_ids: Vec<DefId> = tcx
+        .hir_crate_items(())
+        .definitions()
+        .filter(|local_def_id| {
+            matches!(
+                tcx.def_kind(local_def_id.to_def_id()),
+                rustc_hir::def::DefKind::Const | rustc_hir::def::DefKind::AssocConst
+            )
+        })
+        .map(|local_def_id| local_def_id.to_def_id())
+        .collect();
+    for def_id in const_def_ids {
+        let _ = ty::intern_item(ctxt, def_id, ItemKind::Const, ty::SpecialAdt::None);
     }
 
     for mono_item in discovered_mono_items {
@@ -1035,6 +1077,48 @@ fn construct_instances_and_resolve_cross_references(
     // call sites (different `(item, args, flavor)` triples) extends
     // the map during terminator translation.
     construct_function_instances(ctxt)?;
+    // Per regseq-driver-55 Change F (spec.md section 3.4 Phase 5 +
+    // section 8.1): source `static` / `const` Items get their
+    // symmetric Instance rows constructed here, between the
+    // Function-instance pass and the closure-family pass. Their
+    // parent Items are interned in Phase 2 (Change A's
+    // `MonoItem::Static` walk; Change B's `hir_crate_items` const
+    // walk) and assigned final `ItemId`s by Phase 4, so
+    // `source_item_def_id` resolves them and the pushed
+    // `Instance.item` is a valid index that the closing
+    // `sort_items_by_f4` remap (and the final
+    // `sort_instances_by_f4_2`) carry through correctly.
+    //
+    // INTERPRETATION CHOICE (regseq-driver-55): Change F's
+    // pseudocode also slots `construct_nominal_adt_instances` here,
+    // on the premise (Change E step 3) that "Phase-2's
+    // mono-item-driven type translation populates one Ty entry per
+    // reachable (item, args) pair" with a resolvable `ItemId`. That
+    // premise does not hold in this driver: source `struct` / `enum`
+    // / `union` Items are NOT mono-items and are first interned
+    // during Phase-5 fn-sig / body translation (after Phase 4), so
+    // their `Ty::Struct/Enum/Union` entries carry the high-end
+    // placeholder `ItemId` (per `placeholder_item_id_for_handle`)
+    // until `assign_late_pending_items` + `patch_resolved_source_ty_pending`
+    // run at the END of this orchestrator. Reading the Ty's `item`
+    // field at this slot yields an unpatched placeholder, and
+    // pushing `Instance.item = <placeholder>` would panic the
+    // closing `sort_items_by_f4` remap (`remap[item.index()]`
+    // indexes past `items.len()`). Additionally, running before
+    // `eliminate_diag_log_peel_residue` would push an
+    // `InstanceKind::Enum` for the DiagLogPeel residue `LogArg`
+    // enum, pinning it in the model against the spec.md section
+    // 26.6 contract. The spec-INTENT (one Instance per reachable
+    // monomorphisation via the `model.types` walk, no rustc DefId
+    // resolution) is preserved verbatim by running the SAME pass as
+    // the final construction step (after every ItemId/TyId
+    // finalisation barrier AND the residue DCE) -- mirroring the
+    // existing `const_::construct_const_memory_static_instances`
+    // precedent for late-resolved Instances. Only the slot moves;
+    // the algorithm is unchanged. See the call site at the end of
+    // this function for the full rationale.
+    construct_source_static_instances(ctxt)?;
+    construct_source_const_instances(ctxt)?;
     // Per regseq-driver-51 (spec.md:4531-4546 + 778-781): bridge-
     // synthesised ClosureCall Function Items have no rustc DefId, so
     // `construct_function_instances` (`mod.rs:1114-1121`) skips them.
@@ -1091,6 +1175,33 @@ fn construct_instances_and_resolve_cross_references(
     // removal seeds come from the DiagLogPeelResidue accumulator
     // populated during `run_phase5_body_passes` above.
     diag_log::dead_item_elim::eliminate_diag_log_peel_residue(ctxt)?;
+    // Per regseq-driver-55 Change E (slotted here per the
+    // INTERPRETATION CHOICE documented at the Change-F site above).
+    // This is the LAST construction step, after every ItemId/TyId
+    // finalisation barrier this driver requires:
+    //
+    //  * `assign_late_pending_items` + `patch_resolved_source_ty_pending`
+    //    + `sort_items_by_f4`/`remap_item_ids` have given every
+    //    source `struct`/`enum`/`union` and synth `VTableType` Item
+    //    a final `ItemId` and patched its `Ty::Struct/Enum/Union`
+    //    view (this driver interns source ADT Items late, during
+    //    Phase-5 fn-sig / body translation -- NOT in Phase 2 as
+    //    Change E step 3 assumes -- so the Ty's `item` field is an
+    //    unpatched placeholder until this barrier);
+    //  * `eliminate_diag_log_peel_residue` has removed the
+    //    DiagLogPeel residue `Ty::Enum { item: <LogArg> }` entry.
+    //    Running BEFORE the DCE would push an `InstanceKind::Enum`
+    //    for `LogArg`, which keeps the `LogArg` Ty/Item reachable
+    //    and violates the spec.md section 26.6 contract that
+    //    `LogArg` does NOT appear in RegseqModel.
+    //
+    // The `model.types` walk is therefore the authoritative,
+    // fully-resolved, residue-free monomorphisation enumeration --
+    // identical mechanism to Change E step 3, just after the
+    // barriers the spec's premise does not account for. The closing
+    // `model.sort_instances_by_f4_2()` in `run_bridge` restores
+    // F4-2 canonical ordering across the expanded Instance set.
+    construct_nominal_adt_instances(ctxt)?;
     Ok(())
 }
 
@@ -1191,6 +1302,241 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
         });
         ctxt.function_instance_for_item
             .insert((item_id, args_key, flavor), instance_id);
+    }
+    Ok(())
+}
+
+/// Per regseq-driver-55 Change C: construct one
+/// `InstanceKind::Static { ty, init }` Instance per source-derived
+/// `ItemKind::Static` Item. Per spec.md section 8.0 statics cannot
+/// be generic, so the relationship is always 1:1 (one Instance per
+/// Item, empty `generic_args`).
+///
+/// Synth statics (`SyntheticItemKind::VTableInstance` /
+/// `ConstMemoryStatic`) are filtered out: those carry their own
+/// Phase-5 construction passes
+/// (`synth/vtable.rs::push_vtable_instance_statics`,
+/// `const_::construct_const_memory_static_instances`) that own the
+/// init-aggregate shape. Foreign source statics
+/// (`extern "C" { static FOO: u32; }`) are out of scope per
+/// regseq-driver-55 Non-Goals; `const_::translate_static_init`
+/// returns `init: None` for them, but the bridge does not
+/// currently surface them as Items.
+fn construct_source_static_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    use regseq_model::{Instance, InstanceKind};
+
+    // Snapshot the target Items before iterating: the construction
+    // loop interns `Ty`s / `Const`s and pushes Instances, any of
+    // which would invalidate a live borrow of `model.items`.
+    let static_items: Vec<ItemId> = ctxt
+        .model
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let item_id = ItemId::from_u32(idx as u32);
+            if !matches!(item.kind, ItemKind::Static { .. }) {
+                return None;
+            }
+            if !matches!(
+                ctxt.model.item_synthetic_kinds[item_id],
+                SyntheticItemKind::None
+            ) {
+                return None;
+            }
+            Some(item_id)
+        })
+        .collect();
+
+    for item_id in static_items {
+        let def_path_hash = ctxt.model.item_def_paths[item_id];
+        let Some(def_id) = source_item_def_id(ctxt.input.tcx, def_path_hash) else {
+            // Source static without a rustc DefId in this
+            // compilation (cross-crate reference); no Instance is
+            // constructed here.
+            continue;
+        };
+        let rustc_ty = ctxt.input.tcx.type_of(def_id).instantiate_identity();
+        let ty = ty::translate_ty(ctxt, rustc_ty)?;
+        let init = const_::translate_static_init(ctxt, def_id)?;
+        let emission_name = ctxt.model.items[item_id].def_path.rendered;
+        let span = ctxt.model.items[item_id].span;
+        ctxt.model.instances.push(Instance {
+            item: item_id,
+            generic_args: Vec::new(),
+            emission_name,
+            span,
+            kind: InstanceKind::Static { ty, init },
+        });
+    }
+    Ok(())
+}
+
+/// Per regseq-driver-55 Change D: construct one
+/// `InstanceKind::Const { ty, value }` Instance per source-derived
+/// `ItemKind::Const` Item (top-level `const` and lifted associated
+/// `const` per spec.md section 8.1). Consts cannot be generic, so
+/// the relationship is always 1:1.
+fn construct_source_const_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    use regseq_model::{Instance, InstanceKind};
+
+    let const_items: Vec<ItemId> = ctxt
+        .model
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let item_id = ItemId::from_u32(idx as u32);
+            if !matches!(item.kind, ItemKind::Const) {
+                return None;
+            }
+            if !matches!(
+                ctxt.model.item_synthetic_kinds[item_id],
+                SyntheticItemKind::None
+            ) {
+                return None;
+            }
+            Some(item_id)
+        })
+        .collect();
+
+    for item_id in const_items {
+        let def_path_hash = ctxt.model.item_def_paths[item_id];
+        let Some(def_id) = source_item_def_id(ctxt.input.tcx, def_path_hash) else {
+            continue;
+        };
+        let (ty, value) = const_::translate_const_item(ctxt, def_id)?;
+        let emission_name = ctxt.model.items[item_id].def_path.rendered;
+        let span = ctxt.model.items[item_id].span;
+        ctxt.model.instances.push(Instance {
+            item: item_id,
+            generic_args: Vec::new(),
+            emission_name,
+            span,
+            kind: InstanceKind::Const { ty, value },
+        });
+    }
+    Ok(())
+}
+
+/// Per regseq-driver-55 Change E: construct one
+/// `InstanceKind::{Struct, Enum, Union} { layout }` Instance per
+/// reachable monomorphisation of every source-derived ADT Item AND
+/// every synth `VTableType` Item.
+///
+/// The monomorphisations are enumerated by walking `model.types`:
+/// Phase-2's mono-item-driven type translation interns one nominal
+/// `Ty` per reachable `(item, args)` pair (spec.md section 3.4
+/// Phase 5 cardinality: one Instance per `(Item, GenericArgs, rustc
+/// shim flavor)` tuple). For synth `VTableType` ADTs the parallel
+/// `Ty::Struct` view is interned by
+/// `ty.rs::synthesize_dynamic_vtable_ty` (and refined by
+/// `synth/vtable.rs::push_vtable_instance_statics`); its placeholder
+/// `ItemId` is patched to the final `ItemId` by
+/// `synth::rekey_synthesis_in_phase5`, which runs first in the
+/// Phase-5 orchestrator -- so the same `model.types` walk covers
+/// both source and synth ADT origins with real `ItemId`s.
+///
+/// `SyntheticItemKind::ClosureCaptures` ADTs are filtered OUT: the
+/// `Struct` Instance for a closure's captures struct is owned by
+/// `construct_closure_call_instances` (which keys on the per-closure
+/// `DefPathHash` and would conflict with a second push here).
+///
+/// This pass does NOT call `source_item_def_id`: that helper scans
+/// `tcx.hir_body_owners()`, which covers HIR body owners
+/// (functions, statics, consts) but NOT ADT definitions
+/// (`struct`/`enum`/`union` have no HIR body). The `model.types`
+/// walk is the authoritative enumeration and needs no rustc DefId.
+fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    use regseq_model::{GenericArgs, Instance, InstanceKind};
+
+    let pending = ctxt.pending_def_path_hashes();
+
+    // Existing `(item, args_key)` coverage for nominal Instances so
+    // a re-entry (Test Plan A9 idempotency) or an Instance already
+    // produced by another Phase-5 pass is not duplicated (spec.md
+    // regseq-driver-55 Change E step 4).
+    let mut existing: std::collections::HashSet<(ItemId, ArgsKey)> = ctxt
+        .model
+        .instances
+        .iter()
+        .filter_map(|inst| match &inst.kind {
+            InstanceKind::Struct { .. }
+            | InstanceKind::Enum { .. }
+            | InstanceKind::Union { .. } => Some((
+                inst.item,
+                args_key_for_generic_args_with_pending(
+                    &ctxt.model,
+                    &inst.generic_args,
+                    &pending,
+                ),
+            )),
+            _ => None,
+        })
+        .collect();
+
+    // Snapshot the nominal `Ty` rows before pushing Instances (the
+    // push borrows `model.instances` mutably while `model.types` is
+    // immutably walked).
+    let rows: Vec<(ItemId, GenericArgs, TyId)> = ctxt
+        .model
+        .types
+        .iter()
+        .filter_map(|(ty_id, ty)| match ty {
+            Ty::Struct { item, args, .. }
+            | Ty::Enum { item, args, .. }
+            | Ty::Union { item, args, .. } => Some((*item, args.clone(), ty_id)),
+            _ => None,
+        })
+        .collect();
+
+    for (item_id, args, layout_ty) in rows {
+        // After `rekey_synthesis_in_phase5` every nominal `Ty`
+        // carries a real (patched) `ItemId`. A placeholder here is
+        // a Phase-4/5 ordering bug, not a recoverable shape: panic
+        // per the README section 2 "No defensive fallbacks" rule.
+        assert!(
+            item_id.index() < ctxt.model.items.len(),
+            "construct_nominal_adt_instances: nominal Ty carries unpatched \
+             placeholder ItemId {} (items.len() = {}); \
+             rekey_synthesis_in_phase5 must patch every nominal Ty first",
+            item_id.as_u32(),
+            ctxt.model.items.len()
+        );
+        let item_kind = ctxt.model.items[item_id].kind.clone();
+        if !matches!(
+            item_kind,
+            ItemKind::Struct | ItemKind::Enum | ItemKind::Union
+        ) {
+            continue;
+        }
+        match &ctxt.model.item_synthetic_kinds[item_id] {
+            SyntheticItemKind::None | SyntheticItemKind::VTableType { .. } => {}
+            // ClosureCaptures Struct Instances are owned by
+            // `construct_closure_call_instances`; any other synth
+            // ADT kind is not a definition-site nominal.
+            _ => continue,
+        }
+        let args_key =
+            args_key_for_generic_args_with_pending(&ctxt.model, &args, &pending);
+        if !existing.insert((item_id, args_key)) {
+            continue;
+        }
+        let emission_name = ctxt.model.items[item_id].def_path.rendered;
+        let span = ctxt.model.items[item_id].span;
+        let kind = match item_kind {
+            ItemKind::Struct => InstanceKind::Struct { layout: layout_ty },
+            ItemKind::Enum => InstanceKind::Enum { layout: layout_ty },
+            ItemKind::Union => InstanceKind::Union { layout: layout_ty },
+            _ => unreachable!("filtered to Struct/Enum/Union above"),
+        };
+        ctxt.model.instances.push(Instance {
+            item: item_id,
+            generic_args: args,
+            emission_name,
+            span,
+            kind,
+        });
     }
     Ok(())
 }
@@ -1564,4 +1910,28 @@ pub fn is_source_derived_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
         tcx.def_kind(def_id),
         rustc_hir::def::DefKind::Fn | rustc_hir::def::DefKind::AssocFn
     )
+}
+
+/// Map rustc's `static_mutability` for a `MonoItem::Static` `DefId`
+/// onto the RegseqModel `Mutability` enum carried by
+/// `ItemKind::Static { mutability }` per spec.md section 8.0
+/// (source-level keyword choice; statics cannot be generic so the
+/// Item:Instance relationship is always 1:1).
+///
+/// Per the README section 2 "No defensive fallbacks" rule this
+/// panics rather than substituting a default: rustc's mono-item
+/// collection only ever yields a `MonoItem::Static` for an actual
+/// `static` definition, so `static_mutability` is `Some` by
+/// construction; a `None` here is a toolchain-contract violation,
+/// not a recoverable shape.
+fn source_static_mutability(tcx: TyCtxt<'_>, def_id: DefId) -> regseq_model::Mutability {
+    match tcx.static_mutability(def_id) {
+        Some(rustc_hir::Mutability::Mut) => regseq_model::Mutability::Mut,
+        Some(rustc_hir::Mutability::Not) => regseq_model::Mutability::Not,
+        None => panic!(
+            "source_static_mutability: MonoItem::Static def_id {def_id:?} \
+             has no static_mutability (rustc collects MonoItem::Static \
+             only for defined statics)"
+        ),
+    }
 }

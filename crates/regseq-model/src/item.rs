@@ -588,6 +588,14 @@ mod tests {
         let mut item = item(ItemKind::Function);
         item.def_path.segments[1].data = DefPathData::ValueNs(name);
         item.def_path.rendered = rendered;
+        // regseq-driver-55 Change G adds an Item-vs-Instance
+        // coverage check to `validate`. This test exercises the
+        // item side-table mirror invariant in isolation (no
+        // Instance table); a source foreign declaration is the
+        // spec's documented minimal carve-out for a source Item
+        // that legitimately has no Instance, so the side-table
+        // assertion stays intact while the model is fully valid.
+        item.linkage = Linkage::Foreign;
         model.items.push(item);
         model.item_def_paths.push(DefPathHash {
             stable_crate_id: StableCrateId(1),

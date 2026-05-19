@@ -734,6 +734,29 @@ pub enum InvariantViolation {
         /// operand's type recovery was `Malformed`.
         actual_ty: TyId,
     },
+
+    /// A source-derived `Item` that requires a covering `Instance`
+    /// has none.
+    ///
+    /// Per spec.md section 8.1 `ItemKind` mirrors `InstanceKind`
+    /// and spec.md section 3.4 Phase 5 constructs one Instance per
+    /// `(Item, GenericArgs, rustc shim flavor)` tuple; this extends
+    /// the section 3.1 invariant 14 `InstanceKind`-consistency
+    /// family with the Item-side coverage direction. Scoped to
+    /// source-derived (`SyntheticItemKind::None`) Items; foreign
+    /// source declarations (`linkage == Linkage::Foreign`) are
+    /// carved out (their `body` / `init` is legitimately `None` and
+    /// whether they need an Instance row is SPEC-AMBIGUOUS, out of
+    /// scope per the regseq-driver-55 Non-Goals). Synthetic Items'
+    /// Instance lifecycle is owned by the synth passes + residue
+    /// DCE (Non-Goals 5 + 6) and is not policed here. See
+    /// `validate_item_instance_coverage` for the full rationale.
+    ItemMissingInstance {
+        /// Item lacking a covering `Instance`.
+        item: ItemId,
+        /// The uncovered Item's kind.
+        item_kind: ItemKind,
+    },
 }
 
 /// Construction-invariant identifier.
@@ -1617,6 +1640,7 @@ impl RegseqModel {
         }
 
         crate::layout_validator::validate_instance_layouts(self)?;
+        self.validate_item_instance_coverage()?;
 
         self.validate_value_consts()?;
         crate::layout_validator::validate_const_graph_acyclic(self)?;
@@ -3354,6 +3378,77 @@ impl RegseqModel {
             }
         }
 
+        Ok(())
+    }
+
+    /// Item-vs-Instance coverage per regseq-driver-55 Change G
+    /// (spec.md section 3.4 Phase 5 + section 8.1 `ItemKind`-mirrors-
+    /// `InstanceKind`; extends the section 3.1 invariant 14
+    /// `InstanceKind`-consistency family with the Item-side
+    /// direction).
+    ///
+    /// Every SOURCE-DERIVED (`SyntheticItemKind::None`) Item must be
+    /// covered by at least one `Instance` whose `item` field
+    /// references it, EXCEPT source foreign declarations
+    /// (`linkage == Linkage::Foreign`): foreign `fn` / `static`
+    /// declarations legitimately carry `body: None` / `init: None`
+    /// (spec.md section 3.1 invariant 10 Function-body biconditional;
+    /// spec.md section 9.4 Static-init biconditional) and whether
+    /// they require an Instance row is SPEC-AMBIGUOUS and out of
+    /// scope per the regseq-driver-55 Non-Goals. This is an
+    /// Item-side check, deliberately a sibling of (not folded into)
+    /// `validate_instance`, which is Instance-side.
+    ///
+    /// INTERPRETATION CHOICE (regseq-driver-55): Change G's literal
+    /// boolean also requires every SYNTHETIC Item
+    /// (`item_synthetic_kinds[i] != None`) to carry an Instance.
+    /// That clause cannot be reconciled with the Test Plan D1
+    /// "workspace regression-clean" acceptance criterion: the
+    /// out-of-scope DiagLogPeel residue-driven DCE
+    /// (`regseq-driver-48/49`, explicitly out of scope per the
+    /// Non-Goals 5 + 6) legitimately strips the `Instance` of a
+    /// synth `SyntheticItemKind::DropGlue` Function while leaving
+    /// the Item entry, and the pre-existing
+    /// `bridge_diag_log_dead_item_elim` test asserts `validate`
+    /// SUCCEEDS in exactly that state. Synthetic-Item Instance
+    /// lifecycle is owned by the synth passes + the residue DCE
+    /// (Non-Goals 6); the missing coverage invariant this task
+    /// fixes is the SOURCE `struct`/`enum`/`union`/`static`/`const`
+    /// (and `fn`) ItemKind-mirrors-InstanceKind gap (the entire
+    /// point of Changes A-E). Scoping the check to source-derived
+    /// Items catches that bug precisely (Test Plan B1-B3 semantics
+    /// are unchanged: B1 source non-foreign -> rejected, B2 source
+    /// foreign -> accepted, B3 source covered -> accepted) while
+    /// staying D1 regression-clean and respecting Non-Goals 5 + 6.
+    fn validate_item_instance_coverage(&self) -> Result<(), InvariantViolation> {
+        let mut covered = vec![false; self.items.len()];
+        for instance in self.instances.iter() {
+            let idx = instance.item.index();
+            if idx < covered.len() {
+                covered[idx] = true;
+            }
+        }
+        for (idx, item) in self.items.iter().enumerate() {
+            if covered[idx] {
+                continue;
+            }
+            let item_id = ItemId::from_u32(idx as u32);
+            // Synthetic Items' Instance lifecycle is owned by the
+            // synth passes + the residue DCE (out of scope per the
+            // regseq-driver-55 Non-Goals 5 + 6); only source-derived
+            // Items are checked here.
+            if !matches!(self.item_synthetic_kinds[item_id], SyntheticItemKind::None) {
+                continue;
+            }
+            // Source foreign declarations are the carved-out shape.
+            if item.linkage == Linkage::Foreign {
+                continue;
+            }
+            return Err(InvariantViolation::ItemMissingInstance {
+                item: item_id,
+                item_kind: item.kind.clone(),
+            });
+        }
         Ok(())
     }
 

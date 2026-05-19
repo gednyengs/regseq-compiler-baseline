@@ -1628,12 +1628,41 @@ mod sort_items_by_f4 {
     #[test]
     fn post_sort_f4_monotonicity_debug_check_passes() {
         let mut m = RegseqModel::with_primary("pl011-spec", StableCrateId(1));
-        let _beta = push_named(&mut m, "beta", 1);
-        let _alpha = push_named(&mut m, "alpha", 2);
-        let _gamma = push_named(&mut m, "gamma", 3);
+        let beta = push_named(&mut m, "beta", 1);
+        let alpha = push_named(&mut m, "alpha", 2);
+        let gamma = push_named(&mut m, "gamma", 3);
+        // regseq-driver-55 Change G adds an Item-vs-Instance
+        // coverage check to `validate`. `push_named` produces
+        // source `ItemKind::Function` Items; give each one a
+        // covering Function Instance so this F4-monotonicity test
+        // validates a fully-valid model (one shared FnSig keeps
+        // the C-ABI-lowering side table dense).
+        m.types.push(Ty::Bool);
+        let sig = m.sigs.intern(default_sig());
+        m.sig_c_abi_lowerings.push(None);
+        let cover_name = m.strings.intern("cover");
+        for item in [beta, alpha, gamma] {
+            m.instances.push(Instance {
+                item,
+                generic_args: vec![],
+                emission_name: cover_name,
+                span: Span {
+                    file: SourceFileId::SYNTHESIZED,
+                    lo: 0,
+                    hi: 0,
+                },
+                kind: function_kind(sig, Some(Body::default())),
+            });
+        }
         // The implementation runs its debug-build monotonicity check
         // inside sort_items_by_f4; this call must not panic.
         let _ = m.sort_items_by_f4();
+        // The covering instances above are pushed in item order, not
+        // F4-2 instance order; the bridge's closing
+        // `sort_instances_by_f4_2` is what canonicalises them, so
+        // mirror it here before `validate` runs its
+        // `validate_f4_instance_order` check.
+        m.sort_instances_by_f4_2();
         // Re-validate via the public validator -- the F4 monotonicity
         // check fires here too (validate_f4_item_order).
         assert_eq!(m.validate(&BridgeInput::matching(&m)), Ok(()));

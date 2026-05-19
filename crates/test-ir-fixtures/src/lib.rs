@@ -47,6 +47,14 @@ pub mod fixture_names {
     /// to lock the spec-contract `LayoutKind::Enum` shape through
     /// both `validate` and `render`.
     pub const ENUM_ROUND_TRIP: &str = "enum_round_trip";
+    /// Instance-construction completeness fixture exercising every
+    /// in-scope source kind (`static` / `static mut` / `const` /
+    /// `struct` / generic `struct` / `enum` / `union`) plus the
+    /// synth-`VTableType` path. Used by regseq-driver-55 to lock
+    /// the Phase-5 Instance-construction passes + the
+    /// Item-vs-Instance coverage validator through both `validate`
+    /// and `render`.
+    pub const INSTANCE_COMPLETENESS: &str = "instance_completeness";
 }
 
 /// Drive the phase-1a `regseq-driver` bridge against the named
@@ -272,6 +280,7 @@ mod tests {
             fixture_names::TRAIT_OBJECT,
             fixture_names::CLOSURE,
             fixture_names::ENUM_ROUND_TRIP,
+            fixture_names::INSTANCE_COMPLETENESS,
         ] {
             let path = fixture_dir().join(format!("{name}.rs"));
             let metadata = std::fs::metadata(&path).unwrap_or_else(|err| {

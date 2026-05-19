@@ -1,0 +1,156 @@
+---
+source: crates/regseq-model/tests/e2e_instance_completeness.rs
+expression: render_default(&model)
+---
+fn instance_completeness::{impl#0}::read(_1: &instance_completeness::Point) -> u32 {
+    let mut _0: u32;
+    let mut _2: i32;
+
+    bb0: {
+        _2 = copy ((*_1).x: i32);
+        _0 = move _2 as u32;
+        return -> [];
+    }
+}
+
+extern "C" fn instance_completeness::<regseq_synth>::vtable_method_shim::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748::f7fd36cb1804a25a292d6b67467a59cd::3::f434ea851e214b409b6469d91bb685e6(_1: *mut ()) -> u32 {
+    let mut _0: u32;
+
+    bb0: {
+        _0 = instance_completeness::{impl#0}::read(move (*_1)) -> [return: bb1];
+    }
+
+    bb1: {
+        return -> [];
+    }
+}
+
+fn instance_completeness::Reader::read(_1: &dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748) -> u32;
+
+fn instance_completeness::dispatch(_1: &dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748) -> u32 {
+    let mut _0: u32;
+    let mut _2: &dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748;
+    let mut _3: &dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748;
+    let mut _4: *const instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748;
+    let mut _5: extern "C" fn(*mut ()) -> u32;
+    let mut _6: *mut ();
+    let mut _7: *mut dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748;
+
+    bb0: {
+        _2 = &(*_1);
+        _3 = move _2;
+        _7 = &raw mut (*_3);
+        _4 = PtrMetadatacopy _3;
+        _5 = copy ((*_4).read: extern "C" fn(*mut ()) -> u32);
+        _6 = move _7 as *mut ();
+        _0 = move _5(move _6) -> [return: bb1];
+    }
+
+    bb1: {
+        return -> [];
+    }
+}
+
+fn instance_completeness::make_and_dispatch() -> u32 {
+    let mut _0: u32;
+    let _1: instance_completeness::Point;
+    let _2: &instance_completeness::Point;
+    let mut _3: &instance_completeness::Point;
+    let mut _4: &dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748;
+
+    bb0: {
+        _1 = instance_completeness::Point { x: 1_i32, y: 2_i32 };
+        _2 = &_1;
+        _3 = &(*_2);
+        _4 = move _3 as &dyn instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 (PointerCoercion(Unsize));
+        _0 = instance_completeness::dispatch(move _4) -> [return: bb1];
+    }
+
+    bb1: {
+        return -> [];
+    }
+}
+
+fn instance_completeness::touch_pair(_1: &instance_completeness::Pair) -> u32 {
+    let mut _0: u32;
+
+    bb0: {
+        _0 = copy ((*_1).x: u32);
+        return -> [];
+    }
+}
+
+fn instance_completeness::touch_point(_1: &instance_completeness::Point) -> i32 {
+    let mut _0: i32;
+
+    bb0: {
+        _0 = copy ((*_1).x: i32);
+        return -> [];
+    }
+}
+
+fn instance_completeness::touch_state(_1: &instance_completeness::State) -> u32 {
+    let mut _0: u32;
+
+    bb0: {
+        _0 = 0_u32;
+        return -> [];
+    }
+}
+
+fn instance_completeness::use_u32(_1: &instance_completeness::Wrap<u32>) -> u32 {
+    let mut _0: u32;
+
+    bb0: {
+        _0 = copy ((*_1).v: u32);
+        return -> [];
+    }
+}
+
+fn instance_completeness::use_u64(_1: &instance_completeness::Wrap<u64>) -> u64 {
+    let mut _0: u64;
+
+    bb0: {
+        _0 = copy ((*_1).v: u64);
+        return -> [];
+    }
+}
+
+static instance_completeness::<regseq_synth>::vtable::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748::f7fd36cb1804a25a292d6b67467a59cd: instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 = instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 { __drop_in_place: 0x0 as *mut (), __size: 8_usize, __align: 4_usize, read: instance_completeness::<regseq_synth>::vtable_method_shim::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748::f7fd36cb1804a25a292d6b67467a59cd::3::f434ea851e214b409b6469d91bb685e6 as extern "C" fn(*mut ()) -> u32 };
+
+static instance_completeness::COUNTER: u32 = 0_u32;
+
+static mut instance_completeness::FLAG: u32 = 0_u32;
+
+const instance_completeness::LIMIT: u32 = 64_u32;
+
+struct instance_completeness::<regseq_synth>::vtable_ty::f434ea851e214b40594c75751da52b0a::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 {
+    __drop_in_place: *mut (),
+    __size: usize,
+    __align: usize,
+    read: extern "C" fn(*mut ()) -> u32,
+}
+
+struct instance_completeness::Point {
+    x: i32,
+    y: i32,
+}
+
+struct instance_completeness::Wrap<u32> {
+    v: u32,
+}
+
+struct instance_completeness::Wrap<u64> {
+    v: u64,
+}
+
+enum instance_completeness::State {
+    Idle,
+    Active { 0: u32 },
+    Error,
+}
+
+union instance_completeness::Pair {
+    x: u32,
+    y: i32,
+}
