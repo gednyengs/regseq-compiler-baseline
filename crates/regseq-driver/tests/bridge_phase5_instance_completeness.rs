@@ -133,10 +133,7 @@ fn emission_name<'m>(model: &'m RegseqModel, instance: &regseq_model::Instance) 
 }
 
 /// All instances whose emission name ends with `::<suffix>`.
-fn instances_named<'m>(
-    model: &'m RegseqModel,
-    suffix: &str,
-) -> Vec<&'m regseq_model::Instance> {
+fn instances_named<'m>(model: &'m RegseqModel, suffix: &str) -> Vec<&'m regseq_model::Instance> {
     let want = format!("::{suffix}");
     model
         .instances
@@ -164,7 +161,10 @@ pub fn touch(p: &Point) -> i32 { p.x }
     );
     let inst = points[0];
     let InstanceKind::Struct { layout } = inst.kind else {
-        panic!("Point Instance must be InstanceKind::Struct, got {:?}", inst.kind);
+        panic!(
+            "Point Instance must be InstanceKind::Struct, got {:?}",
+            inst.kind
+        );
     };
     // Layout TyId must resolve to a Ty::Struct whose (item, args)
     // matches the Instance (validate_instance_layouts enforces this
@@ -274,7 +274,10 @@ pub static COUNTER: u32 = 0;
     let counters = instances_named(&model, "COUNTER");
     assert_eq!(counters.len(), 1, "exactly one COUNTER Static Instance");
     let InstanceKind::Static { init, .. } = counters[0].kind else {
-        panic!("COUNTER must be InstanceKind::Static, got {:?}", counters[0].kind);
+        panic!(
+            "COUNTER must be InstanceKind::Static, got {:?}",
+            counters[0].kind
+        );
     };
     let init = init.expect("source static COUNTER must have init: Some(_)");
     // `Const::Int(0)` or equivalent: the byte-level translation
@@ -325,7 +328,10 @@ pub const LIMIT: u32 = 64;
     let limits = instances_named(&model, "LIMIT");
     assert_eq!(limits.len(), 1, "exactly one LIMIT Const Instance");
     let InstanceKind::Const { value, .. } = limits[0].kind else {
-        panic!("LIMIT must be InstanceKind::Const, got {:?}", limits[0].kind);
+        panic!(
+            "LIMIT must be InstanceKind::Const, got {:?}",
+            limits[0].kind
+        );
     };
     let ok = match model.consts.resolve(value) {
         Const::Uint(_, v) | Const::Int(_, v) => *v == 64,

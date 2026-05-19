@@ -1,21 +1,24 @@
-//! regseq-driver-55 Test Plan B: Item-vs-Instance coverage
-//! validator (Change G).
+//! regseq-driver-55 Test Plan B: Item-vs-Instance
+//! bridge-completeness check (Change G, spec v2).
 //!
-//! Invokes the validator via the canonical API shape
-//! `RegseqModel::validate(&mut self, bridge_input: &BridgeInput)`
-//! with the empty-bridge helper `BridgeInput::matching(&model)`,
-//! mirroring the established hand-built-model pattern in
-//! `crates/regseq-model/tests/id_referential_integrity_validator.rs`.
+//! These tests invoke the new `validate_bridge_completeness`
+//! entry point added by Change G, NOT the `validate(&BridgeInput)`
+//! global model-correctness entry point. B1 additionally
+//! cross-checks that `validate(&BridgeInput::matching(&model))`
+//! returns `Ok(())` for the SAME partial model -- this pins the
+//! deliberately-distinct entry-point contract: the
+//! model-correctness path is permissive about Item-vs-Instance
+//! coverage; the bridge-completeness path is strict. The
+//! partial-model corpus at
+//! `crates/regseq-model/tests/{id_referential_integrity_validator,
+//! layout_validator}.rs` is intentionally left untouched and
+//! continues to call `validate(&BridgeInput::matching(model))`.
 
 use regseq_model::{
     BridgeInput, DefPath, DefPathData, DefPathHash, DefPathSegment, GenericArg, InlineHint,
     Instance, InstanceKind, InvariantViolation, Item, ItemId, ItemKind, Layout, LayoutKind,
     Linkage, RegseqModel, Span, StableCrateId, StringId, SyntheticItemKind, Ty,
 };
-
-fn validate(model: &mut RegseqModel) -> Result<(), InvariantViolation> {
-    model.validate(&BridgeInput::matching(model))
-}
 
 fn hash(local_hash: u64) -> DefPathHash {
     DefPathHash {
@@ -84,21 +87,31 @@ fn empty_struct_layout() -> Layout {
 
 // B1. Negative regression: a source-derived non-foreign
 // `ItemKind::Struct` with ZERO matching Instance must be rejected
-// with the missing-coverage error naming the uncovered Item.
+// by the STRICT bridge-completeness path; the PERMISSIVE
+// model-correctness `validate` path must accept the same model.
 #[test]
 fn b1_struct_item_without_instance_is_rejected() {
     let mut model = base_model();
     let item = push_struct_item(&mut model, "Lonely", Linkage::Default);
     assert!(
         matches!(
-            validate(&mut model),
+            model.validate_bridge_completeness(),
             Err(InvariantViolation::ItemMissingInstance {
                 item: m_item,
                 item_kind: ItemKind::Struct,
             }) if m_item == item
         ),
         "expected ItemMissingInstance for the uncovered Struct Item, got {:?}",
-        validate(&mut model)
+        model.validate_bridge_completeness()
+    );
+    // Cross-check: the model-correctness `validate` entry point is
+    // deliberately permissive about Item-vs-Instance coverage and
+    // returns Ok(()) for the SAME partial model (Change G v2).
+    let bridge_input = BridgeInput::matching(&model);
+    assert_eq!(
+        model.validate(&bridge_input),
+        Ok(()),
+        "the model-correctness validate path must stay permissive about coverage"
     );
 }
 
@@ -111,7 +124,7 @@ fn b2_foreign_struct_item_without_instance_is_accepted() {
     let mut model = base_model();
     let _item = push_struct_item(&mut model, "Foreigner", Linkage::Foreign);
     assert_eq!(
-        validate(&mut model),
+        model.validate_bridge_completeness(),
         Ok(()),
         "foreign source Item without an Instance must be carved out"
     );
@@ -139,9 +152,9 @@ fn b3_struct_item_with_matching_instance_is_accepted() {
         kind: InstanceKind::Struct { layout: struct_ty },
     });
     assert_eq!(
-        validate(&mut model),
+        model.validate_bridge_completeness(),
         Ok(()),
-        "non-foreign Struct Item with a matching Struct Instance must validate"
+        "non-foreign Struct Item with a matching Struct Instance must pass bridge-completeness"
     );
 }
 
@@ -165,5 +178,5 @@ fn covered_item_with_generic_args_validates() {
         span: Span::dummy(),
         kind: InstanceKind::Struct { layout: struct_ty },
     });
-    assert_eq!(validate(&mut model), Ok(()));
+    assert_eq!(model.validate_bridge_completeness(), Ok(()));
 }

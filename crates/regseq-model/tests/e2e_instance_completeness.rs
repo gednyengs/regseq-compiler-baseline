@@ -4,10 +4,15 @@
 //! Bridges `crates/test-ir-fixtures/fixtures/instance_completeness.rs`
 //! through the full phase-1a `regseq-driver` pipeline and asserts:
 //!
-//!   1. `model.validate(...)` passes via the canonical
-//!      `BridgeInput::matching(&model)` helper -- this exercises the
-//!      new `validate_item_instance_coverage` check (Change G) over
-//!      a model that now carries every required Instance.
+//!   1. Both validator entry points pass over a model that now
+//!      carries every required Instance: the model-correctness
+//!      `model.validate(...)` (via the canonical
+//!      `BridgeInput::matching(&model)` helper) AND the
+//!      bridge-completeness `model.validate_bridge_completeness()`
+//!      added by Change G (spec v2). `run_bridge` itself already
+//!      invokes the latter before returning; the explicit call
+//!      here is a redundant guard pinning the contract at the test
+//!      surface.
 //!   2. `model.instances` carries the symmetric Instance shape for
 //!      every in-scope source kind plus the synth-`VTableType`
 //!      path (Changes C/D/E).
@@ -38,11 +43,19 @@ fn named<'m>(model: &'m RegseqModel, suffix: &str) -> Vec<&'m regseq_model::Inst
 fn bridged_instance_completeness_validates_renders_and_covers_every_kind() {
     let mut model = bridge_fixture(fixture_names::INSTANCE_COMPLETENESS);
 
-    // 1. Spec-letter validate lock (mirrors e2e_enum_round_trip):
-    // `bridge_fixture` already validates internally, but the
-    // explicit call is the regseq-driver-55 Test Plan C2 contract.
+    // 1. Both validator entry points must pass (Test Plan C2):
+    // the model-correctness `validate` (mirrors
+    // e2e_enum_round_trip; `bridge_fixture` already validates
+    // internally, but the explicit call is the Test Plan C2
+    // contract) AND the bridge-completeness
+    // `validate_bridge_completeness` added by Change G. `run_bridge`
+    // already invokes the latter before returning; the explicit
+    // call here is a redundant guard pinning the contract.
     let bridge_input = regseq_model::BridgeInput::matching(&model);
     model.validate(&bridge_input).expect("validate must pass");
+    model
+        .validate_bridge_completeness()
+        .expect("validate_bridge_completeness must pass");
 
     // 2a. Point -> exactly one InstanceKind::Struct.
     let point_structs: Vec<_> = named(&model, "Point")
@@ -114,7 +127,11 @@ fn bridged_instance_completeness_validates_renders_and_covers_every_kind() {
         .into_iter()
         .filter(|i| matches!(i.kind, InstanceKind::Const { .. }))
         .collect();
-    assert_eq!(limit_consts.len(), 1, "LIMIT must produce one Const Instance");
+    assert_eq!(
+        limit_consts.len(),
+        1,
+        "LIMIT must produce one Const Instance"
+    );
 
     // 2g. Synth VTableType -> at least one InstanceKind::Struct
     // whose parent Item carries SyntheticItemKind::VTableType.

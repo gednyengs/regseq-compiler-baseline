@@ -634,6 +634,23 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
     // InstanceId so terminator references survive the permutation.
     ctxt.model.sort_instances_by_f4_2();
 
+    // Per regseq-driver-55 Change G (spec.md section 3.4 Phase 5 +
+    // section 8.1 `ItemKind` mirrors `InstanceKind`): after the final
+    // F4-2 Instance sort, assert every source-derived non-foreign
+    // Item carries at least one covering Instance. This is the
+    // bridge-completeness ratchet -- a separate entry point from the
+    // model-correctness `RegseqModel::validate` (which the
+    // partial-model validator corpus deliberately keeps Instance-free
+    // to negative-test other invariants; see
+    // `RegseqModel::validate_bridge_completeness` for the rationale).
+    ctxt.model
+        .validate_bridge_completeness()
+        .map_err(|violation| {
+            BridgeError::Phase5(format!(
+                "bridge-completeness validation failed: {violation:?}"
+            ))
+        })?;
+
     Ok(ctxt.model)
 }
 
@@ -1465,11 +1482,7 @@ fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Brid
             | InstanceKind::Enum { .. }
             | InstanceKind::Union { .. } => Some((
                 inst.item,
-                args_key_for_generic_args_with_pending(
-                    &ctxt.model,
-                    &inst.generic_args,
-                    &pending,
-                ),
+                args_key_for_generic_args_with_pending(&ctxt.model, &inst.generic_args, &pending),
             )),
             _ => None,
         })
@@ -1517,8 +1530,7 @@ fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Brid
             // ADT kind is not a definition-site nominal.
             _ => continue,
         }
-        let args_key =
-            args_key_for_generic_args_with_pending(&ctxt.model, &args, &pending);
+        let args_key = args_key_for_generic_args_with_pending(&ctxt.model, &args, &pending);
         if !existing.insert((item_id, args_key)) {
             continue;
         }

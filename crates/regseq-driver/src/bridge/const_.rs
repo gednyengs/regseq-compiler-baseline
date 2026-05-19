@@ -325,10 +325,8 @@ pub fn translate_const_item<'tcx>(
     let rustc_ty = cx.input.tcx.type_of(def_id).instantiate_identity();
     let ty = translate_ty(cx, rustc_ty)?;
     let identity_args = ty::GenericArgs::identity_for_item(cx.input.tcx, def_id);
-    let konst = mir::Const::Unevaluated(
-        mir::UnevaluatedConst::new(def_id, identity_args),
-        rustc_ty,
-    );
+    let konst =
+        mir::Const::Unevaluated(mir::UnevaluatedConst::new(def_id, identity_args), rustc_ty);
     let value = translate_const(cx, konst)?;
     Ok((ty, value))
 }

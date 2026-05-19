@@ -70,3 +70,14 @@ fn trait_object::make_and_drive() -> u8 {
 }
 
 static trait_object::<regseq_synth>::vtable::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748::d50f32ca73c2742cf91a8ab6b552beb9: trait_object::<regseq_synth>::vtable_ty::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 = trait_object::<regseq_synth>::vtable_ty::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 { __drop_in_place: 0x0 as *mut (), __size: 1_usize, __align: 1_usize, read_byte: trait_object::<regseq_synth>::vtable_method_shim::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748::d50f32ca73c2742cf91a8ab6b552beb9::3::d6efa320a07404dd313e3213e38eb191 as extern "C" fn(*mut ()) -> u8 };
+
+struct trait_object::<regseq_synth>::vtable_ty::d6efa320a07404dd3d05810b082fe6cc::df3f619804a92fdb4057192dc43dd748::df3f619804a92fdb4057192dc43dd748 {
+    __drop_in_place: *mut (),
+    __size: usize,
+    __align: usize,
+    read_byte: extern "C" fn(*mut ()) -> u8,
+}
+
+struct trait_object::StaticByte {
+    0: u8,
+}

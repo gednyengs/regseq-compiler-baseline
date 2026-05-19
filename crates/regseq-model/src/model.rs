@@ -750,7 +750,7 @@ pub enum InvariantViolation {
     /// scope per the regseq-driver-55 Non-Goals). Synthetic Items'
     /// Instance lifecycle is owned by the synth passes + residue
     /// DCE (Non-Goals 5 + 6) and is not policed here. See
-    /// `validate_item_instance_coverage` for the full rationale.
+    /// `validate_bridge_completeness` for the full rationale.
     ItemMissingInstance {
         /// Item lacking a covering `Instance`.
         item: ItemId,
@@ -1640,7 +1640,12 @@ impl RegseqModel {
         }
 
         crate::layout_validator::validate_instance_layouts(self)?;
-        self.validate_item_instance_coverage()?;
+        // Per regseq-driver-55 Change G (spec v2): Item-vs-Instance
+        // bridge-completeness is DELIBERATELY NOT folded into the
+        // model-correctness `validate` entry point. It is the
+        // separate `validate_bridge_completeness` sibling method
+        // invoked from `bridge::run_bridge`; see that method's doc
+        // comment for the partial-model-corpus rationale.
 
         self.validate_value_consts()?;
         crate::layout_validator::validate_const_graph_acyclic(self)?;
@@ -3381,46 +3386,55 @@ impl RegseqModel {
         Ok(())
     }
 
-    /// Item-vs-Instance coverage per regseq-driver-55 Change G
+    /// Bridge-completeness check per regseq-driver-55 Change G
     /// (spec.md section 3.4 Phase 5 + section 8.1 `ItemKind`-mirrors-
     /// `InstanceKind`; extends the section 3.1 invariant 14
     /// `InstanceKind`-consistency family with the Item-side
     /// direction).
     ///
-    /// Every SOURCE-DERIVED (`SyntheticItemKind::None`) Item must be
-    /// covered by at least one `Instance` whose `item` field
-    /// references it, EXCEPT source foreign declarations
-    /// (`linkage == Linkage::Foreign`): foreign `fn` / `static`
-    /// declarations legitimately carry `body: None` / `init: None`
-    /// (spec.md section 3.1 invariant 10 Function-body biconditional;
-    /// spec.md section 9.4 Static-init biconditional) and whether
-    /// they require an Instance row is SPEC-AMBIGUOUS and out of
-    /// scope per the regseq-driver-55 Non-Goals. This is an
-    /// Item-side check, deliberately a sibling of (not folded into)
-    /// `validate_instance`, which is Instance-side.
+    /// Enforces: for every `Item` whose `item_synthetic_kinds[i] ==
+    /// SyntheticItemKind::None` AND whose `linkage !=
+    /// Linkage::Foreign`, there is at least one `Instance` whose
+    /// `item` field references it. `ItemKind` is the closed
+    /// 6-variant set per spec.md section 8.0 (`Function` / `Static`
+    /// / `Const` / `Struct` / `Enum` / `Union`), so every
+    /// non-synthetic non-foreign Item is in scope without an
+    /// explicit per-kind filter.
     ///
-    /// INTERPRETATION CHOICE (regseq-driver-55): Change G's literal
-    /// boolean also requires every SYNTHETIC Item
-    /// (`item_synthetic_kinds[i] != None`) to carry an Instance.
-    /// That clause cannot be reconciled with the Test Plan D1
-    /// "workspace regression-clean" acceptance criterion: the
-    /// out-of-scope DiagLogPeel residue-driven DCE
-    /// (`regseq-driver-48/49`, explicitly out of scope per the
-    /// Non-Goals 5 + 6) legitimately strips the `Instance` of a
-    /// synth `SyntheticItemKind::DropGlue` Function while leaving
-    /// the Item entry, and the pre-existing
-    /// `bridge_diag_log_dead_item_elim` test asserts `validate`
-    /// SUCCEEDS in exactly that state. Synthetic-Item Instance
-    /// lifecycle is owned by the synth passes + the residue DCE
-    /// (Non-Goals 6); the missing coverage invariant this task
-    /// fixes is the SOURCE `struct`/`enum`/`union`/`static`/`const`
-    /// (and `fn`) ItemKind-mirrors-InstanceKind gap (the entire
-    /// point of Changes A-E). Scoping the check to source-derived
-    /// Items catches that bug precisely (Test Plan B1-B3 semantics
-    /// are unchanged: B1 source non-foreign -> rejected, B2 source
-    /// foreign -> accepted, B3 source covered -> accepted) while
-    /// staying D1 regression-clean and respecting Non-Goals 5 + 6.
-    fn validate_item_instance_coverage(&self) -> Result<(), InvariantViolation> {
+    /// This is a SEPARATE public entry point, DELIBERATELY NOT
+    /// folded into `RegseqModel::validate(&mut self, &BridgeInput)`.
+    /// `validate` is the model-correctness entry point for
+    /// arbitrary models (hand-constructed partial test fixtures,
+    /// deserialised models, mid-construction snapshots); the
+    /// partial-model validator corpus at
+    /// `crates/regseq-model/tests/{id_referential_integrity_validator,
+    /// layout_validator}.rs` intentionally builds partial models
+    /// with zero Instances to negative-test other invariants
+    /// (`F4OutOfOrderInstance`, `InstanceLayoutMismatch`,
+    /// `InstanceLayoutItemArgsMismatch`) and positive layout tests
+    /// (`layout_pass_struct`) that rely on `validate` returning
+    /// `Ok(())` for a one-Struct zero-Instance model. Folding the
+    /// coverage check into `validate` would either mask those
+    /// intentional negative tests or force a per-test corpus
+    /// migration this task did not scope. The bridge-completeness
+    /// check is therefore invoked from `bridge::run_bridge` (after
+    /// the final `sort_instances_by_f4_2`), not from `validate`.
+    ///
+    /// Foreign-source-Item carve-out (`linkage == Linkage::Foreign`):
+    /// foreign `fn` / `static` declarations legitimately carry
+    /// `body: None` / `init: None` (spec.md section 3.1 invariant 10
+    /// Function-body biconditional; spec.md section 9.4 Static-init
+    /// biconditional) and whether they require an Instance row is
+    /// SPEC-AMBIGUOUS and out of scope per the regseq-driver-55
+    /// Non-Goals 1-2.
+    ///
+    /// Synthetic-Item exemption (`item_synthetic_kinds[i] != None`):
+    /// the out-of-scope DiagLogPeel residue-driven DCE
+    /// (`regseq-driver-48/49`, Non-Goals 5 + 6) legitimately strips
+    /// the `Instance` of a synth Item while leaving the Item entry;
+    /// synth-Item Instance lifecycle is owned by the synth passes +
+    /// the residue DCE, not policed here.
+    pub fn validate_bridge_completeness(&self) -> Result<(), InvariantViolation> {
         let mut covered = vec![false; self.items.len()];
         for instance in self.instances.iter() {
             let idx = instance.item.index();
