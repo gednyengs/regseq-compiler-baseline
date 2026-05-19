@@ -1557,6 +1557,33 @@
               "reason": "v3: narrow Change G kind set to {Static, Const, Struct, Enum, Union} (drop Function); add B4 Function-carve-out regression guard per the implementer's expectation file inbound at SHA f981acf. Function-Instance coverage is owned by construct_function_instances + lazy call-site creation; the RPIT-uncalled-fn case (closure_fixture at bridge_synth.rs:399) is a legitimate bridge-unreachable state per spec.md sec 3.1 inv 10 + pretty-printer.md sec 10.3. Codex amendment review verdict: APPROVED (no caveats)."
             }
           ]
+        },
+        {
+          "id": "regseq-driver-56",
+          "name": "Direct-call callee static-dispatch resolution",
+          "spec": ".harness/tasks/regseq-driver/56-direct-call-callee-static-dispatch-resolution.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-55"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#8",
+            "spec.md#9",
+            "spec.md#3",
+            "spec.md#23",
+            "pretty-printer.md#7"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-19T23:32:13Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
