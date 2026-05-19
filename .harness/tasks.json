@@ -1521,14 +1521,14 @@
           "id": "regseq-driver-55",
           "name": "Phase-5 Instance-construction completeness for source and vtable-type Items",
           "spec": ".harness/tasks/regseq-driver/55-phase5-instance-construction-completeness.md",
-          "status": "failed",
+          "status": "pending",
           "depends_on": [
             "regseq-driver-46",
             "regseq-driver-51",
             "regseq-driver-54"
           ],
           "artifacts": [],
-          "fail_reason": "Spec-v2 Change G implemented correctly as a separate validate_bridge_completeness entry point (un-fold resolves the v1 partial-model-corpus regression; Test Plan A1-A9, B1-B3, C1-C2, D1-D3 pass in isolation). BLOCKER: the spec-mandated Change-G run_bridge invocation (Acceptance Criteria sanction only synthetic+foreign carve-outs; Function is explicitly in the kind set) regresses pre-existing test bridge_synth::run_bridge_synthesises_closure_vtable_and_drop_glue_fixtures. Root cause: exported-but-uncalled source 'pub fn closure_fixture() -> impl Fn(u32)->u32' is interned as a source ItemKind::Function (SyntheticItemKind::None, Linkage::Default), but construct_function_instances (the symmetric source-Function precedent this task must NOT modify) skips it because translate_fn_sig rejects the RPIT Alias(Opaque) return as BridgeError::NonRigidTy{kind:Alias} -- documented intentional behavior with lazy call-site Instance creation. No direct call site => no lazy Instance => a source non-foreign Function Item with ZERO Instances, a state the bridge's own documented design treats as legitimate but Change G flags as a hard ItemMissingInstance from run_bridge, breaking the 'cargo test --workspace regression-clean' acceptance criterion (sole workspace failure). Fixing is out of scope (would require modifying the construct_function_instances precedent / NonRigidTy opaque-return rejection, or unilaterally deviating from the explicit Codex-reviewed Change-G kind set). Spec-vs-pre-existing-design conflict requiring spec-v3 adjudication, directly analogous to the v1 Change-G defect that produced v2. Inbound expectation filed at .harness/expectations/regseq-driver-55.md with three non-prescriptive resolution options. Correct v2 work committed to the branch for reviewer adjudication (mirrors v1->v2 precedent).",
+          "fail_reason": null,
           "phase": "1a",
           "spec_refs": [
             "spec.md#3",
@@ -1537,7 +1537,7 @@
             "spec.md#13",
             "pretty-printer.md#10"
           ],
-          "spec_version": 2,
+          "spec_version": 3,
           "history": [
             {
               "ts": "2026-05-19T18:24:16Z",
@@ -1549,6 +1549,12 @@
               "event": "spec_edited",
               "spec_version": 2,
               "reason": "Amend Change G to use separate validate_bridge_completeness entry point (E1); document Change F final-slot ordering and rationale (E2); rewire Test Plan B1-B3 and C2 (E3+E4); update D1 snapshot drift wording per Codex AMENDMENT APPROVED WITH MINOR FIXES verdict; rename validator check throughout Acceptance Criteria + Review block (E6). See git log + task fail reason for blocker context."
+            },
+            {
+              "ts": "2026-05-19T21:39:52Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "v3: narrow Change G kind set to {Static, Const, Struct, Enum, Union} (drop Function); add B4 Function-carve-out regression guard per the implementer's expectation file inbound at SHA f981acf. Function-Instance coverage is owned by construct_function_instances + lazy call-site creation; the RPIT-uncalled-fn case (closure_fixture at bridge_synth.rs:399) is a legitimate bridge-unreachable state per spec.md sec 3.1 inv 10 + pretty-printer.md sec 10.3. Codex amendment review verdict: APPROVED (no caveats)."
             }
           ]
         }

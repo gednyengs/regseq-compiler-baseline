@@ -401,7 +401,7 @@ pub fn validate_bridge_completeness(&self) -> Result<(), InvariantViolation>
 ```
 
 The method enforces: for every `Item` at index `i` whose `kind` is
-one of `{ Function, Static { .. }, Const, Struct, Enum, Union }`
+one of `{ Static { .. }, Const, Struct, Enum, Union }`
 AND whose `item_synthetic_kinds[i] == SyntheticItemKind::None`
 AND whose `linkage != Linkage::Foreign`, there exists at least
 one `Instance` in `model.instances` with `item == i`.
@@ -410,7 +410,7 @@ The new method is invoked from `bridge::run_bridge` AFTER the
 final `model.sort_instances_by_f4_2()` call at
 `crates/regseq-driver/src/bridge/mod.rs:635` (the existing
 post-bridge invariant ratchet). It is also invoked explicitly
-from Test Plan B1-B3 and from
+from Test Plan B1-B4 and from
 `crates/regseq-model/tests/e2e_instance_completeness.rs` (in
 addition to the existing `model.validate(&bridge_input)` call).
 
@@ -454,6 +454,40 @@ invariant 10 (`spec.md:772-781`, Function body biconditional)
 and §9.4 (`spec.md:2626-2628`, Static init biconditional);
 whether they require an Instance row at all is SPEC-AMBIGUOUS
 per Non-Goals 1-2.
+
+**Source `Function`-Item exemption (the kind-set narrowing in
+v3).** Function-Instance coverage is owned by the pre-existing
+`construct_function_instances` pass at
+`crates/regseq-driver/src/bridge/mod.rs` (the "symmetric
+source-Function precedent" this task's Description names as
+ALREADY-handled) plus lazy call-site creation via
+`lookup_or_create_direct_instance`. The bridge legitimately
+leaves a Function Item without an Instance when
+`translate_fn_sig` rejects the declared signature as
+`BridgeError::NonRigidTy` (e.g., RPIT `Alias(Opaque)` return
+types) AND there is no direct call site to lazy-create one. The
+in-the-wild example is the pre-existing
+`crates/regseq-driver/tests/bridge_synth.rs:399` fixture:
+`pub fn closure_fixture() -> impl Fn(u32) -> u32 { |x| x + 1 }`
+-- a source `pub fn` whose RPIT return is non-rigid (rejected
+by `fnsig::translate_fn_sig` at `bridge/mod.rs:1301`) and which
+no body invokes as a direct callee. Such Items are
+bridge-unreachable for downstream rendering (`pretty-printer.md`
+§10.3 walks `model.instances`, not `model.items`, so an Item
+with no Instance does not render and produces no codegen) and
+the model-correctness check for "Function.body matches
+kind/linkage" remains invariant 10's job (§3.1 inv 10 body
+biconditional), not Change G's.
+
+The original BLOCKING gap-set Codex flagged in its
+investigation enumerated source struct/enum/union/static/const
++ synth VTableType; Function was never enumerated as a gap, and
+the preceding `construct_function_instances` precedent already
+covers every reachable Function-Item monomorphisation. Including
+`Function` in v1/v2's Change G kind set was an over-broad design
+that survived prior review passes because no exercised test
+surface had a source `pub fn` with a non-rigid return type and
+no direct caller -- the v3 narrowing closes that false-positive.
 
 ### Conventions
 
@@ -612,6 +646,27 @@ B3. **Source-derived positive path.** Construct a `RegseqModel`
     rejects every non-foreign Item regardless of Instance
     presence.
 
+B4. **Source `Function`-Item carve-out (positive).** Construct
+    a `RegseqModel` by hand with one `ItemKind::Function` Item,
+    `SyntheticItemKind::None`, `linkage: Linkage::Default`, and
+    ZERO matching Instance. Assert
+    `model.validate_bridge_completeness()` returns `Ok(())`.
+    The in-the-wild example grounding this carve-out:
+    `crates/regseq-driver/tests/bridge_synth.rs:399` defines
+    `pub fn closure_fixture() -> impl Fn(u32) -> u32 { |x| x + 1 }`
+    -- a source `pub fn` whose declared RPIT return type
+    (`Alias(Opaque)`) is rejected by `fnsig::translate_fn_sig`
+    at `crates/regseq-driver/src/bridge/mod.rs:1301` as
+    `BridgeError::NonRigidTy`. `construct_function_instances`
+    skips the Item per the documented `let Ok(fn_sig) = ... else
+    { continue; }` lifecycle, and no direct call site
+    lazy-creates one via `lookup_or_create_direct_instance`. This
+    test pins the contract that Function-Instance coverage is
+    OWNED by `construct_function_instances` + lazy call-site
+    creation, NOT by `validate_bridge_completeness`. Any future
+    change that re-adds `Function` to the kind set must explicitly
+    grandfather this case.
+
 ### C. End-to-end via `test-ir-fixtures`
 
 C1. Add a new fixture
@@ -764,7 +819,7 @@ Files to audit:
 - crates/regseq-driver/tests/bridge_phase5_instance_completeness.rs
   (new unit tests per Test Plan A1-A9)
 - crates/regseq-model/tests/validate_item_instance_coverage.rs
-  (new validator tests per Test Plan B1-B3)
+  (new validator tests per Test Plan B1-B4)
 - crates/test-ir-fixtures/fixtures/instance_completeness.rs
   (new shared fixture per Test Plan C1)
 - crates/regseq-model/tests/e2e_instance_completeness.rs
@@ -827,7 +882,7 @@ Focus on:
   message if their preconditions fail (e.g. Item with kind Struct
   but no matching Ty::Struct entry), NOT return Ok silently per
   the §2 "No defensive fallbacks" rule.
-- Test Plan items A1-A9, B1-B3, C1-C2, D1-D3 must all be present
+- Test Plan items A1-A9, B1-B4, C1-C2, D1-D3 must all be present
   and exercised.
 
 Do NOT flag anything explicitly marked out of scope (Non-Goals,
@@ -913,8 +968,10 @@ Requirements.
 - `crates/regseq-driver/tests/bridge_phase5_instance_completeness.rs`
   exercises Test Plan A1-A9.
 - `crates/regseq-model/tests/validate_item_instance_coverage.rs`
-  exercises Test Plan B1-B3 (negative regression, foreign
-  carve-out, source-derived positive path) by invoking
+  exercises Test Plan B1-B4 (B1 negative regression, B2 foreign
+  carve-out, B3 source-derived positive path, B4 source
+  `Function` carve-out regression guard for the
+  RPIT-uncalled-fn case) by invoking
   `model.validate_bridge_completeness()` (the new
   bridge-completeness entry point added by Change G). B1
   additionally cross-checks that
