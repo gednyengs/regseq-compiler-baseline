@@ -1,6 +1,13 @@
 # E1000 Full Spec Methodology
 
-**Status**: SKELETON. Awaiting authoring.
+> **⚠ PARTIALLY SUPERSEDED (2026-05-19).** The evaluation-strategy framing
+> here (axes-derived claim shape, QEMU-gated staging) is superseded by
+> `../e1000-evaluation-strategy/`. The per-feature *spec-growth* workflow
+> (§3–§7: evidence-driven fixture growth, compile-check discipline) is
+> retained, but must align with the minimal-sufficient strategy — it no
+> longer feeds a full axis matrix or a staged QEMU-patch plan.
+
+**Status**: PARTIALLY SUPERSEDED (was SKELETON). See banner above.
 
 **Role**: documents the methodology by which the full-E1000 Regseq spec
 target is derived, grown, and compile-checked. Parallels
@@ -132,3 +139,6 @@ logic, lowering, or backend realization.
 ## Change history
 
 - 2026-05-04: skeleton stood up. Authoritative content awaits authoring.
+- 2026-05-19: Evaluation-strategy framing superseded by
+  `../e1000-evaluation-strategy/`; per-feature spec-growth workflow retained
+  and re-scoped to the minimal-sufficient strategy.

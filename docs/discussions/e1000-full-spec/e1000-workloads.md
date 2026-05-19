@@ -1,7 +1,10 @@
 # E1000 Workloads and Tolerance Rules
 
-**Status**: SKELETON. Awaiting authoring once `e1000-comparison-axes.md`
-locks the axis set.
+> **⚠ SUPERSEDED (2026-05-19).** Replaced by the minimal-sufficient workload
+> set and cost guardrail in `../e1000-evaluation-strategy/02-minimal-sufficient-evaluation.md`.
+> Retained for provenance only — do not plan or report experiments from it.
+
+**Status**: SUPERSEDED (was SKELETON). See banner above.
 
 **Role**: realization layer for the comparison axes defined in
 `e1000-comparison-axes.md`. Each axis will be exercised by one or more
@@ -97,3 +100,6 @@ escalation ladder applies.
 ## 7. Change history
 
 - 2026-05-04: skeleton stood up.
+- 2026-05-19: SUPERSEDED by `../e1000-evaluation-strategy/`. Replaced by the
+  minimal-sufficient workload set + single cost guardrail. Retained for
+  provenance only; do not plan or report experiments from it.

@@ -1,8 +1,15 @@
 # E1000 Spec Requirements
 
-**Status**: SKELETON. Awaiting authoring once
-`e1000-comparison-axes.md` locks the axes and the per-OS driver analyses
-inform the correctness and backend-contract requirement classes.
+> **ℹ RETAINED, RE-GOVERNED (2026-05-19).** This document is **not**
+> superseded: the spec requirements (what the DSL must express) survive and
+> are *evidence for the paper* (expressiveness). What changed: the
+> `[claim-path]` performance tags on REQ-PERF-CSUM-\* / REQ-PERF-MODERATION-\*
+> (D6/D7) no longer designate benchmarked runtime rows, and the
+> QEMU-patch-gated Stage-2/3 machinery is void. Read with
+> `../e1000-evaluation-strategy/04-supersession-and-traceability.md` §3. Axes
+> referenced here now resolve to the minimal-sufficient strategy.
+
+**Status**: RETAINED, RE-GOVERNED (was SKELETON). See banner above.
 
 **Role**: definitive list of requirements the Regseq E1000 driver
 specification must capture. Every requirement traced to one of three
@@ -44,6 +51,13 @@ axis set and QEMU/observability gating once
 extensions.
 
 ## 1.1 Stage definitions (provisional, to be authored)
+
+> **⚠ VOID (2026-05-19).** §1's `[stage-1/2/3]` tagging and the §1.1/§1.2
+> staged plan below are **void**: there is no QEMU device-model patch program
+> and no QEMU-gated staging (`../e1000-evaluation-strategy/`). Requirements
+> are retained as expressiveness/correctness/backend-contract evidence with
+> no stage assignment and no runtime-benchmark obligation. The text below is
+> historical; ignore the stage mechanics.
 
 Provisional stage shape (parallels PL011):
 
@@ -232,3 +246,9 @@ Provisional:
   jumbo errata complexity; D6+D7 already provide the principal
   per-packet overhead amortization. Fairness preserved by symmetric
   skip at 1500 MTU.
+- 2026-05-19: RE-GOVERNED by `../e1000-evaluation-strategy/`. Spec
+  requirements retained as expressiveness/correctness/backend-contract
+  evidence. D6/D7 `[claim-path]` performance tags no longer mark benchmarked
+  runtime rows (RX-checksum and interrupt-moderation cut as runtime rows;
+  still expressible). Deferred ledger (D8/D9/D10, variant pin) unchanged.
+  QEMU-patch-gated Stage-2/3 plan void. See §3 of the supersession map.

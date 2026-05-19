@@ -1,6 +1,13 @@
 # E1000 Comparison Axes
 
-**Status**: SKELETON. Awaiting authoring.
+> **⚠ SUPERSEDED (2026-05-19).** The authoritative E1000 evaluation strategy
+> is `../e1000-evaluation-strategy/`. The full-coverage axis matrix here is
+> withdrawn in favor of a minimal-sufficient, patch-free evaluation. Retained
+> for provenance only — do not plan or report experiments from it. Per-axis
+> disposition (U1–U7 are carried forward):
+> `../e1000-evaluation-strategy/04-supersession-and-traceability.md`.
+
+**Status**: SUPERSEDED (was SKELETON). See banner above.
 
 **Role**: load-bearing artifact for the Regseq E1000 evaluation strategy.
 
@@ -221,4 +228,11 @@ Removal of use cases or axes:
 - 2026-05-04: D10 locked. Jumbo frames are deferred. Single-axis U2
   anchor without tension; 82540EM jumbo errata complexity; fairness
   preserved by symmetric skip at 1500 MTU.
+- 2026-05-19: SUPERSEDED by `../e1000-evaluation-strategy/`. The
+  full-coverage axis matrix and the QEMU device-model patch program are
+  withdrawn; the E1000 evaluation is now minimal-sufficient and patch-free.
+  U1–U7 are carried forward. See
+  `../e1000-evaluation-strategy/04-supersession-and-traceability.md` for the
+  per-axis disposition. Retained for provenance only; do not plan or report
+  experiments from it.
   See `e1000-spec-requirements.md` Section 7 (REQ-DEF-JUMBO).

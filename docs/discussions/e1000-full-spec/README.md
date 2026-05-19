@@ -1,5 +1,12 @@
 # E1000 Full Spec Discussion
 
+> **⚠ EVALUATION STRATEGY SUPERSEDED (2026-05-19).** The authoritative E1000
+> evaluation strategy is `../e1000-evaluation-strategy/`. The scope pin,
+> corpus, and Linux+Zephyr claim-bearing-backend model below are **retained**;
+> `e1000-spec-requirements.md` is **retained, re-governed** (see
+> `../e1000-evaluation-strategy/04-supersession-and-traceability.md` §3). The
+> other evaluation docs in this directory are banner-marked superseded.
+
 This directory is the working area for the full E1000 Regseq spec we intend to
 carry through the compiler pipeline and, ultimately, the research evaluation
 flow alongside the PL011 target.
@@ -59,6 +66,8 @@ Use this discussion area to:
   observable, environment, verdict rule, and statistical contract
 - author the experiment methodology that bridges abstract workloads to the
   concrete QEMU evaluation environment, including any required QEMU patches
+  *(historical — the evaluation is now patch-free; see the supersession banner
+  at the top of this file and `../e1000-evaluation-strategy/`)*
 - record the exact scope and deferrals for the concrete target fixture
 - record explicit deferrals, if any, even for the "full E1000" target
 
@@ -91,8 +100,11 @@ because that methodology was already retired before E1000 work began.
 > QEMU-relative functional and performance workloads derived from concrete
 > E1000 system use cases.
 
-This claim is provisional until `e1000-comparison-axes.md` Section 1 is
-authored and reviewer-validated.
+**SUPERSEDED (2026-05-19).** This provisional claim shape is replaced by the
+authoritative claim in
+`../e1000-evaluation-strategy/01-claim-and-evaluation-philosophy.md` §3, which
+makes expressiveness and cross-OS portability the offensive claims and
+performance a bounded guardrail.
 
 ## Status
 

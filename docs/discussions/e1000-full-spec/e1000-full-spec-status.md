@@ -1,7 +1,11 @@
 # E1000 Full Spec Status
 
-**Status**: SKELETON. Awaiting fixture creation and per-requirement
-implementation tracking.
+> **⚠ SUPERSEDED (2026-05-19).** The QEMU-patch-gated Stage-1/2/3 plan
+> referenced here no longer exists (no QEMU device-model patch program
+> remains). Implementation/evaluation tracking now follows
+> `../e1000-evaluation-strategy/`. Retained for provenance only.
+
+**Status**: SUPERSEDED (was SKELETON). See banner above.
 
 **Role**: tracks the implementation state of each requirement in the live
 fixture at `tests/fixtures/e1000-full-spec/src/driver.rs`. Stage membership
@@ -65,3 +69,6 @@ syntax checking. This mirrors the discipline established in
 ## Change history
 
 - 2026-05-04: skeleton stood up.
+- 2026-05-19: SUPERSEDED by `../e1000-evaluation-strategy/`. The
+  QEMU-gated staged plan is void; tracking follows the minimal-sufficient
+  strategy. Retained for provenance only.

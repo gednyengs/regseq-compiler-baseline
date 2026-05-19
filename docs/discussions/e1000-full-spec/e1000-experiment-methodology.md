@@ -1,8 +1,14 @@
 # E1000 Experiment Methodology -- How We Run the Comparisons in QEMU
 
-**Status**: SKELETON. Awaiting authoring once
-`e1000-comparison-axes.md` and `e1000-workloads.md` lock the axis and
-workload set.
+> **⚠ SUPERSEDED (2026-05-19).** The authoritative environment summary is
+> `../e1000-evaluation-strategy/02-minimal-sufficient-evaluation.md` §7
+> (Linux x86_64+KVM revised D1; reserved-DUT binding; netns peer). **The
+> QEMU device-model patch catalog in §3 of this document is withdrawn in
+> its entirety** — no E1000 workload depends on patching QEMU. Justification:
+> `../e1000-evaluation-strategy/03-cut-list-and-technical-justification.md`.
+> Retained for provenance only.
+
+**Status**: SUPERSEDED (was SKELETON). See banner above.
 
 **Role**: operational bridge between the abstract workload definitions in
 `e1000-workloads.md` and concrete execution on the evaluation
@@ -228,3 +234,7 @@ authored following the PL011 template (Section 8).
   PL011 console and the E1000 DUT are separate devices on
   `qemu_cortex_a53`. PTP clock and queue-size Kconfig items flagged for
   fairness alignment.
+- 2026-05-19: SUPERSEDED by `../e1000-evaluation-strategy/`. D1 revised to
+  x86_64+KVM; the §3 QEMU device-model patch catalog (3.1–3.5) is withdrawn
+  in full (no consumer remains after F6-RX/P4/P7 were cut). Retained for
+  provenance only; do not plan or report experiments from it.
