@@ -1516,6 +1516,35 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-55",
+          "name": "Phase-5 Instance-construction completeness for source and vtable-type Items",
+          "spec": ".harness/tasks/regseq-driver/55-phase5-instance-construction-completeness.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-46",
+            "regseq-driver-51",
+            "regseq-driver-54"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#8",
+            "spec.md#9",
+            "spec.md#13",
+            "pretty-printer.md#10"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-19T18:24:16Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
