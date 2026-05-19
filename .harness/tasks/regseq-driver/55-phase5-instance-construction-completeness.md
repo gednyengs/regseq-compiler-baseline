@@ -75,9 +75,13 @@ After this task lands:
 - Every synthesised `VTableType` `Item` carries a parallel
   `InstanceKind::Struct { layout }` `Instance` so vtable type
   definitions render at use-sites.
-- A new validator extension on `RegseqModel::validate()` catches any
-  future regression where an `Item` exists without its required
-  Instance(s).
+- A new bridge-completeness entry point on `RegseqModel`
+  (`validate_bridge_completeness`) is invoked from `run_bridge`
+  and catches any future regression where a source-derived
+  non-foreign `Item` exists without its required Instance(s).
+  This is a separate entry point from `RegseqModel::validate`
+  so the existing partial-model validator test corpus stays
+  intact.
 - The new `test-ir-fixtures` fixture + integration test assert
   the Instance shapes and rendered form for each source
   kind end-to-end.
@@ -154,8 +158,11 @@ requires a spec clarification round before implementation.
   source-Static-adjacent Instance constructor; structurally
   analogous to the new source-static pass.
 - `crates/regseq-model/src/model.rs:1594-1619`
-  (`RegseqModel::validate`) -- the dispatch site for the new
-  Item-vs-Instance coverage check.
+  (`RegseqModel::validate`) -- the model-correctness entry
+  point this task DELIBERATELY does NOT fold the new
+  Item-vs-Instance coverage check into; the new
+  `validate_bridge_completeness` method is a separate sibling
+  entry point invoked from `run_bridge`.
 - `crates/regseq-model/src/model.rs:3332-3355` (`validate_instance`)
   -- the existing per-Instance walker (does not catch missing
   Instances).
@@ -332,9 +339,8 @@ The final Phase-5 orchestrator ordering (after this task):
 fn construct_instances_and_resolve_cross_references(ctxt) -> Result<...> {
     synth::rekey_synthesis_in_phase5(ctxt)?;
     construct_function_instances(ctxt)?;
-    construct_source_static_instances(ctxt)?;        // NEW (Change C)
-    construct_source_const_instances(ctxt)?;         // NEW (Change D)
-    construct_nominal_adt_instances(ctxt)?;          // NEW (Change E)
+    construct_source_static_instances(ctxt)?;          // NEW (Change C)
+    construct_source_const_instances(ctxt)?;           // NEW (Change D)
     construct_closure_call_instances(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     if !ctxt.pending_items.is_empty() {
@@ -346,41 +352,108 @@ fn construct_instances_and_resolve_cross_references(ctxt) -> Result<...> {
     ctxt.handles.remap_item_ids(&item_remap);
     const_::construct_const_memory_static_instances(ctxt)?;
     diag_log::dead_item_elim::eliminate_diag_log_peel_residue(ctxt)?;
+    construct_nominal_adt_instances(ctxt)?;            // NEW (Change E) -- FINAL construction step
     Ok(())
 }
 ```
 
-The three new passes slot between `construct_function_instances`
-and `construct_closure_call_instances`. The final
-`ctxt.model.sort_instances_by_f4_2()` at the end of `run_bridge`
-(`mod.rs:635`) restores the F4-2 canonical ordering across the
-expanded Instance set; no per-pass sort is needed.
+`construct_source_static_instances` (Change C) and
+`construct_source_const_instances` (Change D) slot between
+`construct_function_instances` and `construct_closure_call_instances`
+(the symmetric source-Function precedent).
 
-### Change G: Validator extension -- Item-vs-Instance coverage
+`construct_nominal_adt_instances` (Change E) MUST run as the
+**FINAL construction step**, after both
+`patch_resolved_source_ty_pending` + `sort_items_by_f4`/remap and
+`eliminate_diag_log_peel_residue`. Two independent constraints
+force this slot:
 
-Extend `crates/regseq-model/src/model.rs::validate` to enforce: for
-every `Item` at index `i` whose `kind` is one of
-`{ Function, Static { .. }, Const, Struct, Enum, Union }` and whose
-`item_synthetic_kinds[i] != SyntheticItemKind::None` *or* whose
-`linkage != Linkage::Foreign`, there exists at least one `Instance`
-in `model.instances` with `item == i`.
+(i) **Placeholder ItemId barrier.** Source `struct` / `enum` /
+`union` Items are NOT rustc `MonoItem`s and are first interned
+during Phase-5 fn-sig / body translation -- AFTER Phase 4. Their
+`Ty::Struct/Enum/Union { item, args, layout }` entries therefore
+carry the high-end placeholder `ItemId` (per
+`placeholder_item_id_for_handle`) until
+`patch_resolved_source_ty_pending` resolves them. Reading the
+`Ty`'s `item` field before that resolution yields an unpatched
+placeholder; pushing `Instance.item = <placeholder>` would panic
+the closing `sort_items_by_f4` remap
+(`remap[item.index()]` indexes past `model.items.len()`).
+
+(ii) **DiagLogPeel residue barrier.** Running before
+`eliminate_diag_log_peel_residue` would push an
+`InstanceKind::Enum` for the DiagLogPeel residue `LogArg` enum,
+pinning it in the model against `spec.md` §26.6's "the `LogArg`
+type does NOT appear in RegseqModel" contract
+(`I-DiagLog-CallArity` carrier-survival rule).
+
+The final `ctxt.model.sort_instances_by_f4_2()` at the end of
+`run_bridge` (`crates/regseq-driver/src/bridge/mod.rs:635`)
+restores the F4-2 canonical ordering across the expanded
+Instance set; no per-pass sort is needed.
+
+### Change G: Validator extension -- Item-vs-Instance coverage (separate post-bridge entry point)
+
+Add a new public method on `RegseqModel`:
+
+```rust
+pub fn validate_bridge_completeness(&self) -> Result<(), InvariantViolation>
+```
+
+The method enforces: for every `Item` at index `i` whose `kind` is
+one of `{ Function, Static { .. }, Const, Struct, Enum, Union }`
+AND whose `item_synthetic_kinds[i] == SyntheticItemKind::None`
+AND whose `linkage != Linkage::Foreign`, there exists at least
+one `Instance` in `model.instances` with `item == i`.
+
+The new method is invoked from `bridge::run_bridge` AFTER the
+final `model.sort_instances_by_f4_2()` call at
+`crates/regseq-driver/src/bridge/mod.rs:635` (the existing
+post-bridge invariant ratchet). It is also invoked explicitly
+from Test Plan B1-B3 and from
+`crates/regseq-model/tests/e2e_instance_completeness.rs` (in
+addition to the existing `model.validate(&bridge_input)` call).
+
+**The new method is DELIBERATELY NOT folded into
+`RegseqModel::validate(&mut self, &BridgeInput)`.** Rationale:
+`validate()` is the model-correctness entry point for arbitrary
+models (hand-constructed partial test fixtures, deserialised
+models, mid-construction snapshots); the partial-model
+validator test corpus at
+`crates/regseq-model/tests/{id_referential_integrity_validator,
+layout_validator}.rs` legitimately constructs partial models
+with no Instances to negative-test other invariants (notably
+`F4OutOfOrderInstance` at
+`id_referential_integrity_validator.rs:446`,
+`InstanceLayoutMismatch` at `layout_validator.rs:227`, and
+`InstanceLayoutItemArgsMismatch` at `layout_validator.rs:254`),
+and positive layout tests like `layout_pass_struct` at
+`layout_validator.rs:813-824` that build a one-Struct Item
+zero-Instance model and rely on `validate()` returning `Ok(())`.
+Forcing those models to carry Instances either masks the
+intentional negative tests or requires a per-test corpus
+migration the task spec did not scope. The new method is the
+BRIDGE-COMPLETENESS entry point, distinct from model-correctness.
+Both surfaces are load-bearing and must not be conflated.
 
 Spec rationale: §3.4 Phase 5 + §3.1 invariant 14 (`spec.md:760-770`)
 + §8.1 (`ItemKind` mirrors `InstanceKind`). This is the missing
-coverage invariant Codex flagged in its investigation.
+bridge-completeness invariant Codex's investigation flagged.
 
-Exclusion: Foreign items legitimately have `init: None` /
-`body: None` per §3.1 invariant 10 (`spec.md:772-781`, Function
-body biconditional) and §9.4 (`spec.md:2626-2628`, Static init
-biconditional); whether they require an Instance row at all is
-SPEC-AMBIGUOUS for this task and out of scope. The new check
-skips Items with `linkage == Linkage::Foreign` so this task does
-not pre-empt that decision.
+Synthetic-Item exemption (the
+`item_synthetic_kinds[i] == None` clause): the DiagLogPeel
+residue DCE (regseq-driver-48/49; Non-Goals 5 + 6)
+legitimately strips Instances of synth Items, and the post-elim
+model retains synth Items with no Instance. Synthetic-Item
+Instance lifecycle is owned by the synth passes + residue DCE;
+the new check exempts them.
 
-Place the new check inside `validate_instance` is wrong; the check
-is Item-side, not Instance-side. Create a sibling
-`validate_item_instance_coverage` invoked from `validate` after
-`validate_instance` returns.
+Foreign-source-Item exemption (the `linkage != Foreign` clause):
+foreign declarations have no body / init by definition per §3.1
+invariant 10 (`spec.md:772-781`, Function body biconditional)
+and §9.4 (`spec.md:2626-2628`, Static init biconditional);
+whether they require an Instance row at all is SPEC-AMBIGUOUS
+per Non-Goals 1-2.
 
 ### Conventions
 
@@ -498,26 +571,32 @@ A9. **Idempotency.** Re-invoke `construct_nominal_adt_instances`
     Instance rows. (Implementation: extract the loop body into a
     helper, call twice from a test harness.)
 
-### B. Validator coverage unit test in `crates/regseq-model/tests/`
+### B. Bridge-completeness coverage unit test in `crates/regseq-model/tests/`
 
-New file `validate_item_instance_coverage.rs`. Invocation
-follows the existing API at `crates/regseq-model/src/model.rs:1532`:
-`pub fn validate(&mut self, bridge_input: &BridgeInput) ->
-Result<(), InvariantViolation>`. Use the canonical empty-bridge
-helper (e.g. `BridgeInput::matching(&model)` or the equivalent
-helper the existing validator tests already use; cross-reference
-`crates/regseq-model/tests/id_referential_integrity_validator.rs`
-for the established invocation shape).
+New file `validate_item_instance_coverage.rs`. Tests invoke the
+new `validate_bridge_completeness` entry point added by Change G,
+NOT the `validate(&BridgeInput)` global entry point. The
+partial-model corpus at
+`crates/regseq-model/tests/{id_referential_integrity_validator,
+layout_validator}.rs` is intentionally left untouched and
+continues to call `validate(&BridgeInput::matching(model))` per
+the existing API at `crates/regseq-model/src/model.rs:1532`.
 
 B1. **Negative regression.** Construct a `RegseqModel` by hand
     with one `ItemKind::Struct` Item, `SyntheticItemKind::None`,
     `linkage: Linkage::Default`, and ZERO matching Instance.
-    Assert `model.validate(&bridge_input)` returns an error
-    variant naming the missing coverage.
+    Assert `model.validate_bridge_completeness()` returns an
+    error variant naming the missing coverage. Verify in the
+    same test that `model.validate(&BridgeInput::matching(&model))`
+    returns `Ok(())` for the SAME model -- this is the
+    cross-check that the two entry points are deliberately
+    distinct (the model-correctness path is permissive about
+    Item-vs-Instance coverage; the bridge-completeness path is
+    strict).
 
 B2. **Foreign carve-out (positive).** Same as B1 but with
     `linkage: Linkage::Foreign`. Assert
-    `model.validate(&bridge_input)` returns `Ok(())` --
+    `model.validate_bridge_completeness()` returns `Ok(())` --
     foreign Items legitimately may have no Instance per the
     foreign-decl carve-out at Non-Goals 1-2 in this task
     (foreign `fn` and foreign `static` deferred as
@@ -528,8 +607,8 @@ B3. **Source-derived positive path.** Construct a `RegseqModel`
     `SyntheticItemKind::None`, `linkage: Linkage::Default`, AND
     one matching `InstanceKind::Struct { layout }` Instance
     whose `item` field references that Item. Assert
-    `model.validate(&bridge_input)` returns `Ok(())`. Without
-    this case, B1 alone could pass under a validator that
+    `model.validate_bridge_completeness()` returns `Ok(())`.
+    Without this case, B1 alone could pass under a check that
     rejects every non-foreign Item regardless of Instance
     presence.
 
@@ -590,12 +669,18 @@ C2. Add a matching integration test
     that drives the bridge against the new fixture (mirror the
     helper-invocation shape in
     `crates/regseq-model/tests/e2e_enum_round_trip.rs:34-36`),
-    then asserts:
+    then asserts BOTH validator entry points:
     - `model.validate(&bridge_input)` returns `Ok(())`, where
       `bridge_input` is constructed via the canonical
       `BridgeInput::matching(&model)` helper (or the equivalent
       shape the existing E2E tests use; see
       `crates/regseq-model/tests/id_referential_integrity_validator.rs:15-17`).
+      This is the model-correctness check.
+    - `model.validate_bridge_completeness()` returns `Ok(())`.
+      This is the bridge-completeness check added by Change G.
+      `run_bridge` itself invokes this method before returning,
+      so the explicit call here is a redundant guard that pins
+      the contract at the test surface.
     - `model.instances` contains the following Instance shapes
       keyed by Item kind and ItemKind:
       - one `InstanceKind::Struct` for `Point`, `Pair` is owned
@@ -617,9 +702,28 @@ C2. Add a matching integration test
 
 ### D. Workspace regression-clean
 
-D1. `cargo test --workspace` passes (no existing snapshot
-    drift; the closure / vtable / diag-log E2Es exercise paths
-    this task does not change).
+D1. `cargo test --workspace` passes after the expected
+    snapshot drift on
+    `crates/regseq-model/tests/snapshots/e2e_synthesis__vtable_render.snap`
+    is re-baselined. The drift is the intended consequence of
+    Change E: nominal `InstanceKind::Struct` definitions now
+    render at definition-site per `pretty-printer.md`
+    §10.2.4. In the vtable E2E fixture
+    (`crates/test-ir-fixtures/fixtures/trait_object.rs`), this
+    surfaces two new struct definitions in the rendered output
+    -- both the synth `VTableType` struct AND the source
+    `StaticByte` struct
+    (`crates/test-ir-fixtures/fixtures/trait_object.rs:8`) --
+    which is the bug fix this change ships. The implementer
+    MUST commit the re-baselined snapshot.
+
+    No other snapshot is expected to drift; closure E2E
+    (`crates/regseq-model/tests/snapshots/e2e_synthesis__closure_render.snap`),
+    diag-log E2E (`crates/regseq-driver/tests/snapshots/...`),
+    and the new `e2e_instance_completeness__render.snap` are
+    independent of the vtable fixture. If any OTHER snapshot
+    drifts, that is a regression to investigate before
+    re-baselining.
 
 D2. `cargo fmt --all -- --check` passes.
 
@@ -654,8 +758,9 @@ Files to audit:
   (translate_static_init / translate_const_value paths if
   extended for source-static / source-const Instance population)
 - crates/regseq-model/src/model.rs
-  (new validate_item_instance_coverage check + dispatch from
-  validate; foreign-linkage carve-out per Change G)
+  (new validate_bridge_completeness method as a separate entry
+  point per Change G; foreign-linkage and synthetic-Item
+  carve-outs)
 - crates/regseq-driver/tests/bridge_phase5_instance_completeness.rs
   (new unit tests per Test Plan A1-A9)
 - crates/regseq-model/tests/validate_item_instance_coverage.rs
@@ -685,9 +790,16 @@ Focus on:
   construct_source_const_instances MUST NOT produce Instances for
   Items with linkage == Linkage::Foreign. The validator check at
   Change G MUST also carve out foreign Items.
-- Validator placement: validate_item_instance_coverage is an
-  Item-side check, not an Instance-side check; verify it is NOT
-  placed inside validate_instance.
+- Validator placement: `validate_bridge_completeness` is a
+  separate public method on `RegseqModel`, NOT folded into
+  `RegseqModel::validate(&mut self, &BridgeInput)`. Verify
+  `run_bridge` invokes it after the final
+  `sort_instances_by_f4_2()` at
+  `crates/regseq-driver/src/bridge/mod.rs:635`. Verify the
+  partial-model test corpus at
+  `crates/regseq-model/tests/{id_referential_integrity_validator,
+  layout_validator}.rs` is NOT migrated and continues to call
+  `validate(&BridgeInput::matching(model))`.
 - Mutability propagation: source static mutability MUST flow from
   rustc tcx.static_mutability to ItemKind::Static { mutability }
   per spec.md §8.0; assert via Test Plan A6.
@@ -786,17 +898,29 @@ Requirements.
   `InstanceKind::Static { ty, init: Some(_) }` Instance; every
   source `const` produces one `InstanceKind::Const { ty, value }`
   Instance.
-- `crates/regseq-model/src/model.rs::validate` invokes a new
-  `validate_item_instance_coverage` check per Change G; the
-  check skips Items with `linkage == Linkage::Foreign`.
+- A new public method
+  `RegseqModel::validate_bridge_completeness(&self) ->
+  Result<(), InvariantViolation>` is added per Change G,
+  invoked from `bridge::run_bridge` after the final
+  `sort_instances_by_f4_2()` at
+  `crates/regseq-driver/src/bridge/mod.rs:635`. The method
+  skips synthetic Items (`item_synthetic_kinds[i] !=
+  SyntheticItemKind::None`) and foreign Items
+  (`linkage == Linkage::Foreign`). The method is
+  DELIBERATELY NOT folded into
+  `RegseqModel::validate(&mut self, &BridgeInput)`; the
+  partial-model validator test corpus stays intact.
 - `crates/regseq-driver/tests/bridge_phase5_instance_completeness.rs`
   exercises Test Plan A1-A9.
 - `crates/regseq-model/tests/validate_item_instance_coverage.rs`
   exercises Test Plan B1-B3 (negative regression, foreign
-  carve-out, source-derived positive path) and invokes the
-  validator via the correct API shape
-  (`validate(&mut self, bridge_input: &BridgeInput)` at
-  `crates/regseq-model/src/model.rs:1532`).
+  carve-out, source-derived positive path) by invoking
+  `model.validate_bridge_completeness()` (the new
+  bridge-completeness entry point added by Change G). B1
+  additionally cross-checks that
+  `model.validate(&BridgeInput::matching(&model))` returns
+  `Ok(())` for the SAME partial model, pinning the
+  deliberately-distinct entry-point contract.
 - `crates/test-ir-fixtures/fixtures/instance_completeness.rs`
   added per Test Plan C1;
   `crates/regseq-model/tests/e2e_instance_completeness.rs`
