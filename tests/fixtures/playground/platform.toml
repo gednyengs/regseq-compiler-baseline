@@ -1,0 +1,6 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "generic-arm64"
+arch = "aarch64"
