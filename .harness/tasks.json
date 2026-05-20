@@ -1607,6 +1607,31 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-58",
+          "name": "Eager HIR enumeration of source-defined top-level items",
+          "spec": ".harness/tasks/regseq-driver/58-eager-hir-enumeration-of-source-top-level-items.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-57"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#8",
+            "spec.md#9",
+            "pretty-printer.md#5"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-20T04:36:40Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
