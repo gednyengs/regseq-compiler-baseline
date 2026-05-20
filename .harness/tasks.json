@@ -1584,6 +1584,29 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-57",
+          "name": "Canonicalize LogArg::From recognizer (remove trait-method shape)",
+          "spec": ".harness/tasks/regseq-driver/57-canonicalize-logarg-from-recognizer.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-56"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#8"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-20T01:47:54Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
