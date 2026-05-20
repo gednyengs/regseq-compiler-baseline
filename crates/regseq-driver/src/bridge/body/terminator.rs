@@ -12,8 +12,8 @@ use rustc_middle::mir;
 use rustc_middle::ty;
 
 use crate::bridge::{
-    diag_log, function_instance_flavor_for_kind, synth, ty::translate_ty, BridgeCtxt, BridgeError,
-    DslRejectionKind, ItemHandle,
+    canonicalize_call_site_callee, diag_log, synth, ty::translate_ty, BridgeCtxt, BridgeError,
+    CanonicalCallSiteCallee, DslRejectionKind, ItemHandle,
 };
 
 use super::{
@@ -365,7 +365,34 @@ fn translate_call_callee<'tcx>(
             // stray pending Item behind.
             reject_call_site_intrinsics(cx, *def_id)?;
 
-            let model_ty = translate_ty(cx, constant.const_.ty())?;
+            // Spec section 8.1 call-site canonicalization (regseq-driver-56):
+            // resolve `ty::Instance::try_resolve` BEFORE interning the
+            // callee Item so static-dispatch trait-method calls key on
+            // the resolved impl DefId (not the trait declaration DefId),
+            // while Virtual and shim flavors continue to use the
+            // original MIR operand's (def_id, generic_args) per the
+            // bridge's pre-fix behavior.
+            let CanonicalCallSiteCallee {
+                callee_ty,
+                callee_def_id,
+                callee_generic_args,
+                flavor,
+                virtual_idx,
+            } = canonicalize_call_site_callee(cx.input.tcx, *def_id, generic_args).map_err(
+                |err| {
+                    BridgeError::Phase4(format!(
+                        "call-site Instance::try_resolve failed for {:?} with args {:?}: {err}",
+                        *def_id, generic_args,
+                    ))
+                },
+            )?;
+
+            // Route the canonical FnDef Ty through the same `translate_ty`
+            // interning path used by other FnDef sites. This keeps the
+            // resulting Item Phase-4-handle-resolvable for the `Item`
+            // arm without disturbing the bare-Ty `TyKind::FnDef` arm at
+            // `ty::translate_ty`.
+            let model_ty = translate_ty(cx, callee_ty)?;
             let Ty::FnDef(callee_item, model_args) = cx.model.types.resolve(model_ty).clone()
             else {
                 return rejected_terminator(format!("unsupported call callee {func:?}"));
@@ -381,19 +408,18 @@ fn translate_call_callee<'tcx>(
                 cx,
                 ItemHandle::from_u32(callee_item.as_u32()),
                 &callee_def_path,
-                *def_id,
+                callee_def_id,
             )?;
             // Audit finding regseq-driver-42-4 + spec section 23.7:
             // resolve direct callees through `function_instance_for_item`
-            // keyed by `(ItemId, ArgsKey, FunctionInstanceFlavor)`.
-            // Per spec section 11 + 23.7 dyn-Trait method calls
-            // surface as `InstanceKind::Virtual(_, idx)`; the resulting
-            // Regseq Instance is Direct-flavored Virtual with
-            // virtual_idx = Some(idx) so the stage-11 vtable-indirect
-            // rewrite can replace the Direct callee with a vtable load.
-            let (flavor, virtual_idx) = resolve_callsite_flavor(cx, *def_id, generic_args);
-            let def_id_copy = *def_id;
-            let generic_args_copy = *generic_args;
+            // keyed by `(ItemId, ArgsKey, FunctionInstanceFlavor)`. Per
+            // spec section 11 + 23.7 dyn-Trait method calls surface as
+            // `InstanceKind::Virtual(_, idx)`; the resulting Regseq
+            // Instance is Direct-flavored Virtual with virtual_idx =
+            // Some(idx) so the stage-11 vtable-indirect rewrite can
+            // replace the Direct callee with a vtable load.
+            let def_id_copy = callee_def_id;
+            let generic_args_copy = callee_generic_args;
             let instance_id = lookup_or_create_direct_instance(
                 cx,
                 callee_item,
@@ -460,23 +486,6 @@ fn reject_call_site_intrinsics<'tcx>(
         ));
     }
     Ok(())
-}
-
-fn resolve_callsite_flavor<'tcx>(
-    cx: &BridgeCtxt<'tcx>,
-    def_id: rustc_span::def_id::DefId,
-    generic_args: ty::GenericArgsRef<'tcx>,
-) -> (FunctionInstanceFlavor, Option<u32>) {
-    let typing_env = ty::TypingEnv::fully_monomorphized();
-    match ty::Instance::try_resolve(cx.input.tcx, typing_env, def_id, generic_args) {
-        Ok(Some(instance)) => match instance.def {
-            ty::InstanceKind::Virtual(_, idx) => {
-                (FunctionInstanceFlavor::Virtual, Some(idx as u32))
-            }
-            other => (function_instance_flavor_for_kind(other), None),
-        },
-        _ => (FunctionInstanceFlavor::Item, None),
-    }
 }
 
 fn callsite_fn_sig<'tcx>(

@@ -428,23 +428,48 @@ fn non_logarg_from_impl_in_unrelated_fixture_is_preserved() {
     }
     assert!(saw_s_struct_ty, "S struct Ty must survive");
 
+    // Per regseq-driver-56 the bridge canonicalizes static-dispatch
+    // trait-method callees to the resolved impl-method DefId, so the
+    // surviving Instance is keyed on the impl-method (terminal `from`
+    // segment with a `DefPathData::Impl` ancestor) whose function
+    // signature's output is the `S` struct.
     let mut saw_from_for_s_instance = false;
     for instance in model.instances.iter() {
         if instance.item.index() >= model.items.len() {
             continue;
         }
         let item = &model.items[instance.item];
-        let rendered = model.strings.resolve(item.def_path.rendered);
-        if !rendered.ends_with("::From::from") {
+        let Some(last) = item.def_path.segments.last() else {
+            continue;
+        };
+        let leaf = match last.data {
+            DefPathData::ValueNs(id) | DefPathData::TypeNs(id) => model.strings.resolve(id),
+            _ => continue,
+        };
+        if leaf != "from" {
             continue;
         }
-        if let Some(regseq_model::GenericArg::Type(self_ty)) = instance.generic_args.first() {
-            if self_ty.index() < model.types.len() {
-                if let Ty::Struct { item, .. } = model.types.resolve(*self_ty) {
-                    if Some(*item) == s_item_id {
-                        saw_from_for_s_instance = true;
-                    }
-                }
+        if !item
+            .def_path
+            .segments
+            .iter()
+            .any(|s| matches!(s.data, DefPathData::Impl))
+        {
+            continue;
+        }
+        let Some(function) = instance.kind.as_function() else {
+            continue;
+        };
+        if function.fn_sig.index() >= model.sigs.len() {
+            continue;
+        }
+        let sig = model.sigs.resolve(function.fn_sig);
+        if sig.output.index() >= model.types.len() {
+            continue;
+        }
+        if let Ty::Struct { item, .. } = model.types.resolve(sig.output) {
+            if Some(*item) == s_item_id {
+                saw_from_for_s_instance = true;
             }
         }
     }

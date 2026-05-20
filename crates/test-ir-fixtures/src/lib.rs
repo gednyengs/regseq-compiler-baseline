@@ -55,6 +55,12 @@ pub mod fixture_names {
     /// Item-vs-Instance coverage validator through both `validate`
     /// and `render`.
     pub const INSTANCE_COMPLETENESS: &str = "instance_completeness";
+    /// Static-dispatch trait-method callee-canonicalization fixture.
+    /// Trait + concrete impl + caller that invokes the trait method
+    /// on a concrete receiver. Used by regseq-driver-56 to lock the
+    /// spec section 8.1 call-site canonicalization contract through
+    /// both `validate` and `render`.
+    pub const TRAIT_METHOD_RESOLUTION: &str = "trait_method_resolution";
 }
 
 /// Drive the phase-1a `regseq-driver` bridge against the named
@@ -281,6 +287,7 @@ mod tests {
             fixture_names::CLOSURE,
             fixture_names::ENUM_ROUND_TRIP,
             fixture_names::INSTANCE_COMPLETENESS,
+            fixture_names::TRAIT_METHOD_RESOLUTION,
         ] {
             let path = fixture_dir().join(format!("{name}.rs"));
             let metadata = std::fs::metadata(&path).unwrap_or_else(|err| {

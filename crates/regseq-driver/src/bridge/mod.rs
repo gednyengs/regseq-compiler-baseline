@@ -842,7 +842,7 @@ fn scan_terminator_for_synthesis<'tcx>(
         scan_call_ty_for_vtable(ctxt, func.ty(local_decls, ctxt.input.tcx))?;
         scan_operand_move_for_drop_glue(ctxt, local_decls, func)?;
         if let rustc_middle::mir::Operand::Constant(constant) = func {
-            if let TyKind::FnDef(_, _) = constant.const_.ty().kind() {
+            if let TyKind::FnDef(def_id, generic_args) = constant.const_.ty().kind() {
                 // Audit finding regseq-driver-42-4: pre-translate
                 // every constant FnDef callee so the Phase-5
                 // `translate_call_callee` path resolves the callee
@@ -851,11 +851,26 @@ fn scan_terminator_for_synthesis<'tcx>(
                 // here interns the source FnDef Item in
                 // `cx.pending_items` so Phase-3/4 binds it before
                 // body materialisation runs.
-                let _ = ty::translate_ty(ctxt, constant.const_.ty());
-            }
-            if let TyKind::FnDef(def_id, _) = constant.const_.ty().kind() {
-                if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, *def_id).is_some() {
-                    let model_ty = ty::translate_ty(ctxt, constant.const_.ty())?;
+                //
+                // Per regseq-driver-56 spec section 8.1 the callee
+                // is canonicalized through `Instance::try_resolve`
+                // BEFORE interning so static-dispatch trait-method
+                // calls pre-intern the resolved impl-method DefId
+                // rather than the trait-declaration DefId.
+                let canonical =
+                    canonicalize_call_site_callee(ctxt.input.tcx, *def_id, generic_args).map_err(
+                        |err| {
+                            BridgeError::Phase4(format!(
+                        "call-site Instance::try_resolve failed for {:?} with args {:?}: {err}",
+                        *def_id, generic_args,
+                    ))
+                        },
+                    )?;
+                let _ = ty::translate_ty(ctxt, canonical.callee_ty);
+                if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id)
+                    .is_some()
+                {
+                    let model_ty = ty::translate_ty(ctxt, canonical.callee_ty)?;
                     if let Ty::FnDef(callee_item, _) = ctxt.model.types.resolve(model_ty).clone() {
                         // Per audit-finding F4 source-derived Items
                         // carry placeholder ItemIds during Phase 2;
@@ -870,7 +885,7 @@ fn scan_terminator_for_synthesis<'tcx>(
                             ctxt,
                             ItemHandle::from_u32(callee_item.as_u32()),
                             &callee_def_path,
-                            *def_id,
+                            canonical.callee_def_id,
                         )?;
                     }
                 }
@@ -1917,6 +1932,90 @@ fn resolve_closure_scratch(
         GenericArg::Type(closure_ty_id),
         captures_struct_ty_id,
     )))
+}
+
+/// Canonical-form output of `canonicalize_call_site_callee`. Per
+/// spec section 8.1 (`spec.md:2341-2362`, regseq-driver-56 amendment),
+/// a direct call-site `Operand::Constant(FnDef(def_id, generic_args))`
+/// resolves through `ty::Instance::try_resolve` to a canonical
+/// `(callee_def_id, callee_generic_args)` pair keyed by the resolved
+/// `InstanceKind`: `Item(resolved_def_id)` rekeys on the resolved impl
+/// DefId; `Virtual(_, idx)` retains the original trait DefId and
+/// records `virtual_idx = Some(idx)`; all other shim kinds retain the
+/// original MIR operand `(def_id, generic_args)` per the bridge's
+/// pre-fix behavior.
+pub(crate) struct CanonicalCallSiteCallee<'tcx> {
+    /// Canonical `Ty::FnDef` view ready for `translate_ty`.
+    pub(crate) callee_ty: rustc_middle::ty::Ty<'tcx>,
+    /// Canonical callee `DefId` (resolved impl DefId for `Item`-kind;
+    /// original MIR DefId for `Virtual` and shim kinds).
+    pub(crate) callee_def_id: DefId,
+    /// Canonical callee `GenericArgsRef` (resolved `instance.args` for
+    /// `Item`-kind; original MIR `generic_args` for `Virtual` and shim
+    /// kinds).
+    pub(crate) callee_generic_args: rustc_middle::ty::GenericArgsRef<'tcx>,
+    /// `FunctionInstanceFlavor` tag for the resulting Function Instance.
+    pub(crate) flavor: FunctionInstanceFlavor,
+    /// `virtual_idx = Some(idx)` exactly when `flavor == Virtual`.
+    pub(crate) virtual_idx: Option<u32>,
+}
+
+/// Resolve a direct call-site `(def_id, generic_args)` through
+/// `ty::Instance::try_resolve` and return the canonical
+/// `(callee_def_id, callee_generic_args, flavor, virtual_idx)` plus a
+/// synthesised `Ty::FnDef` view. Shared by Phase-2 pre-translation
+/// (`scan_terminator_for_synthesis`) and Phase-5 callee translation
+/// (`translate_call_callee`) so the call-site canonicalization
+/// contract lives in one place per spec section 8.1.
+///
+/// Returns `Err(String)` when `Instance::try_resolve` returns
+/// `Ok(None)` or `Err(_)`. The bridge operates exclusively in
+/// `TypingEnv::fully_monomorphized`; in that context the resolver
+/// never legitimately fails for a `TyKind::FnDef` operand of a
+/// successfully monomorphised body, so a `None`/`Err` here is a
+/// rustc-invariant violation worth surfacing as a hard error per the
+/// no-defensive-fallbacks rule.
+pub(crate) fn canonicalize_call_site_callee<'tcx>(
+    tcx: TyCtxt<'tcx>,
+    def_id: DefId,
+    generic_args: rustc_middle::ty::GenericArgsRef<'tcx>,
+) -> Result<CanonicalCallSiteCallee<'tcx>, String> {
+    let typing_env = rustc_middle::ty::TypingEnv::fully_monomorphized();
+    match rustc_middle::ty::Instance::try_resolve(tcx, typing_env, def_id, generic_args) {
+        Ok(Some(instance)) => {
+            let (callee_def_id, callee_generic_args, flavor, virtual_idx) = match instance.def {
+                rustc_middle::ty::InstanceKind::Virtual(_, idx) => (
+                    def_id,
+                    generic_args,
+                    FunctionInstanceFlavor::Virtual,
+                    Some(idx as u32),
+                ),
+                rustc_middle::ty::InstanceKind::Item(_) => (
+                    instance.def.def_id(),
+                    instance.args,
+                    FunctionInstanceFlavor::Item,
+                    None,
+                ),
+                other => (
+                    def_id,
+                    generic_args,
+                    function_instance_flavor_for_kind(other),
+                    None,
+                ),
+            };
+            let callee_ty =
+                rustc_middle::ty::Ty::new_fn_def(tcx, callee_def_id, callee_generic_args);
+            Ok(CanonicalCallSiteCallee {
+                callee_ty,
+                callee_def_id,
+                callee_generic_args,
+                flavor,
+                virtual_idx,
+            })
+        }
+        Ok(None) => Err("Instance::try_resolve returned Ok(None)".to_string()),
+        Err(err) => Err(format!("Instance::try_resolve returned Err({err:?})")),
+    }
 }
 
 /// Map a `rustc_middle::ty::InstanceKind` to the closed

@@ -10,39 +10,27 @@ pub use format::{parse_format_template, FormatSpecifier, ParsedFormatTemplate};
 pub use peel::diag_log_peel_pass;
 pub use validation::validate_log_call;
 
-use regseq_model::{DefPath, GenericArg, InstanceId, Ty};
+use regseq_model::{DefPath, DefPathData, GenericArg, InstanceId, InstanceKind, Ty};
 use rustc_span::def_id::DefId;
 
 use crate::bridge::{BridgeCtxt, BridgeError, ItemHandle};
 
 /// Structural recognition of `<LogArg<'_> as From<T>>::from` Call
-/// callees per spec.md section 26.4 + section 26.5. Rustc lowers
-/// the macro expansion `LogArg::from($arg)` to a Call whose `func`
-/// is `FnDef(<trait method def_id>, [Self, T])`; the bridge interns
-/// it as a Direct Instance whose `.item` points at the trait method
-/// (`core::convert::From::from`) and whose `.generic_args` carries
-/// the dispatch info `[Type(Self), Type(T)]`. The impl method's
-/// def_path is not interned -- the bridge represents trait-method
-/// calls through their trait-side Item, not the resolved impl Item.
+/// callees per spec.md section 26.4 + section 26.5.
 ///
-/// The earlier rendered-path heuristic
-/// (`path.contains("LogArg") && path.ends_with("from")`) never
-/// matched real fixture bodies for that reason: the bridge only
-/// ever exposes `"core::convert::From::from"` here, so the
-/// substring check on "LogArg" always failed and the carrier's
-/// inner operand fell through unchanged.
+/// Per regseq-driver-56 the bridge canonicalizes static-dispatch
+/// trait-method callees to the resolved impl-method DefId. The
+/// recognizer therefore accepts either shape:
 ///
-/// The structural check:
-/// 1. The callee Item's rendered def_path ends with `::From::from`
-///    (the only trait-method path that should appear inside a
-///    DiagLogPeel carrier walk per spec.md section 26.5).
-/// 2. `generic_args[0]` (the `Self` type substitution; first slot
-///    by rustc generic-arg order for a trait method) resolves to a
-///    nominal ADT (`Ty::Enum` / `Ty::Struct` / `Ty::Union`) whose
-///    Item's def_path terminal segment renders as the bare name
-///    `LogArg`. The terminal-segment match is stricter than a
-///    substring check (which would false-positive on user-named
-///    `MyLogArg` ADTs).
+/// 1. **Impl-method form (post-regseq-driver-56)**: the callee Item's
+///    def_path terminal segment is `from`, the path contains a
+///    `DefPathData::Impl` segment, and the function signature's
+///    output type resolves to a `Ty::Enum/Struct/Union` whose Item's
+///    def_path terminal segment renders as `LogArg`.
+/// 2. **Trait-method form (pre-regseq-driver-56 / synthetic test
+///    fixtures)**: the callee Item's rendered def_path ends with
+///    `::From::from`, and `instance.generic_args[0]` (Self) resolves
+///    to a `LogArg`-named nominal ADT.
 ///
 /// Shared between `peel.rs::peel_log_arg_from_wrapper` (per Phase-5
 /// sub-pass) and `dead_item_elim::eliminate_diag_log_peel_residue`
@@ -60,25 +48,65 @@ pub(crate) fn is_from_logarg_instance(
     if item.index() >= model.items.len() {
         return false;
     }
-    let rendered = model.items[item].def_path.rendered;
+    let def_path = &model.items[item].def_path;
+    let rendered = def_path.rendered;
     let path = model.strings.resolve(rendered);
-    if !path.ends_with("::From::from") {
-        return false;
+
+    // Path 1: trait-method DefId rendering (synthetic test shape).
+    if path.ends_with("::From::from") {
+        let Some(GenericArg::Type(self_ty_id)) = instance.generic_args.first() else {
+            return false;
+        };
+        return ty_terminal_segment_is_logarg(model, *self_ty_id);
     }
-    let Some(GenericArg::Type(self_ty_id)) = instance.generic_args.first() else {
+
+    // Path 2: impl-method rendering (post-regseq-driver-56 canonical
+    // form). Terminal segment `from`, some path segment is
+    // `DefPathData::Impl`, and the function signature's output type
+    // resolves to a `LogArg`-named ADT.
+    let Some(last) = def_path.segments.last() else {
         return false;
     };
-    let self_item = match model.types.resolve(*self_ty_id) {
+    let DefPathData::ValueNs(name_id) = last.data else {
+        return false;
+    };
+    if model.strings.resolve(name_id) != "from" {
+        return false;
+    }
+    if !def_path
+        .segments
+        .iter()
+        .any(|s| matches!(s.data, DefPathData::Impl))
+    {
+        return false;
+    }
+    let InstanceKind::Function(function) = &instance.kind else {
+        return false;
+    };
+    if function.fn_sig.index() >= model.sigs.len() {
+        return false;
+    }
+    let sig = model.sigs.resolve(function.fn_sig);
+    ty_terminal_segment_is_logarg(model, sig.output)
+}
+
+fn ty_terminal_segment_is_logarg(
+    model: &regseq_model::RegseqModel,
+    ty_id: regseq_model::TyId,
+) -> bool {
+    if ty_id.index() >= model.types.len() {
+        return false;
+    }
+    let nominal_item = match model.types.resolve(ty_id) {
         Ty::Enum { item, .. } | Ty::Struct { item, .. } | Ty::Union { item, .. } => *item,
         _ => return false,
     };
-    if self_item.index() >= model.items.len() {
+    if nominal_item.index() >= model.items.len() {
         return false;
     }
-    let self_path_id = model.items[self_item].def_path.rendered;
-    let self_path = model.strings.resolve(self_path_id);
-    self_path
-        .rsplit("::")
+    let path_id = model.items[nominal_item].def_path.rendered;
+    let path = model.strings.resolve(path_id);
+    path.rsplit("::")
         .next()
         .map(|seg| seg == "LogArg")
         .unwrap_or(false)

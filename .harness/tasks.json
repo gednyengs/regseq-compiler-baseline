@@ -1562,7 +1562,7 @@
           "id": "regseq-driver-56",
           "name": "Direct-call callee static-dispatch resolution",
           "spec": ".harness/tasks/regseq-driver/56-direct-call-callee-static-dispatch-resolution.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-55"
           ],

@@ -1,0 +1,29 @@
+---
+source: crates/regseq-model/tests/e2e_trait_method_resolution.rs
+assertion_line: 94
+expression: render_default(&model)
+---
+fn trait_method_resolution::{impl#0}::m(_1: &trait_method_resolution::S) -> u32 {
+    let mut _0: u32;
+
+    bb0: {
+        _0 = 42_u32;
+        return -> [];
+    }
+}
+
+fn trait_method_resolution::caller(_1: &trait_method_resolution::S) -> u32 {
+    let mut _0: u32;
+    let mut _2: &trait_method_resolution::S;
+
+    bb0: {
+        _2 = &(*_1);
+        _0 = trait_method_resolution::{impl#0}::m(move _2) -> [return: bb1];
+    }
+
+    bb1: {
+        return -> [];
+    }
+}
+
+struct trait_method_resolution::S;

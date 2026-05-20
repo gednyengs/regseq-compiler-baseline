@@ -2351,6 +2351,48 @@ to the top-level `items` / `instances` tables:
 - **Default trait method bodies** are owned by the trait, not by
   any impl. The body lives at the trait's DefPath.
 
+**Implementation note (call-site canonicalization, regseq-driver-56)**:
+at a direct call site whose MIR operand is
+`Operand::Constant(FnDef(def_id, generic_args))`, the bridge resolves
+`ty::Instance::try_resolve(.., fully_monomorphized, def_id,
+generic_args)` BEFORE interning the callee Item, and uses the resolved
+Instance's identity for the `InstanceKind::Item(_)` and
+`InstanceKind::Virtual(_, _)` arms exclusively:
+
+- `InstanceKind::Item(resolved_def_id)`: the callee Item is keyed on
+  `(resolved_def_id, instance.args)`. This is the static-dispatch
+  canonicalization that erases trait-declaration DefIds: a trait
+  method called on a concrete receiver pre-interns the resolved
+  impl-method DefId, not the trait-declaration DefId.
+- `InstanceKind::Virtual(trait_def_id, idx)`: the callee Item stays
+  keyed on the trait method DefId + original `generic_args`; the
+  resulting Function Instance carries `flavor = Virtual` and
+  `virtual_idx = Some(idx)` so the stage-11 vtable-indirect rewrite
+  (§23.6.2 B-8) can look up the vtable slot.
+
+All other rustc `InstanceKind` shim variants
+(`Intrinsic` / `VTableShim` / `ReifyShim` / `FnPtrShim` /
+`ClosureOnceShim` / `ConstructCoroutineInClosureShim` /
+`ThreadLocalShim` / `FutureDropPollShim` / `DropGlue` / `CloneShim` /
+`FnPtrAddrShim` / `AsyncDropGlueCtorShim` / `AsyncDropGlue`) continue
+to key the callee Item on the MIR operand's pre-resolution
+`(def_id, generic_args)`; the resulting Function Instance's `flavor`
+records the resolved `InstanceKind` per `function_instance_flavor_for_kind`
+so the shim's stable identity survives per §9.4. The shim path is
+not part of this normative contract (the contract above is normative
+for the `Item` and `Virtual` arms only).
+
+This canonicalization applies at both the Phase-2 callee
+pre-translation (`scan_terminator_for_synthesis`) and the Phase-5
+callee translation (`translate_call_callee`) so a trait declaration
+DefId never reaches `intern_item` at any direct call site. Non-call
+sites that reach `translate_ty` with a `TyKind::FnDef` value (e.g.,
+local-decl types, rvalue expressions) continue to intern the
+original MIR DefId; that bare-Ty interning is outside the normative
+contract because it does not produce a Function Instance (the
+rendered output iterates Instances, not Items per
+`pretty-printer.md` §10.3).
+
 Consequences:
 
 - `ItemKind` has six variants — `Function`, `Static`, `Const`,
