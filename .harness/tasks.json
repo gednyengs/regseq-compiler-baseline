@@ -1680,6 +1680,32 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-61",
+          "name": "sig_c_abi_lowerings parallel-table sync at every driver-side FnSig intern",
+          "spec": ".harness/tasks/regseq-driver/61-sig-c-abi-lowerings-sync-at-fn-sig-intern.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-60"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#12",
+            "spec.md#14",
+            "spec.md#23"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-20T23:17:10Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
