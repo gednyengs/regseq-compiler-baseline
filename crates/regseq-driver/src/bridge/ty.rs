@@ -176,7 +176,24 @@ fn translate_erased_ty_inner<'tcx>(
                 c_variadic: sig.c_variadic,
                 safety: translate_safety(sig.safety),
             };
-            Ty::FnPtr(cx.model.sigs.intern(sig))
+            let sig_id = cx.model.sigs.intern(sig);
+            // Maintain the spec.md section 3 length invariant
+            // `sig_c_abi_lowerings.len() == sigs.len()` and the
+            // section 12 step 5 "Some iff `FnAbi::C`" presence rule
+            // at the FnPtr intern choke point. For an admissible
+            // `FnAbi::C` sig, populate the slot. For an inadmissible
+            // `FnAbi::C` sig, leave the slot as `None`; the outer
+            // C-ABI admissibility check
+            // (`CAbiChecker::check_nested_sig`) raises the rejection
+            // with the correct outer position when the FnPtr is
+            // encountered at a C boundary or as a field of a C-ABI
+            // aggregate (see `bridge_fnsig.rs::nested_fnptr_input_inherits_field_position`).
+            if cx.model.sigs.resolve(sig_id).abi == FnAbi::C {
+                let _ = crate::bridge::fnsig::try_populate_cabi_lowering(cx, sig_id);
+            } else {
+                crate::bridge::fnsig::ensure_cabi_lowering_slots(cx);
+            }
+            Ty::FnPtr(sig_id)
         }
         TyKind::Dynamic(predicates, _) => {
             // DynStar carries its own dedicated rejection row per

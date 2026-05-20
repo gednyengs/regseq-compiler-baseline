@@ -1685,7 +1685,7 @@
           "id": "regseq-driver-61",
           "name": "sig_c_abi_lowerings parallel-table sync at every driver-side FnSig intern",
           "spec": ".harness/tasks/regseq-driver/61-sig-c-abi-lowerings-sync-at-fn-sig-intern.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-60"
           ],

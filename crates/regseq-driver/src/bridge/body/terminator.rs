@@ -539,6 +539,7 @@ fn lookup_or_create_direct_instance<'tcx>(
         return Ok(*existing);
     }
     let fn_sig = make_fn_sig(cx)?;
+    crate::bridge::fnsig::ensure_cabi_lowering_slots(cx);
     let emission_name = cx.model.items[item].def_path.rendered;
     let span = cx.model.items[item].span;
     let instance_id = cx.model.instances.push(Instance {

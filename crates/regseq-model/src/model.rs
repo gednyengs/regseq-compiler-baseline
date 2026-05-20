@@ -1616,6 +1616,11 @@ impl RegseqModel {
             self.sigs.len(),
             "remove_fn_sigs_and_remap keep slice length must match FnSigInterner storage length",
         );
+        debug_assert_eq!(
+            self.sig_c_abi_lowerings.len(),
+            self.sigs.len(),
+            "remove_fn_sigs_and_remap invariant: sig_c_abi_lowerings.len() must equal sigs.len() per spec.md section 3 (every interned FnSig has a parallel side-table slot)",
+        );
         let remap = self.sigs.compact_by_keep(fn_sig_keep);
         permute_index_vec_with_keep(&mut self.sig_c_abi_lowerings, fn_sig_keep);
         self.for_each_fn_sig_id_mut(|sig_id| {

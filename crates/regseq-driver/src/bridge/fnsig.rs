@@ -73,10 +73,35 @@ pub fn compute_cabi_lowering(cx: &mut BridgeCtxt<'_>, sig_id: FnSigId) -> CAbiLo
     lowering
 }
 
-fn ensure_cabi_lowering_slots(cx: &mut BridgeCtxt<'_>) {
+pub(crate) fn ensure_cabi_lowering_slots(cx: &mut BridgeCtxt<'_>) {
     while cx.model.sig_c_abi_lowerings.len() < cx.model.sigs.len() {
         cx.model.sig_c_abi_lowerings.push(None);
     }
+}
+
+/// Try to compute and populate the C ABI lowering slot for `sig_id`.
+/// Used at type-translation choke points (e.g., the `TyKind::FnPtr`
+/// branch in `bridge::ty`) where a `FnSig` may be interned from a
+/// source position that does not itself require C-ABI admissibility.
+/// If the sig is admissible, populates the slot and returns
+/// `Some(lowering)`. If inadmissible, leaves the slot as `None` and
+/// returns `None`; the outer C-ABI admissibility check
+/// (`CAbiChecker::check_nested_sig` for FnPtrs encountered at C
+/// boundaries or as fields of C-ABI aggregates) raises the rejection
+/// with the correct outer position when the FnPtr is actually used
+/// at such a position. Differs from `compute_cabi_lowering`, which
+/// panics on inadmissible sigs and is reserved for paths where
+/// admissibility is guaranteed by construction (vtable synthesis).
+pub(crate) fn try_populate_cabi_lowering(
+    cx: &mut BridgeCtxt<'_>,
+    sig_id: FnSigId,
+) -> Option<CAbiLowering> {
+    ensure_cabi_lowering_slots(cx);
+    let lowering = CAbiChecker::new(cx).sig_lowering(sig_id).ok()?;
+    if cx.model.sigs.resolve(sig_id).abi == FnAbi::C {
+        cx.model.sig_c_abi_lowerings[sig_id] = Some(lowering.clone());
+    }
+    Some(lowering)
 }
 
 fn translate_abi(abi: ExternAbi) -> Result<FnAbi, BridgeError> {
