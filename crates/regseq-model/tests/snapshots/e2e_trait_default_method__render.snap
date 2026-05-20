@@ -1,0 +1,29 @@
+---
+source: crates/regseq-model/tests/e2e_trait_default_method.rs
+assertion_line: 214
+expression: rendered
+---
+fn trait_default_method::Greeter::greet(_1: &trait_default_method::S) -> u32 {
+    let mut _0: u32;
+
+    bb0: {
+        _0 = 42_u32;
+        return -> [];
+    }
+}
+
+fn trait_default_method::entry(_1: &trait_default_method::S) -> u32 {
+    let mut _0: u32;
+    let mut _2: &trait_default_method::S;
+
+    bb0: {
+        _2 = &(*_1);
+        _0 = trait_default_method::Greeter::greet<trait_default_method::S>(move _2) -> [return: bb1];
+    }
+
+    bb1: {
+        return -> [];
+    }
+}
+
+struct trait_default_method::S;

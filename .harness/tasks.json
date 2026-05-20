@@ -1661,7 +1661,7 @@
           "id": "regseq-driver-60",
           "name": "Body materializer substitutes Instance.generic_args into MIR",
           "spec": ".harness/tasks/regseq-driver/60-body-materializer-args-substitution.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-58"
           ],
