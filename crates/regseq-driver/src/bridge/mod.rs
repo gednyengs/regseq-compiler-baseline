@@ -59,6 +59,12 @@ pub struct PendingItem {
     pub def_path_hash: DefPathHash,
     /// Synthetic classification side-table payload for this item.
     pub synthetic_kind: SyntheticItemKind,
+    /// Bridge-only per-Item flags populated by the eager HIR walk
+    /// (Changes A, B, C of regseq-driver-58); copied into
+    /// `RegseqModel::item_bridge_flags` at Phase-4 assignment time.
+    /// Defaults to `BridgeItemFlags::default()` for synth/reactively-
+    /// interned Items so bucket-1 enforcement stays correct.
+    pub bridge_flags: regseq_model::BridgeItemFlags,
 }
 
 /// Bridge-side accumulator for DiagLogPeel residue per spec.md
@@ -738,6 +744,21 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
         let _ = ty::intern_item(ctxt, def_id, ItemKind::Const, ty::SpecialAdt::None);
     }
 
+    // Per regseq-driver-58 Changes A, B, C (spec.md section 8.0
+    // closed-alphabet ItemKind + section 8.1 impl-lifting): the
+    // bridge enumerates every source-defined top-level item EAGERLY
+    // via a single HIR walk, regardless of reachability through
+    // rustc's mono-item collector. This closes the asymmetry
+    // surfaced by manual playground stress-testing where source
+    // structs / inherent methods / trait default bodies (which are
+    // not reached by `MonoItem::Fn` when nobody calls them and which
+    // have no `Ty::Adt(_)` row when nobody references the type) were
+    // missing from `model.items`. Foreign decls (Change B) are
+    // routed through a separate `foreign_items()` iterator because
+    // they have no body owners and `source_item_def_id` cannot find
+    // them via `hir_body_owners`.
+    eager_hir_enumeration(ctxt)?;
+
     for mono_item in discovered_mono_items {
         let MonoItem::Fn(instance) = mono_item else {
             continue;
@@ -758,6 +779,145 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
             }
         }
     }
+    Ok(())
+}
+
+/// Per regseq-driver-58 Changes A, B, C: enumerate every source-
+/// defined top-level item exhaustively from `tcx.hir_crate_items`,
+/// regardless of mono-item reachability. Covers ADTs (Struct / Enum
+/// / Union), source-defined functions (free fns + inherent / trait-
+/// impl methods + default trait method bodies), and foreign decls
+/// (`extern "C" { ... }` Fn / Static). `DefKind::Closure` is OUT
+/// OF SCOPE -- closures are handled by
+/// `synth::closure::synthesise_closure_for_def_id` triggered from
+/// the body-scan loop, and re-interning them here would race with
+/// the synth path. Trait declarations and associated types are
+/// erased per spec.md section 8.1 (`spec.md:2346-2350`); the
+/// `is_mir_available` predicate at the `AssocFn` site naturally
+/// filters out trait method declarations without bodies.
+fn eager_hir_enumeration<'tcx>(ctxt: &mut BridgeCtxt<'tcx>) -> Result<(), BridgeError> {
+    use regseq_model::BridgeItemFlags;
+    use rustc_hir::def::DefKind;
+
+    let tcx = ctxt.input.tcx;
+    let crate_items = tcx.hir_crate_items(());
+
+    // Eager HIR walk for source-defined ADTs and source-defined
+    // free / associated functions. Statics are pre-interned via
+    // the MonoItem::Static walk; consts via the existing HIR walk
+    // above. Foreign decls are routed through `foreign_items()`
+    // below because they have no body owners.
+    let source_def_ids: Vec<DefId> = crate_items
+        .definitions()
+        .map(|local_def_id| local_def_id.to_def_id())
+        .collect();
+    for def_id in source_def_ids {
+        if tcx.is_foreign_item(def_id) {
+            continue;
+        }
+        let item_kind = match tcx.def_kind(def_id) {
+            DefKind::Struct => ItemKind::Struct,
+            DefKind::Enum => ItemKind::Enum,
+            DefKind::Union => ItemKind::Union,
+            DefKind::Static { mutability, .. } => ItemKind::Static {
+                mutability: match mutability {
+                    rustc_ast::Mutability::Mut => regseq_model::Mutability::Mut,
+                    rustc_ast::Mutability::Not => regseq_model::Mutability::Not,
+                },
+            },
+            DefKind::Fn => ItemKind::Function,
+            DefKind::AssocFn => {
+                // Per regseq-driver-58 Change C: `DefKind::AssocFn`
+                // covers inherent and trait-impl methods (which
+                // always have bodies) and trait declarations (which
+                // may or may not have a default body). Only the
+                // body-bearing cases surface as Items; the
+                // `is_mir_available` predicate distinguishes them
+                // per spec.md regseq-driver-58 Change C text and the
+                // `tcx.is_foreign_item(did) && !tcx.is_mir_available(did)`
+                // distinction at spec.md section 9.4. Trait method
+                // declarations without bodies do NOT surface (Change H
+                // spec amendment).
+                if !tcx.is_mir_available(def_id) {
+                    continue;
+                }
+                ItemKind::Function
+            }
+            // All other DefKinds (Mod, Trait, TyAlias, ForeignTy,
+            // ForeignMod, AnonConst, InlineConst, OpaqueTy, Variant,
+            // Ctor, Closure, AssocTy, TyParam, ConstParam, LifetimeParam,
+            // Use, ExternCrate, GlobalAsm, Macro, Const, AssocConst,
+            // Impl, TraitAlias, etc.) are intentionally skipped: they
+            // either fall outside the closed six-variant ItemKind
+            // alphabet (per spec.md section 8.0 `spec.md:2205-2230`),
+            // are handled by a sibling walker (consts via the eager
+            // const walk above; closures via the body-scan synth
+            // trigger), or are erased per spec.md section 8.1
+            // (`spec.md:2346-2350`).
+            _ => continue,
+        };
+        // Per spec.md regseq-driver-58 Change A/C step 1: bucket-3
+        // classification uses `generics_of(def_id).count() > 0`, NOT
+        // `own_params`. The two differ for associated items inside
+        // a generic impl / trait (impl-level parameters are
+        // inherited into the AssocFn's generics chain); using
+        // `own_params` would mis-classify those as bucket 1 / 4.
+        let is_generic = tcx.generics_of(def_id).count() > 0;
+        let flags = BridgeItemFlags {
+            is_generic,
+            signature_non_rigid: false,
+        };
+        let _ = ty::intern_eager_hir_item(
+            ctxt,
+            def_id,
+            item_kind,
+            regseq_model::Linkage::Default,
+            flags,
+        );
+    }
+
+    // Per regseq-driver-58 Change B: foreign decls live in
+    // `foreign_items()`, NOT in `body_owners()`. The Phase-5
+    // `construct_function_instances` / `construct_source_static_instances`
+    // passes will push the corresponding `body: None` / `init: None`
+    // Instances per spec.md section 9.4 (`spec.md:2642-2648`,
+    // `:2668-2677`).
+    for foreign_item_id in crate_items.foreign_items() {
+        let def_id = foreign_item_id.owner_id.def_id.to_def_id();
+        let item_kind = match tcx.def_kind(def_id) {
+            DefKind::Fn => ItemKind::Function,
+            DefKind::Static { mutability, .. } => ItemKind::Static {
+                mutability: match mutability {
+                    rustc_ast::Mutability::Mut => regseq_model::Mutability::Mut,
+                    rustc_ast::Mutability::Not => regseq_model::Mutability::Not,
+                },
+            },
+            // `DefKind::ForeignTy` (`extern type Foo;`) is out of
+            // scope per regseq-driver-58 Non-Goals (foreign-decl
+            // visibility semantics beyond `#[foreign]` attribute
+            // carriage are excluded).
+            _ => continue,
+        };
+        // Foreign Items can be generic in principle (rustc allows
+        // generic foreign fns under unstable flags), but the
+        // four-bucket policy treats every foreign Item as bucket 2
+        // regardless. The flag is still tracked for completeness.
+        // Use `count()` not `own_params` per Change A/C step 1 so
+        // generics inherited from an enclosing scope are reflected.
+        let is_generic = tcx.generics_of(def_id).count() > 0;
+        let flags = BridgeItemFlags {
+            is_generic,
+            signature_non_rigid: false,
+        };
+        let _ = ty::intern_eager_hir_item(
+            ctxt,
+            def_id,
+            item_kind,
+            regseq_model::Linkage::Foreign,
+            flags,
+        );
+    }
+
     Ok(())
 }
 
@@ -1249,17 +1409,35 @@ fn construct_instances_and_resolve_cross_references(
 /// end of `run_bridge` is what guarantees F4-2 ordering across the
 /// whole table; this pass just produces the Function-side rows.
 fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
-    use regseq_model::{FunctionInstanceData, Instance, InstanceKind, ItemKind};
-    // Walk every `ItemKind::Function` model Item per audit finding
-    // regseq-driver-42-4 (Codex review item 2). Synthetic Items (drop
-    // glue, vtable shims, closure call shims) are NOT filtered here;
-    // for those, the rustc resolution via `source_item_def_id` will
-    // return `None` (synthetic DefPathHashes do not correspond to
-    // rustc DefIds) and we skip Instance creation in this pass. The
-    // direct-callee resolution path in `translate_call_callee` and
-    // `translate_drop_as_call` then lazy-creates Instances for them
-    // through `lookup_or_create_direct_instance`, which records the
-    // synthesis flavor on the Instance.
+    use regseq_model::{
+        BridgeItemFlags, FunctionInstanceData, Instance, InstanceKind, ItemKind, Linkage,
+    };
+    // Per regseq-driver-58 Changes E + F: walk every NON-synthetic
+    // `ItemKind::Function` Item and push exactly one Function
+    // Instance keyed by the four-bucket policy:
+    //
+    //   * Bucket 1 (non-generic + sig-rigid + non-foreign): translate
+    //     the identity-instantiated signature and push an Instance
+    //     with `body: None` (body materialisation runs later).
+    //   * Bucket 2 (foreign): translate the identity-instantiated
+    //     signature and push an Instance with `body: None` /
+    //     `flavor: Item` per spec.md section 9.4
+    //     (`spec.md:2642-2648`). Foreign Items have no MIR body, so
+    //     `body` stays `None` through Phase-5 materialisation as
+    //     well.
+    //   * Bucket 3 (generic): skip; monomorphisations reached by the
+    //     `MonoItem::Fn` walk are interned through
+    //     `lookup_or_create_direct_instance`, and unreached generics
+    //     stay Item-only.
+    //   * Bucket 4 (non-generic + sig-non-rigid): record
+    //     `signature_non_rigid = true` on `item_bridge_flags`; push
+    //     no Instance. Validator's bucket-4 carve-out keys on this
+    //     flag.
+    //
+    // Synthetic Items (closure call shims, vtable shims, drop glue)
+    // are filtered out; their Instance lifecycle is owned by sibling
+    // passes (`construct_closure_call_instances`, the synth/vtable
+    // passes, etc.).
     let function_items: Vec<ItemId> = ctxt
         .model
         .items
@@ -1270,38 +1448,128 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             if !matches!(item.kind, ItemKind::Function) {
                 return None;
             }
+            if !matches!(
+                ctxt.model.item_synthetic_kinds[item_id],
+                SyntheticItemKind::None
+            ) {
+                return None;
+            }
             Some(item_id)
         })
         .collect();
 
     for item_id in function_items {
+        let linkage = ctxt.model.items[item_id].linkage;
+        let is_foreign = linkage == Linkage::Foreign;
         let def_path_hash = ctxt.model.item_def_paths[item_id];
-        let Some(def_id) = source_item_def_id(ctxt.input.tcx, def_path_hash) else {
-            // Item without a rustc DefId in this compilation (e.g.,
-            // cross-crate references); the call site that needs
-            // its Instance will lazy-construct one through
-            // `lookup_or_create_direct_instance`.
-            continue;
+        let def_id = if is_foreign {
+            // Per Change B (Codex new issue #1): foreign Items are
+            // resolved through `tcx.hir_crate_items().foreign_items()`,
+            // NOT `tcx.hir_body_owners()` (foreign decls have no
+            // body owners). Per the no-defensive-fallback rule a
+            // foreign Function Item interned by the eager HIR walk
+            // (Change B) MUST resolve here; an unresolved hash is a
+            // bridge-pipeline invariant violation, not a recoverable
+            // shape.
+            match foreign_item_def_id(ctxt.input.tcx, def_path_hash) {
+                Some(def_id) => def_id,
+                None => {
+                    return Err(BridgeError::Phase5(format!(
+                        "foreign ItemKind::Function {item_id:?} (def_path_hash={def_path_hash:?}) \
+                         has no rustc DefId via hir_crate_items().foreign_items(); \
+                         the eager HIR walk (Change B) must intern only locally-defined \
+                         foreign decls"
+                    )));
+                }
+            }
+        } else {
+            match source_item_def_id(ctxt.input.tcx, def_path_hash) {
+                Some(def_id) => def_id,
+                // Item without a rustc DefId in this compilation
+                // (e.g., cross-crate or shim Items that slipped past
+                // the synthetic_kind filter); the call site that
+                // needs the Instance will lazy-construct one through
+                // `lookup_or_create_direct_instance`.
+                None => continue,
+            }
         };
-        // Skip items that are not actually rustc functions; the
-        // bridge's `ItemKind::Function` covers both FnDef and
-        // closure-call shims, but the latter carry synthetic kinds
-        // and were filtered above.
         if !is_rustc_function(ctxt.input.tcx, def_id) {
             continue;
         }
+        let bridge_flags = ctxt
+            .model
+            .item_bridge_flags
+            .get(&item_id)
+            .copied()
+            .unwrap_or_default();
+
+        if is_foreign {
+            // Bucket 2.
+            if duplicate_function_identity_instance(ctxt, item_id) {
+                continue;
+            }
+            let poly_fn_sig = ctxt.input.tcx.fn_sig(def_id).instantiate_identity();
+            // Per Change F + the no-defensive-fallback rule: foreign
+            // signatures must be rigid (C ABI-bound) so any
+            // translation failure here is a real input invariant
+            // violation rather than a recoverable shape. Propagate
+            // the error so callers see the actual `BridgeError`
+            // (UnsupportedCAbiType, UnsupportedAbi, etc.) rather
+            // than a silent skip.
+            let fn_sig = fnsig::translate_fn_sig(ctxt, poly_fn_sig)?;
+            let emission_name = ctxt.model.items[item_id].def_path.rendered;
+            let span = ctxt.model.items[item_id].span;
+            let flavor = FunctionInstanceFlavor::Item;
+            let args_key =
+                args_key_for_generic_args_with_pending(&ctxt.model, &Vec::new(), &HashMap::new());
+            let instance_id = ctxt.model.instances.push(Instance {
+                item: item_id,
+                generic_args: Vec::new(),
+                emission_name,
+                span,
+                kind: InstanceKind::Function(FunctionInstanceData {
+                    fn_sig,
+                    body: None,
+                    flavor,
+                    virtual_idx: None,
+                }),
+            });
+            ctxt.function_instance_for_item
+                .insert((item_id, args_key, flavor), instance_id);
+            continue;
+        }
+
+        // Bucket 3: skip generic Items. Monomorphisations reached
+        // through the MonoItem walk are handled by
+        // `lookup_or_create_direct_instance`; bucket-3 Items with
+        // zero monomorphisations stay Item-only.
+        if bridge_flags.is_generic {
+            continue;
+        }
+
+        if duplicate_function_identity_instance(ctxt, item_id) {
+            // The reactive `MonoItem::Fn` walk + `lookup_or_create_direct_instance`
+            // pre-created an identity-args Instance during Phase 2 /
+            // Phase 5 body materialisation; do not push a second
+            // Instance for the same `(Item, identity-args,
+            // FunctionInstanceFlavor::Item)` tuple.
+            continue;
+        }
+
         let identity_args =
             rustc_middle::ty::GenericArgs::identity_for_item(ctxt.input.tcx, def_id);
-        let Ok(rustc_instance) = rustc_middle::ty::Instance::try_resolve(
+        let rustc_instance = match rustc_middle::ty::Instance::try_resolve(
             ctxt.input.tcx,
             rustc_middle::ty::TypingEnv::fully_monomorphized(),
             def_id,
             identity_args,
-        ) else {
-            continue;
-        };
-        let Some(rustc_instance) = rustc_instance else {
-            continue;
+        ) {
+            Ok(Some(instance)) => instance,
+            Ok(None) | Err(_) => {
+                return Err(BridgeError::Phase5(format!(
+                    "non-generic non-foreign fn {def_id:?} failed Instance::try_resolve"
+                )));
+            }
         };
         let flavor = function_instance_flavor_for_kind(rustc_instance.def);
         let virtual_idx = match rustc_instance.def {
@@ -1313,8 +1581,24 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             .tcx
             .fn_sig(def_id)
             .instantiate(ctxt.input.tcx, identity_args);
-        let Ok(fn_sig) = fnsig::translate_fn_sig(ctxt, poly_fn_sig) else {
-            continue;
+        let fn_sig = match fnsig::translate_fn_sig(ctxt, poly_fn_sig) {
+            Ok(sig) => sig,
+            Err(BridgeError::NonRigidTy { .. }) => {
+                // Bucket 4: record the carve-out flag and push no
+                // Instance. The validator's bucket-4 branch (Change
+                // G) reads this flag to accept zero-Instance Function
+                // Items whose declared signature carries an
+                // `Alias(Opaque)` (RPIT) or other non-rigid `TyKind`.
+                ctxt.model.item_bridge_flags.insert(
+                    item_id,
+                    BridgeItemFlags {
+                        is_generic: false,
+                        signature_non_rigid: true,
+                    },
+                );
+                continue;
+            }
+            Err(e) => return Err(e),
         };
         let emission_name = ctxt.model.items[item_id].def_path.rendered;
         let span = ctxt.model.items[item_id].span;
@@ -1338,6 +1622,20 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
     Ok(())
 }
 
+/// True iff `model.instances` already carries a Function Instance
+/// for `item_id` with identity `generic_args` (empty vec). Used by
+/// `construct_function_instances` to dedupe Bucket-1 / Bucket-2 push
+/// against a reactive MonoItem-walk-driven Instance that may already
+/// exist for the same Item.
+fn duplicate_function_identity_instance(ctxt: &BridgeCtxt<'_>, item_id: ItemId) -> bool {
+    use regseq_model::InstanceKind;
+    ctxt.model.instances.iter().any(|inst| {
+        inst.item == item_id
+            && inst.generic_args.is_empty()
+            && matches!(inst.kind, InstanceKind::Function(_))
+    })
+}
+
 /// Per regseq-driver-55 Change C: construct one
 /// `InstanceKind::Static { ty, init }` Instance per source-derived
 /// `ItemKind::Static` Item. Per spec.md section 8.0 statics cannot
@@ -1357,6 +1655,15 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
 fn construct_source_static_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
     use regseq_model::{Instance, InstanceKind, Linkage};
 
+    // Per regseq-driver-58 Change F: this pass owns BOTH source-
+    // derived and foreign-derived `ItemKind::Static` Items.
+    //
+    //   * Source-derived statics push `InstanceKind::Static { ty,
+    //     init: Some(_) }` -- `translate_static_init` produces the
+    //     initialiser const.
+    //   * Foreign statics push `InstanceKind::Static { ty, init:
+    //     None }` per spec.md section 9.4 (`spec.md:2668-2677`).
+    //
     // Snapshot the target Items before iterating: the construction
     // loop interns `Ty`s / `Const`s and pushes Instances, any of
     // which would invalidate a live borrow of `model.items`.
@@ -1376,39 +1683,55 @@ fn construct_source_static_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Br
             ) {
                 return None;
             }
-            // Foreign source static declarations
-            // (`extern "C" { static FOO: u32; }`) are out of scope
-            // per regseq-driver-55 Non-Goals 1-2; carve them out so
-            // this pass never pushes an Instance for them. Today
-            // Change A's Phase-2 walker only interns from
-            // `MonoItem::Static`, which rustc never emits for
-            // foreign decls, so the filter is a pin-the-contract
-            // guard rather than a live trigger.
-            if item.linkage == Linkage::Foreign {
-                return None;
-            }
             Some(item_id)
         })
         .collect();
 
     for item_id in static_items {
+        // Skip Items that already carry an `InstanceKind::Static`
+        // entry (defensive: today the bridge only enters this pass
+        // once per run, but per the no-defensive-fallback rule we
+        // still avoid double-push if a future caller orders the
+        // passes differently).
+        if ctxt
+            .model
+            .instances
+            .iter()
+            .any(|inst| inst.item == item_id && matches!(inst.kind, InstanceKind::Static { .. }))
+        {
+            continue;
+        }
+        let linkage = ctxt.model.items[item_id].linkage;
+        let is_foreign = linkage == Linkage::Foreign;
         let def_path_hash = ctxt.model.item_def_paths[item_id];
-        // `source_item_def_id` resolves a DefPathHash to a local-crate
-        // `DefId` via `tcx.hir_body_owners()`. Source `ItemKind::Static`
-        // Items are interned by Change A from `MonoItem::Static(def_id)`,
-        // which rustc only emits for statics it is codegen-ing (i.e., the
-        // local crate's body owners). Per spec.md section 2 "No defensive
-        // fallbacks", a precondition that must hold per the spec panics
-        // when violated rather than silently skipping.
-        let def_id = source_item_def_id(ctxt.input.tcx, def_path_hash).unwrap_or_else(|| {
-            panic!(
-                "construct_source_static_instances: source ItemKind::Static {item_id:?} \
-                 (def_path_hash={def_path_hash:?}) has no local-crate DefId; \
-                 Change A's MonoItem::Static walker must only intern local statics"
-            )
-        });
+        let def_id = if is_foreign {
+            // Per Change B: foreign Items live in
+            // `tcx.hir_crate_items().foreign_items()` rather than
+            // `hir_body_owners`.
+            foreign_item_def_id(ctxt.input.tcx, def_path_hash).unwrap_or_else(|| {
+                panic!(
+                    "construct_source_static_instances: foreign ItemKind::Static \
+                     {item_id:?} (def_path_hash={def_path_hash:?}) has no local-crate \
+                     DefId via foreign_items()",
+                )
+            })
+        } else {
+            source_item_def_id(ctxt.input.tcx, def_path_hash).unwrap_or_else(|| {
+                panic!(
+                    "construct_source_static_instances: source ItemKind::Static {item_id:?} \
+                     (def_path_hash={def_path_hash:?}) has no local-crate DefId; \
+                     the MonoItem::Static and HIR statics walkers must intern only local \
+                     statics"
+                )
+            })
+        };
         let rustc_ty = ctxt.input.tcx.type_of(def_id).instantiate_identity();
         let ty = ty::translate_ty(ctxt, rustc_ty)?;
+        // `translate_static_init` already returns `Ok(None)` for
+        // foreign items per its own `is_foreign_item` guard, so the
+        // bucket-2 `init: None` shape per spec.md section 9.4
+        // (`spec.md:2668-2677`) is produced without an extra branch
+        // here. Errors propagate per the no-defensive-fallback rule.
         let init = const_::translate_static_init(ctxt, def_id)?;
         let emission_name = ctxt.model.items[item_id].def_path.rendered;
         let span = ctxt.model.items[item_id].span;
@@ -1519,6 +1842,107 @@ fn construct_source_const_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Bri
 /// (`struct`/`enum`/`union` have no HIR body). The `model.types`
 /// walk is the authoritative enumeration and needs no rustc DefId.
 fn construct_nominal_adt_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    // Per regseq-driver-58 Change D: extend the existing
+    // `model.types`-driven nominal-ADT Instance construction so it
+    // ALSO fires on bucket-1 source-derived ADT Items that the
+    // reactive `translate_adt` path did not reach (e.g., an unused
+    // top-level `pub struct Reg(u32)` whose type was never referenced
+    // by a translated callee body). For each such Item, eagerly
+    // intern the identity-instantiated `Ty::Struct/Enum/Union` view
+    // so the subsequent `nominal_adt_instances_pass` walks it.
+    //
+    // Filtering rules:
+    //   * `synthetic_kind == None`: bridge-synth ADTs (closure
+    //     captures, vtable types) are owned by sibling passes.
+    //   * `linkage != Foreign`: ADTs are never foreign in Rust, so
+    //     this is a contract-pin rather than a live trigger.
+    //   * `!is_generic`: bucket-3 generic ADTs with zero
+    //     monomorphisations get zero Instances per spec.
+    let adt_items: Vec<ItemId> = ctxt
+        .model
+        .items
+        .iter()
+        .enumerate()
+        .filter_map(|(idx, item)| {
+            let item_id = ItemId::from_u32(idx as u32);
+            if !matches!(
+                item.kind,
+                ItemKind::Struct | ItemKind::Enum | ItemKind::Union
+            ) {
+                return None;
+            }
+            if !matches!(
+                ctxt.model.item_synthetic_kinds[item_id],
+                SyntheticItemKind::None
+            ) {
+                return None;
+            }
+            if item.linkage == regseq_model::Linkage::Foreign {
+                return None;
+            }
+            Some(item_id)
+        })
+        .collect();
+    for item_id in adt_items {
+        let bridge_flags = ctxt
+            .model
+            .item_bridge_flags
+            .get(&item_id)
+            .copied()
+            .unwrap_or_default();
+        if bridge_flags.is_generic {
+            // Bucket 3: skip eager interning. Reactive monomorphisations
+            // (if any) are interned via the existing
+            // `translate_adt` path.
+            continue;
+        }
+        let already_has_ty = ctxt
+            .model
+            .types
+            .iter()
+            .any(|(_, ty)| matches!(ty, Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } if *item == item_id));
+        if already_has_ty {
+            continue;
+        }
+        let def_path_hash = ctxt.model.item_def_paths[item_id];
+        // ADT definitions are NOT body owners, so `source_item_def_id`
+        // (which scans `hir_body_owners`) cannot find them. Resolve
+        // through `tcx.def_path_hash_to_def_id` instead, matching
+        // the pattern used by `bridge::fnsig::adt_def`. The
+        // synthetic-kind filter above guards against the
+        // "uninterned StableCrateId(0)" panic in
+        // `def_path_hash_to_def_id` for synthetic Items.
+        let rustc_hash = rustc_hir::definitions::DefPathHash(
+            rustc_data_structures::fingerprint::Fingerprint::new(
+                def_path_hash.stable_crate_id.0,
+                def_path_hash.local_hash,
+            ),
+        );
+        // Per the no-defensive-fallback rule a non-synthetic non-
+        // foreign non-generic ADT Item interned by the eager HIR
+        // walk MUST resolve to a rustc DefId here. An unresolved
+        // hash is a bridge-pipeline invariant violation.
+        let def_id = ctxt
+            .input
+            .tcx
+            .def_path_hash_to_def_id(rustc_hash)
+            .ok_or_else(|| {
+                BridgeError::Phase5(format!(
+                    "construct_nominal_adt_instances: source ADT Item {item_id:?} \
+                 (def_path_hash={def_path_hash:?}) has no rustc DefId via \
+                 def_path_hash_to_def_id; the eager HIR walk (Change A) must \
+                 intern only locally-defined ADTs"
+                ))
+            })?;
+        let rustc_ty = ctxt.input.tcx.type_of(def_id).instantiate_identity();
+        // Propagate any translation failure. Per Change D + the
+        // no-defensive-fallback rule, this branch must not silently
+        // skip: a `translate_ty` rejection on the identity-substituted
+        // type of a non-generic non-foreign ADT is a real bridge-input
+        // invariant violation.
+        ty::translate_ty(ctxt, rustc_ty)?;
+    }
+
     let pending = ctxt.pending_def_path_hashes();
     nominal_adt_instances_pass(&mut ctxt.model, &pending)
 }
@@ -2053,6 +2477,25 @@ fn source_item_def_id(tcx: TyCtxt<'_>, wanted: DefPathHash) -> Option<DefId> {
             && actual.local_hash().as_u64() == wanted.local_hash
         {
             return Some(local_def_id.to_def_id());
+        }
+    }
+    None
+}
+
+/// Per regseq-driver-58 Change B: resolve a foreign Item's
+/// `DefPathHash` to its rustc `DefId` by scanning
+/// `tcx.hir_crate_items().foreign_items()`. Foreign decls have no
+/// MIR body, so `source_item_def_id` (which scans
+/// `hir_body_owners`) cannot find them; this sibling helper is the
+/// dedicated resolver for foreign Function / Static Items.
+fn foreign_item_def_id(tcx: TyCtxt<'_>, wanted: DefPathHash) -> Option<DefId> {
+    for foreign_item_id in tcx.hir_crate_items(()).foreign_items() {
+        let def_id = foreign_item_id.owner_id.def_id.to_def_id();
+        let actual = tcx.def_path_hash(def_id);
+        if actual.stable_crate_id().as_u64() == wanted.stable_crate_id.0
+            && actual.local_hash().as_u64() == wanted.local_hash
+        {
+            return Some(def_id);
         }
     }
     None

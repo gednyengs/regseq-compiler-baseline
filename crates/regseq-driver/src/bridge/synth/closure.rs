@@ -163,6 +163,7 @@ fn push_closure_captures_item(
         item,
         def_path_hash: closure,
         synthetic_kind: SyntheticItemKind::ClosureCaptures { closure },
+        bridge_flags: regseq_model::BridgeItemFlags::default(),
     });
     handle
 }

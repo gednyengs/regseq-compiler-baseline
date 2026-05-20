@@ -60,6 +60,7 @@ mod tests {
                 local_hash: 2,
             },
             synthetic_kind: SyntheticItemKind::None,
+            bridge_flags: regseq_model::BridgeItemFlags::default(),
         };
         let alpha = PendingItem {
             handle: handles.fresh_handle(),
@@ -69,6 +70,7 @@ mod tests {
                 local_hash: 1,
             },
             synthetic_kind: SyntheticItemKind::None,
+            bridge_flags: regseq_model::BridgeItemFlags::default(),
         };
         let mut pending_items = vec![beta, alpha];
 

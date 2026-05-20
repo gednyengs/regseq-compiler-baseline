@@ -190,6 +190,7 @@ pub fn synthesise_const_memory_static<'tcx>(
         item,
         def_path_hash: synthetic_def_path_hash(&synthetic_kind),
         synthetic_kind,
+        bridge_flags: regseq_model::BridgeItemFlags::default(),
     });
     cx.const_memory_static_cache.push(ConstMemoryStaticHandle {
         content_hash,

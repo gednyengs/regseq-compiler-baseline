@@ -1612,7 +1612,7 @@
           "id": "regseq-driver-58",
           "name": "Eager HIR enumeration of source-defined top-level items",
           "spec": ".harness/tasks/regseq-driver/58-eager-hir-enumeration-of-source-top-level-items.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-57"
           ],

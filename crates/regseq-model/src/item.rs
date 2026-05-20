@@ -193,6 +193,36 @@ impl<'de> Deserialize<'de> for Linkage {
     }
 }
 
+/// Bridge-only per-Item flags used by the four-bucket validator
+/// in `RegseqModel::validate_bridge_completeness` (spec.md section
+/// 8.0 + section 9.4 bridge-completeness contract, regseq-driver-58).
+///
+/// These flags are NOT serialized -- they are reconstructed every
+/// bridge invocation and live in the `RegseqModel::item_bridge_flags`
+/// side-table keyed by `ItemId`. Absent entries default to
+/// `BridgeItemFlags::default()` (`is_generic == false`,
+/// `signature_non_rigid == false`), which matches the "bucket 1"
+/// shape (non-generic + signature-rigid).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+pub struct BridgeItemFlags {
+    /// `tcx.generics_of(def_id).count() > 0` for the rustc DefId
+    /// that interned this Item. Generic Items may surface with
+    /// zero `Instance` rows (bucket 3) when no monomorphisation is
+    /// reachable.
+    pub is_generic: bool,
+    /// True iff a `translate_fn_sig` attempt against the Item's
+    /// identity-substituted signature rejected with
+    /// `BridgeError::NonRigidTy`. Set only for
+    /// `ItemKind::Function` Items reaching Phase-5 bucket-1
+    /// construction. The four-bucket validator's bucket 4 keys on
+    /// this flag: such Function Items legitimately have zero
+    /// `Instance` rows (the classic example is
+    /// `pub fn make() -> impl Fn(u32) -> u32`, where the RPIT
+    /// return type produces an `Alias(Opaque)` that
+    /// `translate_fn_sig` cannot translate).
+    pub signature_non_rigid: bool,
+}
+
 /// Inline hint.
 ///
 /// This is a closed four-variant mirror of rustc `InlineAttr`.

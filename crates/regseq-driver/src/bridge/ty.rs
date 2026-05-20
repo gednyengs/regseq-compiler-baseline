@@ -473,8 +473,64 @@ fn intern_source_item_handle(
         item,
         def_path_hash,
         synthetic_kind: SyntheticItemKind::None,
+        bridge_flags: regseq_model::BridgeItemFlags::default(),
     });
     handle
+}
+
+/// Eager-HIR-walk variant of [`intern_item`] (per regseq-driver-58
+/// Changes A, B, C). Allocates (or recovers) the Phase-2 handle for
+/// `def_id`, sets the model `Item.linkage` field via the caller-
+/// supplied `linkage` argument, and records the four-bucket
+/// `BridgeItemFlags` payload on the resulting `PendingItem`.
+///
+/// Idempotent: on a second call for the same `DefPathHash`, the
+/// existing handle is returned and the pending entry's `linkage` /
+/// `bridge_flags` are overwritten with the caller's values. This
+/// supports the "eager HIR walk runs AFTER the reactive MonoItem
+/// walk" ordering -- the reactive walk pre-interns Function /
+/// Static Items with `Linkage::Default` + default flags, and the
+/// eager walk upgrades them in place.
+///
+/// `ItemKind` is taken from the caller; the bridge derives it from
+/// `tcx.def_kind(def_id)` per the eager-walk classification (see
+/// spec.md regseq-driver-58 Changes A, B, C).
+pub(crate) fn intern_eager_hir_item(
+    cx: &mut BridgeCtxt<'_>,
+    def_id: DefId,
+    kind: ItemKind,
+    linkage: Linkage,
+    flags: regseq_model::BridgeItemFlags,
+) -> (ItemId, ItemHandle) {
+    let handle = intern_source_item_handle(cx, def_id, kind.clone(), SpecialAdt::None);
+    if let Some(pending) = cx
+        .pending_items
+        .iter_mut()
+        .find(|pending| pending.handle == handle)
+    {
+        pending.item.linkage = linkage;
+        // The pending entry was created with the caller's `kind` on
+        // the first hit; on a second hit the existing kind is the
+        // authoritative shape (the reactive `intern_item` path also
+        // sets a kind on first creation). Overwrite only the flags
+        // and linkage fields owned by the eager walk.
+        pending.bridge_flags = flags;
+    } else {
+        // Handle already resolved to a real ItemId (e.g., this
+        // function is being called from a late-pending-flush path).
+        // Update the model side-tables in place.
+        if let Some(item_id) = cx.handles.resolve(handle) {
+            if item_id.index() < cx.model.items.len() {
+                cx.model.items[item_id].linkage = linkage;
+            }
+            cx.model.item_bridge_flags.insert(item_id, flags);
+        }
+    }
+    let item_id = cx
+        .handles
+        .resolve(handle)
+        .unwrap_or_else(|| placeholder_item_id_for_handle(handle));
+    (item_id, handle)
 }
 
 /// Record a Phase-2 placeholder `Ty` so Phase 5 can patch its

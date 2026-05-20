@@ -18,9 +18,9 @@
 //! continues to call `validate(&BridgeInput::matching(model))`.
 
 use regseq_model::{
-    BridgeInput, DefPath, DefPathData, DefPathHash, DefPathSegment, GenericArg, InlineHint,
-    Instance, InstanceKind, InvariantViolation, Item, ItemId, ItemKind, Layout, LayoutKind,
-    Linkage, RegseqModel, Span, StableCrateId, StringId, SyntheticItemKind, Ty,
+    BridgeInput, BridgeItemFlags, DefPath, DefPathData, DefPathHash, DefPathSegment, GenericArg,
+    InlineHint, Instance, InstanceKind, InvariantViolation, Item, ItemId, ItemKind, Layout,
+    LayoutKind, Linkage, RegseqModel, Span, StableCrateId, StringId, SyntheticItemKind, Ty,
 };
 
 fn hash(local_hash: u64) -> DefPathHash {
@@ -133,18 +133,25 @@ fn b1_struct_item_without_instance_is_rejected() {
     );
 }
 
-// B2. Foreign carve-out (positive): the same shape but
-// `linkage: Linkage::Foreign` must validate -- foreign source
-// Items legitimately may have no Instance per the regseq-driver-55
-// Non-Goals foreign-decl carve-out.
+// B2. Foreign bucket-2 enforcement: per spec.md regseq-driver-58
+// every foreign Item must carry EXACTLY one matching Instance with
+// `body: None` (fn) / `init: None` (static). A foreign Item with
+// zero Instances now fails -- this is a tightening of the v3
+// blanket foreign-skip, which the four-bucket policy replaces.
 #[test]
-fn b2_foreign_struct_item_without_instance_is_accepted() {
+fn b2_foreign_struct_item_without_instance_is_rejected() {
     let mut model = base_model();
-    let _item = push_struct_item(&mut model, "Foreigner", Linkage::Foreign);
-    assert_eq!(
-        model.validate_bridge_completeness(),
-        Ok(()),
-        "foreign source Item without an Instance must be carved out"
+    let item = push_struct_item(&mut model, "Foreigner", Linkage::Foreign);
+    assert!(
+        matches!(
+            model.validate_bridge_completeness(),
+            Err(InvariantViolation::ItemMissingInstance {
+                item: m_item,
+                item_kind: ItemKind::Struct,
+            }) if m_item == item
+        ),
+        "foreign Item must have exactly one matching Instance (bucket 2), got {:?}",
+        model.validate_bridge_completeness()
     );
 }
 
@@ -176,31 +183,37 @@ fn b3_struct_item_with_matching_instance_is_accepted() {
     );
 }
 
-// B4. Source `Function`-Item carve-out (positive): a non-foreign
-// source `ItemKind::Function` with ZERO matching Instance must
-// pass bridge-completeness. The v3 spec narrowing removes
-// `Function` from Change G's kind set: Function-Instance
-// coverage is owned by `construct_function_instances` + lazy
-// call-site creation (`lookup_or_create_direct_instance`), not
-// by this validator. The in-the-wild grounding is the pre-existing
-// `crates/regseq-driver/tests/bridge_synth.rs:399` fixture, where a
-// `pub fn closure_fixture() -> impl Fn(u32) -> u32` is rejected
-// by `translate_fn_sig` as `BridgeError::NonRigidTy` and no body
-// invokes it directly. Any future change that re-adds `Function`
-// to the kind set must explicitly grandfather this case.
+// B4. Source `Function`-Item bucket-4 carve-out (positive): a
+// non-foreign source `ItemKind::Function` whose translated identity-
+// substituted signature is non-rigid (e.g., RPIT
+// `pub fn closure_fixture() -> impl Fn(u32) -> u32`) has zero
+// matching Instance and is marked via
+// `BridgeItemFlags::signature_non_rigid`. Per spec.md regseq-driver-58
+// the four-bucket validator accepts this shape because the bucket-4
+// branch keys on the flag. The in-the-wild grounding remains the
+// `crates/regseq-driver/tests/bridge_synth.rs:399` fixture, where
+// `translate_fn_sig` rejects the signature as
+// `BridgeError::NonRigidTy` and no body invokes it directly.
 #[test]
 fn b4_function_item_without_instance_is_accepted() {
     let mut model = base_model();
-    let _item = push_source_item(
+    let item = push_source_item(
         &mut model,
         "closure_fixture",
         ItemKind::Function,
         Linkage::Default,
     );
+    model.item_bridge_flags.insert(
+        item,
+        BridgeItemFlags {
+            is_generic: false,
+            signature_non_rigid: true,
+        },
+    );
     assert_eq!(
         model.validate_bridge_completeness(),
         Ok(()),
-        "source Function Item without an Instance must be carved out (v3 kind-set narrowing)"
+        "source Function Item with `signature_non_rigid` must be carved out (bucket 4)"
     );
 }
 

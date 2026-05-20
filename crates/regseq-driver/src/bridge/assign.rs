@@ -30,6 +30,16 @@ fn assign_pending_items(
         model.item_def_paths.push(pending.def_path_hash);
         model.item_synthetic_kinds.push(pending.synthetic_kind);
         model.domain_attrs.item_attrs.push(Vec::new());
+        // Populate the bridge-only flag side-table per regseq-driver-58.
+        // Entries with default `BridgeItemFlags { is_generic: false,
+        // signature_non_rigid: false }` are skipped to keep the map
+        // sparse; the four-bucket validator falls back to the same
+        // default when looking up a missing entry.
+        if pending.bridge_flags != regseq_model::BridgeItemFlags::default() {
+            model
+                .item_bridge_flags
+                .insert(item_id, pending.bridge_flags);
+        }
         handles.bind_final_item_id(pending.handle, item_id);
     }
 }
@@ -83,6 +93,7 @@ mod tests {
                     local_hash: 1,
                 },
                 synthetic_kind: SyntheticItemKind::None,
+                bridge_flags: regseq_model::BridgeItemFlags::default(),
             },
             PendingItem {
                 handle: second,
@@ -92,6 +103,7 @@ mod tests {
                     local_hash: 2,
                 },
                 synthetic_kind: SyntheticItemKind::None,
+                bridge_flags: regseq_model::BridgeItemFlags::default(),
             },
         ];
         assign_pending_items(&mut model, &mut handles, &mut pending_items);

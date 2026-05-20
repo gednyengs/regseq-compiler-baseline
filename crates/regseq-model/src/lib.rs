@@ -79,7 +79,7 @@ pub use instance::{
     FunctionInstanceFlavor, Instance, InstanceKind, RegseqInstanceKey,
 };
 pub use instance_ref::InstanceRef;
-pub use item::{InlineHint, Item, ItemKind, Linkage};
+pub use item::{BridgeItemFlags, InlineHint, Item, ItemKind, Linkage};
 pub use layout::{
     EnumShape, FieldLayout, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout,
     VariantRange, WrappingRange, UNIT_LAYOUT,

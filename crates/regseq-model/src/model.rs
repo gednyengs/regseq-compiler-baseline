@@ -32,7 +32,7 @@ use crate::instance::{
     InstanceKind, RegseqInstanceKey,
 };
 use crate::instance_ref::InstanceRef;
-use crate::item::{InlineHint, Item, ItemKind, Linkage};
+use crate::item::{BridgeItemFlags, InlineHint, Item, ItemKind, Linkage};
 use crate::layout::{EnumShape, Layout, LayoutKind, TagEncoding, TagScalar, VariantLayout};
 use crate::operand::Operand;
 use crate::place::PlaceElem;
@@ -81,6 +81,17 @@ pub struct RegseqModel {
     pub item_def_paths: IndexVec<ItemId, DefPathHash>,
     /// Synthetic item classification side table parallel to `items`.
     pub item_synthetic_kinds: IndexVec<ItemId, SyntheticItemKind>,
+
+    /// Bridge-only per-Item flags used by the four-bucket validator
+    /// in `validate_bridge_completeness` (regseq-driver-58 + spec.md
+    /// section 8.0 + section 9.4). Keys are `ItemId`s assigned at
+    /// Phase 4. Absent entries default to `BridgeItemFlags::default()`
+    /// (`is_generic == false`, `signature_non_rigid == false`),
+    /// i.e., bucket-1 shape. Not serialised: the bridge repopulates
+    /// it on every run, and the model-correctness `validate` entry
+    /// point does not consult it.
+    #[serde(skip)]
+    pub item_bridge_flags: HashMap<ItemId, BridgeItemFlags>,
 
     /// C ABI lowering side table parallel to `sigs`.
     pub sig_c_abi_lowerings: IndexVec<FnSigId, Option<CAbiLowering>>,
@@ -764,6 +775,45 @@ pub enum InvariantViolation {
         /// The uncovered Item's kind.
         item_kind: ItemKind,
     },
+
+    /// A bucket-1 Item (non-generic + signature-rigid + non-foreign)
+    /// carries more than one `Instance`. Spec.md section 3.4 Phase 5
+    /// pins one Instance per `(Item, GenericArgs, rustc shim flavor)`
+    /// tuple, and bucket 1 collapses that tuple to identity-substituted
+    /// args / `Item` shim flavor, so the cardinality is exactly 1.
+    Bucket1MultipleInstances {
+        /// Offending Item.
+        item: ItemId,
+        /// The Item's kind.
+        item_kind: ItemKind,
+        /// Observed `Instance` count.
+        count: usize,
+    },
+
+    /// A bucket-2 (foreign) Function `Instance` carries a non-`None`
+    /// body, or a foreign Static `Instance` carries a non-`None`
+    /// init. Spec.md section 9.4 reserves the `body: None` shape for
+    /// foreign function decls (`spec.md:2642-2648`) and the
+    /// `init: None` shape for foreign static decls
+    /// (`spec.md:2668-2677`).
+    ForeignInstanceBodyOrInitNotNone {
+        /// Offending foreign Item.
+        item: ItemId,
+        /// The Item's kind (Function or Static).
+        item_kind: ItemKind,
+    },
+
+    /// A bucket-4 Item (Function + `signature_non_rigid`) carries one
+    /// or more `Instance` rows. A non-rigid signature cannot be
+    /// monomorphised by `translate_fn_sig`, so any Instance for such
+    /// an Item is a bridge-pipeline bug. Spec.md regseq-driver-58
+    /// Acceptance Criterion 5.
+    Bucket4HasInstance {
+        /// Offending Function Item.
+        item: ItemId,
+        /// Observed `Instance` count.
+        count: usize,
+    },
 }
 
 /// Construction-invariant identifier.
@@ -1002,6 +1052,7 @@ impl RegseqModel {
             items: IndexVec::new(),
             item_def_paths: IndexVec::new(),
             item_synthetic_kinds: IndexVec::new(),
+            item_bridge_flags: HashMap::new(),
             sig_c_abi_lowerings: IndexVec::new(),
             instances: IndexVec::new(),
             vtables: HashMap::new(),
@@ -1258,6 +1309,15 @@ impl RegseqModel {
             *item = new;
         });
 
+        // `item_bridge_flags` is keyed by `ItemId`, so the same remap
+        // that the `for_each_item_id_mut` walk applies to references
+        // must apply to the HashMap keys themselves.
+        let old_flags = std::mem::take(&mut self.item_bridge_flags);
+        for (old_id, flags) in old_flags {
+            let new_id = remap[old_id.index()];
+            self.item_bridge_flags.insert(new_id, flags);
+        }
+
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
             let first = ItemId::from_u32(idx as u32);
@@ -1424,6 +1484,16 @@ impl RegseqModel {
             );
             *item = new;
         });
+
+        // Remap `item_bridge_flags` keys in lock-step. Entries for
+        // removed items are dropped silently because the keep-set
+        // computation was the bridge's responsibility.
+        let old_flags = std::mem::take(&mut self.item_bridge_flags);
+        for (old_id, flags) in old_flags {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.item_bridge_flags.insert(new_id, flags);
+            }
+        }
         remap
     }
 
@@ -3453,47 +3523,111 @@ impl RegseqModel {
     /// "`Function.body` matches kind/linkage" remains spec.md
     /// section 3.1 invariant 10's job, not this check's.
     pub fn validate_bridge_completeness(&self) -> Result<(), InvariantViolation> {
-        let mut covered = vec![false; self.items.len()];
+        // Per spec.md regseq-driver-58 the bridge-completeness rule
+        // classifies every non-synthetic source-derived Item into one
+        // of four buckets keyed by linkage + `is_generic` +
+        // `signature_non_rigid`, and enforces a per-bucket Instance
+        // count.
+        //
+        //  * Bucket 1 (non-generic + sig-rigid + non-foreign): EXACTLY
+        //    1 Instance per Item.
+        //  * Bucket 2 (foreign): EXACTLY 1 Instance per Item with
+        //    `body: None` (Function) / `init: None` (Static).
+        //  * Bucket 3 (generic): 0+ Instances permitted (the count is
+        //    monomorphisation-driven and can be zero for unused
+        //    generics).
+        //  * Bucket 4 (Function + `signature_non_rigid`): exactly 0
+        //    Instances permitted (a non-rigid signature cannot be
+        //    monomorphised, so no Instance can carry it).
+        let mut instance_counts: Vec<usize> = vec![0; self.items.len()];
         for instance in self.instances.iter() {
             let idx = instance.item.index();
-            if idx < covered.len() {
-                covered[idx] = true;
+            if idx < instance_counts.len() {
+                instance_counts[idx] += 1;
             }
         }
         for (idx, item) in self.items.iter().enumerate() {
-            if covered[idx] {
-                continue;
-            }
             let item_id = ItemId::from_u32(idx as u32);
             // Synthetic Items' Instance lifecycle is owned by the
-            // synth passes + the residue DCE (out of scope per the
-            // regseq-driver-55 Non-Goals 5 + 6); only source-derived
-            // Items are checked here.
+            // synth passes + the residue DCE; only source-derived
+            // Items are policed here.
             if !matches!(self.item_synthetic_kinds[item_id], SyntheticItemKind::None) {
                 continue;
             }
-            // Source foreign declarations are the carved-out shape.
+            let flags = self
+                .item_bridge_flags
+                .get(&item_id)
+                .copied()
+                .unwrap_or_default();
+            let count = instance_counts[idx];
             if item.linkage == Linkage::Foreign {
+                // Bucket 2.
+                if count == 0 {
+                    return Err(InvariantViolation::ItemMissingInstance {
+                        item: item_id,
+                        item_kind: item.kind.clone(),
+                    });
+                }
+                if count > 1 {
+                    return Err(InvariantViolation::Bucket1MultipleInstances {
+                        item: item_id,
+                        item_kind: item.kind.clone(),
+                        count,
+                    });
+                }
+                // Every foreign-Item Instance must carry the
+                // body: None / init: None shape per spec.md
+                // section 9.4 (`spec.md:2642-2648`, `:2668-2677`).
+                for instance in self.instances.iter() {
+                    if instance.item != item_id {
+                        continue;
+                    }
+                    let ok = match &instance.kind {
+                        InstanceKind::Function(data) => data.body.is_none(),
+                        InstanceKind::Static { init, .. } => init.is_none(),
+                        // Foreign Items only surface as Function or
+                        // Static Instances in this driver; any other
+                        // shape is a synthesis bug rather than a
+                        // body/init invariant violation.
+                        _ => true,
+                    };
+                    if !ok {
+                        return Err(InvariantViolation::ForeignInstanceBodyOrInitNotNone {
+                            item: item_id,
+                            item_kind: item.kind.clone(),
+                        });
+                    }
+                }
                 continue;
             }
-            // Source-`Function` carve-out per v3 spec: Function-Instance
-            // coverage is owned by `construct_function_instances` plus
-            // lazy call-site creation. RPIT-uncalled source Functions
-            // legitimately reach Phase 5 with zero Instances (see this
-            // method's doc comment for the in-the-wild closure_fixture
-            // example).
-            match item.kind {
-                ItemKind::Function => continue,
-                ItemKind::Static { .. }
-                | ItemKind::Const
-                | ItemKind::Struct
-                | ItemKind::Enum
-                | ItemKind::Union => {}
+            if flags.is_generic {
+                // Bucket 3: zero or more monomorphisations.
+                continue;
             }
-            return Err(InvariantViolation::ItemMissingInstance {
-                item: item_id,
-                item_kind: item.kind.clone(),
-            });
+            if matches!(item.kind, ItemKind::Function) && flags.signature_non_rigid {
+                // Bucket 4: zero Instances required.
+                if count > 0 {
+                    return Err(InvariantViolation::Bucket4HasInstance {
+                        item: item_id,
+                        count,
+                    });
+                }
+                continue;
+            }
+            // Bucket 1: exactly 1 Instance.
+            if count == 0 {
+                return Err(InvariantViolation::ItemMissingInstance {
+                    item: item_id,
+                    item_kind: item.kind.clone(),
+                });
+            }
+            if count > 1 {
+                return Err(InvariantViolation::Bucket1MultipleInstances {
+                    item: item_id,
+                    item_kind: item.kind.clone(),
+                    count,
+                });
+            }
         }
         Ok(())
     }

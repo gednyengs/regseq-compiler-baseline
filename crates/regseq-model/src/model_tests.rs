@@ -172,6 +172,7 @@ fn root_struct_exposes_spec_field_set() {
         items,
         item_def_paths,
         item_synthetic_kinds,
+        item_bridge_flags,
         sig_c_abi_lowerings,
         instances,
         vtables,
@@ -191,6 +192,7 @@ fn root_struct_exposes_spec_field_set() {
     assert!(items.is_empty());
     assert!(item_def_paths.is_empty());
     assert!(item_synthetic_kinds.is_empty());
+    assert!(item_bridge_flags.is_empty());
     assert!(sig_c_abi_lowerings.is_empty());
     assert!(instances.is_empty());
     assert!(vtables.is_empty());

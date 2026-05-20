@@ -712,6 +712,7 @@ pub(crate) fn push_pending_synthetic_item(
         item,
         def_path_hash,
         synthetic_kind,
+        bridge_flags: regseq_model::BridgeItemFlags::default(),
     });
     handle
 }

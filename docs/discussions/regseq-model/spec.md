@@ -2349,7 +2349,13 @@ to the top-level `items` / `instances` tables:
   directly to the implementing function's Instance, dynamic
   dispatch goes through a vtable.
 - **Default trait method bodies** are owned by the trait, not by
-  any impl. The body lives at the trait's DefPath.
+  any impl. The body lives at the trait's DefPath, and surfaces as
+  an `ItemKind::Function` Item at the trait's DefPath
+  (regseq-driver-58 Change H). The trait container itself remains
+  erased -- no `ItemKind::Trait` variant exists. Trait methods
+  WITHOUT default bodies (declarations only) do NOT surface as
+  Items: they exist solely as DefPath segments referenced by
+  impl-method `def_path` strings per the impl-lifting rules above.
 
 **Implementation note (call-site canonicalization, regseq-driver-56)**:
 at a direct call site whose MIR operand is
