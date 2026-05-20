@@ -1632,6 +1632,30 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-59",
+          "name": "Foreign-decl rendering snapshot + default trait method body coverage tests",
+          "spec": ".harness/tasks/regseq-driver/59-foreign-rendering-and-default-trait-method-tests.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-58"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#8",
+            "pretty-printer.md#9"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-20T16:49:40Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
