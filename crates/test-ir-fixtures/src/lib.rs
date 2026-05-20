@@ -61,6 +61,18 @@ pub mod fixture_names {
     /// spec section 8.1 call-site canonicalization contract through
     /// both `validate` and `render`.
     pub const TRAIT_METHOD_RESOLUTION: &str = "trait_method_resolution";
+    /// Foreign-decl rendering fixture: an `extern "C"` block with one
+    /// foreign function and one foreign static, plus a source-defined
+    /// `entry` fn. Used by regseq-driver-59 to lock the
+    /// `#[foreign]\n...;` rendering shapes per pretty-printer.md
+    /// Specimens 113 (foreign function) and 120 (foreign static).
+    pub const FOREIGN_RENDERING: &str = "foreign_rendering";
+    /// Default trait method body coverage fixture: a trait with one
+    /// method that has a default body, a struct + empty impl, and a
+    /// caller. Used by regseq-driver-59 to lock the Change H contract
+    /// at spec.md section 8.1 -- the default body must surface as an
+    /// `ItemKind::Function` Item at the trait's DefPath.
+    pub const TRAIT_DEFAULT_METHOD: &str = "trait_default_method";
 }
 
 /// Drive the phase-1a `regseq-driver` bridge against the named
@@ -288,6 +300,8 @@ mod tests {
             fixture_names::ENUM_ROUND_TRIP,
             fixture_names::INSTANCE_COMPLETENESS,
             fixture_names::TRAIT_METHOD_RESOLUTION,
+            fixture_names::FOREIGN_RENDERING,
+            fixture_names::TRAIT_DEFAULT_METHOD,
         ] {
             let path = fixture_dir().join(format!("{name}.rs"));
             let metadata = std::fs::metadata(&path).unwrap_or_else(|err| {

@@ -1637,12 +1637,12 @@
           "id": "regseq-driver-59",
           "name": "Foreign-decl rendering snapshot + default trait method body coverage tests",
           "spec": ".harness/tasks/regseq-driver/59-foreign-rendering-and-default-trait-method-tests.md",
-          "status": "pending",
+          "status": "failed",
           "depends_on": [
             "regseq-driver-58"
           ],
           "artifacts": [],
-          "fail_reason": null,
+          "fail_reason": "B9 (default-trait-method-body coverage) cannot pass without a production-code change forbidden by task Non-Goals. The spec-mandated fixture (crates/test-ir-fixtures/fixtures/trait_default_method.rs: 'pub trait Greeter { fn greet(&self) -> u32 { 42 } } pub struct S; impl Greeter for S {} pub fn entry(s: &S) -> u32 { s.greet() }') causes run_bridge to fail with BridgeError::NonRigidTy { kind: Param, ty_repr: \"Self\" }. Trace: entry's body translation resolves s.greet() to InstanceKind::Item(greet_def_id, [S]) and creates a Function Instance via lookup_or_create_direct_instance (callsite_fn_sig substitutes Self->S successfully). Later in run_phase5_body_passes, materialise_function_body_inner at crates/regseq-driver/src/bridge/body/materialise.rs:252 calls translate_ty(cx, local.ty) on the polymorphic MIR's local_decls, where _1.ty = &Self. translate_ty (crates/regseq-driver/src/bridge/ty.rs:275) rejects TyKind::Param('Self') as NonRigidTy. The bridge body materializer never substitutes the Instance.generic_args into local_decl types (no subst_mir_and_normalize_erasing_regions call on the body), so Change H (spec.md:2351-2358) cannot be exercised end-to-end. Per task Non-Goals this is a regseq-driver-58 implementation gap requiring a separate follow-up task to add args-subst into body materialization (or to revise the spec's B9 expectations to match the current bridge behavior, e.g., classify trait-default-body Items as bucket 3 with zero Instances). B8 (foreign-decl rendering) and the test surface (fixtures, fixture_names entries, e2e_foreign_rendering.rs, e2e_trait_default_method.rs, expectations file) are all in place and B8 passes cleanly; only B9 cannot pass against the current bridge.",
           "phase": "1a",
           "spec_refs": [
             "spec.md#8",

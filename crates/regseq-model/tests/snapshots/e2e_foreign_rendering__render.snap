@@ -1,0 +1,17 @@
+---
+source: crates/regseq-model/tests/e2e_foreign_rendering.rs
+expression: rendered
+---
+#[foreign]
+extern "C" fn foreign_rendering::{extern#0}::extern_helper(_1: u32) -> u32;
+
+fn foreign_rendering::entry() -> () {
+    let mut _0: ();
+
+    bb0: {
+        return -> [];
+    }
+}
+
+#[foreign]
+static foreign_rendering::{extern#0}::EXTERN_VALUE: u32;
