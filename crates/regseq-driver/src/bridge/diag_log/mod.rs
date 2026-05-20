@@ -10,7 +10,7 @@ pub use format::{parse_format_template, FormatSpecifier, ParsedFormatTemplate};
 pub use peel::diag_log_peel_pass;
 pub use validation::validate_log_call;
 
-use regseq_model::{DefPath, DefPathData, GenericArg, InstanceId, InstanceKind, Ty};
+use regseq_model::{DefPath, DefPathData, InstanceId, InstanceKind, Ty};
 use rustc_span::def_id::DefId;
 
 use crate::bridge::{BridgeCtxt, BridgeError, ItemHandle};
@@ -18,19 +18,20 @@ use crate::bridge::{BridgeCtxt, BridgeError, ItemHandle};
 /// Structural recognition of `<LogArg<'_> as From<T>>::from` Call
 /// callees per spec.md section 26.4 + section 26.5.
 ///
-/// Per regseq-driver-56 the bridge canonicalizes static-dispatch
-/// trait-method callees to the resolved impl-method DefId. The
-/// recognizer therefore accepts either shape:
+/// Per the regseq-driver-56 amendment at spec.md:2354-2394, at a
+/// direct call site the bridge resolves
+/// `ty::Instance::try_resolve(.., fully_monomorphized, def_id,
+/// generic_args)` before interning the callee Item, so
+/// `InstanceKind::Item` keys on the resolved impl-method DefId
+/// rather than the trait-declaration DefId. The recognizer therefore
+/// matches a single canonical impl-method shape:
 ///
-/// 1. **Impl-method form (post-regseq-driver-56)**: the callee Item's
-///    def_path terminal segment is `from`, the path contains a
-///    `DefPathData::Impl` segment, and the function signature's
-///    output type resolves to a `Ty::Enum/Struct/Union` whose Item's
-///    def_path terminal segment renders as `LogArg`.
-/// 2. **Trait-method form (pre-regseq-driver-56 / synthetic test
-///    fixtures)**: the callee Item's rendered def_path ends with
-///    `::From::from`, and `instance.generic_args[0]` (Self) resolves
-///    to a `LogArg`-named nominal ADT.
+/// - the callee Item's def_path terminal segment is the value
+///   `from`,
+/// - the path contains a `DefPathData::Impl` ancestor segment, and
+/// - the Function Instance's `FnSig.output` resolves to a
+///   `Ty::Enum`, `Ty::Struct`, or `Ty::Union` whose Item's def_path
+///   terminal segment renders as `LogArg`.
 ///
 /// Shared between `peel.rs::peel_log_arg_from_wrapper` (per Phase-5
 /// sub-pass) and `dead_item_elim::eliminate_diag_log_peel_residue`
@@ -49,21 +50,10 @@ pub(crate) fn is_from_logarg_instance(
         return false;
     }
     let def_path = &model.items[item].def_path;
-    let rendered = def_path.rendered;
-    let path = model.strings.resolve(rendered);
 
-    // Path 1: trait-method DefId rendering (synthetic test shape).
-    if path.ends_with("::From::from") {
-        let Some(GenericArg::Type(self_ty_id)) = instance.generic_args.first() else {
-            return false;
-        };
-        return ty_terminal_segment_is_logarg(model, *self_ty_id);
-    }
-
-    // Path 2: impl-method rendering (post-regseq-driver-56 canonical
-    // form). Terminal segment `from`, some path segment is
-    // `DefPathData::Impl`, and the function signature's output type
-    // resolves to a `LogArg`-named ADT.
+    // Canonical impl-method recognizer: terminal `ValueNs("from")`
+    // segment, some `DefPathData::Impl` ancestor, and the Function
+    // Instance's `FnSig.output` resolves to a `LogArg`-named ADT.
     let Some(last) = def_path.segments.last() else {
         return false;
     };

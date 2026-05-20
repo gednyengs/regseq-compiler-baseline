@@ -1589,7 +1589,7 @@
           "id": "regseq-driver-57",
           "name": "Canonicalize LogArg::From recognizer (remove trait-method shape)",
           "spec": ".harness/tasks/regseq-driver/57-canonicalize-logarg-from-recognizer.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-56"
           ],

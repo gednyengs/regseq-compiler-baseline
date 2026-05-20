@@ -1390,19 +1390,19 @@ mod tests {
         item
     }
 
-    /// Build an Item whose rendered def_path is the canonical
-    /// trait-method path `core::convert::From::from` -- the exact
-    /// string the bridge interns for `<T as From<U>>::from` Call
-    /// callees (probed against the real fixture; see the
-    /// regseq-driver-45 audit-fix sequence). The Item's `kind` is
-    /// `Function` because the trait method itself is a function
-    /// item.
-    fn make_from_trait_method_item(model: &mut RegseqModel) -> ItemId {
+    /// Build an Item whose def_path is the canonical impl-method
+    /// shape `core::convert::{impl#0}::from` that the bridge interns
+    /// for `<T as From<U>>::from` Call callees after the
+    /// regseq-driver-56 static-dispatch canonicalization
+    /// (spec.md:2354-2394). The segment list is
+    /// `[TypeNs(core), TypeNs(convert), Impl, ValueNs(from)]`. The
+    /// Item's `kind` is `Function` because the impl method itself
+    /// is a function item.
+    fn make_from_impl_method_item(model: &mut RegseqModel) -> ItemId {
         use regseq_model::{DefPath, DefPathData, DefPathHash, DefPathSegment};
-        let rendered = model.strings.intern("core::convert::From::from");
+        let rendered = model.strings.intern("core::convert::{impl#0}::from");
         let core_seg = model.strings.intern("core");
         let convert_seg = model.strings.intern("convert");
-        let from_seg = model.strings.intern("From");
         let from_method = model.strings.intern("from");
         let item = model.items.push(Item {
             def_path: DefPath {
@@ -1417,7 +1417,7 @@ mod tests {
                         disambiguator: 0,
                     },
                     DefPathSegment {
-                        data: DefPathData::TypeNs(from_seg),
+                        data: DefPathData::Impl,
                         disambiguator: 0,
                     },
                     DefPathSegment {
@@ -1448,10 +1448,13 @@ mod tests {
     }
 
     /// Regression for the `callee_is_from_logarg` structural
-    /// recognition. Constructs the trait-method Instance shape the
-    /// bridge produces for `<LogArg<'_> as From<u32>>::from(x)`
-    /// (Item = `core::convert::From::from`, generic_args =
-    /// `[Type(LogArg-enum-ty), Type(u32)]`) and a two-block body:
+    /// recognition. Constructs the canonical impl-method Instance
+    /// shape the bridge produces for
+    /// `<LogArg<'_> as From<u32>>::from(x)` post-regseq-driver-56
+    /// (Item def_path =
+    /// `[TypeNs(core), TypeNs(convert), Impl, ValueNs(from)]`,
+    /// rendered `core::convert::{impl#0}::from`,
+    /// `FnSig.output = LogArg-enum-ty`) and a two-block body:
     ///
     /// ```text
     /// block 0:
@@ -1475,13 +1478,12 @@ mod tests {
     ///   to unit (so the `LogArg` type does not survive in
     ///   `local_decls`).
     ///
-    /// The brittle pre-fix heuristic
-    /// (`path.contains("LogArg") && path.ends_with("from")`) would
-    /// fail this body because the bridge-interned Item path is
-    /// `core::convert::From::from` (no "LogArg" substring); the
-    /// wrapper would not be recognised and `move _t_wrapper` (a
-    /// `LogArg`-typed Operand) would flow through to D4
-    /// admissibility unchanged.
+    /// The canonical impl-method recognizer
+    /// (`is_from_logarg_instance`) keys on the def_path segment
+    /// structure (terminal `ValueNs("from")` + `DefPathData::Impl`
+    /// ancestor) plus `FnSig.output = LogArg`, so the wrapper Call
+    /// is recognised even though the rendered string contains no
+    /// `LogArg` substring.
     #[test]
     fn peels_logarg_from_wrapper_via_structural_recognition() {
         use regseq_model::{CallCallee, GenericArg};
@@ -1504,10 +1506,10 @@ mod tests {
             },
         });
         let u32_ty = model.types.intern(Ty::Uint(regseq_model::UintKind::U32));
-        let from_item = make_from_trait_method_item(&mut model);
+        let from_item = make_from_impl_method_item(&mut model);
 
-        // The From-trait-method Instance carries the dispatch info
-        // (Self, source-type) in `generic_args`.
+        // The canonical impl-method From Instance carries the
+        // dispatch info (Self, source-type) in `generic_args`.
         let unit = intern_unit(&mut model);
         let from_sig = model.sigs.intern(FnSig {
             inputs: vec![u32_ty],

@@ -1067,28 +1067,33 @@ mod tests {
         id
     }
 
-    /// Push a `core::convert::From::from` trait-method Item shape
-    /// per the bridge's interning convention (`peel.rs` comment).
-    fn push_from_trait_method_item(model: &mut regseq_model::RegseqModel) -> regseq_model::ItemId {
-        let core_seg = model.strings.intern("core");
-        let convert_seg = model.strings.intern("convert");
-        let from_seg = model.strings.intern("From");
+    /// Push a canonical impl-method `from` Item shape per the
+    /// regseq-driver-56 static-dispatch canonicalization
+    /// (spec.md:2354-2394). The def_path is
+    /// `[TypeNs(parent_seg), Impl, ValueNs("from")]`, rendered as
+    /// `"{parent_seg}::{impl#0}::from"`, matching what the bridge
+    /// interns for `<T as From<U>>::from` callees once
+    /// `ty::Instance::try_resolve` has resolved the call site to
+    /// the implementing impl-method DefId.
+    fn push_from_impl_method_item(
+        model: &mut regseq_model::RegseqModel,
+        parent_seg: &str,
+    ) -> regseq_model::ItemId {
+        let parent_id = model.strings.intern(parent_seg);
         let from_method = model.strings.intern("from");
-        let rendered = model.strings.intern("core::convert::From::from");
+        let rendered = model
+            .strings
+            .intern(&format!("{parent_seg}::{{impl#0}}::from"));
         let item = Item {
             def_path: DefPath {
                 crate_id: model.primary_crate,
                 segments: vec![
                     DefPathSegment {
-                        data: DefPathData::TypeNs(core_seg),
+                        data: DefPathData::TypeNs(parent_id),
                         disambiguator: 0,
                     },
                     DefPathSegment {
-                        data: DefPathData::TypeNs(convert_seg),
-                        disambiguator: 0,
-                    },
-                    DefPathSegment {
-                        data: DefPathData::TypeNs(from_seg),
+                        data: DefPathData::Impl,
                         disambiguator: 0,
                     },
                     DefPathSegment {
@@ -1120,12 +1125,14 @@ mod tests {
     }
 
     /// Test Plan item 8: hand-construct a DiagLogPeel-style
-    /// residue (a wrapper Instance whose Item def_path is
-    /// `core::convert::From::from` and whose `generic_args[0]`
-    /// resolves to a LogArg-named Enum + a FnSig referencing the
-    /// LogArg Ty). Populate the residue accumulator and assert the
-    /// pass removes the wrapper Instance, the From-impl Item, its
-    /// FnSig, the LogArg Ty, and the LogArg ADT Item.
+    /// residue (a wrapper Instance whose Item def_path is the
+    /// canonical impl-method shape
+    /// `core::convert::{impl#0}::from` and whose
+    /// `FnSig.output` resolves to a LogArg-named Enum + a FnSig
+    /// referencing the LogArg Ty). Populate the residue
+    /// accumulator and assert the pass removes the wrapper
+    /// Instance, the From-impl Item, its FnSig, the LogArg Ty,
+    /// and the LogArg ADT Item.
     #[test]
     fn eliminate_residue_removes_wrapper_seed_and_chained_logarg_artifacts() {
         with_bridge_ctxt(|cx| {
@@ -1144,7 +1151,7 @@ mod tests {
             });
 
             let u32_ty = cx.model.types.intern(Ty::Uint(UintKind::U32));
-            let from_item = push_from_trait_method_item(&mut cx.model);
+            let from_item = push_from_impl_method_item(&mut cx.model, "convert");
 
             let from_sig = cx.model.sigs.intern(FnSig {
                 inputs: vec![u32_ty],
@@ -1197,8 +1204,8 @@ mod tests {
             for item in cx.model.items.iter() {
                 let rendered = cx.model.strings.resolve(item.def_path.rendered);
                 assert!(
-                    !rendered.ends_with("::From::from"),
-                    "From::from Item should be removed but found {rendered}",
+                    !rendered.ends_with("::{impl#0}::from"),
+                    "From-impl Item should be removed but found {rendered}",
                 );
             }
             // The FnSig is removed (only referenced from the dead
@@ -1286,18 +1293,14 @@ mod tests {
                 .types
                 .intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
 
-            // Distinct From-impl Items (the test uses per-impl Items
-            // to exercise the partial-removal split; the bridge's
-            // shared-trait-method convention is exercised by the
-            // integration test).
-            let from_u32_item = push_item(&mut cx.model, "from_u32_impl", ItemKind::Function);
-            // The structural recognition checks `def_path.rendered`
-            // ends with `::From::from` -- re-render so it matches.
-            let rendered_u32 = cx.model.strings.intern("foo::From::from");
-            cx.model.items[from_u32_item].def_path.rendered = rendered_u32;
-            let from_str_item = push_item(&mut cx.model, "from_str_impl", ItemKind::Function);
-            let rendered_str = cx.model.strings.intern("bar::From::from");
-            cx.model.items[from_str_item].def_path.rendered = rendered_str;
+            // Distinct From-impl Items (the test uses per-impl
+            // Items to exercise the partial-removal split). Each
+            // Item has the canonical impl-method def_path shape
+            // (terminal `ValueNs("from")` + `Impl` ancestor) so the
+            // structural recognizer at `mod.rs::is_from_logarg_instance`
+            // matches via the regseq-driver-56 canonical contract.
+            let from_u32_item = push_from_impl_method_item(&mut cx.model, "foo");
+            let from_str_item = push_from_impl_method_item(&mut cx.model, "bar");
 
             let u32_sig = cx.model.sigs.intern(FnSig {
                 inputs: vec![u32_ty],
@@ -1355,11 +1358,11 @@ mod tests {
             for item in cx.model.items.iter() {
                 let rendered = cx.model.strings.resolve(item.def_path.rendered);
                 assert!(
-                    rendered != "foo::From::from",
+                    rendered != "foo::{impl#0}::from",
                     "from_u32 (residue-seeded) Item should be removed",
                 );
                 assert!(
-                    rendered != "bar::From::from",
+                    rendered != "bar::{impl#0}::from",
                     "from_str (non-residue but Self=LogArg) Item should also be removed",
                 );
             }
