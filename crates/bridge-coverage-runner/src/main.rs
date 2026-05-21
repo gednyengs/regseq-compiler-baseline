@@ -25,10 +25,13 @@ use std::path::PathBuf;
 use std::process::ExitCode;
 
 use crate::cluster::{bridge_error_variant, oracle_outcome_tag, ActualOutcomeTag, RowResult};
-use crate::inspect::{InspectError, InspectionPredicate};
+use crate::inspect::InspectionPredicate;
 use crate::matrix::{Expectation, ExpectedRejection};
 use crate::oracle::OracleOutcome;
-use regseq_driver::bridge::{BridgeError, CAbiTypePosition, DslRejectionKind};
+use regseq_driver::bridge::{
+    BridgeError, CAbiTypePosition, DiagLogFormatReason, DiagLogValidationDiagnostic,
+    DslRejectionKind,
+};
 
 struct Args {
     metadata: PathBuf,
@@ -186,10 +189,6 @@ fn classify(
             None => (true, "OK (no inspection)".to_string()),
             Some(pred) => match inspect::check(model, pred) {
                 Ok(()) => (true, "OK (inspection passed)".to_string()),
-                Err(InspectError::Unimplemented { variant, arg }) => (
-                    false,
-                    format!("inspection unimplemented: {variant}({arg}) (F3 follow-up)"),
-                ),
                 Err(err) => (false, format!("inspection failed: {err}")),
             },
         },
@@ -293,6 +292,26 @@ fn expected_rejection_matches(
                 }
             }
         }
+        BridgeError::DiagLogFormat { reason, .. } => {
+            if let Some(expected_reason) = &expected.reason {
+                let actual_reason = diag_log_format_reason_tag(*reason);
+                if actual_reason != expected_reason {
+                    return Err(format!(
+                        "DiagLogFormat: expected reason {expected_reason} but got {actual_reason}"
+                    ));
+                }
+            }
+        }
+        BridgeError::DiagLogValidation { diagnostic, .. } => {
+            if let Some(expected_diagnostic) = &expected.diagnostic {
+                let actual_diagnostic = diag_log_validation_diagnostic_tag(*diagnostic);
+                if actual_diagnostic != expected_diagnostic {
+                    return Err(format!(
+                        "DiagLogValidation: expected diagnostic {expected_diagnostic} but got {actual_diagnostic}"
+                    ));
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -316,5 +335,154 @@ fn cabi_position_tag(position: &CAbiTypePosition) -> &'static str {
         CAbiTypePosition::Input(_) => "Input",
         CAbiTypePosition::Output => "Output",
         CAbiTypePosition::Field => "Field",
+    }
+}
+
+fn diag_log_format_reason_tag(reason: DiagLogFormatReason) -> &'static str {
+    match reason {
+        DiagLogFormatReason::DebugFormatterRejected => "DebugFormatterRejected",
+        DiagLogFormatReason::PositionalArgRejected => "PositionalArgRejected",
+        DiagLogFormatReason::NamedArgRejected => "NamedArgRejected",
+        DiagLogFormatReason::NonSubsetModifier => "NonSubsetModifier",
+        DiagLogFormatReason::UnclosedBrace => "UnclosedBrace",
+        DiagLogFormatReason::UnmatchedClosingBrace => "UnmatchedClosingBrace",
+    }
+}
+
+fn diag_log_validation_diagnostic_tag(diagnostic: DiagLogValidationDiagnostic) -> &'static str {
+    match diagnostic {
+        DiagLogValidationDiagnostic::D1 => "D1",
+        DiagLogValidationDiagnostic::D2 => "D2",
+        DiagLogValidationDiagnostic::D4 => "D4",
+        DiagLogValidationDiagnostic::D6 => "D6",
+        DiagLogValidationDiagnostic::D7 => "D7",
+        DiagLogValidationDiagnostic::D8 => "D8",
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn expected(
+        variant: &str,
+        kind: Option<&str>,
+        position: Option<&str>,
+        reason: Option<&str>,
+        diagnostic: Option<&str>,
+    ) -> ExpectedRejection {
+        ExpectedRejection {
+            variant: variant.to_string(),
+            kind: kind.map(str::to_string),
+            position: position.map(str::to_string),
+            reason: reason.map(str::to_string),
+            diagnostic: diagnostic.map(str::to_string),
+        }
+    }
+
+    #[test]
+    fn expected_rejection_matches_variant_only_when_sub_axis_absent() {
+        let err = BridgeError::DslRejection {
+            kind: DslRejectionKind::Atomic,
+            ty_repr: "AtomicU32".to_string(),
+        };
+        let exp = expected("DslRejection", None, None, None, None);
+        assert!(expected_rejection_matches(&err, &exp).is_ok());
+    }
+
+    #[test]
+    fn expected_rejection_matches_kind_when_kind_present() {
+        let err = BridgeError::DslRejection {
+            kind: DslRejectionKind::Atomic,
+            ty_repr: "AtomicU32".to_string(),
+        };
+        let exp_ok = expected("DslRejection", Some("Atomic"), None, None, None);
+        assert!(expected_rejection_matches(&err, &exp_ok).is_ok());
+
+        let err_box = BridgeError::DslRejection {
+            kind: DslRejectionKind::Box,
+            ty_repr: "Box<u8>".to_string(),
+        };
+        let exp_fail = expected("DslRejection", Some("Atomic"), None, None, None);
+        let result = expected_rejection_matches(&err_box, &exp_fail);
+        assert!(result.is_err());
+        let detail = result.unwrap_err();
+        assert!(detail.contains("DslRejection"));
+        assert!(detail.contains("Atomic"));
+        assert!(detail.contains("Box"));
+    }
+
+    #[test]
+    fn expected_rejection_matches_reason_when_reason_present() {
+        let err = BridgeError::DiagLogFormat {
+            reason: DiagLogFormatReason::DebugFormatterRejected,
+            template: "{:?}".to_string(),
+        };
+        let exp_ok = expected(
+            "DiagLogFormat",
+            None,
+            None,
+            Some("DebugFormatterRejected"),
+            None,
+        );
+        assert!(expected_rejection_matches(&err, &exp_ok).is_ok());
+
+        let exp_fail = expected(
+            "DiagLogFormat",
+            None,
+            None,
+            Some("PositionalArgRejected"),
+            None,
+        );
+        let result = expected_rejection_matches(&err, &exp_fail);
+        assert!(result.is_err());
+        let detail = result.unwrap_err();
+        assert!(detail.contains("DiagLogFormat"));
+        assert!(detail.contains("PositionalArgRejected"));
+        assert!(detail.contains("DebugFormatterRejected"));
+    }
+
+    #[test]
+    fn expected_rejection_matches_position_when_position_present() {
+        let err_field = BridgeError::UnsupportedCAbiType {
+            ty_repr: "WithRustFn".to_string(),
+            position: CAbiTypePosition::Field,
+        };
+        let exp_ok = expected("UnsupportedCAbiType", None, Some("Field"), None, None);
+        assert!(expected_rejection_matches(&err_field, &exp_ok).is_ok());
+
+        let err_output = BridgeError::UnsupportedCAbiType {
+            ty_repr: "(u32, u32)".to_string(),
+            position: CAbiTypePosition::Output,
+        };
+        let exp_fail = expected("UnsupportedCAbiType", None, Some("Field"), None, None);
+        let result = expected_rejection_matches(&err_output, &exp_fail);
+        assert!(result.is_err());
+        let detail = result.unwrap_err();
+        assert!(detail.contains("UnsupportedCAbiType"));
+        assert!(detail.contains("Field"));
+        assert!(detail.contains("Output"));
+    }
+
+    #[test]
+    fn expected_rejection_matches_diagnostic_when_diagnostic_present() {
+        let err = BridgeError::DiagLogValidation {
+            diagnostic: DiagLogValidationDiagnostic::D1,
+            detail: "arity".to_string(),
+        };
+        let exp_ok = expected("DiagLogValidation", None, None, None, Some("D1"));
+        assert!(expected_rejection_matches(&err, &exp_ok).is_ok());
+
+        let err_d6 = BridgeError::DiagLogValidation {
+            diagnostic: DiagLogValidationDiagnostic::D6,
+            detail: "literal".to_string(),
+        };
+        let exp_fail = expected("DiagLogValidation", None, None, None, Some("D1"));
+        let result = expected_rejection_matches(&err_d6, &exp_fail);
+        assert!(result.is_err());
+        let detail = result.unwrap_err();
+        assert!(detail.contains("DiagLogValidation"));
+        assert!(detail.contains("D1"));
+        assert!(detail.contains("D6"));
     }
 }

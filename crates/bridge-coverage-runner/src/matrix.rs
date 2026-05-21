@@ -69,6 +69,14 @@ pub enum Expectation {
 }
 
 /// Expected rejection shape for `rejected` rows.
+///
+/// Sub-axis fields (`kind`, `position`, `reason`, `diagnostic`)
+/// are optional with `None` => no constraint semantics. When `Some`,
+/// the runner's matcher enforces the field against the actual
+/// `BridgeError` variant's matching sub-axis tag. The applicable
+/// sub-axis depends on `variant`: `DslRejection` consumes `kind`,
+/// `UnsupportedCAbiType` consumes `position`, `DiagLogFormat`
+/// consumes `reason`, `DiagLogValidation` consumes `diagnostic`.
 #[derive(Debug, Deserialize)]
 pub struct ExpectedRejection {
     /// `BridgeError` variant name (e.g., `DslRejection`, `Coroutine`).
@@ -78,6 +86,12 @@ pub struct ExpectedRejection {
     /// Sub-position for `UnsupportedCAbiType` (`Input`, `Output`,
     /// `Field`).
     pub position: Option<String>,
+    /// Sub-reason for `DiagLogFormat` (e.g.,
+    /// `DebugFormatterRejected`, `PositionalArgRejected`).
+    pub reason: Option<String>,
+    /// Sub-diagnostic for `DiagLogValidation` (`D1`, `D2`, `D4`,
+    /// `D6`, `D7`, `D8`).
+    pub diagnostic: Option<String>,
 }
 
 impl Row {

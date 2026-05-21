@@ -314,7 +314,7 @@ expectation = "rejected"
 status = "uncovered"
 cluster_key = "RJ-031"
 snippet_path = "RJ-031-A.rs"
-expected_rejection = { variant = "DiagLogFormat" }
+expected_rejection = { variant = "DiagLogFormat", reason = "DebugFormatterRejected" }
 
 [[row]]
 id = "RJ-031-B"
@@ -324,7 +324,7 @@ expectation = "rejected"
 status = "uncovered"
 cluster_key = "RJ-031"
 snippet_path = "RJ-031-B.rs"
-expected_rejection = { variant = "DiagLogFormat" }
+expected_rejection = { variant = "DiagLogFormat", reason = "PositionalArgRejected" }
 
 [[row]]
 id = "RJ-031-C"
@@ -334,7 +334,7 @@ expectation = "rejected"
 status = "uncovered"
 cluster_key = "RJ-031"
 snippet_path = "RJ-031-C.rs"
-expected_rejection = { variant = "DiagLogFormat" }
+expected_rejection = { variant = "DiagLogFormat", reason = "NamedArgRejected" }
 
 [[row]]
 id = "RJ-031-E"
@@ -344,7 +344,7 @@ expectation = "rejected"
 status = "uncovered"
 cluster_key = "RJ-031"
 snippet_path = "RJ-031-E.rs"
-expected_rejection = { variant = "DiagLogFormat" }
+expected_rejection = { variant = "DiagLogFormat", reason = "UnclosedBrace" }
 
 [[row]]
 id = "RJ-031-F"
@@ -354,4 +354,4 @@ expectation = "rejected"
 status = "uncovered"
 cluster_key = "RJ-031"
 snippet_path = "RJ-031-F.rs"
-expected_rejection = { variant = "DiagLogFormat" }
+expected_rejection = { variant = "DiagLogFormat", reason = "UnmatchedClosingBrace" }
