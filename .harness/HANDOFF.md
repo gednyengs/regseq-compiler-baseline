@@ -288,14 +288,52 @@ uv run python scripts/python/task.py add-task \
 ## § First-action recommendations by user input (STABLE)
 
 **User says "implementer is done"**:
-1. `git fetch && git pull --ff-only origin main`
-2. `git log --oneline -3` (see the implementer's commit + message)
-3. Read `.harness/expectations/regseq-driver-NN.md`
-4. Verify: `cargo build` / `cargo fmt --check` / `cargo clippy -p <crate> -D warnings` / `cargo test -p <crate>` (or workspace with `RUST_TEST_THREADS=1`)
-5. Manual Mode A run if runner-touching task
-6. Verify diff scope: `git diff --stat PREV..HEAD` confined per Quality Gate
-7. Update **§ Current state** of this handoff (commit SHA, in-flight, escalations)
-8. Summarize implementer outcome to user + recommend next direction
+
+Common pre-pull steps (both task types):
+1. `git fetch origin && git status` — note current local HEAD; this is the **diff base** (the spec-registration commit). The implementer's commit becomes the new HEAD after pull.
+2. `git log --oneline HEAD..origin/main` — confirm exactly one new commit.
+3. `git pull --ff-only origin main`
+4. `git show --stat <implementer-sha>` — orient on what files moved.
+5. Read `.harness/expectations/regseq-driver-NN.md` end-to-end.
+
+Then branch by task type:
+
+**(A) Code-modifying task** (driver-63 through -67, future bridge/runner edits):
+
+6a. `cargo build -p <crate>` clean
+7a. `cargo fmt --all -- --check` clean
+8a. `cargo clippy -p <crate> --all-targets -- -D warnings` clean
+9a. `cargo test -p <crate> -- --test-threads=1` green (or workspace with `RUST_TEST_THREADS=1`)
+10a. Manual Mode A invocation of the runner if runner-touching task: confirm `Total = Pass`, `Fail = 0`, exit 0
+11a. Diff scope verification: `git diff --stat <spec-reg-sha>..<implementer-sha>` confined per Quality Gate. **Read the implementer's commit carefully** — they may have added defensible adaptations outside the strict spec scope (e.g., F3 implementer touched `tests/smoke.rs` to make a monotonic assertion + removed `InspectError::Unimplemented` variant as orphan cleanup). Judgment call: defensible engineering hygiene vs. scope creep. The litmus test: does the change trace to a consequence of completing the spec's mandate, or is it independent improvement?
+12a. **Spot-check empirical claims** from the expectations file. If the implementer reports "Mode A produced Total=N Pass=N Fail=0", re-run Mode A and confirm. If they report a probe outcome (e.g., F3's IX-017 BodyAbsent probe = YES), re-run the probe shape. Trust-but-verify.
+
+**(B) Analytical task** (driver-68 post-F4 triage, future audit/triage tasks):
+
+6b. `cargo test --workspace -- --test-threads=1` green (sanity; no code changes expected)
+7b. Diff scope verification: `git diff --stat <spec-reg-sha>..<implementer-sha>` should touch ONLY the deliverable document(s) + harness state + tasks.json registration. **No source modifications, no `task.py add-task` calls beyond the F68 self-registration.**
+8b. Read the deliverable document end-to-end (e.g., `.harness/audits/<date>-<topic>.md` for triage tasks).
+9b. Coverage verification: every input item (e.g., every active escalation for a triage task) appears somewhere in the deliverable.
+10b. Field completeness verification per the spec's Acceptance Criteria (e.g., for triage proposals: title, affected escalations, root cause, empirical evidence, scope sketch, priority, dependencies, effort).
+11b. Coherence check: does the cluster/grouping/recommendation taxonomy match the empirical evidence? Spot-check by reading 2-3 source-citations to confirm they say what the deliverable claims they say.
+12b. **No-auto-filing verification** (for triage tasks): `git diff <spec-reg-sha>..<implementer-sha> -- .harness/tasks.json` should show ONLY the task's own status flip (`pending` → `done`), no other add-task entries.
+
+Common post-verification:
+13. **Update §Current state of this handoff**. Four specific edits:
+    - `Last updated`: today's date
+    - `Last completed task`: the task that just closed
+    - `Last commit on main`: the implementer's SHA + commit subject (truncated)
+    - `In-flight task`: typically "none" until the next is filed
+    - **Active escalation queue**: refresh count + cluster taxonomy delta if the closed task resolved any escalations (e.g., F4 resolved IX-017 via BodyAbsent re-attempt)
+    - **Next actions**: rewrite the priority list for what comes next
+14. Append a `YYYY-MM-DD: <one-line summary>` entry to **§ Update log**.
+15. Commit + push the handoff update in the same session that did the assessment.
+16. Summarize implementer outcome to user. **A good summary covers**:
+    - Verification result table (build / fmt / clippy / tests / Mode A — pass/fail per check)
+    - Scope of changes (file count, line count, diff stat)
+    - Surprising findings the implementer surfaced beyond the spec's predictions (these go into the next triage queue)
+    - Scope-discipline judgment calls (defensible adaptations vs. potential creep — flag both)
+    - Recommended next direction (file next task / wait for user / pause for review)
 
 **User wants to file a new task**:
 1. Draft spec via the 8-section template
