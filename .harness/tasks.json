@@ -1743,6 +1743,30 @@
               "reason": "B4 throwaway crate setup spelled out with required panic=abort profile + pinned toolchain (Codex round-2 fix)"
             }
           ]
+        },
+        {
+          "id": "regseq-driver-63",
+          "name": "test-ir-fixtures: typed BridgeOutcome helper (F0 of bridge-coverage-runner)",
+          "spec": ".harness/tasks/regseq-driver/63-typed-bridge-outcome-helper.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-62"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [
+            "spec.md#3",
+            "spec.md#12"
+          ],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-21T07:32:42Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
