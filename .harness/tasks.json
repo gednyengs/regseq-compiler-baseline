@@ -1809,6 +1809,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-66",
+          "name": "Bridge-coverage-runner F3 dispatch hardening + sub-axis matcher",
+          "spec": ".harness/tasks/regseq-driver/66-bridge-coverage-runner-f3-dispatch-hardening.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-65"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-21T17:21:44Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
