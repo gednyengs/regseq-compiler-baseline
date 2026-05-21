@@ -26,8 +26,50 @@ use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::{Arc, Mutex, Once};
 
-use regseq_driver::bridge::{run_bridge, BridgeInput as DriverBridgeInput};
-use regseq_model::{PrettyPrinter, RegseqModel};
+use regseq_driver::bridge::{run_bridge, BridgeError, BridgeInput as DriverBridgeInput};
+use regseq_model::{InvariantViolation, PrettyPrinter, RegseqModel};
+
+/// Typed result of a fixture compile + bridge + validate sweep.
+///
+/// `Ok` means BOTH bridge AND `model.validate()` succeeded.
+/// Distinct rejection / validator-failure / rustc-rejected variants
+/// are exposed so downstream tooling (specifically the
+/// bridge-coverage-runner per
+/// `docs/discussions/regseq-model/bridge-coverage-runner-strategy.md`,
+/// phase F0) can classify outcomes without parsing error strings.
+///
+/// This is the typed surface introduced by regseq-driver-63 (F0
+/// of the bridge-coverage-runner strategy). Existing callers
+/// continue to use the legacy panicking [`bridge_fixture`] helper.
+#[derive(Debug)]
+pub enum BridgeOutcome {
+    /// Bridge succeeded AND `model.validate()` succeeded.
+    Ok(RegseqModel),
+    /// Bridge succeeded but `model.validate()` failed. The model
+    /// is returned alongside the violation so the caller can
+    /// pretty-print or inspect.
+    ValidatorFailed {
+        /// Bridge-constructed model that failed validation.
+        model: RegseqModel,
+        /// Typed validator violation per `regseq_model::InvariantViolation`.
+        violation: InvariantViolation,
+    },
+    /// Bridge returned a typed [`BridgeError`] (e.g.,
+    /// `DslRejection`, `NonRigidTy`, `Phase4`, ...).
+    Rejected(BridgeError),
+    /// Rustc exited before `after_analysis` was reached -- either
+    /// rustc rejected the input or the compile produced no result
+    /// for an unknown reason. `stderr` is the rustc subprocess
+    /// stderr, captured by the bridge-coverage runner. In this
+    /// F0 helper, `stderr` is always the empty string; the
+    /// runner adds subprocess-based stderr capture in F1
+    /// (per strategy doc section 6.3).
+    RustcRejected {
+        /// Captured rustc stderr, or the empty string in this
+        /// F0 helper.
+        stderr: String,
+    },
+}
 
 /// Names of the canonical phase-1a fixtures shipped by this crate.
 /// Each name maps to a `.rs` source file under `fixtures/`.
@@ -88,6 +130,30 @@ pub mod fixture_names {
 /// into an in-memory `RegseqModel`. See `bridge_fixture_with_options`
 /// for the full configuration surface.
 pub fn bridge_fixture(name: &str) -> RegseqModel {
+    match try_bridge_fixture(name) {
+        BridgeOutcome::Ok(model) => model,
+        BridgeOutcome::ValidatorFailed { violation, .. } => {
+            panic!("bridge produced invalid RegseqModel for fixture {name:?}: {violation:?}");
+        }
+        BridgeOutcome::Rejected(err) => {
+            panic!("bridge failed on fixture {name:?}: {err}");
+        }
+        BridgeOutcome::RustcRejected { .. } => {
+            panic!(
+                "bridge produced no result for fixture {name:?}: rustc invocation completed without reaching after_analysis"
+            )
+        }
+    }
+}
+
+/// Typed entry point for fixtures already shipped under
+/// `crates/test-ir-fixtures/fixtures/<name>.rs`.
+///
+/// Mirrors [`bridge_fixture`] but returns a [`BridgeOutcome`]
+/// instead of panicking on non-OK paths. Panics ONLY when the
+/// fixture name is unknown or the fixture file is unreadable
+/// (those are caller-bugs, not bridge outcomes).
+pub fn try_bridge_fixture(name: &str) -> BridgeOutcome {
     let path = fixture_path(name);
     let metadata = std::fs::metadata(&path).unwrap_or_else(|err| {
         panic!(
@@ -101,7 +167,51 @@ pub fn bridge_fixture(name: &str) -> RegseqModel {
             path.display()
         );
     }
-    compile_and_bridge(name, &path)
+    try_compile_and_bridge(name, &path)
+}
+
+/// Typed entry point for arbitrary source paths. Used by the
+/// bridge-coverage runner to drive snippets that do NOT live in
+/// the `test-ir-fixtures/fixtures/` directory.
+///
+/// Derives a diagnostic name from the file stem (used in panic
+/// messages and the temp-dir name) and a rustc-valid synthetic
+/// crate name from the same stem via [`sanitize_crate_name`].
+/// The runner's snippet naming convention uses hyphenated row IDs
+/// (e.g., `TY-001.rs`); rustc's `--crate-name` rejects hyphens, so
+/// the helper sanitizes the stem before passing it through.
+pub fn try_bridge_fixture_path(path: &Path) -> BridgeOutcome {
+    let diagnostic_name = path
+        .file_stem()
+        .and_then(|s| s.to_str())
+        .unwrap_or("<anonymous>");
+    let crate_name = sanitize_crate_name(diagnostic_name);
+    try_compile_and_bridge_with_crate_name(diagnostic_name, &crate_name, path)
+}
+
+/// Map a free-form fixture stem to a rustc-valid crate name by
+/// replacing every non-(ascii-alphanumeric-or-underscore) byte
+/// with `_`, and prepending `s_` if the result starts with a
+/// digit. Idempotent on already-valid names. Returns `"snippet"`
+/// for empty input.
+pub(crate) fn sanitize_crate_name(stem: &str) -> String {
+    let mut out: String = stem
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect();
+    if out.is_empty() {
+        return "snippet".to_string();
+    }
+    if out.starts_with(|c: char| c.is_ascii_digit()) {
+        out.insert_str(0, "s_");
+    }
+    out
 }
 
 /// Pretty-print the model with default `PrettyPrintOptions`
@@ -156,16 +266,31 @@ fn host_sysroot() -> String {
         .to_string()
 }
 
-/// Compile the fixture source in-process with bridge-enabled rustc
-/// callbacks and return the resulting `RegseqModel`.
-fn compile_and_bridge(name: &str, src: &Path) -> RegseqModel {
+/// Compile a fixture source in-process with bridge-enabled rustc
+/// callbacks and return a typed [`BridgeOutcome`]. The diagnostic
+/// name and crate name coincide for fixture-name callers (existing
+/// fixtures under `crates/test-ir-fixtures/fixtures/` use
+/// rustc-valid stems).
+fn try_compile_and_bridge(name: &str, src: &Path) -> BridgeOutcome {
+    try_compile_and_bridge_with_crate_name(name, name, src)
+}
+
+/// Compile a source file with a caller-supplied `crate_name`
+/// passed to rustc's `--crate-name` flag. `diagnostic_name` is used
+/// for the temp-dir name only; it may differ from `crate_name`
+/// when the path-based entry point sanitizes a hyphenated stem.
+fn try_compile_and_bridge_with_crate_name(
+    diagnostic_name: &str,
+    crate_name: &str,
+    src: &Path,
+) -> BridgeOutcome {
     let _lock = COMPILER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
     init_rustc_logger();
 
     let sysroot = host_sysroot();
-    let out_dir = tempdir_for(name);
+    let out_dir = tempdir_for(diagnostic_name);
 
     let args = vec![
         "rustc".to_string(),
@@ -179,7 +304,7 @@ fn compile_and_bridge(name: &str, src: &Path) -> RegseqModel {
         "--crate-type".to_string(),
         "rlib".to_string(),
         "--crate-name".to_string(),
-        name.to_string(),
+        crate_name.to_string(),
         "--out-dir".to_string(),
         out_dir
             .to_str()
@@ -197,10 +322,10 @@ fn compile_and_bridge(name: &str, src: &Path) -> RegseqModel {
         "panic=abort".to_string(),
     ];
 
-    let result: Arc<Mutex<Option<Result<RegseqModel, String>>>> = Arc::new(Mutex::new(None));
+    let result: Arc<Mutex<Option<Result<RegseqModel, BridgeError>>>> = Arc::new(Mutex::new(None));
 
     struct Callbacks {
-        result: Arc<Mutex<Option<Result<RegseqModel, String>>>>,
+        result: Arc<Mutex<Option<Result<RegseqModel, BridgeError>>>>,
     }
 
     impl rustc_driver::Callbacks for Callbacks {
@@ -225,10 +350,7 @@ fn compile_and_bridge(name: &str, src: &Path) -> RegseqModel {
             tcx: rustc_middle::ty::TyCtxt<'tcx>,
         ) -> rustc_driver::Compilation {
             let input = DriverBridgeInput::new(tcx);
-            let outcome = match run_bridge(input) {
-                Ok(model) => Ok(model),
-                Err(err) => Err(format!("{err}")),
-            };
+            let outcome = run_bridge(input);
             *self.result.lock().expect("result mutex poisoned") = Some(outcome);
             rustc_driver::Compilation::Stop
         }
@@ -239,30 +361,26 @@ fn compile_and_bridge(name: &str, src: &Path) -> RegseqModel {
     };
     rustc_driver::run_compiler(&args, &mut callbacks);
 
-    let outcome = result
-        .lock()
-        .expect("result mutex poisoned")
-        .take()
-        .unwrap_or_else(|| {
-            panic!(
-                "bridge produced no result for fixture {name:?}: rustc invocation completed without reaching after_analysis"
-            )
-        });
-
+    let outcome = result.lock().expect("result mutex poisoned").take();
     let _ = std::fs::remove_dir_all(&out_dir);
 
     let mut model = match outcome {
-        Ok(model) => model,
-        Err(message) => {
-            panic!("bridge failed on fixture {name:?}: {message}")
+        None => {
+            return BridgeOutcome::RustcRejected {
+                stderr: String::new(),
+            };
         }
+        Some(Err(err)) => {
+            return BridgeOutcome::Rejected(err);
+        }
+        Some(Ok(model)) => model,
     };
 
     let bridge_input = regseq_model::BridgeInput::matching(&model);
-    if let Err(err) = model.validate(&bridge_input) {
-        panic!("bridge produced invalid RegseqModel for fixture {name:?}: {err:?}");
+    match model.validate(&bridge_input) {
+        Ok(()) => BridgeOutcome::Ok(model),
+        Err(violation) => BridgeOutcome::ValidatorFailed { model, violation },
     }
-    model
 }
 
 /// Unique temp directory for a fixture compile, keyed by the fixture
@@ -344,5 +462,29 @@ mod tests {
             message.contains(missing_name),
             "panic message must name the missing fixture; got: {message:?}"
         );
+    }
+
+    /// `sanitize_crate_name` replaces hyphens with underscores so
+    /// the bridge-coverage runner's hyphenated row-id snippet
+    /// stems (e.g. `TY-001`) lift to rustc-valid `--crate-name`
+    /// arguments. Covers spec Change D item 4.
+    #[test]
+    fn sanitize_crate_name_rewrites_hyphen() {
+        assert_eq!(sanitize_crate_name("TY-001"), "TY_001");
+    }
+
+    /// `sanitize_crate_name` prepends `s_` when the input begins
+    /// with a digit (rustc rejects digit-leading crate names).
+    /// Covers spec Change D item 4.
+    #[test]
+    fn sanitize_crate_name_prepends_s_on_digit_leading() {
+        assert_eq!(sanitize_crate_name("123foo"), "s_123foo");
+    }
+
+    /// `sanitize_crate_name` is idempotent on already-valid
+    /// names. Covers spec Change D item 4.
+    #[test]
+    fn sanitize_crate_name_idempotent_on_valid_name() {
+        assert_eq!(sanitize_crate_name("no_op"), "no_op");
     }
 }

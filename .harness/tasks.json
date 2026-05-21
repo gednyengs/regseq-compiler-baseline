@@ -1748,7 +1748,7 @@
           "id": "regseq-driver-63",
           "name": "test-ir-fixtures: typed BridgeOutcome helper (F0 of bridge-coverage-runner)",
           "spec": ".harness/tasks/regseq-driver/63-typed-bridge-outcome-helper.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-62"
           ],
