@@ -1835,7 +1835,7 @@
           "id": "regseq-driver-67",
           "name": "Bridge-coverage-runner F4 full corpus batch (~102 rows)",
           "spec": ".harness/tasks/regseq-driver/67-bridge-coverage-runner-f4-full-corpus.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-66"
           ],

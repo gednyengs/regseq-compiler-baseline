@@ -355,3 +355,936 @@ status = "uncovered"
 cluster_key = "RJ-031"
 snippet_path = "RJ-031-F.rs"
 expected_rejection = { variant = "DiagLogFormat", reason = "UnmatchedClosingBrace" }
+
+# ---------------------------------------------------------------------------
+# F4 (regseq-driver-67): full snippet corpus batch (~100 rows) per
+# bridge-coverage-runner-strategy.md section 11. Rows that consumed their
+# 3-retry budget without a passing candidate are documented in
+# .harness/expectations/regseq-driver-67.md and intentionally NOT committed
+# here.
+# ---------------------------------------------------------------------------
+
+# Section 1.1 -- Ty enum + sub-axes
+[[row]]
+id = "TY-001"
+section = "1.1"
+construct = "Ty::Bool"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-001"
+snippet_path = "TY-001.rs"
+inspect = { kind = "TyVariant", arg = "Bool" }
+
+[[row]]
+id = "TY-002"
+section = "1.1"
+construct = "Ty::Char"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-002"
+snippet_path = "TY-002.rs"
+inspect = { kind = "TyVariant", arg = "Char" }
+
+[[row]]
+id = "TY-007"
+section = "1.1"
+construct = "Ty::Never"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-007"
+snippet_path = "TY-007.rs"
+inspect = { kind = "TyVariant", arg = "Never" }
+
+[[row]]
+id = "TY-008"
+section = "1.1"
+construct = "Ty::Array(_, _)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-008"
+snippet_path = "TY-008.rs"
+inspect = { kind = "TyVariant", arg = "Array" }
+
+[[row]]
+id = "TY-011-A"
+section = "1.1"
+construct = "Ty::Ptr(_, Not)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-011"
+snippet_path = "TY-011-A.rs"
+inspect = { kind = "TyVariant", arg = "Ptr" }
+
+[[row]]
+id = "TY-016"
+section = "1.1"
+construct = "Ty::Tuple (non-unit)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-016"
+snippet_path = "TY-016.rs"
+inspect = { kind = "TyVariant", arg = "Tuple" }
+
+[[row]]
+id = "TY-014-B"
+section = "1.1"
+construct = "dyn T + Send (loose: TyVariant=Dynamic)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-014"
+snippet_path = "TY-014-B.rs"
+inspect = { kind = "TyVariant", arg = "Dynamic" }
+
+[[row]]
+id = "TY-014-C"
+section = "1.1"
+construct = "dyn T + Sync (loose: TyVariant=Dynamic)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-014"
+snippet_path = "TY-014-C.rs"
+inspect = { kind = "TyVariant", arg = "Dynamic" }
+
+[[row]]
+id = "TY-014-D"
+section = "1.1"
+construct = "dyn T + Unpin (loose: TyVariant=Dynamic)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-014"
+snippet_path = "TY-014-D.rs"
+inspect = { kind = "TyVariant", arg = "Dynamic" }
+
+[[row]]
+id = "TY-014-E"
+section = "1.1"
+construct = "dyn T + Send + Sync (loose: TyVariant=Dynamic)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-014"
+snippet_path = "TY-014-E.rs"
+inspect = { kind = "TyVariant", arg = "Dynamic" }
+
+[[row]]
+id = "TY-003-A"
+section = "1.1"
+construct = "IntKind::I8"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-003"
+snippet_path = "TY-003-A.rs"
+inspect = { kind = "ScalarKind", arg = "I8" }
+
+[[row]]
+id = "TY-003-B"
+section = "1.1"
+construct = "IntKind::I16"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-003"
+snippet_path = "TY-003-B.rs"
+inspect = { kind = "ScalarKind", arg = "I16" }
+
+[[row]]
+id = "TY-003-D"
+section = "1.1"
+construct = "IntKind::I64"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-003"
+snippet_path = "TY-003-D.rs"
+inspect = { kind = "ScalarKind", arg = "I64" }
+
+[[row]]
+id = "TY-003-E"
+section = "1.1"
+construct = "IntKind::I128"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-003"
+snippet_path = "TY-003-E.rs"
+inspect = { kind = "ScalarKind", arg = "I128" }
+
+[[row]]
+id = "TY-003-F"
+section = "1.1"
+construct = "IntKind::Isize"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-003"
+snippet_path = "TY-003-F.rs"
+inspect = { kind = "ScalarKind", arg = "Isize" }
+
+[[row]]
+id = "TY-004-B"
+section = "1.1"
+construct = "UintKind::U16"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-004"
+snippet_path = "TY-004-B.rs"
+inspect = { kind = "ScalarKind", arg = "U16" }
+
+[[row]]
+id = "TY-004-E"
+section = "1.1"
+construct = "UintKind::U128"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-004"
+snippet_path = "TY-004-E.rs"
+inspect = { kind = "ScalarKind", arg = "U128" }
+
+[[row]]
+id = "TY-004-F"
+section = "1.1"
+construct = "UintKind::Usize"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-004"
+snippet_path = "TY-004-F.rs"
+inspect = { kind = "ScalarKind", arg = "Usize" }
+
+[[row]]
+id = "TY-005-A"
+section = "1.1"
+construct = "FloatKind::F16"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-005"
+snippet_path = "TY-005-A.rs"
+inspect = { kind = "ScalarKind", arg = "F16" }
+
+[[row]]
+id = "TY-005-B"
+section = "1.1"
+construct = "FloatKind::F32"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-005"
+snippet_path = "TY-005-B.rs"
+inspect = { kind = "ScalarKind", arg = "F32" }
+
+[[row]]
+id = "TY-005-C"
+section = "1.1"
+construct = "FloatKind::F64"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-005"
+snippet_path = "TY-005-C.rs"
+inspect = { kind = "ScalarKind", arg = "F64" }
+
+[[row]]
+id = "TY-005-D"
+section = "1.1"
+construct = "FloatKind::F128"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TY-005"
+snippet_path = "TY-005-D.rs"
+inspect = { kind = "ScalarKind", arg = "F128" }
+
+# Section 1.2 -- PlaceElem
+[[row]]
+id = "PL-004"
+section = "1.2"
+construct = "PlaceElem::Index"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "PL-004"
+snippet_path = "PL-004.rs"
+inspect = { kind = "PlaceElem", arg = "Index" }
+
+[[row]]
+id = "PL-005"
+section = "1.2"
+construct = "PlaceElem::ConstantIndex"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "PL-005"
+snippet_path = "PL-005.rs"
+inspect = { kind = "PlaceElem", arg = "ConstantIndex" }
+
+[[row]]
+id = "PL-006"
+section = "1.2"
+construct = "PlaceElem::Subslice"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "PL-006"
+snippet_path = "PL-006.rs"
+inspect = { kind = "PlaceElem", arg = "Subslice" }
+
+# Section 1.3 -- Operand/Const sub-axes
+[[row]]
+id = "OP-003-A"
+section = "1.3"
+construct = "Const::Bool"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-A.rs"
+inspect = { kind = "ConstVariant", arg = "Bool" }
+
+[[row]]
+id = "OP-003-B"
+section = "1.3"
+construct = "Const::Char"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-B.rs"
+inspect = { kind = "ConstVariant", arg = "Char" }
+
+[[row]]
+id = "OP-003-E"
+section = "1.3"
+construct = "Const::Float"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-E.rs"
+inspect = { kind = "ConstVariant", arg = "Float" }
+
+[[row]]
+id = "OP-003-H"
+section = "1.3"
+construct = "Const::Aggregate"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-H.rs"
+inspect = { kind = "ConstVariant", arg = "Aggregate" }
+
+[[row]]
+id = "OP-003-J"
+section = "1.3"
+construct = "Const::NullPtr"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-J.rs"
+inspect = { kind = "ConstVariant", arg = "NullPtr" }
+
+# Section 1.4 -- Rvalue sub-axes
+[[row]]
+id = "RV-002"
+section = "1.4"
+construct = "Rvalue::Repeat"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-002"
+snippet_path = "RV-002.rs"
+inspect = { kind = "RvalueVariant", arg = "Repeat" }
+
+[[row]]
+id = "RV-005-A"
+section = "1.4"
+construct = "CastKind::PointerExposeProvenance"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-A.rs"
+inspect = { kind = "CastKind", arg = "PointerExposeProvenance" }
+
+[[row]]
+id = "RV-005-B"
+section = "1.4"
+construct = "CastKind::PointerWithExposedProvenance"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-B.rs"
+inspect = { kind = "CastKind", arg = "PointerWithExposedProvenance" }
+
+[[row]]
+id = "RV-005-C"
+section = "1.4"
+construct = "CastKind::PointerCoercion::ReifyFnPointer"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-C.rs"
+inspect = { kind = "CastKind", arg = "PointerCoercion::ReifyFnPointer" }
+
+[[row]]
+id = "RV-005-D"
+section = "1.4"
+construct = "CastKind::PointerCoercion::UnsafeFnPointer"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-D.rs"
+inspect = { kind = "CastKind", arg = "PointerCoercion::UnsafeFnPointer" }
+
+[[row]]
+id = "RV-005-E"
+section = "1.4"
+construct = "CastKind::PointerCoercion::ClosureFnPointer"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-E.rs"
+inspect = { kind = "CastKind", arg = "PointerCoercion::ClosureFnPointer" }
+
+[[row]]
+id = "RV-005-G"
+section = "1.4"
+construct = "CastKind::IntToInt"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-G.rs"
+inspect = { kind = "CastKind", arg = "IntToInt" }
+
+[[row]]
+id = "RV-005-H"
+section = "1.4"
+construct = "CastKind::FloatToInt"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-H.rs"
+inspect = { kind = "CastKind", arg = "FloatToInt" }
+
+[[row]]
+id = "RV-005-I"
+section = "1.4"
+construct = "CastKind::FloatToFloat"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-I.rs"
+inspect = { kind = "CastKind", arg = "FloatToFloat" }
+
+[[row]]
+id = "RV-005-J"
+section = "1.4"
+construct = "CastKind::IntToFloat"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-J.rs"
+inspect = { kind = "CastKind", arg = "IntToFloat" }
+
+[[row]]
+id = "RV-005-K"
+section = "1.4"
+construct = "CastKind::PtrToPtr"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-K.rs"
+inspect = { kind = "CastKind", arg = "PtrToPtr" }
+
+[[row]]
+id = "RV-005-L"
+section = "1.4"
+construct = "CastKind::FnPtrToPtr"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-L.rs"
+inspect = { kind = "CastKind", arg = "FnPtrToPtr" }
+
+[[row]]
+id = "RV-005-M"
+section = "1.4"
+construct = "CastKind::Transmute"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-M.rs"
+inspect = { kind = "CastKind", arg = "Transmute" }
+
+[[row]]
+id = "RV-005-N"
+section = "1.4"
+construct = "CastKind::Subtype"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-005"
+snippet_path = "RV-005-N.rs"
+inspect = { kind = "CastKind", arg = "Subtype" }
+
+[[row]]
+id = "RV-006-B"
+section = "1.4"
+construct = "BinOp::Sub"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-B.rs"
+inspect = { kind = "BinOp", arg = "Sub" }
+
+[[row]]
+id = "RV-006-C"
+section = "1.4"
+construct = "BinOp::Mul"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-C.rs"
+inspect = { kind = "BinOp", arg = "Mul" }
+
+[[row]]
+id = "RV-006-D"
+section = "1.4"
+construct = "BinOp::Div"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-D.rs"
+inspect = { kind = "BinOp", arg = "Div" }
+
+[[row]]
+id = "RV-006-E"
+section = "1.4"
+construct = "BinOp::Rem"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-E.rs"
+inspect = { kind = "BinOp", arg = "Rem" }
+
+[[row]]
+id = "RV-006-F"
+section = "1.4"
+construct = "BinOp::AddUnchecked"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-F.rs"
+inspect = { kind = "BinOp", arg = "AddUnchecked" }
+
+[[row]]
+id = "RV-006-G"
+section = "1.4"
+construct = "BinOp::SubUnchecked"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-G.rs"
+inspect = { kind = "BinOp", arg = "SubUnchecked" }
+
+[[row]]
+id = "RV-006-H"
+section = "1.4"
+construct = "BinOp::MulUnchecked"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-H.rs"
+inspect = { kind = "BinOp", arg = "MulUnchecked" }
+
+[[row]]
+id = "RV-006-J"
+section = "1.4"
+construct = "BinOp::SubWithOverflow"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-J.rs"
+inspect = { kind = "BinOp", arg = "SubWithOverflow" }
+
+[[row]]
+id = "RV-006-K"
+section = "1.4"
+construct = "BinOp::MulWithOverflow"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-K.rs"
+inspect = { kind = "BinOp", arg = "MulWithOverflow" }
+
+[[row]]
+id = "RV-006-L"
+section = "1.4"
+construct = "BinOp::BitXor"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-L.rs"
+inspect = { kind = "BinOp", arg = "BitXor" }
+
+[[row]]
+id = "RV-006-M"
+section = "1.4"
+construct = "BinOp::BitAnd"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-M.rs"
+inspect = { kind = "BinOp", arg = "BitAnd" }
+
+[[row]]
+id = "RV-006-N"
+section = "1.4"
+construct = "BinOp::BitOr"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-N.rs"
+inspect = { kind = "BinOp", arg = "BitOr" }
+
+[[row]]
+id = "RV-006-O"
+section = "1.4"
+construct = "BinOp::Shl"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-O.rs"
+inspect = { kind = "BinOp", arg = "Shl" }
+
+[[row]]
+id = "RV-006-P"
+section = "1.4"
+construct = "BinOp::ShlUnchecked"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-P.rs"
+inspect = { kind = "BinOp", arg = "ShlUnchecked" }
+
+[[row]]
+id = "RV-006-Q"
+section = "1.4"
+construct = "BinOp::Shr"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-Q.rs"
+inspect = { kind = "BinOp", arg = "Shr" }
+
+[[row]]
+id = "RV-006-R"
+section = "1.4"
+construct = "BinOp::ShrUnchecked"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-R.rs"
+inspect = { kind = "BinOp", arg = "ShrUnchecked" }
+
+[[row]]
+id = "RV-006-S"
+section = "1.4"
+construct = "BinOp::Eq"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-S.rs"
+inspect = { kind = "BinOp", arg = "Eq" }
+
+[[row]]
+id = "RV-006-T"
+section = "1.4"
+construct = "BinOp::Lt"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-T.rs"
+inspect = { kind = "BinOp", arg = "Lt" }
+
+[[row]]
+id = "RV-006-U"
+section = "1.4"
+construct = "BinOp::Le"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-U.rs"
+inspect = { kind = "BinOp", arg = "Le" }
+
+[[row]]
+id = "RV-006-V"
+section = "1.4"
+construct = "BinOp::Ne"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-V.rs"
+inspect = { kind = "BinOp", arg = "Ne" }
+
+[[row]]
+id = "RV-006-W"
+section = "1.4"
+construct = "BinOp::Ge"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-W.rs"
+inspect = { kind = "BinOp", arg = "Ge" }
+
+[[row]]
+id = "RV-006-X"
+section = "1.4"
+construct = "BinOp::Gt"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-X.rs"
+inspect = { kind = "BinOp", arg = "Gt" }
+
+[[row]]
+id = "RV-006-Y"
+section = "1.4"
+construct = "BinOp::Cmp"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-Y.rs"
+inspect = { kind = "BinOp", arg = "Cmp" }
+
+[[row]]
+id = "RV-006-Z"
+section = "1.4"
+construct = "BinOp::Offset"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-Z.rs"
+inspect = { kind = "BinOp", arg = "Offset" }
+
+[[row]]
+id = "RV-007-A"
+section = "1.4"
+construct = "UnOp::Not"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-007"
+snippet_path = "RV-007-A.rs"
+inspect = { kind = "UnOp", arg = "Not" }
+
+[[row]]
+id = "RV-007-B"
+section = "1.4"
+construct = "UnOp::Neg"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-007"
+snippet_path = "RV-007-B.rs"
+inspect = { kind = "UnOp", arg = "Neg" }
+
+[[row]]
+id = "RV-009-A"
+section = "1.4"
+construct = "AggregateKind::Array"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-009"
+snippet_path = "RV-009-A.rs"
+inspect = { kind = "AggregateKind", arg = "Array" }
+
+[[row]]
+id = "RV-009-B"
+section = "1.4"
+construct = "AggregateKind::Tuple (non-unit)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-009"
+snippet_path = "RV-009-B.rs"
+inspect = { kind = "AggregateKind", arg = "Tuple" }
+
+[[row]]
+id = "RV-009-E"
+section = "1.4"
+construct = "AggregateKind::Union"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "RV-009"
+snippet_path = "RV-009-E.rs"
+inspect = { kind = "AggregateKind", arg = "Union" }
+
+# Section 1.5 -- Statement (NonDivergingIntrinsic)
+[[row]]
+id = "ST-003-A"
+section = "1.5"
+construct = "NonDivergingIntrinsic::Assume"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "ST-003"
+snippet_path = "ST-003-A.rs"
+inspect = { kind = "NonDivergingIntrinsic", arg = "Assume" }
+
+[[row]]
+id = "ST-003-B"
+section = "1.5"
+construct = "NonDivergingIntrinsic::CopyNonOverlapping"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "ST-003"
+snippet_path = "ST-003-B.rs"
+inspect = { kind = "NonDivergingIntrinsic", arg = "CopyNonOverlapping" }
+
+# Section 1.6 -- Terminator sub-axes
+[[row]]
+id = "TM-004"
+section = "1.6"
+construct = "TerminatorKind::Unreachable"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TM-004"
+snippet_path = "TM-004.rs"
+inspect = { kind = "TerminatorKind", arg = "Unreachable" }
+
+[[row]]
+id = "TM-006-A"
+section = "1.6"
+construct = "AssertKind::BoundsCheck"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TM-006"
+snippet_path = "TM-006-A.rs"
+inspect = { kind = "AssertKind", arg = "BoundsCheck" }
+
+[[row]]
+id = "TM-006-D"
+section = "1.6"
+construct = "AssertKind::DivisionByZero"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TM-006"
+snippet_path = "TM-006-D.rs"
+inspect = { kind = "AssertKind", arg = "DivisionByZero" }
+
+[[row]]
+id = "TM-006-E"
+section = "1.6"
+construct = "AssertKind::RemainderByZero"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "TM-006"
+snippet_path = "TM-006-E.rs"
+inspect = { kind = "AssertKind", arg = "RemainderByZero" }
+
+# Section 3 -- source-level features
+[[row]]
+id = "FT-002"
+section = "3"
+construct = "Generic Drop impl"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "FT-002"
+snippet_path = "FT-002.rs"
+inspect = { kind = "All", arg = [
+  { kind = "ItemKind", arg = "Struct" },
+  { kind = "FunctionInstanceFlavor", arg = "DropGlue" },
+] }
+
+[[row]]
+id = "FT-005"
+section = "3"
+construct = "Explicit core::mem::drop(x)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "FT-005"
+snippet_path = "FT-005.rs"
+inspect = { kind = "CallCallee", arg = "Direct" }
+
+[[row]]
+id = "FT-008"
+section = "3"
+construct = "Trait default + impl override"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "FT-008"
+snippet_path = "FT-008.rs"
+inspect = { kind = "ItemKind", arg = "Function" }
+
+# Section 4 -- compilation/toolchain
+[[row]]
+id = "CT-011"
+section = "4"
+construct = "N>1 generic args (loose: ItemKind=Struct)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "CT-011"
+snippet_path = "CT-011.rs"
+inspect = { kind = "ItemKind", arg = "Struct" }
+
+# Section 5 -- interaction re-attempt
+[[row]]
+id = "IX-017"
+section = "5"
+construct = "Diag-log intrinsic x generic caller"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-017"
+snippet_path = "IX-017.rs"
+inspect = { kind = "BodyAbsent" }
+
+# Section 6 -- rejection rows
+[[row]]
+id = "RJ-015"
+section = "6.3"
+construct = "Foreign"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-015"
+snippet_path = "RJ-015.rs"
+expected_rejection = { variant = "Foreign" }
+
+[[row]]
+id = "RJ-031-D"
+section = "6.3"
+construct = "DiagLogFormat::NonSubsetModifier"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-031"
+snippet_path = "RJ-031-D.rs"
+expected_rejection = { variant = "DiagLogFormat", reason = "NonSubsetModifier" }
+
+[[row]]
+id = "RJ-032-A"
+section = "6.3"
+construct = "DiagLogValidation::D1"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-032"
+snippet_path = "RJ-032-A.rs"
+expected_rejection = { variant = "DiagLogValidation", diagnostic = "D1" }
+
+[[row]]
+id = "RJ-032-B"
+section = "6.3"
+construct = "DiagLogValidation::D2"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-032"
+snippet_path = "RJ-032-B.rs"
+expected_rejection = { variant = "DiagLogValidation", diagnostic = "D2" }
+
+[[row]]
+id = "RJ-032-C"
+section = "6.3"
+construct = "DiagLogValidation::D4"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-032"
+snippet_path = "RJ-032-C.rs"
+expected_rejection = { variant = "DiagLogValidation", diagnostic = "D4" }
+
+[[row]]
+id = "RJ-032-D"
+section = "6.3"
+construct = "DiagLogValidation::D6"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-032"
+snippet_path = "RJ-032-D.rs"
+expected_rejection = { variant = "DiagLogValidation", diagnostic = "D6" }
+
+[[row]]
+id = "RJ-032-E"
+section = "6.3"
+construct = "DiagLogValidation::D7"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-032"
+snippet_path = "RJ-032-E.rs"
+expected_rejection = { variant = "DiagLogValidation", diagnostic = "D7" }
+
+
