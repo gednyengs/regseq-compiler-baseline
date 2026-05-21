@@ -1723,7 +1723,7 @@
             "spec.md#9",
             "spec.md#15"
           ],
-          "spec_version": 2,
+          "spec_version": 3,
           "history": [
             {
               "ts": "2026-05-21T04:03:16Z",
@@ -1735,6 +1735,12 @@
               "event": "spec_edited",
               "spec_version": 2,
               "reason": "remove load-bearing references to user's playground; canonical repro now inline + B4 manual smoke retargeted at the new B2 fixture"
+            },
+            {
+              "ts": "2026-05-21T04:13:35Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "B4 throwaway crate setup spelled out with required panic=abort profile + pinned toolchain (Codex round-2 fix)"
             }
           ]
         }

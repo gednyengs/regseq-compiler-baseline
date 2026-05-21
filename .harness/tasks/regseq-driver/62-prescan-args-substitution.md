@@ -367,14 +367,63 @@ fixture).
 
 After the fix lands, the implementer manually verifies the new
 B2 fixture also bridges cleanly via the production wrapper (not
-just the in-process test helper):
+just the in-process test helper).
+
+**Throwaway crate setup** (required, NOT optional): the
+B2 fixture exercises a closure-call site whose surrounding MIR
+shape produces unwind edges under the default
+`panic = "unwind"` strategy. Under default unwind, the bridge's
+basic-block scanner at
+`crates/regseq-driver/src/bridge/body/basic_block.rs:23-26`
+rejects any surviving `is_cleanup=true` block. The throwaway
+crate MUST be configured so cleanup blocks are pruned BEFORE the
+bridge sees them. Mirror the existing `cargo-regseq` e2e test
+shape at `crates/cargo-regseq/tests/playground_emit.rs:172-195`,
+which scaffolds a standalone crate with the pinned toolchain.
+
+Minimal throwaway-crate shape:
+
+```toml
+# Cargo.toml
+[package]
+name = "regseq_driver_62_smoke"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[profile.dev]
+panic = "abort"
+
+[profile.release]
+panic = "abort"
+```
+
+```toml
+# rust-toolchain.toml (matches the workspace's pinned nightly)
+[toolchain]
+channel = "<workspace pinned channel from rust-toolchain.toml>"
+```
+
+```rust
+// src/lib.rs -- byte-identical to the B2 fixture source
+#![no_std]
+
+pub fn apply(x: i32, y: i32, f: impl Fn(i32, i32) -> i32) -> i32 {
+    f(x, y)
+}
+
+pub fn entry(x: i32, y: i32) -> i32 {
+    apply(x, y, |x, y| x + y)
+}
+```
 
 ```bash
-# Author a throwaway Cargo crate (or use an existing fixture
-# crate setup) whose `src/lib.rs` is the B2 fixture's source.
-# Then drive the production wrapper:
+# From the throwaway crate's root, drive the production wrapper:
 PATH="<workspace>/target/debug:$PATH" cargo regseq \
-  --target-os linux --platform-file <platform.toml> --emit model
+  --target-os linux --platform-file <workspace>/tests/fixtures/playground/platform.toml \
+  --emit model
 ```
 
 Verifies the production-wrapper code path matches the in-process
@@ -385,7 +434,11 @@ smoke only; the binding regression guard is B2.
 Do NOT use `tests/fixtures/playground/` for this verification --
 playground is the user's experimentation space (per
 `playground-is-experimentation-space`) and its on-disk state at
-any commit is not part of this task's repro contract.
+any commit is not part of this task's repro contract. The
+implementer MAY borrow the playground's `platform.toml` as the
+`--platform-file` argument (it is a stable target-config file,
+not part of the playground's iteration surface), or author a
+fresh one.
 
 ## Review
 
