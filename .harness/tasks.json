@@ -1851,6 +1851,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-68",
+          "name": "Post-F4 batch triage (propose decomposition per strategy Mode B)",
+          "spec": ".harness/tasks/regseq-driver/68-post-f4-batch-triage.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-67"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-21T19:21:54Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
