@@ -1287,4 +1287,30 @@ cluster_key = "RJ-032"
 snippet_path = "RJ-032-E.rs"
 expected_rejection = { variant = "DiagLogValidation", diagnostic = "D7" }
 
+# F68 D1: per-fixture build-flag override rows. Authored per
+# `.harness/tasks/regseq-driver/69-test-ir-fixtures-build-flag-override.md`
+# to bring TM-006-C and RJ-006 to PASS through the helper's new
+# override surface.
+[[row]]
+id = "TM-006-C"
+section = "1.6"
+construct = "AssertKind::OverflowNeg"
+expectation = "positive"
+status = "covered"
+cluster_key = "TM-006"
+snippet_path = "TM-006-C.rs"
+inspect = { kind = "AssertKind", arg = "OverflowNeg" }
+build_overrides = { overflow_checks = true }
+
+[[row]]
+id = "RJ-006"
+section = "6.1"
+construct = "DslRejectionKind::Statement"
+expectation = "rejected"
+status = "covered"
+cluster_key = "RJ-006"
+snippet_path = "RJ-006.rs"
+expected_rejection = { variant = "DslRejection", kind = "Statement" }
+build_overrides = { z_flags = ["mir-emit-retag"] }
+
 

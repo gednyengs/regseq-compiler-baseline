@@ -29,6 +29,46 @@ use std::sync::{Arc, Mutex, Once};
 use regseq_driver::bridge::{run_bridge, BridgeError, BridgeInput as DriverBridgeInput};
 use regseq_model::{InvariantViolation, PrettyPrinter, RegseqModel};
 
+/// Allow-listed `-Z` flag names that [`BuildOverrides::z_flags`]
+/// entries may carry. Any `-Z` value outside this list causes the
+/// override-aware helper workhorse to panic, per the D1 proposal at
+/// `.harness/audits/2026-05-21-post-f4-triage.md:349-415`. The
+/// allow-list is intentionally narrow; widening it is a separate
+/// task with its own approval gate.
+pub const Z_FLAG_ALLOWLIST: &[&str] = &["mir-emit-retag"];
+
+/// Per-fixture build-flag overrides for the bridge helper.
+///
+/// All fields default to None / empty; the default value preserves
+/// the helper's existing hard-wired behavior. The override surface
+/// is intentionally narrow: only the two flags this proposal
+/// authorizes (`overflow_checks` and the `-Z mir-emit-retag` flag)
+/// are exposed here. Adding any further flag is a separate task
+/// with its own approval gate per the F68 audit document's D1
+/// proposal at `.harness/audits/2026-05-21-post-f4-triage.md:349-415`.
+#[derive(Debug, Clone, Default)]
+pub struct BuildOverrides {
+    /// Overrides `config.opts.cg.overflow_checks` in the helper's
+    /// `Callbacks::config` block. `None` preserves the existing
+    /// hard-wired `Some(false)`. `Some(true)` re-enables runtime
+    /// overflow checks, which is the documented requirement for
+    /// TM-006-C `AssertKind::OverflowNeg` per
+    /// `.harness/expectations/regseq-driver-67.md:264-278`.
+    pub overflow_checks: Option<bool>,
+    /// Allow-listed `-Z` flag names to append to the rustc args
+    /// vec as `-Z <flag>` after the helper's existing
+    /// `-C panic=abort`. Allow-list (initial drop):
+    ///   - `"mir-emit-retag"`: exposes
+    ///     `mir::StatementKind::Retag` to the bridge for RJ-006
+    ///     per `.harness/expectations/regseq-driver-67.md:353-373`.
+    ///
+    /// Any value outside [`Z_FLAG_ALLOWLIST`] causes the helper
+    /// workhorse to panic with the documented diagnostic. Adding
+    /// values to the allow-list is a separate task per the
+    /// No-Defensive-Fallbacks policy.
+    pub z_flags: Vec<String>,
+}
+
 /// Typed result of a fixture compile + bridge + validate sweep.
 ///
 /// `Ok` means BOTH bridge AND `model.validate()` succeeded.
@@ -181,12 +221,29 @@ pub fn try_bridge_fixture(name: &str) -> BridgeOutcome {
 /// (e.g., `TY-001.rs`); rustc's `--crate-name` rejects hyphens, so
 /// the helper sanitizes the stem before passing it through.
 pub fn try_bridge_fixture_path(path: &Path) -> BridgeOutcome {
+    try_bridge_fixture_path_with_overrides(path, &BuildOverrides::default())
+}
+
+/// Typed entry point for arbitrary source paths with caller-supplied
+/// build-flag overrides. Mirrors [`try_bridge_fixture_path`] in
+/// its diagnostic-name + crate-name derivation; the `overrides`
+/// argument additionally threads the codegen flag + `-Z` flag
+/// surface through to the rustc invocation per the D1 proposal at
+/// `.harness/audits/2026-05-21-post-f4-triage.md:349-415`.
+///
+/// Passing `&BuildOverrides::default()` preserves the existing
+/// hard-wired helper behavior bit-for-bit; that is how the
+/// non-overriding entry points call into the shared workhorse.
+pub fn try_bridge_fixture_path_with_overrides(
+    path: &Path,
+    overrides: &BuildOverrides,
+) -> BridgeOutcome {
     let diagnostic_name = path
         .file_stem()
         .and_then(|s| s.to_str())
         .unwrap_or("<anonymous>");
     let crate_name = sanitize_crate_name(diagnostic_name);
-    try_compile_and_bridge_with_crate_name(diagnostic_name, &crate_name, path)
+    try_compile_and_bridge_with_crate_name(diagnostic_name, &crate_name, path, overrides)
 }
 
 /// Map a free-form fixture stem to a rustc-valid crate name by
@@ -272,18 +329,38 @@ fn host_sysroot() -> String {
 /// fixtures under `crates/test-ir-fixtures/fixtures/` use
 /// rustc-valid stems).
 fn try_compile_and_bridge(name: &str, src: &Path) -> BridgeOutcome {
-    try_compile_and_bridge_with_crate_name(name, name, src)
+    try_compile_and_bridge_with_crate_name(name, name, src, &BuildOverrides::default())
 }
 
 /// Compile a source file with a caller-supplied `crate_name`
 /// passed to rustc's `--crate-name` flag. `diagnostic_name` is used
 /// for the temp-dir name only; it may differ from `crate_name`
 /// when the path-based entry point sanitizes a hyphenated stem.
+/// `overrides` carries optional per-call codegen-flag and `-Z`
+/// flag overrides; `&BuildOverrides::default()` preserves the
+/// helper's existing hard-wired behavior.
 fn try_compile_and_bridge_with_crate_name(
     diagnostic_name: &str,
     crate_name: &str,
     src: &Path,
+    overrides: &BuildOverrides,
 ) -> BridgeOutcome {
+    // Defense-in-depth allow-list enforcement: panic before any rustc
+    // setup so an unrecognized override never reaches the compiler.
+    // The runner's matrix loader is the first line of defense and
+    // catches this at load time per the F68 D1 proposal; this panic
+    // ensures direct programmatic callers cannot smuggle an
+    // unrecognized flag past the loader.
+    for flag in overrides.z_flags.iter() {
+        if !Z_FLAG_ALLOWLIST.contains(&flag.as_str()) {
+            panic!(
+                "unrecognized -Z override {value:?}; allow-list = {allowlist:?}",
+                value = flag,
+                allowlist = Z_FLAG_ALLOWLIST,
+            );
+        }
+    }
+
     let _lock = COMPILER_LOCK
         .lock()
         .unwrap_or_else(std::sync::PoisonError::into_inner);
@@ -292,7 +369,7 @@ fn try_compile_and_bridge_with_crate_name(
     let sysroot = host_sysroot();
     let out_dir = tempdir_for(diagnostic_name);
 
-    let args = vec![
+    let mut args = vec![
         "rustc".to_string(),
         src.to_str()
             .expect("fixture path is not valid UTF-8")
@@ -322,10 +399,18 @@ fn try_compile_and_bridge_with_crate_name(
         "panic=abort".to_string(),
     ];
 
+    // Append allow-listed `-Z` flags in their stored order so
+    // diagnostic reproducibility tracks the caller's input ordering.
+    for flag in overrides.z_flags.iter() {
+        args.push("-Z".to_string());
+        args.push(flag.clone());
+    }
+
     let result: Arc<Mutex<Option<Result<RegseqModel, BridgeError>>>> = Arc::new(Mutex::new(None));
 
     struct Callbacks {
         result: Arc<Mutex<Option<Result<RegseqModel, BridgeError>>>>,
+        overrides: BuildOverrides,
     }
 
     impl rustc_driver::Callbacks for Callbacks {
@@ -339,7 +424,10 @@ fn try_compile_and_bridge_with_crate_name(
             config.opts.unstable_opts.mir_opt_level = Some(0);
             config.opts.unstable_opts.always_encode_mir = true;
             config.opts.unstable_opts.mir_enable_passes = regseq_driver::regseq_mir_passes();
-            config.opts.cg.overflow_checks = Some(false);
+            config.opts.cg.overflow_checks = match self.overrides.overflow_checks {
+                Some(v) => Some(v),
+                None => Some(false),
+            };
             config.opts.cg.debug_assertions = Some(false);
             config.opts.debug_assertions = false;
         }
@@ -358,6 +446,7 @@ fn try_compile_and_bridge_with_crate_name(
 
     let mut callbacks = Callbacks {
         result: result.clone(),
+        overrides: overrides.clone(),
     };
     rustc_driver::run_compiler(&args, &mut callbacks);
 

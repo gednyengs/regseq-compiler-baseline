@@ -53,6 +53,36 @@ pub struct Row {
     pub inspect: Option<crate::inspect::InspectionPredicate>,
     /// Expected rejection shape for `rejected` rows.
     pub expected_rejection: Option<ExpectedRejection>,
+    /// Optional per-row build-flag overrides forwarded to the helper
+    /// via `try_bridge_fixture_path_with_overrides`. `None` preserves
+    /// the helper's default config; this is the D1 surface introduced
+    /// per `.harness/audits/2026-05-21-post-f4-triage.md:349-415`.
+    pub build_overrides: Option<RowBuildOverrides>,
+}
+
+/// Mirror of [`test_ir_fixtures::BuildOverrides`] expressed as a
+/// `Deserialize` TOML schema. The runner-side type lives next to
+/// the other row schema types so the loader can `deny_unknown_fields`
+/// and enforce the `-Z` allow-list at load time before the helper
+/// workhorse ever runs.
+#[derive(Debug, Deserialize, Clone, Default)]
+#[serde(deny_unknown_fields)]
+pub struct RowBuildOverrides {
+    /// Mirrors `BuildOverrides::overflow_checks`.
+    pub overflow_checks: Option<bool>,
+    /// Mirrors `BuildOverrides::z_flags`. Each entry is validated
+    /// at load time against [`test_ir_fixtures::Z_FLAG_ALLOWLIST`].
+    #[serde(default)]
+    pub z_flags: Vec<String>,
+}
+
+impl From<&RowBuildOverrides> for test_ir_fixtures::BuildOverrides {
+    fn from(value: &RowBuildOverrides) -> Self {
+        Self {
+            overflow_checks: value.overflow_checks,
+            z_flags: value.z_flags.clone(),
+        }
+    }
 }
 
 /// Per-row expectation class.
@@ -126,6 +156,17 @@ pub enum MatrixError {
         /// Row IDs found in the sidecar but absent from the matrix.
         rows: Vec<String>,
     },
+    /// A row carries a `build_overrides.z_flags` entry whose value
+    /// is not in [`test_ir_fixtures::Z_FLAG_ALLOWLIST`]. Load-time
+    /// fail is the first line of defense; the helper workhorse's
+    /// panic is the second per the F68 D1 proposal at
+    /// `.harness/audits/2026-05-21-post-f4-triage.md:349-415`.
+    UnknownZFlag {
+        /// Owning row ID.
+        row_id: String,
+        /// The unrecognized `-Z` flag value.
+        flag: String,
+    },
 }
 
 impl std::fmt::Display for MatrixError {
@@ -138,6 +179,13 @@ impl std::fmt::Display for MatrixError {
                     f,
                     "drift-hard-fail: sidecar row(s) absent from matrix: {}",
                     rows.join(", ")
+                )
+            }
+            MatrixError::UnknownZFlag { row_id, flag } => {
+                write!(
+                    f,
+                    "row {row_id}: unrecognized -Z override {flag:?}; allow-list = {allowlist:?}",
+                    allowlist = test_ir_fixtures::Z_FLAG_ALLOWLIST,
                 )
             }
         }
@@ -171,10 +219,27 @@ pub struct DriftReport {
     pub missing_in_sidecar: Vec<String>,
 }
 
-/// Parse the sidecar TOML at `metadata_path`.
+/// Parse the sidecar TOML at `metadata_path` and validate every
+/// `build_overrides.z_flags` entry against
+/// [`test_ir_fixtures::Z_FLAG_ALLOWLIST`]. Unrecognized values
+/// surface as [`MatrixError::UnknownZFlag`] so the runner fails
+/// fast at load time instead of letting the helper's
+/// defense-in-depth panic fire mid-sweep.
 pub fn load(metadata_path: &Path) -> Result<RowsFile, MatrixError> {
     let text = fs::read_to_string(metadata_path)?;
     let parsed: RowsFile = toml::from_str(&text)?;
+    for row in parsed.rows.iter() {
+        if let Some(overrides) = row.build_overrides.as_ref() {
+            for flag in overrides.z_flags.iter() {
+                if !test_ir_fixtures::Z_FLAG_ALLOWLIST.contains(&flag.as_str()) {
+                    return Err(MatrixError::UnknownZFlag {
+                        row_id: row.id.clone(),
+                        flag: flag.clone(),
+                    });
+                }
+            }
+        }
+    }
     Ok(parsed)
 }
 
@@ -298,6 +363,7 @@ fn is_row_id(s: &str) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::path::PathBuf;
 
     #[test]
     fn is_row_id_accepts_top_level() {
@@ -343,5 +409,122 @@ not a table line\n\
         assert!(ids.contains("RV-006-A"));
         assert!(ids.contains("OP-003-G-1"));
         assert_eq!(ids.len(), 3);
+    }
+
+    /// Writes `text` to a temp file (scoped to this test process) and
+    /// returns its path. Tests inspect the returned path with
+    /// [`load`] and delete the file on drop via the returned guard.
+    fn write_tmp_rows(label: &str, text: &str) -> (PathBuf, TmpFileGuard) {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path = std::env::temp_dir().join(format!("brcr-matrix-{label}-{nanos}.toml"));
+        std::fs::write(&path, text).expect("must write temp rows.toml");
+        let guard = TmpFileGuard(path.clone());
+        (path, guard)
+    }
+
+    struct TmpFileGuard(PathBuf);
+
+    impl Drop for TmpFileGuard {
+        fn drop(&mut self) {
+            let _ = std::fs::remove_file(&self.0);
+        }
+    }
+
+    /// B3 (1): a row with `z_flags = ["mir-emit-retag"]` loads cleanly
+    /// because the value sits inside `Z_FLAG_ALLOWLIST`.
+    #[test]
+    fn load_accepts_allow_listed_z_flag() {
+        let text = "\
+[[row]]
+id = \"RJ-006\"
+section = \"6.1\"
+construct = \"DslRejectionKind::Statement\"
+expectation = \"rejected\"
+status = \"covered\"
+cluster_key = \"RJ-006\"
+snippet_path = \"RJ-006.rs\"
+expected_rejection = { variant = \"DslRejection\", kind = \"Statement\" }
+build_overrides = { z_flags = [\"mir-emit-retag\"] }
+";
+        let (path, _guard) = write_tmp_rows("allow-listed", text);
+        let parsed = load(&path).expect("allow-listed z_flag value must load cleanly");
+        assert_eq!(parsed.rows.len(), 1);
+        let overrides = parsed.rows[0]
+            .build_overrides
+            .as_ref()
+            .expect("build_overrides must round-trip");
+        assert_eq!(overrides.z_flags, vec!["mir-emit-retag".to_string()]);
+    }
+
+    /// B3 (2): a row with a `z_flags` value outside the allow-list
+    /// surfaces [`MatrixError::UnknownZFlag`] whose message names
+    /// both the offending value and the allow-list itself.
+    #[test]
+    fn load_rejects_unknown_z_flag_with_typed_error() {
+        let text = "\
+[[row]]
+id = \"BOGUS-001\"
+section = \"6.1\"
+construct = \"DslRejectionKind::Statement\"
+expectation = \"rejected\"
+status = \"covered\"
+cluster_key = \"BOGUS\"
+snippet_path = \"BOGUS-001.rs\"
+expected_rejection = { variant = \"DslRejection\", kind = \"Statement\" }
+build_overrides = { z_flags = [\"bogus-flag\"] }
+";
+        let (path, _guard) = write_tmp_rows("bogus-flag", text);
+        let err = load(&path).expect_err("bogus-flag must surface MatrixError::UnknownZFlag");
+        match &err {
+            MatrixError::UnknownZFlag { row_id, flag } => {
+                assert_eq!(row_id, "BOGUS-001");
+                assert_eq!(flag, "bogus-flag");
+            }
+            other => panic!("expected MatrixError::UnknownZFlag, got {other:?}"),
+        }
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("bogus-flag"),
+            "error display must name the offending value; got: {rendered:?}"
+        );
+        assert!(
+            rendered.contains("mir-emit-retag"),
+            "error display must surface the allow-list; got: {rendered:?}"
+        );
+    }
+
+    /// B3 (3): an unknown override key (e.g., `unknown_flag = true`)
+    /// fails to deserialize because [`RowBuildOverrides`] is marked
+    /// `deny_unknown_fields`. The error message must name the
+    /// unknown field so future override-surface drift is caught at
+    /// load time rather than silently accepted.
+    #[test]
+    fn load_rejects_unknown_build_overrides_field() {
+        let text = "\
+[[row]]
+id = \"UF-001\"
+section = \"6.1\"
+construct = \"DslRejectionKind::Statement\"
+expectation = \"rejected\"
+status = \"covered\"
+cluster_key = \"UF\"
+snippet_path = \"UF-001.rs\"
+expected_rejection = { variant = \"DslRejection\", kind = \"Statement\" }
+build_overrides = { unknown_flag = true }
+";
+        let (path, _guard) = write_tmp_rows("unknown-field", text);
+        let err = load(&path).expect_err("unknown override key must fail deserialization");
+        match &err {
+            MatrixError::Toml(_) => {}
+            other => panic!("expected MatrixError::Toml from deny_unknown_fields, got {other:?}"),
+        }
+        let rendered = format!("{err}");
+        assert!(
+            rendered.contains("unknown_flag"),
+            "TOML error must name the unknown field; got: {rendered:?}"
+        );
     }
 }

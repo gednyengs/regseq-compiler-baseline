@@ -23,7 +23,7 @@ use std::process::Command;
 
 use regseq_driver::bridge::BridgeError;
 use regseq_model::{InvariantViolation, RegseqModel};
-use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
+use test_ir_fixtures::{try_bridge_fixture_path_with_overrides, BridgeOutcome, BuildOverrides};
 
 /// Typed oracle outcome surfaced to the run loop.
 ///
@@ -64,8 +64,19 @@ pub enum OracleOutcome {
     },
 }
 
-/// Run the two-step oracle against `snippet_path`.
-pub fn invoke(snippet_path: &Path) -> OracleOutcome {
+/// Run the two-step oracle against `snippet_path`. The optional
+/// `overrides` argument forwards per-row build-flag overrides to
+/// the in-process bridge helper via
+/// [`try_bridge_fixture_path_with_overrides`] per the D1 proposal at
+/// `.harness/audits/2026-05-21-post-f4-triage.md:349-415`. `None`
+/// is functionally equivalent to passing `&BuildOverrides::default()`
+/// and preserves pre-D1 helper behavior.
+///
+/// Pre-flight rustc metadata emission is NOT override-aware: the
+/// authorized overrides (`overflow_checks` + `-Z mir-emit-retag`)
+/// only affect MIR-build downstream of metadata, so the pre-flight
+/// classification stays identical regardless of overrides.
+pub fn invoke(snippet_path: &Path, overrides: Option<&BuildOverrides>) -> OracleOutcome {
     match rustc_preflight(snippet_path) {
         PreflightOutcome::Ok => {}
         PreflightOutcome::CleanReject { stderr } => {
@@ -77,8 +88,9 @@ pub fn invoke(snippet_path: &Path) -> OracleOutcome {
     }
 
     let path_owned = snippet_path.to_path_buf();
+    let overrides_owned = overrides.cloned().unwrap_or_default();
     let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(move || {
-        try_bridge_fixture_path(&path_owned)
+        try_bridge_fixture_path_with_overrides(&path_owned, &overrides_owned)
     }));
     match result {
         Err(payload) => OracleOutcome::Panic {

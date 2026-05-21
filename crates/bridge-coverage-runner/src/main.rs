@@ -121,7 +121,11 @@ fn main() -> ExitCode {
 
     let mut results: Vec<RowResult> = Vec::with_capacity(rows_file.rows.len());
     for (row, snip) in rows_file.rows.iter().zip(snippets.iter()) {
-        let outcome = oracle::invoke(&snip.path);
+        let overrides: Option<test_ir_fixtures::BuildOverrides> = row
+            .build_overrides
+            .as_ref()
+            .map(test_ir_fixtures::BuildOverrides::from);
+        let outcome = oracle::invoke(&snip.path, overrides.as_ref());
         let (pass, classification_detail) = classify(row, &outcome, row.inspect.as_ref());
         let variant_or_phase = variant_or_phase(&outcome);
         let detail = format!("{} -- {}", row.row_context(), classification_detail);

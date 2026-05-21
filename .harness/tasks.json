@@ -1877,7 +1877,7 @@
           "id": "regseq-driver-69",
           "name": "test-ir-fixtures per-fixture build-flag override (D1: TM-006-C + RJ-006)",
           "spec": ".harness/tasks/regseq-driver/69-test-ir-fixtures-build-flag-override.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-68"
           ],
