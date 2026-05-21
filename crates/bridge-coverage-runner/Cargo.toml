@@ -1,0 +1,20 @@
+[package]
+name = "bridge-coverage-runner"
+version = "0.1.0"
+edition = "2021"
+publish = false
+
+[package.metadata.rust-analyzer]
+rustc_private = true
+
+[[bin]]
+name = "bridge-coverage-runner"
+path = "src/main.rs"
+
+[dependencies]
+test-ir-fixtures = { path = "../test-ir-fixtures" }
+regseq-model = { path = "../regseq-model" }
+regseq-driver = { path = "../regseq-driver" }
+toml = "0.8"
+serde = { version = "1", features = ["derive"] }
+sha2 = "0.10"

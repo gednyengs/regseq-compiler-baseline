@@ -1772,7 +1772,7 @@
           "id": "regseq-driver-64",
           "name": "Bridge-coverage-runner F1 scaffold (10-row demo)",
           "spec": ".harness/tasks/regseq-driver/64-bridge-coverage-runner-f1-scaffold.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-63"
           ],

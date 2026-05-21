@@ -1,0 +1,119 @@
+# 10-row demo set for F1 validate-the-loop milestone per
+# bridge-coverage-runner-strategy.md section 11. Composed to exercise:
+#   - Both expectation classes (positive: 6, rejected: 4)
+#   - Five InspectionPredicate dispatch arms (TyVariant / ItemKind /
+#     FunctionInstanceFlavor / All / Any composite)
+#   - Four BridgeError variants (DslRejection / Coroutine /
+#     UnsupportedAbi / UnsupportedCAbiType)
+#   - The subprocess rustc pre-flight path (no row deliberately
+#     fails rustc in F1; pre-flight code path is verified via the
+#     positive flow not surfacing RustcCleanReject)
+#
+# F2+ extends this sidecar to the full ~133-uncovered-row matrix
+# corpus.
+
+[[row]]
+id = "TY-018"
+section = "1.1"
+construct = "Ty::Enum"
+expectation = "positive"
+status = "covered"
+cluster_key = "TY-018"
+snippet_path = "TY-018.rs"
+inspect = { kind = "TyVariant", arg = "Enum" }
+
+[[row]]
+id = "IK-002"
+section = "2.1"
+construct = "ItemKind::Static"
+expectation = "positive"
+status = "covered"
+cluster_key = "IK-002"
+snippet_path = "IK-002.rs"
+inspect = { kind = "ItemKind", arg = "Static" }
+
+[[row]]
+id = "IK-005"
+section = "2.1"
+construct = "ItemKind::Struct"
+expectation = "positive"
+status = "covered"
+cluster_key = "IK-005"
+snippet_path = "IK-005.rs"
+inspect = { kind = "ItemKind", arg = "Struct" }
+
+[[row]]
+id = "TY-014-A"
+section = "1.1"
+construct = "Ty::Dynamic (no auto-traits)"
+expectation = "positive"
+status = "covered"
+cluster_key = "TY-014"
+snippet_path = "TY-014-A.rs"
+inspect = { kind = "Any", arg = [
+  { kind = "TyVariant", arg = "Dynamic" },
+  { kind = "TyVariant", arg = "Never" },
+] }
+
+[[row]]
+id = "FF-011"
+section = "2.3"
+construct = "FunctionInstanceFlavor::DropGlue"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-011"
+snippet_path = "FF-011.rs"
+inspect = { kind = "FunctionInstanceFlavor", arg = "DropGlue" }
+
+[[row]]
+id = "IX-002"
+section = "5"
+construct = "Trait default body x body materialisation"
+expectation = "positive"
+status = "covered"
+cluster_key = "IX-002"
+snippet_path = "IX-002.rs"
+inspect = { kind = "All", arg = [
+  { kind = "TyVariant", arg = "Struct" },
+  { kind = "ItemKind", arg = "Function" },
+] }
+
+[[row]]
+id = "RJ-002"
+section = "6.1"
+construct = "DslRejectionKind::CVoid"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-002"
+snippet_path = "RJ-002.rs"
+expected_rejection = { variant = "DslRejection", kind = "CVoid" }
+
+[[row]]
+id = "RJ-016"
+section = "6.3"
+construct = "Coroutine"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-016"
+snippet_path = "RJ-016.rs"
+expected_rejection = { variant = "Coroutine" }
+
+[[row]]
+id = "RJ-026"
+section = "6.3"
+construct = "UnsupportedAbi"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-026"
+snippet_path = "RJ-026.rs"
+expected_rejection = { variant = "UnsupportedAbi" }
+
+[[row]]
+id = "RJ-028-A"
+section = "6.3"
+construct = "UnsupportedCAbiType::Input"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-028"
+snippet_path = "RJ-028-A.rs"
+expected_rejection = { variant = "UnsupportedCAbiType", position = "Input" }

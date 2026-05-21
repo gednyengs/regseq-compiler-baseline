@@ -1,6 +1,7 @@
 [workspace]
 resolver = "2"
 members = [
+    "crates/bridge-coverage-runner",
     "crates/cargo-regseq",
     "crates/regseq",
     "crates/regseq-analysis",
