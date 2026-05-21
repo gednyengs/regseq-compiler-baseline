@@ -17,9 +17,9 @@ returns `Ok(None)` because rustc cannot resolve a trait method on a
 generic `Param`. The bridge surfaces this as
 `BridgeError::Phase4(...)` at `bridge/mod.rs:1042-1046`.
 
-Manual playground stress-testing surfaced this on the canonical
-closure-indirection shape (committed to `playground/src/lib.rs`,
-uncommitted in the working tree at the time of this task spec):
+Manual stress-testing surfaced this on the canonical
+closure-indirection shape (reproduced inline below; the
+implementer authors the same shape as the B2 fixture):
 
 ```rust
 #![no_std]
@@ -135,12 +135,11 @@ No spec amendment, no schema change, no validator change.
   `bridge_fixture` helper already injects `-C panic=abort`. New
   fixtures authored under this task automatically get the right
   panic-strategy treatment.
-- Pre-fix manual repro: `tests/fixtures/playground/src/lib.rs`
-  (uncommitted in the working tree at the time of this task)
-  compiles cleanly under `cargo regseq` after the fix. The
-  playground is NOT used for committed regression assertions per
-  the `playground-is-experimentation-space` rule; the regression
-  guard goes in test-ir-fixtures.
+- The committed regression guard goes in test-ir-fixtures per the
+  B2 plan below. The bug's source-shape repro is captured inline
+  in the Description block above and re-used in B2; the
+  implementer does NOT depend on any uncommitted file under
+  `tests/fixtures/playground/` for repro authoring.
 
 ## Implementation Notes
 
@@ -259,8 +258,10 @@ sufficient reason. Driver-60's Change C made the same observation.
 
 Record:
 
-- Before-fix evidence: cite the playground reproduction
-  `tests/fixtures/playground/src/lib.rs` (uncommitted) +
+- Before-fix evidence: cite the canonical repro shape
+  (inline in the Description above, re-authored as the B2
+  fixture at
+  `crates/test-ir-fixtures/fixtures/closure_apply_indirection.rs`) +
   the `BridgeError::Phase4` shape +
   the `bridge/mod.rs:769` polymorphic-body fetch +
   the `bridge/mod.rs:1039-1047` `try_resolve` -> Phase4 conversion
@@ -362,22 +363,29 @@ Post-fix: this test passes.
 tests, no panics, no `BridgeError::Phase4` from any committed
 fixture).
 
-### B4: playground manual verification (out-of-tree)
+### B4: end-to-end smoke via `cargo regseq` on the new fixture
 
-After the fix lands, the implementer manually verifies:
+After the fix lands, the implementer manually verifies the new
+B2 fixture also bridges cleanly via the production wrapper (not
+just the in-process test helper):
 
 ```bash
-cd tests/fixtures/playground && \
-  PATH="../../../target/debug:$PATH" cargo regseq \
-    --target-os linux --platform-file platform.toml --emit model
+# Author a throwaway Cargo crate (or use an existing fixture
+# crate setup) whose `src/lib.rs` is the B2 fixture's source.
+# Then drive the production wrapper:
+PATH="<workspace>/target/debug:$PATH" cargo regseq \
+  --target-os linux --platform-file <platform.toml> --emit model
 ```
 
-succeeds against the current playground state (whatever closure
-indirection shape the user has there). The implementer does NOT
-add a committed assertion against the playground per
-`playground-is-experimentation-space` rule; this is a one-off
-manual smoke check recorded in the harness expectations file as
-"manually verified at <commit-sha>".
+Verifies the production-wrapper code path matches the in-process
+test-helper code path. Recorded in the harness expectations file
+as "manually verified at <commit-sha>". This is OUT-OF-TREE
+smoke only; the binding regression guard is B2.
+
+Do NOT use `tests/fixtures/playground/` for this verification --
+playground is the user's experimentation space (per
+`playground-is-experimentation-space`) and its on-disk state at
+any commit is not part of this task's repro contract.
 
 ## Review
 
@@ -472,7 +480,7 @@ Do not ask clarifying questions. Read the files, decide, stop.
   - new `.harness/expectations/regseq-driver-62.md` (Change C)
 - No spec.md, pretty-printer.md, generic-c-backend.md, or
   validator changes.
-- Manual verification on `tests/fixtures/playground/` per B4.
+- Manual verification via `cargo regseq` on the B2 fixture per B4.
 - Codex Task Review verdict: APPROVED or APPROVED WITH MINOR FIXES.
 
 ## Acceptance Criteria
@@ -488,8 +496,10 @@ Do not ask clarifying questions. Read the files, decide, stop.
    (DropGlue, VTableShim, etc.) receive the right body view per
    the pinned-nightly rustc API contract.
 
-3. **Pre-fix repro stops failing**: the playground stress fixture
-   that surfaces the bug compiles cleanly via `cargo regseq`.
+3. **Pre-fix repro stops failing**: the canonical
+   closure-apply-indirection shape (the B2 fixture below)
+   compiles cleanly via both the `bridge_fixture` test helper
+   and the production `cargo regseq` wrapper.
 
 4. **B2 fixture test passes**: the new
    `closure_apply_indirection.rs` fixture and its integration
@@ -511,4 +521,4 @@ Do not ask clarifying questions. Read the files, decide, stop.
 8. **Expectations file lands**:
    `.harness/expectations/regseq-driver-62.md` records before /
    after evidence with file:line citations + the manual
-   playground verification SHA.
+   `cargo regseq` smoke-verification SHA from B4.

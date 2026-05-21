@@ -1723,12 +1723,18 @@
             "spec.md#9",
             "spec.md#15"
           ],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-21T04:03:16Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-21T04:10:22Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "remove load-bearing references to user's playground; canonical repro now inline + B4 manual smoke retargeted at the new B2 fixture"
             }
           ]
         }
