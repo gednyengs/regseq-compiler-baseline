@@ -23,11 +23,11 @@ The volatility split means 90% of updates touch only the
 ## § Current state (UPDATE EVERY TASK CLOSE)
 
 - **Last updated**: 2026-05-21
-- **Last completed task**: regseq-driver-67 (F4 full corpus batch, 91 rows committed + 11 escalations) at commit `c8c16f3`
-- **Last commit on main**: `705e9a6` — `regseq-driver-68: register post-F4 batch triage spec (propose decomposition per strategy Mode B)`
-- **In-flight task**: regseq-driver-68 (post-F4 batch triage) — **filed but not yet picked up by implementer**
-- **Runner state**: 123 committed sidecar rows, all PASS via Mode A. 22/22 InspectionPredicate dispatch arms. 4/4 sub-axis matcher fields. Direct binary works on macOS via build.rs rpath.
-- **Active escalation queue**: 12 items (11 F4 + 1 F2 IX-014). Detail in `.harness/expectations/regseq-driver-67.md` + `.harness/expectations/regseq-driver-65.md`. Cluster taxonomy below.
+- **Last completed task**: regseq-driver-68 (F5 post-F4 batch triage, 7 proposals for human approval) at commit `c3456a5`
+- **Last commit on main**: `c3456a5` — `regseq-driver-68: post-F4 batch triage (7 proposals for human approval)` (post-implementer handoff-doc commits `88888f7` and this update follow)
+- **In-flight task**: none — awaiting user approval of a subset of F68 triage proposals before drafting regseq-driver-69+ task specs
+- **Runner state**: 123 committed sidecar rows, all PASS via Mode A. 22/22 InspectionPredicate dispatch arms. 4/4 sub-axis matcher fields. Direct binary works on macOS via build.rs rpath. **No change from F4 close** (F68 is analytical; no code modifications).
+- **Active escalation queue**: 12 items unchanged (11 F4 + 1 F2 IX-014). Now formalized into 7 PROPOSED follow-up tasks in `.harness/audits/2026-05-21-post-f4-triage.md` (A1, B1, B2, C1, C2, D1, F1). Cluster taxonomy below; per-row proposal assignment in the triage doc's Summary table.
 - **Uncommitted state in working tree**: `tests/fixtures/playground/src/lib.rs` (user's experimentation surface — never commit, never modify).
 
 ### Active escalation cluster taxonomy (driver-68's input)
@@ -41,13 +41,17 @@ The volatility split means 90% of updates touch only the
 | (e) Bridge-internal invariant rejections | RJ-024 (UnsupportedEnumLayout) | Rejection paths that rustc's layout solver doesn't produce from source |
 | (f) OPEN BUG family pointer | IX-014 | Blocked by IX-004/IX-010 (`Fn::call` resolution in polymorphic MIR) |
 
+Cluster → proposal mapping (per the F68 audit doc):
+(a) → A1 HIGH; (b) FF-012 → B1 MEDIUM, (b) FF-004 + (e) RJ-024 → B2 LOW;
+(c) OP-003-I → C1 MEDIUM, (c) FF-013 → C2 MEDIUM; (d) TM-006-C + RJ-006 → D1 HIGH,
+(d) RJ-032-F → F1 LOW; (f) IX-014 → F1 LOW (bundled with RJ-032-F as "deferred pending external work").
+
 ### Next actions (in priority order)
 
-1. **Wait for driver-68 implementer**. When user signals completion: `git pull`, read `.harness/expectations/regseq-driver-68.md` + `.harness/audits/2026-05-21-post-f4-triage.md`. Verify clean (no code changes expected). Summarize proposals + recommend approval order to user.
-2. **User approves a subset of proposals** from the triage document.
-3. **Draft follow-up specs** (regseq-driver-69+) per approved proposals via spec → Codex → file flow.
-4. **Possible matrix precision patches** as a side track (FF-002 / IX-017 diag-log peel shape mis-classification surfaced in F2/F3 expectations).
-5. **Eventual F5+ strategy items**: CI gating (Mode C), Mode B agent integration, JSON report output. Per strategy §10 these are deferred until corpus stabilises; F4 + F5 triage close the discovery-engine arc.
+1. **User reviews triage proposals** at `.harness/audits/2026-05-21-post-f4-triage.md` and approves a subset (recommended order in the doc's Closing recommendations table). Highest-leverage starting set: D1 (HIGH, smallest infra unblock for TM-006-C + RJ-006) and A1 (HIGH, single normalization clears RV-007-C / RV-009-G / FF-005).
+2. **Draft follow-up specs** (regseq-driver-69+) per each approved proposal via the spec → Codex → file flow. Each approved proposal is one task spec; F68 deliberately did not pre-author them.
+3. **Possible matrix precision patches** as a side track (FF-002 / IX-017 diag-log peel shape mis-classification surfaced in F2/F3 expectations).
+4. **Eventual post-discovery strategy items**: CI gating (Mode C), Mode B agent integration, JSON report output. Per strategy §10 these are deferred until corpus stabilises; F4 close + F5 triage close the discovery-engine arc.
 
 ---
 
@@ -62,7 +66,7 @@ Bridge-coverage-runner workstream phasing per `docs/discussions/regseq-model/bri
 | F2 | driver-65 | `3a01888` | First snippet batch (22 committed) + mini-F3 (3 arms: SyntheticItemKind / ConstVariant / CallDivergent). IX-014 escalated-before-attempt, IX-017 escalated-after-attempt |
 | F3 | driver-66 | `e2e77c0` | Dispatch hardening (14 remaining arms) + sub-axis matcher (kind/position/reason/diagnostic). 22/22 dispatch. Unblocks IX-017 via BodyAbsent |
 | F4 | driver-67 | `c8c16f3` | Full corpus batch: 91/102 rows committed, 11 escalations. IX-017 re-attempted and PASSES. Total sidecar: 123 rows |
-| F5 | driver-68 | `705e9a6` (filed) | Post-F4 batch triage: clusters escalations, **proposes** follow-up tasks (no auto-filing per strategy §10 Mode B) |
+| F5 | driver-68 | `c3456a5` | Post-F4 batch triage: 7 proposals (A1, B1, B2, C1, C2, D1, F1) covering all 12 active escalations; no auto-filing per strategy §10 Mode B. Audit doc at `.harness/audits/2026-05-21-post-f4-triage.md` |
 
 ---
 
@@ -355,3 +359,4 @@ Common post-verification:
 ## § Update log (append-only)
 
 - 2026-05-21: Initial handoff document created. State as of commit `705e9a6` (driver-68 filed).
+- 2026-05-21: F68 assessment closed. Implementer commit `c3456a5` verified clean (3 files: triage doc, expectations, tasks.json status flip; no code changes; no auto-filing). All 12 escalations covered by 7 proposals. Workspace `cargo test` green (79 test groups, 0 failures). Awaiting user approval of subset for driver-69+ spec drafting.
