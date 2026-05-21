@@ -1856,7 +1856,7 @@
           "id": "regseq-driver-68",
           "name": "Post-F4 batch triage (propose decomposition per strategy Mode B)",
           "spec": ".harness/tasks/regseq-driver/68-post-f4-batch-triage.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-67"
           ],
