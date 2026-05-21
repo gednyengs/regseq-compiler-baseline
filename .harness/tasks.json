@@ -1830,6 +1830,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-67",
+          "name": "Bridge-coverage-runner F4 full corpus batch (~102 rows)",
+          "spec": ".harness/tasks/regseq-driver/67-bridge-coverage-runner-f4-full-corpus.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-66"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-21T18:09:03Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
