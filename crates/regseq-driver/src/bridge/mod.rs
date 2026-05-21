@@ -763,10 +763,29 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
         let MonoItem::Fn(instance) = mono_item else {
             continue;
         };
-        let Some(local_def_id) = instance.def_id().as_local() else {
+        if instance.def_id().as_local().is_none() {
             continue;
-        };
-        let body = ctxt.input.tcx.optimized_mir(local_def_id);
+        }
+        // Per regseq-driver-62: fetch the polymorphic MIR via
+        // `tcx.instance_mir(instance.def)` (matching the regseq-driver-60
+        // body materializer at `bridge/body/materialise.rs:287-293`),
+        // then substitute `instance.args` so the local_decls /
+        // statements / terminators presented to the scan functions are
+        // monomorphized. Without the substitution, trait-method call
+        // sites whose `Self` is `TyKind::Param(_)` in the polymorphic
+        // body trip `canonicalize_call_site_callee` ->
+        // `Instance::try_resolve` -> `Ok(None)` -> `BridgeError::Phase4`
+        // at `bridge/mod.rs:1042-1046`. `instance_mir` returns the
+        // right body for each `InstanceKind` (source body for Item,
+        // shim body for DropGlue / VTableShim / etc.), and the
+        // substitution is a natural no-op when `instance.args` is the
+        // identity, so no defensive branch is needed.
+        let polymorphic_body = ctxt.input.tcx.instance_mir(instance.def);
+        let body = instance.instantiate_mir_and_normalize_erasing_regions(
+            ctxt.input.tcx,
+            rustc_middle::ty::TypingEnv::fully_monomorphized(),
+            rustc_middle::ty::EarlyBinder::bind(polymorphic_body.clone()),
+        );
         for local in &body.local_decls {
             scan_ty_for_synthesis(ctxt, local.ty)?;
         }

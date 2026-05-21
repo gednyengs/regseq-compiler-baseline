@@ -1711,7 +1711,7 @@
           "id": "regseq-driver-62",
           "name": "Synthesis pre-scan substitutes Instance.args into MIR",
           "spec": ".harness/tasks/regseq-driver/62-prescan-args-substitution.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-61"
           ],

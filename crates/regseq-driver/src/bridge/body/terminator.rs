@@ -51,7 +51,16 @@ pub fn translate_terminator<'tcx>(
             destination,
             target,
             ..
-        } => translate_call(cx, body_cx, func, &args, destination, target)?,
+        } => translate_call(
+            cx,
+            body_cx,
+            statements,
+            span,
+            func,
+            &args,
+            destination,
+            target,
+        )?,
         mir::TerminatorKind::Assert {
             cond,
             expected,
@@ -127,9 +136,12 @@ fn translate_switch_targets(targets: mir::SwitchTargets) -> SwitchTargets {
     }
 }
 
+#[allow(clippy::too_many_arguments)]
 fn translate_call<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
+    span: Span,
     func: mir::Operand<'tcx>,
     args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
     destination: mir::Place<'tcx>,
@@ -141,7 +153,9 @@ fn translate_call<'tcx>(
     // against a closure captures struct must be lowered into a
     // Rust-ABI `ClosureCall` synthetic Function Item with the call
     // arguments tuple-normalised.
-    if let Some((callee, normalised_args)) = rewrite_closure_call_shim(cx, body_cx, &func, args)? {
+    if let Some((callee, normalised_args)) =
+        rewrite_closure_call_shim(cx, body_cx, statements, span, &func, args)?
+    {
         return Ok(TerminatorKind::Call {
             callee,
             args: normalised_args.into_boxed_slice(),
@@ -170,6 +184,8 @@ fn translate_call<'tcx>(
 fn rewrite_closure_call_shim<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
+    span: Span,
     func: &mir::Operand<'tcx>,
     args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
 ) -> Result<Option<(CallCallee, Vec<Operand>)>, BridgeError> {
@@ -209,7 +225,29 @@ fn rewrite_closure_call_shim<'tcx>(
 
     let mut normalised: Vec<Operand> = Vec::new();
     if let Some(receiver) = args.first() {
-        normalised.push(translate_operand(cx, body_cx, receiver.node.clone())?);
+        let translated_receiver = translate_operand(cx, body_cx, receiver.node.clone())?;
+        // Per regseq-driver-62 + spec.md section 13.1: the closure-call
+        // shim's `FnSig.inputs[0]` references the parallel captures-
+        // struct `Ty::Struct { item, .. }` view of the closure (via
+        // `construct_closure_call_instances` at `bridge/mod.rs:2278-2289`),
+        // but the call-site MIR receiver carries the closure-type-
+        // identity `Ty::Closure(item, args)` view. The two views share
+        // one `Item` (and thus identical layout per spec.md:4619-4634)
+        // but are distinct `Ty` interner entries, so the validator's
+        // strict `CallArgTypeMismatch` check at
+        // `crates/regseq-model/src/model.rs:3041-3048` rejects the
+        // pairing. Bridge the gap by emitting a `Transmute` cast into
+        // a fresh synthetic local typed against the shim's expected
+        // captures-struct view; closure_ty and captures_struct_ty
+        // share Item identity + layout, so the transmute is
+        // bit-equivalent.
+        if let Some(retyped) =
+            cast_receiver_to_captures_view(cx, body_cx, statements, span, &translated_receiver)?
+        {
+            normalised.push(retyped);
+        } else {
+            normalised.push(translated_receiver);
+        }
     }
     if let Some(tuple_arg) = args.get(1) {
         let local_decls = body_cx
@@ -274,22 +312,22 @@ fn rewrite_closure_call_shim<'tcx>(
     // best-effort FnSig derived from the synth-side `ClosureCall`
     // type. Closure-call shims have FnAbi::Rust per spec section
     // 13.1; the input list mirrors the rewritten positional args.
+    //
+    // Per regseq-driver-62: the synthetic-local allocated by
+    // `cast_receiver_to_captures_view` (the closure-view -> captures-
+    // view transmute) lives in the MODEL body's `local_decls` only,
+    // not the rustc `local_decls` view used for tuple-untupling
+    // above, so the per-operand type recovery here goes through the
+    // model-side `operand_ty` helper.
     let arg_tys: Vec<regseq_model::TyId> = normalised
         .iter()
         .map(|operand| {
-            let local_decls = body_cx.local_decls().expect("set above");
-            match operand {
-                Operand::Copy(place) | Operand::Move(place) => {
-                    let local = rustc_middle::mir::Local::from_u32(place.local.as_u32());
-                    let rustc_ty = local_decls[local].ty;
-                    translate_ty(cx, rustc_ty).unwrap_or_else(|_| {
-                        cx.model.types.intern(Ty::Tuple {
-                            fields: Vec::new(),
-                            layout: UNIT_LAYOUT,
-                        })
-                    })
-                }
-                Operand::Constant(_) => cx.model.types.intern(Ty::Tuple {
+            let model_body = body_cx
+                .model_body_mut()
+                .expect("closure-call shim arg-Ty recovery requires BodyCtxt::new_with_model_body");
+            match regseq_model::operand_ty(&cx.model, model_body, operand) {
+                regseq_model::TypeRecovery::Recovered(ty_id) => ty_id,
+                _ => cx.model.types.intern(Ty::Tuple {
                     fields: Vec::new(),
                     layout: UNIT_LAYOUT,
                 }),
@@ -333,14 +371,112 @@ fn rewrite_closure_call_shim<'tcx>(
     Ok(Some((callee, normalised)))
 }
 
+/// Per regseq-driver-62: if the closure-call shim receiver's `Ty` in
+/// the model carries the closure-type-identity `Ty::Closure(item, args)`
+/// view (or `Ty::Ref(Ty::Closure(...), prov)`) and the model has a
+/// parallel captures-struct `Ty::Struct { item, args, layout }` view
+/// for the same `Item`, emit a `Statement::Assign` whose `Rvalue::Cast`
+/// transmutes the receiver into the captures-struct view (or
+/// `Ty::Ref(captures_struct, prov)` for `Call` / `CallMut`). Return
+/// `Some(Operand::Move(synthetic_local))` for the caller to push into
+/// `normalised` in place of the original receiver. Return `None` when
+/// no view conversion is needed (e.g., the receiver already uses the
+/// captures-struct view, or the operand is a constant).
+///
+/// The two views share one rustc `DefId` and identical layout per
+/// spec.md:4619-4634, so the transmute is bit-equivalent. Without this
+/// cast the validator's `CallArgTypeMismatch` check at
+/// `crates/regseq-model/src/model.rs:3041-3048` rejects the pairing
+/// (the closure-call shim's `FnSig.inputs[0]` is built against the
+/// captures-struct view per spec.md:4590-4594 at
+/// `bridge/mod.rs:2278-2289`, but the MIR receiver Place is typed
+/// against the closure-type-identity view).
+fn cast_receiver_to_captures_view<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    statements: &mut Vec<Statement>,
+    span: Span,
+    receiver: &Operand,
+) -> Result<Option<Operand>, BridgeError> {
+    use regseq_model::CastKind;
+    let receiver_place = match receiver {
+        Operand::Copy(place) | Operand::Move(place) => place.clone(),
+        Operand::Constant(_) => return Ok(None),
+    };
+    let receiver_ty_id = {
+        let model_body_ref = match body_cx.model_body_mut() {
+            Some(body) => body,
+            None => return Ok(None),
+        };
+        match regseq_model::operand_ty(&cx.model, model_body_ref, receiver) {
+            regseq_model::TypeRecovery::Recovered(ty_id) => ty_id,
+            _ => return Ok(None),
+        }
+    };
+    let receiver_ty = cx.model.types.resolve(receiver_ty_id).clone();
+    let target_ty_id = match receiver_ty {
+        Ty::Ref(pointee_ty_id, prov) => match cx
+            .model
+            .closure_captures_struct_ty
+            .get(&pointee_ty_id)
+            .copied()
+        {
+            Some(captures_ty_id) => cx.model.types.intern(Ty::Ref(captures_ty_id, prov)),
+            None => return Ok(None),
+        },
+        Ty::Closure(_, _) => match cx
+            .model
+            .closure_captures_struct_ty
+            .get(&receiver_ty_id)
+            .copied()
+        {
+            Some(captures_ty_id) => captures_ty_id,
+            None => return Ok(None),
+        },
+        _ => return Ok(None),
+    };
+    let model_body = body_cx.model_body_mut().ok_or_else(|| BridgeError::DslRejection {
+        kind: DslRejectionKind::Terminator,
+        ty_repr:
+            "closure-call shim receiver cast requires BodyCtxt::new_with_model_body for synthetic-local allocation"
+                .to_string(),
+    })?;
+    let synth_local = model_body.push_synthetic_local(target_ty_id);
+    statements.push(Statement {
+        kind: StatementKind::Assign(
+            Place::from(synth_local),
+            Rvalue::Cast(
+                CastKind::Transmute,
+                Operand::Copy(receiver_place),
+                target_ty_id,
+            ),
+        ),
+        span,
+    });
+    Ok(Some(Operand::Move(Place::from(synth_local))))
+}
+
 fn pick_closure_call_handle(
     cx: &BridgeCtxt<'_>,
     handles: &crate::bridge::synth::ClosureSynthHandles,
     call_kind: ClosureCallKind,
 ) -> Option<ItemHandle> {
     handles.calls.iter().copied().find(|handle| {
-        let placeholder = crate::bridge::placeholder_item_id_for_handle(*handle);
-        match cx.lookup_item_synthetic_kind(placeholder) {
+        // Per regseq-driver-62: prefer the bound final `ItemId` when
+        // the handle has already been resolved (post-Phase-4). The
+        // `placeholder_item_id_for_handle` fallback only applies while
+        // `pending_items` still carries the synth entry (pre-Phase-4);
+        // `lookup_item_synthetic_kind` cannot recover the synth kind
+        // from a placeholder `ItemId` once `pending_items` has been
+        // drained into `model.items` by
+        // `assign_item_ids_and_populate_sidetables`. `rewrite_closure_call_shim`
+        // is invoked during Phase-5 body materialisation, by which
+        // time the closure-call synth handles have been bound.
+        let item_id = cx
+            .handles
+            .resolve(*handle)
+            .unwrap_or_else(|| crate::bridge::placeholder_item_id_for_handle(*handle));
+        match cx.lookup_item_synthetic_kind(item_id) {
             Some(regseq_model::SyntheticItemKind::ClosureCall { call_kind: ck, .. }) => {
                 ck == call_kind
             }
