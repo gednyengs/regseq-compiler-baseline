@@ -23,11 +23,11 @@ The volatility split means 90% of updates touch only the
 ## § Current state (UPDATE EVERY TASK CLOSE)
 
 - **Last updated**: 2026-05-21
-- **Last completed task**: regseq-driver-68 (F5 post-F4 batch triage, 7 proposals for human approval) at commit `c3456a5`
-- **Last commit on main**: `c3456a5` — `regseq-driver-68: post-F4 batch triage (7 proposals for human approval)` (post-implementer handoff-doc commits `88888f7` and this update follow)
-- **In-flight task**: none — awaiting user approval of a subset of F68 triage proposals before drafting regseq-driver-69+ task specs
-- **Runner state**: 123 committed sidecar rows, all PASS via Mode A. 22/22 InspectionPredicate dispatch arms. 4/4 sub-axis matcher fields. Direct binary works on macOS via build.rs rpath. **No change from F4 close** (F68 is analytical; no code modifications).
-- **Active escalation queue**: 12 items unchanged (11 F4 + 1 F2 IX-014). Now formalized into 7 PROPOSED follow-up tasks in `.harness/audits/2026-05-21-post-f4-triage.md` (A1, B1, B2, C1, C2, D1, F1). Cluster taxonomy below; per-row proposal assignment in the triage doc's Summary table.
+- **Last completed task**: regseq-driver-68 (F5 post-F4 batch triage, 7 proposals; Codex-revised audit doc) at commits `c3456a5` + `4e14bb1`
+- **Last commit on main**: `32dad48` — `regseq-driver-69: file D1 (test-ir-fixtures per-fixture build-flag override)`
+- **In-flight task**: **regseq-driver-69** (D1: per-fixture build-flag override + TM-006-C / RJ-006 sidecar rows) — filed and pushed; awaiting implementer pickup. Codex Task Review verdict: APPROVED_WITH_MINOR_FIXES after 2 rounds (all fixes applied).
+- **Runner state**: 123 committed sidecar rows, all PASS via Mode A. 22/22 InspectionPredicate dispatch arms. 4/4 sub-axis matcher fields. Direct binary works on macOS via build.rs rpath. **No change from F4 close** (F68 was analytical; F69 in flight).
+- **Active escalation queue**: 12 items unchanged at sidecar level (11 F4 + 1 F2 IX-014). 2 items (TM-006-C, RJ-006) targeted by in-flight F69; remaining 10 still PROPOSED via 6 audit proposals (A1, B1, B2, C1, C2, F1) awaiting user approval. Cluster taxonomy below; per-row proposal assignment in `.harness/audits/2026-05-21-post-f4-triage.md` Summary table.
 - **Uncommitted state in working tree**: `tests/fixtures/playground/src/lib.rs` (user's experimentation surface — never commit, never modify).
 
 ### Active escalation cluster taxonomy (driver-68's input)
@@ -48,10 +48,11 @@ Cluster → proposal mapping (per the F68 audit doc):
 
 ### Next actions (in priority order)
 
-1. **User reviews triage proposals** at `.harness/audits/2026-05-21-post-f4-triage.md` and approves a subset (recommended order in the doc's Closing recommendations table). Highest-leverage starting set: D1 (HIGH, smallest infra unblock for TM-006-C + RJ-006) and A1 (HIGH, single normalization clears RV-007-C / RV-009-G / FF-005).
-2. **Draft follow-up specs** (regseq-driver-69+) per each approved proposal via the spec → Codex → file flow. Each approved proposal is one task spec; F68 deliberately did not pre-author them.
-3. **Possible matrix precision patches** as a side track (FF-002 / IX-017 diag-log peel shape mis-classification surfaced in F2/F3 expectations).
-4. **Eventual post-discovery strategy items**: CI gating (Mode C), Mode B agent integration, JSON report output. Per strategy §10 these are deferred until corpus stabilises; F4 close + F5 triage close the discovery-engine arc.
+1. **Wait for driver-69 implementer**. When user signals completion: `git pull`, read `.harness/expectations/regseq-driver-69.md`. Verify per the Type-A code-modifying assessment loop (`cargo build` / `cargo fmt --check` / `cargo clippy -D warnings` / `cargo test`, plus Mode A invocation of the runner expecting `Total = 125, Pass = 125, Fail = 0`). The implementer's deliverable touches `crates/test-ir-fixtures/`, `crates/bridge-coverage-runner/{matrix,oracle,main}.rs`, `matrix_metadata/rows.toml`, and two new snippet files.
+2. **Draft next follow-up spec** (recommended: A1 — HIGH, single normalization clears RV-007-C / RV-009-G / FF-005). User approves; spec → Codex → file flow per the F69 pattern just established.
+3. **Subsequent proposals** (in audit-doc Closing recommendations order): C1 (OP-003-I const-eval), C2 (FF-013 fn-ptr-provenance), B1 (FF-012 CloneShim — coordinate with C1/C2 const-surface), B2 (FF-004/RJ-024 probe-or-defer LOW), F1 (IX-014/RJ-032-F watch-list LOW).
+4. **Possible matrix precision patches** as a side track (FF-002 / IX-017 diag-log peel shape mis-classification surfaced in F2/F3 expectations).
+5. **Eventual post-discovery strategy items**: CI gating (Mode C), Mode B agent integration, JSON report output. Per strategy §10 these are deferred until corpus stabilises; F4 close + F5 triage close the discovery-engine arc.
 
 ---
 
@@ -361,3 +362,4 @@ Common post-verification:
 - 2026-05-21: Initial handoff document created. State as of commit `705e9a6` (driver-68 filed).
 - 2026-05-21: F68 assessment closed. Implementer commit `c3456a5` verified clean (3 files: triage doc, expectations, tasks.json status flip; no code changes; no auto-filing). All 12 escalations covered by 7 proposals. Workspace `cargo test` green (79 test groups, 0 failures). Awaiting user approval of subset for driver-69+ spec drafting.
 - 2026-05-21: Codex review pass over the F68 triage deliverable returned NOT_READY with 5 REQUIRED FIXES. Audit doc revised in a follow-up commit per user direction: (#1) F1 IX-014 reframed as F68 spec-policy choice with explicit deferred path-(a) note from F2 expectations `:238-243`; (#2) B2 root cause downgraded from "empirically-confirmed no source path" to "no source path within F4's 3-retry budget"; (#3) B1 carries an explicit fix-location warning pointing at `ty.rs:614-618` (`translate_generic_args`) as the likely actual blocker, with mandate that the B1 spec-drafting session must empirically pin the location; (#4) Closing recommendations now flags B1 / C1 / C2 const-surface coordination risk; (#5) MEDIUM-tier ordering rationale formalized. Defects #1, #2, #4, #5 fixed in-doc; defect #3 deferred to B1 spec-drafting session per user direction.
+- 2026-05-21: regseq-driver-69 (D1) drafted + Codex-reviewed (2 rounds: NOT_READY → APPROVED_WITH_MINOR_FIXES, all fixes applied) + filed + pushed at commit `32dad48`. Spec extends test-ir-fixtures with a per-fixture `BuildOverrides { overflow_checks, z_flags }` surface (allow-listed at both matrix loader load-time and helper workhorse defense-in-depth), threads it through the runner schema, and authors TM-006-C + RJ-006 sidecar rows. Empirical claims grounded in pinned-nightly rustc source (Codex verified via active sysroot at `~/.rustup/toolchains/nightly-2026-02-01-aarch64-apple-darwin/lib/rustlib/rustc-src/rust/compiler/`). Three local commits (`11124b3`, `4e14bb1`, `32dad48`) pushed to origin/main in a single push. Implementer agent picks up next.
