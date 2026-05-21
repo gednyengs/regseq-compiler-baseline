@@ -1,12 +1,17 @@
 //! Post-bridge inspection predicate enum + dispatch per strategy
 //! section 7.
 //!
-//! F1 ships the complete 23-variant enum so the sidecar can be
+//! F1 ships the complete 22-variant enum (20 leaf variants plus
+//! the two composites `All` / `Any`) so the sidecar can be
 //! authored against the full predicate vocabulary, but implements
 //! dispatch only for the demo set's predicates (`TyVariant`,
-//! `ItemKind`, `FunctionInstanceFlavor`, `All`, `Any`). The other
-//! 18 leaf variants return [`InspectError::Unimplemented`]; F3
-//! per strategy section 11 hardens dispatch.
+//! `ItemKind`, `FunctionInstanceFlavor`, `All`, `Any`). F2 (per
+//! `bridge-coverage-runner-strategy.md` section 11, mini-F3 slice)
+//! adds three more dispatch arms (`SyntheticItemKind`,
+//! `ConstVariant`, `CallDivergent`) required by the first snippet
+//! batch's Section-5 rows. The remaining 14 leaf variants return
+//! [`InspectError::Unimplemented`]; F3 per strategy section 11
+//! hardens dispatch for the rest.
 //!
 //! Strategy section 7 deviation (implementation-level only): the
 //! strategy text presents `All`/`Any` as struct variants carrying
@@ -20,7 +25,9 @@
 
 use serde::Deserialize;
 
-use regseq_model::{InstanceKind, ItemKind, RegseqModel, Ty};
+use regseq_model::{
+    Const, InstanceKind, ItemKind, RegseqModel, SyntheticItemKind, TerminatorKind, Ty,
+};
 
 /// Closed inspection-predicate enum per strategy section 7.
 #[derive(Debug, Deserialize, Clone)]
@@ -222,6 +229,39 @@ fn item_kind_tag(kind: &ItemKind) -> &'static str {
     }
 }
 
+/// Variant tag for a `SyntheticItemKind` value.
+fn synthetic_kind_variant_tag(sk: &SyntheticItemKind) -> &'static str {
+    match sk {
+        SyntheticItemKind::None => "None",
+        SyntheticItemKind::ClosureCaptures { .. } => "ClosureCaptures",
+        SyntheticItemKind::ClosureCall { .. } => "ClosureCall",
+        SyntheticItemKind::ClosureDropGlue { .. } => "ClosureDropGlue",
+        SyntheticItemKind::DropGlue { .. } => "DropGlue",
+        SyntheticItemKind::VTableType { .. } => "VTableType",
+        SyntheticItemKind::VTableInstance { .. } => "VTableInstance",
+        SyntheticItemKind::VTableMethodShim { .. } => "VTableMethodShim",
+        SyntheticItemKind::VTableDropShim { .. } => "VTableDropShim",
+        SyntheticItemKind::ConstMemoryStatic { .. } => "ConstMemoryStatic",
+    }
+}
+
+/// Variant tag for a `Const` value.
+fn const_variant_tag(c: &Const) -> &'static str {
+    match c {
+        Const::Bool(_) => "Bool",
+        Const::Char(_) => "Char",
+        Const::Int(_, _) => "Int",
+        Const::Uint(_, _) => "Uint",
+        Const::Float(_, _) => "Float",
+        Const::ZST => "ZST",
+        Const::Bytes(_) => "Bytes",
+        Const::Aggregate(_) => "Aggregate",
+        Const::EnumValue { .. } => "EnumValue",
+        Const::NullPtr(_) => "NullPtr",
+        Const::Reloc(_) => "Reloc",
+    }
+}
+
 /// Variant tag for a `FunctionInstanceFlavor` value. Mirrors the
 /// `Debug` rendering.
 fn flavor_tag(flavor: &regseq_model::FunctionInstanceFlavor) -> &'static str {
@@ -290,6 +330,59 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
                 })
             }
         }
+        InspectionPredicate::SyntheticItemKind(arg) => {
+            let needle = arg.as_str();
+            let hit = model
+                .item_synthetic_kinds
+                .iter()
+                .any(|sk| synthetic_kind_variant_tag(sk) == needle);
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "SyntheticItemKind",
+                    arg: arg.clone(),
+                })
+            }
+        }
+        InspectionPredicate::ConstVariant(arg) => {
+            let needle = arg.as_str();
+            let hit = model
+                .consts
+                .iter()
+                .any(|(_, c)| const_variant_tag(c) == needle);
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "ConstVariant",
+                    arg: arg.clone(),
+                })
+            }
+        }
+        InspectionPredicate::CallDivergent(arg) => {
+            let needs_divergent = *arg;
+            let hit = model
+                .instances
+                .iter()
+                .filter_map(|inst| match &inst.kind {
+                    InstanceKind::Function(data) => data.body.as_ref(),
+                    _ => None,
+                })
+                .flat_map(|body| body.basic_blocks.iter())
+                .any(|bb| match &bb.terminator.kind {
+                    TerminatorKind::Call { target, .. } => target.is_none() == needs_divergent,
+                    _ => false,
+                });
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "CallDivergent",
+                    arg: needs_divergent.to_string(),
+                })
+            }
+        }
         InspectionPredicate::All(children) => {
             for child in children {
                 check(model, child)?;
@@ -310,5 +403,228 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
             variant: variant_name(other),
             arg: arg_for_display(other),
         }),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    use regseq_model::{
+        ArgsKey, BasicBlock, Body, CallCallee, FloatKind, FnAbi, FnSig, FunctionInstanceData,
+        FunctionInstanceFlavor, GenericArgs, IndexVec, InstanceId, InstanceKind, IntKind, ItemId,
+        LocalDecl, LocalId, Mutability, Place, PrincipalTraitKey, ProjectionBindingsKey,
+        RegseqModel, Safety, SourceFileId, Span, StableCrateId, Terminator, UNIT_LAYOUT,
+    };
+
+    fn empty_model() -> RegseqModel {
+        RegseqModel::with_primary("inspect_test", StableCrateId(1))
+    }
+
+    fn dummy_span() -> Span {
+        Span {
+            file: SourceFileId::SYNTHESIZED,
+            lo: 0,
+            hi: 0,
+        }
+    }
+
+    fn dummy_principal(local: u64) -> PrincipalTraitKey {
+        PrincipalTraitKey {
+            trait_path: regseq_model::DefPathHash {
+                stable_crate_id: StableCrateId(1),
+                local_hash: local,
+            },
+            trait_args: ArgsKey(0x1111),
+            projection_bindings: ProjectionBindingsKey(0x2222),
+        }
+    }
+
+    /// Build a `Body` whose basic-block terminators are exactly
+    /// `terminators`, without statements.
+    fn body_with_terminators(
+        unit_ty: regseq_model::TyId,
+        terminators: Vec<TerminatorKind>,
+    ) -> Body {
+        let mut basic_blocks: IndexVec<regseq_model::BlockId, BasicBlock> = IndexVec::new();
+        for kind in terminators {
+            basic_blocks.push(BasicBlock {
+                statements: Box::new([]),
+                terminator: Terminator {
+                    kind,
+                    span: dummy_span(),
+                },
+            });
+        }
+        let mut local_decls: IndexVec<LocalId, LocalDecl> = IndexVec::new();
+        local_decls.push(LocalDecl {
+            ty: unit_ty,
+            mutability: Mutability::Mut,
+            span: dummy_span(),
+            debug_name: None,
+        });
+        Body {
+            basic_blocks,
+            local_decls,
+            arg_count: 0,
+            span: dummy_span(),
+        }
+    }
+
+    /// Push a minimal `Function` instance carrying `body`. The
+    /// instance back-references `ItemId::ZERO`; the dispatch arms
+    /// under test never resolve item back-references, so a stub
+    /// is sufficient.
+    fn push_function_instance(model: &mut RegseqModel, body: Body) {
+        let unit_ty = model.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: UNIT_LAYOUT,
+        });
+        let sig = model.sigs.intern(FnSig {
+            inputs: vec![],
+            output: unit_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        let emission_name = model.strings.intern("inspect_test_fn");
+        model.instances.push(regseq_model::Instance {
+            item: ItemId::ZERO,
+            generic_args: GenericArgs::new(),
+            emission_name,
+            span: dummy_span(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: sig,
+                body: Some(body),
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        });
+    }
+
+    #[test]
+    fn synthetic_item_kind_arm_matches_present_variant_and_reports_not_found_otherwise() {
+        let mut model = empty_model();
+        model
+            .item_synthetic_kinds
+            .push(SyntheticItemKind::VTableDropShim {
+                principal: dummy_principal(0x7A17),
+                self_ty: ArgsKey(0x3333),
+            });
+
+        assert!(check(
+            &model,
+            &InspectionPredicate::SyntheticItemKind("VTableDropShim".to_string()),
+        )
+        .is_ok());
+
+        match check(
+            &model,
+            &InspectionPredicate::SyntheticItemKind("VTableType".to_string()),
+        ) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "SyntheticItemKind");
+                assert_eq!(arg, "VTableType");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn const_variant_arm_matches_present_variant_and_reports_not_found_otherwise() {
+        let mut model = empty_model();
+        model.consts.intern(Const::Float(FloatKind::F32, 0));
+        model.consts.intern(Const::Int(IntKind::I32, 0));
+
+        assert!(check(
+            &model,
+            &InspectionPredicate::ConstVariant("Float".to_string()),
+        )
+        .is_ok());
+        assert!(check(
+            &model,
+            &InspectionPredicate::ConstVariant("Int".to_string()),
+        )
+        .is_ok());
+
+        match check(
+            &model,
+            &InspectionPredicate::ConstVariant("Reloc".to_string()),
+        ) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "ConstVariant");
+                assert_eq!(arg, "Reloc");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn call_divergent_arm_matches_divergent_call_and_reports_not_found_otherwise() {
+        let mut divergent_model = empty_model();
+        let unit_ty = divergent_model.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: UNIT_LAYOUT,
+        });
+        let body = body_with_terminators(
+            unit_ty,
+            vec![TerminatorKind::Call {
+                callee: CallCallee::Direct(InstanceId::ZERO),
+                args: Box::new([]),
+                destination: Place::from(LocalId::RETURN_PLACE),
+                target: None,
+            }],
+        );
+        push_function_instance(&mut divergent_model, body);
+
+        assert!(check(&divergent_model, &InspectionPredicate::CallDivergent(true),).is_ok());
+        match check(&divergent_model, &InspectionPredicate::CallDivergent(false)) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "CallDivergent");
+                assert_eq!(arg, "false");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        let mut returning_model = empty_model();
+        let unit_ty = returning_model.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: UNIT_LAYOUT,
+        });
+        let body = body_with_terminators(
+            unit_ty,
+            vec![
+                TerminatorKind::Call {
+                    callee: CallCallee::Direct(InstanceId::ZERO),
+                    args: Box::new([]),
+                    destination: Place::from(LocalId::RETURN_PLACE),
+                    target: Some(regseq_model::BlockId::from_u32(1)),
+                },
+                TerminatorKind::Return,
+            ],
+        );
+        push_function_instance(&mut returning_model, body);
+
+        assert!(check(&returning_model, &InspectionPredicate::CallDivergent(false),).is_ok());
+        match check(&returning_model, &InspectionPredicate::CallDivergent(true)) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "CallDivergent");
+                assert_eq!(arg, "true");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn unimplemented_arms_still_report_unimplemented() {
+        let model = empty_model();
+        match check(&model, &InspectionPredicate::PlaceElem("Deref".to_string())) {
+            Err(InspectError::Unimplemented { variant, arg }) => {
+                assert_eq!(variant, "PlaceElem");
+                assert_eq!(arg, "Deref");
+            }
+            other => panic!("expected Unimplemented, got {other:?}"),
+        }
     }
 }

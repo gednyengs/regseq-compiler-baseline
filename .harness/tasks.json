@@ -1793,7 +1793,7 @@
           "id": "regseq-driver-65",
           "name": "Bridge-coverage-runner F2 first snippet batch + mini-F3 dispatch arms",
           "spec": ".harness/tasks/regseq-driver/65-bridge-coverage-runner-f2-first-batch.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-64"
           ],

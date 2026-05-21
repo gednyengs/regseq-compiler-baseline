@@ -117,3 +117,241 @@ status = "uncovered"
 cluster_key = "RJ-028"
 snippet_path = "RJ-028-A.rs"
 expected_rejection = { variant = "UnsupportedCAbiType", position = "Input" }
+
+# ---------------------------------------------------------------------------
+# F2 (regseq-driver-65): first snippet batch covering Section 5 (interactions)
+# + Section 6 (rejections) high-yield uncovered rows per
+# bridge-coverage-runner-strategy.md section 11. Rows that consumed their
+# 3-retry budget without a passing candidate are documented in
+# .harness/expectations/regseq-driver-65.md and intentionally NOT committed
+# here (the runner only sees passing rows).
+# ---------------------------------------------------------------------------
+
+[[row]]
+id = "IX-001"
+section = "5"
+construct = "Generic fn x concrete args"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-001"
+snippet_path = "IX-001.rs"
+inspect = { kind = "All", arg = [
+  { kind = "ItemKind", arg = "Function" },
+  { kind = "FunctionInstanceFlavor", arg = "Item" },
+] }
+
+[[row]]
+id = "IX-007"
+section = "5"
+construct = "dyn Trait x Drop -> VTableDropShim"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-007"
+snippet_path = "IX-007.rs"
+inspect = { kind = "SyntheticItemKind", arg = "VTableDropShim" }
+
+[[row]]
+id = "IX-008"
+section = "5"
+construct = "dyn Trait x generic method substitution at vtable"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-008"
+snippet_path = "IX-008.rs"
+inspect = { kind = "SyntheticItemKind", arg = "VTableMethodShim" }
+
+[[row]]
+id = "IX-012"
+section = "5"
+construct = "Nested Drop ordering"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-012"
+snippet_path = "IX-012.rs"
+inspect = { kind = "All", arg = [
+  { kind = "FunctionInstanceFlavor", arg = "DropGlue" },
+  { kind = "ItemKind", arg = "Struct" },
+] }
+
+[[row]]
+id = "IX-013"
+section = "5"
+construct = "Closure x Drop captures (-> ClosureDropGlue)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-013"
+snippet_path = "IX-013.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureDropGlue" }
+
+[[row]]
+id = "IX-015"
+section = "5"
+construct = "Generic fn x generic struct field access"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-015"
+snippet_path = "IX-015.rs"
+inspect = { kind = "All", arg = [
+  { kind = "ItemKind", arg = "Function" },
+  { kind = "ItemKind", arg = "Struct" },
+] }
+
+[[row]]
+id = "IX-019"
+section = "5"
+construct = "Two adjacent end-of-scope drops"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-019"
+snippet_path = "IX-019.rs"
+inspect = { kind = "FunctionInstanceFlavor", arg = "DropGlue" }
+
+[[row]]
+id = "IX-021"
+section = "5"
+construct = "dyn Trait + Send auto-trait"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-021"
+snippet_path = "IX-021.rs"
+inspect = { kind = "TyVariant", arg = "Dynamic" }
+
+[[row]]
+id = "IX-022"
+section = "5"
+construct = "Const::Reloc x call-site (reloc through &static)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-022"
+snippet_path = "IX-022.rs"
+inspect = { kind = "ConstVariant", arg = "Reloc" }
+
+[[row]]
+id = "IX-023"
+section = "5"
+construct = "Diverging call x reachability (Call.target == None)"
+expectation = "positive"
+status = "uncovered"
+cluster_key = "IX-023"
+snippet_path = "IX-023.rs"
+inspect = { kind = "CallDivergent", arg = true }
+
+[[row]]
+id = "RJ-003"
+section = "6.1"
+construct = "DslRejectionKind::Atomic"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-003"
+snippet_path = "RJ-003.rs"
+expected_rejection = { variant = "DslRejection", kind = "Atomic" }
+
+[[row]]
+id = "RJ-005"
+section = "6.1"
+construct = "DslRejectionKind::Rvalue (ThreadLocalRef)"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-005"
+snippet_path = "RJ-005.rs"
+expected_rejection = { variant = "DslRejection", kind = "Rvalue" }
+
+[[row]]
+id = "RJ-019"
+section = "6.3"
+construct = "DynAutoOnly"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-019"
+snippet_path = "RJ-019.rs"
+expected_rejection = { variant = "DynAutoOnly" }
+
+[[row]]
+id = "RJ-022"
+section = "6.3"
+construct = "SubstantiveHrtb"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-022"
+snippet_path = "RJ-022.rs"
+expected_rejection = { variant = "SubstantiveHrtb" }
+
+[[row]]
+id = "RJ-027"
+section = "6.3"
+construct = "UnsupportedNeverInput"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-027"
+snippet_path = "RJ-027.rs"
+expected_rejection = { variant = "UnsupportedNeverInput" }
+
+[[row]]
+id = "RJ-028-B"
+section = "6.3"
+construct = "UnsupportedCAbiType::Output"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-028"
+snippet_path = "RJ-028-B.rs"
+expected_rejection = { variant = "UnsupportedCAbiType", position = "Output" }
+
+[[row]]
+id = "RJ-028-C"
+section = "6.3"
+construct = "UnsupportedCAbiType::Field"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-028"
+snippet_path = "RJ-028-C.rs"
+expected_rejection = { variant = "UnsupportedCAbiType", position = "Field" }
+
+[[row]]
+id = "RJ-031-A"
+section = "6.3"
+construct = "DiagLogFormat::DebugFormatterRejected"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-031"
+snippet_path = "RJ-031-A.rs"
+expected_rejection = { variant = "DiagLogFormat" }
+
+[[row]]
+id = "RJ-031-B"
+section = "6.3"
+construct = "DiagLogFormat::PositionalArgRejected"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-031"
+snippet_path = "RJ-031-B.rs"
+expected_rejection = { variant = "DiagLogFormat" }
+
+[[row]]
+id = "RJ-031-C"
+section = "6.3"
+construct = "DiagLogFormat::NamedArgRejected"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-031"
+snippet_path = "RJ-031-C.rs"
+expected_rejection = { variant = "DiagLogFormat" }
+
+[[row]]
+id = "RJ-031-E"
+section = "6.3"
+construct = "DiagLogFormat::UnclosedBrace"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-031"
+snippet_path = "RJ-031-E.rs"
+expected_rejection = { variant = "DiagLogFormat" }
+
+[[row]]
+id = "RJ-031-F"
+section = "6.3"
+construct = "DiagLogFormat::UnmatchedClosingBrace"
+expectation = "rejected"
+status = "uncovered"
+cluster_key = "RJ-031"
+snippet_path = "RJ-031-F.rs"
+expected_rejection = { variant = "DiagLogFormat" }
