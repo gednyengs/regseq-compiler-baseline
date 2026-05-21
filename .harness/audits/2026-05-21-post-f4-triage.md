@@ -169,6 +169,24 @@ If the tuple shape's `ItemMissingInstance` is a downstream
 symptom of the same array-length issue, both shapes will
 unblock; if not, file a follow-up under a separate task.
 
+**Cited fix-location warning (Codex review surfaced)**: The
+above sketch's cited entry at `const_.rs:42-49` is a hypothesis,
+not a verified blocker location. Independent inspection
+suggests the array-length const `4_usize` is more likely
+rejected upstream at
+`crates/regseq-driver/src/bridge/ty.rs:614-618`, where
+`translate_generic_args` rejects every `GenericArgKind::Const`
+unconditionally with `BridgeError::UnsupportedConst`. The
+CloneShim's substitution `{T = [u32; 4]}` would carry the
+array length as a const generic arg, hitting that rejection
+before any MIR-const-eval at `const_.rs:42-49` runs. The
+reverse-side coordinated rejection at
+`bridge/body/materialise.rs::translate_model_generic_args`
+(referenced in the `ty.rs:587-606` comment) must also be
+adjusted in lockstep. The B1 task-spec drafting session MUST
+empirically pin the actual blocker via runner probe before
+committing to the fix location.
+
 **Priority**: MEDIUM
 
 **Rationale**: One row unblock; bounded const-translation
@@ -186,21 +204,27 @@ extension and isolated from other proposals.
 `docs/discussions/regseq-model/bridge-coverage-matrix.md:397`,
 `:574`).
 
-**Root cause**: Both rows have empirically-confirmed no source
-path under the pinned nightly. FF-004 per
+**Root cause**: Both rows have no source path found within F4's
+tried shapes under the per-row 3-retry budget; neither row is
+empirically established as universally unauthorable (probing
+beyond the F4 budget remains open). FF-004 per
 `.harness/expectations/regseq-driver-67.md:280-301`: rustc's
 monomorphizer does not synthesize `InstanceKind::ReifyShim`
 for the three tried shapes (plain `fn` reify,
 `extern "C" fn` reify, `#[track_caller]` reify); the
 track-caller path that should produce a ReifyShim per
 `rustc_middle/src/ty/instance.rs::resolve_for_fn_ptr` is
-elided in the pinned-nightly's optimized MIR. RJ-024 per
+elided in the pinned-nightly's optimized MIR for those three
+shapes. RJ-024 per
 `.harness/expectations/regseq-driver-67.md:375-391`: the
 bridge's three `UnsupportedEnumLayout` paths (`Scalar::Union`
-tag, `Float` tag, niche-variant out-of-range) are
-bridge-internal invariant violations that rustc's layout
-solver does not produce for source-authored enums under the
-pinned toolchain.
+tag, `Float` tag, niche-variant out-of-range) were not
+exercised by the three F4-tried enum layouts; rustc's layout
+solver did not produce these tag shapes for the source-authored
+enums in the F4 candidate set. Whether broader source shapes
+(`#[rustc_intrinsic]` reify, `repr(u128)` enums with unusual tag
+paths, niche-range squeezes, etc.) can surface the predicates
+is the proposal's probe scope.
 
 **Proposed scope**:
 This is a probe + decision task, NOT a bridge-fix task.
@@ -416,8 +440,29 @@ implementation work.
   hit OPEN BUG family blockers -- Candidate A panics the bridge
   AND maps to `FunctionInstanceFlavor::Item` (not
   `ClosureOnceShim`); Candidate B hits the IX-004 / IX-010 OPEN
-  BUG family. IX-014 unblocks once IX-004 / IX-010 are resolved
-  upstream.
+  BUG family.
+
+  **Framing note (Codex review surfaced)**: The F2 expectations
+  file at `.harness/expectations/regseq-driver-65.md:238-243`
+  records TWO follow-up directions, not one: (a) a future task
+  adds a sub-variant-matching `SyntheticItemKind` predicate
+  (e.g., `SyntheticItemKind=ClosureCall, sub=CallOnce`) and uses
+  the direct-consumption path's actual outcome shape, OR (b) a
+  separate bug-discovery task files the bridge panic + the OPEN
+  BUG family investigation upstream. F1's grouping with RJ-032-F
+  treats IX-014 as path (b) only -- a watch-list pointer toward
+  IX-004 / IX-010 resolution -- per the F68 task spec's Non-Goal
+  item 7 at
+  `.harness/tasks/regseq-driver/68-post-f4-batch-triage.md:232-243`,
+  which explicitly mandates a "HIGH-LEVEL POINTER proposal" for
+  IX-014 and forbids parallel IX-004 / IX-010 investigation.
+  This is a TASK-SPEC POLICY CHOICE made at F68 spec-authoring
+  time, not an empirical root-cause claim that path (a) is
+  unviable. Path (a) -- the `SyntheticItemKind` sub-variant
+  predicate route -- remains an open option for a future triage
+  pass once F1's annotation lands, and would be a candidate
+  proposal in a follow-up post-driver-NN-discovery triage if a
+  user chooses to revisit IX-014 outside the OPEN-BUG path.
 - RJ-032-F: per `.harness/expectations/regseq-driver-67.md:393-417`,
   the D8 diagnostic short-circuits to `Ok(())` because
   `target_str_arg_bound` at
@@ -428,33 +473,46 @@ implementation work.
   26.9 + the per-target `<target>-backend.md` artifacts.
 
 **Proposed scope**:
-This is a watch-list documentation task, NOT a bridge-fix task.
-The implementer:
+This is a watch-list documentation task, NOT a bridge-fix task,
+per the F68 task spec's Non-Goal item 7 policy choice for
+IX-014. The implementer:
 1. Annotates each row in
    `docs/discussions/regseq-model/bridge-coverage-matrix.md`
    with the external-dependency reason (IX-014 = "blocked on
-   IX-004/IX-010 resolution"; RJ-032-F = "blocked on
-   target-binding wiring per spec.md section 26.9").
+   IX-004/IX-010 resolution per F68 task spec policy choice;
+   alternative SyntheticItemKind sub-variant route at F2
+   expectations `:238-243` deliberately deferred"; RJ-032-F =
+   "blocked on target-binding wiring per spec.md section 26.9").
 2. Records a follow-up trigger condition so a future post-IX-004
    triage / post-target-binding-wiring triage knows to revisit
-   both rows.
+   both rows. For IX-014, the trigger may be EITHER (a) IX-004 /
+   IX-010 resolution OR (b) a separate user decision to revisit
+   the deferred `SyntheticItemKind` sub-variant predicate route.
 3. Does NOT file parallel investigation work for IX-004,
    IX-010, or the target-binding wiring -- those are separate
    approval gates owned by their own phases.
+4. Does NOT file the `SyntheticItemKind` sub-variant predicate
+   task for IX-014 -- that is deferred per the F68 spec policy
+   choice noted above, and re-emerges only if a future triage
+   pass explicitly approves it.
 
 **Priority**: LOW
 
 **Rationale**: No immediate implementation; the rows remain
-matrix-uncovered until external work lands. Annotation gives
-future triage a definitive watch-target list, which is the
-cheapest unblock the F68 cluster set can offer for these rows.
+matrix-uncovered until external work lands OR a user decision
+to revisit the deferred IX-014 sub-variant route arrives.
+Annotation gives future triage a definitive watch-target list,
+which is the cheapest unblock the F68 cluster set can offer for
+these rows.
 
-**Dependencies**: IX-014 depends (externally) on resolution of
-IX-004 / IX-010 per the OPEN BUG family in the matrix. RJ-032-F
-depends (externally) on backend target-binding wiring per
-spec.md section 26.9 and the corresponding
-`<target>-backend.md` artifact. Both are out of scope for any
-near-term sidecar-coverage task.
+**Dependencies**: IX-014 depends (per F68 spec policy choice)
+on resolution of IX-004 / IX-010 per the OPEN BUG family in the
+matrix. The deferred alternative path (sub-variant predicate)
+has no external dependency and could be revived independently
+in a future triage. RJ-032-F depends (externally) on backend
+target-binding wiring per spec.md section 26.9 and the
+corresponding `<target>-backend.md` artifact. Both rows are out
+of scope for any near-term sidecar-coverage task.
 
 **Estimated effort**: documentation-only.
 
@@ -462,8 +520,19 @@ near-term sidecar-coverage task.
 
 The recommended priority order for the user to approve reflects
 (i) leverage per unit of implementer time and (ii) the absence
-of internal dependency edges between proposals (no proposal
-unblocks another; every proposal is independent).
+of formal dependency edges between proposals (no proposal
+unblocks another). The proposals are independent at the level
+of hard dependencies, but B1, C1, and C2 all touch the bridge's
+const-translation surface (B1 hypothesizes `const_.rs:42-49`
+but the verified blocker may be `ty.rs:614-618`; C1 targets
+`const_.rs:42-49`; C2 targets `translate_const_value`'s
+allocation-provenance path). If two or more of these are
+approved together, the implementer should coordinate the order
+to avoid one task's const-surface refactor invalidating another
+task's cited fix location. The ordering recommended in the
+table below already accounts for this: the MEDIUM tier puts
+C1 and C2 ahead of B1 so the value-tree + provenance fixes can
+land before B1's array-length-const refactor encounters them.
 
 | Order | Proposal | Affected escalations | Priority | Effort | Recommended action |
 | ----- | -------- | -------------------- | -------- | ------ | ------------------ |
@@ -471,7 +540,7 @@ unblocks another; every proposal is independent).
 | 2 | A1 | RV-007-C, RV-009-G, FF-005 | HIGH | moderate bridge | Approve. Single normalization extension clears 3 rows. |
 | 3 | C1 | OP-003-I | MEDIUM | moderate bridge | Approve. Isolated const-eval surface extension. |
 | 4 | C2 | FF-013 | MEDIUM | moderate bridge | Approve. Independent of C1; isolated allocation-provenance fix. |
-| 5 | B1 | FF-012 | MEDIUM | small-to-moderate bridge | Approve. One-row unblock; could trail behind C1/C2 if the implementer prefers a single const-surface sweep. |
+| 5 | B1 | FF-012 | MEDIUM | small-to-moderate bridge | Approve. One-row unblock; intentionally trails C1 + C2 because B1, C1, and C2 share the const-translation surface (see Closing recommendations coordination note above). Trailing C1/C2 lets their value-tree + provenance fixes land before B1's array-length-const refactor needs to coexist. |
 | 6 | B2 | FF-004, RJ-024 | LOW | documentation-or-small | Defer or approve at the user's discretion. Probe + decision; uncertain payoff. |
 | 7 | F1 | IX-014, RJ-032-F | LOW | documentation-only | Approve as a low-cost annotation task; no implementation risk. |
 
