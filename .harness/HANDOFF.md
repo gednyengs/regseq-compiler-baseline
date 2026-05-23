@@ -24,13 +24,13 @@ The volatility split means 90% of updates touch only the
 
 - **Last updated**: 2026-05-23
 - **Last completed task**: regseq-driver-72 (F71 follow-up trio: SyntheticItemKindSub predicate + ClosureOnceShim Phase-5 binding + RJ-009 bucket-4 carve-out coverage — all 3 sub-tasks PASS, 4/4 rows committed, zero new escalations) at commit `9186248`
-- **Last commit on main**: `dfa5fad` — `tooling: read-only coverage-drift report + matrix/sidecar drift finding` (sits on top of F72's `9186248`; **both local, 2 commits ahead of origin** at `43a8a26`)
-- **In-flight task**: none — awaiting user direction on next item (remaining F68 proposals B1 / B2 / C1 / C2 / F1, the F70 residuals FF-005 RustCall ABI + RV-009-G slice, or gap-inventory Category 4 = Section 7 validator audit)
+- **Last commit on main**: `dc10414` — `docs: retire C1 (OP-003-I) by reclassification after plan-stage misdiagnosis` (**pushed; local in sync with origin**). Recent history: `9186248` (F72 impl) → `dfa5fad` (coverage-drift tool + finding) → `821ec7d` (user: moved Codex runner to a user-level Skill — CLAUDE.md §2 is now "External Review") → `dc10414` (C1 reclassification). Codex is now invoked via the `codex-runner` Skill (verified working 2026-05-23); the local `scripts/python/codex_runner.py` is retired — see §Workflow → Codex invocation.
+- **In-flight task**: none — awaiting user direction. Next on the F68 slate is **C2** (FF-013 fn-ptr-provenance); also open: B1, B2, F1, the F70 residuals (FF-005 RustCall ABI, RV-009-G slice), or gap-inventory Category 4 (Section 7 validator audit). **C1 is RETIRED** (reclassified — see below). Suggested next move: a HEAD-grounded feasibility sanity-check on C2 *before* a full plan, given C1/F72 both showed audit proposals can mis-scope the fix-hook.
 - **Runner state**: **140 committed sidecar rows**, all PASS via Mode A (Total=140, Pass=140, Fail=0; independently re-verified at assessment). F72 added **2 new InspectionPredicate arms** (`SyntheticItemKindSub { kind, sub }` for the ClosureCall call_kind sub-axis; `SignatureNonRigid` reading `BridgeItemFlags.signature_non_rigid` from the in-process model).
 - **KNOWN DRIFT (open; remedy deferred)**: the matrix per-row `status` column understates runner coverage — at HEAD the sidecar covers 140 rows but the matrix marks only 19 of them `covered` (121 still read `uncovered`/`partial`); separately ~94 matrix-`covered` rows are legacy-fixture-only (not in sidecar). Root cause: the bulk F4 corpus committed sidecar rows without backfilling matrix `status`. The matrix `status` is therefore NOT a reliable coverage view. Read-only report at `scripts/python/coverage_drift.py`; full finding at `.harness/audits/2026-05-23-matrix-sidecar-drift.md`. Remedy = derive matrix status from sidecar under Category 5 (do NOT hand-backfill). A per-gap living ledger was sketched and DEFERRED to Category 5 for the same "derive, don't hand-maintain" reason (`.harness/audits/2026-05-23-gap-ledger-proposal.md`).
 - **Active escalation queue**: **7 items remaining** (F72 closed FF-007, RJ-009, SK-004, SK-005; **C1/OP-003-I closed-by-reclassification 2026-05-23** — see below). Open: **C2** FF-013 (FnPtrAddrShim provenance), **B1** FF-012 (CloneShim arrays/tuples), **B2** FF-004 + RJ-024 (deferred-shim probe, LOW), **F1** RJ-032-F (watch-list, LOW), plus the F70 residuals **FF-005** (RustCall ABI gap at `bridge/fnsig.rs:107-115`) and **RV-009-G slice** (at `bridge/body/rvalue.rs:197`). Cluster taxonomy below; per-row proposal assignment in `.harness/audits/2026-05-21-post-f4-triage.md` Summary table.
 - **C1 (OP-003-I) RETIRED by reclassification, not implemented**: the F68 audit mis-scoped C1 as an isolated const-eval fix. Codex plan review (+ verification) found the real blocker is the bridge's **by-design rejection of all const-generic args** (`translate_generic_args` at `bridge/ty.rs:743-748`; reverse at `body/materialise.rs:673-684`, coordinated gap with driver-37) PLUS the deliberate exclusion of `Const::EnumValue` from type-level admissibility (scalar-only at `const_value.rs:54-64`). Architect decided enum/non-scalar const-generics are out of scope for `#![no_std]` driver specs; OP-003-I reclassified `uncovered` → `blocked-bridge-rejects-by-design` (cross-ref Section 6 RJ-029). Analysis: `.harness/audits/2026-05-23-c1-enum-const-eval-plan.md`. **Broad const-generic support remains a deferred gap (driver-37), to be taken up deliberately only if const-generics become a driver-spec requirement.**
-- **Uncommitted state in working tree**: `CLAUDE.md` carries a **pre-existing, unrelated** uncommitted edit (replaces §2 "Running Codex" with "External Review") that predates this session — NOT authored here, left untouched, flag to user. Plus untracked `tests/fixtures/playground-pl011/` + `crates/regseq-driver/tests/fixtures/` (experimentation/fixtures — never commit, never modify).
+- **Uncommitted state in working tree**: clean except two untracked dirs left alone by standing rule — `tests/fixtures/playground-pl011/` + `crates/regseq-driver/tests/fixtures/` (experimentation/fixtures — never commit, never modify). (The earlier `CLAUDE.md` edit was committed by the user as `821ec7d`.)
 
 ### Active escalation cluster taxonomy (driver-68's input)
 
@@ -91,7 +91,7 @@ Bridge-coverage-runner workstream phasing per `docs/discussions/regseq-model/bri
 ### Task spec authoring loop
 
 1. Diagnose → draft spec at `.harness/tasks/regseq-driver/NN-name.md`
-2. Send to Codex via `scripts/python/codex_runner.py` with the four-block prompt template
+2. Send to Codex via the **`codex-runner` Skill** (bundled runner) with the four-block prompt template
 3. Apply REQUIRED FIXES; re-Codex if substantive (most specs take 2-4 rounds)
 4. File via `uv run python scripts/python/task.py add-task --id --name --spec --group --depends-on --phase`
 5. Commit + push; implementer picks up
@@ -124,8 +124,14 @@ Bridge-coverage-runner workstream phasing per `docs/discussions/regseq-model/bri
 
 ### Codex invocation (canonical)
 
+Use the **`codex-runner` Skill** (the single source of truth for invoking
+Codex). Its bundled runner is pure stdlib — plain `python3`, no `uv run`.
+The Skill supersedes the repo's local `scripts/python/codex_runner.py`
+copy (do not invoke the local copy; verified equivalent + working
+2026-05-23).
+
 ```bash
-cat <<'EOF' | uv run python scripts/python/codex_runner.py --timeout 900
+cat <<'EOF' | python3 "/home/nyengele/.claude/skills/codex-runner/scripts/codex_runner.py" --timeout 900
 <task>
 ... what to review/identify ...
 </task>
@@ -149,7 +155,9 @@ Do not ask clarifying questions. Read the files, decide, stop.
 EOF
 ```
 
-Bash `timeout` >= `950000` (Codex `--timeout 900` + margin). Default `--effort high`. Codex empirically probes code (sometimes runs `cargo test`) — trust findings.
+Bash `timeout` >= `950000` (Codex `--timeout 900` + margin). Default `--effort high`. Codex empirically probes code (sometimes runs `cargo test`) — trust findings. Useful flags: `--message-only` (raw `final_message`, skip the JSON wrapper), `--no-yolo` (deny unattended shell), `--model` / `--effort` / `--cwd`.
+
+History (2026-05-23): the Codex runner moved to a user-level `codex-runner` Skill (`821ec7d` slimmed CLAUDE.md §2 to an "External Review" pointer). The Skill was verified working end-to-end and is now the canonical entry; the local-script invocation was retired per user decision. The repo still ships `scripts/python/codex_runner.py`, but do not use it — go through the Skill.
 
 If Codex returns `error: codex produced no agent_message`, daemon may be rate-limited; try `codex exec --json -m gpt-5.5` directly.
 
@@ -231,7 +239,7 @@ If Codex returns `error: codex produced no agent_message`, daemon may be rate-li
 - `.harness/expectations/regseq-driver-NN.md` — implementer reports
 - `.harness/audits/YYYY-MM-DD-<topic>.md` — date-prefixed audit docs
 - `scripts/python/task.py` — task CLI
-- `scripts/python/codex_runner.py` — Codex CLI wrapper
+- Codex review: **`codex-runner` Skill** → `/home/nyengele/.claude/skills/codex-runner/scripts/codex_runner.py` (canonical; the repo's `scripts/python/codex_runner.py` copy is retired — do not use)
 
 ---
 
