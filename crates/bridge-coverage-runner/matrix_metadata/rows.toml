@@ -1358,4 +1358,199 @@ cluster_key = "RV-009"
 snippet_path = "RV-009-G.rs"
 inspect = { kind = "AggregateKind", arg = "RawPtr" }
 
+# F71 Category 1: closure-family reattempt sweep + matrix-doc OPEN BUG refresh.
+# Authored per `.harness/tasks/regseq-driver/71-closure-family-reattempt-sweep.md`
+# (Category 1 of the 2026-05-22 gap inventory). The driver-62 prescan
+# args-substitution fix at `crates/regseq-driver/src/bridge/mod.rs:769-789`
+# unblocked the closure-call family that was previously documented as
+# "blocked-open-bridge-bug" (IX-004 / IX-010 / FT-011 / IX-014 in the
+# F4 task spec at 67-bridge-coverage-runner-f4-full-corpus.md:81-83) and
+# the empirically-blocked closure-feature siblings (FT-012 / FT-013 /
+# FT-014, BD-007, SK-003-promote-from-partial). The rows below commit
+# the snippets that PASS through HEAD's bridge; rows that escalate
+# either against a separate bridge gap (Tier 2 RustCall ABI rejection,
+# F70 FF-005 pattern) or against the runner-side `InspectionPredicate::
+# SyntheticItemKind` tag-collapse limitation at
+# `crates/bridge-coverage-runner/src/inspect.rs:50-53` + `:168-174`
+# (Tier 3 SK-004 / SK-005, CallMut / CallOnce sub-variants) are
+# documented inline below their would-be row entries and in
+# `.harness/expectations/regseq-driver-71.md`.
 
+[[row]]
+id = "IX-004"
+section = "5"
+construct = "Closure (impl Fn) x Fn::call site translation"
+expectation = "positive"
+status = "covered"
+cluster_key = "IX-004"
+snippet_path = "IX-004.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "IX-010"
+section = "5"
+construct = "Generic fn x Trait method call inside body (closure-call shim path)"
+expectation = "positive"
+status = "covered"
+cluster_key = "IX-010"
+snippet_path = "IX-010.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "BD-007"
+section = "2.4"
+construct = "Body materialised for synthetic ClosureCall Instance"
+expectation = "positive"
+status = "covered"
+cluster_key = "BD-007"
+snippet_path = "BD-007.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "FT-011"
+section = "3"
+construct = "Closure with zero captures, called by ref (impl Fn)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-011"
+snippet_path = "FT-011.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "FT-012"
+section = "3"
+construct = "Closure with N captures, called by ref"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-012"
+snippet_path = "FT-012.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "FT-013"
+section = "3"
+construct = "Closure called by mut ref (impl FnMut)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-013"
+snippet_path = "FT-013.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "FT-014"
+section = "3"
+construct = "Closure called by value (impl FnOnce)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-014"
+snippet_path = "FT-014.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "SK-003"
+section = "2.2"
+construct = "SyntheticItemKind::ClosureCall { call_kind: Call } (Fn::call body path)"
+expectation = "positive"
+status = "covered"
+cluster_key = "SK-003"
+snippet_path = "SK-003.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+[[row]]
+id = "IX-014"
+section = "5"
+construct = "Closure x FnOnce consumed via Move (ClosureCall { call_kind: CallOnce } path)"
+expectation = "positive"
+status = "covered"
+cluster_key = "IX-014"
+snippet_path = "IX-014.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+# F71 ESCALATION -- RJ-009 (`NonRigidTyKind::Param`).
+# F71 Tier 1 candidate. 3-retry sweep exhausted; no source shape
+# surfaces `BridgeError::NonRigidTy { kind: Param }` against HEAD's
+# bridge (commit 5759691). Empirically the bridge's bucket-4
+# carve-out at `crates/regseq-driver/src/bridge/mod.rs:1644-1658`
+# silently absorbs polymorphic `Function` item signatures whose
+# `translate_fn_sig` raises `NonRigidTy`, and the driver-62 fix at
+# `crates/regseq-driver/src/bridge/mod.rs:769-789` plus the closure-call
+# shim rewrite at `crates/regseq-driver/src/bridge/body/terminator.rs:150-165`
+# eliminate the previously-surviving closure-call `Param`-rejection
+# path that the matrix annotation at
+# `docs/discussions/regseq-model/bridge-coverage-matrix.md:554` cited
+# ("driver-60 prevents most; remaining gap is OPEN BUG IX-004").
+# Candidates probed: (1) `pub fn id<T>(x: T) -> T { x }` + monomorphic
+# `id::<u32>(0)` -- bridge Ok, no rejection. (2) Unused generic
+# `pub fn unused<T>(x: T) -> T { x }` with non-generic entry --
+# bridge Ok, no rejection (bucket-4 swallow). (3) Generic trait
+# method `trait Tr { fn run<T>(&self, x: T) -> T; }` + monomorphic
+# call -- bridge Ok, no rejection. Per-row escalation outcome
+# documented in `.harness/expectations/regseq-driver-71.md` Mode 1
+# (empirical). The RJ-009 row + snippet are NOT committed so the
+# zero-failures sidecar invariant is preserved.
+
+# F71 ESCALATION -- FF-007 (`FunctionInstanceFlavor::ClosureOnceShim`).
+# F71 Tier 2 candidate. 3-retry sweep exhausted; surfaced a NEW
+# bridge gap distinct from the F70 RustCall ABI rejection at
+# `crates/regseq-driver/src/bridge/fnsig.rs:107-115`. Empirically the
+# Fn-as-FnOnce and FnMut-as-FnOnce coercion paths route through
+# `function_instance_flavor_for_kind`'s mapping of
+# rustc's `InstanceKind::ClosureOnceShim` but the bridge's Phase-5
+# body pass rejects with
+# `BridgeError::Phase5("bridge-completeness validation failed:
+# ItemMissingInstance { item: ItemId(_), item_kind: Function }")`
+# before the ClosureOnceShim Instance is materialized end-to-end.
+# Candidates probed: (1) `move`-FnOnce closure with own captures --
+# bridge Ok but the produced flavor is the closure-call rewrite's
+# synthesized `Item` carrying `SyntheticItemKind::ClosureCall`, not
+# `ClosureOnceShim` (matches F2 IX-014 Candidate-A's empirical
+# finding at `.harness/expectations/regseq-driver-65.md:231-236`).
+# (2) Fn-only zero-capture closure passed to `call_once<F: FnOnce>`
+# -- Phase-5 `ItemMissingInstance` for the shim Item. (3) FnMut
+# capture-mutating closure passed to `call_once<F: FnOnce>` --
+# same Phase-5 `ItemMissingInstance`. Per-row escalation outcome
+# documented in `.harness/expectations/regseq-driver-71.md` Mode 1
+# (empirical). The FF-007 row + snippet are NOT committed.
+
+# F71 DESIGN-TIME ESCALATION -- SK-004
+# (`SyntheticItemKind::ClosureCall { call_kind: CallMut }`).
+# Escalates unconditionally because the runner's
+# `InspectionPredicate::SyntheticItemKind(String)` arm at
+# `crates/bridge-coverage-runner/src/inspect.rs:50-53` matches only
+# the variant TAG via `synthetic_kind_variant_tag` at
+# `crates/bridge-coverage-runner/src/inspect.rs:168-174`, which
+# collapses `ClosureCall { call_kind: Call }`,
+# `ClosureCall { call_kind: CallMut }`, and
+# `ClosureCall { call_kind: CallOnce }` to the single tag
+# `"ClosureCall"`. The dispatch at
+# `crates/bridge-coverage-runner/src/inspect.rs:604-609` therefore
+# cannot distinguish SK-004 (CallMut) from SK-003 (Call), so the
+# F71-committed `SK-003` row's `SyntheticItemKind=ClosureCall`
+# predicate would falsely "cover" SK-004 if SK-004 were committed.
+# Per the task spec's "No new `InspectionPredicate` arms" non-goal,
+# F71 does NOT add a sub-variant predicate; SK-004 escalates by
+# design and becomes input to a future runner-precision task.
+# Follow-up direction: per F2 IX-014 evidence at
+# `.harness/expectations/regseq-driver-65.md:238-240`, a future
+# `SyntheticItemKind` predicate extension would carry a
+# `sub: Option<String>` field matching `CallMut` / `CallOnce`
+# inner tags. No snippet was compiled (no candidate-shape outcome).
+
+# F71 DESIGN-TIME ESCALATION -- SK-005
+# (`SyntheticItemKind::ClosureCall { call_kind: CallOnce }`).
+# Same runner predicate-precision gap as SK-004: the tag function at
+# `crates/bridge-coverage-runner/src/inspect.rs:168-174` collapses
+# `CallOnce` to the `"ClosureCall"` tag, so the existing
+# `InspectionPredicate::SyntheticItemKind` arm cannot distinguish
+# CallOnce from Call / CallMut. The F71-committed IX-014 + FT-014
+# rows DO exercise the CallOnce dispatch path empirically (their
+# `rewrite_closure_call_shim` rewrite at
+# `crates/regseq-driver/src/bridge/body/terminator.rs:209-214`
+# resolves to `LangItem::FnOnce -> ClosureCallKind::CallOnce`),
+# but the runner-side predicate cannot prove the sub-axis was hit,
+# so SK-005 cannot be committed as a positive-coverage row. Per
+# the task spec's design-time escalation discipline, no snippet
+# is shipped; the row entry is recorded in the matrix doc as
+# uncovered pending a future runner-precision predicate task. See
+# `.harness/expectations/regseq-driver-71.md` Mode 2 (design-time)
+# entry.

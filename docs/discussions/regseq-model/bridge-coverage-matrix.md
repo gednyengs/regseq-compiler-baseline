@@ -376,9 +376,9 @@ bridge bugs they surface.
 | ------- | ---------------- | ----------- | ----------- | ------------ | ----- |
 | SK-001  | `SyntheticItemKind::None` (source-derived) | positive | covered | most fixtures | |
 | SK-002  | `SyntheticItemKind::ClosureCaptures { closure }` | positive | covered | `closure.rs`, `closure_call_sig_sync.rs` | |
-| SK-003  | `SyntheticItemKind::ClosureCall { closure, call_kind: Call }` | positive | partial | `closure_call_sig_sync.rs` (eager synth path only) | the `Fn::call` body path is the OPEN BUG (IX-004) |
-| SK-004  | `SyntheticItemKind::ClosureCall { closure, call_kind: CallMut }` | positive | uncovered | -- | needs `FnMut` |
-| SK-005  | `SyntheticItemKind::ClosureCall { closure, call_kind: CallOnce }` | positive | uncovered | -- | needs `FnOnce` |
+| SK-003  | `SyntheticItemKind::ClosureCall { closure, call_kind: Call }` | positive | covered | `crates/bridge-coverage-runner/snippets/SK-003.rs` | regseq-driver-71 (the `Fn::call` body path that was the OPEN BUG IX-004 now translates cleanly post-driver-62) |
+| SK-004  | `SyntheticItemKind::ClosureCall { closure, call_kind: CallMut }` | positive | uncovered | -- | regseq-driver-71 design-time escalation: the runner's `InspectionPredicate::SyntheticItemKind` arm at `crates/bridge-coverage-runner/src/inspect.rs:50-53` matches only the variant tag via `synthetic_kind_variant_tag` at `crates/bridge-coverage-runner/src/inspect.rs:168-174`, collapsing CallMut into the shared `"ClosureCall"` tag. Follow-up direction at `.harness/expectations/regseq-driver-65.md:238-240` (sub-variant-matching predicate) |
+| SK-005  | `SyntheticItemKind::ClosureCall { closure, call_kind: CallOnce }` | positive | uncovered | -- | regseq-driver-71 design-time escalation: same predicate-precision gap as SK-004; the F71-committed FT-014 + IX-014 rows DO exercise the CallOnce dispatch path empirically but the runner-side predicate cannot prove it. Follow-up direction at `.harness/expectations/regseq-driver-65.md:238-240` |
 | SK-006  | `SyntheticItemKind::ClosureDropGlue { closure }` | positive | uncovered | -- | closure with non-trivial captures + drop |
 | SK-007  | `SyntheticItemKind::DropGlue { self_ty }` | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | SK-008  | `SyntheticItemKind::VTableType { principal }` | positive | covered | `trait_object.rs`, `instance_completeness.rs` | |
@@ -397,7 +397,7 @@ bridge bugs they surface.
 | FF-004  | `ReifyShim`         | positive | uncovered | -- | needs `fn` reified from FnDef |
 | FF-005  | `FnPtrShim`         | positive | uncovered | -- | calls through FnPtr around closure |
 | FF-006  | `Virtual`           | positive | covered | `trait_object.rs` | |
-| FF-007  | `ClosureOnceShim`   | positive | uncovered | -- | `FnOnce` closure |
+| FF-007  | `ClosureOnceShim`   | positive | blocked-bridge-itemmissinginstance | -- | regseq-driver-71 empirical escalation: Fn-as-FnOnce + FnMut-as-FnOnce coercion paths surface a NEW Phase-5 `ItemMissingInstance` bridge gap at the shim Instance materialization (distinct from F70's RustCall ABI rejection at `crates/regseq-driver/src/bridge/fnsig.rs:107-115`); follow-up direction at `.harness/expectations/regseq-driver-71.md` FF-007 entry. The explicit `move`-FnOnce closure shape exercises the closure-call rewrite (`SyntheticItemKind::ClosureCall`) and does NOT emit `ClosureOnceShim` flavor (matches F2 IX-014 Candidate-A finding at `.harness/expectations/regseq-driver-65.md:231-236`); the new class name reflects spec discretion at `.harness/tasks/regseq-driver/71-closure-family-reattempt-sweep.md:631-639` |
 | FF-008  | `ConstructCoroutineInClosureShim` | rejected | blocked-bridge-rejects-by-design | -- | coroutines rejected -- cross-ref Section 6 |
 | FF-009  | `ThreadLocalShim`   | rejected | blocked-bridge-rejects-by-design | -- | TLS rejected in phase 1a |
 | FF-010  | `FutureDropPollShim` | rejected | blocked-bridge-rejects-by-design | -- | async rejected |
@@ -417,7 +417,7 @@ bridge bugs they surface.
 | BD-004  | Body with multiple LocalDecls of distinct types | positive | covered | many | |
 | BD-005  | Body materialised for source-derived Function Instance | positive | covered | many | regseq-driver-60 |
 | BD-006  | Body materialised for synthetic DropGlue Instance | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
-| BD-007  | Body materialised for synthetic ClosureCall Instance | positive | blocked-open-bridge-bug | -- | the prescan args-substitution bug (IX-004) surfaces here |
+| BD-007  | Body materialised for synthetic ClosureCall Instance | positive | covered | `crates/bridge-coverage-runner/snippets/BD-007.rs` | regseq-driver-71 (post-driver-62 reattempt PASS; the prescan args-substitution bug IX-004 is closed at HEAD) |
 | BD-008  | Body materialised for synthetic VTableMethodShim Instance | positive | covered | `trait_object.rs` | |
 | BD-009  | Body with `body: None` for bucket-3 (generic) Item | positive | covered | `instance_completeness.rs` | regseq-driver-58 |
 | BD-010  | Body with `body: None` for bucket-2 (foreign) Item | positive | covered | `foreign_rendering.rs` | |
@@ -438,10 +438,10 @@ bridge bugs they surface.
 | FT-008  | Trait default method body overridden by impl | positive | uncovered | -- | |
 | FT-009  | Generic free fn called with concrete args | positive | uncovered | -- | needs driver-60 B4-style fixture |
 | FT-010  | Generic struct + concrete instantiation | positive | partial | `instance_completeness.rs` (`Wrap<u32>`, `Wrap<u64>`) | the struct EXISTS in model.items; per-Item-instance body materialisation under monomorphisation needs verification |
-| FT-011  | Closure with zero captures, called by ref (`impl Fn`) | positive | blocked-open-bridge-bug | -- | OPEN BUG (IX-004) |
-| FT-012  | Closure with N captures, called by ref | positive | uncovered | -- | |
-| FT-013  | Closure called by mut ref (`impl FnMut`) | positive | uncovered | -- | |
-| FT-014  | Closure called by value (`impl FnOnce`) | positive | uncovered | -- | |
+| FT-011  | Closure with zero captures, called by ref (`impl Fn`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-011.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
+| FT-012  | Closure with N captures, called by ref | positive | covered | `crates/bridge-coverage-runner/snippets/FT-012.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
+| FT-013  | Closure called by mut ref (`impl FnMut`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-013.rs` | regseq-driver-71 (post-driver-62 reattempt PASS via the closure-call rewrite's `LangItem::FnMut -> ClosureCallKind::CallMut` arm) |
+| FT-014  | Closure called by value (`impl FnOnce`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-014.rs` | regseq-driver-71 (post-driver-62 reattempt PASS via the closure-call rewrite's `LangItem::FnOnce -> ClosureCallKind::CallOnce` arm) |
 | FT-015  | Trait object `&dyn Trait` static-method call | positive | covered | `trait_object.rs` | |
 | FT-016  | Trait object `Box<dyn Trait>` | rejected | blocked-bridge-rejects-by-design | -- | cross-ref Section 6 row RJ-001 |
 | FT-017  | `const fn` evaluated in const context | positive | partial | playground (`Reg::REG_0`) | |
@@ -482,17 +482,17 @@ or, if uncovered, the bug class it would surface.
 | IX-001  | GenericArgs × Direct Call (generic fn called with concrete args, fn body materialises) | positive | uncovered | -- | driver-60 B4 target; latent generalisation of driver-60 |
 | IX-002  | Trait default body × Body materialisation (substitution at trait DefPath) | positive | covered | `trait_default_method.rs` | driver-60 regression guard |
 | IX-003  | Drop impl × FnSig interning (Drop-as-Call collapse parallel-table sync) | positive | covered | `drop_glue_in_self_consuming_method.rs` | driver-61 regression guard |
-| IX-004  | Closure (`impl Fn`) × `Fn::call` site translation (polymorphic body containing `<F as Fn>::call`) | positive | blocked-open-bridge-bug | OPEN-BUG-PRESCAN | THE OPEN BUG -- `bridge/mod.rs:769` walks polymorphic MIR before substitution |
+| IX-004  | Closure (`impl Fn`) × `Fn::call` site translation (polymorphic body containing `<F as Fn>::call`) | positive | covered | `crates/bridge-coverage-runner/snippets/IX-004.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | IX-005  | Closure × FnSig parallel-table sync (eager synth path) | positive | covered | `closure_call_sig_sync.rs` | driver-61 regression guard |
 | IX-006  | FnPtr × FnSig parallel-table sync (Rust + C ABI dispatch on `FnAbi::C`) | positive | covered | `fn_ptr_translation_sig_sync.rs` | driver-61 regression guard |
 | IX-007  | `dyn Trait` × Drop type (vtable drop-in-place shim, SK-011) | positive | uncovered | -- | exercises VTableDropShim path |
 | IX-008  | `dyn Trait` × generic-method-call substitution at vtable shim site | positive | uncovered | -- | substitution at VTableMethodShim |
 | IX-009  | Self-consuming method × Drop (on-success-path drop terminator) | positive | covered | `drop_glue_in_self_consuming_method.rs` | driver-61 firing case |
-| IX-010  | Generic fn × Trait method call inside body (polymorphic `Fn::call` / trait-method resolve) | positive | blocked-open-bridge-bug | OPEN-BUG-PRESCAN | same root-cause family as IX-004 |
+| IX-010  | Generic fn × Trait method call inside body (polymorphic `Fn::call` / trait-method resolve) | positive | covered | `crates/bridge-coverage-runner/snippets/IX-010.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | IX-011  | Trait default method × GenericArgs substitution at body materialisation | positive | covered | `trait_default_method.rs` | driver-60 |
 | IX-012  | Nested Drop type × on-success-path drop (field-drop ordering) | positive | uncovered | -- | drop scheduling order |
 | IX-013  | Closure × Captures with Drop type | positive | uncovered | -- | exercises ClosureDropGlue (SK-006) |
-| IX-014  | Closure × `FnOnce` consumed via Move | positive | uncovered | -- | exercises FF-007 + SK-005 |
+| IX-014  | Closure × `FnOnce` consumed via Move | positive | covered | `crates/bridge-coverage-runner/snippets/IX-014.rs` | regseq-driver-71 PASS via closure-call rewrite to `ClosureCall { call_kind: CallOnce }`; the embedded FF-007 ClosureOnceShim sub-axis remains uncovered (separate Phase-5 `ItemMissingInstance` bridge gap surfaced by F71), and the SK-005 CallOnce sub-axis is masked by the runner predicate-precision gap |
 | IX-015  | Generic fn × Generic struct field access | positive | uncovered | -- | substitution in `Place::Field` |
 | IX-016  | Const eval × Const item used in body | positive | covered | playground | |
 | IX-017  | Diag-log intrinsic × generic caller | positive | uncovered | -- | log call inside `pub fn f<T>(t: T)` |
@@ -505,9 +505,11 @@ or, if uncovered, the bug class it would surface.
 | IX-024  | `panic = "abort"` MIR rewrite × cleanup-block-bearing source (Drop on success path) | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | IX-025  | `Cast::Unsize` × vtable instance synthesis at use-site | positive | covered | `instance_completeness.rs`, `trait_object.rs` | |
 
-### Notes on the open bug (IX-004 / IX-010)
+### Notes on the open bug (IX-004 / IX-010) -- historical
 
-The bridge currently fails on:
+Before regseq-driver-62 (commit at
+`.harness/expectations/regseq-driver-62.md:51-68`), the bridge
+failed on:
 
 ```rust
 fn apply(x: i32, y: i32, f: impl Fn(i32, i32) -> i32) -> i32 { f(x, y) }
@@ -515,12 +517,45 @@ pub fn entry(x: i32, y: i32) -> i32 { apply(x, y, |x, y| x + y) }
 ```
 
 because the Phase-2 synthesis pre-scan at
-`crates/regseq-driver/src/bridge/mod.rs:769` walks
+`crates/regseq-driver/src/bridge/mod.rs:769` walked
 `tcx.optimized_mir(local_def_id)` (the POLYMORPHIC body), not the
-substituted body, then attempts to resolve the polymorphic
-`<F as Fn>::call` callee via `Instance::try_resolve` at `mod.rs:1039`.
-Same root-cause shape as driver-60 (process polymorphic MIR without
+substituted body, then attempted to resolve the polymorphic
+`<F as Fn>::call` callee via `Instance::try_resolve`. Same
+root-cause shape as driver-60 (process polymorphic MIR without
 applying `instance.args`), different pass.
+
+**regseq-driver-62 landed the fix**: HEAD's
+`crates/regseq-driver/src/bridge/mod.rs:769-789` now calls
+`tcx.instance_mir(instance.def)` plus
+`instantiate_mir_and_normalize_erasing_regions(...)`, processing the
+substituted body. The minimal repro above now translates cleanly
+through Phase 2.
+
+**regseq-driver-71** (the closure-family reattempt sweep + this
+refresh) re-verified the cohort that was previously blocked by this
+bug. The per-row reattempt outcomes are recorded in
+`.harness/expectations/regseq-driver-71.md`. The row-status table
+entries that previously read `blocked-open-bridge-bug` are
+reclassified per those outcomes:
+
+- **Rows that PASS** become `covered`.
+- **Rows that escalate against a SEPARATE bridge gap** (e.g., the
+  Fn-as-FnOnce coercion path's Phase-5 `ItemMissingInstance`
+  rejection F71 surfaced for FF-007, or the RustCall ABI rejection
+  F70 surfaced for FF-005 at
+  `crates/regseq-driver/src/bridge/fnsig.rs:107-115`) get a status
+  note pointing at the new bridge-side follow-up.
+- **Rows that escalate against a runner-side predicate-precision
+  gap** (the missing `ClosureCallKind` sub-axis in
+  `InspectionPredicate::SyntheticItemKind` at
+  `crates/bridge-coverage-runner/src/inspect.rs:50-53` +
+  `:168-174` that prevents distinguishing CallMut / CallOnce from
+  Call -- SK-004 / SK-005) get a status note pointing at the F2
+  IX-014 follow-up direction recorded at
+  `.harness/expectations/regseq-driver-65.md:238-240`.
+
+The `IX-004` and `IX-010` row entries themselves are updated below;
+downstream rows are updated in their own sections.
 
 ---
 
@@ -551,7 +586,7 @@ wrong classification) or VALIDATOR-FAIL.
 
 | id      | rejection variant | source trigger | status | notes |
 | ------- | ----------------- | -------------- | ------ | ----- |
-| RJ-009  | `NonRigidTyKind::Param` | `Param` surviving substitution | rejected | partial (driver-60 prevents most; remaining gap is OPEN BUG IX-004) |
+| RJ-009  | `NonRigidTyKind::Param` | `Param` surviving substitution | rejected | partial: regseq-driver-71 empirical escalation. Post-driver-62 no source shape surfaces `BridgeError::NonRigidTy { kind: Param }`: the bridge's bucket-4 carve-out at `crates/regseq-driver/src/bridge/mod.rs:1644-1658` silently absorbs polymorphic Function-item signatures, and driver-62 + the closure-call shim rewrite eliminate the closure-call `Fn::call` path that was the previously-cited surviving surface. Status retained at `partial`: regseq-driver-65 + IX-001 still pre-empt the monomorphizable Param surface implicitly. Follow-up: a future task to either expose the bucket-4 carve-out to the rejection oracle or to add a generic-fn surface that intentionally surfaces a Param surviving substitution outside the carve-out |
 | RJ-010  | `NonRigidTyKind::Bound` | bound generic surviving | rejected | uncovered |
 | RJ-011  | `NonRigidTyKind::Placeholder` | placeholder surviving | rejected | uncovered |
 | RJ-012  | `NonRigidTyKind::Infer` | infer surviving | rejected | uncovered |
