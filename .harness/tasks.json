@@ -1935,6 +1935,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-72",
+          "name": "F71 follow-up trio (SyntheticItemKind sub-variant predicate + ClosureOnceShim Phase-5 binding + RJ-009 source-shape resolution)",
+          "spec": ".harness/tasks/regseq-driver/72-f71-followup-trio.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-71"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-23T18:13:20Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
