@@ -197,7 +197,7 @@ row is a `positive` expectation unless otherwise marked.
 | OP-003-F  | `Const::ZST` | covered | playground (Reg unit-construction) -- needs verification |
 | OP-003-G  | `Const::Bytes(Vec<Byte>)` | partial | `diag_logging.rs` (string literal -- ConstMemoryStatic-backed) |
 | OP-003-H  | `Const::Aggregate(Vec<ConstId>)` | uncovered | array/tuple literal const |
-| OP-003-I  | `Const::EnumValue { variant_idx, payload }` | uncovered | enum-constant value |
+| OP-003-I  | `Const::EnumValue { variant_idx, payload }` | blocked-bridge-rejects-by-design | enum-constant value. Reclassified 2026-05-23 (was `uncovered`): the only source route to a type-level enum value-tree is a const-generic argument (`W<V>` where `V: E` is an enum const), which the bridge rejects by design at `translate_generic_args` (`crates/regseq-driver/src/bridge/ty.rs:743-748`, `UnsupportedConst` -- cross-ref Section 6 RJ-029) and at reverse materialisation (`crates/regseq-driver/src/bridge/body/materialise.rs:673-684`, coordinated gap with driver-37). More durably, `Const::EnumValue` is deliberately excluded from type-level admissibility -- only scalar consts (Bool/Char/Int/Uint/Float) may be a `GenericArg::Const` per `crates/regseq-model/src/const_value.rs:54-64`. Enum/non-scalar const-generics are out of scope for `#![no_std]` driver specs. Decision + analysis: `.harness/audits/2026-05-23-c1-enum-const-eval-plan.md` |
 | OP-003-J  | `Const::NullPtr(TyId)` | uncovered | -- | needs a `core::ptr::null()` or `0 as *mut T` call site |
 | OP-003-K  | `Const::Reloc(InstanceRef)` | uncovered | -- | function-pointer literal (e.g., `let p: fn() = foo;`) |
 
