@@ -1313,4 +1313,49 @@ snippet_path = "RJ-006.rs"
 expected_rejection = { variant = "DslRejection", kind = "Statement" }
 build_overrides = { z_flags = ["mir-emit-retag"] }
 
+# F70 A1: bridge associated-type projection normalization. Authored
+# per `.harness/tasks/regseq-driver/70-bridge-associated-type-projection-normalization.md`
+# to bring two F4 escalations (RV-007-C, RV-009-G) to PASS through
+# the bridge's node-local normalization of the two authorized
+# projection families (`<T as core::ptr::Pointee>::Metadata` for
+# slice + sized; `<F as Fn / FnMut / FnOnce<Args>>::Output` over
+# function-pointer Self types). The third F4 escalation enumerated
+# by the task spec (FF-005, `FunctionInstanceFlavor::FnPtrShim`) is
+# ESCALATED per the spec's "no bridge changes outside ty.rs" /
+# escalation clause: empirically, the `caller<F: Fn()>(f: F)` shape
+# (and the two other F4-documented shapes) routes through the
+# bridge's `Fn::call` FnDef sig translation in
+# `bridge/body/terminator.rs::callsite_fn_sig` ->
+# `bridge/fnsig.rs::translate_fn_sig` ->
+# `translate_abi(ExternAbi::RustCall)`, which rejects with
+# `BridgeError::UnsupportedAbi` BEFORE the FnPtrShim Instance is
+# inserted into the model. Resolving requires a FnPtrShim-aware
+# sig translation analogous to the closure-call shim rewrite at
+# `bridge/ty.rs:148-166` / `bridge/body/terminator.rs::rewrite_closure_call_shim`,
+# which is bridge work outside ty.rs and therefore out of A1's
+# scope. The FF-005 row + snippet are deliberately omitted from
+# the committed sidecar so the workspace smoke test
+# `bridge-coverage-runner::smoke::smoke_full_demo_set_runs_to_completion`
+# stays green; a future bridge-side task tracking FnPtrShim sig
+# handling can land the FF-005 row + snippet alongside that fix.
+[[row]]
+id = "RV-007-C"
+section = "1.4"
+construct = "UnOp::PtrMetadata"
+expectation = "positive"
+status = "covered"
+cluster_key = "RV-007"
+snippet_path = "RV-007-C.rs"
+inspect = { kind = "UnOp", arg = "PtrMetadata" }
+
+[[row]]
+id = "RV-009-G"
+section = "1.4"
+construct = "AggregateKind::RawPtr"
+expectation = "positive"
+status = "covered"
+cluster_key = "RV-009"
+snippet_path = "RV-009-G.rs"
+inspect = { kind = "AggregateKind", arg = "RawPtr" }
+
 

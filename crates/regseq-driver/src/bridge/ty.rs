@@ -1,7 +1,10 @@
 //! Type translation from rustc `TyKind` into RegseqModel `Ty`.
 
 use rustc_hir::LangItem;
-use rustc_middle::ty::{self, TyKind, TypeSuperVisitable, TypeVisitable};
+use rustc_middle::ty::{
+    self, AliasTyKind, TyKind, TypeFoldable, TypeFolder, TypeSuperFoldable, TypeSuperVisitable,
+    TypeVisitable, TypeVisitableExt,
+};
 use rustc_span::def_id::DefId;
 
 use regseq_model::{
@@ -49,6 +52,22 @@ fn translate_erased_ty<'tcx>(
     ty: rustc_middle::ty::Ty<'tcx>,
     allow_unsized_marker: bool,
 ) -> Result<TyId, BridgeError> {
+    // Per regseq-driver-70 (A1 from the F68 post-F4 triage): node-local
+    // normalization of the two authorized associated-type projection
+    // families (`<T as core::ptr::Pointee>::Metadata` for slice +
+    // sized pointees, and `<F as Fn / FnMut / FnOnce<Args>>::Output`
+    // over function pointer Self types) BEFORE the inner `match
+    // ty.kind()` dispatch reaches its `TyKind::Alias` short-circuit
+    // arm. Other `TyKind::Alias` projections are preserved and
+    // continue to short-circuit as `NonRigidTy { kind: Alias, .. }`.
+    // Normalization at the outer's entry keeps the produced `TyId`
+    // and the cached rustc Ty in agreement so Phase-5 body
+    // materialisation's reverse resolution at
+    // `bridge/body/materialise.rs::translate_model_generic_args`
+    // reads back the same (post-normalization) ty it would have
+    // seen on the forward path.
+    let ty = normalize_authorized_projections(cx.input.tcx, ty);
+
     let ty_id = translate_erased_ty_inner(cx, ty, allow_unsized_marker)?;
     // Audit-finding regseq-driver-43-2: cache the (TyId,
     // erased-rustc-Ty) pairing so Phase-5 body materialisation can
@@ -57,6 +76,117 @@ fn translate_erased_ty<'tcx>(
     // first-seen rustc Ty stable across repeated translation calls.
     cx.ty_forward_cache.entry(ty_id).or_insert(ty);
     Ok(ty_id)
+}
+
+/// Node-local normalization of the two associated-type projection
+/// families authorized by regseq-driver-70:
+///
+///   - `<T as core::ptr::Pointee>::Metadata` on `T = Slice(_)` or a
+///     sized non-`Dynamic` non-`Slice` pointee (resolves to `usize`
+///     or `()`).
+///   - `<F as core::ops::Fn / FnMut / FnOnce<Args>>::Output` on
+///     `F = FnPtr(..)` (resolves to the function pointer's return
+///     type).
+///
+/// Walks `ty` with a custom `TypeFolder` that, at every
+/// `TyKind::Alias(AliasTyKind::Projection, _)` node, checks whether
+/// the alias matches one of the two authorized families AND its
+/// `self_ty` is one of the authorized shapes; if so, the node is
+/// rewritten via `tcx.normalize_erasing_regions` invoked on that
+/// single alias `Ty`. If the alias is NOT authorized, the walk
+/// continues into its interior so a nested authorized projection
+/// embedded inside an unauthorized one (e.g.,
+/// `Foo<<T as OtherTr>::Item<<U as Pointee>::Metadata>>`) can still
+/// be rewritten on the inner node. Calling
+/// `tcx.normalize_erasing_regions(env, value)` on the containing
+/// `value` is NOT used because the query normalizer recursively folds
+/// every alias in `value` once `value.has_aliases()` is true (see
+/// `compiler/rustc_middle/src/ty/normalize_erasing_regions.rs:57-61`
+/// under the pinned nightly), which would silently widen the
+/// bridge's effective alias-acceptance set beyond the two authorized
+/// families.
+fn normalize_authorized_projections<'tcx>(
+    tcx: ty::TyCtxt<'tcx>,
+    ty: rustc_middle::ty::Ty<'tcx>,
+) -> rustc_middle::ty::Ty<'tcx> {
+    if !ty.has_aliases() {
+        return ty;
+    }
+    let mut folder = AuthorizedProjectionFolder { tcx };
+    ty.fold_with(&mut folder)
+}
+
+struct AuthorizedProjectionFolder<'tcx> {
+    tcx: ty::TyCtxt<'tcx>,
+}
+
+impl<'tcx> TypeFolder<ty::TyCtxt<'tcx>> for AuthorizedProjectionFolder<'tcx> {
+    fn cx(&self) -> ty::TyCtxt<'tcx> {
+        self.tcx
+    }
+
+    fn fold_ty(&mut self, ty: rustc_middle::ty::Ty<'tcx>) -> rustc_middle::ty::Ty<'tcx> {
+        if let TyKind::Alias(AliasTyKind::Projection, alias_ty) = ty.kind() {
+            if is_authorized_projection(self.tcx, *alias_ty) {
+                // Normalize this single alias node. The query
+                // normalizer at
+                // `rustc_middle/src/ty/normalize_erasing_regions.rs`
+                // resolves the projection to its concrete
+                // monomorphic type when called with
+                // `TypingEnv::fully_monomorphized()`.
+                let normalized = self
+                    .tcx
+                    .normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(), ty);
+                return normalized.fold_with(self);
+            }
+        }
+        ty.super_fold_with(self)
+    }
+}
+
+/// Predicate: is this `AliasTy<'tcx>` a `Projection` whose trait +
+/// associated-item identity AND Self-type shape both fall in the
+/// regseq-driver-70 authorized set?
+fn is_authorized_projection<'tcx>(tcx: ty::TyCtxt<'tcx>, alias_ty: ty::AliasTy<'tcx>) -> bool {
+    // The associated-item lang-item determines the projection
+    // family. Per `rustc_hir/src/lang_items.rs:187` and `:259` under
+    // the pinned nightly:
+    //   - `LangItem::Metadata` corresponds to
+    //     `#[lang = "metadata_type"]` on
+    //     `core::ptr::Pointee::Metadata`.
+    //   - `LangItem::FnOnceOutput` corresponds to
+    //     `#[lang = "fn_once_output"]` on
+    //     `core::ops::FnOnce::Output` (inherited by `Fn` / `FnMut`
+    //     subtraits, which do not redeclare `Output`).
+    let self_ty = alias_ty.self_ty();
+    if tcx.is_lang_item(alias_ty.def_id, LangItem::Metadata) {
+        return is_authorized_pointee_self(tcx, self_ty);
+    }
+    if tcx.is_lang_item(alias_ty.def_id, LangItem::FnOnceOutput) {
+        return matches!(self_ty.kind(), TyKind::FnPtr(..));
+    }
+    false
+}
+
+/// Predicate: is `self_ty` an authorized pointee shape for the
+/// `<T as Pointee>::Metadata` family? Per regseq-driver-70 A1, this
+/// is `Slice(_)` OR a sized non-`Dynamic` non-`Slice` non-`Str` type.
+/// The `Dynamic` shape is explicitly excluded (its rejection has a
+/// different root cause -- `BridgeError::Foreign` on
+/// `core::ptr::metadata::VTable`, an extern type -- and is out of
+/// A1's scope). Other unsized pointees (`Str`, etc.) also remain
+/// out of scope; only the slice + sized branches of the
+/// `core::ptr::Pointee` std impls in
+/// `library/core/src/ptr/metadata.rs` are rewritten.
+fn is_authorized_pointee_self<'tcx>(
+    tcx: ty::TyCtxt<'tcx>,
+    self_ty: rustc_middle::ty::Ty<'tcx>,
+) -> bool {
+    match self_ty.kind() {
+        TyKind::Slice(_) => true,
+        TyKind::Dynamic(..) | TyKind::Str => false,
+        _ => self_ty.is_sized(tcx, ty::TypingEnv::fully_monomorphized()),
+    }
 }
 
 fn translate_erased_ty_inner<'tcx>(

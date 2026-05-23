@@ -1898,7 +1898,7 @@
           "id": "regseq-driver-70",
           "name": "Bridge associated-type projection normalization (A1: RV-007-C + RV-009-G + FF-005)",
           "spec": ".harness/tasks/regseq-driver/70-bridge-associated-type-projection-normalization.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-69"
           ],
