@@ -1914,6 +1914,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-71",
+          "name": "Closure-family reattempt sweep + matrix-doc OPEN BUG refresh (Category 1 from 2026-05-22 gap inventory)",
+          "spec": ".harness/tasks/regseq-driver/71-closure-family-reattempt-sweep.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-70"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-23T02:37:59Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
