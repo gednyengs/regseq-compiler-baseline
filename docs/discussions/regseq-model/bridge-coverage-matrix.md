@@ -403,7 +403,7 @@ bridge bugs they surface.
 | FF-010  | `FutureDropPollShim` | rejected | blocked-bridge-rejects-by-design | -- | async rejected |
 | FF-011  | `DropGlue`          | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | FF-012  | `CloneShim`         | positive | uncovered | -- | derived `Clone` impl |
-| FF-013  | `FnPtrAddrShim`     | positive | uncovered | -- | function pointer address-taking |
+| FF-013  | `FnPtrAddrShim`     | positive | covered | `crates/bridge-coverage-runner/snippets/FF-013.rs` | A direct `<fnptr as FnPtr>::addr` call (`#![feature(fn_ptr_trait)]`) bridges to an `InstanceKind::Function` with flavor `FnPtrAddrShim` (body absent per `bridge/body/materialise.rs:246-269`), zero bridge changes. The F68 audit's C2 const-fix proposal was RETIRED as mis-scoped: fn-pointer comparison never surfaces this flavor in the bridge model even with the const-provenance rejection removed (see `.harness/audits/2026-05-23-c2-fnptraddrshim-retirement.md`) |
 | FF-014  | `AsyncDropGlueCtorShim` | rejected | blocked-bridge-rejects-by-design | -- | async drop rejected |
 | FF-015  | `AsyncDropGlue`     | rejected | blocked-bridge-rejects-by-design | -- | async drop rejected |
 

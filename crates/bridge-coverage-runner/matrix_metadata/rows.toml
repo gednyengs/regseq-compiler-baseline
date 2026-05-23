@@ -1538,3 +1538,30 @@ status = "covered"
 cluster_key = "SK-005"
 snippet_path = "SK-005.rs"
 inspect = { kind = "SyntheticItemKindSub", arg = { kind = "ClosureCall", sub = "CallOnce" } }
+
+# FF-013: the F68 audit's C2 proposal (accept Function-provenance
+# const allocations at `bridge/const_.rs:526-542` so an
+# "auxiliary-instance scan materializes the FnPtrAddrShim
+# downstream") is RETIRED as mis-scoped -- it is neither necessary
+# nor sufficient for this row. `FnPtrAddrShim` is the instance kind
+# for `<fnptr as FnPtr>::addr` (rustc_ty_utils/src/instance.rs:283-292),
+# NOT for fn-pointer comparison. Empirically (HEAD, pinned
+# nightly-2026-02-01), a fn-pointer `PartialEq::eq(&a, &b)` with no
+# const at all bridges to flavors [Item, Item] with no FnPtrAddrShim,
+# so removing the const-provenance rejection cannot surface the
+# flavor; a direct `.addr()` call (this snippet) bridges to
+# [FnPtrAddrShim, Item]. The bridge already handles the flavor via
+# the body-absent deferred arm at `bridge/body/materialise.rs:246-269`.
+# The const-provenance rejection is a real but SEPARATE gap (fn
+# pointers embedded in consts/statics). See
+# `.harness/audits/2026-05-23-c2-fnptraddrshim-retirement.md`.
+
+[[row]]
+id = "FF-013"
+section = "2.3"
+construct = "FunctionInstanceFlavor::FnPtrAddrShim (fn-pointer address-taking)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-013"
+snippet_path = "FF-013.rs"
+inspect = { kind = "FunctionInstanceFlavor", arg = "FnPtrAddrShim" }
