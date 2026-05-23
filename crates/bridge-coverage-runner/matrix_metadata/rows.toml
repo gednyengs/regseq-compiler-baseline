@@ -1565,3 +1565,30 @@ status = "covered"
 cluster_key = "FF-013"
 snippet_path = "FF-013.rs"
 inspect = { kind = "FunctionInstanceFlavor", arg = "FnPtrAddrShim" }
+
+# FF-012: the F68 audit's B1 proposal (fix "array-length const
+# handling" so `[u32; 4].clone()` materializes a CloneShim) is RETIRED
+# as mis-scoped. rustc only synthesizes `InstanceKind::CloneShim` for
+# FnDef/FnPtr/Coroutine/Closure/Tuple self types
+# (rustc_ty_utils/src/instance.rs:256-275); ARRAYS are excluded
+# (`_ => Ok(None)`) and use a const-generic library Clone impl, so
+# `[u32; 4].clone()` is rejected at `translate_generic_args`
+# (`bridge/ty.rs:744-748`) on the `N=4_usize` const generic arg -- the
+# SAME by-design const-generic rejection that retired C1 (deferred
+# driver-37), NOT a CloneShim path. A fn-pointer `.clone()` (this
+# snippet) bridges to a `CloneShim`-flavored instance with ZERO bridge
+# changes (body absent at `bridge/body/materialise.rs:246-269`). Two
+# separate gaps stay open (NOT B1, NOT FF-012): tuple `.clone()` ->
+# Phase-5 ItemMissingInstance (FF-007 family); a USED cloned closure
+# (`let d = c.clone(); d()`) -> rustc ICE (`fn_sig()` on a closure).
+# See `.harness/audits/2026-05-23-b1-cloneshim-retirement.md`.
+
+[[row]]
+id = "FF-012"
+section = "2.3"
+construct = "FunctionInstanceFlavor::CloneShim (builtin Clone glue)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-012"
+snippet_path = "FF-012.rs"
+inspect = { kind = "FunctionInstanceFlavor", arg = "CloneShim" }
