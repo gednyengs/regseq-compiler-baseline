@@ -1940,7 +1940,7 @@
           "id": "regseq-driver-72",
           "name": "F71 follow-up trio (SyntheticItemKind sub-variant predicate + ClosureOnceShim Phase-5 binding + RJ-009 source-shape resolution)",
           "spec": ".harness/tasks/regseq-driver/72-f71-followup-trio.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-71"
           ],

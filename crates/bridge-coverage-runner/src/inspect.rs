@@ -32,9 +32,9 @@
 use serde::Deserialize;
 
 use regseq_model::{
-    AggregateKind, AssertKind, BinOp, CallCallee, CastKind, Const, InstanceKind, ItemKind, Linkage,
-    NonDivergingIntrinsic, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind,
-    SyntheticItemKind, TerminatorKind, Ty, UnOp,
+    AggregateKind, AssertKind, BinOp, CallCallee, CastKind, ClosureCallKind, Const, InstanceKind,
+    ItemKind, Linkage, NonDivergingIntrinsic, PlaceElem, PointerCoercion, RegseqModel, Rvalue,
+    StatementKind, SyntheticItemKind, TerminatorKind, Ty, UnOp,
 };
 
 /// Closed inspection-predicate enum per strategy section 7.
@@ -49,6 +49,20 @@ pub enum InspectionPredicate {
     ItemKind(String),
     /// At least one `SyntheticItemKind` entry matches.
     SyntheticItemKind(String),
+    /// At least one `SyntheticItemKind` entry matches the named outer
+    /// variant AND the named inner sub-axis (e.g.,
+    /// `ClosureCall { call_kind: CallMut }` is named by
+    /// `{ kind = "ClosureCall", sub = "CallMut" }`). Distinguishes the
+    /// `ClosureCall` sub-variants that the flat `SyntheticItemKind`
+    /// arm collapses to the single `"ClosureCall"` tag.
+    SyntheticItemKindSub {
+        /// Outer `SyntheticItemKind` variant tag (e.g.,
+        /// `"ClosureCall"`).
+        kind: String,
+        /// Inner sub-axis tag (e.g., `"Call"`, `"CallMut"`,
+        /// `"CallOnce"`).
+        sub: String,
+    },
     /// At least one Function Instance's flavor matches.
     FunctionInstanceFlavor(String),
     /// At least one body's statement matches the named variant.
@@ -84,6 +98,17 @@ pub enum InspectionPredicate {
     /// At least one `Ty::Int`/`Ty::Uint`/`Ty::Float` carries the
     /// named scalar-kind variant.
     ScalarKind(String),
+    /// At least one Item carries the bridge bucket-4 carve-out flag
+    /// `BridgeItemFlags.signature_non_rigid == true` -- i.e., a
+    /// non-generic `ItemKind::Function` whose identity-signature
+    /// translation rejected with `BridgeError::NonRigidTy` and was
+    /// absorbed by the four-bucket validator's bucket 4 (zero
+    /// Instances). The classic shape is an RPIT `-> impl Trait`
+    /// return that produces an `Alias(Opaque)`. Reads the bridge-only
+    /// `RegseqModel::item_bridge_flags` side table directly: the
+    /// runner inspects the in-process model the bridge produces, so
+    /// the side table is populated even though it is `#[serde(skip)]`.
+    SignatureNonRigid,
     /// Composite: ALL of the listed predicates hold.
     All(Vec<InspectionPredicate>),
     /// Composite: AT LEAST ONE of the listed predicates holds.
@@ -178,6 +203,20 @@ fn synthetic_kind_variant_tag(sk: &SyntheticItemKind) -> &'static str {
         SyntheticItemKind::VTableMethodShim { .. } => "VTableMethodShim",
         SyntheticItemKind::VTableDropShim { .. } => "VTableDropShim",
         SyntheticItemKind::ConstMemoryStatic { .. } => "ConstMemoryStatic",
+    }
+}
+
+/// Sub-variant tag for `SyntheticItemKind` values that carry an inner
+/// discriminator. Returns `None` for variants without a meaningful
+/// sub-axis (every variant other than `ClosureCall`).
+fn synthetic_kind_subvariant_tag(sk: &SyntheticItemKind) -> Option<&'static str> {
+    match sk {
+        SyntheticItemKind::ClosureCall { call_kind, .. } => Some(match call_kind {
+            ClosureCallKind::Call => "Call",
+            ClosureCallKind::CallMut => "CallMut",
+            ClosureCallKind::CallOnce => "CallOnce",
+        }),
+        _ => None,
     }
 }
 
@@ -616,6 +655,22 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
                 })
             }
         }
+        InspectionPredicate::SyntheticItemKindSub { kind, sub } => {
+            let kind_needle = kind.as_str();
+            let sub_needle = sub.as_str();
+            let hit = model.item_synthetic_kinds.iter().any(|sk| {
+                synthetic_kind_variant_tag(sk) == kind_needle
+                    && synthetic_kind_subvariant_tag(sk) == Some(sub_needle)
+            });
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "SyntheticItemKindSub",
+                    arg: format!("{kind}/{sub}"),
+                })
+            }
+        }
         InspectionPredicate::ConstVariant(arg) => {
             let needle = arg.as_str();
             let hit = model
@@ -957,6 +1012,20 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
                 })
             }
         }
+        InspectionPredicate::SignatureNonRigid => {
+            let hit = model
+                .item_bridge_flags
+                .values()
+                .any(|flags| flags.signature_non_rigid);
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "SignatureNonRigid",
+                    arg: String::new(),
+                })
+            }
+        }
         InspectionPredicate::All(children) => {
             for child in children {
                 check(model, child)?;
@@ -1099,6 +1168,99 @@ mod tests {
             }
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn synthetic_item_kind_sub_arm_distinguishes_closure_call_subvariants() {
+        let mut model = empty_model();
+        let closure = regseq_model::DefPathHash {
+            stable_crate_id: StableCrateId(1),
+            local_hash: 0xC105,
+        };
+        model
+            .item_synthetic_kinds
+            .push(SyntheticItemKind::ClosureCall {
+                closure,
+                call_kind: regseq_model::ClosureCallKind::CallMut,
+            });
+
+        // The CallMut sub-axis matches.
+        assert!(check(
+            &model,
+            &InspectionPredicate::SyntheticItemKindSub {
+                kind: "ClosureCall".to_string(),
+                sub: "CallMut".to_string(),
+            },
+        )
+        .is_ok());
+
+        // A different sub-axis (CallOnce) on the same outer variant does
+        // NOT match, even though the flat `SyntheticItemKind` arm would.
+        match check(
+            &model,
+            &InspectionPredicate::SyntheticItemKindSub {
+                kind: "ClosureCall".to_string(),
+                sub: "CallOnce".to_string(),
+            },
+        ) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "SyntheticItemKindSub");
+                assert_eq!(arg, "ClosureCall/CallOnce");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        // The flat outer-variant arm still matches the same entry,
+        // confirming the new arm is additive (Shape A.2.ii).
+        assert!(check(
+            &model,
+            &InspectionPredicate::SyntheticItemKind("ClosureCall".to_string()),
+        )
+        .is_ok());
+
+        // A mismatched outer variant does not match.
+        assert!(check(
+            &model,
+            &InspectionPredicate::SyntheticItemKindSub {
+                kind: "DropGlue".to_string(),
+                sub: "CallMut".to_string(),
+            },
+        )
+        .is_err());
+    }
+
+    #[test]
+    fn signature_non_rigid_arm_matches_bucket4_carve_out_flag() {
+        let mut model = empty_model();
+        // No carve-out flags present: the predicate reports NotFound.
+        match check(&model, &InspectionPredicate::SignatureNonRigid) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "SignatureNonRigid");
+                assert_eq!(arg, "");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        // An Item carrying the bucket-4 carve-out flag matches.
+        model.item_bridge_flags.insert(
+            regseq_model::ItemId::ZERO,
+            regseq_model::BridgeItemFlags {
+                is_generic: false,
+                signature_non_rigid: true,
+            },
+        );
+        assert!(check(&model, &InspectionPredicate::SignatureNonRigid).is_ok());
+
+        // A flag entry that is NOT signature_non_rigid does not match.
+        let mut only_generic = empty_model();
+        only_generic.item_bridge_flags.insert(
+            regseq_model::ItemId::ZERO,
+            regseq_model::BridgeItemFlags {
+                is_generic: true,
+                signature_non_rigid: false,
+            },
+        );
+        assert!(check(&only_generic, &InspectionPredicate::SignatureNonRigid).is_err());
     }
 
     #[test]

@@ -351,6 +351,12 @@ fn rewrite_closure_call_shim<'tcx>(
         Ty::Closure(_, args) => args.clone(),
         _ => Vec::new(),
     };
+    // Per regseq-driver-72 sub-task B: the closure-call shim inputs
+    // double as the by-value `ClosureOnceShim` signature inputs when
+    // this site resolves to a `ClosureOnceShim` (handled below), so
+    // snapshot them before the ClosureCall `make_fn_sig` closure moves
+    // `arg_tys`.
+    let once_shim_inputs = arg_tys.clone();
     let instance_id = lookup_or_create_direct_instance(
         cx,
         call_item,
@@ -367,8 +373,91 @@ fn rewrite_closure_call_shim<'tcx>(
             }))
         },
     )?;
+    bind_closure_once_shim_instance(
+        cx,
+        *method_def_id,
+        method_args,
+        closure_args.as_closure(),
+        once_shim_inputs,
+    )?;
     let callee = CallCallee::Direct(instance_id);
     Ok(Some((callee, normalised)))
+}
+
+/// Per regseq-driver-72 sub-task B (Path B.2.a, lazy-allocate): when
+/// the monomorphised Fn-family closure call at this site resolves --
+/// per rustc's `Instance::try_resolve` -- to an
+/// `InstanceKind::ClosureOnceShim` (a `Fn` / `FnMut` closure invoked
+/// through an `FnOnce` bound), bind a `ClosureOnceShim`-flavored
+/// Function Instance for the underlying `FnOnce::call_once`
+/// trait-method Item that the Phase-2 callee pre-scan at
+/// `crates/regseq-driver/src/bridge/mod.rs:1084-1093` already interned.
+///
+/// The closure-call rewrite redirects the actual Call terminator to
+/// the `ClosureCall` synth Instance, so without this binding the
+/// pre-interned `FnOnce::call_once` Item carries zero Instances and
+/// trips the Phase-5 bucket-1 `ItemMissingInstance` completeness check
+/// at `crates/regseq-model/src/model.rs:3622-3627`. The lazy
+/// allocation mirrors the closure-call shim pattern above and dedups
+/// through the `(ItemId, ArgsKey, FunctionInstanceFlavor)` cache so
+/// repeated call sites for the same shim converge on one Instance
+/// (Risk R-1). The shim body stays `None`: the Phase-5 materialiser
+/// treats `FunctionInstanceFlavor::ClosureOnceShim` as a flavor with
+/// no own materialisable MIR per
+/// `crates/regseq-driver/src/bridge/body/materialise.rs:246-269`. The
+/// signature reuses the closure-call shim's by-value positional inputs
+/// (which equal the `ClosureCallKind::CallOnce` receiver-plus-untupled
+/// shape) and the closure's own return type, interned as `FnAbi::Rust`
+/// so no `extern "rust-call"` ABI translation is attempted (keeping
+/// this distinct from F70's FF-005 RustCall ABI rejection).
+fn bind_closure_once_shim_instance<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    method_def_id: rustc_span::def_id::DefId,
+    method_args: ty::GenericArgsRef<'tcx>,
+    closure_args: ty::ClosureArgs<ty::TyCtxt<'tcx>>,
+    inputs: Vec<regseq_model::TyId>,
+) -> Result<(), BridgeError> {
+    let resolves_to_once_shim = matches!(
+        ty::Instance::try_resolve(
+            cx.input.tcx,
+            ty::TypingEnv::fully_monomorphized(),
+            method_def_id,
+            method_args,
+        ),
+        Ok(Some(instance)) if matches!(instance.def, ty::InstanceKind::ClosureOnceShim { .. })
+    );
+    if !resolves_to_once_shim {
+        return Ok(());
+    }
+
+    let callee_ty = ty::Ty::new_fn_def(cx.input.tcx, method_def_id, method_args);
+    let model_ty = translate_ty(cx, callee_ty)?;
+    let Ty::FnDef(shim_item, model_args) = cx.model.types.resolve(model_ty).clone() else {
+        return Ok(());
+    };
+
+    let closure_fn_sig = closure_args.sig().skip_binder();
+    let output_rustc =
+        crate::bridge::ty::erase_regions_or_reject(cx.input.tcx, closure_fn_sig.output())?;
+    let output = translate_ty(cx, output_rustc)?;
+
+    lookup_or_create_direct_instance(
+        cx,
+        shim_item,
+        model_args,
+        FunctionInstanceFlavor::ClosureOnceShim,
+        None,
+        move |cx| {
+            Ok(cx.model.sigs.intern(FnSig {
+                inputs,
+                output,
+                abi: FnAbi::Rust,
+                c_variadic: false,
+                safety: Safety::Safe,
+            }))
+        },
+    )?;
+    Ok(())
 }
 
 /// Per regseq-driver-62: if the closure-call shim receiver's `Ty` in
