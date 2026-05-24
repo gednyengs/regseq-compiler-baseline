@@ -42,6 +42,16 @@ Each row pairs a `(spec_source, construct_or_axis)` with:
     from `uncovered` because the lack of coverage IS the failure
     mode -- a fixture would be filed as a regseq-driver-NN task,
     not used as a passing tick.
+  - `blocked-unimplemented-phase` -- realisable in principle, but the
+    bridge/backend code path that would produce the construct is
+    deliberately stubbed pending a future implementation phase (e.g.,
+    a `None`-returning helper awaiting backend wiring). The construct
+    short-circuits rather than reaching the producing path, so it is
+    unreachable from source today. Distinct from `blocked-open-bridge-bug`
+    (no panic/reject -- the path short-circuits) and from
+    `blocked-spec-gap` (the spec DOES describe a realisable witness,
+    just not until the phase lands). A fixture becomes authorable when
+    the phase is implemented.
 - **fixture_path**: relative path under
   `crates/test-ir-fixtures/fixtures/` (or other test surface) for
   covered / partial rows. Multiple rows may share one fixture.
@@ -644,7 +654,7 @@ wrong classification) or VALIDATOR-FAIL.
 | RJ-032-C  | `D4` | uncovered | |
 | RJ-032-D  | `D6` | uncovered | |
 | RJ-032-E  | `D7` | uncovered | |
-| RJ-032-F  | `D8` | uncovered | |
+| RJ-032-F  | `D8` | blocked-unimplemented-phase | D8 short-circuits to `Ok(())` because `target_str_arg_bound` (`bridge/diag_log/peel.rs:179-180`) is hard-wired `None` pending the backend target-binding wiring that populates `max_str_args_per_call` (spec §26.8/26.9 + per-target `<target>-backend.md`). Unreachable from source until that phase lands. See `.harness/audits/2026-05-23-f1-rj032f-watchlist.md` (F1) |
 
 ---
 

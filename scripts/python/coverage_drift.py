@@ -51,6 +51,7 @@ STATUS_VALUES = {
     "blocked-bridge-rejects-by-design",
     "blocked-generator-gap",
     "blocked-open-bridge-bug",
+    "blocked-unimplemented-phase",
 }
 
 # Matrix row ids: 2-3 uppercase letters, hyphen, 3 digits, then zero or
