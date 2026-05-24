@@ -1956,6 +1956,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-73",
+          "name": "Accept GlobalAlloc::Function provenance in const translation (R1: covers FF-004, closes C2 gap)",
+          "spec": ".harness/tasks/regseq-driver/73-const-fnptr-provenance.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-72"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-24T01:56:41Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
