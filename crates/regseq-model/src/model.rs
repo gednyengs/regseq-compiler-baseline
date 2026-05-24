@@ -1066,6 +1066,20 @@ impl RegseqModel {
         PrettyPrinter::new(self)
     }
 
+    /// Canonical [`InstanceRef`] for the materialized instance at `id`.
+    ///
+    /// Exposes the exact reference computation the validator uses to
+    /// build its accepted-reference set (see the private
+    /// `instance_ref`), so producers of `Const::Reloc` / `Byte::Reloc`
+    /// can read the reference back from a materialized instance instead
+    /// of hand-reconstructing it. A hand-built reference would silently
+    /// diverge if the canonical computation ever changed; reading it
+    /// back here makes that drift impossible. Panics if `id` is out of
+    /// bounds for `self.instances`.
+    pub fn instance_ref_of(&self, id: InstanceId) -> InstanceRef {
+        self.compute_instance_ref(&self.instances[id])
+    }
+
     /// Compares two item payloads by the F4 item sort contract.
     pub fn compare_items_f4(&self, first: &Item, second: &Item) -> core::cmp::Ordering {
         let first_path = &first.def_path;
@@ -3396,12 +3410,20 @@ impl RegseqModel {
 
     fn instance_ref(&self, instance: &Instance) -> Result<InstanceRef, InvariantViolation> {
         self.check_item_id(instance.item, INSTANCE_ITEM)?;
-        Ok(InstanceRef {
+        Ok(self.compute_instance_ref(instance))
+    }
+
+    /// Compute the canonical [`InstanceRef`] for an instance without
+    /// validating its back-references. Single source of truth shared
+    /// by the validator path ([`Self::instance_ref`], which adds the
+    /// `item` bounds check) and the public [`Self::instance_ref_of`].
+    fn compute_instance_ref(&self, instance: &Instance) -> InstanceRef {
+        InstanceRef {
             regseq_kind_rank: regseq_instance_kind_rank(&instance.kind),
             def_path_hash: self.item_def_paths[instance.item],
             args_key: args_key_for_generic_args(self, &instance.generic_args),
             fn_shim_disambig: function_instance_disambig(&instance.kind),
-        })
+        }
     }
 
     fn regseq_instance_key(&self, instance: &Instance) -> RegseqInstanceKey {
@@ -3545,10 +3567,25 @@ impl RegseqModel {
         //    Instances permitted (a non-rigid signature cannot be
         //    monomorphised, so no Instance can carry it).
         let mut instance_counts: Vec<usize> = vec![0; self.items.len()];
+        // Count `Item`-flavored Function instances per item separately:
+        // for a Bucket-1 source `Function` item the `Item` flavor is the
+        // single primary instance, while rustc may legitimately expose
+        // auxiliary shim-flavored Function instances (e.g. `ReifyShim`
+        // for a `#[track_caller]` fn reified into a fn pointer) that
+        // share the source `DefId`. Those auxiliary shims are permitted
+        // alongside the one primary instance.
+        let mut primary_function_counts: Vec<usize> = vec![0; self.items.len()];
         for instance in self.instances.iter() {
             let idx = instance.item.index();
             if idx < instance_counts.len() {
                 instance_counts[idx] += 1;
+                if matches!(
+                    &instance.kind,
+                    InstanceKind::Function(data)
+                        if data.flavor == FunctionInstanceFlavor::Item
+                ) {
+                    primary_function_counts[idx] += 1;
+                }
             }
         }
         for (idx, item) in self.items.iter().enumerate() {
@@ -3619,18 +3656,30 @@ impl RegseqModel {
                 }
                 continue;
             }
-            // Bucket 1: exactly 1 Instance.
+            // Bucket 1: covered by exactly one primary Instance. Every
+            // source Item kind needs at least one covering Instance.
             if count == 0 {
                 return Err(InvariantViolation::ItemMissingInstance {
                     item: item_id,
                     item_kind: item.kind.clone(),
                 });
             }
-            if count > 1 {
+            // For `Function` items the cardinality bound applies to the
+            // primary (`Item`-flavored) instance only; auxiliary
+            // shim-flavored Function instances on the same source item
+            // are permitted (see `primary_function_counts` above). Every
+            // other source Item kind (Static / Const / Struct / Enum /
+            // Union) carries exactly one Instance.
+            let bound_count = if matches!(item.kind, ItemKind::Function) {
+                primary_function_counts[idx]
+            } else {
+                count
+            };
+            if bound_count > 1 {
                 return Err(InvariantViolation::Bucket1MultipleInstances {
                     item: item_id,
                     item_kind: item.kind.clone(),
-                    count,
+                    count: bound_count,
                 });
             }
         }

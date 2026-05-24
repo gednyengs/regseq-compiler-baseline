@@ -424,6 +424,9 @@ fn translate_scalar<'tcx>(
                 GlobalAlloc::Static(def_id) => {
                     Const::Reloc(instance_ref_for_static(cx.input.tcx, def_id))
                 }
+                GlobalAlloc::Function { instance } => {
+                    Const::Reloc(instance_ref_for_function_provenance(cx, instance)?)
+                }
                 _ => {
                     return Err(BridgeError::UnsupportedConst {
                         const_repr: format!("pointer scalar over {alloc:?}"),
@@ -535,6 +538,9 @@ fn allocation_bytes<'tcx>(
                 GlobalAlloc::Static(def_id) => {
                     Byte::Reloc(instance_ref_for_static(cx.input.tcx, def_id))
                 }
+                GlobalAlloc::Function { instance } => {
+                    Byte::Reloc(instance_ref_for_function_provenance(cx, instance)?)
+                }
                 _ => {
                     return Err(BridgeError::UnsupportedConst {
                         const_repr: format!("allocation provenance over {alloc:?}"),
@@ -562,6 +568,50 @@ fn allocation_bytes<'tcx>(
         idx += 1;
     }
     Ok(bytes)
+}
+
+/// Materialize the function instance carried by a
+/// `GlobalAlloc::Function { instance }` provenance and return the
+/// canonical `InstanceRef` to it, so a function pointer baked into a
+/// `const` or `static` lowers to a `Const::Reloc` / `Byte::Reloc`
+/// targeting that instance.
+///
+/// Mirrors the `bind_closure_once_shim_instance` materialization
+/// recipe in `bridge/body/terminator.rs`: build the callee `FnDef`
+/// `Ty` from the instance identity, translate it to
+/// `Ty::FnDef(item, args)`, map the rustc instance kind to a
+/// `FunctionInstanceFlavor` (so a `#[track_caller]` reify keeps its
+/// `ReifyShim` flavor), then materialize and dedup the Function
+/// instance through `lookup_or_create_direct_instance`. The returned
+/// reference is read back from the materialized instance via
+/// `RegseqModel::instance_ref_of`, so it cannot drift from the
+/// reference set the validator accepts in `check_instance_ref`.
+fn instance_ref_for_function_provenance<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    instance: ty::Instance<'tcx>,
+) -> Result<InstanceRef, BridgeError> {
+    let callee_ty = ty::Ty::new_fn_def(cx.input.tcx, instance.def_id(), instance.args);
+    let model_ty = translate_ty(cx, callee_ty)?;
+    let Ty::FnDef(item, model_args) = cx.model.types.resolve(model_ty).clone() else {
+        return Err(BridgeError::UnsupportedConst {
+            const_repr: format!("function provenance over non-FnDef type {callee_ty}"),
+        });
+    };
+    let flavor = super::function_instance_flavor_for_kind(instance.def);
+    let def_id = instance.def_id();
+    let args = instance.args;
+    let id = super::body::terminator::lookup_or_create_direct_instance(
+        cx,
+        item,
+        model_args,
+        flavor,
+        None,
+        move |cx| {
+            let poly = cx.input.tcx.fn_sig(def_id).instantiate(cx.input.tcx, args);
+            super::fnsig::translate_fn_sig(cx, poly)
+        },
+    )?;
+    Ok(cx.model.instance_ref_of(id))
 }
 
 fn instance_ref_for_const(cx: &BridgeCtxt<'_>, pointee_const: ConstId) -> InstanceRef {

@@ -726,7 +726,7 @@ fn callsite_fn_sig<'tcx>(
     crate::bridge::fnsig::translate_fn_sig(cx, poly)
 }
 
-fn lookup_or_create_direct_instance<'tcx>(
+pub(crate) fn lookup_or_create_direct_instance<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     item: ItemId,
     generic_args: regseq_model::GenericArgs,

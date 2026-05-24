@@ -288,6 +288,32 @@ fn invariant_9_pass_const_reloc_and_bytes_reloc() {
 }
 
 #[test]
+fn instance_ref_of_returns_validator_accepted_reference() {
+    let mut model = base_model();
+    let item = push_item(&mut model, "driver", ItemKind::Function, 1);
+    add_function_instance(&mut model, item);
+
+    // The reference read back from the materialized instance equals the
+    // canonical fields the validator builds its accepted set from.
+    let reference = model.instance_ref_of(regseq_model::InstanceId::ZERO);
+    assert_eq!(
+        reference,
+        InstanceRef {
+            regseq_kind_rank: 0,
+            def_path_hash: hash(1),
+            args_key: ArgsKey::EMPTY,
+            fn_shim_disambig: 0,
+        }
+    );
+
+    // A `Const::Reloc` carrying that reference validates, proving the
+    // bridge can use `instance_ref_of` to emit relocations that cannot
+    // drift from `check_instance_ref`'s accepted set.
+    model.consts.intern(Const::Reloc(reference));
+    assert_eq!(validate(&mut model), Ok(()));
+}
+
+#[test]
 fn invariant_11_ty_interner_pass_and_reject_duplicate() {
     let mut passing = base_model();
     passing.types.intern(Ty::Uint(regseq_model::UintKind::U32));

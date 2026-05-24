@@ -1961,7 +1961,7 @@
           "id": "regseq-driver-73",
           "name": "Accept GlobalAlloc::Function provenance in const translation (R1: covers FF-004, closes C2 gap)",
           "spec": ".harness/tasks/regseq-driver/73-const-fnptr-provenance.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-72"
           ],

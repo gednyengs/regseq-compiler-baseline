@@ -1592,3 +1592,24 @@ status = "covered"
 cluster_key = "FF-012"
 snippet_path = "FF-012.rs"
 inspect = { kind = "FunctionInstanceFlavor", arg = "CloneShim" }
+
+# FF-004 (regseq-driver-73): a `#[track_caller]` fn reified into a
+# `static FP: fn() = t` surfaces `GlobalAlloc::Function { ReifyShim }`
+# provenance, which the const translator now accepts (the
+# `GlobalAlloc::Function` arm in `bridge/const_.rs`). The materialized
+# `ReifyShim`-flavored Function instance shares the reified fn's source
+# item, so the Phase-5 Bucket-1 ratchet was relaxed to bound only the
+# primary (`Item`-flavored) instance count. Closes the C2-logged
+# const-fn-ptr-provenance gap (plain-fn statics / fn-ptr arrays / fn-ptr
+# consts) as a side effect. See the R1 plan
+# (`.harness/audits/2026-05-23-r1-const-fnptr-provenance-plan.md`).
+
+[[row]]
+id = "FF-004"
+section = "2.3"
+construct = "FunctionInstanceFlavor::ReifyShim (track_caller fn reified into a static fn pointer)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-004"
+snippet_path = "FF-004.rs"
+inspect = { kind = "FunctionInstanceFlavor", arg = "ReifyShim" }
