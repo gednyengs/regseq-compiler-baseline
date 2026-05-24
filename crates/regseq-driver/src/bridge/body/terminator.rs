@@ -283,7 +283,72 @@ fn rewrite_closure_call_shim<'tcx>(
                     });
                 }
             }
-            _ => return Ok(None),
+            // regseq-driver-75: the optimized MIR that `tcx.instance_mir`
+            // returns folds a zero-arg (or all-ZST) args-tuple into a
+            // `const` operand rather than a `_args = (...); move _args`
+            // place. An empty tuple (`const ()`) contributes no
+            // positional args, so `normalised` stays `[receiver]` --
+            // matching the `Fn<()>` shim arity (`bridge/mod.rs`
+            // closure-call `FnSig` construction, inputs =
+            // `[receiver]`). A non-empty constant tuple (all-ZST
+            // fields) cannot be field-projected off a place, so
+            // materialise it into a synthetic local via a plain
+            // `Rvalue::Use` of the translated const operand (NOT a
+            // `Transmute`; this is a value move, not a view change),
+            // then project each field exactly like the `Move`/`Copy`
+            // arm above. Without this arm a constant args-tuple bails
+            // to the catch-all below, falls through to
+            // `translate_call_callee` -> `callsite_fn_sig` ->
+            // `tcx.fn_sig(closure)`, which ICEs (closures have no
+            // `fn_sig` query; their signature is `args.as_closure().sig()`).
+            mir::Operand::Constant(_) => {
+                if !tuple_fields.is_empty() {
+                    let tuple_model_ty = translate_ty(cx, tuple_ty)?;
+                    let const_operand = translate_operand(cx, body_cx, tuple_arg.node.clone())?;
+                    let model_body =
+                        body_cx.model_body_mut().ok_or_else(|| BridgeError::DslRejection {
+                            kind: DslRejectionKind::Terminator,
+                            ty_repr: "closure-call shim requires BodyCtxt::new_with_model_body to materialise a constant args-tuple"
+                                .to_string(),
+                        })?;
+                    let synth_local = model_body.push_synthetic_local(tuple_model_ty);
+                    statements.push(Statement {
+                        kind: StatementKind::Assign(
+                            Place::from(synth_local),
+                            Rvalue::Use(const_operand),
+                        ),
+                        span,
+                    });
+                    for (idx, field_ty) in tuple_fields.iter().enumerate() {
+                        let model_field_ty = translate_ty(cx, field_ty)?;
+                        let projected = Place {
+                            local: synth_local,
+                            projection: Box::new([PlaceElem::Field(
+                                FieldIdx::from_u32(idx as u32),
+                                model_field_ty,
+                            )]),
+                        };
+                        // A materialised constant has no source
+                        // move/copy discriminator; `Move` is the
+                        // uniform choice for the projected fields.
+                        normalised.push(Operand::Move(projected));
+                    }
+                }
+            }
+            // regseq-driver-75: a typed rejection (NOT the old silent
+            // `Ok(None)` bail) guarantees no closure-call args-tuple
+            // operand shape can fall through to `translate_call_callee`
+            // -> `tcx.fn_sig(closure)` and ICE. The ZST cases above are
+            // handled, not rejected; this fires only for a truly
+            // unexpected operand shape.
+            other => {
+                return Err(BridgeError::DslRejection {
+                    kind: DslRejectionKind::Terminator,
+                    ty_repr: format!(
+                        "closure-call shim args-tuple operand is neither a place nor a constant: {other:?}"
+                    ),
+                });
+            }
         }
     }
 

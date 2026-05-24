@@ -2003,7 +2003,7 @@
           "id": "regseq-driver-75",
           "name": "Closure calls with a constant args-tuple operand (zero-arg / all-ZST-arg closure call ICE)",
           "spec": ".harness/tasks/regseq-driver/75-zero-arg-closure-call.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-74"
           ],

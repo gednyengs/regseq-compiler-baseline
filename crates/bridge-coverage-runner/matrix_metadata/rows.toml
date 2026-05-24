@@ -1637,3 +1637,21 @@ status = "covered"
 cluster_key = "FF-016"
 snippet_path = "FF-016.rs"
 inspect = { kind = "FunctionInstanceFlavor", arg = "CloneShim" }
+
+# regseq-driver-75: a zero-arg closure call (`let c = move || x; c()`)
+# whose monomorphised `Fn::call` args-tuple arrives as `const ()` ICEd
+# at HEAD (`tcx.fn_sig(closure)` in the rewrite fall-through). The fix
+# handles the constant args-tuple inside `rewrite_closure_call_shim`, so
+# the call routes through the `ClosureCall` synth shim. The runner
+# predicate is the coarse `SyntheticItemKind = ClosureCall` the existing
+# closure-call rows use; the discriminating signal is reaching `Ok` at
+# all (HEAD ICEs on this snippet).
+[[row]]
+id = "FF-017"
+section = "2.3"
+construct = "Zero-arg closure call (constant `const ()` args-tuple) x ClosureCall shim"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-017"
+snippet_path = "FF-017.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
