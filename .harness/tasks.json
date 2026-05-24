@@ -2019,6 +2019,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-76",
+          "name": "Raw-pointer aggregate with an unsized (slice/str) pointee (RV-009-G slice case)",
+          "spec": ".harness/tasks/regseq-driver/76-rawptr-slice-aggregate.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-75"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-24T21:14:39Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
