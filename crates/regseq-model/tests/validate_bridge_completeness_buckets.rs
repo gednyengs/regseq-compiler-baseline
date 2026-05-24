@@ -316,6 +316,80 @@ fn bucket1_function_item_with_two_primary_instances_rejected() {
 }
 
 // ------------------------------------------------------------------
+// Bucket 1 (regseq-driver-73 hardening): the per-item relaxation only
+// bounds the PRIMARY count, so two IDENTICAL shim-flavored instances
+// (same canonical key) on one item slip past it -- the global
+// unique-instance-key backstop must reject them.
+// ------------------------------------------------------------------
+#[test]
+fn bucket1_function_item_with_duplicate_shim_instances_rejected() {
+    let mut model = base_model();
+    let item = push_item(&mut model, "t", ItemKind::Function, Linkage::Default, 1);
+    let sig = unit_fn_sig(&mut model);
+    let emission = model.items[item].def_path.rendered;
+    model.instances.push(function_instance_with_flavor(
+        sig,
+        item,
+        Some(regseq_model::Body::default()),
+        emission,
+        FunctionInstanceFlavor::Item,
+    ));
+    model.instances.push(function_instance_with_flavor(
+        sig,
+        item,
+        None,
+        emission,
+        FunctionInstanceFlavor::ReifyShim,
+    ));
+    model.instances.push(function_instance_with_flavor(
+        sig,
+        item,
+        None,
+        emission,
+        FunctionInstanceFlavor::ReifyShim,
+    ));
+    assert!(matches!(
+        model.validate_bridge_completeness(),
+        Err(InvariantViolation::DuplicateInstanceKey { .. })
+    ));
+}
+
+// ------------------------------------------------------------------
+// Bucket 1 (regseq-driver-73): a primary plus several DISTINCT-flavored
+// shim instances (distinct keys) on one item is legitimate and accepted
+// -- the backstop only rejects identical-key duplicates.
+// ------------------------------------------------------------------
+#[test]
+fn bucket1_function_item_with_distinct_shims_accepted() {
+    let mut model = base_model();
+    let item = push_item(&mut model, "t", ItemKind::Function, Linkage::Default, 1);
+    let sig = unit_fn_sig(&mut model);
+    let emission = model.items[item].def_path.rendered;
+    model.instances.push(function_instance_with_flavor(
+        sig,
+        item,
+        Some(regseq_model::Body::default()),
+        emission,
+        FunctionInstanceFlavor::Item,
+    ));
+    model.instances.push(function_instance_with_flavor(
+        sig,
+        item,
+        None,
+        emission,
+        FunctionInstanceFlavor::ReifyShim,
+    ));
+    model.instances.push(function_instance_with_flavor(
+        sig,
+        item,
+        None,
+        emission,
+        FunctionInstanceFlavor::CloneShim,
+    ));
+    assert_eq!(model.validate_bridge_completeness(), Ok(()));
+}
+
+// ------------------------------------------------------------------
 // Bucket 2: foreign Function Instance with `body: Some(_)` must fail
 // the foreign-body-None invariant per spec.md section 9.4
 // (`spec.md:2642-2648`).

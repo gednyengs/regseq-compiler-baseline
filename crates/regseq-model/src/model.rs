@@ -259,6 +259,20 @@ pub enum InvariantViolation {
         second: InstanceId,
     },
 
+    /// Two `instances` entries share the same canonical
+    /// [`RegseqInstanceKey`] (`(regseq_kind_rank, item, args_key,
+    /// fn_shim_disambig)`). Each monomorphized instance must be unique;
+    /// a duplicate is an over-emission bug (e.g. the same shim
+    /// materialized twice). This is the validator-side backstop for the
+    /// Bucket-1 cardinality relaxation that permits multiple
+    /// *distinct*-flavored Function instances on one source item.
+    DuplicateInstanceKey {
+        /// First instance carrying the key.
+        first: InstanceId,
+        /// Second instance carrying the duplicate key.
+        second: InstanceId,
+    },
+
     /// Stored `DefPath.rendered` does not match canonical rendering.
     DefPathRenderMismatch {
         /// Item carrying the mismatched rendered path.
@@ -1752,6 +1766,7 @@ impl RegseqModel {
         crate::layout_validator::validate_opaque_handle_eligibility(self)?;
         crate::layout_validator::validate_unit_layout(self)?;
         self.validate_f4_instance_order()?;
+        self.validate_unique_instance_keys()?;
         self.rebuild_vtables()?;
 
         Ok(())
@@ -3331,6 +3346,31 @@ impl RegseqModel {
         Ok(())
     }
 
+    /// No two instances may share a canonical [`RegseqInstanceKey`].
+    ///
+    /// Each monomorphized instance is uniquely identified by
+    /// `(regseq_kind_rank, item, args_key, fn_shim_disambig)`; a
+    /// repeat is an over-emission bug. This is the global backstop for
+    /// the Bucket-1 relaxation (regseq-driver-73), which permits a
+    /// source `Function` item to carry several *distinct*-flavored
+    /// instances (e.g. its primary `Item` plus a `ReifyShim` that
+    /// shares the `DefId`) — distinct flavors yield distinct keys, so
+    /// the legitimate shapes pass while a duplicated instance (two
+    /// identical `ReifyShim`s, two primaries, …) is rejected here
+    /// rather than relying on producer-side dedup discipline.
+    fn validate_unique_instance_keys(&self) -> Result<(), InvariantViolation> {
+        let mut seen: HashMap<RegseqInstanceKey, InstanceId> =
+            HashMap::with_capacity(self.instances.len());
+        for idx in 0..self.instances.len() {
+            let id = InstanceId::from_u32(idx as u32);
+            let key = self.regseq_instance_key(&self.instances[id]);
+            if let Some(first) = seen.insert(key, id) {
+                return Err(InvariantViolation::DuplicateInstanceKey { first, second: id });
+            }
+        }
+        Ok(())
+    }
+
     fn rebuild_vtables(&mut self) -> Result<(), InvariantViolation> {
         let mut rebuilt = HashMap::new();
         for (idx, kind) in self.item_synthetic_kinds.iter().enumerate() {
@@ -3683,6 +3723,12 @@ impl RegseqModel {
                 });
             }
         }
+        // Global backstop: the per-item bound above (relaxed to permit
+        // auxiliary distinct-flavored Function instances) does NOT catch
+        // a duplicated instance with an identical canonical key (e.g. two
+        // identical `ReifyShim`s on one item). Reject those here so the
+        // completeness ratchet does not depend on producer-side dedup.
+        self.validate_unique_instance_keys()?;
         Ok(())
     }
 
