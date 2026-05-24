@@ -1613,3 +1613,27 @@ status = "covered"
 cluster_key = "FF-004"
 snippet_path = "FF-004.rs"
 inspect = { kind = "FunctionInstanceFlavor", arg = "ReifyShim" }
+
+# FF-016 (regseq-driver-74): a tuple `.clone()` resolves to a
+# `CloneShim` on `Clone::clone`, but rustc's mono-collector also
+# collects the field-type library impl `<u32 as Clone>::clone` as a
+# mentioned mono-item. The bridge interns it yet never instantiates it
+# (its only call edge lives in the absent, copy-optimized CloneShim
+# body), so at HEAD the snippet fails Phase-5 `ItemMissingInstance`.
+# The Change-B post-pass instantiates every source bucket-1
+# zero-instance Function item identically to the reactive direct-call
+# path, so the snippet now reaches `Ok`+validate. The predicate is the
+# coarse FF-012 one (any `CloneShim`-flavored instance present); the
+# discriminating signal is that the row reaches `Ok` at all. The exact
+# field-clone-instance proof lives in
+# `crates/regseq-driver/tests/bridge_orphan_collected_instance.rs`.
+
+[[row]]
+id = "FF-016"
+section = "2.3"
+construct = "FunctionInstanceFlavor::CloneShim w/ collected field-clone (tuple .clone())"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-016"
+snippet_path = "FF-016.rs"
+inspect = { kind = "FunctionInstanceFlavor", arg = "CloneShim" }

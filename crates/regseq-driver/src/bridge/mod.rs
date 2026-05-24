@@ -139,6 +139,21 @@ pub struct BridgeCtxt<'tcx> {
     /// triple is observed at a call site that the Phase-4 walk had no
     /// way to reach in advance.
     pub function_instance_for_item: HashMap<(ItemId, ArgsKey, FunctionInstanceFlavor), InstanceId>,
+    /// Collection-time resolution stash for source-derived
+    /// `InstanceKind::Item` functions seen during the Phase-2
+    /// `MonoItem::Fn` walk (regseq-driver-74 Change A). Keyed by the
+    /// model `DefPathHash` (the converter `def_path_hash`, matching
+    /// `model.item_def_paths`) so the orphan post-pass can recover the
+    /// rustc `(DefId, GenericArgsRef)` needed to instantiate a
+    /// collected-but-uninstantiated item identically to the reactive
+    /// direct-call path. The stored args are the rustc
+    /// `GenericArgsRef` (not model-translated; translation needs the
+    /// post-Phase-4 model). Generic items (bucket 3) may write multiple
+    /// monomorphisations to the same key; that is harmless because the
+    /// post-pass reads the table only for non-generic orphans, whose
+    /// resolution is unique.
+    pub collected_item_resolutions:
+        HashMap<DefPathHash, (DefId, rustc_middle::ty::GenericArgsRef<'tcx>)>,
     /// Reverse lookup from model `TyId` to its originating
     /// `rustc_middle::ty::Ty<'tcx>` (after region erasure). Populated
     /// on every successful return from `ty::translate_erased_ty` per
@@ -177,6 +192,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             source_item_handles: HashMap::new(),
             source_ty_pending: HashMap::new(),
             function_instance_for_item: HashMap::new(),
+            collected_item_resolutions: HashMap::new(),
             ty_forward_cache: HashMap::new(),
             diag_log_peel_residue: DiagLogPeelResidue::default(),
         }
@@ -628,6 +644,15 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
     sort::f4_sort(&ctxt.model, &mut ctxt.pending_items)?;
     assign::assign_item_ids_and_populate_sidetables(&mut ctxt)?;
     construct_instances_and_resolve_cross_references(&mut ctxt)?;
+    // Per regseq-driver-74 Change B: instantiate source bucket-1
+    // Function items that rustc's mono-collector interned (mentioned
+    // items) but no translated body reached, so they would otherwise
+    // trip the Phase-5 `ItemMissingInstance` ratchet. Runs after all
+    // reactive instances exist (so item IDs are final and the
+    // zero-instance test is accurate) and before the F4-2 sort +
+    // completeness check (so the newly created `body: None` instances
+    // are ordered and validated like any other).
+    instantiate_orphaned_collected_functions(&mut ctxt)?;
     // Audit-finding HIGH-40-2 (spec.md section 16.2 / 16.3): the
     // bridge pushes Function and Static instances during distinct
     // Phase-5 sub-passes (`body::run_phase5_body_passes` for
@@ -658,6 +683,149 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
         })?;
 
     Ok(ctxt.model)
+}
+
+/// Per regseq-driver-74 Change B: give an `Item`-flavored Function
+/// instance to every source bucket-1 Function item that rustc's
+/// mono-collector interned but no translated body reached.
+///
+/// rustc collects mentioned items from pre-optimization MIR
+/// (`collect_and_partition_mono_items`), so e.g. a tuple `.clone()`'s
+/// field-type library `Clone` impl (`<u32 as Clone>::clone`) is a
+/// genuinely emitted mono-item that the bridge interns via the Phase-2
+/// `MonoItem::Fn` walk. But the bridge only instantiates the items a
+/// translated body reaches, and the field clone's sole call edge lives
+/// in the tuple CloneShim body, which the bridge leaves absent and
+/// which rustc has anyway optimized to a plain field copy. The item is
+/// therefore interned-but-orphaned and trips the Phase-5
+/// `ItemMissingInstance` ratchet.
+///
+/// The targeting predicate mirrors `validate_bridge_completeness`'s
+/// bucket-1 classification exactly (`regseq-model/src/model.rs`
+/// `:3631-3706`): non-synthetic, non-foreign, non-generic, sig-rigid
+/// `ItemKind::Function` with zero instances. Each orphan is
+/// instantiated by calling the reactive helper
+/// `body::terminator::lookup_or_create_direct_instance` with the same
+/// flavor and `callsite_fn_sig` closure the reactive direct-call path
+/// uses, so the resulting `(item, args_key, Item)` key and signature
+/// are indistinguishable from what a real caller would have produced
+/// and the R1 `validate_unique_instance_keys` backstop sees no
+/// duplicate.
+///
+/// This is ~zero-regression by construction: a zero-instance bucket-1
+/// source item already fails the build today, so the pass is a no-op
+/// on every currently-passing run and can only fire where the build
+/// currently fails.
+///
+/// Stash-miss handling: an orphan absent from
+/// `collected_item_resolutions` is a separate pre-existing orphan
+/// class (e.g. an uncalled local item eagerly interned but never
+/// mono-collected) that is out of regseq-driver-74 scope and already
+/// fails the build; it is surfaced as a hard `BridgeError::Phase5`
+/// rather than silently skipped.
+fn instantiate_orphaned_collected_functions(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
+    // Count instances per item, mirroring the validator's
+    // `instance_counts` (model.rs:3618-3629).
+    let mut instance_counts: Vec<usize> = vec![0; ctxt.model.items.len()];
+    for instance in ctxt.model.instances.iter() {
+        let idx = instance.item.index();
+        if idx < instance_counts.len() {
+            instance_counts[idx] += 1;
+        }
+    }
+
+    // Collect orphan ItemIds before touching the model: translating an
+    // orphan's FnDef can intern fresh nominal items, so snapshot the
+    // target set first to avoid observing items appended mid-pass.
+    let mut orphans: Vec<ItemId> = Vec::new();
+    for (idx, item) in ctxt.model.items.iter().enumerate() {
+        let item_id = ItemId::from_u32(idx as u32);
+        // Synthetic Items are owned by the synth passes, not this
+        // ratchet (model.rs:3636).
+        if !matches!(
+            ctxt.model.item_synthetic_kinds[item_id],
+            SyntheticItemKind::None
+        ) {
+            continue;
+        }
+        // Only Function items are reactively orphaned this way; the
+        // other source kinds get their Instance in
+        // `construct_instances_and_resolve_cross_references`.
+        if !matches!(item.kind, ItemKind::Function) {
+            continue;
+        }
+        // Bucket 2 (foreign): excluded (model.rs:3645).
+        if item.linkage == regseq_model::Linkage::Foreign {
+            continue;
+        }
+        let flags = ctxt
+            .model
+            .item_bridge_flags
+            .get(&item_id)
+            .copied()
+            .unwrap_or_default();
+        // Bucket 3 (generic): excluded (model.rs:3685).
+        if flags.is_generic {
+            continue;
+        }
+        // Bucket 4 (sig-non-rigid Function): excluded (model.rs:3689).
+        if flags.signature_non_rigid {
+            continue;
+        }
+        // Bucket 1 orphan: zero instances reference it.
+        if instance_counts[idx] != 0 {
+            continue;
+        }
+        orphans.push(item_id);
+    }
+
+    for item_id in orphans {
+        let def_path_hash = ctxt.model.item_def_paths[item_id];
+        let (def_id, rustc_args) = ctxt
+            .collected_item_resolutions
+            .get(&def_path_hash)
+            .copied()
+            .ok_or_else(|| {
+                let rendered = ctxt
+                    .model
+                    .strings
+                    .resolve(ctxt.model.items[item_id].def_path.rendered);
+                BridgeError::Phase5(format!(
+                    "orphaned source bucket-1 Function item {} ({}) has no \
+                         collection-time resolution: it was interned without being \
+                         mono-collected (a separate pre-existing orphan class outside \
+                         regseq-driver-74 scope)",
+                    item_id.as_u32(),
+                    rendered,
+                ))
+            })?;
+
+        // Translate the FnDef ty to model args via the canonical path
+        // (ty.rs:258), exactly as the reactive direct-call path does
+        // (terminator.rs:620-621), so the model args match.
+        let callee_ty = rustc_middle::ty::Ty::new_fn_def(ctxt.input.tcx, def_id, rustc_args);
+        let model_ty = ty::translate_ty(ctxt, callee_ty)?;
+        let Ty::FnDef(callee_item, model_args) = ctxt.model.types.resolve(model_ty).clone() else {
+            return Err(BridgeError::Phase5(format!(
+                "orphan instantiation: translate_ty did not yield Ty::FnDef for item {}",
+                item_id.as_u32(),
+            )));
+        };
+
+        // Create the instance with the same helper, flavor, virtual_idx
+        // (None), and sig closure the reactive direct-call path uses
+        // (terminator.rs:648-655), so the instance is identical to what
+        // a real caller would have produced.
+        let _ = body::terminator::lookup_or_create_direct_instance(
+            ctxt,
+            callee_item,
+            model_args,
+            FunctionInstanceFlavor::Item,
+            None,
+            |cx| body::terminator::callsite_fn_sig(cx, def_id, rustc_args),
+        )?;
+    }
+    Ok(())
 }
 
 fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeError> {
@@ -706,6 +874,17 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
                     continue;
                 }
                 let _ = ty::intern_item(ctxt, def_id, ItemKind::Function, ty::SpecialAdt::None);
+                // Per regseq-driver-74 Change A: stash the resolved
+                // rustc `(DefId, args)` for this collected Item fn,
+                // keyed by the model `DefPathHash`. The orphan
+                // post-pass (Change B) reads it to instantiate items
+                // rustc collected (mentioned-items) but no translated
+                // body reaches, recreating the instance identically to
+                // the reactive direct-call path. The resolution is
+                // already in hand here; only the capture is new.
+                let key = def_path_hash(ctxt.input.tcx, def_id);
+                ctxt.collected_item_resolutions
+                    .insert(key, (def_id, instance.args));
             }
             MonoItem::Static(def_id) => {
                 let mutability = source_static_mutability(ctxt.input.tcx, *def_id);

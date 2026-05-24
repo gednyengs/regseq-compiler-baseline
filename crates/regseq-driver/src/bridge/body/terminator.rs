@@ -713,7 +713,12 @@ fn reject_call_site_intrinsics<'tcx>(
     Ok(())
 }
 
-fn callsite_fn_sig<'tcx>(
+/// Translate a callee's post-monomorphization function signature via
+/// `tcx.fn_sig(def_id).instantiate(generic_args)` -> `translate_fn_sig`.
+/// Shared by the reactive direct-call path and the regseq-driver-74
+/// orphan-instantiation post-pass so both produce an identical
+/// `FnSigId` for the same `(def_id, generic_args)` pair.
+pub(crate) fn callsite_fn_sig<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     def_id: rustc_span::def_id::DefId,
     generic_args: ty::GenericArgsRef<'tcx>,

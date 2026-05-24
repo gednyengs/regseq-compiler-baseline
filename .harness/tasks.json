@@ -1982,7 +1982,7 @@
           "id": "regseq-driver-74",
           "name": "Instantiate orphaned mono-collected source functions (tuple .clone() ItemMissingInstance)",
           "spec": ".harness/tasks/regseq-driver/74-orphan-collected-instance.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-73"
           ],
