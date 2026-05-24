@@ -1998,6 +1998,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-75",
+          "name": "Closure calls with a constant args-tuple operand (zero-arg / all-ZST-arg closure call ICE)",
+          "spec": ".harness/tasks/regseq-driver/75-zero-arg-closure-call.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-74"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-24T19:51:16Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
