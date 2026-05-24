@@ -78,6 +78,18 @@ fn translate_erased_ty<'tcx>(
     Ok(ty_id)
 }
 
+/// Translate the pointee of a raw-pointer / reference position, where an
+/// unsized `Slice`/`Str`/`Dynamic` marker is admissible (mirrors the
+/// `TyKind::RawPtr` / `TyKind::Ref` type-path pointee translation). The
+/// aggregate's rustc pointee is not pre-erased, so erase first.
+pub(crate) fn translate_ptr_pointee<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    pointee: rustc_middle::ty::Ty<'tcx>,
+) -> Result<TyId, BridgeError> {
+    let pointee = erase_regions_or_reject(cx.input.tcx, pointee)?;
+    translate_erased_ty(cx, pointee, /* allow_unsized_marker = */ true)
+}
+
 /// Node-local normalization of the two associated-type projection
 /// families authorized by regseq-driver-70:
 ///

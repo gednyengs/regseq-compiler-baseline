@@ -301,7 +301,7 @@ row is a `positive` expectation unless otherwise marked.
 | RV-009-D  | `AggregateKind::Enum(TyId, VariantIdx)` | covered | `enum_round_trip.rs` |
 | RV-009-E  | `AggregateKind::Union(TyId, FieldIdx)` | uncovered | union constructor; depends on TY-019 |
 | RV-009-F  | `AggregateKind::Closure(TyId)` | covered | `closure.rs`, `closure_call_sig_sync.rs` |
-| RV-009-G  | `AggregateKind::RawPtr(TyId, Mutability)` | uncovered | raw-pointer aggregate (slice / dyn from parts) |
+| RV-009-G  | `AggregateKind::RawPtr(TyId, Mutability)` | covered | raw-pointer aggregate; sized + slice/str pointees bridge via the unsized-allowed aggregate pointee translation (`translate_ptr_pointee`); dyn-from-parts stays `Rejected(Foreign)` (DynMetadata hazard, A1-deferred) |
 
 ## 1.5 `Statement` -- `crates/regseq-model/src/statement.rs:34` + spec.md §22.1 (3 variants)
 

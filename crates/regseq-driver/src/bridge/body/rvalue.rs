@@ -194,7 +194,7 @@ fn translate_aggregate_kind<'tcx>(
             Ok(AggregateKind::Closure(translate_ty(cx, rvalue_ty)?))
         }
         mir::AggregateKind::RawPtr(pointee, mutability) => Ok(AggregateKind::RawPtr(
-            translate_ty(cx, pointee)?,
+            crate::bridge::ty::translate_ptr_pointee(cx, pointee)?,
             translate_ast_mutability(mutability),
         )),
         mir::AggregateKind::Coroutine(_, _) | mir::AggregateKind::CoroutineClosure(_, _) => {
