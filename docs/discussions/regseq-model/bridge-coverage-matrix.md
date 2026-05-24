@@ -394,7 +394,7 @@ bridge bugs they surface.
 | FF-001  | `Item`              | positive | covered | every fixture | |
 | FF-002  | `Intrinsic`         | positive | covered | `diag_logging.rs` (log intrinsics) | |
 | FF-003  | `VTableShim`        | positive | covered | `trait_object.rs` | |
-| FF-004  | `ReifyShim`         | positive | uncovered | -- | needs `fn` reified from FnDef |
+| FF-004  | `ReifyShim`         | positive | blocked-open-bridge-bug | -- | ReifyShim's source-reachable trigger is reifying a `#[track_caller]` fn. Both paths blocked at HEAD: runtime reify (`let fp: fn() = tc_fn`) resolves the cast operand to flavor `Item` (the bridge does not apply `resolve_for_fn_ptr`'s track_caller→ReifyShim adjustment); const/static reify (`static FP: fn() = tc_fn`) DOES surface a ReifyShim but is rejected at `const_.rs:429` (`pointer scalar over Function`), the C2-family const-fn-ptr-provenance gap. Unblock = accept `GlobalAlloc::Function` in const translation (`const_.rs:429`+`:540`). See `.harness/audits/2026-05-23-b2-deferred-shim-probe.md` (B2) |
 | FF-005  | `FnPtrShim`         | positive | uncovered | -- | calls through FnPtr around closure |
 | FF-006  | `Virtual`           | positive | covered | `trait_object.rs` | |
 | FF-007  | `ClosureOnceShim`   | positive | covered | `crates/bridge-coverage-runner/snippets/FF-007.rs` | regseq-driver-72 sub-task B: the Fn-as-FnOnce coercion shape resolves to an `InstanceKind::ClosureOnceShim`, whose underlying `FnOnce::call_once` Item was pre-interned by the Phase-2 callee scan but left instance-less because the closure-call rewrite redirects the Call to the `ClosureCall` synth Instance. The fix lazy-allocates a `ClosureOnceShim`-flavored Instance for that Item via `lookup_or_create_direct_instance` (Path B.2.a), so the Phase-5 bucket-1 `ItemMissingInstance` check passes and the model carries the `ClosureOnceShim` flavor. The Phase-5 bucket-1 invariant is preserved, not weakened |
@@ -606,7 +606,7 @@ wrong classification) or VALIDATOR-FAIL.
 | RJ-021  | `CustomAutoTrait` | source-declared auto trait | rejected | blocked-rustc-infeasible | feature gated |
 | RJ-022  | `SubstantiveHrtb` | substantive HRTB binder | rejected | uncovered |
 | RJ-023  | `Layout` | uncomputable layout | rejected | uncovered |
-| RJ-024  | `UnsupportedEnumLayout` | enum with unsupported tag scalar | rejected | uncovered |
+| RJ-024  | `UnsupportedEnumLayout` | enum with unsupported tag scalar | rejected | blocked-rustc-infeasible | The three rejection paths (`Scalar::Union` tag `ty.rs:1320`, `Float` tag `ty.rs:1368`, niche-out-of-range `ty.rs:1446`) are defensive bridge invariants for layouts rustc's solver does not emit from source: enum discriminants are integral (never Float/Union tags) and niche ranges respect rustc's guarantees. Probed niche / `repr(u128)` / niche-squeeze enums — none hit it. See `.harness/audits/2026-05-23-b2-deferred-shim-probe.md` (B2) |
 | RJ-025  | `UnsupportedTy` | unrecognised rustc TyKind | rejected | uncovered |
 | RJ-026  | `UnsupportedAbi` | non-Rust / non-C ABI | rejected | uncovered |
 | RJ-027  | `UnsupportedNeverInput` | `!` as fn input | rejected | uncovered |
