@@ -2124,6 +2124,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-81",
+          "name": "DFS-RPO body normalization (FT-003 multi-Drop drop-glue fix)",
+          "spec": ".harness/tasks/regseq-driver/81-drop-glue-rpo-normalization.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-80"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-25T23:49:51Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
