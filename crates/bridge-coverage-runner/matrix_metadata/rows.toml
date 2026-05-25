@@ -1333,11 +1333,12 @@ build_overrides = { z_flags = ["mir-emit-retag"] }
 # sig translation analogous to the closure-call shim rewrite at
 # `bridge/ty.rs:148-166` / `bridge/body/terminator.rs::rewrite_closure_call_shim`,
 # which is bridge work outside ty.rs and therefore out of A1's
-# scope. The FF-005 row + snippet are deliberately omitted from
-# the committed sidecar so the workspace smoke test
+# scope. The FF-005 row + snippet were deliberately omitted from
+# the committed sidecar at F70 so the workspace smoke test
 # `bridge-coverage-runner::smoke::smoke_full_demo_set_runs_to_completion`
-# stays green; a future bridge-side task tracking FnPtrShim sig
-# handling can land the FF-005 row + snippet alongside that fix.
+# stays green; the bridge-side follow-up that lands them is
+# regseq-driver-77 (the indirect-call rewrite -- see the FF-005 row
+# above, near FF-004).
 [[row]]
 id = "RV-007-C"
 section = "1.4"
@@ -1613,6 +1614,31 @@ status = "covered"
 cluster_key = "FF-004"
 snippet_path = "FF-004.rs"
 inspect = { kind = "FunctionInstanceFlavor", arg = "ReifyShim" }
+
+# FF-005 (regseq-driver-77): a bare `fn` coerced to a function pointer
+# and invoked through a generic `Fn` / `FnMut` / `FnOnce` bound
+# monomorphises to an `InstanceKind::FnPtrShim` whose `Fn*::call`
+# signature is `extern "rust-call"`, which the bridge rejected with
+# `UnsupportedAbi { RustCall }` at HEAD. Reclassified `covered`-BY-REWRITE:
+# the FnPtrShim flavor is intentionally never materialised; the fn-pointer
+# `Fn*::call` is lowered to a `CallCallee::Indirect` through the
+# (deref'd-per-kind) fn-pointer receiver (a fn-pointer call IS an indirect
+# call), exactly as the closure `Fn::call` family is covered via the
+# `ClosureCall` rewrite rather than a raw closure Item. The predicate is
+# the broad `CallCallee = Indirect` (any indirect call matches); the
+# discriminating signal is that the snippet reaches `Ok`+validate AT ALL
+# (HEAD rejects). The per-kind / args proof lives in
+# `crates/regseq-driver/tests/bridge_fnptr_shim_indirect_call.rs`. See the
+# R5 plan (`.harness/audits/2026-05-24-ff005-fnptrshim-rustcall-plan.md`).
+[[row]]
+id = "FF-005"
+section = "2.3"
+construct = "FunctionInstanceFlavor::FnPtrShim (coerced fn pointer called through an Fn/FnMut/FnOnce bound, lowered to an indirect call)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FF-005"
+snippet_path = "FF-005.rs"
+inspect = { kind = "CallCallee", arg = "Indirect" }
 
 # FF-016 (regseq-driver-74): a tuple `.clone()` resolves to a
 # `CloneShim` on `Clone::clone`, but rustc's mono-collector also

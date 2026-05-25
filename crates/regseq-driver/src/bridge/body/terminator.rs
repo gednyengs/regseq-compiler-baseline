@@ -202,15 +202,29 @@ fn rewrite_closure_call_shim<'tcx>(
         return Ok(None);
     };
     let receiver_ty = method_args.type_at(0);
-    let ty::TyKind::Closure(closure_def_id, closure_args) = receiver_ty.kind() else {
-        return Ok(None);
-    };
 
     let call_kind = match cx.input.tcx.lang_items().from_def_id(trait_def_id) {
         Some(LangItem::Fn) => ClosureCallKind::Call,
         Some(LangItem::FnMut) => ClosureCallKind::CallMut,
         Some(LangItem::FnOnce) => ClosureCallKind::CallOnce,
         _ => return Ok(None),
+    };
+
+    // regseq-driver-77: a bare `fn` coerced to a function pointer and
+    // invoked through an `Fn` / `FnMut` / `FnOnce` bound monomorphises to
+    // an `InstanceKind::FnPtrShim` whose `Fn*::call` signature is
+    // `extern "rust-call"` (rejected at `translate_abi`). A fn-pointer
+    // call IS an indirect call, so lower it to a `CallCallee::Indirect`
+    // through the (deref'd-per-kind) fn-pointer receiver. No FnPtrShim
+    // Instance is materialised and `translate_fn_sig` never sees the
+    // RustCall sig -- mirroring how the closure `Fn::call` family is
+    // covered by the `ClosureCall` rewrite rather than a raw closure Item.
+    if matches!(receiver_ty.kind(), ty::TyKind::FnPtr(..)) {
+        return rewrite_fn_ptr_call_shim(cx, body_cx, call_kind, args).map(Some);
+    }
+
+    let ty::TyKind::Closure(closure_def_id, closure_args) = receiver_ty.kind() else {
+        return Ok(None);
     };
     let _ = closure_kind;
 
@@ -447,6 +461,143 @@ fn rewrite_closure_call_shim<'tcx>(
     )?;
     let callee = CallCallee::Direct(instance_id);
     Ok(Some((callee, normalised)))
+}
+
+/// regseq-driver-77: lower a fn-pointer `Fn::call` / `FnMut::call_mut` /
+/// `FnOnce::call_once` to a `CallCallee::Indirect` through the
+/// fn-pointer receiver, untupling the `RustCall` args tuple into
+/// positional operands. The receiver becomes the indirect callee:
+/// by-value (`copy _1`) for `FnOnce`, deref'd (`*move _2`) for
+/// `Fn` / `FnMut` whose receiver is `&F` / `&mut F`. No `FnPtrShim`
+/// Instance is created, so `translate_call_callee` -> `callsite_fn_sig`
+/// -> `translate_abi(RustCall)` is never reached.
+fn rewrite_fn_ptr_call_shim<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    body_cx: &mut BodyCtxt<'tcx, '_>,
+    call_kind: ClosureCallKind,
+    args: &[rustc_span::source_map::Spanned<mir::Operand<'tcx>>],
+) -> Result<(CallCallee, Vec<Operand>), BridgeError> {
+    let Some(receiver) = args.first() else {
+        return Err(BridgeError::DslRejection {
+            kind: DslRejectionKind::Terminator,
+            ty_repr: "fn-pointer Fn*::call shim has no receiver operand".to_string(),
+        });
+    };
+    let translated_receiver = translate_operand(cx, body_cx, receiver.node.clone())?;
+    let callee = match call_kind {
+        // `FnOnce::call_once(copy _1, ...)` takes the fn pointer by
+        // value; the receiver operand is the indirect target directly.
+        ClosureCallKind::CallOnce => translated_receiver,
+        // `Fn::call(move _2, ...)` / `FnMut::call_mut(move _2, ...)` take
+        // `&F` / `&mut F`; deref to recover the fn-pointer value.
+        // `PlaceElem::Deref` must be the first projection element
+        // (`place.rs:58`), so the receiver place must be a bare temp
+        // (empty projection) -- the observed MIR shape is `_2 = &_1;
+        // call(move _2, ...)`. A non-empty projection is unexpected and
+        // is rejected with a typed `DslRejectionKind::Terminator` rather
+        // than silently producing an invalid `Field.Deref` place.
+        ClosureCallKind::Call | ClosureCallKind::CallMut => {
+            let place = match &translated_receiver {
+                Operand::Move(place) | Operand::Copy(place) => place,
+                Operand::Constant(_) => {
+                    return Err(BridgeError::DslRejection {
+                        kind: DslRejectionKind::Terminator,
+                        ty_repr: "fn-pointer Fn/FnMut::call receiver is a constant, not a place"
+                            .to_string(),
+                    });
+                }
+            };
+            if !place.projection.is_empty() {
+                return Err(BridgeError::DslRejection {
+                    kind: DslRejectionKind::Terminator,
+                    ty_repr: format!(
+                        "fn-pointer Fn/FnMut::call receiver place has a non-empty projection: {:?}",
+                        place.projection
+                    ),
+                });
+            }
+            Operand::Copy(Place {
+                local: place.local,
+                projection: Box::new([PlaceElem::Deref]),
+            })
+        }
+    };
+
+    // Untuple `args[1]` into positional operands with NO receiver prefix
+    // (the receiver became the indirect callee). Mirror the closure-call
+    // shim: a `Move`/`Copy` place is field-projected; an empty `const ()`
+    // contributes no positional args. The match over `mir::Operand` is
+    // exhaustive (this nightly has a 4th `RuntimeChecks` variant --
+    // driver-75); any other operand shape is a typed rejection, never an
+    // `Ok(None)` fall-through to the RustCall reject.
+    let mut untupled: Vec<Operand> = Vec::new();
+    if let Some(tuple_arg) = args.get(1) {
+        let local_decls = body_cx
+            .local_decls()
+            .ok_or_else(|| BridgeError::DslRejection {
+                kind: DslRejectionKind::Terminator,
+                ty_repr:
+                    "fn-pointer Fn*::call shim requires body local declarations to untuple args"
+                        .to_string(),
+            })?;
+        let tuple_ty = tuple_arg.node.ty(local_decls, cx.input.tcx);
+        let ty::TyKind::Tuple(tuple_fields) = tuple_ty.kind() else {
+            return Err(BridgeError::DslRejection {
+                kind: DslRejectionKind::Terminator,
+                ty_repr: format!(
+                    "fn-pointer Fn*::call args operand is not a tuple type: {tuple_ty:?}"
+                ),
+            });
+        };
+        match &tuple_arg.node {
+            mir::Operand::Move(place) | mir::Operand::Copy(place) => {
+                let base = translate_place(cx, body_cx, *place)?;
+                let move_semantics = matches!(tuple_arg.node, mir::Operand::Move(_));
+                for (idx, field_ty) in tuple_fields.iter().enumerate() {
+                    let model_field_ty = translate_ty(cx, field_ty)?;
+                    let mut projection: Vec<PlaceElem> = base.projection.to_vec();
+                    projection.push(PlaceElem::Field(
+                        FieldIdx::from_u32(idx as u32),
+                        model_field_ty,
+                    ));
+                    let projected = Place {
+                        local: base.local,
+                        projection: projection.into_boxed_slice(),
+                    };
+                    untupled.push(if move_semantics {
+                        Operand::Move(projected)
+                    } else {
+                        Operand::Copy(projected)
+                    });
+                }
+            }
+            // An empty `const ()` args-tuple contributes no positional
+            // args (the zero-arg case). A non-empty constant tuple
+            // (all-ZST fields) is the driver-75-style materialise case,
+            // declared out of scope for fn-ptr calls (spec Non-Goals);
+            // reject rather than fall through to the RustCall sig.
+            mir::Operand::Constant(_) => {
+                if !tuple_fields.is_empty() {
+                    return Err(BridgeError::DslRejection {
+                        kind: DslRejectionKind::Terminator,
+                        ty_repr: format!(
+                            "fn-pointer Fn*::call non-empty constant args-tuple is out of scope: {tuple_ty:?}"
+                        ),
+                    });
+                }
+            }
+            other => {
+                return Err(BridgeError::DslRejection {
+                    kind: DslRejectionKind::Terminator,
+                    ty_repr: format!(
+                        "fn-pointer Fn*::call args-tuple operand is neither a place nor a constant: {other:?}"
+                    ),
+                });
+            }
+        }
+    }
+
+    Ok((CallCallee::Indirect(callee), untupled))
 }
 
 /// Per regseq-driver-72 sub-task B (Path B.2.a, lazy-allocate): when
@@ -865,6 +1016,20 @@ fn translate_drop_as_call<'tcx>(
         return rejected_terminator("Drop terminator without body local declarations");
     };
     let place_ty = place.ty(local_decls, cx.input.tcx).ty;
+
+    // regseq-driver-77: a no-op drop (`needs_drop == false`, e.g. the
+    // Copy fn-pointer local that the `Fn`/`FnMut` bodies drop after the
+    // call) has no drop glue to synthesise. Lower it to `Goto` (Regseq
+    // has no Drop terminator; the single-successor shape matches; a
+    // `Call` would add an artificial drop-glue callee). Mirrors the
+    // Phase-2 pre-scan no-op-drop skip at `mod.rs:1279`. Without this,
+    // once the fn-pointer `Fn*::call` no longer rejects first, the
+    // unmasked `drop(_1: fn())` would synthesise drop glue for a fn
+    // pointer.
+    if !place_ty.needs_drop(cx.input.tcx, ty::TypingEnv::fully_monomorphized()) {
+        return Ok(TerminatorKind::Goto(block_id(target)));
+    }
+
     let model_ty = translate_ty(cx, place_ty)?;
 
     // Resolve (or eagerly synthesise) the drop-glue Item handle and

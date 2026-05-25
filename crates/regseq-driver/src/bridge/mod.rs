@@ -1243,27 +1243,43 @@ fn scan_terminator_for_synthesis<'tcx>(
                     ))
                         },
                     )?;
-                let _ = ty::translate_ty(ctxt, canonical.callee_ty);
-                if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id)
-                    .is_some()
-                {
-                    let model_ty = ty::translate_ty(ctxt, canonical.callee_ty)?;
-                    if let Ty::FnDef(callee_item, _) = ctxt.model.types.resolve(model_ty).clone() {
-                        // Per audit-finding F4 source-derived Items
-                        // carry placeholder ItemIds during Phase 2;
-                        // look the callee's DefPath up through
-                        // `pending_items` when the ItemId hasn't yet
-                        // been bound to `model.items`.
-                        let callee_def_path = ctxt
-                            .lookup_item_def_path(callee_item)
-                            .expect("FnDef callee Item must be interned")
-                            .clone();
-                        diag_log::recognise_log_intrinsic_def_id(
-                            ctxt,
-                            ItemHandle::from_u32(callee_item.as_u32()),
-                            &callee_def_path,
-                            canonical.callee_def_id,
-                        )?;
+                // regseq-driver-77: a fn-pointer `Fn*::call` resolves to
+                // `InstanceKind::FnPtrShim`. The Phase-5 rewrite
+                // (`rewrite_fn_ptr_call_shim`) lowers it to a
+                // `CallCallee::Indirect`, so the FnPtrShim callee Item
+                // (`core::ops::Fn::call`) is never materialised into an
+                // Instance; pre-interning it here would orphan a bucket-1
+                // Function with zero Instances and trip the Phase-5
+                // completeness check (`model.rs:3599-3607`). Skip ONLY
+                // the callee intern -- the arg scans below
+                // (`scan_call_ty_for_vtable` / `scan_operand_move_for_drop_glue`)
+                // must still run for fn-ptr calls whose args carry
+                // vtable / drop-glue needs.
+                if !matches!(canonical.flavor, FunctionInstanceFlavor::FnPtrShim) {
+                    let _ = ty::translate_ty(ctxt, canonical.callee_ty);
+                    if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id)
+                        .is_some()
+                    {
+                        let model_ty = ty::translate_ty(ctxt, canonical.callee_ty)?;
+                        if let Ty::FnDef(callee_item, _) =
+                            ctxt.model.types.resolve(model_ty).clone()
+                        {
+                            // Per audit-finding F4 source-derived Items
+                            // carry placeholder ItemIds during Phase 2;
+                            // look the callee's DefPath up through
+                            // `pending_items` when the ItemId hasn't yet
+                            // been bound to `model.items`.
+                            let callee_def_path = ctxt
+                                .lookup_item_def_path(callee_item)
+                                .expect("FnDef callee Item must be interned")
+                                .clone();
+                            diag_log::recognise_log_intrinsic_def_id(
+                                ctxt,
+                                ItemHandle::from_u32(callee_item.as_u32()),
+                                &callee_def_path,
+                                canonical.callee_def_id,
+                            )?;
+                        }
                     }
                 }
             }
