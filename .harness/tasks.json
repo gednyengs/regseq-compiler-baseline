@@ -2103,6 +2103,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-80",
+          "name": "Triage the 47-row needs-validation tail (feature-complete gate)",
+          "spec": ".harness/tasks/regseq-driver/80-needs-validation-tail-triage.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-79"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-25T22:38:59Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
