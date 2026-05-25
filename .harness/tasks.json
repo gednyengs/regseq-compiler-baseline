@@ -2066,7 +2066,7 @@
           "id": "regseq-driver-78",
           "name": "Section 7 validator-invariant coverage audit (Category 4)",
           "spec": ".harness/tasks/regseq-driver/78-section7-validator-audit.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-77"
           ],

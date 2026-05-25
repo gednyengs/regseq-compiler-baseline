@@ -662,84 +662,105 @@ wrong classification) or VALIDATOR-FAIL.
 
 # Section 7: Validator invariants (validator-failing expectations)
 
-Per Codex review (round 1): every `InvariantViolation` variant defined
-at `crates/regseq-model/src/model.rs:163-...` gets a row -- 60 variants
-total, sourced via `awk` against the enum block. Validator-failing
-fixtures are typically CONSTRUCTED-MODEL tests at
-`crates/regseq-model/tests/id_referential_integrity_validator.rs`, not
+Every `InvariantViolation` variant defined at
+`crates/regseq-model/src/model.rs:163-831` gets a row -- **61 variants**
+total, sourced via `awk`/grep against the enum block. (Was 60 until the
+regseq-driver-78 audit added `DuplicateInstanceKey`, enum variant #12, which
+the regseq-driver-73/R1 hardening introduced after Section 7 was first
+authored; the ids below were renumbered to restore enum-order
+correspondence.) Validator-failing fixtures are CONSTRUCTED-MODEL tests, not
 source-level Rust fixtures.
 
-The existing test file covers some variants; this matrix's job is to
-list every variant so the fixture batch can fill any gaps.
+The `exercised?` column was verified by the regseq-driver-78 audit
+(`.harness/audits/2026-05-25-section7-validator-audit.md`): for each variant,
+a genuine asserting test (construct a defective `RegseqModel` -> call
+`validate()` / `validate_bridge_completeness()` -> assert *that* variant) was
+located, or the variant marked `no`. The audit corpus is **six** test files,
+not the one this header originally named:
+`id_referential_integrity_validator.rs`, `layout_validator.rs`,
+`place_validator.rs`, `validate_bridge_completeness_buckets.rs`,
+`validate_item_instance_coverage.rs` (the five external
+`crates/regseq-model/tests/` files), plus the in-crate
+`crates/regseq-model/src/model_tests.rs` module
+(`#[cfg(test)] #[path] mod tests;` at `model.rs:121-123`). The `notes` column
+cites the exercising test for `yes`/`partial`, or the fixture-form +
+audit-doc cross-reference for `no`. See the audit doc for per-variant
+`file:fn` citations and defect sketches.
 
-| id      | variant | exercised in id_ref_integrity_validator.rs? | notes |
-| ------- | ------- | -------------------------------------------- | ----- |
-| VL-001  | `DanglingId` | yes | |
-| VL-002  | `ItemDefPathsLengthMismatch` | yes | |
-| VL-003  | `ItemSyntheticKindsLengthMismatch` | yes | |
-| VL-004  | `PrimaryCrateOutOfRange` | yes | |
-| VL-005  | `PrimaryCrateStableIdMismatch` | yes | |
-| VL-006  | `DuplicateStableCrateId` | yes | |
-| VL-007  | `DefPathCrateIdOutOfBounds` | yes | |
-| VL-008  | `DuplicateInternerEntry` | yes | |
-| VL-009  | `DuplicateItemDefPathHash` | yes | |
-| VL-010  | `F4OutOfOrder` | yes | |
-| VL-011  | `F4OutOfOrderInstance` | yes | |
-| VL-012  | `DefPathRenderMismatch` | unknown -- verify | |
-| VL-013  | `SpanOutOfBounds` | unknown -- verify | |
-| VL-014  | `SpanNotOnUtf8Boundary` | unknown -- verify | |
-| VL-015  | `DuplicateVTablePrincipal` | unknown -- verify | |
-| VL-016  | `SynthesizedSentinelInvalid` | unknown -- verify | |
-| VL-017  | `StringInternerSentinelInvalid` | unknown -- verify | |
-| VL-018  | `DuplicateString` | unknown -- verify | |
-| VL-019  | `PlaceWalk` | unknown -- verify | |
-| VL-020  | `SyntheticKindItemKindMismatch` | unknown -- verify | |
-| VL-021  | `DirectCalleeOutOfRange` | unknown -- verify | |
-| VL-022  | `TargetMalformed` | unknown -- verify | |
-| VL-023  | `BuildMalformed` | unknown -- verify | |
-| VL-024  | `FnSigMalformed` | unknown -- verify | |
-| VL-025  | `CAbiLoweringMalformed` | unknown -- verify | |
-| VL-026  | `LayoutMalformed` | unknown -- verify | |
-| VL-027  | `TagScalarOutOfRange` | unknown -- verify | |
-| VL-028  | `InstanceLayoutMismatch` | unknown -- verify | |
-| VL-029  | `InstanceLayoutItemArgsMismatch` | unknown -- verify | |
-| VL-030  | `ConstGraphCycle` | unknown -- verify | |
-| VL-031  | `DomainAttrMalformed` | unknown -- verify | |
-| VL-032  | `OpaqueHandleInconsistent` | unknown -- verify | |
-| VL-033  | `StableCrateIdZeroCollision` | unknown -- verify | |
-| VL-034  | `SyntheticDomainBoundary` | unknown -- verify | |
-| VL-035  | `UnitLayoutMismatch` | unknown -- verify | |
-| VL-036  | `SourceFileMalformed` | unknown -- verify | |
-| VL-037  | `DuplicateSourceFilePath` | unknown -- verify | |
-| VL-038  | `BodyTyIdOutOfRange` | unknown -- verify | |
-| VL-039  | `StatementAssignTypeMismatch` | unknown -- verify | |
-| VL-040  | `StatementAssignMalformed` | unknown -- verify | |
-| VL-041  | `SetDiscriminantVariantIdxOutOfRange` | unknown -- verify | |
-| VL-042  | `SetDiscriminantNonEnumTarget` | unknown -- verify | |
-| VL-043  | `AssumeOperandNotBool` | unknown -- verify | |
-| VL-044  | `CopyNonOverlappingOperandType` | unknown -- verify | |
-| VL-045  | `SwitchIntDiscrTypeMismatch` | unknown -- verify | |
-| VL-046  | `AssertCondNotBool` | unknown -- verify | |
-| VL-047  | `CallDestinationTypeMismatch` | unknown -- verify | |
-| VL-048  | `CallArgsArityMismatch` | unknown -- verify | |
-| VL-049  | `CallDirectCalleeNotFunction` | unknown -- verify | |
-| VL-050  | `CallIndirectCalleeNotFnPtr` | unknown -- verify | |
-| VL-051  | `CallArgTypeMismatch` | unknown -- verify | |
-| VL-052  | `CallVirtualIdxInconsistent` | unknown -- verify | |
-| VL-053  | `CallTargetDivergenceMismatch` | unknown -- verify | |
-| VL-054  | `DiagLogCallArg0NotStrRef` | unknown -- verify | |
-| VL-055  | `DiagLogCallArityBelowMinimum` | unknown -- verify | |
-| VL-056  | `DiagLogCallArgNotAdmissible` | unknown -- verify | |
-| VL-057  | `ItemMissingInstance` | unknown -- verify | |
-| VL-058  | `Bucket1MultipleInstances` | unknown -- verify | |
-| VL-059  | `ForeignInstanceBodyOrInitNotNone` | unknown -- verify | |
-| VL-060  | `Bucket4HasInstance` | unknown -- verify | |
+| id      | variant | exercised? | notes |
+| ------- | ------- | ---------- | ----- |
+| VL-001  | `DanglingId` | yes | `model_tests.rs:invariant_1_dangling_item_id_in_instance` + `id_ref` dangling/const/span tests |
+| VL-002  | `ItemDefPathsLengthMismatch` | yes | `model_tests.rs:invariant_2_item_def_paths_length_mismatch` |
+| VL-003  | `ItemSyntheticKindsLengthMismatch` | yes | `id_ref:invariant_2_reject_synthetic_kinds_short`; `model_tests.rs:invariant_2_item_synthetic_kinds_length_mismatch` |
+| VL-004  | `PrimaryCrateOutOfRange` | yes | `model_tests.rs:invariant_4_primary_crate_out_of_range` |
+| VL-005  | `PrimaryCrateStableIdMismatch` | yes | `model_tests.rs:invariant_4_primary_crate_stable_id_mismatch` |
+| VL-006  | `DuplicateStableCrateId` | yes | `model_tests.rs:invariant_5_duplicate_stable_crate_id` |
+| VL-007  | `DefPathCrateIdOutOfBounds` | yes | `id_ref:invariant_6_reject_def_path_crate_id_out_of_bounds` |
+| VL-008  | `DuplicateInternerEntry` | yes | `id_ref:invariant_11_{ty,fn_sig,const}_interner_pass_and_reject_duplicate`, `phase_b_then_c_ordering` |
+| VL-009  | `DuplicateItemDefPathHash` | yes | `id_ref:invariant_18_reject_duplicate_item_def_path_hash` |
+| VL-010  | `F4OutOfOrder` | yes | `id_ref:f4_sort_reject_permuted_input` |
+| VL-011  | `F4OutOfOrderInstance` | yes | `id_ref:f4_2_sort_reject` |
+| VL-012  | `DuplicateInstanceKey` | yes | NEW row (enum #12). `validate_bridge_completeness_buckets.rs:bucket1_function_item_with_duplicate_shim_instances_rejected` |
+| VL-013  | `DefPathRenderMismatch` | yes | `id_ref:def_path_render_reject_malformed` |
+| VL-014  | `SpanOutOfBounds` | yes | `id_ref:span_bounds_reject_lo_gt_hi`, `span_bounds_reject_hi_gt_content_len` |
+| VL-015  | `SpanNotOnUtf8Boundary` | yes | `id_ref:span_bounds_reject_not_on_utf8_boundary_{lo,hi}` |
+| VL-016  | `DuplicateVTablePrincipal` | yes | `id_ref:phase_c_vtables_rebuild_reject_duplicate_principal` |
+| VL-017  | `SynthesizedSentinelInvalid` | yes | `model_tests.rs:invariant_8_synthesized_sentinel_{invalid_path,with_content_rejected,with_wrong_line_starts_rejected}` |
+| VL-018  | `StringInternerSentinelInvalid` | no | unreachable-by-construction backstop: `StringInterner` encapsulation (private fields; `new()`/`intern()` preserve the sentinel; `Deserialize` rejects non-empty index 0) makes the defect unrepresentable without a test-only hook. Not a fixture-batch task. See audit doc S.2/S.3 finding 5 |
+| VL-019  | `DuplicateString` | no | unreachable-by-construction backstop: `intern()` is content-deduplicating and `Deserialize` rejects duplicates (`string_interner.rs:49-50,157-161`), so the defect needs a test-only hook. Not a fixture-batch task. See audit doc S.2/S.3 finding 5 |
+| VL-020  | `PlaceWalk` | yes | `id_ref:place_validator_structural_error_at_index_5_not_masked_by_type_error_at_index_0`; `place_validator.rs:joint_validator_integration_pass_and_reject` |
+| VL-021  | `SyntheticKindItemKindMismatch` | no | constructed-model gap; `ItemKind::Function` item with `SyntheticItemKind::ClosureCaptures` (requires `Struct`). See audit doc S.2 |
+| VL-022  | `DirectCalleeOutOfRange` | yes | `id_ref:terminator_b7_direct_callee_out_of_range_rejects`; `place_validator.rs:joint_validator_rejects_dangling_direct_call_instance` |
+| VL-023  | `TargetMalformed` | yes | `layout_validator.rs:target_reject_*` (6 reasons) |
+| VL-024  | `BuildMalformed` | yes | `layout_validator.rs:build_reject_toolchain_empty` (one of two reasons; `reason`-string) |
+| VL-025  | `FnSigMalformed` | yes | `layout_validator.rs:fn_sig_c_variadic_reject_{non_c_abi,zero_inputs}`, `fn_sig_reject_inputs_never` |
+| VL-026  | `CAbiLoweringMalformed` | yes | `layout_validator.rs:cabi_lowering_reject_*` (5 tests) |
+| VL-027  | `LayoutMalformed` | yes | `layout_validator.rs:layout_reject_field_{overlap,offset_misaligned,overflows_layout_size}` (struct-kind reasons; tuple/array/union/enum untested -- same variant) |
+| VL-028  | `TagScalarOutOfRange` | yes | `layout_validator.rs:tag_scalar_width_fit_reject_overflow` |
+| VL-029  | `InstanceLayoutMismatch` | yes | `layout_validator.rs:invariant_14_reject_kind_mismatch_struct_to_enum` |
+| VL-030  | `InstanceLayoutItemArgsMismatch` | yes | `layout_validator.rs:invariant_14_reject_item_args_mismatch` |
+| VL-031  | `ConstGraphCycle` | yes | `layout_validator.rs:const_graph_cycle_reject_{self_loop,two_node,enum_value_payload}` |
+| VL-032  | `DomainAttrMalformed` | yes | `layout_validator.rs:domain_attr_*_reject*`, `intrinsic_singleton_reject_two_intrinsics` (6 tests) |
+| VL-033  | `OpaqueHandleInconsistent` | yes | `layout_validator.rs:invariant_19_reject_{non_struct_kind,generic,non_zst_layout,by_value_use}` |
+| VL-034  | `StableCrateIdZeroCollision` | yes | `layout_validator.rs:invariant_20_reject_real_crate_zero` |
+| VL-035  | `SyntheticDomainBoundary` | yes | `layout_validator.rs:invariant_20_reject_{source_derived_synthetic_domain,synthetic_non_zero_domain}` |
+| VL-036  | `UnitLayoutMismatch` | yes | `layout_validator.rs:unit_layout_reject_non_canonical` |
+| VL-037  | `SourceFileMalformed` | yes | `layout_validator.rs:source_file_reject_line_start{s_non_monotonic,s_does_not_start_at_zero,_exceeds_content_len}` |
+| VL-038  | `DuplicateSourceFilePath` | yes | `layout_validator.rs:source_file_reject_duplicate_path` |
+| VL-039  | `BodyTyIdOutOfRange` | yes | `id_ref:body_ty_closure_rejects_dangling_local_decl_ty` |
+| VL-040  | `StatementAssignTypeMismatch` | yes | `id_ref:statement_b1_assign_type_mismatch_rejects` |
+| VL-041  | `StatementAssignMalformed` | partial | `id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer` asserts only `side="rvalue"`; `side="place"` arm untested. See audit doc S.2 |
+| VL-042  | `SetDiscriminantVariantIdxOutOfRange` | yes | `id_ref:statement_b2_set_discriminant_variant_idx_out_of_range_rejects` |
+| VL-043  | `SetDiscriminantNonEnumTarget` | yes | `id_ref:statement_b3_set_discriminant_non_enum_target_rejects` |
+| VL-044  | `AssumeOperandNotBool` | yes | `id_ref:statement_b4_assume_operand_not_bool_rejects` |
+| VL-045  | `CopyNonOverlappingOperandType` | partial | `id_ref:statement_b5_copy_non_overlapping_count_type_rejects` asserts only `which="count"`; `src`/`dst`/`pointee` arms untested. See audit doc S.2 |
+| VL-046  | `SwitchIntDiscrTypeMismatch` | yes | `id_ref:terminator_b1_switch_int_discr_type_mismatch_rejects` |
+| VL-047  | `AssertCondNotBool` | yes | `id_ref:terminator_b2_assert_cond_not_bool_rejects` |
+| VL-048  | `CallDestinationTypeMismatch` | yes | `id_ref:terminator_b3_call_destination_type_mismatch_rejects{,_indirect}` |
+| VL-049  | `CallArgsArityMismatch` | yes | `id_ref:terminator_b4_call_args_arity_mismatch_rejects_{direct,indirect}`; `model_tests.rs:{non_log_direct_call_uses_generic_b4,indirect_call_does_not_receive_log_exception}` |
+| VL-050  | `CallDirectCalleeNotFunction` | yes | `id_ref:terminator_b5_call_direct_callee_not_function_rejects` |
+| VL-051  | `CallIndirectCalleeNotFnPtr` | yes | `id_ref:terminator_b5_call_indirect_callee_not_fn_ptr_rejects` |
+| VL-052  | `CallArgTypeMismatch` | yes | `id_ref:terminator_b6_call_arg_type_mismatch_rejects_{direct,indirect}` |
+| VL-053  | `CallVirtualIdxInconsistent` | yes | `id_ref:terminator_b8_virtual_idx_inconsistent_rejects` |
+| VL-054  | `CallTargetDivergenceMismatch` | yes | `id_ref:terminator_b9_target_divergence_mismatch_rejects_{non_diverging_no_target,indirect_divergent_target_some}` |
+| VL-055  | `DiagLogCallArg0NotStrRef` | yes | `model_tests.rs:rejects_args_zero_not_str_ref` |
+| VL-056  | `DiagLogCallArityBelowMinimum` | yes | `model_tests.rs:rejects_empty_args` |
+| VL-057  | `DiagLogCallArgNotAdmissible` | yes | `model_tests.rs:rejects_args_one_not_admissible_log_arg_source` |
+| VL-058  | `ItemMissingInstance` | yes | `validate_bridge_completeness_buckets.rs:bucket{1_struct,2_foreign_function}_zero_instances_rejected`; `validate_item_instance_coverage.rs:b{1,2}_*_without_instance_is_rejected` |
+| VL-059  | `Bucket1MultipleInstances` | yes | `validate_bridge_completeness_buckets.rs:bucket1_{struct_multiple_instances,function_item_with_two_primary_instances}_rejected` |
+| VL-060  | `ForeignInstanceBodyOrInitNotNone` | yes | `validate_bridge_completeness_buckets.rs:bucket2_foreign_{function_body,static_init}_must_be_none` |
+| VL-061  | `Bucket4HasInstance` | yes | `validate_bridge_completeness_buckets.rs:bucket4_rpit_function_with_instance_rejected` |
 
-The `unknown -- verify` cells are matrix-author follow-up: cross-check
-each against `crates/regseq-model/tests/id_referential_integrity_validator.rs`
-and any sibling test files, mark as `yes` / `no` / `partial`. Variants
-marked `no` after verification become fixture-batch tasks (one
-constructed-model test per uncovered variant).
+Audit roll-up (`.harness/audits/2026-05-25-section7-validator-audit.md`):
+coverage axis **56 `yes`, 2 `partial` (VL-041, VL-045), 3 `no` (VL-018,
+VL-019, VL-021)**; triage axis **1 fixture-bound `no` (VL-021), 2
+`unreachable-by-construction` backstops (VL-018, VL-019), 0 dead**, over all
+61. The fixture-batch follow-up is **3 gaps** -- VL-021 (constructed-model)
+plus completing the two `partial`s -- grouped by enforcing method
+(`validate_synthetic_kinds`, `validate_copy_non_overlapping`,
+`validate_body_statement_invariants`); not authored here. VL-018/VL-019 are
+excluded from that batch (they need a test-only `StringInterner` hook, a
+source change, not a model-level fixture).
 
 ---
 
