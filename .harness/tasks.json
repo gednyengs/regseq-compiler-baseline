@@ -2061,6 +2061,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-78",
+          "name": "Section 7 validator-invariant coverage audit (Category 4)",
+          "spec": ".harness/tasks/regseq-driver/78-section7-validator-audit.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-77"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-25T18:20:29Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
