@@ -2087,7 +2087,7 @@
           "id": "regseq-driver-79",
           "name": "Feature-complete-gate reconciliation engine (G1)",
           "spec": ".harness/tasks/regseq-driver/79-feature-complete-gate-reconciliation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-78"
           ],
