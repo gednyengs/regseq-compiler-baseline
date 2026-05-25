@@ -2108,7 +2108,7 @@
           "id": "regseq-driver-80",
           "name": "Triage the 47-row needs-validation tail (feature-complete gate)",
           "spec": ".harness/tasks/regseq-driver/80-needs-validation-tail-triage.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-79"
           ],
