@@ -267,9 +267,13 @@ sub-axis tables where coverage is in `status` but evidence is in `notes` with no
   reason-bearing `rejected`/`uncovered`), and the four §2.4 outputs (ledger +
   worklist + drift report + verdict). Deliverable: the tool (read-only + ledger
   emitter) + the authoritative `coverage_ledger.{md,json}` + the needs-validation
-  worklist + the verdict report. No new deps (stdlib + `tomllib`, as today).
-  **No matrix in-place write, no legacy→runner migration, no new fixtures, no
-  codegen.**
+  worklist + the verdict report. **Tool runtime deps stay stdlib + `tomllib`**
+  (plain-`python3` invocable, like the existing tool). **Tests use `pytest`,
+  added as a uv DEV dependency** (`uv add --dev pytest`; `[dependency-groups] dev`
+  + `uv.lock`), run via `uv run pytest` — this is the repo's first Python test
+  suite, and a dev/test dep is distinct from the tool's runtime deps (the project
+  uses uv; uv 0.9.11 + `uv.lock` present). **No matrix in-place write, no
+  legacy→runner migration, no new fixtures, no codegen.**
 - **Task G1b (matrix de-drift; Type-B tooling, gated on G1).** Add the
   schema-aware A1′ `--write` mode: regenerate ONLY each row's coverage cell per its
   table schema (never the `expectation` cell, never adjudication reason text),

@@ -2082,6 +2082,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-79",
+          "name": "Feature-complete-gate reconciliation engine (G1)",
+          "spec": ".harness/tasks/regseq-driver/79-feature-complete-gate-reconciliation.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-78"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-25T20:37:39Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
