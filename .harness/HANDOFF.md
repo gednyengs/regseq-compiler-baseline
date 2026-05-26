@@ -37,15 +37,19 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 - **Workstream status**: **just kicked off.** The bridge front-end gate
   PASSES (`1a6a996`, archived handoff). We are now standing up the
   generic-C backend workstream.
-- **Last completed**: **Level-1 roadmap**
-  (`docs/discussions/generic-c-backend/roadmap.md`) — Codex APPROVED
-  (4/4: faithful-to-architect, factual, no-overscheduling, consistent).
-  P1 fully scoped; P2 (RegseqError) definition-only/detail-deferred; P3+
-  unscheduled pool. Prior: workstream scaffolding (`2a8aa60`, pushed) —
-  created the docs HQ + `.harness/generic-c/`, archived the bridge
-  HANDOFF, reseeded this file (option A: canonical spec stays in
-  `regseq-model/`).
-- **In-flight**: **none.** Next is the **Phase-1 plan-first design doc**.
+- **Last completed**: **Phase-1 plan-doc STRUCTURE** stood up at
+  `docs/discussions/generic-c-backend/phase-1/` — an entry `README.md` +
+  3 outlined skeletons (`01-construct-surface-and-matrix.md`,
+  `02-architecture-decisions.md`, `03-verification-flow.md`) per the
+  architect's 3-doc strategy. Locked decisions are embedded; open items
+  marked TO FILL. The heavy construct-surface re-derivation is
+  DELIBERATELY DEFERRED to a fresh session (full budget). Codex APPROVED
+  (4/4: faithful-to-decisions, gap-claims-accurate [§7 defers all 6
+  terminators; per-Rvalue/BinOp/CastKind genuinely unspecced; Ty/Place/
+  Operand/diag-log covered], source-files-exist, self-consistent). Prior:
+  Level-1 roadmap (`e74fbb3`, pushed); scaffolding (`2a8aa60`, pushed).
+- **In-flight**: **none.** Next is **Doc 1 — re-derive the construct
+  surface** (fresh session; see Next actions).
 - **Uncommitted state**: the two standing untracked dirs stay untouched
   by rule — `tests/fixtures/playground-pl011/`,
   `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
@@ -53,21 +57,24 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 
 ### Next actions (in priority order)
 
-1. **Phase-1 plan-first design doc** (Level-2) → built around a
-   **codegen-coverage matrix** (the codegen analog of
-   `bridge-coverage-matrix.md`): one row per `RegseqModel` construct + its
-   pinned C lowering + a fixture + run-and-assert. Coverage analysis runs
-   against BOTH `generic-c-backend.md` (what's specced/deferred) AND the
-   full `RegseqModel` surface (every `Ty`/`Statement`/`Terminator`/
-   `Rvalue`/`Operand`/`Place`/`Const` variant + C-ABI rules). Resolve the
-   open architecture decisions (naming / decl-order / file-layout / host
-   panic / terminator emission — see § Decisions locked). Pins the
-   end-to-end auto-verification flow. Codex-review, then →
-2. **Phase-1 spec deltas** into `generic-c-backend.md` (esp. its deferred
-   §7 terminator emission), Codex-reviewed, then implementation tasks via
-   `task.py`.
-3. **(Later) Phase-2 RegseqError** — describe at Phase-2 start (definition
-   in § Decisions locked + roadmap); not before.
+1. **Doc 1 — re-derive the construct surface** (THE fresh-session task;
+   it's the matrix backbone, heaviest + most quality-critical). Fill
+   `phase-1/01-construct-surface-and-matrix.md` per ITS OWN "Method"
+   section: re-derive EXACTLY from `crates/regseq-model/src/*` (the 15
+   named enum/struct files) reconciled with `generic-c-backend.md` +
+   `spec.md §14.5`; one matrix row per construct classified
+   covered/deferred/unspecced/out-of-scope; output the **gap list**.
+   Supersede the earlier exploratory agent maps — re-derive against
+   source. (Priority gaps to expect: §7 terminators [deferred],
+   per-Rvalue/BinOp/CastKind [unspecced], Const initializers,
+   SetDiscriminant.) Codex-review the filled matrix.
+2. **Docs 2 + 3** (parallel, after Doc 1): resolve the 6 architecture
+   decisions concretely (`02-…`, Codex first-contact on D2/D3/D5) + pin
+   the codegen-coverage harness (`03-…`). Settle everything here —
+   nothing left to implementation.
+3. **Phase-1 spec deltas** into `generic-c-backend.md` (esp. §7 terminator
+   emission + the unspecced rows), Codex-reviewed, then `task.py` tasks.
+4. **(Later) Phase-2 RegseqError** — describe at Phase-2 start; not before.
 
 ---
 
@@ -149,8 +156,9 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | Phase | Scope | Status | Commit | Deliverable |
 | ----- | ----- | ------ | ------ | ----------- |
 | (scaffold) | workstream homes + reseed HANDOFF | done | `2a8aa60` | docs HQ + `.harness/generic-c/` + archived bridge handoff |
-| L1 roadmap | phase sequence + deps + gates | done | (this) | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
-| P1 | Rust surface + diag-log → C, + verification harness | pending | — | generic-C backend MVP + codegen-coverage harness |
+| L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
+| P1 plan docs | entry + 3 skeletons (surface+matrix / decisions / verification) | structure done; content pending | (this) | `docs/discussions/generic-c-backend/phase-1/` (Codex APPROVED) |
+| P1 impl | Rust surface + diag-log → C, + verification harness | pending | — | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -385,3 +393,21 @@ the rest is stable.
   emission_name claims against source). Reconciled § Decisions locked +
   § Current state to match (dropped the older fixed P3/P4 draft order).
   Next: the Phase-1 plan-first (Level-2) design doc.
+- 2026-05-26: **Phase-1 plan-doc structure** stood up at
+  `docs/discussions/generic-c-backend/phase-1/` (entry `README.md` + 3
+  skeletons: `01-construct-surface-and-matrix.md`,
+  `02-architecture-decisions.md`, `03-verification-flow.md`), per the
+  architect's 3-document strategy + "settle in docs, not implementation."
+  Locked decisions embedded (the 6 architecture directions, diag-log
+  interception rule, dual-oracle verification); open work marked TO FILL.
+  **The construct-surface re-derivation (Doc 1) is deliberately deferred
+  to a fresh session** (it's the heaviest, most quality-critical artifact;
+  the architect chose to set up cleanly now and re-derive with full
+  budget). Doc 1 carries its own precise "Method" (re-derive from the 15
+  `regseq-model/src` files + `generic-c-backend.md`, classify each
+  construct, output the gap list). Codex review APPROVED (4/4:
+  faithful-to-decisions / gap-claims-accurate / source-files-exist /
+  self-consistent — Codex independently confirmed §7 defers all 6
+  terminators + per-Rvalue/BinOp/CastKind is unspecced + the source files
+  exist). **Next session: fill Doc 1 (re-derive), then Docs 2+3, then the
+  `generic-c-backend.md` spec delta + `task.py` tasks.**
