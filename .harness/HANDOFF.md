@@ -37,14 +37,15 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 - **Workstream status**: **just kicked off.** The bridge front-end gate
   PASSES (`1a6a996`, archived handoff). We are now standing up the
   generic-C backend workstream.
-- **Last completed**: workstream scaffolding — created
-  `docs/discussions/generic-c-backend/` (design/strategy HQ),
-  `.harness/generic-c/` (live ledgers/trackers/scratchpads), archived the
-  bridge HANDOFF, and reseeded this file. (Decision: keep the canonical
-  C-emission spec `docs/discussions/regseq-model/generic-c-backend.md`
-  in place — option A — since it is a governed co-equal merger artifact.)
-- **In-flight**: **none.** Next is the **Level-1 roadmap doc** (see Next
-  actions), then the **Phase-1 plan-first design doc**.
+- **Last completed**: **Level-1 roadmap**
+  (`docs/discussions/generic-c-backend/roadmap.md`) — Codex APPROVED
+  (4/4: faithful-to-architect, factual, no-overscheduling, consistent).
+  P1 fully scoped; P2 (RegseqError) definition-only/detail-deferred; P3+
+  unscheduled pool. Prior: workstream scaffolding (`2a8aa60`, pushed) —
+  created the docs HQ + `.harness/generic-c/`, archived the bridge
+  HANDOFF, reseeded this file (option A: canonical spec stays in
+  `regseq-model/`).
+- **In-flight**: **none.** Next is the **Phase-1 plan-first design doc**.
 - **Uncommitted state**: the two standing untracked dirs stay untouched
   by rule — `tests/fixtures/playground-pl011/`,
   `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
@@ -52,25 +53,21 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 
 ### Next actions (in priority order)
 
-1. **Level-1 roadmap doc** → `docs/discussions/generic-c-backend/`. Its
-   FIRST section is a cheap investigation that unblocks the whole
-   sequence: *what are RegseqError and Lifecycle, and which domains are
-   already in `RegseqModel` vs. need a front-end (bridge) phase first?*
-   (Only diag-log is bridged today; MMIO = spec stage 16, interrupts =
-   17, atomics = 18 are NOT bridged — see Decisions locked.) Output: a
-   dependency-ordered phase list + per-phase exit gate. Codex-review the
-   sequencing.
-2. **Phase-1 plan-first design doc** → built around a **codegen-coverage
-   matrix** (the codegen analog of `bridge-coverage-matrix.md`): one row
-   per `RegseqModel` construct + its pinned C lowering + a fixture +
-   run-and-assert. Coverage analysis runs against BOTH
-   `generic-c-backend.md` (what's specced/deferred) AND the full
-   `RegseqModel` surface (every `Ty`/`Statement`/`Terminator`/`Rvalue`/
-   `Operand`/`Place`/`Const` variant + C-ABI rules). Also pins the
-   end-to-end auto-verification flow.
-3. **Per-phase spec deltas** into `generic-c-backend.md` (esp. its
-   deferred §7 terminator emission), Codex-reviewed, then implementation
-   tasks via `task.py`.
+1. **Phase-1 plan-first design doc** (Level-2) → built around a
+   **codegen-coverage matrix** (the codegen analog of
+   `bridge-coverage-matrix.md`): one row per `RegseqModel` construct + its
+   pinned C lowering + a fixture + run-and-assert. Coverage analysis runs
+   against BOTH `generic-c-backend.md` (what's specced/deferred) AND the
+   full `RegseqModel` surface (every `Ty`/`Statement`/`Terminator`/
+   `Rvalue`/`Operand`/`Place`/`Const` variant + C-ABI rules). Resolve the
+   open architecture decisions (naming / decl-order / file-layout / host
+   panic / terminator emission — see § Decisions locked). Pins the
+   end-to-end auto-verification flow. Codex-review, then →
+2. **Phase-1 spec deltas** into `generic-c-backend.md` (esp. its deferred
+   §7 terminator emission), Codex-reviewed, then implementation tasks via
+   `task.py`.
+3. **(Later) Phase-2 RegseqError** — describe at Phase-2 start (definition
+   in § Decisions locked + roadmap); not before.
 
 ---
 
@@ -81,18 +78,25 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 - **Two-level planning.** L1 = phase roadmap (sequence + exit gates +
   cross-track deps). L2 = per-phase plan-first design doc → spec → Codex
   → tasks.
-- **Phase roadmap (L1, draft order — to be dependency-validated):**
-  P1 = full supported **Rust surface + diagnostic logging**; P2 =
-  **RegseqError** handling; P3 = **Register Access** (MMIO); P4 =
-  **Lifecycle**; … Ordering after P1 is partly forced by **front-end
-  availability**.
+- **Phase roadmap (L1) — authoritative doc:
+  `docs/discussions/generic-c-backend/roadmap.md`.** P1 = full supported
+  **Rust surface + diagnostic logging** (fully scoped). P2 =
+  **RegseqError** — the abstraction for authoring OS-agnostic errors that
+  are mapped to OS-specific error codes during lowering; **definition
+  only — detailed description + spec + tasks deferred to Phase-2 start**
+  (per architect). **P3+ = domain constructs one at a time, deliberately
+  UNSCHEDULED** — picked by immediate need after P1–P2 (Register Access
+  anticipated, NOT committed; pool also incl. Interrupts/Atomics/Lifecycle/
+  Ordered-regions). Post-P1 ordering is partly forced by **front-end
+  availability** (most domains aren't bridged — stages 16/17/18).
 - **Domain phases are gated by what's in `RegseqModel`.** Diag-logging is
   the ONLY domain construct currently bridged (survives as
   `AttrData::Intrinsic(IntrinsicKind::Log(level))` on the callee item).
   MMIO/interrupt/atomic are spec stages 16/17/18, NOT implemented (atomics
   rejected). So P3+ each need a front-end (bridge) phase to land the
-  construct in the IR before the backend can lower it. RegseqError +
-  Lifecycle bridge-status: **TBD** (the L1 doc's first investigation).
+  construct in the IR before the backend can lower it. RegseqError
+  bridge-status: **TBD — deferred to Phase-2 start** (per the roadmap;
+  not investigated in the L1 doc by architect decision).
 - **Per-phase exit gate** mirrors the bridge gate: a domain is
   "codegen-complete" when every construct lowers, compiles, runs, and
   auto-validates on the host.
@@ -144,8 +148,8 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 
 | Phase | Scope | Status | Commit | Deliverable |
 | ----- | ----- | ------ | ------ | ----------- |
-| (scaffold) | workstream homes + reseed HANDOFF | done | (this) | docs HQ + `.harness/generic-c/` + archived bridge handoff |
-| L1 roadmap | phase sequence + deps + gates | pending | — | `docs/discussions/generic-c-backend/` roadmap doc |
+| (scaffold) | workstream homes + reseed HANDOFF | done | `2a8aa60` | docs HQ + `.harness/generic-c/` + archived bridge handoff |
+| L1 roadmap | phase sequence + deps + gates | done | (this) | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 | Rust surface + diag-log → C, + verification harness | pending | — | generic-C backend MVP + codegen-coverage harness |
 
 ---
@@ -366,3 +370,18 @@ the rest is stable.
   gated by front-end availability (only diag-log bridged); Phase-1 =
   Rust surface + diag-log with a codegen-coverage harness; canonical spec
   stays in `regseq-model/` (option A). Scaffolding Codex-reviewed.
+- 2026-05-26: **Level-1 roadmap** drafted at
+  `docs/discussions/generic-c-backend/roadmap.md`. Per architect framing:
+  P1 (Rust surface + diag-log) fully scoped with deliverables + open
+  architecture decisions + exit gate; P2 (RegseqError = OS-agnostic errors
+  mapped to OS-specific codes during lowering) recorded as DEFINITION
+  ONLY, detail/spec/tasks deferred to Phase-2 start; P3+ domain constructs
+  deliberately UNSCHEDULED (one-at-a-time, picked by immediate need after
+  P1–P2; Register Access anticipated, not committed). Roadmap states the
+  front-end↔backend dependency model (only diag-log bridged; MMIO/intr/
+  atomic = stages 16/17/18) and the per-phase exit gate. Codex review
+  APPROVED (4/4: faithful-to-architect / factual / no-overscheduling /
+  consistent; verified the bridged-vs-not + §7-defers-terminators +
+  emission_name claims against source). Reconciled § Decisions locked +
+  § Current state to match (dropped the older fixed P3/P4 draft order).
+  Next: the Phase-1 plan-first (Level-2) design doc.
