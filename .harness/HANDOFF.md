@@ -38,7 +38,8 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
   handoff). Next is **`task.py` tasks** → implementation.
-- **Last completed**: **Phase-1 spec delta** applied to the canonical
+- **Last completed**: **Phase-1 spec delta committed (`cb0b793`)** — now
+  the complete §§1–17 input contract. Applied to the canonical
   `docs/discussions/regseq-model/generic-c-backend.md` — every Doc-2
   `Spec-delta: yes` decision (D1,D2,D4,D5,D7,D8,D9,D10,D11,D12)
   transcribed: §7 identifier policy gains type-name derivation (D1); **new
@@ -46,13 +47,15 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (D5); new §10 Rvalue+BinOp/UnOp (D7), §11 casts (D8), §12 `Const`
   initializers (D11), §13 enum offset-faithful representation (D9,
   generalizing §9.8/§9.9), §14 field-offset reproduction (D10), §15
-  declaration-order + C-ABI prototypes + `c_variadic` (D2), §16 panic +
+  declaration-order + C-ABI prototypes + `c_variadic` + the by-value-containment edge set (D2), §16 panic +
   `AssertKind` table (D4), §17 symbol/linkage (D12); §2/§5 rows point into
   the new sections. Numbering kept §1–§9 intact (only external ref is to
   §8); new sections appended §10–§17. Codex APPROVED after 3 rounds (r1:
   bank-4 statics / bank-2 struct-vs-union / non-enum `Discriminant`→0; r2:
   Doc-2↔spec drift on the struct/union forward-decl — backported into Doc
-  2 D2; r3 APPROVED). D3 + D6 are `Spec-delta: no` (D6's printf shape was
+  2 D2; r3 APPROVED). The §15 by-value-containment edge-set refinement (so
+  the type-defs task is a pure transcription) was a follow-on Codex pass
+  (APPROVED 4/4). D3 + D6 are `Spec-delta: no` (D6's printf shape was
   already §8; only its call-site cross-ref was added to §7.1).
 - **Earlier this session**: **Phase-1 Level-2 plan docs ALL FILLED** at
   `docs/discussions/generic-c-backend/phase-1/` (committed `63b43cd`; each
@@ -90,9 +93,10 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   backend impl in `crates/regseq-backends` + the `codegen-coverage-runner`
   crate + fixtures); see Next actions.
 - **Uncommitted state**: the three Phase-1 plan docs are committed
-  (`63b43cd`). **Uncommitted now**: the `generic-c-backend.md` spec delta +
-  a one-line Doc-2 D2 backport (struct/union forward-decl) + this HANDOFF
-  refresh (no commit requested this turn). The two standing untracked dirs
+  (`63b43cd`); the spec delta + Doc-2 D2 backport + §15 edge-set refinement
+  are committed (`cb0b793`). **Uncommitted now**: only this HANDOFF refresh
+  (no commit requested this turn). Neither commit is pushed (commit-only
+  requested; offer to push at session start). The two standing untracked dirs
   stay untouched by rule — `tests/fixtures/playground-pl011/`,
   `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
   never modify).
@@ -376,10 +380,16 @@ uv run python scripts/python/task.py add-task \
    Decisions locked.
 2. Auto-memory (loads automatically) — incl. the
    bridge-feature-complete-gate milestone.
-3. `docs/discussions/generic-c-backend/` README + roadmap (once it exists).
-4. `docs/discussions/regseq-model/generic-c-backend.md` — the canonical
-   C-emission spec (the input contract for implementation).
-5. The Phase-1 plan-first doc + codegen-coverage matrix (once they exist).
+3. `docs/discussions/generic-c-backend/roadmap.md` — phase sequence + exit
+   gates + the front-end↔backend dependency model.
+4. **`docs/discussions/regseq-model/generic-c-backend.md` §§1–17 — the
+   canonical C-emission spec; the COMPLETE input contract for
+   implementation** (read this before writing any task or code).
+5. The Phase-1 plan docs `docs/discussions/generic-c-backend/phase-1/`:
+   **Doc 1** (`01-…`) the construct/coverage matrix + gap list (the Doc-1
+   row IDs each task closes), **Doc 2** (`02-…`) the D1–D12 decisions (the
+   *why* behind each spec rule), **Doc 3** (`03-…`) the verification flow
+   (the `codegen-coverage-runner` harness the impl is gated by).
 6. Only if needed: the archived bridge HANDOFF
    (`.harness/archive/2026-05-26-bridge-coverage-runner/HANDOFF.md`) for
    methodology depth or front-end questions.
@@ -388,9 +398,9 @@ uv run python scripts/python/task.py add-task \
 
 ## § First-action recommendations by user input (STABLE)
 
-**"Let's continue / what's next"** → § Current state → Next actions. If no
-task in flight, the next artifact is the L1 roadmap doc or the Phase-1
-plan-first doc (whichever § Current state names).
+**"Let's continue / what's next"** → § Current state → Next actions
+(currently: **file the Phase-1 `task.py` implementation tasks** — the
+plan + spec are complete and committed; see the Next-actions a→e sequence).
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
