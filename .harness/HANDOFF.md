@@ -34,12 +34,29 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 ## § Current state (UPDATE EVERY TASK/DECISION CLOSE)
 
 - **Last updated**: 2026-05-26
-- **Workstream status**: Phase-1 **planning complete** (all 3 Level-2
-  plan docs filled + Codex-approved). The bridge front-end gate PASSES
-  (`1a6a996`, archived handoff). Next is the spec delta → tasks →
-  implementation.
-- **Last completed**: **Phase-1 Level-2 plan docs ALL FILLED** at
-  `docs/discussions/generic-c-backend/phase-1/` (each Codex-APPROVED):
+- **Workstream status**: Phase-1 **planning + spec delta complete**
+  (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
+  + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
+  handoff). Next is **`task.py` tasks** → implementation.
+- **Last completed**: **Phase-1 spec delta** applied to the canonical
+  `docs/discussions/regseq-model/generic-c-backend.md` — every Doc-2
+  `Spec-delta: yes` decision (D1,D2,D4,D5,D7,D8,D9,D10,D11,D12)
+  transcribed: §7 identifier policy gains type-name derivation (D1); **new
+  §7.1 per-terminator emission** replaces the old "deferred" paragraph
+  (D5); new §10 Rvalue+BinOp/UnOp (D7), §11 casts (D8), §12 `Const`
+  initializers (D11), §13 enum offset-faithful representation (D9,
+  generalizing §9.8/§9.9), §14 field-offset reproduction (D10), §15
+  declaration-order + C-ABI prototypes + `c_variadic` (D2), §16 panic +
+  `AssertKind` table (D4), §17 symbol/linkage (D12); §2/§5 rows point into
+  the new sections. Numbering kept §1–§9 intact (only external ref is to
+  §8); new sections appended §10–§17. Codex APPROVED after 3 rounds (r1:
+  bank-4 statics / bank-2 struct-vs-union / non-enum `Discriminant`→0; r2:
+  Doc-2↔spec drift on the struct/union forward-decl — backported into Doc
+  2 D2; r3 APPROVED). D3 + D6 are `Spec-delta: no` (D6's printf shape was
+  already §8; only its call-site cross-ref was added to §7.1).
+- **Earlier this session**: **Phase-1 Level-2 plan docs ALL FILLED** at
+  `docs/discussions/generic-c-backend/phase-1/` (committed `63b43cd`; each
+  Codex-APPROVED):
   - **Doc 1** (`01-…`, construct surface + matrix) — 170 rows / 13
     families, classified covered/deferred/unspecced/out-of-scope, + a
     grouped **gap list**. Surfaced two non-pre-flagged structural gaps:
@@ -69,34 +86,33 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **none.** Next is the **Phase-1 spec delta** into
-  `generic-c-backend.md` (every Doc-2 `Spec-delta: yes`), then `task.py`
-  tasks.
-- **Uncommitted state**: **all three Phase-1 plan docs** (`01`/`02`/`03`)
-  are filled but **not yet committed** (no commit requested). The two
-  standing untracked dirs stay untouched by rule —
-  `tests/fixtures/playground-pl011/`, `crates/regseq-driver/tests/
-  fixtures/` (experimentation; never commit, never modify).
+- **In-flight**: **none.** Next is **`task.py` tasks** (the generic-C
+  backend impl in `crates/regseq-backends` + the `codegen-coverage-runner`
+  crate + fixtures); see Next actions.
+- **Uncommitted state**: the three Phase-1 plan docs are committed
+  (`63b43cd`). **Uncommitted now**: the `generic-c-backend.md` spec delta +
+  a one-line Doc-2 D2 backport (struct/union forward-decl) + this HANDOFF
+  refresh (no commit requested this turn). The two standing untracked dirs
+  stay untouched by rule — `tests/fixtures/playground-pl011/`,
+  `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
+  never modify).
 
 ### Next actions (in priority order)
 
-1. **Phase-1 spec delta** into the canonical
-   `docs/discussions/regseq-model/generic-c-backend.md` — apply every
-   Doc-2 decision flagged `Spec-delta: yes`: D1 type-name + identifier
-   policy (§7); D2 a new declaration-order section + C-ABI prototypes +
-   `c_variadic`; D4 panic section + the `AssertKind` message table; **D5
-   the §7 terminator-emission section (the core, was DEFERRED)**; D7 a new
-   Rvalue section + BinOp/UnOp tables; D8 a cast section + saturating-cast
-   contract + host assumptions; D9 a generalized enum-representation
-   section (supersedes §9.8/§9.9 as examples); D10 a field-offset section;
-   D11 the per-`Const` initializer table (§5); D12 a symbol/linkage/
-   section/inline section. Codex-reviewed (2–4 rounds). (Doc 3 is
-   backend/harness-internal — **no** spec delta.)
-2. **`task.py` tasks** — file the implementation tasks (the generic-C
-   backend in `crates/regseq-backends`, the `codegen-coverage-runner`
-   crate + fixtures) per the 8-section template; Codex-reviewed; commit +
-   push; implementer picks up.
-3. **(Later) Phase-2 RegseqError** — describe at Phase-2 start; not before.
+1. **`task.py` tasks** — file the Phase-1 implementation tasks per the
+   8-section template; Codex-reviewed; commit + push; implementer picks
+   up. The natural breakdown (input contract = `generic-c-backend.md`
+   §§2–17, now complete): (a) the **codegen-coverage-runner** crate +
+   harness plumbing (Doc 3: pipeline, dual oracle, `manifest.toml`,
+   ledger) — buildable before the backend so fixtures can be authored;
+   (b) the **prelude + envelope** (D2/§15 banks, D4/§16 panic, helpers);
+   (c) **types + layout** (§2/§13/§14 — the offset-faithful aggregate/enum
+   emission + `_Static_assert` guards); (d) **bodies** (§7.1 terminators,
+   §10 Rvalue/BinOp, §11 casts, §12 Const, §4/§5 places/operands);
+   (e) **diag-log** (§8 + §7.1 interception) — the first end-to-end
+   behavioral fixture. Sequence by the dependency (a→b→c→d→e); each task
+   cites its spec sections + the Doc-1 matrix rows it closes.
+2. **(Later) Phase-2 RegseqError** — describe at Phase-2 start; not before.
 
 ---
 
@@ -179,8 +195,9 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | ----- | ----- | ------ | ------ | ----------- |
 | (scaffold) | workstream homes + reseed HANDOFF | done | `2a8aa60` | docs HQ + `.harness/generic-c/` + archived bridge handoff |
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
-| P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | (uncommitted) | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
-| P1 impl | Rust surface + diag-log → C, + verification harness | pending | — | generic-C backend MVP + codegen-coverage harness |
+| P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
+| P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
+| P1 impl | Rust surface + diag-log → C, + verification harness | pending (tasks next) | — | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -479,3 +496,37 @@ the rest is stable.
   docs uncommitted** (no commit requested). **Next: the
   `generic-c-backend.md` spec delta (every Doc-2 `Spec-delta: yes`) →
   `task.py` tasks.**
+- 2026-05-26: **Phase-1 plan docs committed** (`63b43cd`,
+  `gc: Phase-1 Level-2 plan docs — matrix, decisions, verification`; the
+  three docs + HANDOFF refresh; playground dirs left untracked). Not
+  pushed (commit-only requested).
+- 2026-05-26: **Phase-1 spec delta** applied to canonical
+  `docs/discussions/regseq-model/generic-c-backend.md` (every Doc-2
+  `Spec-delta: yes`). In-place: §7 identifier policy gains type-name
+  derivation (D1); **§7.1 NEW** per-terminator emission replaces the old
+  "deferred" paragraph (D5, incl. diag-log call-site interception cross-ref
+  for D6); §2 enum/struct/union + §5 Constant rows point into the new
+  sections. Appended **§10** Rvalue+BinOp/UnOp (D7), **§11** casts (D8),
+  **§12** `Const` initializers (D11), **§13** enum offset-faithful
+  representation (D9, generalizing §9.8/§9.9), **§14** field-offset
+  reproduction (D10), **§15** declaration-order + C-ABI prototypes +
+  `c_variadic` (D2), **§16** panic + `AssertKind` table (D4), **§17**
+  symbol/linkage (D12). §1–§9 numbering kept intact (only external ref is
+  to §8); §9 gained a forward-note. Codex review APPROVED after 3 rounds
+  (r1: bank-4 must extern-declare ALL forward-ref statics not just foreign
+  + bank-2 needs `union <T>;` vs `struct <T>;` + non-enum `Discriminant`→0
+  per rvalue.rs:62-66; r2: backport the struct/union forward-decl
+  distinction into Doc-2 D2 to kill doc↔spec drift; r3 APPROVED). D3/D6 are
+  `Spec-delta: no`. **Uncommitted** (spec delta + Doc-2 backport +
+  this HANDOFF refresh; no commit requested). **Next: `task.py` tasks**
+  (harness crate → prelude/envelope → types/layout → bodies → diag-log).
+- 2026-05-26: **§15/D2 refinement** — enumerated the **by-value-containment
+  edge set** for the bank-3 type-definition topo-sort (the only
+  load-bearing emission order; instance/fn/static order is forward-declared
+  → F4-deterministic only). Pinned in both `generic-c-backend.md` §15 and
+  Doc-2 D2 (kept in sync): edge `T→U` iff `U` is a `FieldLayout.ty`
+  (struct/union/tuple/enum-payload/closure-capture) **or** a `Ty::Array`
+  element reached that way; **no** edge through `Ref`/`Ptr`/`FnPtr`
+  (forward-declarable) or `FnDef` (ZST). Closes the precision gap so the
+  types/layout task is a pure transcription. Codex APPROVED (4/4:
+  C-correct / IR-faithful / spec↔Doc-2 agree / no new contradiction).

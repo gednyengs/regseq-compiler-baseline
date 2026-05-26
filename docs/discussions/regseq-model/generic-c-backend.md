@@ -83,9 +83,9 @@ enum). The generic-C target lowers each variant as follows:
 | `Dynamic { auto_traits, vtable_ty }` | only behind `Ref`/`Ptr`; fat pointer per §3 |
 | `Closure(ItemId, GenericArgs)` | C `struct` (synthesised captures-struct's parallel `Ty::Struct` C lowering) |
 | `Tuple { fields, layout }` | anonymous C struct with synthetic field names `_0`, `_1`, ... for non-empty tuples; the **empty tuple** `Ty::Tuple { fields: [] }` is Rust `()` -- ZST with `size: 0, align: 1`, lowered to C `void` in function return position (per `spec.md` §14.5) and treated as a value-less marker elsewhere |
-| `Struct { item, args, layout }` | C `struct` |
-| `Enum { item, args, layout }` | tagged C struct or niche-encoded per the layout's `EnumShape` / `TagEncoding` (see §9.8, §9.9 for worked examples) |
-| `Union { item, args, layout }` | C `union` |
+| `Struct { item, args, layout }` | C `struct`; field placement reproduces the layout offsets per §14 |
+| `Enum { item, args, layout }` | offset-faithful tagged / niche-encoded C `struct` per the layout's `EnumShape` / `TagEncoding` — general rule at §13 (the §9.8 / §9.9 examples are now special cases of §13) |
+| `Union { item, args, layout }` | C `union` (field placement per §14) |
 
 Opaque-handle pattern (e.g., `core::ffi::c_void` rewrites per
 `spec.md` Appendix A.1): an `#[repr(C)] struct OpaqueCtx {
@@ -219,7 +219,7 @@ The generic-C backend lowers each variant as follows:
 | --------------- | ----------------------------------------------------------- |
 | `Copy(p)`       | C value-load from the C lvalue of `p` (per §4). The backend may emit a plain assignment, a struct-copy, or `memcpy` based on size and layout policy. |
 | `Move(p)`       | Same C value-load as `Copy(p)`. The variant tag is informational at the C level; a backend that wants to specialise (e.g., emit `memcpy` for large moves while the source place becomes dead, or elide a final move into a return slot) may consult the variant. The bare load semantics are identical to `Copy`. |
-| `Constant(id)`  | C literal or compound literal materialised from `model.consts.resolve(id)`. Concrete per-`Const`-variant C lowerings (literal vs compound vs address-of for `Reloc`, etc.) compose with the per-`Ty` table at §2 and the `Const` vocabulary defined in `spec.md` §9.7. |
+| `Constant(id)`  | C literal or compound literal materialised from `model.consts.resolve(id)`. The per-`Const`-variant initializer forms are pinned at **§12**; they compose with the per-`Ty` table at §2 and the `Const` vocabulary defined in `spec.md` §9.7. |
 
 Because the IR has no `RuntimeChecks` variant (per `spec.md`
 §20.3.1), the C backend never sees a session-flag query at
@@ -282,31 +282,82 @@ ret_ty fn_name(arg_ty1 arg1, ..., arg_tyN argN) {
 }
 ```
 
-**Identifier emission policy.** Named locals via
-`debug_name = Some` use the recorded name; locals with
-`debug_name = None` use the synthetic `_N` form. The
+**Identifier emission policy.** Instances (functions, statics,
+consts) emit under their bridge-minted `Instance.emission_name`
+(uniqueness guaranteed); the backend does not re-mint. **Type**
+names (struct / enum / union / tuple / closure) are *derived*:
+`sanitize(DefPath.rendered)` (mapping `::` and any
+non-`[A-Za-z0-9_]` to `_`) plus, for generic items, a canonical
+`__<hex>` suffix from the interner's `ArgsKey` — so the name is
+a pure function of the post-mono nominal identity `(DefPath,
+ArgsKey)` and is build-equivalence-stable. Tuple typedefs are
+`tuple_<hash-of-field-TyIds>` with fields `_0`, `_1`, ...; enum
+variant payload structs are `<EnumName>__<VariantName>`. Fields
+use the interned `FieldLayout.name` / `VariantLayout.name`
+(sanitised). Named locals via `debug_name = Some` use the
+recorded name; locals with `debug_name = None` use the synthetic
+`_N` form; basic blocks are `bb_N` from `BlockId`. A final
+`_clash_<n>` disambiguation pass over the name table is the
+safety net (expected no-op given the identity keys). The
 identifier-emission convention pinned for the snapshot
 pretty-printer (`pretty-printer.md`) coincides with the
 generic-C backend's; if a future renderer or backend diverges,
 each artifact pins its own convention.
 
-§7 pins only the Body envelope (signature template, local
-decls, basic-block labels). Per-statement C-emission for
-`Operand` and intrinsic statements is at §5 / §6 above;
-per-terminator C-emission is **not specified by stage 14** --
-the closed 6-variant terminator vocabulary
-(`Return` / `Goto` / `SwitchInt` / `Call` / `Assert` /
-`Unreachable`) is IR-side closed at `spec.md` §23; MIR `Drop`
-is represented as a synthetic `Call` per `spec.md` §23.4 (no
-separate `Drop` variant in the v1 IR). Per-target C lowering
-for each terminator surfaces with the phase-1 implementation
-sweep (post stage-14 close) and lands in this file alongside
-the implementation. Backends consuming the IR before that sweep
-can derive each terminator's C emission directly from the
-IR-side construct (per the project `README.md` §2
-"C semantics with information preservation" principle --
-"store the result, not the input"; see also `spec.md`
-§17.3).
+§7 pins the Body envelope (signature template, local decls,
+basic-block labels). Per-statement C-emission for `Operand`,
+`Rvalue`, and intrinsic statements is at §5 / §10 / §6;
+per-terminator C-emission is pinned in §7.1 below. Statements:
+`Assign(place, rvalue)` → `<place> = <rvalue>;` (place per §4,
+rvalue per §10; struct-copy or `memcpy` for large aggregate
+RHS); `SetDiscriminant(place, v)` → the tag write per §13;
+`Intrinsic(..)` → §6.
+
+### 7.1 Per-terminator C-emission
+
+IR-side definition: `spec.md` §23 (the closed 6-variant
+terminator vocabulary). Control flow is the `bb_N:` labels of
+§7 plus `goto`. Each `TerminatorKind` lowers as:
+
+- **`Goto(t)`** → `goto bb_<t>;`
+- **`Return`** → `return _0;` (the return-place local
+  `LocalId::RETURN_PLACE`, `spec.md` §25.1); for a unit-`()`
+  (C `void`) output, `return;`. A `Never`-output body is
+  `_Noreturn` and contains no `Return` (the bridge ends
+  divergent bodies in `Unreachable` / a divergent `Call`); a
+  `Return` there is model corruption.
+- **`SwitchInt { discr, targets }`** → a C `switch` when `discr`
+  lowers to an integer that fits C `switch` (≤ 64-bit — the
+  common `bool` / small-`repr(int)` enum / integer cases):
+  `switch (<discr>) { case <v_i>: goto bb_<t_i>; ... default:
+  goto bb_<otherwise>; }`. When `discr` is 128-bit (the
+  `SwitchTargets.cases` values are `u128`), emit an if-else
+  chain instead.
+- **`Call { callee, args, destination, target }`**:
+  - **Diag-log interception (first).** If `callee` is
+    `Direct(inst)` and `model.instances[inst]`'s source `item`
+    carries `AttrData::Intrinsic(IntrinsicKind::Log(..))`
+    (`spec.md` §26), emit the §8 `printf` **instead of** a call
+    (the log-marked item is a recognition tag and emits no C
+    definition — see §15), then `goto bb_<target>;`.
+  - **Ordinary call.** `Direct(inst)` → `name(args...)` with
+    `name = emission_name(inst)`; `Indirect(op)` →
+    `(<op>)(args...)`.
+  - **Destination.** If the callee's return `Ty` is unit / ZST,
+    emit `<call>;` (no assignment); else
+    `<destination> = <call>;` (`destination` is a `Place`, §4).
+  - **Successor.** `target: Some(t)` → append `goto bb_<t>;`.
+    `target: None` (divergent; the output is `Never` by
+    invariant) → emit `<call>;` then `__builtin_unreachable();`
+    with **no** destination assignment.
+  - **Drop-as-`Call`** (`spec.md` §23.4): no special case — it
+    is a `Direct` call to a drop-glue instance; emit per the
+    `Direct` rule.
+- **`Assert { cond, expected, msg, target }`** →
+  `if ((<cond>) == <expected>) goto bb_<target>; else <panic
+  for msg>;` (`expected` is a compile-time `bool`; the panic
+  path is §16's `AssertKind` table).
+- **`Unreachable`** → the §16 trap.
 
 ---
 
@@ -446,6 +497,12 @@ are anchored per example. Each example is generic-C /
 target-agnostic; phase-2 backends contribute their own
 target-specific worked examples to their respective
 `<target>-backend.md`.
+
+> **Note.** §§10–17 below pin the normative per-construct rules these
+> examples illustrate (Rvalue + operators, casts, `Const` initializers,
+> enum representation, aggregate field offsets, declaration order, host
+> panic, symbol policy). The §9.8 / §9.9 enum examples are special cases
+> of the general rule at §13.
 
 ### 9.1 Reference and pointer types
 
@@ -757,3 +814,298 @@ uint32_t f(Option_ref_u32_t x) {
 // Construction of Option::Some(p) -> place->p = p;
 //   /* Separate MIR field-write statement, NOT a SetDiscriminant. */
 ```
+
+---
+
+## 10. `Rvalue` C-emission
+
+IR-side definition: `spec.md` §21. `Rvalue` appears as the RHS of
+`Assign` (§7). Each variant lowers as:
+
+- `Use(op)` → the operand expression (§5).
+- `Repeat(op, n)` → array fill into the destination
+  (`for (size_t i = 0; i < n; i++) dst[i] = <op>;`); `n` is the
+  post-mono constant.
+- `Ref(_, place)` / `RawPtr(_, place)` → `&<place>` (§4); for an unsized
+  pointee the result is the §3.2 fat pointer built per §11 `Unsize`.
+- `Cast(k, op, ty)` → §11.
+- `BinaryOp(op, a, b)` → the BinOp table below.
+- `UnaryOp(op, a)` → `Not`: `!a` for `bool`, `~a` for integers; `Neg`:
+  `-a`; `PtrMetadata`: the §3.2 fat-pointer metadata slot (`.len` /
+  `.vtable`).
+- `Discriminant(place)` → §13 (read the tag / niche) when the place's type
+  is an enum; for a **non-enum** predecessor type the result is the
+  constant `0` (`spec.md` §21.2.8).
+- `Aggregate(kind, ops)` → struct / union / tuple / array compound literal
+  with field placement per §14; enum per §13; closure → captures-struct
+  compound literal (§9.7); `AggregateKind::RawPtr` → build the §3.2 fat
+  pointer from `(data, metadata)`.
+
+### 10.1 `BinOp`
+
+The host toolchain **MUST** be configured for two's-complement wrapping of
+signed `+`, `-`, `*` (e.g. `-fwrapv`); `-fwrapv` does **not** cover shift
+UB, which §10.1 lowers explicitly.
+
+| `BinOp` | C emission |
+|---------|-----------|
+| `Add` / `Sub` / `Mul` | `a + b` / `a - b` / `a * b` (wrapping) |
+| `AddUnchecked` / `SubUnchecked` / `MulUnchecked` | same operators (defined-wrap is a sound superset of the IR's UB-on-overflow) |
+| `AddWithOverflow` / `SubWithOverflow` / `MulWithOverflow` | `__builtin_{add,sub,mul}_overflow(a, b, &tmp)` → `struct { T v; _Bool overflow; }` (the builtin's return is `overflow`, `tmp` is `v`), matching the IR's `(T, bool)` |
+| `Div` / `Rem` | `a / b` / `a % b` — sound because rustc always emits the guarding `Assert(DivisionByZero)` and `Assert(Overflow)` (INT_MIN/-1) terminators upstream; the bare op never sees the UB inputs |
+| `BitXor` / `BitAnd` / `BitOr` | `a ^ b` / `a & b` / `a | b` |
+| `Shl` (wrapping) | `(T)((U)a << (b & (BITS-1)))` — compute in the unsigned same-width type `U`, count masked |
+| `Shr` (wrapping) | `a >> (b & (BITS-1))` — **arithmetic** for signed `a`, **logical** for unsigned `a` (host arithmetic right shift is a pinned host assumption) |
+| `ShlUnchecked` / `ShrUnchecked` | as `Shl` / `Shr` but with the count **unmasked** (caller guarantees `b < BITS`) |
+| `Eq` / `Ne` / `Lt` / `Le` / `Ge` / `Gt` | `a == b`, … → `_Bool` |
+| `Cmp` | three-way `core::cmp::Ordering` as `i8`: `(int8_t)((a > b) - (a < b))` (−1 / 0 / 1) |
+| `Offset` | `a + b` (C pointer arithmetic; `<*const T>::offset` semantics; `b` is `isize`) |
+
+---
+
+## 11. Cast C-emission (`CastKind` / `PointerCoercion`)
+
+IR-side definition: `spec.md` §21.3.3.
+
+| `CastKind` | C emission |
+|------------|-----------|
+| `IntToInt` / `FloatToFloat` / `IntToFloat` | `(T)x` (two's-complement integer narrowing is a pinned host assumption) |
+| `FloatToInt` | **saturating helper, never a bare cast** (C is UB out-of-range; Rust `as` saturates, NaN→0). Per source-float × dest-int prelude helper: `if (isnan(x)) return 0; if (x <= (F)DI_MIN) return DI_MIN; if (x >= (F)DI_MAX) return DI_MAX; return (DI)x;` (bounds checked *before* the cast; ±inf handled by the comparisons) |
+| `PtrToPtr` | `(T*)p` |
+| `FnPtrToPtr` | `(T*)p` — function↔object pointer round-trip is a pinned **host-target assumption** (POSIX-guaranteed, not ISO C) |
+| `PointerExposeProvenance` | `(uintptr_t)p` |
+| `PointerWithExposedProvenance` | `(T*)n` |
+| `Transmute` | bit reinterpret via `memcpy` between equal-`sizeof` objects (no union pun): `memcpy(&dst, &src, sizeof dst)` |
+| `Subtype` | no-op (representation-identical; emit the operand) |
+
+`PointerCoercion`:
+
+- `Unsize` → build the §3.2 fat pointer: slice / array → `{ data, len }`;
+  `str` → `{ data, len }`; `dyn` → `{ data, vtable = &VT }`.
+- `ReifyFnPointer` → `&<fn>` (function designator → fn pointer).
+- `ClosureFnPointer` → `&<synthesised call shim>` for the non-capturing
+  closure.
+- `UnsafeFnPointer` → no-op (safe→unsafe fn-ptr is C-identical).
+
+---
+
+## 12. `Const` → C initializers
+
+IR-side definition: `spec.md` §9.7 (the closed 11-variant `Const` +
+3-state `Byte`). Reached via `Operand::Constant` (§5),
+`InstanceKind::Static.init`, and `InstanceKind::Const.value`. Every form
+below is materialisable both at value sites and as a static / `const`
+initializer.
+
+| `Const` | C initializer |
+|---------|--------------|
+| `Bool(b)` | `1` / `0` |
+| `Char(u)` | `(uint32_t)<u>` |
+| `Int(k, v)` | width-suffixed signed literal of the value (`v` is the sign-extended bit pattern; `LL` as needed; `I128` via `__int128` halves, host-dependent) |
+| `Uint(k, v)` | unsigned literal (`U` / `ULL`) |
+| `Float(k, bits)` | a **constant-expression** that is exact + bit-faithful (incl. NaN payloads): finite → C99 **hex-float literal**; ±∞ → `__builtin_inff()` / `__builtin_inf()`; NaN → `__builtin_nanf("0x<payload>")` (quiet) / `__builtin_nansf(...)` (signaling). These are GCC/Clang constant expressions (the primitives behind `<math.h>` `INFINITY` / `NAN`); a host-target assumption. **Not** a union member access (which is not a constant expression). `_Float16` / `_Float128` host-dependent. |
+| `ZST` | no bytes — value position: no-op / `(void)0`; aggregate field: omitted (§14) |
+| `Bytes(Vec<Byte>)` | `unsigned char[]` initializer: `Value(b)`→`b`; `Uninit`→`0` (uninit lowered to a defined zero for host determinism); `Reloc(r)`→ the pointer-width address slot `&<r>` |
+| `Aggregate(children)` | C compound literal in §14 field order |
+| `EnumValue { variant_idx, payload }` | §13 (tag write + payload fields) |
+| `NullPtr(ty)` | `(T*)0` |
+| `Reloc(InstanceRef)` | `&<emission_name>` of the referenced instance |
+
+---
+
+## 13. Enum C representation
+
+IR-side definition: `spec.md` §11 (`Layout` / `EnumShape` / `TagEncoding`).
+Generalises the §9.8 (Direct, fieldless) and §9.9 (Niche, single-pointer)
+examples to **all** enum shapes.
+
+**Representation — offset-faithful.** An enum lowers to a C aggregate
+built by the §14 field-offset technique (NOT a naive `{ tag; union; }`,
+which falsely assumes tag-at-0 + contiguous payload). The tag cell (when
+present: `Single{scalar:Some}`, `Multiple`) is a `<TagScalar.scalar_ty>`
+field at `TagScalar.offset`; the payload region is a `union` of per-variant
+payload structs, each itself offset-faithful (variant field offsets are
+**absolute to the enum object**, not the payload start). `_Static_assert`
+guards validate every offset / `sizeof`. Niche enums simply carry no tag
+field — the niche cell is a payload field whose bit pattern *is* the tag.
+
+**Tag operations.**
+
+- `Discriminant(place)` — `Empty`: unreachable. `Single`: the single
+  variant index (constant). `Multiple` (both `Direct` **and** `Niche`):
+  read the tag / niche cell at `TagScalar.offset` and **compare against
+  each variant's precomputed `VariantLayout.tag_value`**; the match selects
+  the variant. Using the bridge-precomputed `tag_value` (which already
+  encodes the **mod-2^scalar_width** storage and any **wrapping**
+  `WrappingRange`) avoids re-deriving the niche formula. For `Niche`, the
+  niched variants carry `Some(tag_value)` and the untagged variant carries
+  `None`; **no match → `untagged_variant`**.
+- `SetDiscriminant(place, v)` — `Direct` / `Single{scalar:Some}`: store
+  `VariantLayout[v].tag_value` (`Some` by construction) into the tag cell.
+  `Niche` niched variant: store its `tag_value`. `Niche` untagged variant:
+  **no-op** (`tag_value: None`; payload is the tag). `Single{scalar:None}`:
+  no-op.
+- `Downcast(v)` then `Field(i, _)` → access variant `v`'s payload field `i`
+  at its `FieldLayout.offset` (§14 access).
+- `Aggregate::Enum(ty, v)` / `Const::EnumValue` → write the active
+  variant's payload fields at their offsets + the tag write (as
+  `SetDiscriminant(v)`).
+
+A readability optimisation (a named `{ tag; union; }` when the layout is
+provably tag-prefix-compatible) is **deferred** — not Phase 1.
+
+---
+
+## 14. Aggregate field-offset reproduction
+
+IR-side definition: `spec.md` §11. `FieldLayout` / `VariantLayout` field
+vectors are in **source / MIR field order, not memory order**; `repr(Rust)`
+reorders, so verbatim field emission does **not** reproduce `offset`. Every
+aggregate (struct, union, tuple, enum payload, closure captures) is emitted
+by:
+
+1. Sort the emittable fields by `FieldLayout.offset` ascending.
+2. **Omit ZST fields** but account for them: `PhantomData`
+   (`is_phantom_data`, `spec.md` §14.5 `CFieldAdmissible`) and unit / ZST
+   fields occupy 0 bytes; multiple same-offset ZSTs collapse.
+3. Insert explicit `unsigned char _padN[k];` fillers to advance from the
+   previous field's end to the next field's `offset`, and a trailing pad to
+   `layout.size`.
+4. Carry alignment: `_Alignas(layout.align)` (or
+   `__attribute__((aligned(align)))`); `pack: Some(1)` →
+   `__attribute__((packed))`; `pack: Some(n)` → `packed` + `aligned(n)`.
+5. **Unions** (`LayoutKind::Union`): all field offsets are 0 → a C `union`
+   of the fields, trailing pad to `size`.
+6. Emit `_Static_assert(sizeof(T)==size)`,
+   `_Static_assert(_Alignof(T)==align)`, and per-field
+   `_Static_assert(offsetof(T,f)==offset)` guards.
+7. **Field access** (§4 `.fname`): direct member access for the natural
+   case; `memcpy` to / from a typed temporary when accessing through enum
+   byte storage or a packed / misaligned field (avoids alignment UB).
+
+---
+
+## 15. Declaration order, signatures & C-ABI prototypes
+
+IR-side definition: `spec.md` §8 / §9 (items / instances), §14 (`FnSig` /
+`FnAbi` / §14.5 C-ABI). Phase 1 emits a **single translation unit**; module
+hierarchy lives only in the `DefPath`-qualified names (§7) so a later
+multi-file split is rename-free. The TU is emitted in five ordered banks:
+
+1. **Prelude** — fixed runtime header: includes (`<stdint.h>`, `<stddef.h>`,
+   `<stdio.h>`, `<stdlib.h>`, `<string.h>`), the §3.2 fat-pointer typedefs,
+   the §16 panic routines, and the §10 / §11 `*WithOverflow` /
+   saturating-cast helpers.
+2. **Type forward-decls** — tag forward-decls for every aggregate in F4
+   order: `struct <T>;` for structs / tuples / enums / closures,
+   `union <T>;` for unions.
+3. **Type definitions** — full `struct` / `union` bodies (enums lower to
+   structs per §13), **topologically sorted by by-value containment**: a
+   type that contains another *by value* is emitted after it (C requires a
+   complete type before by-value use — fields, array elements, by-value
+   params/returns, `sizeof`/`offsetof` for the §14 `_Static_assert`
+   guards). The containment graph (the **only** load-bearing emission
+   order; everything else is forward-declared) is, for an aggregate `T`:
+
+   - `T → U` iff `U` is the resolved `Ty` of any `FieldLayout.ty` of `T`'s
+     struct / union / tuple fields, any enum `VariantLayout` payload field,
+     or any closure capture field; **or** `U` is the **element type of a
+     `Ty::Array`** reached that way (C `U[N]` needs `U` complete). Recurse
+     through these edges.
+   - **No** edge through `Ty::Ref` / `Ty::Ptr` / `Ty::FnPtr` (forward-decls
+     in bank 2 break these — pointers to incomplete types are legal) or
+     `Ty::FnDef` (a ZST; not emitted).
+
+   This is derivable purely from `FieldLayout.ty` + the `Ty` interner (no
+   recomputation). F4 / instance kind-rank order is the deterministic
+   **tie-breaker** only. By-value cycles are impossible for sized Rust
+   types (rustc rejects them); a detected cycle is a hard error (model
+   corruption).
+4. **Declarations** — function prototypes for every function instance
+   (including foreign `body: None`); and `extern` declarations for **every**
+   static — both foreign (`init: None`) and locally-defined statics that may
+   be referenced before their bank-5 definition (declare-before-use in the
+   single TU: `extern [const] T X;` here, defined in bank 5).
+5. **Definitions** — function bodies + static initializers, F4 order.
+
+**C-ABI prototypes.** A function with `FnSig.abi == C` emits its signature
+from the **C-ABI lowered** types: read `sig_c_abi_lowerings[sig]` (§14.5);
+a position with `CAbiShape::Substituted { emit_as, .. }` emits `emit_as`'s
+C type (not the original `FnSig` `TyId`); `Direct` uses the position's own
+type. The backend **never re-derives** repr facts (they are not in the IR).
+Nested `FnPtr` declarators recurse through the same table.
+
+**C variadics.** `FnSig.c_variadic == true` (implies `abi == C` + ≥ 1 fixed
+input) emits the fixed parameters followed by a trailing `, ...` in both the
+prototype (bank 4) and the definition (bank 5).
+
+**Diag-log exclusion.** An instance whose source `item` carries
+`IntrinsicKind::Log(..)` is a recognition tag (§7.1, §8): it is **skipped**
+in banks 4 / 5 — no prototype, no definition.
+
+---
+
+## 16. Host panic & `AssertKind` messages
+
+IR-side definition: `spec.md` §23 (`Assert` / `AssertKind` /
+`Unreachable`). The prelude (§15 bank 1) defines a `_Noreturn` panic
+routine that prints to **stderr** (keeping the §8 diag-log **stdout** oracle
+clean) and `abort()`s:
+
+```c
+_Noreturn static void regseq_panic(const char *msg) {
+    fprintf(stderr, "panic: %s\n", msg);
+    abort();
+}
+```
+
+`Assert` failure (§7.1) and `Unreachable` route here; `Unreachable` prints
+`"internal error: entered unreachable code"`. Each `AssertKind` prints a
+fixed Rust-style message (operands formatted by their `Ty`):
+
+| `AssertKind` | message |
+| ------------ | ------- |
+| `BoundsCheck{len,index}` | `index out of bounds: the len is <len> but the index is <index>` |
+| `Overflow(op,l,r)` | `attempt to <op> with overflow` |
+| `OverflowNeg(v)` | `attempt to negate with overflow` |
+| `DivisionByZero(v)` | `attempt to divide by zero` |
+| `RemainderByZero(v)` | `attempt to calculate the remainder with a divisor of zero` |
+| `MisalignedPointerDereference{required,found}` | `misaligned pointer dereference: address must be a multiple of <required> but is <found>` |
+| `NullPointerDereference` | `null pointer dereference occurred` |
+| `InvalidEnumConstruction(v)` | `constructed invalid enum discriminant <v>` |
+
+A release-mode `Unreachable` MAY instead emit `__builtin_unreachable()`;
+the Phase-1 default is the trap (fail loud for the host oracle).
+
+---
+
+## 17. Symbol & linkage policy
+
+IR-side definition: `spec.md` §8 (`Item` linkage / section / inline
+fields), §9 (`InstanceKind`).
+
+- **`Linkage`**: `Default` → ordinary file-scope definition **without**
+  `static` (cross-instance refs exist within the one TU); `NoMangle` /
+  `export_name` → definition under the verbatim `emission_name`; `Foreign`
+  → **declaration only** (`extern`, bank 4), never defined; `Weak` →
+  `__attribute__((weak))` on the definition.
+- **`link_section: Some(s)`** → `__attribute__((section("<s>")))` on the
+  definition.
+- **`inline_hint`**: `Hint` → `inline`; `Always` → `inline
+  __attribute__((always_inline))`; `Never` → `__attribute__((noinline))`;
+  `None` → nothing.
+- **`Static { mutability }`**: `Not` → `const`-qualified global; `Mut` →
+  non-const global. `init: Some` → with initializer (§12); `init: None` →
+  `extern`, no initializer.
+- **`Const` item**: no standalone C symbol by default — materialised at use
+  sites (§12). A `static const` is emitted only if a `Reloc` takes its
+  address.
+- **Function instances**: `body: Some` → prototype (bank 4) + definition
+  (bank 5); `body: None` → prototype / `extern` only.
+- **Shim flavors** (`FunctionInstanceFlavor`): reachable flavors all emit
+  as ordinary C functions from their bridge-synthesised `body` (no
+  per-flavor special case). `virtual_idx: Some(i)` participates only in
+  **vtable** construction — slot `i` is initialised to `&<shim
+  emission_name>` (§9.6). Coroutine / async flavors are unreachable
+  (`spec.md` §15.1).
+- `is_unsafe` / `FnSig.safety` are **not** lowered (no C equivalent).

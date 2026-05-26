@@ -92,16 +92,26 @@ graph of mutually-referential instances/types.
    `<stddef.h>`, `<stdio.h>`, `<stdlib.h>`, `<string.h>`), the fat-pointer
    typedefs (gc §3.2), the panic routines (D4), the saturating-cast and
    `*WithOverflow` helpers (D7/D8).
-2. **Type forward-decls**: `struct <T>;` tag forward-decls for every
-   aggregate type, in F4 order.
-3. **Type definitions**: full `struct`/`union` bodies, **topologically
-   sorted by by-value containment** (a type that embeds another *by
-   value* — not behind `Ptr`/`Ref` — must follow it). F4/instance order
-   (instance.rs:163-178 kind ranks) is the deterministic **tie-breaker**
-   only. By-value cycles are impossible for sized Rust types (rustc
-   rejects them); pointer/reference edges are broken by the bank-2
-   forward-decls. A detected by-value cycle is a hard error
-   (model corruption).
+2. **Type forward-decls**: tag forward-decls for every aggregate type, in
+   F4 order — `struct <T>;` for structs / tuples / enums / closures,
+   `union <T>;` for unions (distinct C tag forms).
+3. **Type definitions**: full `struct`/`union` bodies (enums lower to
+   structs per D9), **topologically sorted by by-value containment** — a
+   type that contains another *by value* must follow it (C needs a
+   complete type before by-value use: fields, array elements, by-value
+   params/returns, `sizeof`/`offsetof`). The containment graph (the only
+   load-bearing emission order — everything else is forward-declared), for
+   an aggregate `T`: an edge `T → U` iff `U` is the resolved `Ty` of any
+   `FieldLayout.ty` (struct/union/tuple field, enum `VariantLayout` payload
+   field, closure capture) **or** the **element type of a `Ty::Array`**
+   reached that way (`U[N]` needs `U` complete); recurse. **No** edge
+   through `Ty::Ref`/`Ty::Ptr`/`Ty::FnPtr` (broken by the bank-2
+   forward-decls — pointers to incomplete types are legal) or `Ty::FnDef`
+   (ZST, not emitted). Derivable purely from `FieldLayout.ty` + the `Ty`
+   interner. F4/instance order (instance.rs:163-178 kind ranks) is the
+   deterministic **tie-breaker** only. By-value cycles are impossible for
+   sized Rust types (rustc rejects them); a detected by-value cycle is a
+   hard error (model corruption).
 4. **Declarations**: `extern` statics (foreign / forward refs), function
    prototypes for every function instance (including foreign `body:None`,
    IN-3), and `extern` foreign statics (`init:None`, IN-7).
