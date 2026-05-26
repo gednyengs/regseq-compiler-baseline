@@ -118,12 +118,12 @@
   },
   "CT-004": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "--",
     "id": "CT-004",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "out-of-scope",
+    "reason": "front-end axis; no new IR vocabulary",
     "section": "4",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "CT-005": {
     "axis": "coverage",
@@ -156,7 +156,7 @@
     "axis": "coverage",
     "evidence": "implicit",
     "id": "CT-008",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "4",
     "truth": "validated-legacy-universal"
@@ -174,7 +174,7 @@
     "axis": "coverage",
     "evidence": "Linkage::Default ubiquitous; NoMangle / Foreign covered via foreign_rendering.rs; Weak uncovered",
     "id": "CT-010",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "4",
     "truth": "validated-legacy"
@@ -183,7 +183,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "CT-011",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "4",
     "truth": "validated-runner"
@@ -363,7 +363,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "FT-002",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
     "truth": "validated-runner"
@@ -390,7 +390,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "FT-005",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
     "truth": "validated-runner"
@@ -417,7 +417,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "FT-008",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
     "truth": "validated-runner"
@@ -435,7 +435,7 @@
     "axis": "coverage",
     "evidence": "instance_completeness.rs (Wrap<u32>, Wrap<u64>)",
     "id": "FT-010",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
     "truth": "validated-legacy"
@@ -532,12 +532,12 @@
   },
   "FT-021": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RJ-031-A, RJ-031-B, RJ-031-C, RJ-031-D, RJ-031-E, RJ-031-F",
     "id": "FT-021",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "3",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "IK-001": {
     "axis": "coverage",
@@ -606,7 +606,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-001",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -660,7 +660,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-007",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -669,7 +669,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-008",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -705,7 +705,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-012",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -714,7 +714,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-013",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -732,7 +732,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-015",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -750,7 +750,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-017",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -768,7 +768,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-019",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -786,7 +786,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-021",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -795,7 +795,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-022",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -804,7 +804,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "IX-023",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
     "truth": "validated-runner"
@@ -849,7 +849,7 @@
     "axis": "coverage",
     "evidence": "many",
     "id": "OP-003",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-legacy-universal"
@@ -858,7 +858,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "OP-003-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -867,7 +867,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "OP-003-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -894,7 +894,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "OP-003-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -912,7 +912,7 @@
     "axis": "coverage",
     "evidence": "diag_logging.rs (string literal -- ConstMemoryStatic-backed)",
     "id": "OP-003-G",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-legacy"
@@ -948,7 +948,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "OP-003-H",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -966,7 +966,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "OP-003-J",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1011,7 +1011,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "PL-004",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1020,7 +1020,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "PL-005",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1029,7 +1029,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "PL-006",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1056,7 +1056,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-002",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1065,7 +1065,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-003",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1083,7 +1083,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-005",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1092,7 +1092,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-006",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1126,30 +1126,30 @@
   },
   "RJ-010": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "blocked-rustc-infeasible (Bound is a binder/inference-internal TyKind, erased before monomorphic MIR; bridge producer ty.rs:435)",
     "id": "RJ-010",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "Bound is a binder/inference-internal TyKind, erased before monomorphic MIR; bridge producer ty.rs:435",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "RJ-011": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "blocked-rustc-infeasible (Placeholder is a HRTB-subtyping-internal TyKind, never in MIR; bridge producer ty.rs:436)",
     "id": "RJ-011",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "Placeholder is a HRTB-subtyping-internal TyKind, never in MIR; bridge producer ty.rs:436",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "RJ-012": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "blocked-rustc-infeasible (Infer is an inference variable, fully resolved before MIR; bridge producer ty.rs:437)",
     "id": "RJ-012",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "Infer is an inference variable, fully resolved before MIR; bridge producer ty.rs:437",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "RJ-013": {
     "axis": "coverage",
@@ -1173,7 +1173,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-015",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1182,7 +1182,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-016",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1209,7 +1209,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-019",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1236,19 +1236,19 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-022",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
   },
   "RJ-023": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "blocked-rustc-infeasible (layout_of does not fail on a rustc-accepted monomorphic type; defensive invariant, cf. RJ-024)",
     "id": "RJ-023",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "layout_of does not fail on a rustc-accepted monomorphic type; defensive invariant, cf. RJ-024",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "RJ-024": {
     "axis": "coverage",
@@ -1272,7 +1272,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-026",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1281,25 +1281,25 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-027",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
   },
   "RJ-028": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RJ-028-A, RJ-028-B, RJ-028-C",
     "id": "RJ-028",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RJ-028-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-028-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1308,7 +1308,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-028-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1317,7 +1317,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-028-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1333,27 +1333,27 @@
   },
   "RJ-030": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "blocked-unimplemented-phase (no GenericOpaqueHandle producer in the bridge; the #[rseq::opaque] attribute is unparsed)",
     "id": "RJ-030",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-unimplemented-phase",
+    "reason": "no GenericOpaqueHandle producer in the bridge; the #[rseq::opaque] attribute is unparsed",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "RJ-031": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RJ-031-A, RJ-031-B, RJ-031-C, RJ-031-D, RJ-031-E, RJ-031-F",
     "id": "RJ-031",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RJ-031-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-031-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1362,7 +1362,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-031-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1371,7 +1371,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-031-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1380,7 +1380,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-031-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1389,7 +1389,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-031-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1398,25 +1398,25 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-031-F",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
   },
   "RJ-032": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RJ-032-A, RJ-032-B, RJ-032-C, RJ-032-D, RJ-032-E, RJ-032-F",
     "id": "RJ-032",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RJ-032-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-032-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1425,7 +1425,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-032-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1434,7 +1434,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-032-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1443,7 +1443,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-032-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1452,7 +1452,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RJ-032-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
     "truth": "validated-runner"
@@ -1479,7 +1479,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-002",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1504,18 +1504,18 @@
   },
   "RV-005": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RV-005-A, RV-005-B, RV-005-C, RV-005-D, RV-005-E, RV-005-F ...",
     "id": "RV-005",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RV-005-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1524,7 +1524,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1533,7 +1533,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1542,7 +1542,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1551,7 +1551,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1569,7 +1569,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-G",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1578,7 +1578,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-H",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1587,7 +1587,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-I",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1596,7 +1596,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-J",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1605,7 +1605,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-K",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1614,7 +1614,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-L",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1623,7 +1623,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-M",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1632,19 +1632,19 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-005-N",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
   },
   "RV-006": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RV-006-A, RV-006-B, RV-006-C, RV-006-D, RV-006-E, RV-006-F ...",
     "id": "RV-006",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RV-006-A": {
     "axis": "coverage",
@@ -1659,7 +1659,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1668,7 +1668,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1677,7 +1677,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1686,7 +1686,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1695,7 +1695,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-F",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1704,7 +1704,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-G",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1713,7 +1713,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-H",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1731,7 +1731,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-J",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1740,7 +1740,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-K",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1749,7 +1749,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-L",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1758,7 +1758,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-M",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1767,7 +1767,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-N",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1776,7 +1776,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-O",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1785,7 +1785,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-P",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1794,7 +1794,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-Q",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1803,7 +1803,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-R",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1812,7 +1812,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-S",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1821,7 +1821,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-T",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1830,7 +1830,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-U",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1839,7 +1839,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-V",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1848,7 +1848,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-W",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1857,7 +1857,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-X",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1866,7 +1866,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-Y",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1875,25 +1875,25 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-006-Z",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
   },
   "RV-007": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RV-007-A, RV-007-B, RV-007-C",
     "id": "RV-007",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "partial",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RV-007-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-007-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1902,7 +1902,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-007-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1911,7 +1911,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-007-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1927,18 +1927,18 @@
   },
   "RV-009": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: RV-009-A, RV-009-B, RV-009-C, RV-009-D, RV-009-E, RV-009-F ...",
     "id": "RV-009",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "RV-009-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-009-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1947,7 +1947,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-009-B",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -1974,7 +1974,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "RV-009-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2100,7 +2100,7 @@
     "axis": "coverage",
     "evidence": "diag_logging.rs (string-literal backing)",
     "id": "SK-012",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "2",
     "truth": "validated-legacy"
@@ -2125,18 +2125,18 @@
   },
   "ST-003": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: ST-003-A, ST-003-B",
     "id": "ST-003",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "ST-003-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "ST-003-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2145,7 +2145,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "ST-003-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2181,7 +2181,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TM-004",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2233,18 +2233,18 @@
   },
   "TM-006": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "rolled up from sub-axes: TM-006-A, TM-006-B, TM-006-C, TM-006-D, TM-006-E, TM-006-F ...",
     "id": "TM-006",
     "matrix_current_status": "partial",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-aggregate"
   },
   "TM-006-A": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TM-006-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2262,7 +2262,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TM-006-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2271,7 +2271,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TM-006-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2280,43 +2280,43 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TM-006-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
   },
   "TM-006-F": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "regseq MIR whitelist disables CheckAlignment (callbacks.rs:32); this assert is never inserted into bridged MIR",
     "id": "TM-006-F",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "CheckAlignment pass disabled",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "TM-006-G": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "regseq MIR whitelist disables CheckNull (callbacks.rs:33); this assert is never inserted into bridged MIR",
     "id": "TM-006-G",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "CheckNull pass disabled",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "TM-006-H": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "regseq MIR whitelist disables CheckEnums (callbacks.rs:34); this assert is never inserted into bridged MIR",
     "id": "TM-006-H",
-    "matrix_current_status": "uncovered",
-    "reason": "",
+    "matrix_current_status": "blocked-rustc-infeasible",
+    "reason": "CheckEnums pass disabled",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "out-of-scope"
   },
   "TY-001": {
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-001",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2325,7 +2325,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-002",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2334,7 +2334,7 @@
     "axis": "coverage",
     "evidence": "instance_completeness.rs (i32 in Point)",
     "id": "TY-003",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-legacy"
@@ -2343,7 +2343,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-003-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2352,7 +2352,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-003-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2370,7 +2370,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-003-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2379,7 +2379,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-003-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2388,7 +2388,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-003-F",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2397,7 +2397,7 @@
     "axis": "coverage",
     "evidence": "many",
     "id": "TY-004",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-legacy-universal"
@@ -2415,7 +2415,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-004-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2442,7 +2442,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-004-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2451,7 +2451,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-004-F",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2469,7 +2469,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-005-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2478,7 +2478,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-005-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2487,7 +2487,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-005-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2496,7 +2496,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-005-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2514,7 +2514,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-007",
-    "matrix_current_status": "blocked-generator-gap",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2523,7 +2523,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-008",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2577,7 +2577,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-011-A",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2631,7 +2631,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-014-B",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2640,7 +2640,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-014-C",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2649,7 +2649,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-014-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2658,7 +2658,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-014-E",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"
@@ -2676,7 +2676,7 @@
     "axis": "coverage",
     "evidence": "sidecar:rows.toml",
     "id": "TY-016",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
     "truth": "validated-runner"

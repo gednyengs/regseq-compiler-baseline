@@ -57,11 +57,15 @@ from pathlib import Path
 # Closed coverage/adjudication taxonomy as DECLARED in the matrix doc
 # "How to read" section. `rejected` is an EXPECTATION class, not a
 # coverage value, so it is deliberately absent here -- a bare `rejected`
-# cell must never be read as coverage.
+# cell must never be read as coverage. `out-of-scope` is an adjudication
+# (not a `blocked-*`): the shape is rustc-producible but lies on a
+# non-IR axis (e.g. an edition front-end) with no RegseqModel construct
+# to validate beyond what existing rows cover.
 STATUS_VALUES = {
     "covered",
     "partial",
     "uncovered",
+    "out-of-scope",
     "blocked-spec-gap",
     "blocked-rustc-infeasible",
     "blocked-bridge-rejects-by-design",
@@ -488,14 +492,15 @@ def classify_evidence(
 def is_adjudicated(row: MatrixRow) -> bool:
     """True iff the row carries a human out-of-scope adjudication.
 
-    Adjudication = a `blocked-*` coverage token, OR a Section-6 /
-    `rejected`-expectation row whose parsed coverage is
+    Adjudication = a `blocked-*` coverage token, the explicit
+    `out-of-scope` token (a rustc-producible but non-IR-axis row), OR a
+    Section-6 / `rejected`-expectation row whose parsed coverage is
     `uncovered`/`covered` carrying a non-empty reason that documents why
     no fixture exists. Detected from the parsed `(coverage_token,
     reason_text)` pair, not the taxonomy token alone.
     """
     tok = row.coverage_token
-    if tok is not None and tok.startswith("blocked-"):
+    if tok is not None and (tok.startswith("blocked-") or tok == "out-of-scope"):
         return True
     is_rejected_ctx = row.expectation == "rejected" or row.section == "6"
     if (
@@ -572,6 +577,66 @@ def _is_accepted_validator_residual(row: MatrixRow) -> bool:
     return any(marker in notes for marker in _ACCEPTED_VALIDATOR_MARKERS)
 
 
+# Truth values that count as "resolved" when rolling an aggregate header
+# row up from its sub-axes. All are produced by the initial derivation
+# (derive_truth) BEFORE the roll-up runs, so the roll-up is a single
+# order-independent pass. `validated-aggregate` is deliberately excluded
+# (no aggregate-of-aggregate exists in the matrix; excluding it keeps the
+# pass from depending on iteration order).
+_ROLLUP_RESOLVED = {
+    "validated-runner",
+    "validated-legacy",
+    "validated-legacy-universal",
+    "out-of-scope",
+}
+
+# A row id appearing inside another row's notes. Used ONLY to resolve an
+# aggregate ALIAS (e.g. FT-021, whose coverage IS the Section-6 RJ-031
+# family) when a row has no direct `<id>-*` sub-axes of its own.
+_ID_IN_TEXT_RE = re.compile(r"\b[A-Z]{2,3}-[0-9]{3}\b")
+
+
+def apply_aggregate_rollup(recon: Reconciliation, rows: list[MatrixRow]) -> None:
+    """Resolve aggregate header rows from their sub-axes, in place.
+
+    An aggregate row (e.g. `RV-005` = `Rvalue::Cast`, whose coverage is
+    enumerated per sub-axis `RV-005-A..F`) carries no direct fixture of
+    its own, so the initial derivation lands it on `needs-validation`. But
+    the construct IS validated the moment >=1 enumerated sub-axis is
+    resolved (runner / legacy / out-of-scope). This pass upgrades such a
+    row to `validated-aggregate` -- an UPGRADE only: it touches
+    `needs-validation` rows exclusively, so it can never demote a derived
+    truth, and any genuinely-uncovered sub-axis stays on the worklist on
+    its own row.
+
+    Sub-axes are the rows whose id is `<aggregate-id>-<suffix>`. A row
+    with no such direct sub-axes may instead ALIAS a sibling family named
+    by id in its notes (FT-021 -> RJ-031); that family's sub-axes form the
+    pool. Threshold: >=1 resolved sub-axis.
+    """
+    notes_by_id = {r.id: r.notes for r in rows if r.axis == "coverage"}
+    cov_entries = [e for e in recon.entries if e.axis == "coverage"]
+    for e in cov_entries:
+        if e.truth != "needs-validation":
+            continue
+        pool = [s for s in cov_entries if s.id != e.id and s.id.startswith(e.id + "-")]
+        if not pool:
+            # No direct sub-axes: fall back to an aliased family named in notes.
+            alias_ids = {
+                aid
+                for aid in _ID_IN_TEXT_RE.findall(notes_by_id.get(e.id, ""))
+                if aid != e.id
+            }
+            for aid in alias_ids:
+                pool.extend(s for s in cov_entries if s.id.startswith(aid + "-"))
+        resolved = sorted(s.id for s in pool if s.truth in _ROLLUP_RESOLVED)
+        if resolved:
+            shown = ", ".join(resolved[:6]) + (" ..." if len(resolved) > 6 else "")
+            e.truth = "validated-aggregate"
+            e.evidence = f"rolled up from sub-axes: {shown}"
+            e.reason = ""
+
+
 def reconcile(
     rows: list[MatrixRow],
     sidecar_ids: set[str],
@@ -624,6 +689,7 @@ def reconcile(
                 reason=reason,
             )
         )
+    apply_aggregate_rollup(result, rows)
     return result
 
 
@@ -740,6 +806,210 @@ def write_ledger(recon: Reconciliation, out_dir: Path = LEDGER_DIR) -> list[Path
 
 
 # ---------------------------------------------------------------------------
+# G1b: schema-aware matrix coverage-cell de-drift write
+# ---------------------------------------------------------------------------
+
+# Where the coverage token sits, per schema, as a `_cells` index. For
+# `section6main` the position varies per row (the token may be in the
+# `status` cell, the notes cell, or a 6c extra cell), so it is located by
+# scanning rather than fixed here.
+_COVERAGE_CELL_INDEX = {"canonical": 3, "subaxis": 2, "interaction": 3}
+
+# Derived truths that G1b will write a bare coverage token for. Adjudicated
+# rows (truth `out-of-scope`) and anomalies are NEVER written -- their cell
+# is human-owned and preserved verbatim.
+_WRITABLE_TRUTHS = {
+    "validated-runner",
+    "validated-legacy",
+    "validated-legacy-universal",
+    "validated-aggregate",
+    "needs-validation",
+}
+
+
+@dataclass
+class MatrixWriteResult:
+    """Outcome of a (dry-run or applied) matrix coverage-cell de-drift."""
+
+    new_text: str
+    changed: list[tuple[str, str, str]] = field(default_factory=list)  # (id, old, new)
+    flagged: list[tuple[str, str]] = field(default_factory=list)  # (id, why)
+    preserved_adjudicated: int = 0
+
+
+def _section6_coverage_index(cells: list[str]) -> int | None:
+    """Return the unique `_cells` index (>=2) carrying a coverage token.
+
+    Mirrors the `section6main` parser: scan cells after the rejection
+    variant for the single canonicalized taxonomy token (a bare `rejected`
+    expectation never matches). Returns `None` if zero or several cells
+    carry a token (the row is then flagged for manual review).
+    """
+    hits = [i for i in range(2, len(cells)) if canonicalize_coverage(cells[i])[0] is not None]
+    return hits[0] if len(hits) == 1 else None
+
+
+def _rewrite_coverage_cell(line: str, cell_index: int, new_token: str) -> str | None:
+    """Replace ONLY the bare coverage token in `_cells`-index `cell_index`.
+
+    Returns the rewritten line, or `None` if the cell does not hold a bare
+    taxonomy token (i.e. it carries trailing content such as a
+    parenthetical reason -> flag for manual review, never mangle). The
+    field's surrounding whitespace is preserved so the diff stays local to
+    the one token.
+    """
+    parts = line.split("|")
+    raw_idx = cell_index + 1  # a row begins with '|', so parts[0] == ''
+    if raw_idx >= len(parts):
+        return None
+    field = parts[raw_idx]
+    stripped = field.strip().replace("`", "")
+    m = _LEAD_TOKEN_RE.match(stripped)
+    if not m:
+        return None
+    old_token = m.group(1)
+    if stripped[len(old_token):].strip():
+        # Trailing content beyond the bare token (e.g. a parenthetical) --
+        # refuse to rewrite, flag instead.
+        return None
+    lead_ws = field[: len(field) - len(field.lstrip())]
+    trail_ws = field[len(field.rstrip()):]
+    parts[raw_idx] = f"{lead_ws}{new_token}{trail_ws}"
+    return "|".join(parts)
+
+
+def compute_matrix_write(
+    text: str,
+    recon: Reconciliation,
+    rows: list[MatrixRow],
+) -> MatrixWriteResult:
+    """Compute the de-drifted matrix text (schema-aware, no I/O).
+
+    For every Sections-1-6 coverage row whose derived truth differs from
+    the matrix's visible coverage class, rewrite ONLY that row's coverage
+    cell (per its table schema) to the bare derived token. NEVER touches:
+    the `expectation` cell, any adjudicated row (preserved verbatim, incl.
+    its reason text), Section-7 rows, or a cell carrying trailing content.
+    Un-locatable coverage cells are flagged, not rewritten.
+    """
+    truth_by_id = {
+        e.id: e.truth for e in recon.entries if e.axis == "coverage"
+    }
+    row_by_id = {r.id: r for r in rows}
+    result = MatrixWriteResult(new_text=text)
+
+    out_lines: list[str] = []
+    section = ""
+    schema: str | None = None
+    for raw in text.splitlines():
+        sm = _SECTION_RE.match(raw)
+        if sm:
+            section = sm.group(1)
+            schema = None
+            out_lines.append(raw)
+            continue
+        if _SUBSECTION_RE.match(raw) or not raw.lstrip().startswith("|"):
+            out_lines.append(raw)
+            continue
+        cells = _cells(raw)
+        header_key = tuple(c.lower() for c in cells)
+        if header_key in HEADER_SCHEMAS:
+            schema = HEADER_SCHEMAS[header_key]
+            out_lines.append(raw)
+            continue
+        if _is_separator(cells) or not cells or not ROW_ID_RE.match(cells[0]):
+            out_lines.append(raw)
+            continue
+
+        rid = cells[0]
+        row = row_by_id.get(rid)
+        if row is None or row.axis != "coverage" or section == "7":
+            out_lines.append(raw)
+            continue
+        if row.anomaly is not None:
+            result.flagged.append((rid, f"anomaly: {row.anomaly}"))
+            out_lines.append(raw)
+            continue
+        if is_adjudicated(row):
+            result.preserved_adjudicated += 1
+            out_lines.append(raw)
+            continue
+
+        truth = truth_by_id.get(rid)
+        target = _TRUTH_TO_CLASS.get(truth or "")
+        if truth not in _WRITABLE_TRUTHS or target is None:
+            result.flagged.append((rid, f"non-writable truth: {truth}"))
+            out_lines.append(raw)
+            continue
+
+        if (schema or "") in _COVERAGE_CELL_INDEX:
+            idx = _COVERAGE_CELL_INDEX[schema or ""]
+        elif schema == "section6main":
+            idx = _section6_coverage_index(cells)
+        else:
+            idx = None
+        if idx is None:
+            result.flagged.append((rid, f"coverage cell not locatable (schema {schema})"))
+            out_lines.append(raw)
+            continue
+
+        current = canonicalize_coverage(cells[idx])[0]
+        if current == target:
+            out_lines.append(raw)
+            continue
+        rewritten = _rewrite_coverage_cell(raw, idx, target)
+        if rewritten is None:
+            result.flagged.append((rid, f"cell {idx} not a bare token: {cells[idx]!r}"))
+            out_lines.append(raw)
+            continue
+        result.changed.append((rid, current or "<none>", target))
+        out_lines.append(rewritten)
+
+    trailing_nl = "\n" if text.endswith("\n") else ""
+    result.new_text = "\n".join(out_lines) + trailing_nl
+    return result
+
+
+def write_matrix(
+    matrix_path: Path,
+    sidecar_ids: set[str],
+    fixtures_dir: Path = DEFAULT_FIXTURES_DIR,
+    repo_root: Path = REPO_ROOT,
+    apply: bool = False,
+) -> MatrixWriteResult:
+    """De-drift the matrix's coverage cells in place (G1b).
+
+    Computes the schema-aware rewrite, then enforces two safety
+    invariants before any disk write: (1) re-deriving from the rewritten
+    text yields byte-identical per-row truths (the write changed only
+    visible tokens, never the derivation), and (2) the rewrite is
+    idempotent (re-running on the new text produces no further change). If
+    either fails, the function raises and writes nothing. With
+    `apply=False` it is a pure dry run (no disk write).
+    """
+    text = matrix_path.read_text()
+    rows = parse_matrix_text(text)
+    recon = reconcile(rows, sidecar_ids, fixtures_dir, repo_root)
+    res = compute_matrix_write(text, recon, rows)
+
+    before = {e.id: e.truth for e in recon.entries}
+    rows2 = parse_matrix_text(res.new_text)
+    recon2 = reconcile(rows2, sidecar_ids, fixtures_dir, repo_root)
+    after = {e.id: e.truth for e in recon2.entries}
+    if before != after:
+        diff = {k: (before.get(k), after.get(k)) for k in before | after if before.get(k) != after.get(k)}
+        raise RuntimeError(f"matrix write changed the derivation (refusing to write): {diff}")
+
+    res2 = compute_matrix_write(res.new_text, recon2, rows2)
+    if res2.changed:
+        raise RuntimeError(f"matrix write is not idempotent: {res2.changed}")
+
+    if apply:
+        matrix_path.write_text(res.new_text)
+    return res
+
+
+# ---------------------------------------------------------------------------
 # Reporting
 # ---------------------------------------------------------------------------
 
@@ -747,6 +1017,12 @@ _TRUTH_TO_CLASS = {
     "validated-runner": "covered",
     "validated-legacy": "covered",
     "validated-legacy-universal": "covered",
+    # An aggregate header row is covered VIA its sub-axes, not a direct
+    # fixture of its own -- which is exactly what the matrix `partial`
+    # status denotes ("a fixture interns ... a closely-related sub-shape").
+    # Mapping it to `partial` keeps the matrix's honest aggregate marking
+    # drift-consistent rather than over-claiming a bare `covered`.
+    "validated-aggregate": "partial",
     "out-of-scope": "out-of-scope",
     "needs-validation": "uncovered",
 }
@@ -770,10 +1046,16 @@ def _matrix_class(status: str) -> str:
 
 def drift_rows(recon: Reconciliation) -> list[LedgerEntry]:
     """Coverage-axis rows where the matrix hand-set status disagrees with
-    the derived truth (understatement or stale-legacy overstatement)."""
+    the derived truth (understatement or stale-legacy overstatement).
+
+    Rows derived `out-of-scope` are excluded: that truth is read FROM the
+    matrix's own human adjudication, so it can never drift against it. (A
+    stale adjudication superseded by a runner row derives
+    `validated-runner`, not `out-of-scope`, and IS surfaced as drift.)
+    """
     out: list[LedgerEntry] = []
     for e in recon.entries:
-        if e.axis != "coverage" or e.truth == "anomaly":
+        if e.axis != "coverage" or e.truth in ("anomaly", "out-of-scope"):
             continue
         if _TRUTH_TO_CLASS.get(e.truth, e.truth) != _matrix_class(e.matrix_current_status):
             out.append(e)
@@ -818,6 +1100,7 @@ def print_report(
         "validated-runner",
         "validated-legacy",
         "validated-legacy-universal",
+        "validated-aggregate",
         "out-of-scope",
         "needs-validation",
         "anomaly",
@@ -895,6 +1178,19 @@ def main(argv: list[str] | None = None) -> int:
         action="store_true",
         help="write coverage_ledger.{json,md} under docs/discussions/regseq-model/",
     )
+    ap.add_argument(
+        "--write-matrix",
+        action="store_true",
+        help=(
+            "G1b: schema-aware in-place de-drift of the matrix coverage cells "
+            "(preserves expectation + adjudication cells; safety-checked)"
+        ),
+    )
+    ap.add_argument(
+        "--dry-run",
+        action="store_true",
+        help="with --write-matrix, report the changes without writing the file",
+    )
     args = ap.parse_args(argv)
 
     sidecar_ids = load_sidecar_ids(args.sidecar)
@@ -911,6 +1207,26 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"wrote {p.relative_to(REPO_ROOT)}")
             except ValueError:
                 print(f"wrote {p}")
+
+    if args.write_matrix:
+        res = write_matrix(
+            args.matrix, sidecar_ids, args.fixtures_dir, REPO_ROOT, apply=not args.dry_run
+        )
+        print()
+        verb = "would change" if args.dry_run else "changed"
+        print(f"=== G1b matrix de-drift ({'DRY-RUN' if args.dry_run else 'APPLIED'}) ===")
+        print(f"  coverage cells {verb}      : {len(res.changed)}")
+        print(f"  adjudicated rows preserved : {res.preserved_adjudicated}")
+        print(f"  flagged for manual review  : {len(res.flagged)}")
+        for rid, old, new in res.changed:
+            print(f"    {rid:<12} {old:<10} -> {new}")
+        for rid, why in res.flagged:
+            print(f"    FLAG {rid:<12} {why}")
+        if not args.dry_run:
+            try:
+                print(f"  wrote {args.matrix.relative_to(REPO_ROOT)}")
+            except ValueError:
+                print(f"  wrote {args.matrix}")
 
     return 0
 

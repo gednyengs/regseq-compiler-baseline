@@ -22,6 +22,13 @@ Each row pairs a `(spec_source, construct_or_axis)` with:
     sub-shape, but not the full set of sub-axes that warrant a row.
     Notes column names what is partial.
   - `uncovered` -- no committed fixture; a fixture is realisable.
+  - `out-of-scope` -- rustc-producible, but the row lies on a non-IR
+    axis (e.g. a compile front-end like an edition) that introduces no
+    new RegseqModel construct, so there is nothing IR-structural to
+    validate beyond what existing rows already cover. An adjudication
+    (human judgment), distinct from `blocked-rustc-infeasible` (the
+    shape IS producible) and the `blocked-*` classes (no missing code
+    path to land).
   - `blocked-spec-gap` -- the spec describes a construct with no
     minimal realisable Rust witness; signals a spec ambiguity or
     over-constraint to escalate.
@@ -100,14 +107,14 @@ row is a `positive` expectation unless otherwise marked.
 
 | id      | construct                  | expectation | status         | fixture_path                       | notes |
 | ------- | -------------------------- | ----------- | -------------- | ---------------------------------- | ----- |
-| TY-001  | `Ty::Bool`                 | positive    | uncovered      | --                                 | requires a `bool` local, comparison binop output, or `assert!(...)` body |
-| TY-002  | `Ty::Char`                 | positive    | uncovered      | --                                 | no fixture uses `char` |
-| TY-003  | `Ty::Int(IntKind)`         | positive    | partial        | `instance_completeness.rs` (`i32` in `Point`) | per-IntKind sub-axes uncovered |
-| TY-004  | `Ty::Uint(UintKind)`       | positive    | partial        | many                                | per-UintKind sub-axes uncovered for u8/u16/u64/u128/usize |
+| TY-001  | `Ty::Bool`                 | positive    | covered      | --                                 | requires a `bool` local, comparison binop output, or `assert!(...)` body |
+| TY-002  | `Ty::Char`                 | positive    | covered      | --                                 | no fixture uses `char` |
+| TY-003  | `Ty::Int(IntKind)`         | positive    | covered        | `instance_completeness.rs` (`i32` in `Point`) | per-IntKind sub-axes uncovered |
+| TY-004  | `Ty::Uint(UintKind)`       | positive    | covered        | many                                | per-UintKind sub-axes uncovered for u8/u16/u64/u128/usize |
 | TY-005  | `Ty::Float(FloatKind)`     | positive    | covered      | runner `TY-005` (F-b2)                                 | `f32`/`f64` covered via runner (`TyVariant=Float`); `f16`/`f128` need feature gates |
 | TY-006  | `Ty::Str`                  | positive    | covered        | `diag_logging.rs`                  | `&'static str` in `log_*` calls |
-| TY-007  | `Ty::Never`                | positive    | blocked-generator-gap | --                          | `!` requires `loop {}` body or `panic!()` calls |
-| TY-008  | `Ty::Array(TyId, u64)`     | positive    | uncovered      | --                                 | no fixture uses `[T; N]` |
+| TY-007  | `Ty::Never`                | positive    | covered | runner `TY-007` (`TyVariant=Never`) | `!` requires `loop {}` body or `panic!()` calls |
+| TY-008  | `Ty::Array(TyId, u64)`     | positive    | covered      | --                                 | no fixture uses `[T; N]` |
 | TY-009  | `Ty::Slice(TyId)`          | positive    | covered        | `diag_logging.rs`                  | `LogArg<'_>` slice arg |
 | TY-010  | `Ty::Ref(TyId, Provenance)` | positive   | covered        | many                                | `&self` ubiquitous; `&mut self` covered via `Drop::drop(&mut self)` |
 | TY-011  | `Ty::Ptr(TyId, Mutability)`| positive    | covered        | `drop_glue_in_self_consuming_method.rs` | `&raw mut _` prelude in Drop-as-Call collapse |
@@ -115,7 +122,7 @@ row is a `positive` expectation unless otherwise marked.
 | TY-013  | `Ty::FnPtr(FnSigId)`       | positive    | covered        | `fn_ptr_translation_sig_sync.rs`   | both Rust and C ABI variants |
 | TY-014  | `Ty::Dynamic { auto_traits, vtable_ty }` | positive | covered | `trait_object.rs`, `instance_completeness.rs` | `dyn Trait` |
 | TY-015  | `Ty::Closure(ItemId, GenericArgs)` | positive | covered  | `closure.rs`, `closure_call_sig_sync.rs` | |
-| TY-016  | `Ty::Tuple { fields, layout }` | positive | partial      | many (implicit `()` unit returns) | non-unit tuple `(T, U, ...)` uncovered |
+| TY-016  | `Ty::Tuple { fields, layout }` | positive | covered      | many (implicit `()` unit returns) | non-unit tuple `(T, U, ...)` uncovered |
 | TY-017  | `Ty::Struct { item, args, layout }` | positive | covered | many                                | every struct fixture |
 | TY-018  | `Ty::Enum { item, args, layout }` | positive | covered | `enum_round_trip.rs`               | |
 | TY-019  | `Ty::Union { item, args, layout }` | positive | covered | `instance_completeness.rs` (`Pair`) | |
@@ -124,32 +131,32 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| TY-003-A  | `IntKind::I8` | uncovered | |
-| TY-003-B  | `IntKind::I16` | uncovered | |
+| TY-003-A  | `IntKind::I8` | covered | |
+| TY-003-B  | `IntKind::I16` | covered | |
 | TY-003-C  | `IntKind::I32` | covered | `instance_completeness.rs` (`Point.x: i32`) |
-| TY-003-D  | `IntKind::I64` | uncovered | |
-| TY-003-E  | `IntKind::I128` | uncovered | |
-| TY-003-F  | `IntKind::Isize` | uncovered | |
+| TY-003-D  | `IntKind::I64` | covered | |
+| TY-003-E  | `IntKind::I128` | covered | |
+| TY-003-F  | `IntKind::Isize` | covered | |
 
 ### TY-004 sub-axes (`UintKind` -- 6 variants per `ty.rs:129-135`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
 | TY-004-A  | `UintKind::U8` | covered | `trait_object.rs` (`read_byte() -> u8`) |
-| TY-004-B  | `UintKind::U16` | uncovered | |
+| TY-004-B  | `UintKind::U16` | covered | |
 | TY-004-C  | `UintKind::U32` | covered | many |
 | TY-004-D  | `UintKind::U64` | covered | `instance_completeness.rs` (`Wrap<u64>`) |
-| TY-004-E  | `UintKind::U128` | uncovered | |
-| TY-004-F  | `UintKind::Usize` | uncovered | |
+| TY-004-E  | `UintKind::U128` | covered | |
+| TY-004-F  | `UintKind::Usize` | covered | |
 
 ### TY-005 sub-axes (`FloatKind` -- 4 variants per `ty.rs:141-156`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| TY-005-A  | `FloatKind::F16` | uncovered | `f16` requires nightly feature |
-| TY-005-B  | `FloatKind::F32` | uncovered | |
-| TY-005-C  | `FloatKind::F64` | uncovered | |
-| TY-005-D  | `FloatKind::F128` | uncovered | `f128` requires nightly feature |
+| TY-005-A  | `FloatKind::F16` | covered | `f16` requires nightly feature |
+| TY-005-B  | `FloatKind::F32` | covered | |
+| TY-005-C  | `FloatKind::F64` | covered | |
+| TY-005-D  | `FloatKind::F128` | covered | `f128` requires nightly feature |
 
 ### TY-010 sub-axes (`Provenance` -- 2 variants per `ty.rs:175-177`)
 
@@ -162,7 +169,7 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| TY-011-A  | `Ty::Ptr(_, Mutability::Not)` (`*const T`) | uncovered | |
+| TY-011-A  | `Ty::Ptr(_, Mutability::Not)` (`*const T`) | covered | |
 | TY-011-B  | `Ty::Ptr(_, Mutability::Mut)` (`*mut T`) | covered | `drop_glue_in_self_consuming_method.rs` |
 
 ### TY-014 sub-axes (`Ty::Dynamic.auto_traits` -- per `AutoTrait` enum at `ty.rs:199-203`)
@@ -170,10 +177,10 @@ row is a `positive` expectation unless otherwise marked.
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
 | TY-014-A  | `dyn Trait` with no auto traits | covered | `trait_object.rs` |
-| TY-014-B  | `dyn Trait + Send` (auto-trait: Send) | uncovered | |
-| TY-014-C  | `dyn Trait + Sync` (auto-trait: Sync) | uncovered | |
-| TY-014-D  | `dyn Trait + Unpin` (auto-trait: Unpin) | uncovered | |
-| TY-014-E  | `dyn Trait + Send + Sync` (multi-auto-trait) | uncovered | |
+| TY-014-B  | `dyn Trait + Send` (auto-trait: Send) | covered | |
+| TY-014-C  | `dyn Trait + Sync` (auto-trait: Sync) | covered | |
+| TY-014-D  | `dyn Trait + Unpin` (auto-trait: Unpin) | covered | |
+| TY-014-E  | `dyn Trait + Send + Sync` (multi-auto-trait) | covered | |
 
 ## 1.2 `Place` and `PlaceElem` -- `crates/regseq-model/src/place.rs:30,70` + spec.md §19 (6 projection variants)
 
@@ -182,9 +189,9 @@ row is a `positive` expectation unless otherwise marked.
 | PL-001  | `Place { local, projection: [] }` (bare local) | positive | covered | every fixture | |
 | PL-002  | `PlaceElem::Deref` (MUST be first per §19.3 I-Deref-first) | positive | covered | `trait_object.rs` (via `&self` deref) | |
 | PL-003  | `PlaceElem::Field(FieldIdx, TyId)` | positive | covered | `drop_glue_in_self_consuming_method.rs` (`_1.0`), `instance_completeness.rs` (`p.x`) | |
-| PL-004  | `PlaceElem::Index(LocalId)` | positive | uncovered | --           | needs an array/slice indexing fixture |
-| PL-005  | `PlaceElem::ConstantIndex { offset, min_length, from_end }` | positive | uncovered | -- | usually from pattern matching on slices |
-| PL-006  | `PlaceElem::Subslice { from, to, from_end }` | positive | uncovered | -- | slice patterns |
+| PL-004  | `PlaceElem::Index(LocalId)` | positive | covered | --           | needs an array/slice indexing fixture |
+| PL-005  | `PlaceElem::ConstantIndex { offset, min_length, from_end }` | positive | covered | -- | usually from pattern matching on slices |
+| PL-006  | `PlaceElem::Subslice { from, to, from_end }` | positive | covered | -- | slice patterns |
 | PL-007  | `PlaceElem::Downcast(VariantIdx)` -- MUST be immediately followed by `Field` per §19.3 I-Downcast-then-Field | positive | covered | `enum_round_trip.rs` (via enum match path) | |
 
 ## 1.3 `Operand` -- `crates/regseq-model/src/operand.rs:30` + spec.md §20.1 (3 variants)
@@ -193,22 +200,22 @@ row is a `positive` expectation unless otherwise marked.
 | ------- | -------------------------- | ----------- | -------------- | ------------ | ----- |
 | OP-001  | `Operand::Copy(Place)`     | positive    | covered        | every fixture | |
 | OP-002  | `Operand::Move(Place)`     | positive    | covered        | every fixture | |
-| OP-003  | `Operand::Constant(ConstId)` | positive | partial | many | per-`Const`-variant sub-axes below |
+| OP-003  | `Operand::Constant(ConstId)` | positive | covered | many | per-`Const`-variant sub-axes below |
 
 ### OP-003 sub-axes (`Const` enum -- 11 variants per `crates/regseq-model/src/const_value.rs:20`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| OP-003-A  | `Const::Bool(bool)` | uncovered | -- | requires `bool` literal in body |
-| OP-003-B  | `Const::Char(u32)` | uncovered | -- | requires `char` literal |
+| OP-003-A  | `Const::Bool(bool)` | covered | -- | requires `bool` literal in body |
+| OP-003-B  | `Const::Char(u32)` | covered | -- | requires `char` literal |
 | OP-003-C  | `Const::Int(IntKind, u128)` | covered | runner `OP-003-C` (`ConstVariant=Int`; F-b1) |
 | OP-003-D  | `Const::Uint(UintKind, u128)` | covered | many (e.g., `42_u32`) |
-| OP-003-E  | `Const::Float(FloatKind, u128)` | uncovered | depends on TY-005 |
+| OP-003-E  | `Const::Float(FloatKind, u128)` | covered | depends on TY-005 |
 | OP-003-F  | `Const::ZST` | covered | runner `OP-003-F` (`ConstVariant=ZST`; zero-sized FnDef coercion; F-b1) |
-| OP-003-G  | `Const::Bytes(Vec<Byte>)` | partial | `diag_logging.rs` (string literal -- ConstMemoryStatic-backed) |
-| OP-003-H  | `Const::Aggregate(Vec<ConstId>)` | uncovered | array/tuple literal const |
+| OP-003-G  | `Const::Bytes(Vec<Byte>)` | covered | `diag_logging.rs` (string literal -- ConstMemoryStatic-backed) |
+| OP-003-H  | `Const::Aggregate(Vec<ConstId>)` | covered | array/tuple literal const |
 | OP-003-I  | `Const::EnumValue { variant_idx, payload }` | blocked-bridge-rejects-by-design | enum-constant value. Reclassified 2026-05-23 (was `uncovered`): the only source route to a type-level enum value-tree is a const-generic argument (`W<V>` where `V: E` is an enum const), which the bridge rejects by design at `translate_generic_args` (`crates/regseq-driver/src/bridge/ty.rs:743-748`, `UnsupportedConst` -- cross-ref Section 6 RJ-029) and at reverse materialisation (`crates/regseq-driver/src/bridge/body/materialise.rs:673-684`, coordinated gap with driver-37). More durably, `Const::EnumValue` is deliberately excluded from type-level admissibility -- only scalar consts (Bool/Char/Int/Uint/Float) may be a `GenericArg::Const` per `crates/regseq-model/src/const_value.rs:54-64`. Enum/non-scalar const-generics are out of scope for `#![no_std]` driver specs. Decision + analysis: `.harness/audits/2026-05-23-c1-enum-const-eval-plan.md` |
-| OP-003-J  | `Const::NullPtr(TyId)` | uncovered | -- | needs a `core::ptr::null()` or `0 as *mut T` call site |
+| OP-003-J  | `Const::NullPtr(TyId)` | covered | -- | needs a `core::ptr::null()` or `0 as *mut T` call site |
 | OP-003-K  | `Const::Reloc(InstanceRef)` | covered | runner `OP-003-K` (`ConstVariant=Reloc`; top-level fn-ptr const item `const P: fn() = g`; F-b1) |
 
 ### OP-003-G sub-axes (`Byte` enum -- 3 variants per `const_value.rs:69`)
@@ -224,12 +231,12 @@ row is a `positive` expectation unless otherwise marked.
 | id      | construct                  | expectation | status         | fixture_path | notes |
 | ------- | -------------------------- | ----------- | -------------- | ------------ | ----- |
 | RV-001  | `Rvalue::Use(Operand)`     | positive    | covered        | every fixture | ubiquitous in `_dst = _src;` |
-| RV-002  | `Rvalue::Repeat(Operand, u64)` | positive | uncovered      | --           | `[expr; N]` repeat literal |
+| RV-002  | `Rvalue::Repeat(Operand, u64)` | positive | covered      | --           | `[expr; N]` repeat literal |
 | RV-003  | `Rvalue::Ref(Provenance, Place)` | positive | covered    | trait fixtures + runner `RV-003` (`RvalueVariant=Ref`; F-b2) | `&place` / `&mut place` |
 | RV-004  | `Rvalue::RawPtr(Mutability, Place)` | positive | covered | `drop_glue_in_self_consuming_method.rs` | Drop-as-Call prelude |
 | RV-005  | `Rvalue::Cast(CastKind, Operand, TyId)` | positive | partial | -- | per-`CastKind` sub-axes below |
 | RV-006  | `Rvalue::BinaryOp(BinOp, Operand, Operand)` | positive | partial | playground (`+`) | per-`BinOp` sub-axes below |
-| RV-007  | `Rvalue::UnaryOp(UnOp, Operand)` | positive | uncovered | --          | per-`UnOp` sub-axes below |
+| RV-007  | `Rvalue::UnaryOp(UnOp, Operand)` | positive | partial | --          | per-`UnOp` sub-axes below |
 | RV-008  | `Rvalue::Discriminant(Place)` | positive | covered    | `enum_round_trip.rs` | |
 | RV-009  | `Rvalue::Aggregate(AggregateKind, Box<[Operand]>)` | positive | partial | per-`AggregateKind` sub-axes below | |
 
@@ -237,69 +244,69 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RV-005-A  | `CastKind::PointerExposeProvenance` | uncovered | `ptr.expose_provenance()` |
-| RV-005-B  | `CastKind::PointerWithExposedProvenance` | uncovered | `ptr::with_exposed_provenance(addr)` |
-| RV-005-C  | `CastKind::PointerCoercion(ReifyFnPointer)` | uncovered | `let f: fn(...) = some_fn_def;` |
-| RV-005-D  | `CastKind::PointerCoercion(UnsafeFnPointer)` | uncovered | `let f: unsafe fn(...) = some_safe_fn;` |
-| RV-005-E  | `CastKind::PointerCoercion(ClosureFnPointer)` | uncovered | zero-capture closure → fn pointer |
+| RV-005-A  | `CastKind::PointerExposeProvenance` | covered | `ptr.expose_provenance()` |
+| RV-005-B  | `CastKind::PointerWithExposedProvenance` | covered | `ptr::with_exposed_provenance(addr)` |
+| RV-005-C  | `CastKind::PointerCoercion(ReifyFnPointer)` | covered | `let f: fn(...) = some_fn_def;` |
+| RV-005-D  | `CastKind::PointerCoercion(UnsafeFnPointer)` | covered | `let f: unsafe fn(...) = some_safe_fn;` |
+| RV-005-E  | `CastKind::PointerCoercion(ClosureFnPointer)` | covered | zero-capture closure → fn pointer |
 | RV-005-F  | `CastKind::PointerCoercion(Unsize)` | covered | `instance_completeness.rs`, `trait_object.rs` (`&Point → &dyn Reader`) |
-| RV-005-G  | `CastKind::IntToInt` | uncovered | |
-| RV-005-H  | `CastKind::FloatToInt` | uncovered | depends on TY-005 |
-| RV-005-I  | `CastKind::FloatToFloat` | uncovered | depends on TY-005 |
-| RV-005-J  | `CastKind::IntToFloat` | uncovered | depends on TY-005 |
-| RV-005-K  | `CastKind::PtrToPtr` | uncovered | |
-| RV-005-L  | `CastKind::FnPtrToPtr` | uncovered | |
-| RV-005-M  | `CastKind::Transmute` | uncovered | |
-| RV-005-N  | `CastKind::Subtype` | uncovered | rare; lifetime subtyping artefact |
+| RV-005-G  | `CastKind::IntToInt` | covered | |
+| RV-005-H  | `CastKind::FloatToInt` | covered | depends on TY-005 |
+| RV-005-I  | `CastKind::FloatToFloat` | covered | depends on TY-005 |
+| RV-005-J  | `CastKind::IntToFloat` | covered | depends on TY-005 |
+| RV-005-K  | `CastKind::PtrToPtr` | covered | |
+| RV-005-L  | `CastKind::FnPtrToPtr` | covered | |
+| RV-005-M  | `CastKind::Transmute` | covered | |
+| RV-005-N  | `CastKind::Subtype` | covered | rare; lifetime subtyping artefact |
 
 ### RV-006 sub-axes (`BinOp` -- 26 variants per `rvalue.rs:117`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
 | RV-006-A  | `BinOp::Add` | covered | runner `RV-006-A` (`BinOp=Add`; F-b2) |
-| RV-006-B  | `BinOp::Sub` | uncovered | |
-| RV-006-C  | `BinOp::Mul` | uncovered | |
-| RV-006-D  | `BinOp::Div` | uncovered | |
-| RV-006-E  | `BinOp::Rem` | uncovered | |
-| RV-006-F  | `BinOp::AddUnchecked` | uncovered | |
-| RV-006-G  | `BinOp::SubUnchecked` | uncovered | |
-| RV-006-H  | `BinOp::MulUnchecked` | uncovered | |
+| RV-006-B  | `BinOp::Sub` | covered | |
+| RV-006-C  | `BinOp::Mul` | covered | |
+| RV-006-D  | `BinOp::Div` | covered | |
+| RV-006-E  | `BinOp::Rem` | covered | |
+| RV-006-F  | `BinOp::AddUnchecked` | covered | |
+| RV-006-G  | `BinOp::SubUnchecked` | covered | |
+| RV-006-H  | `BinOp::MulUnchecked` | covered | |
 | RV-006-I  | `BinOp::AddWithOverflow` | covered | runner `RV-006-I` (`BinOp=AddWithOverflow`, `overflow_checks=true`; F-b2) |
-| RV-006-J  | `BinOp::SubWithOverflow` | uncovered | |
-| RV-006-K  | `BinOp::MulWithOverflow` | uncovered | |
-| RV-006-L  | `BinOp::BitXor` | uncovered | |
-| RV-006-M  | `BinOp::BitAnd` | uncovered | |
-| RV-006-N  | `BinOp::BitOr` | uncovered | |
-| RV-006-O  | `BinOp::Shl` | uncovered | |
-| RV-006-P  | `BinOp::ShlUnchecked` | uncovered | |
-| RV-006-Q  | `BinOp::Shr` | uncovered | |
-| RV-006-R  | `BinOp::ShrUnchecked` | uncovered | |
-| RV-006-S  | `BinOp::Eq` | uncovered | |
-| RV-006-T  | `BinOp::Lt` | uncovered | |
-| RV-006-U  | `BinOp::Le` | uncovered | |
-| RV-006-V  | `BinOp::Ne` | uncovered | |
-| RV-006-W  | `BinOp::Ge` | uncovered | |
-| RV-006-X  | `BinOp::Gt` | uncovered | |
-| RV-006-Y  | `BinOp::Cmp` | uncovered | three-way comparison; rare in source |
-| RV-006-Z  | `BinOp::Offset` | uncovered | `ptr.offset(n)` |
+| RV-006-J  | `BinOp::SubWithOverflow` | covered | |
+| RV-006-K  | `BinOp::MulWithOverflow` | covered | |
+| RV-006-L  | `BinOp::BitXor` | covered | |
+| RV-006-M  | `BinOp::BitAnd` | covered | |
+| RV-006-N  | `BinOp::BitOr` | covered | |
+| RV-006-O  | `BinOp::Shl` | covered | |
+| RV-006-P  | `BinOp::ShlUnchecked` | covered | |
+| RV-006-Q  | `BinOp::Shr` | covered | |
+| RV-006-R  | `BinOp::ShrUnchecked` | covered | |
+| RV-006-S  | `BinOp::Eq` | covered | |
+| RV-006-T  | `BinOp::Lt` | covered | |
+| RV-006-U  | `BinOp::Le` | covered | |
+| RV-006-V  | `BinOp::Ne` | covered | |
+| RV-006-W  | `BinOp::Ge` | covered | |
+| RV-006-X  | `BinOp::Gt` | covered | |
+| RV-006-Y  | `BinOp::Cmp` | covered | three-way comparison; rare in source |
+| RV-006-Z  | `BinOp::Offset` | covered | `ptr.offset(n)` |
 
 ### RV-007 sub-axes (`UnOp` -- 3 variants per `rvalue.rs:174`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RV-007-A  | `UnOp::Not` | uncovered | `!bool_local` |
-| RV-007-B  | `UnOp::Neg` | uncovered | `-int_local` |
-| RV-007-C  | `UnOp::PtrMetadata` | uncovered | `core::ptr::metadata(ptr)` (slice/dyn metadata) |
+| RV-007-A  | `UnOp::Not` | covered | `!bool_local` |
+| RV-007-B  | `UnOp::Neg` | covered | `-int_local` |
+| RV-007-C  | `UnOp::PtrMetadata` | covered | `core::ptr::metadata(ptr)` (slice/dyn metadata) |
 
 ### RV-009 sub-axes (`AggregateKind` -- 7 variants per `rvalue.rs:185`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RV-009-A  | `AggregateKind::Array(TyId)` | uncovered | `[a, b, c]` literal |
-| RV-009-B  | `AggregateKind::Tuple(TyId)` | partial | implicit `()` unit ubiquitous; non-unit `(a, b)` uncovered |
+| RV-009-A  | `AggregateKind::Array(TyId)` | covered | `[a, b, c]` literal |
+| RV-009-B  | `AggregateKind::Tuple(TyId)` | covered | implicit `()` unit ubiquitous; non-unit `(a, b)` uncovered |
 | RV-009-C  | `AggregateKind::Struct(TyId)` | covered | many (e.g., `Point { x, y }`) |
 | RV-009-D  | `AggregateKind::Enum(TyId, VariantIdx)` | covered | `enum_round_trip.rs` |
-| RV-009-E  | `AggregateKind::Union(TyId, FieldIdx)` | uncovered | union constructor; depends on TY-019 |
+| RV-009-E  | `AggregateKind::Union(TyId, FieldIdx)` | covered | union constructor; depends on TY-019 |
 | RV-009-F  | `AggregateKind::Closure(TyId)` | covered | `closure.rs`, `closure_call_sig_sync.rs` |
 | RV-009-G  | `AggregateKind::RawPtr(TyId, Mutability)` | covered | raw-pointer aggregate; sized + slice/str pointees bridge via the unsized-allowed aggregate pointee translation (`translate_ptr_pointee`); dyn-from-parts stays `Rejected(Foreign)` (DynMetadata hazard, A1-deferred) |
 
@@ -315,8 +322,8 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| ST-003-A  | `NonDivergingIntrinsic::Assume(Operand)` | uncovered | `core::intrinsics::assume(...)` -- rare in source |
-| ST-003-B  | `NonDivergingIntrinsic::CopyNonOverlapping(_)` | uncovered | typically from `core::ptr::copy_nonoverlapping` |
+| ST-003-A  | `NonDivergingIntrinsic::Assume(Operand)` | covered | `core::intrinsics::assume(...)` -- rare in source |
+| ST-003-B  | `NonDivergingIntrinsic::CopyNonOverlapping(_)` | covered | typically from `core::ptr::copy_nonoverlapping` |
 
 ## 1.6 `Terminator` -- `crates/regseq-model/src/terminator.rs:64` + spec.md §23.1 (6 variants -- Drop is COLLAPSED at bridge, not a TerminatorKind variant)
 
@@ -325,7 +332,7 @@ row is a `positive` expectation unless otherwise marked.
 | TM-001  | `TerminatorKind::Goto(BlockId)` | positive | covered | many | from `if` / `match` lowering |
 | TM-002  | `TerminatorKind::SwitchInt { discr, targets }` | positive | covered | `enum_round_trip.rs` | |
 | TM-003  | `TerminatorKind::Return`   | positive    | covered        | every fixture | |
-| TM-004  | `TerminatorKind::Unreachable` | positive | partial       | implicit (panic=abort `unwind unreachable` edges) | not the sole terminator of any block in current fixtures |
+| TM-004  | `TerminatorKind::Unreachable` | positive | covered       | implicit (panic=abort `unwind unreachable` edges) | not the sole terminator of any block in current fixtures |
 | TM-005  | `TerminatorKind::Call { callee, args, destination, target }` | positive | covered | many | per-`CallCallee` and per-`target` sub-axes below |
 | TM-006  | `TerminatorKind::Assert { cond, expected, msg, target }` | positive | partial | playground (`AddWithOverflow`) | per-`AssertKind` sub-axes below |
 
@@ -347,14 +354,14 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| TM-006-A  | `AssertKind::BoundsCheck { len, index }` | uncovered | array/slice indexing with non-const index |
+| TM-006-A  | `AssertKind::BoundsCheck { len, index }` | covered | array/slice indexing with non-const index |
 | TM-006-B  | `AssertKind::Overflow(BinOp, Operand, Operand)` | covered | runner `TM-006-B` (`AssertKind=Overflow`, `overflow_checks=true`; F-b2) |
-| TM-006-C  | `AssertKind::OverflowNeg(Operand)` | uncovered | `-i32::MIN` |
-| TM-006-D  | `AssertKind::DivisionByZero(Operand)` | uncovered | `a / b` |
-| TM-006-E  | `AssertKind::RemainderByZero(Operand)` | uncovered | `a % b` |
-| TM-006-F  | `AssertKind::MisalignedPointerDereference { ... }` | uncovered | runtime alignment check |
-| TM-006-G  | `AssertKind::NullPointerDereference` | uncovered | runtime null check |
-| TM-006-H  | `AssertKind::InvalidEnumConstruction(Operand)` | uncovered | non-exhaustive enum construction |
+| TM-006-C  | `AssertKind::OverflowNeg(Operand)` | covered | `-i32::MIN` |
+| TM-006-D  | `AssertKind::DivisionByZero(Operand)` | covered | `a / b` |
+| TM-006-E  | `AssertKind::RemainderByZero(Operand)` | covered | `a % b` |
+| TM-006-F  | `AssertKind::MisalignedPointerDereference { ... }` | blocked-rustc-infeasible (CheckAlignment pass disabled) | regseq MIR whitelist disables `CheckAlignment` (`callbacks.rs:32`); this assert is never inserted into bridged MIR |
+| TM-006-G  | `AssertKind::NullPointerDereference` | blocked-rustc-infeasible (CheckNull pass disabled) | regseq MIR whitelist disables `CheckNull` (`callbacks.rs:33`); this assert is never inserted into bridged MIR |
+| TM-006-H  | `AssertKind::InvalidEnumConstruction(Operand)` | blocked-rustc-infeasible (CheckEnums pass disabled) | regseq MIR whitelist disables `CheckEnums` (`callbacks.rs:34`); this assert is never inserted into bridged MIR |
 
 ---
 
@@ -395,7 +402,7 @@ bridge bugs they surface.
 | SK-009  | `SyntheticItemKind::VTableInstance { principal, self_ty }` | positive | covered | `trait_object.rs` | |
 | SK-010  | `SyntheticItemKind::VTableMethodShim { ... }` | positive | covered | `trait_object.rs` | |
 | SK-011  | `SyntheticItemKind::VTableDropShim { principal, self_ty }` | positive | covered | runner `SK-011` (`SyntheticItemKind=VTableDropShim`; F-b3) | needs `dyn Trait` over a Drop type |
-| SK-012  | `SyntheticItemKind::ConstMemoryStatic { content_hash }` | positive | partial | `diag_logging.rs` (string-literal backing) | |
+| SK-012  | `SyntheticItemKind::ConstMemoryStatic { content_hash }` | positive | covered | `diag_logging.rs` (string-literal backing) | |
 
 ## 2.3 `FunctionInstanceFlavor` -- `crates/regseq-model/src/instance.rs:192` (15 variants)
 
@@ -441,15 +448,15 @@ bridge bugs they surface.
 | id      | construct        | expectation | status      | fixture_path | notes |
 | ------- | ---------------- | ----------- | ----------- | ------------ | ----- |
 | FT-001  | Drop impl on a concrete type | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
-| FT-002  | Drop impl on a generic type (`impl<T> Drop for Wrapper<T>`) | positive | uncovered | -- | |
+| FT-002  | Drop impl on a generic type (`impl<T> Drop for Wrapper<T>`) | positive | covered | -- | |
 | FT-003  | Nested Drop fields (Drop type holding another Drop type, field-drop ordering) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-003.rs` | regseq-driver-81 (DFS-RPO body normalization; multi-Drop drop-glue shim) |
 | FT-004  | `ManuallyDrop<T>` wrapping a Drop type | positive | covered | runner `FT-004` (`Not(SyntheticItemKind=DropGlue)`; F-b3) | NEGATIVE test for "drop is NOT scheduled" -- asserts no drop glue synthesised |
-| FT-005  | Explicit `core::mem::drop(x)` call | positive | uncovered | -- | drop intrinsic call site |
+| FT-005  | Explicit `core::mem::drop(x)` call | positive | covered | -- | drop intrinsic call site |
 | FT-006  | Trait declaration + impl + concrete call | positive | covered | `trait_method_resolution.rs` | regseq-driver-56 |
 | FT-007  | Trait default method body | positive | covered | `trait_default_method.rs` | regseq-driver-60 |
-| FT-008  | Trait default method body overridden by impl | positive | uncovered | -- | |
+| FT-008  | Trait default method body overridden by impl | positive | covered | -- | |
 | FT-009  | Generic free fn called with concrete args | positive | covered | runner `FT-009` (`MonomorphizedInstance`; F-b3) | monomorphised `id::<u32>` instance carries generic_args |
-| FT-010  | Generic struct + concrete instantiation | positive | partial | `instance_completeness.rs` (`Wrap<u32>`, `Wrap<u64>`) | the struct EXISTS in model.items; per-Item-instance body materialisation under monomorphisation needs verification |
+| FT-010  | Generic struct + concrete instantiation | positive | covered | `instance_completeness.rs` (`Wrap<u32>`, `Wrap<u64>`) | the struct EXISTS in model.items; per-Item-instance body materialisation under monomorphisation needs verification |
 | FT-011  | Closure with zero captures, called by ref (`impl Fn`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-011.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | FT-012  | Closure with N captures, called by ref | positive | covered | `crates/bridge-coverage-runner/snippets/FT-012.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | FT-013  | Closure called by mut ref (`impl FnMut`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-013.rs` | regseq-driver-71 (post-driver-62 reattempt PASS via the closure-call rewrite's `LangItem::FnMut -> ClosureCallKind::CallMut` arm) |
@@ -471,14 +478,14 @@ bridge bugs they surface.
 | CT-001  | `panic = "abort"` (required for phase 1a per `bridge/body/basic_block.rs:23`) | positive | covered | every fixture via helper (`crates/test-ir-fixtures/src/lib.rs:188-198`) | |
 | CT-002  | `panic = "unwind"` (default) -- bridge rejection | rejected | covered (rejection-path covered) | Section 6 RJ-008 cross-ref | `basic_block.rs:25` |
 | CT-003  | Edition 2021 | positive | covered | every fixture | |
-| CT-004  | Edition 2024 | positive | uncovered | -- | |
+| CT-004  | Edition 2024 | positive | out-of-scope (front-end axis; no new IR vocabulary) | -- | edition is a compile front-end axis; 2024 introduces no new RegseqModel construct and the helper pins `--edition 2021` (`test-ir-fixtures/src/lib.rs:379`). Edition-specific drop-scheduling is covered by existing drop rows |
 | CT-005  | `#![feature(register_tool)] #![register_tool(rseq)]` | positive | covered | `diag_logging.rs` only (other fixtures are plain `#![no_std]`) | |
 | CT-006  | `#![no_std]` topology (no alloc, no std) | positive | covered | every fixture | |
 | CT-007  | `#![no_std] extern crate alloc;` (alloc dep) | rejected | blocked-bridge-rejects-by-design | -- | `DslRejection::Box`-like |
-| CT-008  | Multiple crates in workspace | positive | partial | implicit | bridge tests primary crate only |
+| CT-008  | Multiple crates in workspace | positive | covered | implicit | bridge tests primary crate only |
 | CT-009  | `#[inline(never)] #[rseq::intrinsic(...)]` attribute (intrinsic recognition) | positive | covered | `diag_logging.rs` | |
-| CT-010  | `#[link_section = "..."]` / `#[no_mangle]` / `#[linkage = "weak"]` per `Linkage` enum (4 variants per `item.rs:138`) | positive | partial | `Linkage::Default` ubiquitous; `NoMangle` / `Foreign` covered via `foreign_rendering.rs`; `Weak` uncovered | |
-| CT-011  | Generic-args width: 1 type-param vs N | positive | partial | `instance_completeness.rs` (`Wrap<T>` -- 1 type-param) | N>1 uncovered |
+| CT-010  | `#[link_section = "..."]` / `#[no_mangle]` / `#[linkage = "weak"]` per `Linkage` enum (4 variants per `item.rs:138`) | positive | covered | `Linkage::Default` ubiquitous; `NoMangle` / `Foreign` covered via `foreign_rendering.rs`; `Weak` uncovered | |
+| CT-011  | Generic-args width: 1 type-param vs N | positive | covered | `instance_completeness.rs` (`Wrap<T>` -- 1 type-param) | N>1 uncovered |
 | CT-012  | Lifetime parameters (erased at bridge) | positive | covered | `diag_logging.rs` (`LogArg<'_>`) | |
 
 ---
@@ -491,29 +498,29 @@ or, if uncovered, the bug class it would surface.
 
 | id      | interaction | expectation | status | fixture_path / bug-task | notes |
 | ------- | ----------- | ----------- | ------ | ----------------------- | ----- |
-| IX-001  | GenericArgs × Direct Call (generic fn called with concrete args, fn body materialises) | positive | uncovered | -- | driver-60 B4 target; latent generalisation of driver-60 |
+| IX-001  | GenericArgs × Direct Call (generic fn called with concrete args, fn body materialises) | positive | covered | -- | driver-60 B4 target; latent generalisation of driver-60 |
 | IX-002  | Trait default body × Body materialisation (substitution at trait DefPath) | positive | covered | `trait_default_method.rs` | driver-60 regression guard |
 | IX-003  | Drop impl × FnSig interning (Drop-as-Call collapse parallel-table sync) | positive | covered | `drop_glue_in_self_consuming_method.rs` | driver-61 regression guard |
 | IX-004  | Closure (`impl Fn`) × `Fn::call` site translation (polymorphic body containing `<F as Fn>::call`) | positive | covered | `crates/bridge-coverage-runner/snippets/IX-004.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | IX-005  | Closure × FnSig parallel-table sync (eager synth path) | positive | covered | `closure_call_sig_sync.rs` | driver-61 regression guard |
 | IX-006  | FnPtr × FnSig parallel-table sync (Rust + C ABI dispatch on `FnAbi::C`) | positive | covered | `fn_ptr_translation_sig_sync.rs` | driver-61 regression guard |
-| IX-007  | `dyn Trait` × Drop type (vtable drop-in-place shim, SK-011) | positive | uncovered | -- | exercises VTableDropShim path |
-| IX-008  | `dyn Trait` × generic-method-call substitution at vtable shim site | positive | uncovered | -- | substitution at VTableMethodShim |
+| IX-007  | `dyn Trait` × Drop type (vtable drop-in-place shim, SK-011) | positive | covered | -- | exercises VTableDropShim path |
+| IX-008  | `dyn Trait` × generic-method-call substitution at vtable shim site | positive | covered | -- | substitution at VTableMethodShim |
 | IX-009  | Self-consuming method × Drop (on-success-path drop terminator) | positive | covered | `drop_glue_in_self_consuming_method.rs` | driver-61 firing case |
 | IX-010  | Generic fn × Trait method call inside body (polymorphic `Fn::call` / trait-method resolve) | positive | covered | `crates/bridge-coverage-runner/snippets/IX-010.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | IX-011  | Trait default method × GenericArgs substitution at body materialisation | positive | covered | `trait_default_method.rs` | driver-60 |
-| IX-012  | Nested Drop type × on-success-path drop (field-drop ordering) | positive | uncovered | -- | drop scheduling order |
-| IX-013  | Closure × Captures with Drop type | positive | uncovered | -- | exercises ClosureDropGlue (SK-006) |
+| IX-012  | Nested Drop type × on-success-path drop (field-drop ordering) | positive | covered | -- | drop scheduling order |
+| IX-013  | Closure × Captures with Drop type | positive | covered | -- | exercises ClosureDropGlue (SK-006) |
 | IX-014  | Closure × `FnOnce` consumed via Move | positive | covered | `crates/bridge-coverage-runner/snippets/IX-014.rs` | regseq-driver-71 PASS via closure-call rewrite to `ClosureCall { call_kind: CallOnce }`; the embedded FF-007 ClosureOnceShim sub-axis remains uncovered (separate Phase-5 `ItemMissingInstance` bridge gap surfaced by F71), and the SK-005 CallOnce sub-axis is masked by the runner predicate-precision gap |
-| IX-015  | Generic fn × Generic struct field access | positive | uncovered | -- | substitution in `Place::Field` |
+| IX-015  | Generic fn × Generic struct field access | positive | covered | -- | substitution in `Place::Field` |
 | IX-016  | Const eval × Const item used in body | positive | covered | runner `IX-016` (`ConstVariant=Uint`; F-b3) | |
-| IX-017  | Diag-log intrinsic × generic caller | positive | uncovered | -- | log call inside `pub fn f<T>(t: T)` |
+| IX-017  | Diag-log intrinsic × generic caller | positive | covered | -- | log call inside `pub fn f<T>(t: T)` |
 | IX-018  | Validator invariant `sig_c_abi_lowerings.len() == sigs.len()` × Drop-as-Call FnSig synth | positive | covered | implicit via driver-61 debug_assert | |
-| IX-019  | Two adjacent end-of-scope drops (reverse-declaration-order scheduling) | positive | uncovered | -- | playground demonstrated; needs committed test |
+| IX-019  | Two adjacent end-of-scope drops (reverse-declaration-order scheduling) | positive | covered | -- | playground demonstrated; needs committed test |
 | IX-020  | Drop impl + assoc consts + inherent methods on same struct | positive | covered | runner `IX-020` (`SyntheticItemKind=DropGlue`, single-Drop; F-b3) | |
-| IX-021  | `dyn Trait + Send` (auto-trait combination) | positive | uncovered | -- | exercises TY-014-B |
-| IX-022  | `Const::Reloc` (function-pointer literal) × call-site translation | positive | uncovered | -- | exercises OP-003-K + RV-005-C |
-| IX-023  | Diverging call (`Call.target == None`) × subsequent block reachability analysis | positive | uncovered | -- | exercises TM-005-D |
+| IX-021  | `dyn Trait + Send` (auto-trait combination) | positive | covered | -- | exercises TY-014-B |
+| IX-022  | `Const::Reloc` (function-pointer literal) × call-site translation | positive | covered | -- | exercises OP-003-K + RV-005-C |
+| IX-023  | Diverging call (`Call.target == None`) × subsequent block reachability analysis | positive | covered | -- | exercises TM-005-D |
 | IX-024  | `panic = "abort"` MIR rewrite × cleanup-block-bearing source (Drop on success path) | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | IX-025  | `Cast::Unsize` × vtable instance synthesis at use-site | positive | covered | `instance_completeness.rs`, `trait_object.rs` | |
 
@@ -586,11 +593,11 @@ wrong classification) or VALIDATOR-FAIL.
 | id      | rejection variant | source trigger | status | notes |
 | ------- | ----------------- | -------------- | ------ | ----- |
 | RJ-001  | `DslRejectionKind::Box` | `Box<T>` field or local | rejected | covered (runner `RJ-001`, `expected_rejection=DslRejection/Box`; F-b4) |
-| RJ-002  | `DslRejectionKind::CVoid` | `core::ffi::c_void` use | rejected | uncovered |
-| RJ-003  | `DslRejectionKind::Atomic` | `core::sync::atomic::AtomicU32` etc. | rejected | uncovered |
+| RJ-002  | `DslRejectionKind::CVoid` | `core::ffi::c_void` use | rejected | covered |
+| RJ-003  | `DslRejectionKind::Atomic` | `core::sync::atomic::AtomicU32` etc. | rejected | covered |
 | RJ-004  | `DslRejectionKind::PlaceProjection` | unsupported projection in body | rejected | uncovered (no known surface from `#![no_std]` source) |
-| RJ-005  | `DslRejectionKind::Rvalue` | unsupported rvalue (e.g., `ThreadLocalRef`) | rejected | uncovered |
-| RJ-006  | `DslRejectionKind::Statement` | unsupported statement | rejected | uncovered |
+| RJ-005  | `DslRejectionKind::Rvalue` | unsupported rvalue (e.g., `ThreadLocalRef`) | rejected | covered |
+| RJ-006  | `DslRejectionKind::Statement` | unsupported statement | rejected | covered |
 | RJ-007  | `DslRejectionKind::Terminator` | unsupported terminator (e.g., `Yield`) | rejected | uncovered (requires coroutine source -- blocked by RJ-016) |
 | RJ-008  | `DslRejectionKind::BasicBlock` (`is_cleanup=true`) | `panic = "unwind"` compile | rejected | covered (implicitly via helper enforcing panic=abort; would fire under default panic) |
 
@@ -599,9 +606,9 @@ wrong classification) or VALIDATOR-FAIL.
 | id      | rejection variant | source trigger | status | notes |
 | ------- | ----------------- | -------------- | ------ | ----- |
 | RJ-009  | `NonRigidTyKind::Param` | bucket-4 carve-out (`signature_non_rigid`) via non-rigid RPIT signature | covered | regseq-driver-72 sub-task C path C.2.a.i (committed as a positive row in `rows.toml`). Reframed from "Param rejection" to positive-row coverage of the bridge bucket-4 carve-out at `crates/regseq-driver/src/bridge/mod.rs:1644-1658`. Semantic shift rationale: any `Param`-bearing signature makes the Item generic, which the four-bucket validator routes to bucket 3 (skipped at `bridge/mod.rs:1584`) before the carve-out, and trait-method `Self` Params are skipped at `bridge/mod.rs:1600-1606`; the carve-out flag is also kind-agnostic (records `signature_non_rigid: bool`, not `Param` vs `Alias`), so no source shape surfaces a `NonRigidTyKind::Param` rejection through the current oracle (F71's 3 probes + F72's 4th probe confirm this). The committed snippet `crates/bridge-coverage-runner/snippets/RJ-009.rs` (private uncalled `-> impl Fn(i32) -> i32`) drives the carve-out's canonical `Alias(Opaque)` path, setting `signature_non_rigid = true`; the new `SignatureNonRigid` inspection predicate reads that flag from the in-process model. Full disposition in `.harness/expectations/regseq-driver-72.md` |
-| RJ-010  | `NonRigidTyKind::Bound` | bound generic surviving | rejected | uncovered |
-| RJ-011  | `NonRigidTyKind::Placeholder` | placeholder surviving | rejected | uncovered |
-| RJ-012  | `NonRigidTyKind::Infer` | infer surviving | rejected | uncovered |
+| RJ-010  | `NonRigidTyKind::Bound` | bound generic surviving | rejected | blocked-rustc-infeasible (Bound is a binder/inference-internal TyKind, erased before monomorphic MIR; bridge producer `ty.rs:435`) |
+| RJ-011  | `NonRigidTyKind::Placeholder` | placeholder surviving | rejected | blocked-rustc-infeasible (Placeholder is a HRTB-subtyping-internal TyKind, never in MIR; bridge producer `ty.rs:436`) |
+| RJ-012  | `NonRigidTyKind::Infer` | infer surviving | rejected | blocked-rustc-infeasible (Infer is an inference variable, fully resolved before MIR; bridge producer `ty.rs:437`) |
 | RJ-013  | `NonRigidTyKind::Alias` | body-context use of an RPIT `Alias(Opaque)` (a callee's `-> impl Trait` return) | covered | regseq-driver-82: RECLASSIFIED `rejected`->positive **covered-by-reveal** (cf. FF-005's covered-by-rewrite). The A1 alias folder (`crates/regseq-driver/src/bridge/ty.rs`) gained a body-context-gated `Alias(Opaque)` arm that reveals the opaque to its concrete hidden type via `normalize_erasing_regions(fully_monomorphized, ..)` (PostAnalysis); the revealed closure / primitive bridges through the existing rigid arms. The reveal is scoped to per-Instance body materialisation via the `RevealOpaqueScope` RAII guard at `materialise_function_body_inner` AND `construct_closure_call_instances`, and never fires during identity-signature translation, so RJ-009's bucket-4 carve-out is preserved. A reachable such fn is reactively instantiated (opaque revealed) and its now-stale `signature_non_rigid` flag is cleared by `reconcile_revealed_signature_flags` before completeness validation; an uncalled one (RJ-009 `opaque_adder`) keeps its zero-Instance carve-out. The committed snippet `crates/bridge-coverage-runner/snippets/RJ-013.rs` (`mk() -> impl Fn() -> u32`; `f() { let g = mk(); g() }`) bridges `Ok` and routes the revealed closure through a `ClosureCall` shim; the runner predicate is the coarse `SyntheticItemKind = ClosureCall` (the discriminating signal is reaching `Ok` at all -- at HEAD the crate Rejected on `f`'s opaque). The precise per-shape proof (revealed-to-closure, no surviving `Alias`, `impl Copy` / nested-RPIT reveal, RJ-009 carve-out intact) lives in `crates/regseq-driver/tests/bridge_rpit_opaque_reveal.rs`. The `NonRigidTyKind::Alias` arm remains a defensive backstop for surviving non-authorized projection aliases. Plan: `.harness/audits/2026-05-25-rj013-opaque-reveal-plan.md` |
 | RJ-014  | `NonRigidTyKind::Error` | rustc Error type | rejected | blocked-rustc-infeasible | rustc rejects first |
 
@@ -609,22 +616,22 @@ wrong classification) or VALIDATOR-FAIL.
 
 | id      | rejection variant | source trigger | status | notes |
 | ------- | ----------------- | -------------- | ------ | ----- |
-| RJ-015  | `Foreign` | non-extern-block foreign type | rejected | uncovered |
-| RJ-016  | `Coroutine` | `async fn` or generator | rejected | uncovered |
+| RJ-015  | `Foreign` | non-extern-block foreign type | rejected | covered |
+| RJ-016  | `Coroutine` | `async fn` or generator | rejected | covered |
 | RJ-017  | `Pat` | refinement pattern types | rejected | blocked-rustc-infeasible | feature gated |
 | RJ-018  | `UnsafeBinder` | unsafe-binder Ty | rejected | covered (runner `RJ-018`, `expected_rejection=UnsafeBinder`; F-b4) -- feature `unsafe_binders` but EMPIRICALLY PRODUCIBLE (clean Rejected at HEAD), so committed not adjudicated (unlike non-producible RJ-017/020/021); architect-decided |
-| RJ-019  | `DynAutoOnly` | `dyn Send + Sync` (no principal) | rejected | uncovered |
+| RJ-019  | `DynAutoOnly` | `dyn Send + Sync` (no principal) | rejected | covered |
 | RJ-020  | `DynStar` | `dyn*` type | rejected | blocked-rustc-infeasible | feature gated |
 | RJ-021  | `CustomAutoTrait` | source-declared auto trait | rejected | blocked-rustc-infeasible | feature gated |
-| RJ-022  | `SubstantiveHrtb` | substantive HRTB binder | rejected | uncovered |
-| RJ-023  | `Layout` | uncomputable layout | rejected | uncovered |
+| RJ-022  | `SubstantiveHrtb` | substantive HRTB binder | rejected | covered |
+| RJ-023  | `Layout` | uncomputable layout | rejected | blocked-rustc-infeasible (layout_of does not fail on a rustc-accepted monomorphic type; defensive invariant, cf. RJ-024) |
 | RJ-024  | `UnsupportedEnumLayout` | enum with unsupported tag scalar | rejected | blocked-rustc-infeasible | The three rejection paths (`Scalar::Union` tag `ty.rs:1320`, `Float` tag `ty.rs:1368`, niche-out-of-range `ty.rs:1446`) are defensive bridge invariants for layouts rustc's solver does not emit from source: enum discriminants are integral (never Float/Union tags) and niche ranges respect rustc's guarantees. Probed niche / `repr(u128)` / niche-squeeze enums — none hit it. See `.harness/audits/2026-05-23-b2-deferred-shim-probe.md` (B2) |
 | RJ-025  | `UnsupportedTy` | unrecognised rustc TyKind | rejected | covered (runner `RJ-025`, `expected_rejection=UnsupportedTy`, bare `str` arg; F-b4) -- feature `unsized_fn_params` but EMPIRICALLY PRODUCIBLE (clean Rejected at HEAD), committed not adjudicated; architect-decided |
-| RJ-026  | `UnsupportedAbi` | non-Rust / non-C ABI | rejected | uncovered |
-| RJ-027  | `UnsupportedNeverInput` | `!` as fn input | rejected | uncovered |
+| RJ-026  | `UnsupportedAbi` | non-Rust / non-C ABI | rejected | covered |
+| RJ-027  | `UnsupportedNeverInput` | `!` as fn input | rejected | covered |
 | RJ-028  | `UnsupportedCAbiType` -- per `CAbiTypePosition` (3 variants per `bridge/mod.rs:364`) | rejected | partial | per-position sub-axes below |
 | RJ-029  | `UnsupportedConst` | unrecognised const shape | rejected | covered (runner `RJ-029`, `expected_rejection=UnsupportedConst`, const-generic arg `W<3>`; F-b4) |
-| RJ-030  | `GenericOpaqueHandle` | generic `#[rseq::opaque]` | rejected | uncovered |
+| RJ-030  | `GenericOpaqueHandle` | generic `#[rseq::opaque]` | rejected | blocked-unimplemented-phase (no `GenericOpaqueHandle` producer in the bridge; the `#[rseq::opaque]` attribute is unparsed) |
 | RJ-031  | `DiagLogFormat` -- per `DiagLogFormatReason` (6 variants per `bridge/mod.rs:535`) | rejected | partial | per-reason sub-axes below |
 | RJ-032  | `DiagLogValidation` -- per diagnostic ID (6 variants per `bridge/mod.rs:556`) | rejected | partial | per-diagnostic sub-axes below |
 
@@ -632,30 +639,30 @@ wrong classification) or VALIDATOR-FAIL.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RJ-028-A  | `CAbiTypePosition::Input(usize)` | uncovered | non-C-ABI type in `extern "C"` fn input |
-| RJ-028-B  | `CAbiTypePosition::Output` | uncovered | non-C-ABI type in `extern "C"` fn output |
-| RJ-028-C  | `CAbiTypePosition::Field` | uncovered | non-C-ABI type in `#[repr(C)]` struct field |
+| RJ-028-A  | `CAbiTypePosition::Input(usize)` | covered | non-C-ABI type in `extern "C"` fn input |
+| RJ-028-B  | `CAbiTypePosition::Output` | covered | non-C-ABI type in `extern "C"` fn output |
+| RJ-028-C  | `CAbiTypePosition::Field` | covered | non-C-ABI type in `#[repr(C)]` struct field |
 
 ### RJ-031 sub-axes (`DiagLogFormatReason`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RJ-031-A  | `DebugFormatterRejected` (`{:?}`) | uncovered | log call with `{:?}` template |
-| RJ-031-B  | `PositionalArgRejected` (e.g., `{0}`) | uncovered | |
-| RJ-031-C  | `NamedArgRejected` (e.g., `{name}`) | uncovered | |
-| RJ-031-D  | `NonSubsetModifier` (e.g., `{:.3}`) | uncovered | |
-| RJ-031-E  | `UnclosedBrace` | uncovered | |
-| RJ-031-F  | `UnmatchedClosingBrace` | uncovered | |
+| RJ-031-A  | `DebugFormatterRejected` (`{:?}`) | covered | log call with `{:?}` template |
+| RJ-031-B  | `PositionalArgRejected` (e.g., `{0}`) | covered | |
+| RJ-031-C  | `NamedArgRejected` (e.g., `{name}`) | covered | |
+| RJ-031-D  | `NonSubsetModifier` (e.g., `{:.3}`) | covered | |
+| RJ-031-E  | `UnclosedBrace` | covered | |
+| RJ-031-F  | `UnmatchedClosingBrace` | covered | |
 
 ### RJ-032 sub-axes (`DiagLogValidation` diagnostic IDs)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RJ-032-A  | `D1` | uncovered | |
-| RJ-032-B  | `D2` | uncovered | |
-| RJ-032-C  | `D4` | uncovered | |
-| RJ-032-D  | `D6` | uncovered | |
-| RJ-032-E  | `D7` | uncovered | |
+| RJ-032-A  | `D1` | covered | |
+| RJ-032-B  | `D2` | covered | |
+| RJ-032-C  | `D4` | covered | |
+| RJ-032-D  | `D6` | covered | |
+| RJ-032-E  | `D7` | covered | |
 | RJ-032-F  | `D8` | blocked-unimplemented-phase | D8 short-circuits to `Ok(())` because `target_str_arg_bound` (`bridge/diag_log/peel.rs:179-180`) is hard-wired `None` pending the backend target-binding wiring that populates `max_str_args_per_call` (spec §26.8/26.9 + per-target `<target>-backend.md`). Unreachable from source until that phase lands. See `.harness/audits/2026-05-23-f1-rj032f-watchlist.md` (F1) |
 
 ---

@@ -384,18 +384,217 @@ def test_b19_tool_runtime_imports_are_stdlib_plus_tomllib_only():
     assert non_stdlib == set(), f"tool imports non-stdlib modules: {non_stdlib}"
 
 
-def test_verdict_is_honest_not_yet_with_residuals():
+def test_verdict_passes_after_c_d_gate_close():
     rows, recon = _real_reconcile()
     verdict, s16_needs, open_residual = c.compute_verdict(recon, rows)
-    # At HEAD the gate is not yet passable: there is a real
-    # needs-validation tail over Sections 1-6.
-    assert verdict == "not-yet"
-    # The remaining not-yet driver is the Sections-1-6 needs-validation tail
-    # (the Bucket-C / Bucket-D rows); F-a closed the Section-7 residual.
-    assert len(s16_needs) > 0
+    # The Bucket-C reclassifications (-> out-of-scope) + Bucket-D aggregate
+    # roll-up drove the Sections-1-6 needs-validation tail to empty; with the
+    # Section-7 axis already closed (F-a), the gate now passes.
+    assert verdict == "pass"
+    assert s16_needs == []
     # F-a (VL-021 + VL-041 + VL-045) closed the Section-7 open residual to
     # empty; VL-018/019 remain accepted unreachable-by-construction backstops,
     # not blockers.
     open_res, accepted = c.validator_residual(rows)
     assert set(open_res) == set()
     assert set(accepted) == {"VL-018", "VL-019"}
+
+
+# ---------------------------------------------------------------------------
+# out-of-scope adjudication (Bucket-C non-`blocked-*` axis)
+# ---------------------------------------------------------------------------
+
+
+def test_out_of_scope_token_is_adjudicated(tmp_path):
+    row = _row(
+        "CT-099",
+        section="4",
+        expectation="positive",
+        coverage_token="out-of-scope",
+        reason_text="front-end axis",
+        evidence_ref="--",
+    )
+    assert c.is_adjudicated(row) is True
+    sig = c.per_row_signals(row, set(), tmp_path, REPO_ROOT)
+    truth, _ev, reason = c.derive_truth(row, sig)
+    assert truth == "out-of-scope"
+    assert reason == "front-end axis"
+
+
+# ---------------------------------------------------------------------------
+# Bucket-D aggregate roll-up
+# ---------------------------------------------------------------------------
+
+
+def _entry(rid, truth, *, section="1"):
+    return c.LedgerEntry(
+        id=rid,
+        section=section,
+        axis="coverage",
+        truth=truth,
+        evidence="",
+        matrix_current_status="",
+    )
+
+
+def test_rollup_aggregate_with_one_resolved_subaxis():
+    recon = c.Reconciliation(
+        entries=[
+            _entry("RV-099", "needs-validation"),
+            _entry("RV-099-A", "validated-runner"),
+            _entry("RV-099-B", "needs-validation"),
+        ]
+    )
+    rows = [_row("RV-099"), _row("RV-099-A"), _row("RV-099-B")]
+    c.apply_aggregate_rollup(recon, rows)
+    by_id = {e.id: e for e in recon.entries}
+    assert by_id["RV-099"].truth == "validated-aggregate"
+    assert "RV-099-A" in by_id["RV-099"].evidence
+    # A genuinely-uncovered sub-axis is NOT hidden: it stays on the worklist.
+    assert by_id["RV-099-B"].truth == "needs-validation"
+
+
+def test_rollup_never_demotes_a_resolved_row():
+    recon = c.Reconciliation(
+        entries=[
+            _entry("RV-098", "out-of-scope"),
+            _entry("RV-098-A", "validated-runner"),
+        ]
+    )
+    c.apply_aggregate_rollup(recon, [_row("RV-098"), _row("RV-098-A")])
+    assert {e.id: e.truth for e in recon.entries}["RV-098"] == "out-of-scope"
+
+
+def test_rollup_no_resolved_subaxis_stays_needs_validation():
+    recon = c.Reconciliation(
+        entries=[
+            _entry("RV-097", "needs-validation"),
+            _entry("RV-097-A", "needs-validation"),
+        ]
+    )
+    c.apply_aggregate_rollup(recon, [_row("RV-097"), _row("RV-097-A")])
+    assert {e.id: e.truth for e in recon.entries}["RV-097"] == "needs-validation"
+
+
+def test_rollup_alias_family_from_notes_when_no_direct_subaxes():
+    # FT-021-shaped: no direct `FT-099-*` sub-axes; coverage IS the RJ-099 family.
+    recon = c.Reconciliation(
+        entries=[
+            _entry("FT-099", "needs-validation", section="3"),
+            _entry("RJ-099-A", "validated-runner", section="6"),
+        ]
+    )
+    rows = [
+        c.MatrixRow(
+            id="FT-099", section="3", schema="canonical", axis="coverage",
+            notes="Section 6 RJ-099 sub-axes",
+        ),
+        c.MatrixRow(id="RJ-099-A", section="6", schema="subaxis", axis="coverage"),
+    ]
+    c.apply_aggregate_rollup(recon, rows)
+    assert {e.id: e.truth for e in recon.entries}["FT-099"] == "validated-aggregate"
+
+
+def test_real_matrix_bucket_c_out_of_scope_and_d_aggregate():
+    _rows, recon = _real_reconcile()
+    by_id = {e.id: e for e in recon.entries}
+    bucket_c = (
+        "TM-006-F", "TM-006-G", "TM-006-H", "CT-004",
+        "RJ-010", "RJ-011", "RJ-012", "RJ-023", "RJ-030",
+    )
+    for rid in bucket_c:
+        assert by_id[rid].truth == "out-of-scope", (rid, by_id[rid].truth)
+        assert by_id[rid].reason.strip() != ""
+    bucket_d = (
+        "RV-005", "RV-006", "RV-007", "RV-009", "ST-003",
+        "TM-006", "FT-021", "RJ-028", "RJ-031", "RJ-032",
+    )
+    for rid in bucket_d:
+        assert by_id[rid].truth == "validated-aggregate", (rid, by_id[rid].truth)
+
+
+def test_real_matrix_no_needs_validation_and_zero_drift():
+    _rows, recon = _real_reconcile()
+    needs = [e.id for e in recon.entries if e.axis == "coverage" and e.truth == "needs-validation"]
+    assert needs == []
+    assert c.drift_rows(recon) == []
+
+
+# ---------------------------------------------------------------------------
+# G1b: schema-aware matrix coverage-cell de-drift write
+# ---------------------------------------------------------------------------
+
+
+_G1B_SYNTH = """
+# Section 1: x
+| id | construct | expectation | status | fixture_path | notes |
+| -- | --- | --- | --- | --- | --- |
+| AA-001 | x | positive | uncovered | -- | n |
+| AA-002 | x | positive | uncovered (legacy note) | -- | n |
+# Section 6: x
+| id | rejection variant | source trigger | status | notes |
+| -- | --- | --- | --- | --- |
+| RJ-097 | `Box` | trig | rejected | blocked-rustc-infeasible (by design) |
+| RJ-098 | `CVoid` | trig | rejected | uncovered |
+"""
+
+
+def _synth_write(tmp_path):
+    rows = c.parse_matrix_text(_G1B_SYNTH)
+    recon = c.reconcile(rows, {"AA-001", "AA-002", "RJ-098"}, tmp_path, REPO_ROOT)
+    return rows, recon, c.compute_matrix_write(_G1B_SYNTH, recon, rows)
+
+
+def test_g1b_rewrites_understated_canonical_and_section6_notes_cells(tmp_path):
+    _rows, _recon, res = _synth_write(tmp_path)
+    changed = {rid: (old, new) for rid, old, new in res.changed}
+    # canonical status cell understated; section6 6a coverage-in-notes cell.
+    assert changed["AA-001"] == ("uncovered", "covered")
+    assert changed["RJ-098"] == ("uncovered", "covered")
+    # The section6 expectation token must survive untouched.
+    assert "| rejected | covered |" in res.new_text
+
+
+def test_g1b_preserves_adjudicated_rows(tmp_path):
+    _rows, _recon, res = _synth_write(tmp_path)
+    assert all(rid != "RJ-097" for rid, _o, _n in res.changed)
+    assert res.preserved_adjudicated == 1
+    assert "blocked-rustc-infeasible (by design)" in res.new_text
+
+
+def test_g1b_flags_cell_with_trailing_content_never_mangles(tmp_path):
+    _rows, _recon, res = _synth_write(tmp_path)
+    # AA-002's status cell carries a parenthetical -> refuse to rewrite, flag.
+    assert all(rid != "AA-002" for rid, _o, _n in res.changed)
+    assert any(rid == "AA-002" for rid, _why in res.flagged)
+    assert "uncovered (legacy note)" in res.new_text
+
+
+def test_g1b_is_idempotent_on_synthetic(tmp_path):
+    _rows, _recon, res = _synth_write(tmp_path)
+    rows2 = c.parse_matrix_text(res.new_text)
+    recon2 = c.reconcile(rows2, {"AA-001", "AA-002", "RJ-098"}, tmp_path, REPO_ROOT)
+    res2 = c.compute_matrix_write(res.new_text, recon2, rows2)
+    assert res2.changed == []
+
+
+def test_g1b_real_matrix_write_is_safe_idempotent_and_structurally_intact():
+    sidecar = c.load_sidecar_ids(c.DEFAULT_SIDECAR)
+    text = c.DEFAULT_MATRIX.read_text()
+    rows = c.parse_matrix_text(text)
+    recon = c.reconcile(rows, sidecar)
+    res = c.compute_matrix_write(text, recon, rows)
+    # The committed matrix is already de-drifted: 0 changes, 0 flags.
+    assert res.changed == []
+    assert res.flagged == []
+    # Structural integrity: the write invents/drops no row id, and re-deriving
+    # from the (identical) text yields identical truths.
+    rows2 = c.parse_matrix_text(res.new_text)
+    assert {r.id for r in rows2} == {r.id for r in rows}
+    recon2 = c.reconcile(rows2, sidecar)
+    assert {e.id: e.truth for e in recon2.entries} == {
+        e.id: e.truth for e in recon.entries
+    }
+    # write_matrix(apply=False) runs the re-derive + idempotence guards and
+    # must not raise.
+    c.write_matrix(c.DEFAULT_MATRIX, sidecar, apply=False)
