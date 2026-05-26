@@ -709,7 +709,7 @@ audit-doc cross-reference for `no`. See the audit doc for per-variant
 | VL-018  | `StringInternerSentinelInvalid` | no | unreachable-by-construction backstop: `StringInterner` encapsulation (private fields; `new()`/`intern()` preserve the sentinel; `Deserialize` rejects non-empty index 0) makes the defect unrepresentable without a test-only hook. Not a fixture-batch task. See audit doc S.2/S.3 finding 5 |
 | VL-019  | `DuplicateString` | no | unreachable-by-construction backstop: `intern()` is content-deduplicating and `Deserialize` rejects duplicates (`string_interner.rs:49-50,157-161`), so the defect needs a test-only hook. Not a fixture-batch task. See audit doc S.2/S.3 finding 5 |
 | VL-020  | `PlaceWalk` | yes | `id_ref:place_validator_structural_error_at_index_5_not_masked_by_type_error_at_index_0`; `place_validator.rs:joint_validator_integration_pass_and_reject` |
-| VL-021  | `SyntheticKindItemKindMismatch` | no | constructed-model gap; `ItemKind::Function` item with `SyntheticItemKind::ClosureCaptures` (requires `Struct`). See audit doc S.2 |
+| VL-021  | `SyntheticKindItemKindMismatch` | yes | covered (F-a) by `id_ref:vl021_synthetic_kind_function_with_closure_captures_rejected` — an `ItemKind::Function` item carrying `SyntheticItemKind::ClosureCaptures` (which requires `Struct`) |
 | VL-022  | `DirectCalleeOutOfRange` | yes | `id_ref:terminator_b7_direct_callee_out_of_range_rejects`; `place_validator.rs:joint_validator_rejects_dangling_direct_call_instance` |
 | VL-023  | `TargetMalformed` | yes | `layout_validator.rs:target_reject_*` (6 reasons) |
 | VL-024  | `BuildMalformed` | yes | `layout_validator.rs:build_reject_toolchain_empty` (one of two reasons; `reason`-string) |
@@ -729,11 +729,11 @@ audit-doc cross-reference for `no`. See the audit doc for per-variant
 | VL-038  | `DuplicateSourceFilePath` | yes | `layout_validator.rs:source_file_reject_duplicate_path` |
 | VL-039  | `BodyTyIdOutOfRange` | yes | `id_ref:body_ty_closure_rejects_dangling_local_decl_ty` |
 | VL-040  | `StatementAssignTypeMismatch` | yes | `id_ref:statement_b1_assign_type_mismatch_rejects` |
-| VL-041  | `StatementAssignMalformed` | partial | `id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer` asserts only `side="rvalue"`; `side="place"` arm untested. See audit doc S.2 |
+| VL-041  | `StatementAssignMalformed` | yes | `side="rvalue"` by `id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer`. `side="place"` is a DEFENSIVE backstop (F-a finding): the structural `validate_body_places` pass runs before `validate_body_statement_invariants` and rejects any malformed place first as `PlaceWalk`, so the statement-site `side="place"` arm is unreachable from a structurally-valid place (cf. `body_ty.rs::place_ty` doc lines 63-66). Proven shadowed by `id_ref:vl041_assign_malformed_place_side_is_defensively_shadowed` (F-a). See audit doc S.2 |
 | VL-042  | `SetDiscriminantVariantIdxOutOfRange` | yes | `id_ref:statement_b2_set_discriminant_variant_idx_out_of_range_rejects` |
 | VL-043  | `SetDiscriminantNonEnumTarget` | yes | `id_ref:statement_b3_set_discriminant_non_enum_target_rejects` |
 | VL-044  | `AssumeOperandNotBool` | yes | `id_ref:statement_b4_assume_operand_not_bool_rejects` |
-| VL-045  | `CopyNonOverlappingOperandType` | partial | `id_ref:statement_b5_copy_non_overlapping_count_type_rejects` asserts only `which="count"`; `src`/`dst`/`pointee` arms untested. See audit doc S.2 |
+| VL-045  | `CopyNonOverlappingOperandType` | yes | `which="count"` by `id_ref:statement_b5_copy_non_overlapping_count_type_rejects`; `which="src"`/`"dst"`/`"pointee"` by `id_ref:vl045_copy_non_overlapping_{src_not_pointer,dst_not_pointer,pointee_mismatch}_rejects` (F-a). All four `which` arms covered |
 | VL-046  | `SwitchIntDiscrTypeMismatch` | yes | `id_ref:terminator_b1_switch_int_discr_type_mismatch_rejects` |
 | VL-047  | `AssertCondNotBool` | yes | `id_ref:terminator_b2_assert_cond_not_bool_rejects` |
 | VL-048  | `CallDestinationTypeMismatch` | yes | `id_ref:terminator_b3_call_destination_type_mismatch_rejects{,_indirect}` |
@@ -751,16 +751,17 @@ audit-doc cross-reference for `no`. See the audit doc for per-variant
 | VL-060  | `ForeignInstanceBodyOrInitNotNone` | yes | `validate_bridge_completeness_buckets.rs:bucket2_foreign_{function_body,static_init}_must_be_none` |
 | VL-061  | `Bucket4HasInstance` | yes | `validate_bridge_completeness_buckets.rs:bucket4_rpit_function_with_instance_rejected` |
 
-Audit roll-up (`.harness/audits/2026-05-25-section7-validator-audit.md`):
-coverage axis **56 `yes`, 2 `partial` (VL-041, VL-045), 3 `no` (VL-018,
-VL-019, VL-021)**; triage axis **1 fixture-bound `no` (VL-021), 2
-`unreachable-by-construction` backstops (VL-018, VL-019), 0 dead**, over all
-61. The fixture-batch follow-up is **3 gaps** -- VL-021 (constructed-model)
-plus completing the two `partial`s -- grouped by enforcing method
-(`validate_synthetic_kinds`, `validate_copy_non_overlapping`,
-`validate_body_statement_invariants`); not authored here. VL-018/VL-019 are
-excluded from that batch (they need a test-only `StringInterner` hook, a
-source change, not a model-level fixture).
+Audit roll-up (`.harness/audits/2026-05-25-section7-validator-audit.md`),
+updated after **F-a** closed the 3-gap fixture batch: coverage axis is now
+**59 `yes`, 0 `partial`, 2 `no` (VL-018, VL-019)**, over all 61. F-a added
+constructed-model tests for VL-021 (`SyntheticKindItemKindMismatch`) and the
+VL-045 `which="src"/"dst"/"pointee"` arms, and a test that documents VL-041's
+`side="place"` arm as a defensive backstop (shadowed by the structural
+`validate_body_places` pass — see VL-041's note). VL-041/VL-045 thus move
+`partial`→`yes`; VL-021 `no`→`yes`. The only remaining non-`yes` rows are
+VL-018/VL-019, both `unreachable-by-construction` backstops (they need a
+test-only `StringInterner` hook, a source change, not a model-level fixture)
+— accepted residuals, not gate-blocking. **The Section-7 open residual is now ∅.**
 
 ---
 

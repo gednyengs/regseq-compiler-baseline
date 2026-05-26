@@ -2890,12 +2890,12 @@
   },
   "VL-021": {
     "axis": "validator",
-    "evidence": "constructed-model gap; ItemKind::Function item with SyntheticItemKind::ClosureCaptures (requires Struct). See audit doc S.2",
+    "evidence": "covered (F-a) by id_ref:vl021_synthetic_kind_function_with_closure_captures_rejected \u2014 an ItemKind::Function item carrying SyntheticItemKind::ClosureCaptures (which requires Struct)",
     "id": "VL-021",
-    "matrix_current_status": "no",
+    "matrix_current_status": "yes",
     "reason": "",
     "section": "7",
-    "truth": "validator-gap"
+    "truth": "validator-exercised"
   },
   "VL-022": {
     "axis": "validator",
@@ -3070,12 +3070,12 @@
   },
   "VL-041": {
     "axis": "validator",
-    "evidence": "id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer asserts only side=\"rvalue\"; side=\"place\" arm untested. See audit doc S.2",
+    "evidence": "side=\"rvalue\" by id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer. side=\"place\" is a DEFENSIVE backstop (F-a finding): the structural validate_body_places pass runs before validate_body_statement_invariants and rejects any malformed place first as PlaceWalk, so the statement-site side=\"place\" arm is unreachable from a structurally-valid place (cf. body_ty.rs::place_ty doc lines 63-66). Proven shadowed by id_ref:vl041_assign_malformed_place_side_is_defensively_shadowed (F-a). See audit doc S.2",
     "id": "VL-041",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "yes",
     "reason": "",
     "section": "7",
-    "truth": "validator-partial"
+    "truth": "validator-exercised"
   },
   "VL-042": {
     "axis": "validator",
@@ -3106,12 +3106,12 @@
   },
   "VL-045": {
     "axis": "validator",
-    "evidence": "id_ref:statement_b5_copy_non_overlapping_count_type_rejects asserts only which=\"count\"; src/dst/pointee arms untested. See audit doc S.2",
+    "evidence": "which=\"count\" by id_ref:statement_b5_copy_non_overlapping_count_type_rejects; which=\"src\"/\"dst\"/\"pointee\" by id_ref:vl045_copy_non_overlapping_{src_not_pointer,dst_not_pointer,pointee_mismatch}_rejects (F-a). All four which arms covered",
     "id": "VL-045",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "yes",
     "reason": "",
     "section": "7",
-    "truth": "validator-partial"
+    "truth": "validator-exercised"
   },
   "VL-046": {
     "axis": "validator",

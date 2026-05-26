@@ -320,10 +320,14 @@ def test_b15_ledger_accounts_every_row_exactly_once():
     assert len(validator) == 61
 
 
-def test_b16_all_146_sidecar_ids_classify_validated_runner():
+def test_b16_all_sidecar_ids_classify_validated_runner():
     rows, recon = _real_reconcile()
     sidecar = c.load_sidecar_ids(c.DEFAULT_SIDECAR)
-    assert len(sidecar) == 146
+    # The committed sidecar grows as coverage batches land (146 at
+    # driver-79; 174 after the F-b authoring track). A monotonic floor is
+    # a loader-sanity guard; the per-id loop below is the real invariant
+    # (every committed sidecar row classifies as validated-runner).
+    assert len(sidecar) >= 146
     by_id = {e.id: e for e in recon.entries}
     for rid in sidecar:
         assert rid in by_id, f"sidecar id {rid} absent from the matrix/ledger"
@@ -386,9 +390,12 @@ def test_verdict_is_honest_not_yet_with_residuals():
     # At HEAD the gate is not yet passable: there is a real
     # needs-validation tail over Sections 1-6.
     assert verdict == "not-yet"
+    # The remaining not-yet driver is the Sections-1-6 needs-validation tail
+    # (the Bucket-C / Bucket-D rows); F-a closed the Section-7 residual.
     assert len(s16_needs) > 0
-    # Section-7 open residual is the known F-a 3-batch; VL-018/019 are
-    # accepted backstops, not blockers.
+    # F-a (VL-021 + VL-041 + VL-045) closed the Section-7 open residual to
+    # empty; VL-018/019 remain accepted unreachable-by-construction backstops,
+    # not blockers.
     open_res, accepted = c.validator_residual(rows)
-    assert set(open_res) == {"VL-021", "VL-041", "VL-045"}
+    assert set(open_res) == set()
     assert set(accepted) == {"VL-018", "VL-019"}

@@ -993,6 +993,11 @@ fn statement_b4_assume_operand_not_bool_rejects() {
 fn statement_b5_copy_non_overlapping_count_type_rejects() {
     let mut f = BodyFixture::new();
     let usize_ty = f.model.types.intern(Ty::Uint(UintKind::Usize));
+    // The `count` operand recovers its type via the const interner's
+    // `find(&Ty::Uint(Usize))`, so the usize TYPE must be interned (else
+    // `expect_operand_ty(count)` is NotApplicable -> the count arm fires
+    // before the src/dst/pointee checks under test).
+    f.model.types.intern(Ty::Uint(UintKind::Usize));
     let usize_const = f.model.consts.intern(Const::Uint(UintKind::Usize, 0));
     let _ = usize_const;
     let _ = usize_ty;
@@ -1804,4 +1809,170 @@ fn invariant_18_pass_unique_def_path_hashes() {
     push_item(&mut model, "b", ItemKind::Function, 2);
     push_item(&mut model, "c", ItemKind::Function, 3);
     assert_eq!(validate(&mut model), Ok(()));
+}
+
+// ----------------------------------------------------------------------
+// regseq-driver F-a: Section-7 validator-coverage completions (driver-78
+// audit §2/§3). VL-021 (no test), VL-045 src/dst/pointee arms (partial ->
+// complete). VL-041 side="place" is probed below.
+// ----------------------------------------------------------------------
+
+fn place_with_projection(local: u32, projection: Vec<PlaceElem>) -> Place {
+    Place {
+        local: LocalId::from_u32(local),
+        projection: projection.into_boxed_slice(),
+    }
+}
+
+#[test]
+fn vl021_synthetic_kind_function_with_closure_captures_rejected() {
+    // VL-021 `SyntheticKindItemKindMismatch`: ClosureCaptures is a
+    // synthesised capture STRUCT, so attaching it to an ItemKind::Function
+    // item is inconsistent. `item_synthetic_kinds` is a pub field.
+    let mut f = BodyFixture::new();
+    // A complete valid driver instance so the bucket/referential
+    // validators have nothing else to reject.
+    let body = BodyFixture::body_from_blocks(&[], vec![return_block()]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    // Inject the mismatch on a fresh Function item carrying a
+    // ClosureCaptures synthetic kind (valid only on a Struct).
+    let item = f.push_named_item("captures_on_function", ItemKind::Function);
+    f.model.item_synthetic_kinds[item] = SyntheticItemKind::ClosureCaptures {
+        closure: hash(0xC0FFEE),
+    };
+    match validate(&mut f.model).unwrap_err() {
+        InvariantViolation::SyntheticKindItemKindMismatch { item: got, .. } => {
+            assert_eq!(got, item);
+        }
+        other => panic!("expected SyntheticKindItemKindMismatch, got {other:?}"),
+    }
+}
+
+#[test]
+fn vl045_copy_non_overlapping_src_not_pointer_rejects() {
+    let mut f = BodyFixture::new();
+    let ptr_u32 = f.model.types.intern(Ty::Ptr(f.u32_ty, Mutability::Mut));
+    // The `count` operand recovers its type via the const interner's
+    // `find(&Ty::Uint(Usize))`, so the usize TYPE must be interned (else
+    // `expect_operand_ty(count)` is NotApplicable -> the count arm fires
+    // before the src/dst/pointee checks under test).
+    f.model.types.intern(Ty::Uint(UintKind::Usize));
+    let usize_const = f.model.consts.intern(Const::Uint(UintKind::Usize, 0));
+    // _0: u32 (non-pointer src); _1: *mut u32 (dst). count: usize.
+    let stmt = Statement {
+        kind: StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(
+            CopyNonOverlapping {
+                src: Operand::Copy(place_local(0)),
+                dst: Operand::Copy(place_local(1)),
+                count: Operand::Constant(usize_const),
+            },
+        )),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(
+        &[f.u32_ty, ptr_u32],
+        vec![block_with_statements(vec![stmt])],
+    );
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    assert!(matches!(
+        validate(&mut f.model).unwrap_err(),
+        InvariantViolation::CopyNonOverlappingOperandType { which: "src", .. }
+    ));
+}
+
+#[test]
+fn vl045_copy_non_overlapping_dst_not_pointer_rejects() {
+    let mut f = BodyFixture::new();
+    let ptr_u32 = f.model.types.intern(Ty::Ptr(f.u32_ty, Mutability::Mut));
+    // The `count` operand recovers its type via the const interner's
+    // `find(&Ty::Uint(Usize))`, so the usize TYPE must be interned (else
+    // `expect_operand_ty(count)` is NotApplicable -> the count arm fires
+    // before the src/dst/pointee checks under test).
+    f.model.types.intern(Ty::Uint(UintKind::Usize));
+    let usize_const = f.model.consts.intern(Const::Uint(UintKind::Usize, 0));
+    // _0: *mut u32 (pointer src); _1: u32 (non-pointer dst). count: usize.
+    let stmt = Statement {
+        kind: StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(
+            CopyNonOverlapping {
+                src: Operand::Copy(place_local(0)),
+                dst: Operand::Copy(place_local(1)),
+                count: Operand::Constant(usize_const),
+            },
+        )),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(
+        &[ptr_u32, f.u32_ty],
+        vec![block_with_statements(vec![stmt])],
+    );
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    assert!(matches!(
+        validate(&mut f.model).unwrap_err(),
+        InvariantViolation::CopyNonOverlappingOperandType { which: "dst", .. }
+    ));
+}
+
+#[test]
+fn vl045_copy_non_overlapping_pointee_mismatch_rejects() {
+    let mut f = BodyFixture::new();
+    let ptr_u32 = f.model.types.intern(Ty::Ptr(f.u32_ty, Mutability::Mut));
+    let ptr_bool = f.model.types.intern(Ty::Ptr(f.bool_ty, Mutability::Mut));
+    // The `count` operand recovers its type via the const interner's
+    // `find(&Ty::Uint(Usize))`, so the usize TYPE must be interned (else
+    // `expect_operand_ty(count)` is NotApplicable -> the count arm fires
+    // before the src/dst/pointee checks under test).
+    f.model.types.intern(Ty::Uint(UintKind::Usize));
+    let usize_const = f.model.consts.intern(Const::Uint(UintKind::Usize, 0));
+    // _0: *mut u32, _1: *mut bool -> pointees disagree. count: usize.
+    let stmt = Statement {
+        kind: StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping(
+            CopyNonOverlapping {
+                src: Operand::Copy(place_local(0)),
+                dst: Operand::Copy(place_local(1)),
+                count: Operand::Constant(usize_const),
+            },
+        )),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(
+        &[ptr_u32, ptr_bool],
+        vec![block_with_statements(vec![stmt])],
+    );
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    assert!(matches!(
+        validate(&mut f.model).unwrap_err(),
+        InvariantViolation::CopyNonOverlappingOperandType {
+            which: "pointee",
+            ..
+        }
+    ));
+}
+
+#[test]
+fn vl041_assign_malformed_place_side_is_defensively_shadowed() {
+    // VL-041 `StatementAssignMalformed { side: "place" }` is a DEFENSIVE
+    // backstop, not reachable from a structurally-valid place: any place
+    // whose `place_ty` is Malformed (e.g. a `[Deref]` on a non-pointer
+    // local) is rejected FIRST by the structural `validate_body_places`
+    // pass (model.rs runs it before `validate_body_statement_invariants`),
+    // surfacing `PlaceWalk { DerefOnNonPointer }` rather than the
+    // statement-site `side="place"` arm. The `body_ty.rs::place_ty` doc
+    // (lines 63-66) states this explicitly: the structural pre-pass owns
+    // the malformed-place rejection; the statement arm re-checks
+    // defensively. This mirrors VL-018/019 (other unreachable-by-
+    // construction backstops). The reachable `side="rvalue"` arm is
+    // covered by `statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer`.
+    let mut f = BodyFixture::new();
+    let dest = place_with_projection(0, vec![PlaceElem::Deref]);
+    let stmt = Statement {
+        kind: StatementKind::Assign(dest, Rvalue::Use(Operand::Constant(f.u32_const))),
+        span: Span::dummy(),
+    };
+    let body = BodyFixture::body_from_blocks(&[f.u32_ty], vec![block_with_statements(vec![stmt])]);
+    f.push_function_with_body(body, vec![], f.unit_ty);
+    // The structural place validator catches the malformed place first.
+    assert!(matches!(
+        validate(&mut f.model).unwrap_err(),
+        InvariantViolation::PlaceWalk { .. }
+    ));
 }

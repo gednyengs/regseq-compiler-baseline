@@ -327,7 +327,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | VL-018 | 7 | validator | validator-gap | no | unreachable-by-construction backstop: StringInterner encapsulation (private fields; new()/intern() preserve the sentinel; Deserialize rejects non-empty index 0) makes the defect unrepresentable without a test-only hook. Not a fixture-batch task. See audit doc S.2/S.3 finding 5 |  |
 | VL-019 | 7 | validator | validator-gap | no | unreachable-by-construction backstop: intern() is content-deduplicating and Deserialize rejects duplicates (string_interner.rs:49-50,157-161), so the defect needs a test-only hook. Not a fixture-batch task. See audit doc S.2/S.3 finding 5 |  |
 | VL-020 | 7 | validator | validator-exercised | yes | id_ref:place_validator_structural_error_at_index_5_not_masked_by_type_error_at_index_0; place_validator.rs:joint_validator_integration_pass_and_reject |  |
-| VL-021 | 7 | validator | validator-gap | no | constructed-model gap; ItemKind::Function item with SyntheticItemKind::ClosureCaptures (requires Struct). See audit doc S.2 |  |
+| VL-021 | 7 | validator | validator-exercised | yes | covered (F-a) by id_ref:vl021_synthetic_kind_function_with_closure_captures_rejected — an ItemKind::Function item carrying SyntheticItemKind::ClosureCaptures (which requires Struct) |  |
 | VL-022 | 7 | validator | validator-exercised | yes | id_ref:terminator_b7_direct_callee_out_of_range_rejects; place_validator.rs:joint_validator_rejects_dangling_direct_call_instance |  |
 | VL-023 | 7 | validator | validator-exercised | yes | layout_validator.rs:target_reject_* (6 reasons) |  |
 | VL-024 | 7 | validator | validator-exercised | yes | layout_validator.rs:build_reject_toolchain_empty (one of two reasons; reason-string) |  |
@@ -347,11 +347,11 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | VL-038 | 7 | validator | validator-exercised | yes | layout_validator.rs:source_file_reject_duplicate_path |  |
 | VL-039 | 7 | validator | validator-exercised | yes | id_ref:body_ty_closure_rejects_dangling_local_decl_ty |  |
 | VL-040 | 7 | validator | validator-exercised | yes | id_ref:statement_b1_assign_type_mismatch_rejects |  |
-| VL-041 | 7 | validator | validator-partial | partial | id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer asserts only side="rvalue"; side="place" arm untested. See audit doc S.2 |  |
+| VL-041 | 7 | validator | validator-exercised | yes | side="rvalue" by id_ref:statement_b1_assign_malformed_rejects_ptr_metadata_on_non_fat_pointer. side="place" is a DEFENSIVE backstop (F-a finding): the structural validate_body_places pass runs before validate_body_statement_invariants and rejects any malformed place first as PlaceWalk, so the statement-site side="place" arm is unreachable from a structurally-valid place (cf. body_ty.rs::place_ty doc lines 63-66). Proven shadowed by id_ref:vl041_assign_malformed_place_side_is_defensively_shadowed (F-a). See audit doc S.2 |  |
 | VL-042 | 7 | validator | validator-exercised | yes | id_ref:statement_b2_set_discriminant_variant_idx_out_of_range_rejects |  |
 | VL-043 | 7 | validator | validator-exercised | yes | id_ref:statement_b3_set_discriminant_non_enum_target_rejects |  |
 | VL-044 | 7 | validator | validator-exercised | yes | id_ref:statement_b4_assume_operand_not_bool_rejects |  |
-| VL-045 | 7 | validator | validator-partial | partial | id_ref:statement_b5_copy_non_overlapping_count_type_rejects asserts only which="count"; src/dst/pointee arms untested. See audit doc S.2 |  |
+| VL-045 | 7 | validator | validator-exercised | yes | which="count" by id_ref:statement_b5_copy_non_overlapping_count_type_rejects; which="src"/"dst"/"pointee" by id_ref:vl045_copy_non_overlapping_{src_not_pointer,dst_not_pointer,pointee_mismatch}_rejects (F-a). All four which arms covered |  |
 | VL-046 | 7 | validator | validator-exercised | yes | id_ref:terminator_b1_switch_int_discr_type_mismatch_rejects |  |
 | VL-047 | 7 | validator | validator-exercised | yes | id_ref:terminator_b2_assert_cond_not_bool_rejects |  |
 | VL-048 | 7 | validator | validator-exercised | yes | id_ref:terminator_b3_call_destination_type_mismatch_rejects{,_indirect} |  |
