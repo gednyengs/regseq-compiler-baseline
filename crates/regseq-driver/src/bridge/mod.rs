@@ -768,7 +768,7 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
 
 /// Per regseq-driver-82: clear the `signature_non_rigid` carve-out
 /// flag on any Function Item that ended Phase 5 with at least one
-/// Instance.
+/// primary (`Item`-flavored) Instance.
 ///
 /// The flag is set eagerly by `construct_function_instances` when a
 /// non-generic Function's identity signature rejects `NonRigidTy`
@@ -777,28 +777,48 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
 /// reachable. A reachable (called) such function is reactively
 /// instantiated during Phase-5 body materialisation, where the
 /// body-context opaque reveal makes its signature translatable. Once
-/// the Instance exists the carve-out no longer applies: the Item is a
-/// normal instantiated bucket-1 Function. Without this reconciliation
-/// the stale flag trips the `Bucket4HasInstance` invariant (a bucket-4
-/// Item must have zero Instances).
+/// the primary Instance exists the carve-out no longer applies: the
+/// Item is a normal instantiated bucket-1 Function. Without this
+/// reconciliation the stale flag trips the `Bucket4HasInstance`
+/// invariant (a bucket-4 Item must have zero Instances).
 ///
 /// An uncalled RPIT function (e.g. RJ-009's private `opaque_adder`) is
 /// never reactively instantiated, so its instance count stays zero and
 /// its flag is left intact -- the bucket-4 carve-out and the
 /// `SignatureNonRigid` coverage predicate are preserved.
+///
+/// The predicate counts ONLY primary (`Item`-flavored) Function
+/// instances, mirroring the validator's `primary_function_counts`
+/// (model.rs:3617-3628). This is load-bearing: bucket-1 validation
+/// bounds the primary count alone and PERMITS a Function carrying only
+/// auxiliary shim-flavored instances (no primary). Counting all
+/// instances would clear the carve-out for such a shim-only item too,
+/// silently moving it to bucket-1 instead of leaving the (then-correct)
+/// `Bucket4HasInstance` rejection in place for a non-rigid-signature
+/// item that never gained its covering primary Instance.
 fn reconcile_revealed_signature_flags(ctxt: &mut BridgeCtxt<'_>) {
-    // Count Instances per Item, mirroring the validator's
-    // `instance_counts` (model.rs:3618-3629).
-    let mut instance_counts: Vec<usize> = vec![0; ctxt.model.items.len()];
+    // Count primary (`Item`-flavored) Function instances per Item,
+    // mirroring the validator's `primary_function_counts`
+    // (model.rs:3617-3628).
+    let mut primary_function_counts: Vec<usize> = vec![0; ctxt.model.items.len()];
     for instance in ctxt.model.instances.iter() {
         let idx = instance.item.index();
-        if idx < instance_counts.len() {
-            instance_counts[idx] += 1;
+        if idx < primary_function_counts.len()
+            && matches!(
+                &instance.kind,
+                regseq_model::InstanceKind::Function(data)
+                    if data.flavor == FunctionInstanceFlavor::Item
+            )
+        {
+            primary_function_counts[idx] += 1;
         }
     }
     for (item_id, flags) in ctxt.model.item_bridge_flags.iter_mut() {
         let idx = item_id.index();
-        if flags.signature_non_rigid && idx < instance_counts.len() && instance_counts[idx] > 0 {
+        if flags.signature_non_rigid
+            && idx < primary_function_counts.len()
+            && primary_function_counts[idx] > 0
+        {
             flags.signature_non_rigid = false;
         }
     }
