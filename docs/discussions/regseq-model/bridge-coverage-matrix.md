@@ -442,7 +442,7 @@ bridge bugs they surface.
 | ------- | ---------------- | ----------- | ----------- | ------------ | ----- |
 | FT-001  | Drop impl on a concrete type | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | FT-002  | Drop impl on a generic type (`impl<T> Drop for Wrapper<T>`) | positive | uncovered | -- | |
-| FT-003  | Nested Drop fields (Drop type holding another Drop type, field-drop ordering) | positive | uncovered | -- | covers field-drop scheduling |
+| FT-003  | Nested Drop fields (Drop type holding another Drop type, field-drop ordering) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-003.rs` | regseq-driver-81 (DFS-RPO body normalization; multi-Drop drop-glue shim) |
 | FT-004  | `ManuallyDrop<T>` wrapping a Drop type | positive | uncovered | -- | NEGATIVE test for "drop is NOT scheduled" |
 | FT-005  | Explicit `core::mem::drop(x)` call | positive | uncovered | -- | drop intrinsic call site |
 | FT-006  | Trait declaration + impl + concrete call | positive | covered | `trait_method_resolution.rs` | regseq-driver-56 |

@@ -381,6 +381,15 @@ pub fn run_phase5_body_passes(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError
         // B-4 / B-6 see the peeled flat-arg shape. The pass is a
         // no-op for Bodies without Log-intrinsic Calls.
         crate::bridge::diag_log::diag_log_peel_pass(cx, &mut body)?;
+        // Normalise the body to DFS-RPO as the strictly-last
+        // CFG-mutating step, after the vtable-indirect and
+        // diag-log-peel passes (the latter can rewrite a `Call` into a
+        // `Goto`, changing the CFG). rustc's drop-shim pipeline omits
+        // `ReorderBasicBlocks`, so a multi-block drop-glue shim arrives
+        // non-RPO; this satisfies the `BRpo`/`BReachable` pre-checks in
+        // `joint_validation_walk` and is idempotent on already-RPO
+        // bodies (`optimized_mir` output).
+        body.reorder_blocks_to_rpo();
         joint_validation_walk(&cx.model, instance, &body)?;
         let function = cx.model.instances[instance]
             .kind

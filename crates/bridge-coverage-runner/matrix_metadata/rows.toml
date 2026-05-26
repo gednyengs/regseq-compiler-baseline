@@ -1681,3 +1681,26 @@ status = "covered"
 cluster_key = "FF-017"
 snippet_path = "FF-017.rs"
 inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
+# regseq-driver-81 (FT-003): a struct with two or more `Drop` fields
+# produces a multi-block drop-glue shim. rustc's shim MIR pipeline omits
+# `ReorderBasicBlocks`, so the shim body arrived non-RPO and failed the
+# Phase-5 `BRpo` body pre-check at HEAD. The bridge now normalises every
+# materialised body to DFS-RPO immediately before joint validation, so
+# the multi-Drop witness reaches `Ok`+validate. The predicate mirrors
+# FT-002 (a Struct Item plus a DropGlue-flavored Function Instance); the
+# discriminating signal is that the row reaches `Ok` at all (HEAD
+# rejects). The RPO + per-kind remap proof lives in
+# `crates/regseq-driver/tests/bridge_drop_glue_rpo.rs`.
+[[row]]
+id = "FT-003"
+section = "3"
+construct = "Nested Drop fields (struct with >=2 Drop fields, field-drop ordering)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-003"
+snippet_path = "FT-003.rs"
+inspect = { kind = "All", arg = [
+  { kind = "ItemKind", arg = "Struct" },
+  { kind = "FunctionInstanceFlavor", arg = "DropGlue" },
+] }

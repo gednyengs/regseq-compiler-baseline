@@ -407,14 +407,118 @@ fn dfs_rpo_from(start: BlockId, body: &Body) -> Vec<BlockId> {
     postorder
 }
 
+impl Body {
+    /// Reorder `basic_blocks` into DFS reverse-postorder from
+    /// `BlockId::START_BLOCK`, dropping blocks unreachable from START
+    /// and remapping every terminator `BlockId` reference through the
+    /// resulting old-to-new permutation.
+    ///
+    /// This normalizes a body to the `BRpo` and `BReachable`
+    /// invariants enforced by `Visitor::visit_body` (spec.md section
+    /// 25.6.2): rustc's `optimized_mir` pipeline runs
+    /// `ReorderBasicBlocks`, but its drop-shim pipeline does not, so a
+    /// multi-block drop-glue shim arrives non-RPO. `START_BLOCK` stays
+    /// at index 0 (it is always the first RPO entry). The reorder is a
+    /// semantics-preserving relabel: the CFG edge set is preserved
+    /// under the permutation, so it is idempotent on a body that is
+    /// already in DFS-RPO.
+    pub fn reorder_blocks_to_rpo(&mut self) {
+        if self.basic_blocks.is_empty() {
+            return;
+        }
+
+        let rpo = dfs_rpo_from(BlockId::START_BLOCK, self);
+
+        // `new_index[old.index()]` is the post-reorder id for a
+        // reachable block, or `None` for an unreachable block (which is
+        // dropped). A reachable terminator's successors are themselves
+        // reachable, so every remapped id resolves to `Some`.
+        let mut new_index: Vec<Option<BlockId>> = vec![None; self.basic_blocks.len()];
+        for (new_idx, old_id) in rpo.iter().copied().enumerate() {
+            new_index[old_id.index()] = Some(BlockId::from_u32(new_idx as u32));
+        }
+
+        let old_blocks = core::mem::take(&mut self.basic_blocks).into_inner();
+        let mut old_blocks: Vec<Option<BasicBlock>> = old_blocks.into_iter().map(Some).collect();
+
+        let mut new_blocks: Vec<BasicBlock> = Vec::with_capacity(rpo.len());
+        for old_id in rpo.iter().copied() {
+            let mut block = old_blocks[old_id.index()]
+                .take()
+                .expect("each RPO entry is unique, so a block is moved at most once");
+            remap_terminator_blocks(&mut block.terminator.kind, &new_index);
+            new_blocks.push(block);
+        }
+
+        self.basic_blocks.replace_inner(new_blocks);
+    }
+}
+
+/// Look up the post-reorder id for a successor referenced by a
+/// reachable terminator.
+///
+/// Panics if `old` has no mapping: a reachable terminator's successors
+/// are reachable by construction, so a `None` here means the remap
+/// missed a `BlockId` reference (the load-bearing soundness invariant).
+fn remap_block_id(old: BlockId, new_index: &[Option<BlockId>]) -> BlockId {
+    new_index[old.index()]
+        .expect("a reachable terminator's successor must itself be reachable and have a new id")
+}
+
+/// Remap every `BlockId` carried by a terminator through `new_index`.
+///
+/// The `match` is exhaustively destructured (no `..`, no catch-all):
+/// a future `BlockId`-bearing `TerminatorKind` or `SwitchTargets`
+/// field fails to compile until handled here. The set of arms mirrors
+/// `Terminator::successors()` (terminator.rs), which is the complete
+/// `BlockId` reference set.
+fn remap_terminator_blocks(kind: &mut TerminatorKind, new_index: &[Option<BlockId>]) {
+    match kind {
+        TerminatorKind::Goto(target) => {
+            *target = remap_block_id(*target, new_index);
+        }
+        TerminatorKind::SwitchInt {
+            discr: _discr,
+            targets,
+        } => {
+            let SwitchTargets { cases, otherwise } = targets;
+            for (_value, target) in cases.iter_mut() {
+                *target = remap_block_id(*target, new_index);
+            }
+            *otherwise = remap_block_id(*otherwise, new_index);
+        }
+        TerminatorKind::Return => {}
+        TerminatorKind::Unreachable => {}
+        TerminatorKind::Call {
+            callee: _callee,
+            args: _args,
+            destination: _destination,
+            target,
+        } => {
+            if let Some(target) = target {
+                *target = remap_block_id(*target, new_index);
+            }
+        }
+        TerminatorKind::Assert {
+            cond: _cond,
+            expected: _expected,
+            msg: _msg,
+            target,
+        } => {
+            *target = remap_block_id(*target, new_index);
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::{BodyValidationError, Visitor};
     use crate::{
         BasicBlock, BlockId, Body, ConstId, FieldIdx, IndexVec, LocalDecl, LocalId, Mutability,
         Operand, Place, PlaceElem, Rvalue, SourceFileId, Span, Statement, StatementKind,
-        Terminator, TerminatorKind, TyId,
+        SwitchTargets, Terminator, TerminatorKind, TyId,
     };
+    use std::collections::HashSet;
 
     fn span(lo: u32, hi: u32) -> Span {
         Span {
@@ -680,5 +784,168 @@ mod tests {
         let mut visitor = CountingVisitor::default();
         Visitor::visit_body(&mut visitor, &body);
         assert!(visitor.errors.is_empty());
+    }
+
+    /// A block whose terminator span `lo` doubles as a stable identity
+    /// tag across a reorder (the reorder never rewrites spans).
+    fn tagged_block(kind: TerminatorKind, id: u32) -> BasicBlock {
+        BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator {
+                kind,
+                span: span(id, id + 1),
+            },
+        }
+    }
+
+    fn body_from_blocks(blocks: Vec<BasicBlock>) -> Body {
+        let mut basic_blocks = IndexVec::new();
+        for block in blocks {
+            basic_blocks.push(block);
+        }
+        Body {
+            basic_blocks,
+            local_decls: IndexVec::new(),
+            arg_count: 0,
+            span: span(0, 1),
+        }
+    }
+
+    fn body_errors(body: &Body) -> Vec<BodyValidationError> {
+        let mut visitor = CountingVisitor::default();
+        Visitor::visit_body(&mut visitor, body);
+        visitor.errors
+    }
+
+    /// The CFG edge set expressed via stable per-block identity tags
+    /// (terminator span `lo`), so equality can be compared across the
+    /// reorder's index permutation.
+    fn edges_by_identity(body: &Body) -> HashSet<(u32, u32)> {
+        let mut edges = HashSet::new();
+        for bb in body.basic_blocks.iter() {
+            let src = bb.terminator.span.lo;
+            for succ in bb.terminator.successors() {
+                let dst = body.basic_blocks[succ].terminator.span.lo;
+                edges.insert((src, dst));
+            }
+        }
+        edges
+    }
+
+    // B1: a body whose blocks are laid out [START, 1, 2] but whose DFS
+    // visits START, 2, 1 fails `BRpo`; after reorder, `visit_body`
+    // emits no body error.
+    #[test]
+    fn reorder_makes_non_rpo_body_pass_visit_body() {
+        let mut body = body_from_blocks(vec![
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(2)), 100),
+            tagged_block(TerminatorKind::Return, 101),
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(1)), 102),
+        ]);
+
+        assert_eq!(body_errors(&body), vec![BodyValidationError::BRpo]);
+
+        body.reorder_blocks_to_rpo();
+
+        assert!(
+            body_errors(&body).is_empty(),
+            "post-reorder body must pass BRpo/BReachable/BSuccessorsValid",
+        );
+    }
+
+    // B2: the post-reorder CFG edge set equals the pre-reorder edge set
+    // under the permutation (compared via identity tags). Uses a
+    // fully-reachable fixture so no block is dropped.
+    #[test]
+    fn reorder_preserves_cfg_edge_set() {
+        let body = body_from_blocks(vec![
+            tagged_block(
+                TerminatorKind::SwitchInt {
+                    discr: const_operand(1),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(1),
+                    },
+                },
+                100,
+            ),
+            tagged_block(TerminatorKind::Return, 101),
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(1)), 102),
+        ]);
+
+        let before = edges_by_identity(&body);
+
+        let mut reordered = body.clone();
+        reordered.reorder_blocks_to_rpo();
+
+        assert_eq!(
+            edges_by_identity(&reordered),
+            before,
+            "reorder must preserve the CFG edge set under the permutation",
+        );
+        assert!(
+            body_errors(&reordered).is_empty(),
+            "the reordered fully-reachable body must validate",
+        );
+    }
+
+    // B3: an unreachable block is dropped; `basic_blocks` shrinks and
+    // the body validates.
+    #[test]
+    fn reorder_drops_unreachable_block() {
+        let mut body = body_from_blocks(vec![
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(1)), 100),
+            tagged_block(TerminatorKind::Return, 101),
+            tagged_block(TerminatorKind::Return, 102),
+        ]);
+
+        assert_eq!(body_errors(&body), vec![BodyValidationError::BReachable]);
+
+        body.reorder_blocks_to_rpo();
+
+        assert_eq!(
+            body.basic_blocks.len(),
+            2,
+            "the unreachable block must be dropped",
+        );
+        assert!(body_errors(&body).is_empty());
+    }
+
+    // B4: reorder is idempotent on an already-RPO body, and a second
+    // reorder is a further no-op.
+    #[test]
+    fn reorder_is_idempotent_on_rpo_body() {
+        let body = body_from_blocks(vec![
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(1)), 100),
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(2)), 101),
+            tagged_block(TerminatorKind::Return, 102),
+        ]);
+        assert!(body_errors(&body).is_empty(), "fixture must already be RPO");
+
+        let mut once = body.clone();
+        once.reorder_blocks_to_rpo();
+        assert_eq!(once, body, "reorder of an already-RPO body is a no-op");
+
+        let mut twice = once.clone();
+        twice.reorder_blocks_to_rpo();
+        assert_eq!(twice, once, "reorder must be idempotent");
+    }
+
+    // B5: `START_BLOCK` maps to index 0 after reorder.
+    #[test]
+    fn reorder_keeps_start_block_at_index_zero() {
+        let mut body = body_from_blocks(vec![
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(2)), 100),
+            tagged_block(TerminatorKind::Return, 101),
+            tagged_block(TerminatorKind::Goto(BlockId::from_u32(1)), 102),
+        ]);
+
+        body.reorder_blocks_to_rpo();
+
+        assert_eq!(
+            body.basic_blocks[BlockId::START_BLOCK].terminator.span.lo,
+            100,
+            "the original START block must remain at index 0",
+        );
     }
 }
