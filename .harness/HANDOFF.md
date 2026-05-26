@@ -34,47 +34,69 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 ## § Current state (UPDATE EVERY TASK/DECISION CLOSE)
 
 - **Last updated**: 2026-05-26
-- **Workstream status**: **just kicked off.** The bridge front-end gate
-  PASSES (`1a6a996`, archived handoff). We are now standing up the
-  generic-C backend workstream.
-- **Last completed**: **Phase-1 plan-doc STRUCTURE** stood up at
-  `docs/discussions/generic-c-backend/phase-1/` — an entry `README.md` +
-  3 outlined skeletons (`01-construct-surface-and-matrix.md`,
-  `02-architecture-decisions.md`, `03-verification-flow.md`) per the
-  architect's 3-doc strategy. Locked decisions are embedded; open items
-  marked TO FILL. The heavy construct-surface re-derivation is
-  DELIBERATELY DEFERRED to a fresh session (full budget). Codex APPROVED
-  (4/4: faithful-to-decisions, gap-claims-accurate [§7 defers all 6
-  terminators; per-Rvalue/BinOp/CastKind genuinely unspecced; Ty/Place/
-  Operand/diag-log covered], source-files-exist, self-consistent). Prior:
-  Level-1 roadmap (`e74fbb3`, pushed); scaffolding (`2a8aa60`, pushed).
-- **In-flight**: **none.** Next is **Doc 1 — re-derive the construct
-  surface** (fresh session; see Next actions).
-- **Uncommitted state**: the two standing untracked dirs stay untouched
-  by rule — `tests/fixtures/playground-pl011/`,
-  `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
-  never modify).
+- **Workstream status**: Phase-1 **planning complete** (all 3 Level-2
+  plan docs filled + Codex-approved). The bridge front-end gate PASSES
+  (`1a6a996`, archived handoff). Next is the spec delta → tasks →
+  implementation.
+- **Last completed**: **Phase-1 Level-2 plan docs ALL FILLED** at
+  `docs/discussions/generic-c-backend/phase-1/` (each Codex-APPROVED):
+  - **Doc 1** (`01-…`, construct surface + matrix) — 170 rows / 13
+    families, classified covered/deferred/unspecced/out-of-scope, + a
+    grouped **gap list**. Surfaced two non-pre-flagged structural gaps:
+    struct/union field-offset reproduction (`FieldLayout` is source/MIR
+    order, not memory order, layout.rs:37) and payload-carrying enum C
+    shape. Codex APPROVED (3 rounds).
+  - **Doc 2** (`02-…`, architecture decisions) — **D1–D12** pin every
+    gap concretely. Highlights: D5 terminator emission (all 6, the §7
+    core delta); D7 Rvalue/BinOp (`-fwrapv` for signed +,-,*; **shifts in
+    the unsigned domain** since `-fwrapv` does NOT cover shift UB; Div/Rem
+    rely on upstream guarding Asserts); D8 casts (FloatToInt saturating
+    helper; Transmute via memcpy; FnPtrToPtr host assumption); **D9 enum =
+    offset-faithful** (NOT naive `{tag;union}`; `TagScalar.offset`
+    arbitrary, variant field offsets absolute; niche decode compares the
+    cell vs precomputed `VariantLayout.tag_value` → handles mod-width +
+    wrapping); D10 field-offset reproduction (sort-by-offset + explicit
+    pad + `_Static_assert` guards); D11 Const→C (float consts =
+    constant-expression hex-float/`__builtin_inf`/`__builtin_nan`, NOT a
+    union member access which isn't a constant expr); D12 symbol/linkage/
+    section/inline/`c_variadic`. Codex first-contact caught the D9 + D7
+    errors pre-draft; APPROVED after 3 review rounds.
+  - **Doc 3** (`03-…`, verification flow) — the codegen-coverage harness
+    (`crates/codegen-coverage-runner`): 6-stage pipeline, dual oracle
+    (diag-log golden **stdout** [behavior] + golden **`.c` snapshot**
+    [determinism]), pinned fixture layout + `manifest.toml` schema,
+    `.harness/generic-c/coverage_ledger.{json,md}` ledger, exit gate
+    (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
+    -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
+  - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
+- **In-flight**: **none.** Next is the **Phase-1 spec delta** into
+  `generic-c-backend.md` (every Doc-2 `Spec-delta: yes`), then `task.py`
+  tasks.
+- **Uncommitted state**: **all three Phase-1 plan docs** (`01`/`02`/`03`)
+  are filled but **not yet committed** (no commit requested). The two
+  standing untracked dirs stay untouched by rule —
+  `tests/fixtures/playground-pl011/`, `crates/regseq-driver/tests/
+  fixtures/` (experimentation; never commit, never modify).
 
 ### Next actions (in priority order)
 
-1. **Doc 1 — re-derive the construct surface** (THE fresh-session task;
-   it's the matrix backbone, heaviest + most quality-critical). Fill
-   `phase-1/01-construct-surface-and-matrix.md` per ITS OWN "Method"
-   section: re-derive EXACTLY from `crates/regseq-model/src/*` (the 15
-   named enum/struct files) reconciled with `generic-c-backend.md` +
-   `spec.md §14.5`; one matrix row per construct classified
-   covered/deferred/unspecced/out-of-scope; output the **gap list**.
-   Supersede the earlier exploratory agent maps — re-derive against
-   source. (Priority gaps to expect: §7 terminators [deferred],
-   per-Rvalue/BinOp/CastKind [unspecced], Const initializers,
-   SetDiscriminant.) Codex-review the filled matrix.
-2. **Docs 2 + 3** (parallel, after Doc 1): resolve the 6 architecture
-   decisions concretely (`02-…`, Codex first-contact on D2/D3/D5) + pin
-   the codegen-coverage harness (`03-…`). Settle everything here —
-   nothing left to implementation.
-3. **Phase-1 spec deltas** into `generic-c-backend.md` (esp. §7 terminator
-   emission + the unspecced rows), Codex-reviewed, then `task.py` tasks.
-4. **(Later) Phase-2 RegseqError** — describe at Phase-2 start; not before.
+1. **Phase-1 spec delta** into the canonical
+   `docs/discussions/regseq-model/generic-c-backend.md` — apply every
+   Doc-2 decision flagged `Spec-delta: yes`: D1 type-name + identifier
+   policy (§7); D2 a new declaration-order section + C-ABI prototypes +
+   `c_variadic`; D4 panic section + the `AssertKind` message table; **D5
+   the §7 terminator-emission section (the core, was DEFERRED)**; D7 a new
+   Rvalue section + BinOp/UnOp tables; D8 a cast section + saturating-cast
+   contract + host assumptions; D9 a generalized enum-representation
+   section (supersedes §9.8/§9.9 as examples); D10 a field-offset section;
+   D11 the per-`Const` initializer table (§5); D12 a symbol/linkage/
+   section/inline section. Codex-reviewed (2–4 rounds). (Doc 3 is
+   backend/harness-internal — **no** spec delta.)
+2. **`task.py` tasks** — file the implementation tasks (the generic-C
+   backend in `crates/regseq-backends`, the `codegen-coverage-runner`
+   crate + fixtures) per the 8-section template; Codex-reviewed; commit +
+   push; implementer picks up.
+3. **(Later) Phase-2 RegseqError** — describe at Phase-2 start; not before.
 
 ---
 
@@ -157,7 +179,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | ----- | ----- | ------ | ------ | ----------- |
 | (scaffold) | workstream homes + reseed HANDOFF | done | `2a8aa60` | docs HQ + `.harness/generic-c/` + archived bridge handoff |
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
-| P1 plan docs | entry + 3 skeletons (surface+matrix / decisions / verification) | structure done; content pending | (this) | `docs/discussions/generic-c-backend/phase-1/` (Codex APPROVED) |
+| P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | (uncommitted) | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 impl | Rust surface + diag-log → C, + verification harness | pending | — | generic-C backend MVP + codegen-coverage harness |
 
 ---
@@ -411,3 +433,49 @@ the rest is stable.
   terminators + per-Rvalue/BinOp/CastKind is unspecced + the source files
   exist). **Next session: fill Doc 1 (re-derive), then Docs 2+3, then the
   `generic-c-backend.md` spec delta + `task.py` tasks.**
+- 2026-05-26: **Doc 1 — construct surface + codegen-coverage matrix**
+  FILLED at `phase-1/01-construct-surface-and-matrix.md`. Re-derived
+  against the 15 `regseq-model/src` files + reconciled with
+  `generic-c-backend.md` + `spec.md` (§14.5/§21/§23/§26). 170 rows in 13
+  families, classified covered/deferred/unspecced/out-of-scope, with a
+  grouped gap list. Confirmed the skeleton's pre-flags (gc §7 defers all 6
+  terminators; per-Rvalue/BinOp/CastKind/AggregateKind genuinely unspecced
+  per spec §21.3.4 "commits only to the variant set"; Ty §2 covers all 19;
+  Place/Operand/intrinsics/diag-log covered) AND surfaced two
+  non-pre-flagged structural gaps: struct/union field-offset reproduction
+  (`FieldLayout` is source/MIR order, not memory order) and
+  payload-carrying enum C shape (only fieldless-Direct + single-niche
+  examples exist). Added a `Body`/`BasicBlock`/`LocalDecl` family the
+  skeleton had folded into notes. Codex review APPROVED after 3 rounds
+  (r1 caught the missing Body/LocalDecl rows + hybrid status strings +
+  gap-list "all-and-only" violations; r2 caught a residual parenthetical
+  status [LY-1] + one uncited unspecced row [LY-14]; r3 APPROVED 3/3, no
+  residual issues). A programmatic cross-check confirms all 96
+  unspecced/deferred rows are cited in the gap list and every status is a
+  legend value. **Uncommitted** (no commit requested). **Next: Docs 2+3.**
+- 2026-05-26: **Phase-1 Docs 2 + 3 FILLED** (both Codex-APPROVED). **Doc 2
+  — architecture decisions** (`02-…`): D1–D12 resolve the entire Doc-1 gap
+  list to pinned C-lowering rules. Codex **first-contact** (pre-draft) on
+  the open forks caught two real errors before they were written: (1) the
+  naive `{tag; union}` enum shape is WRONG — `TagScalar.offset` is
+  arbitrary and variant field offsets are absolute to the enum object, so
+  D9 is **offset-faithful** (reuses D10's pad+`_Static_assert` technique;
+  niche decode compares the cell against precomputed
+  `VariantLayout.tag_value`, handling mod-2^width + wrapping); (2)
+  `-fwrapv` does NOT cover signed **shift** UB, so D7 lowers wrapping
+  shifts in the unsigned domain. Three review rounds then fixed: missing
+  `c_variadic` (gap C12 → D2), D9 niche wrapping, and the D11 float
+  constant (union member access is not a C constant expression → switched
+  to hex-float / `__builtin_inf` / `__builtin_nan` constant-expression
+  forms, valid in static initializers + bit-faithful incl. NaN payloads).
+  **Doc 3 — verification flow** (`03-…`): the codegen-coverage harness
+  (`crates/codegen-coverage-runner`) — 6-stage pipeline, dual oracle
+  (diag-log golden stdout + golden `.c` snapshot), pinned fixture-dir +
+  `manifest.toml` schema, `.harness/generic-c/` ledger, exit gate,
+  toolchain (`-fwrapv -std=gnu11` + the gcc/clang host assumptions). Codex
+  review narrowed the oracle claims (one fixture proves its *exercised
+  path*, not the whole chain; snapshot drift is review-required, never
+  auto-blessed) and completed the host-assumption list. **All three plan
+  docs uncommitted** (no commit requested). **Next: the
+  `generic-c-backend.md` spec delta (every Doc-2 `Spec-delta: yes`) →
+  `task.py` tasks.**

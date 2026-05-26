@@ -1,117 +1,498 @@
 # Phase 1 · Doc 1 — Construct surface + codegen-coverage matrix
 
-**Status: SKELETON — the re-derivation below is the next action (fresh
-session, full budget).** This document is the authoritative enumeration
-of every `RegseqModel` construct the generic-C backend must consume, each
-with its pinned C lowering and a coverage status against the canonical
-spec. It is the **backbone** of Phase 1 — Docs 2 and 3 reference it.
+**Status: FILLED (re-derived against source 2026-05-26).** This document
+is the authoritative enumeration of every `RegseqModel` construct the
+generic-C backend must consume, each with its pinned C lowering and a
+coverage status against the canonical spec. It is the **backbone** of
+Phase 1 — Docs 2 and 3 reference it.
 
-## Method (how to fill this — do NOT shortcut)
+The re-derivation walked the 15 owned-IR files in `crates/regseq-model/
+src/*` (`item`, `instance`, `ty`, `layout`, `const_value`, `place`,
+`operand`, `rvalue`, `statement`, `terminator`, `basic_block`, `body`,
+`fn_sig`, `cabi`, `domain_attr`) and reconciled each variant/field
+against `../../regseq-model/generic-c-backend.md` (what C lowering is
+pinned) and `../../regseq-model/spec.md` (producer rules + §14.5 C-ABI
+admissibility). It **supersedes** the earlier exploratory agent maps.
 
-Re-derive the surface **exactly**, from two sources, and reconcile:
+## Method (how this was filled)
+
+Re-derived the surface **exactly**, from two sources, and reconciled:
 
 1. **The owned IR** — `crates/regseq-model/src/*` enum/struct definitions
-   (the source of truth for what variants exist). Walk: `item.rs`,
-   `instance.rs`, `ty.rs`, `layout.rs`, `const_value.rs`, `place.rs`,
-   `operand.rs`, `rvalue.rs`, `statement.rs`, `terminator.rs`,
-   `basic_block.rs`, `body.rs`, `fn_sig.rs`, `cabi.rs`, `domain_attr.rs`.
+   (the source of truth for what variants exist).
 2. **The canonical C-emission spec** —
-   `../../regseq-model/generic-c-backend.md` (what C lowering is already
-   pinned) and `../../regseq-model/spec.md` (the producer-side rules +
-   §14.5 C-ABI admissibility).
+   `../../regseq-model/generic-c-backend.md` (pinned C lowering) and
+   `../../regseq-model/spec.md` (producer rules + §14.5).
 
-For **every** variant/field, record one matrix row. Classify its spec
-coverage; the `unspecced`/`deferred` rows are the gap list that drives
-Doc 2 + the spec delta. This supersedes the earlier exploratory agent
-maps — re-derive against source, do not copy them.
+For **every** variant/field, one matrix row, classified for spec
+coverage; the `unspecced`/`deferred` rows are the gap list (§ end) that
+drives Doc 2 + the spec delta.
 
 ## Coverage legend (the `status` column)
 
-- **covered** — `generic-c-backend.md` pins this construct's C lowering.
+- **covered** — `generic-c-backend.md` pins this construct's C lowering
+  generally (a rule, not only an example).
 - **deferred** — the spec explicitly defers it (e.g. §7 terminators).
-- **unspecced** — no C lowering pinned anywhere; a genuine gap to resolve
-  in Doc 2 and write into the spec delta.
-- **out-of-scope** — not lowerable in Phase 1 by design (e.g. unbridged
-  domain constructs; rustc-rejected shapes) — record with the reason.
+- **unspecced** — no general C lowering pinned anywhere; a genuine gap to
+  resolve in Doc 2 and write into the spec delta. (Used even where a
+  *worked example* illustrates a special case but no general rule exists;
+  the note says so.)
+- **out-of-scope** — not lowerable / not emitted in Phase 1 by design
+  (rustc-rejected shapes, unreachable flavors, ZST identity tags, C-ABI
+  boundary rejections) — recorded with the reason.
 
-## Matrix schema
+## How the backend consumes the model (orientation)
 
-One row per construct:
+The backend walks **`model.instances`** (post-mono; instance.rs:1-13),
+not items. Per instance it reads `Instance.emission_name` (the C
+identifier, bridge-minted; instance.rs:139) and `Instance.kind`
+(`InstanceKind`, 6 variants). Types resolve through `model.types`
+(`Ty`), layouts are inline on the nominal `Ty` variants, constants
+through `model.consts` (`Const`), signatures through `model.sigs`
+(`FnSig`) with C-ABI shapes in the parallel
+`model.sig_c_abi_lowerings` side-table (model.rs:97). Diag-log markers
+live in `model.domain_attrs.item_attrs` keyed by `ItemId`
+(domain_attr.rs:19). The model is post-mono + rustc-free: the backend
+**trusts** layout/offsets/C-ABI as bridge certificates (no recompute).
 
-| id | construct (variant/field) | C lowering | status | spec ref | fixture | notes |
-| -- | ------------------------- | ---------- | ------ | -------- | ------- | ----- |
+---
 
-(`id` = a stable per-row tag, family-prefixed, à la the bridge matrix.
-`fixture` = the codegen-coverage fixture that exercises it — see Doc 3.)
+## 1. Items — `ItemKind` + emission-relevant fields
 
-## Construct families to enumerate (fill each subsection)
+Source: `item.rs`; spec §8. Items are the pre-mono source alphabet for
+**traceback + per-item flags**; the backend emits from instances, so most
+`Item` data is consulted *through* the owning instance rather than
+emitted directly. The emission-relevant fields are the symbol/placement/
+marker flags.
 
-> Each heading below becomes a matrix block. The parenthetical is the
-> source file + the spec section that should cover it; "GAP?" flags where
-> a hole is anticipated.
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| IT-1 | `ItemKind::Function` | drives the owning `InstanceKind::Function` emission (§7 envelope) | covered | gc §7 | item kind is informational; emission is per-instance |
+| IT-2 | `ItemKind::Static { mutability }` | drives `InstanceKind::Static`; `mutability` → `const`-qualify the C global when `Not` | unspecced | gc §2 | global-emission shape covered by §2; the `mutability`→`const`-qualifier rule is **not** pinned → Doc 2 |
+| IT-3 | `ItemKind::Const` | drives `InstanceKind::Const` (compile-time value; see CO-*) | covered | gc §5 | |
+| IT-4 | `ItemKind::Struct` | drives `InstanceKind::Struct` → C `struct` (§2) | covered | gc §2 | |
+| IT-5 | `ItemKind::Enum` | drives `InstanceKind::Enum` → tagged/niche C struct (§2) | unspecced | gc §2 | general enum emission unspecced — see LY-* / TY-18 |
+| IT-6 | `ItemKind::Union` | drives `InstanceKind::Union` → C `union` (§2) | covered | gc §2 | |
+| IT-7 | field `linkage: Linkage` (Default/NoMangle/Foreign/Weak) | symbol-emission classifier: `Default`→mangled static-link def; `NoMangle`→verbatim symbol; `Foreign`→`extern` decl, no def; `Weak`→tentative def (`__attribute__((weak))`) | unspecced | gc — | gc spec has **no** linkage→C storage-class/attr table; `Instance.emission_name` already encodes the name, but storage class / `static` vs external linkage / weak attr is not pinned → Doc 2 |
+| IT-8 | field `link_section: Option<StringId>` | `__attribute__((section("...")))` on the emitted def | unspecced | gc — | not pinned anywhere; needed for `.init_array`/`.driver_data` placement → Doc 2 |
+| IT-9 | field `inline_hint: InlineHint` (None/Hint/Always/Never) | `inline` / `__attribute__((always_inline))` / `__attribute__((noinline))` on the C function | unspecced | gc — | not pinned; low-stakes but in scope → Doc 2 |
+| IT-10 | field `is_unsafe: bool` | **not lowered** (C has no `unsafe`) | out-of-scope | item.rs:48-51 | explicitly analysis-only per source comment |
+| IT-11 | field `is_unsafe_cell: bool` | gates `const`-drop on enclosing shared refs (§3.1, §9.4) | covered | gc §3.1 | consumed via `contains_unsafe_cell` (model.rs:1821) |
+| IT-12 | field `is_phantom_data: bool` | PhantomData fields omitted from emitted C aggregates | covered | spec §14.5 (`CFieldAdmissible`) | gc spec implies via opaque/marker handling; confirm field-omission rule lands in spec delta |
+| IT-13 | field `is_manually_drop: bool` | affects drop-glue emission (Drop is a synthetic `Call` — deferred) | deferred | gc §7 | depends on terminator emission (TM-*) |
+| IT-14 | field `opaque_handle_eligible: bool` | forward-declared `struct X *` (opaque-handle pattern) | covered | gc §2 (opaque-handle para) | |
 
-### 1. Items — `ItemKind` + emission-relevant fields
-`item.rs`, spec §8. Variants (Function/Static/Const/Struct/Enum/Union) +
-fields the backend needs: `linkage`, `link_section`, `inline_hint`,
-`opaque_handle_eligible`. *(TO FILL.)*
+---
 
-### 2. Instances + `InstanceKind`
-`instance.rs`, spec §9. What the backend emits per instance (the backend
-walks **instances**, post-mono, not items). Foreign (`body: None`) →
-prototype/extern; defined/shim → definition. *(TO FILL.)*
+## 2. Instances + `InstanceKind`
 
-### 3. `Ty` (19 variants) → C type
-`ty.rs`, spec §10; lowering pinned at `generic-c-backend.md` §2 (+ §3 for
-ref/ptr/fat-pointer). Expect mostly **covered**. *(TO FILL — confirm each.)*
+Source: `instance.rs`; spec §9. The backend's primary walk. `body: None`
+(foreign) → prototype/`extern`; defined → C definition.
 
-### 4. `Layout` → struct/enum/union/tuple emission
-`layout.rs`, spec §11. Field offsets, enum `EnumShape`/`TagEncoding`
-(Direct vs Niche), union, packed. *(TO FILL — note where §2's enum
-emission is example-only vs pinned.)*
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| IN-1 | `Instance.emission_name: StringId` | **the** C identifier for the instance | covered | gc §7 ("identifier emission policy") | bridge-minted, uniqueness guaranteed; type-name derivation is a Doc 2 item |
+| IN-2 | `InstanceKind::Function` w/ `body: Some` | C function definition (§7 envelope: signature + locals + bb labels) | covered | gc §7 | the **envelope** is pinned; the body interior is itemized separately (BD-*, ST-*, RV-*, TM-*) and carries its own gaps |
+| IN-3 | `InstanceKind::Function` w/ `body: None` (foreign) | C prototype / `extern` declaration only | unspecced | gc §7 | §7 covers the def envelope; the "decl-only for foreign, no body" rule is implied, not pinned → Doc 2 (declaration-order decision) |
+| IN-4 | `FunctionInstanceData.fn_sig: FnSigId` | the emitted C signature (see FS-*) | covered | gc §7, §14.5 | |
+| IN-5 | `FunctionInstanceData.flavor: FunctionInstanceFlavor` | informational; reachable shim flavors (VTableShim/ReifyShim/FnPtrShim/Virtual/ClosureOnceShim/DropGlue/CloneShim/ThreadLocalShim/FnPtrAddrShim/Item/Intrinsic) all lower to ordinary C functions with synthesized bodies | unspecced | instance.rs:181-223 | backend mostly keys on `body` presence, not flavor; shim body synthesis (vtable shim §9.6, closure-once §9.7) is illustrated but per-flavor emission isn't pinned → Doc 2 |
+| IN-5b | coroutine/async flavors (`ConstructCoroutineInClosureShim`, `FutureDropPollShim`, `AsyncDropGlueCtorShim`, `AsyncDropGlue`) | — | out-of-scope | spec §15.1 | coroutines rejected at type translation; these flavors are unreachable in v1 (enum is an append-only rustc mirror) |
+| IN-6 | `FunctionInstanceData.virtual_idx: Option<u32>` | vtable slot index for `Virtual` instances (vtable construction, §9.6) | unspecced | gc §9.6 | §9.6 **illustrates** one vtable instance; the general slot-emission rule is not pinned → Doc 2 |
+| IN-7 | `InstanceKind::Static { ty, init }` | C global of `ty`'s lowering, initialized from `init` Const (CO-*); `init: None` → `extern` | unspecced | gc §2, §5 | initializer = Const→C (unspecced, CO-*); `extern` for foreign static not pinned |
+| IN-8 | `InstanceKind::Const { ty, value }` | compile-time value; materialized at use sites (no standalone C entity required) or as a `static const` | unspecced | gc §5 | Const→C initializer unspecced (CO-*); whether a const item gets its own C symbol vs inlines → Doc 2 |
+| IN-9 | `InstanceKind::Struct { layout }` | C `struct` definition (field emission = LY-*) | unspecced | gc §2 | struct *shape* covered; field-offset reproduction unspecced (LY-3) |
+| IN-10 | `InstanceKind::Enum { layout }` | tagged/niche C struct | unspecced | gc §2 | payload-carrying enum emission unspecced (TY-18, LY-5) |
+| IN-11 | `InstanceKind::Union { layout }` | C `union` definition | covered | gc §2 | union offsets are all-zero by construction (layout.rs:41) |
 
-### 5. `Const` / `Byte` vocabulary → C initializer
-`const_value.rs`, spec §9.7. Bool/Char/Int/Uint/Float/ZST/Bytes/Aggregate/
-EnumValue/NullPtr/Reloc + Byte::{Uninit,Value,Reloc}. Partly via §5
-(`Operand::Constant`). **GAP?** per-variant C initializer forms. *(TO FILL.)*
+> `RegseqInstanceKey`, `regseq_instance_kind_rank`,
+> `rustc_instance_kind_sort_rank` (instance.rs:147-252) are bridge-side
+> interning/ordering keys — **not** emitted; out-of-scope for codegen.
 
-### 6. `Place` / `PlaceElem` → C lvalue
-`place.rs`, spec §19; pinned at `generic-c-backend.md` §4. **covered**
-expected. *(TO FILL — confirm.)*
+---
 
-### 7. `Operand` → C
-`operand.rs`, spec §20; pinned at §5. **covered** expected. *(TO FILL.)*
+## 2A. `Body` / `BasicBlock` / `LocalDecl` — function interior envelope
 
-### 8. `Rvalue` (+ `BinOp`/`UnOp`/`CastKind`/`AggregateKind`) → C expr
-`rvalue.rs`, spec §21. **GAP?** `generic-c-backend.md` does not appear to
-fully pin per-Rvalue / per-BinOp / per-CastKind C emission — likely a
-large `unspecced` block to resolve. *(TO FILL — this is a priority gap.)*
+Source: `body.rs`, `basic_block.rs`; spec §24, §25. The function-level
+MIR container that lives structurally on `InstanceKind::Function` (IN-2).
+The §7 envelope pins the signature/locals/bb-label frame; per-statement
+and per-terminator *content* is itemized in §9 (ST-*), §8 (RV-*), and
+§10 (TM-*).
 
-### 9. `Statement` → C
-`statement.rs`, spec §22. `Assign` / `SetDiscriminant` / `Intrinsic`
-(`Assume`, `CopyNonOverlapping`). Intrinsics pinned at §6;
-`SetDiscriminant` (tag write) **GAP?**. *(TO FILL.)*
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| BD-1 | `Body.basic_blocks: IndexVec<BlockId, BasicBlock>` | `bb_N:` labels, emitted in RPO storage order | covered | gc §7 | |
+| BD-2 | `Body.local_decls` ([0]=return place, [1..=arg_count]=args, rest=temps) | args → C formals; temporaries → local declarations | covered | gc §7 | layout convention spec §25.1 |
+| BD-3 | `Body.arg_count: usize` | splits formals from temporaries | covered | gc §7 | |
+| BD-4 | `Body.span: Span` | diagnostics only; **not** emitted | out-of-scope | body.rs:40-41 | |
+| BD-5 | `LocalDecl.ty: TyId` | the local/formal's C type (TY-*) | covered | gc §7, §2 | |
+| BD-6 | `LocalDecl.mutability: Mutability` | **not** lowered (C locals); optional `const`-qualification not pinned | out-of-scope | body.rs:117-118 | informational; no required emission |
+| BD-7 | `LocalDecl.debug_name: Option<StringId>` | `Some`→named C local; `None`→synthetic `_N` | covered | gc §7 ("identifier emission policy") | |
+| BD-8 | `BasicBlock.statements: Box<[Statement]>` | straight-line statement sequence | covered | gc §7 | per-statement content = ST-* (some unspecced) |
+| BD-9 | `BasicBlock.terminator: Terminator` | the block's single control-flow exit | covered | gc §7 | the slot/frame is covered; terminator *emission* = TM-* (deferred) |
+| BD-10 | `BlockId::START_BLOCK` entry + B-RPO storage | entry block + emission order | covered | gc §7, spec §25.1 | |
 
-### 10. `Terminator` (6 variants + `AssertKind`) → C  ⚠ KNOWN DEFERRED
-`terminator.rs`, spec §23; `generic-c-backend.md` §7 **explicitly defers
-all six** (`Return`/`Goto`/`SwitchInt`/`Call`/`Assert`/`Unreachable`, +
-MIR `Drop` as a synthetic `Call`). Must be **fully pinned** here +
-resolved in Doc 2 + written into the spec delta. *(TO FILL — core P1 work.)*
+---
 
-### 11. `FnSig` / `FnAbi` + C-ABI admissibility → C signatures
-`fn_sig.rs`, `cabi.rs`, spec §14 (esp. §14.5 + `CAbiLowering`/`CAbiShape`).
-How signatures + `extern "C"` boundary lowering are emitted. *(TO FILL.)*
+## 3. `Ty` (19 variants) → C type
 
-### 12. Diagnostic-logging domain construct → `printf`
-`domain_attr.rs` (`AttrData::Intrinsic(IntrinsicKind::Log)`); pinned at
-`generic-c-backend.md` §8 (per-level call, per-arg specifier, `&str`
-NUL/`%.*s`, `max_str_args_per_call`). Backend rule (locked): the
-log-marked item is a **recognition tag — intercept at call sites; emit no
-C definition for it**; args arrive already peeled flat. *(TO FILL —
-confirm §8 completeness + the interception mechanics, which cross-ref Doc 2.)*
+Source: `ty.rs`; spec §10. Lowering pinned at `generic-c-backend.md` §2
+(+ §3 for ref/ptr/fat-pointer). All 19 are **covered** by the §2 table;
+the qualifications below are the only caveats.
 
-## Output of this doc
+| id | construct (variant) | C lowering | status | spec ref | notes |
+| -- | ------------------- | ---------- | ------ | -------- | ----- |
+| TY-1 | `Bool` | `_Bool`/`uint8_t` | covered | gc §2 | |
+| TY-2 | `Char` | `uint32_t` | covered | gc §2 | rejected at C-ABI boundary (FS-*) per spec §14.5 |
+| TY-3 | `Int(IntKind)` (I8/I16/I32/I64/I128/Isize) | `int8_t`..`__int128`; `Isize`→`intptr_t` | covered | gc §2 | `I128`→`__int128` host-toolchain-dependent (admitted by bridge; ty.rs:90) |
+| TY-4 | `Uint(UintKind)` (U8/U16/U32/U64/U128/Usize) | `uint8_t`..; `Usize`→`size_t` | covered | gc §2 | `U128` as TY-3 caveat |
+| TY-5 | `Float(FloatKind)` (F16/F32/F64/F128) | `_Float16`/`float`/`double`/`_Float128` | covered | gc §2 | `F16`/`F128` host-toolchain-dependent (ty.rs:142,150) |
+| TY-6 | `Str` | fat pointer behind `Ref`/`Ptr` only (§3) | covered | gc §3 | |
+| TY-7 | `Never` | `void`+`noreturn` in fn-return; as `Ref`/`Ptr` pointee codegen MAY reject | covered | gc §2 | `Ref(Never,_)`/`Ptr(Never,_)` rejected at C boundary (spec §14.5) |
+| TY-8 | `Array(TyId, u64)` | C array `T[N]` in field/local only | covered | gc §2 | rejected at `FnAbi::C` param/return (spec §14.5) |
+| TY-9 | `Slice(TyId)` | fat pointer behind `Ref`/`Ptr` only (§3) | covered | gc §3 | |
+| TY-10 | `Ref(TyId, Provenance)` | `T*`/`const T*`/restrict per §3.1; fat per §3.2 | covered | gc §3 | `const` consults `contains_unsafe_cell` |
+| TY-11 | `Ptr(TyId, Mutability)` | `T*`/`const T*` per §3.1; fat per §3.2 | covered | gc §3 | |
+| TY-12 | `FnDef(ItemId, GenericArgs)` | ZST function-identity tag; **no** C value, **no** C type | out-of-scope | gc §2 | emit nothing; recognized as call target |
+| TY-13 | `FnPtr(FnSigId)` | C function pointer `T (*)(args)` | covered | gc §2 | |
+| TY-14 | `Dynamic { auto_traits, vtable_ty }` | fat pointer (`void* data` + `const VTable*`) behind `Ref`/`Ptr` only | covered | gc §3.2, §3.3, §9.6 | `data` slot unqualified `void*` (erasure, §3.3) |
+| TY-15 | `Closure(ItemId, GenericArgs)` | C `struct` (parallel captures-struct's `Ty::Struct` lowering) | covered | gc §2, §9.7 | layout via `closure_captures_struct_ty` (model.rs:115) |
+| TY-16 | `Tuple { fields, layout }` | non-empty → anon C struct `_0`,`_1`,…; empty `()` → `void` in return, value-less marker elsewhere | covered | gc §2 | multi-field tuple rejected at C boundary (spec §14.5) |
+| TY-17 | `Struct { item, args, layout }` | C `struct` type reference (`struct X`) | covered | gc §2 | the **type reference** is covered; emitting the struct *definition* (fields/offsets) is IN-9 / LY-3 |
+| TY-18 | `Enum { item, args, layout }` | tagged C struct or niche-encoded per `EnumShape`/`TagEncoding` | unspecced | gc §2, §9.8, §9.9 | **only** fieldless-Direct (§9.8) + single-pointer-Niche (§9.9) examples exist; a **payload-carrying** enum (tag + union of variant payloads) C shape is not pinned → priority gap |
+| TY-19 | `Union { item, args, layout }` | C `union` | covered | gc §2 | |
 
-1. The filled matrix (every construct, classified).
-2. **The gap list** — all `unspecced` + `deferred` rows — which is the
-   agenda for Doc 2 (architecture decisions) and the `generic-c-backend.md`
-   spec delta.
+> Sub-enums `IntKind`/`UintKind`/`FloatKind`/`Provenance`/`Mutability`/
+> `AutoTrait` are folded into the rows above. `GenericArgs`/`GenericArg`
+> (`Type(TyId)`/`Const(ConstId)`) drive **type-name derivation** (Doc 2
+> naming), not direct emission.
+
+---
+
+## 4. `Layout` → struct/enum/union/tuple emission
+
+Source: `layout.rs`; spec §11. The model preserves rustc's resolved
+`size`/`align`/`pack` and per-field `offset`; the backend trusts them and
+must **reproduce** them in C.
+
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| LY-1 | `Layout { size, align, pack, uninhabited, kind }` | overall aggregate shape | covered | gc §2, §9.5 | struct/union shapes covered; the enum `kind` is LY-5 |
+| LY-2 | `pack: Some(n)` | `__attribute__((packed))` (+ `aligned(n)` for `packed(n)`) | covered | gc §9.5 | example pins `packed`; `packed(n)` form confirm in delta |
+| LY-3 | `LayoutKind::Struct { fields: Vec<FieldLayout> }` | C `struct`; fields emitted to reproduce each `FieldLayout.offset` | unspecced | gc §2 | **`FieldLayout` is source/MIR field order, not memory order** (layout.rs:37-39). For `repr(Rust)` types rustc reorders, so emitting fields verbatim does NOT reproduce offsets. The backend must emit by-offset with explicit padding (or restrict guarantees). **Not pinned** → priority gap |
+| LY-4 | `LayoutKind::Union { fields }` | C `union`; offsets all zero by construction | covered | gc §2, layout.rs:41 | |
+| LY-5 | `LayoutKind::Enum { shape: EnumShape }` | tagged/niche C struct | unspecced | gc §9.8, §9.9 | see TY-18; the general `EnumShape`→C mapping is the gap |
+| LY-6 | `FieldLayout { name, ty, offset }` | `.name` → C field name; `ty` → field type; `offset` → placement | unspecced | gc §4 (`.fname`), §2 | `name` use covered (§4); `offset` reproduction is LY-3 |
+| LY-7 | `EnumShape::Empty` (0-variant uninhabited) | uninhabited; codegen MAY reject (no values) | unspecced | gc §2 | not addressed; likely emit nothing / reject → Doc 2 |
+| LY-8 | `EnumShape::Single { variant, scalar }` | single-variant: `scalar: Some` (fieldless `repr(int)`) → tag scalar; `None` → bare payload struct | unspecced | gc §2 | not in worked examples → gap |
+| LY-9 | `EnumShape::Multiple { tag, encoding, variants }` | multi-variant tagged/niche struct | unspecced | gc §9.8 (Direct, fieldless), §9.9 (Niche, single) | payload variants + the variant-payload `union` not pinned → priority gap |
+| LY-10 | `TagScalar { offset, scalar_ty, valid_range }` | the tag cell's C type/placement | unspecced | gc §9.8 | `scalar_ty` admits Bool/Char/Int/Uint/Ptr/Ref (layout.rs:150-154); tag-cell emission rule not pinned |
+| LY-11 | `TagEncoding::Direct` | each variant writes its discriminant as tag (`tag_value = Some(discr)`) | unspecced | gc §9.8 | the tag-write rule is **illustrated** for the fieldless case (§9.8); the general (payload-carrying) rule is not pinned |
+| LY-12 | `TagEncoding::Niche { untagged_variant, niche_variants, niche_start }` | niched variants write computed `tag_value`; untagged variant's payload IS the tag (`tag_value: None`) | unspecced | gc §9.9 | **illustrated** for single-pointer `Option` (§9.9) only; multi-niche / payload-carrying not pinned |
+| LY-13 | `VariantLayout { name, fields, uninhabited, discriminant, tag_value }` | per-variant payload struct + tag-write value | unspecced | gc §9.8, §9.9 | `tag_value` read rule illustrated; general per-variant payload emission not pinned |
+| LY-14 | `VariantRange` / `WrappingRange` | tag-range metadata (niche math, valid-range) | unspecced | gc — | consumed when computing niche tag values; not emitted directly |
+
+---
+
+## 5. `Const` / `Byte` vocabulary → C initializer
+
+Source: `const_value.rs`; spec §9.7. Reached via `Operand::Constant`
+(OP-3), `InstanceKind::Static.init` (IN-7), `InstanceKind::Const.value`
+(IN-8). `generic-c-backend.md` §5 says only that a `Constant` lowers to
+"a C literal or compound literal … compose with §2 and the `Const`
+vocabulary in `spec.md` §9.7" — **no per-variant C form is pinned**. This
+is a priority gap block.
+
+| id | construct (variant) | C lowering (intended) | status | spec ref | notes |
+| -- | ------------------- | --------------------- | ------ | -------- | ----- |
+| CO-1 | `Const::Bool(bool)` | `0`/`1` (or `true`/`false`) | unspecced | gc §5 | trivial but unpinned |
+| CO-2 | `Const::Char(u32)` | `uint32_t` code-point literal | unspecced | gc §5 | |
+| CO-3 | `Const::Int(IntKind, u128)` | width-suffixed signed literal (sign-extended in model) | unspecced | gc §5 | I128 literal form host-dependent |
+| CO-4 | `Const::Uint(UintKind, u128)` | width-suffixed unsigned literal | unspecced | gc §5 | |
+| CO-5 | `Const::Float(FloatKind, u128)` | float from IEEE-754 bit pattern (hex-float or bit reinterpret) | unspecced | gc §5 | bit-pattern→C float form not pinned |
+| CO-6 | `Const::ZST` | no value / `(void)0` / omitted | unspecced | gc §5 | |
+| CO-7 | `Const::Bytes(Vec<Byte>)` | byte-array initializer (mixes init/uninit/reloc) | unspecced | gc §5 | see Byte rows |
+| CO-8 | `Const::Aggregate(Vec<ConstId>)` | C compound literal `{ ... }` over children | unspecced | gc §5 | |
+| CO-9 | `Const::EnumValue { variant_idx, payload }` | tagged/niche enum compound literal | unspecced | gc §5 | depends on enum C shape (TY-18) |
+| CO-10 | `Const::NullPtr(TyId)` | `(T*)0` / `NULL` | unspecced | gc §5 | |
+| CO-11 | `Const::Reloc(InstanceRef)` | address-of the referenced instance (`&sym` / `sym`) | unspecced | gc §5 | symbol resolved via `InstanceRef`; address-of form not pinned |
+| CO-12 | `Byte::Uninit` | uninitialized byte (padding) | unspecced | gc §5 | |
+| CO-13 | `Byte::Value(u8)` | literal byte | unspecced | gc §5 | static `&str` literal example (§9.2) is the only concrete byte-init shown |
+| CO-14 | `Byte::Reloc(InstanceRef)` | pointer-slot relocation (address bytes) | unspecced | gc §5 | |
+
+---
+
+## 6. `Place` / `PlaceElem` → C lvalue
+
+Source: `place.rs`; spec §19. Pinned at `generic-c-backend.md` §4. All 6
+projections **covered**; two caveats depend on the enum C shape.
+
+| id | construct (variant) | C lvalue form | status | spec ref | notes |
+| -- | ------------------- | ------------- | ------ | -------- | ----- |
+| PL-1 | `Place { local, projection }` | head local lvalue + projection chain | covered | gc §4, §7 | named/`_N` local naming per §7 |
+| PL-2 | `PlaceElem::Deref` | `*p` | covered | gc §4 | |
+| PL-3 | `PlaceElem::Field(idx, ty)` | `.fname` (name from predecessor `FieldLayout.name`) | covered | gc §4 | for enum-variant fields, depends on enum C shape (TY-18) |
+| PL-4 | `PlaceElem::Index(local)` | `[local_lvalue]` | covered | gc §4 | |
+| PL-5 | `PlaceElem::ConstantIndex { from_end: false }` | `[offset]` | covered | gc §4 | |
+| PL-6 | `PlaceElem::ConstantIndex { from_end: true }` | `[len - offset]` (slice-only) | covered | gc §4 | `len` from predecessor fat-pointer `len` slot |
+| PL-7 | `PlaceElem::Subslice { from, to, from_end }` | slice expression `[from, to)` / `[from, len - to)` | covered | gc §4 | "slice expression" is somewhat abstract; concretizes against fat-pointer struct (§3.2) — confirm in delta |
+| PL-8 | `PlaceElem::Downcast(VariantIdx)` | tagged-union arm projection | covered | gc §4 | §4 pins a row for `Downcast`; the concrete projection **form** is contingent on the enum C shape (TY-18, unspecced), but the projection rule itself is covered |
+
+---
+
+## 7. `Operand` → C
+
+Source: `operand.rs`; spec §20. Pinned at `generic-c-backend.md` §5. All
+3 **covered**.
+
+| id | construct (variant) | C lowering | status | spec ref | notes |
+| -- | ------------------- | ---------- | ------ | -------- | ----- |
+| OP-1 | `Operand::Copy(Place)` | value-load from `p`'s lvalue (assign/struct-copy/`memcpy` by policy) | covered | gc §5 | |
+| OP-2 | `Operand::Move(Place)` | same load as `Copy`; tag informational | covered | gc §5 | |
+| OP-3 | `Operand::Constant(ConstId)` | C literal/compound literal from `model.consts[id]` | covered | gc §5 | the §5 **dispatch** is covered; the per-`Const`-variant initializer forms are unspecced (CO-*) |
+
+---
+
+## 8. `Rvalue` (+ `BinOp`/`UnOp`/`CastKind`/`AggregateKind`) → C expr
+
+Source: `rvalue.rs`; spec §21. **This is the largest gap.**
+`generic-c-backend.md` has **no `Rvalue` section** and spec §21.3.4 states
+plainly: *"Each maps to a distinct C lowering (or runtime-helper call) at
+the codegen stage; the spec commits only to the variant set, not to
+per-variant C lowerings."* (spec.md:7530-7533). Every row below is
+`unspecced` and is core Phase-1 spec-delta work.
+
+| id | construct (variant) | C lowering (intended sketch) | status | spec ref | notes |
+| -- | ------------------- | ---------------------------- | ------ | -------- | ----- |
+| RV-1 | `Rvalue::Use(Operand)` | the operand value (OP-*) | unspecced | gc — | identity; trivial but unpinned |
+| RV-2 | `Rvalue::Repeat(Operand, u64)` | `[x; N]` array fill (loop or designated init) | unspecced | gc — | |
+| RV-3 | `Rvalue::Ref(Provenance, Place)` | `&place` (address-of lvalue) | unspecced | gc — | fat-ptr construction for unsized pointees |
+| RV-4 | `Rvalue::RawPtr(Mutability, Place)` | `&place` (raw) | unspecced | gc — | |
+| RV-5 | `Rvalue::Cast(CastKind, Operand, TyId)` | per-`CastKind` (CK-*) | unspecced | gc — | |
+| RV-6 | `Rvalue::BinaryOp(BinOp, Operand, Operand)` | per-`BinOp` (BO-*) | unspecced | gc — | |
+| RV-7 | `Rvalue::UnaryOp(UnOp, Operand)` | per-`UnOp` (UN-*) | unspecced | gc — | |
+| RV-8 | `Rvalue::Discriminant(Place)` | read enum tag (from tag scalar / niche) | unspecced | gc §9.8, §9.9 | tag-read implied by examples; depends on enum C shape (TY-18) |
+| RV-9 | `Rvalue::Aggregate(AggregateKind, Box<[Operand]>)` | per-`AggregateKind` (AG-*) | unspecced | gc — | |
+| BO-1..5 | `BinOp::{Add,Sub,Mul,Div,Rem}` | C `+ - * / %` (wrapping arithmetic) | unspecced | spec §21.3.4 | wrapping semantics on unsigned = C; signed overflow is C UB → must pin a wrapping strategy |
+| BO-6..8 | `BinOp::{AddUnchecked,SubUnchecked,MulUnchecked}` | C `+ - *` (UB-on-overflow) | unspecced | spec §21.3.4 | |
+| BO-9..11 | `BinOp::{AddWithOverflow,SubWithOverflow,MulWithOverflow}` | returns `(T, bool)` overflow tuple | unspecced | spec §21.3.4, §7536 | needs `__builtin_*_overflow` or a 2-field struct result |
+| BO-12..14 | `BinOp::{BitXor,BitAnd,BitOr}` | C `^ & |` | unspecced | spec §21.3.4 | |
+| BO-15..18 | `BinOp::{Shl,ShlUnchecked,Shr,ShrUnchecked}` | C `<< >>` (wrapping vs UB-on-overflow) | unspecced | spec §21.3.4 | shift-amount masking for wrapping form must be pinned |
+| BO-19..24 | `BinOp::{Eq,Lt,Le,Ne,Ge,Gt}` | C comparisons → `bool` | unspecced | spec §21.3.4 | |
+| BO-25 | `BinOp::Cmp` | three-way → `core::cmp::Ordering` as `i8` (-1/0/1) | unspecced | spec §7548 | needs the Ordering encoding pinned |
+| BO-26 | `BinOp::Offset` | `<*const T>::offset` → pointer arithmetic `p + n` | unspecced | spec §7549 | |
+| UN-1 | `UnOp::Not` | `!`/`~` (bool vs integer) | unspecced | spec §21.3.5 | |
+| UN-2 | `UnOp::Neg` | `-x` | unspecced | spec §21.3.5 | |
+| UN-3 | `UnOp::PtrMetadata` | extract fat-pointer metadata (`len`/`vtable` slot) | unspecced | spec §21.3.5 | reads the §3.2 fat-pointer second slot |
+| CK-1 | `CastKind::PointerExposeProvenance` | ptr→int (`(uintptr_t)p`) | unspecced | spec §21.3.3 | |
+| CK-2 | `CastKind::PointerWithExposedProvenance` | int→ptr (`(T*)n`) | unspecced | spec §21.3.3 | |
+| CK-3 | `CastKind::PointerCoercion(PointerCoercion)` | per sub-variant (PC-*) | unspecced | spec §21.3.3 | |
+| CK-4 | `CastKind::IntToInt` | C integer cast (trunc/extend) | unspecced | spec §21.3.3 | |
+| CK-5 | `CastKind::FloatToInt` | C float→int (Rust saturating vs C UB → must pin) | unspecced | spec §21.3.3 | saturation semantics differ from C → real decision |
+| CK-6 | `CastKind::FloatToFloat` | C float cast | unspecced | spec §21.3.3 | |
+| CK-7 | `CastKind::IntToFloat` | C int→float | unspecced | spec §21.3.3 | |
+| CK-8 | `CastKind::PtrToPtr` | C pointer cast | unspecced | spec §21.3.3 | |
+| CK-9 | `CastKind::FnPtrToPtr` | fn-ptr→data-ptr cast | unspecced | spec §21.3.3 | |
+| CK-10 | `CastKind::Transmute` | bit reinterpret (`memcpy`/union pun) | unspecced | spec §21.3.3 | |
+| CK-11 | `CastKind::Subtype` | no-op (representation-identical) | unspecced | spec §21.3.3 | |
+| PC-1 | `PointerCoercion::ReifyFnPointer` | fn-item ZST → fn pointer (`&fn`) | unspecced | spec §21.3.3 | |
+| PC-2 | `PointerCoercion::UnsafeFnPointer` | safe→unsafe fn-ptr (no-op in C) | unspecced | spec §21.3.3 | |
+| PC-3 | `PointerCoercion::ClosureFnPointer` | non-capturing closure → fn ptr | unspecced | spec §21.3.3 | |
+| PC-4 | `PointerCoercion::Unsize` | thin→fat pointer (build §3.2 aggregate) | unspecced | spec §21.3.3 | builds the fat-pointer struct |
+| AG-1 | `AggregateKind::Array(TyId)` | C array compound literal | unspecced | spec §21.3.6 | |
+| AG-2 | `AggregateKind::Tuple(TyId)` | anon-struct compound literal (`_0`,`_1`,…) | unspecced | spec §21.3.6 | |
+| AG-3 | `AggregateKind::Struct(TyId)` | struct compound literal | unspecced | spec §21.3.6 | |
+| AG-4 | `AggregateKind::Enum(TyId, VariantIdx)` | tagged/niche enum construction | unspecced | spec §21.3.6 | depends on enum C shape (TY-18) |
+| AG-5 | `AggregateKind::Union(TyId, FieldIdx)` | union compound literal (one active field) | unspecced | spec §21.3.6 | |
+| AG-6 | `AggregateKind::Closure(TyId)` | captures-struct compound literal | unspecced | spec §21.3.6, §9.7 | example §9.7 shows `(closure_..){ .t = t }` but no general rule |
+| AG-7 | `AggregateKind::RawPtr(TyId, Mutability)` | fat raw-ptr from (data, metadata) | unspecced | spec §21.3.6 | builds §3.2 aggregate |
+
+---
+
+## 9. `Statement` → C
+
+Source: `statement.rs`; spec §22. `Assume`/`CopyNonOverlapping` pinned at
+§6; `Assign` interior + `SetDiscriminant` are gaps.
+
+| id | construct (variant) | C lowering | status | spec ref | notes |
+| -- | ------------------- | ---------- | ------ | -------- | ----- |
+| ST-1 | `StatementKind::Assign(Place, Rvalue)` | `<place-lvalue> = <rvalue-expr>;` | unspecced | gc §4, §5 | LHS place covered (§4), RHS rvalue **unspecced** (RV-*); the statement form (incl. large-aggregate copy / `memcpy`) not pinned |
+| ST-2 | `StatementKind::SetDiscriminant(Place, VariantIdx)` | write the variant's `tag_value` to the tag cell | unspecced | gc §9.8, §9.9 | rule illustrated (read `VariantLayout.tag_value`; niche-untagged = no-op) but **not pinned as a general rule** across all `EnumShape`/`TagEncoding` → priority gap |
+| ST-3 | `StatementKind::Intrinsic(NonDivergingIntrinsic::Assume)` | `__builtin_assume(x)` (clang) / `if(!x)__builtin_unreachable()` (gcc) | covered | gc §6 | |
+| ST-4 | `StatementKind::Intrinsic(NonDivergingIntrinsic::CopyNonOverlapping)` | `memcpy(dst, src, count*sizeof(T))` (arg-order swap handled by named fields) | covered | gc §6 | |
+
+---
+
+## 10. `Terminator` (6 variants + `AssertKind`) → C  ⚠ KNOWN DEFERRED
+
+Source: `terminator.rs`; spec §23. `generic-c-backend.md` §7
+**explicitly defers all six** terminators (+ MIR `Drop` as a synthetic
+`Call`). This is the **core Phase-1 spec-delta work**: must be fully
+pinned in Doc 2 and written into the spec delta.
+
+| id | construct (variant) | C lowering (intended sketch) | status | spec ref | notes |
+| -- | ------------------- | ---------------------------- | ------ | -------- | ----- |
+| TM-1 | `TerminatorKind::Goto(BlockId)` | `goto bb_N;` | deferred | gc §7 | |
+| TM-2 | `TerminatorKind::SwitchInt { discr, targets }` | `switch (discr) { case v: goto bb; … default: goto otherwise; }` | deferred | gc §7 | `SwitchTargets` (TM-7) drives cases |
+| TM-3 | `TerminatorKind::Return` | `return <return-place>;` (or `return;` for unit/`void`) | deferred | gc §7 | return value from `local_decls[0]` (body §25) |
+| TM-4 | `TerminatorKind::Unreachable` | `__builtin_unreachable()` / `abort()` (host panic policy, Doc 2) | deferred | gc §7 | |
+| TM-5 | `TerminatorKind::Call { callee, args, destination, target }` | `dest = callee(args); goto target;` | deferred | gc §7 | **diag-log interception happens here** (DL-*); Drop-as-Call lowering too |
+| TM-6 | `TerminatorKind::Assert { cond, expected, msg, target }` | `if (cond != expected) { <panic msg>; abort(); } goto target;` | deferred | gc §7 | panic strategy = Doc 2 host-panic decision |
+| TM-7 | `SwitchTargets { cases, otherwise }` | `switch` case table + default | deferred | gc §7 | drives TM-2 |
+| TM-8 | `CallCallee::Direct(InstanceId)` | direct call to instance's `emission_name` | deferred | gc §7 | diag-log marker recognized here (DL-*) |
+| TM-9 | `CallCallee::Indirect(Operand)` | indirect call through fn-ptr operand | deferred | gc §7 | |
+| TM-10 | Drop (synthetic `Call`) | call to drop-glue instance | deferred | gc §7, spec §23.4 | no separate IR variant; surfaces as `Call` to a `DropGlue` instance |
+| AK-1 | `AssertKind::BoundsCheck { len, index }` | panic message for index OOB | deferred | gc §7 | message-text rendering = Doc 2 |
+| AK-2 | `AssertKind::Overflow(BinOp, l, r)` | arithmetic-overflow panic | deferred | gc §7 | |
+| AK-3 | `AssertKind::OverflowNeg(Operand)` | negation-overflow panic | deferred | gc §7 | |
+| AK-4 | `AssertKind::DivisionByZero(Operand)` | div-by-zero panic | deferred | gc §7 | |
+| AK-5 | `AssertKind::RemainderByZero(Operand)` | rem-by-zero panic | deferred | gc §7 | |
+| AK-6 | `AssertKind::MisalignedPointerDereference { required, found }` | misaligned-ptr panic | deferred | gc §7 | |
+| AK-7 | `AssertKind::NullPointerDereference` | null-deref panic | deferred | gc §7 | |
+| AK-8 | `AssertKind::InvalidEnumConstruction(Operand)` | invalid-discriminant panic | deferred | gc §7 | |
+
+> Body CFG structure (`BasicBlock`, RPO storage, `BlockId::START_BLOCK`
+> entry) is itemized in §2A (BD-*) and covered by the §7 envelope
+> (`bb_N:` labels); only the **terminator emission** (TM-*) that wires the
+> labels together is deferred.
+
+---
+
+## 11. `FnSig` / `FnAbi` + C-ABI admissibility → C signatures
+
+Source: `fn_sig.rs`, `cabi.rs`; spec §14 (esp. §14.5). The C-ABI shapes
+are pinned by spec §14.5 + gc §2/§3; the function-signature *envelope* is
+pinned by gc §7.
+
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| FS-1 | `FnSig { inputs, output, abi, c_variadic, safety }` | C signature `ret fn(args)` (§7 envelope) | covered | gc §7 | |
+| FS-2 | `FnSig.inputs[i]` / `output` | C parameter / return types via per-`Ty` (§2) and C-ABI shape (FS-6) | covered | gc §2, spec §14.5 | inputs must not be `Never` (fn_sig.rs:17) |
+| FS-3 | `FnAbi::Rust` | internal calling convention; backend-chosen (single-TU, no contract constraint) | covered | gc §7 | Rust-ABI aggregate returns lower naturally in one TU |
+| FS-4 | `FnAbi::C` | `extern "C"` boundary; positions must pass §14.5 | covered | spec §14.5 | admissibility is bridge-side; backend trusts the certificate |
+| FS-5 | `FnSig.c_variadic` | trailing C `...` | unspecced | gc — | implies `abi==C` + ≥1 fixed input (fn_sig.rs:27-31); C `...` emission not pinned → confirm in delta |
+| FS-6 | `FnSig.safety` | **not lowered** (no C equivalent) | out-of-scope | fn_sig.rs:34-36 | identity-only |
+| FS-7 | `CAbiShape::Direct` | emit the position's own `TyId` natural C repr | covered | spec §14.5, gc §2 | |
+| FS-8 | `CAbiShape::Substituted { emit_as, reason }` | emit `emit_as`'s natural C repr at the boundary (fully composed) | covered | spec §14.5 | original `TyId` stays in `FnSig`; backend reads `emit_as` |
+| FS-9 | `SubstReason::{TransparentChain,TagScalar,TransparentChainAndTagScalar}` | diagnostic-only; no emission effect (the `emit_as` already encodes the result) | covered | spec §14.5 | informational |
+| FS-10 | `CAbiLowering { inputs, output }` | per-position shape table read at the C boundary | covered | model.rs:97, spec §14.5 | side-table `sig_c_abi_lowerings[FnSigId]` |
+| FS-11 | C-boundary **rejections** (Char, multi-tuple, bare Array, unit-param, `Ref/Ptr` to unsized, `Ref/Ptr(Never)`, Rust-ABI fn-ptr, repr(Rust) ADT, …) | not emittable at `FnAbi::C` positions | out-of-scope | spec §14.5 (rejected list) | bridge rejects pre-IR; backend never sees them at C positions |
+
+---
+
+## 12. Diagnostic-logging domain construct → `printf`
+
+Source: `domain_attr.rs`
+(`AttrData::Intrinsic(IntrinsicKind::Log(LogLevel))`); pinned at
+`generic-c-backend.md` §8. The only domain construct bridged in v1
+(HANDOFF § Decisions locked). Recognition is **covered**; the
+*interception* fires at `Call` terminators (TM-5/TM-8) which are
+**deferred**, so end-to-end diag-log lowering has a hard dependency on
+the terminator spec delta.
+
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| DL-1 | `AttrData::Intrinsic(IntrinsicKind::Log(level))` on `item_attrs` | **recognition tag**: intercept at call sites; emit **no** C definition for the marked item | covered | gc §8, HANDOFF | locked: log-marked item is a tag, not an emittable fn |
+| DL-2 | `LogLevel::{Error,Warn,Info,Debug}` | `printf("[LEVEL] " <fmt> "\n", <args>…)` | covered | gc §8.1 | single emitter, stdout, bracketed tag, explicit `\n` |
+| DL-3 | per-arg specifier (from peeled operand `Ty`) | `%d`/`%u`/`%llu`/`%lld`/`%s` per width; modifiers compose | covered | gc §8.2 | |
+| DL-4 | `&str` argument NUL-termination | static literal → direct C string; non-static → per-`%s` stack buffer, truncate at `cap-1`, always NUL, cap ≥ 256 | covered | gc §8.3 | normative overflow contract pinned |
+| DL-5 | `max_str_args_per_call = 8` | bridge-side validation (D8); >8 `&str` rejected | covered | gc §8.4 | counted across `args[1..]` |
+| DL-6 | Pipeline A flat-arg consumption | read post-DiagLogPeel flat args; MUST NOT reconstruct `LogArg` slice | covered | gc §8.5 | args arrive already peeled flat |
+| DL-7 | call-site interception mechanics | recognize `Call{callee:Direct(inst)}` where `model.instances[inst].item` carries the Log attr; emit `printf` instead of a call | covered | gc §8, HANDOFF | the interception **rule** is pinned; it executes inside the `Call` terminator (TM-5, deferred), so end-to-end diag-log lowering inherits that dependency (see Cross-dependencies) |
+
+---
+
+## Output of this doc — the gap list
+
+The `unspecced` + `deferred` rows, grouped into the agenda for Doc 2
+(architecture decisions) and the `generic-c-backend.md` spec delta. Each
+bullet's primary IDs are themselves `unspecced`/`deferred`; a trailing
+"(affects: …)" names `covered` rows that lower fine once the gap is
+resolved but are blocked *downstream* of it — listed for traceability,
+not counted as gaps.
+
+### A. DEFERRED (spec explicitly defers; must be fully pinned in P1)
+
+1. **All 6 terminators + `SwitchTargets` + `CallCallee` + Drop-as-Call**
+   (TM-1..TM-10) — gc §7 defers every one. **Core P1 work.** (affects:
+   the `BasicBlock.terminator` slot BD-9, covered as a frame.)
+2. **All 8 `AssertKind` panic messages** (AK-1..AK-8) — message-text
+   rendering + abort strategy (ties to the host-panic decision).
+3. **`Item.is_manually_drop`** (IT-13) — only meaningful through
+   drop-glue emission, which is a synthetic `Call` (deferred).
+
+### B. UNSPECCED — priority gaps (large, structural)
+
+4. **`Rvalue` / `BinOp` / `UnOp` / `CastKind` / `PointerCoercion` /
+   `AggregateKind` C emission** (RV-1..9, BO-1..26, UN-1..3, CK-1..11,
+   PC-1..4, AG-1..7) — gc has no `Rvalue` section; spec §21.3.4 commits
+   only to the variant set. Highest-volume gap. Decisions with real
+   teeth: signed-overflow wrapping strategy (BO-1..5), `*Unchecked` vs
+   `*WithOverflow` (BO-6..11), shift masking (BO-15..18), `Cmp`→`i8`
+   Ordering (BO-25), `FloatToInt` saturation (CK-5), `Transmute`
+   (CK-10), `Unsize` fat-pointer build (PC-4).
+5. **Payload-carrying enum C shape** (TY-18, IT-5, IN-10, LY-5, LY-7,
+   LY-8, LY-9, LY-10, LY-11, LY-12, LY-13, LY-14) — gc §9.8/§9.9 only show
+   fieldless-Direct + single-niche; the general tag + variant-payload
+   `union` C layout is unpinned (`LY-14` = the `VariantRange`/
+   `WrappingRange` niche-math inputs consumed here). Dependent unspecced
+   rows: `Discriminant`
+   (RV-8), `SetDiscriminant` (ST-2), `EnumValue` const (CO-9), enum
+   aggregate (AG-4). (affects: `Downcast` PL-8, covered but its
+   projection form is contingent on this shape.)
+6. **Struct/union field-offset reproduction** (LY-3, LY-6, IN-9) —
+   `FieldLayout` is source/MIR order, **not** memory order
+   (layout.rs:37-39); `repr(Rust)` reordering means verbatim field
+   emission does not reproduce `offset`. Must pin a by-offset + explicit
+   padding rule (or scope guarantees to `repr(C)`). (affects: `Struct`
+   type-ref TY-17, covered.)
+7. **`Const` → C initializer, all 11 + 3 byte variants** (CO-1..CO-14,
+   IN-7, IN-8) — gc §5 defers per-variant forms. Notable: float
+   bit-pattern→C (CO-5), `Reloc` address-of (CO-11/14), `Bytes`
+   init/uninit/reloc (CO-7/12/13/14). (affects: `Operand::Constant`
+   OP-3, covered dispatch.)
+
+### C. UNSPECCED — smaller / localized gaps
+
+8. **Symbol emission**: `Linkage`→C storage class / weak attr (IT-7),
+   `link_section`→`section(...)` attr (IT-8), `inline_hint`→inline attr
+   (IT-9), `Static.mutability`→`const` global (IT-2).
+9. **Declaration policy**: foreign fn `body:None`→prototype/`extern`
+   (IN-3), foreign static `init:None`→`extern` (IN-7), const-item
+   inline-vs-symbol (IN-8) — ties to Doc 2 declaration-order decision.
+   (IN-7 / IN-8 also appear in gap 7 for their *initializer* aspect; here
+   it is the *declaration* aspect.)
+10. **Shim flavors** (IN-5, IN-6): per-`FunctionInstanceFlavor` body
+    synthesis + vtable-slot emission (vtable/closure-once/clone/drop-glue)
+    is illustrated (§9.6/§9.7) but not generally pinned.
+11. **`Assign` statement form** (ST-1): LHS covered, but the statement
+    C form incl. large-aggregate copy / `memcpy` policy is unpinned.
+12. **`c_variadic`** (FS-5): C `...` emission not pinned.
+
+### Cross-dependencies (not gaps themselves)
+
+- **Diag-log host execution** (DL-7, covered): the interception *rule*
+  is pinned (gc §8) but fires inside the deferred `Call` terminator
+  (TM-5), so end-to-end diag-log lowering waits on the terminator delta
+  (gap A1). This is the dual-oracle harness's primary behavior fixture
+  (Doc 3), so the terminator delta gates diag-log verification.
+
+### D. OUT-OF-SCOPE (recorded, no P1 emission)
+
+- `Item.is_unsafe` / `FnSig.safety` (IT-10, FS-6) — no C equivalent.
+- `Ty::FnDef` (TY-12) — ZST identity tag; emit nothing.
+- Coroutine/async `FunctionInstanceFlavor` (IN-5b) — unreachable
+  (coroutines rejected at type translation, spec §15.1).
+- C-boundary rejections (FS-11) — bridge rejects pre-IR.
+- `Body.span` / `LocalDecl.mutability` (BD-4, BD-6) — diagnostics /
+  not lowered.
+- All `span` fields (Item/Instance/Statement/Terminator/Body/LocalDecl) —
+  source locations, diagnostics-only; not emitted.
+- `RegseqInstanceKey` / instance-rank tables — bridge-side, not emitted.
+
+**Next:** Docs 2 + 3. Doc 2 resolves A + B + C concretely (terminators,
+enum C shape, field-offset reproduction, Rvalue/Const emission, symbol/
+declaration policy, host-panic); Doc 3 turns the matrix rows into
+codegen-coverage fixtures. Then the `generic-c-backend.md` spec delta
+(esp. a new Rvalue section, §7 terminator emission, the enum-shape and
+field-offset rules, the per-`Const` initializer table) → Codex →
+`task.py` tasks.
