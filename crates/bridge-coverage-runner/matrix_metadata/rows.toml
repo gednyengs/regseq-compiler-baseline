@@ -1979,3 +1979,52 @@ status = "covered"
 cluster_key = "IX-020"
 snippet_path = "IX-020.rs"
 inspect = { kind = "SyntheticItemKind", arg = "DropGlue" }
+
+# F-b4 batch (driver-80 triage bucket A): the 4 rejection rows. These are
+# `expectation = rejected` (the bridge correctly REJECTS by design), so
+# each carries an `expected_rejection` variant rather than a positive
+# `inspect`. RJ-001/RJ-029 are clean by-design rejections; RJ-018/RJ-025
+# depend on incomplete nightly features (`unsafe_binders` /
+# `unsized_fn_params`) but are EMPIRICALLY PRODUCIBLE at HEAD (probe:
+# clean Rejected, not RustcRejected) -- committed per architect decision
+# (distinct from the non-producible feature-gated RJ-017/020/021, which
+# stay adjudicated `blocked-rustc-infeasible`).
+[[row]]
+id = "RJ-001"
+section = "6.1"
+construct = "DslRejectionKind::Box (alloc Box rejected by design)"
+expectation = "rejected"
+status = "covered"
+cluster_key = "RJ-001"
+snippet_path = "RJ-001.rs"
+expected_rejection = { variant = "DslRejection", kind = "Box" }
+
+[[row]]
+id = "RJ-018"
+section = "6.3"
+construct = "UnsafeBinder (unsafe<'a> &'a u32; feature unsafe_binders)"
+expectation = "rejected"
+status = "covered"
+cluster_key = "RJ-018"
+snippet_path = "RJ-018.rs"
+expected_rejection = { variant = "UnsafeBinder" }
+
+[[row]]
+id = "RJ-025"
+section = "6.3"
+construct = "UnsupportedTy (bare unsized str arg; feature unsized_fn_params)"
+expectation = "rejected"
+status = "covered"
+cluster_key = "RJ-025"
+snippet_path = "RJ-025.rs"
+expected_rejection = { variant = "UnsupportedTy" }
+
+[[row]]
+id = "RJ-029"
+section = "6.3"
+construct = "UnsupportedConst (const-generic arg W<3> rejected by design)"
+expectation = "rejected"
+status = "covered"
+cluster_key = "RJ-029"
+snippet_path = "RJ-029.rs"
+expected_rejection = { variant = "UnsupportedConst" }

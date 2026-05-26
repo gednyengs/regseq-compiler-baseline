@@ -122,7 +122,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | PL-005 | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | PL-006 | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | PL-007 | 1 | coverage | validated-legacy | covered | enum_round_trip.rs (via enum match path) |  |
-| RJ-001 | 6 | coverage | needs-validation | uncovered |  |  |
+| RJ-001 | 6 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RJ-002 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-003 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-004 | 6 | coverage | out-of-scope | uncovered | uncovered (no known surface from #![no_std] source) | no known surface from #![no_std] source |
@@ -139,21 +139,21 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RJ-015 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-016 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-017 | 6 | coverage | out-of-scope | blocked-rustc-infeasible | feature gated | blocked-rustc-infeasible |
-| RJ-018 | 6 | coverage | needs-validation | uncovered |  |  |
+| RJ-018 | 6 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RJ-019 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-020 | 6 | coverage | out-of-scope | blocked-rustc-infeasible | feature gated | blocked-rustc-infeasible |
 | RJ-021 | 6 | coverage | out-of-scope | blocked-rustc-infeasible | feature gated | blocked-rustc-infeasible |
 | RJ-022 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-023 | 6 | coverage | needs-validation | uncovered |  |  |
 | RJ-024 | 6 | coverage | out-of-scope | blocked-rustc-infeasible | The three rejection paths (Scalar::Union tag ty.rs:1320, Float tag ty.rs:1368, niche-out-of-range ty.rs:1446) are defensive bridge invariants for layouts rustc's solver does not emit from source: enum discriminants are integral (never Float/Union tags) and niche ranges respect rustc's guarantees. Probed niche / repr(u128) / niche-squeeze enums — none hit it. See .harness/audits/2026-05-23-b2-deferred-shim-probe.md (B2) | blocked-rustc-infeasible |
-| RJ-025 | 6 | coverage | needs-validation | uncovered |  |  |
+| RJ-025 | 6 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RJ-026 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-027 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-028 | 6 | coverage | needs-validation | partial |  |  |
 | RJ-028-A | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-028-B | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-028-C | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| RJ-029 | 6 | coverage | needs-validation | uncovered |  |  |
+| RJ-029 | 6 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RJ-030 | 6 | coverage | needs-validation | uncovered |  |  |
 | RJ-031 | 6 | coverage | needs-validation | partial |  |  |
 | RJ-031-A | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |

@@ -1045,12 +1045,12 @@
   },
   "RJ-001": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RJ-001",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RJ-002": {
     "axis": "coverage",
@@ -1198,12 +1198,12 @@
   },
   "RJ-018": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RJ-018",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RJ-019": {
     "axis": "coverage",
@@ -1261,12 +1261,12 @@
   },
   "RJ-025": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RJ-025",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RJ-026": {
     "axis": "coverage",
@@ -1324,12 +1324,12 @@
   },
   "RJ-029": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RJ-029",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "6",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RJ-030": {
     "axis": "coverage",

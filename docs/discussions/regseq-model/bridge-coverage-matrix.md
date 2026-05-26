@@ -585,7 +585,7 @@ wrong classification) or VALIDATOR-FAIL.
 
 | id      | rejection variant | source trigger | status | notes |
 | ------- | ----------------- | -------------- | ------ | ----- |
-| RJ-001  | `DslRejectionKind::Box` | `Box<T>` field or local | rejected | uncovered |
+| RJ-001  | `DslRejectionKind::Box` | `Box<T>` field or local | rejected | covered (runner `RJ-001`, `expected_rejection=DslRejection/Box`; F-b4) |
 | RJ-002  | `DslRejectionKind::CVoid` | `core::ffi::c_void` use | rejected | uncovered |
 | RJ-003  | `DslRejectionKind::Atomic` | `core::sync::atomic::AtomicU32` etc. | rejected | uncovered |
 | RJ-004  | `DslRejectionKind::PlaceProjection` | unsupported projection in body | rejected | uncovered (no known surface from `#![no_std]` source) |
@@ -612,18 +612,18 @@ wrong classification) or VALIDATOR-FAIL.
 | RJ-015  | `Foreign` | non-extern-block foreign type | rejected | uncovered |
 | RJ-016  | `Coroutine` | `async fn` or generator | rejected | uncovered |
 | RJ-017  | `Pat` | refinement pattern types | rejected | blocked-rustc-infeasible | feature gated |
-| RJ-018  | `UnsafeBinder` | unsafe-binder Ty | rejected | uncovered |
+| RJ-018  | `UnsafeBinder` | unsafe-binder Ty | rejected | covered (runner `RJ-018`, `expected_rejection=UnsafeBinder`; F-b4) -- feature `unsafe_binders` but EMPIRICALLY PRODUCIBLE (clean Rejected at HEAD), so committed not adjudicated (unlike non-producible RJ-017/020/021); architect-decided |
 | RJ-019  | `DynAutoOnly` | `dyn Send + Sync` (no principal) | rejected | uncovered |
 | RJ-020  | `DynStar` | `dyn*` type | rejected | blocked-rustc-infeasible | feature gated |
 | RJ-021  | `CustomAutoTrait` | source-declared auto trait | rejected | blocked-rustc-infeasible | feature gated |
 | RJ-022  | `SubstantiveHrtb` | substantive HRTB binder | rejected | uncovered |
 | RJ-023  | `Layout` | uncomputable layout | rejected | uncovered |
 | RJ-024  | `UnsupportedEnumLayout` | enum with unsupported tag scalar | rejected | blocked-rustc-infeasible | The three rejection paths (`Scalar::Union` tag `ty.rs:1320`, `Float` tag `ty.rs:1368`, niche-out-of-range `ty.rs:1446`) are defensive bridge invariants for layouts rustc's solver does not emit from source: enum discriminants are integral (never Float/Union tags) and niche ranges respect rustc's guarantees. Probed niche / `repr(u128)` / niche-squeeze enums — none hit it. See `.harness/audits/2026-05-23-b2-deferred-shim-probe.md` (B2) |
-| RJ-025  | `UnsupportedTy` | unrecognised rustc TyKind | rejected | uncovered |
+| RJ-025  | `UnsupportedTy` | unrecognised rustc TyKind | rejected | covered (runner `RJ-025`, `expected_rejection=UnsupportedTy`, bare `str` arg; F-b4) -- feature `unsized_fn_params` but EMPIRICALLY PRODUCIBLE (clean Rejected at HEAD), committed not adjudicated; architect-decided |
 | RJ-026  | `UnsupportedAbi` | non-Rust / non-C ABI | rejected | uncovered |
 | RJ-027  | `UnsupportedNeverInput` | `!` as fn input | rejected | uncovered |
 | RJ-028  | `UnsupportedCAbiType` -- per `CAbiTypePosition` (3 variants per `bridge/mod.rs:364`) | rejected | partial | per-position sub-axes below |
-| RJ-029  | `UnsupportedConst` | unrecognised const shape | rejected | uncovered |
+| RJ-029  | `UnsupportedConst` | unrecognised const shape | rejected | covered (runner `RJ-029`, `expected_rejection=UnsupportedConst`, const-generic arg `W<3>`; F-b4) |
 | RJ-030  | `GenericOpaqueHandle` | generic `#[rseq::opaque]` | rejected | uncovered |
 | RJ-031  | `DiagLogFormat` -- per `DiagLogFormatReason` (6 variants per `bridge/mod.rs:535`) | rejected | partial | per-reason sub-axes below |
 | RJ-032  | `DiagLogValidation` -- per diagnostic ID (6 variants per `bridge/mod.rs:556`) | rejected | partial | per-diagnostic sub-axes below |
