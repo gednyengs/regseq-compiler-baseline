@@ -47,7 +47,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | FF-017 | 2 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/FF-017.rs |  |
 | FT-001 | 3 | coverage | validated-legacy | covered | drop_glue_in_self_consuming_method.rs |  |
 | FT-002 | 3 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| FT-003 | 3 | coverage | needs-validation | uncovered |  |  |
+| FT-003 | 3 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/FT-003.rs |  |
 | FT-004 | 3 | coverage | needs-validation | uncovered |  |  |
 | FT-005 | 3 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | FT-006 | 3 | coverage | validated-legacy | covered | trait_method_resolution.rs |  |
@@ -103,18 +103,18 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | OP-003 | 1 | coverage | validated-legacy-universal | partial | many |  |
 | OP-003-A | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | OP-003-B | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| OP-003-C | 1 | coverage | needs-validation | covered |  |  |
+| OP-003-C | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | OP-003-D | 1 | coverage | validated-legacy-universal | covered | many (e.g., 42_u32) |  |
 | OP-003-E | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| OP-003-F | 1 | coverage | needs-validation | covered |  |  |
+| OP-003-F | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | OP-003-G | 1 | coverage | validated-legacy | partial | diag_logging.rs (string literal -- ConstMemoryStatic-backed) |  |
-| OP-003-G-1 | 1 | coverage | needs-validation | uncovered |  |  |
+| OP-003-G-1 | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | OP-003-G-2 | 1 | coverage | validated-legacy | covered | diag_logging.rs (string-literal bytes) |  |
-| OP-003-G-3 | 1 | coverage | needs-validation | uncovered |  |  |
+| OP-003-G-3 | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | OP-003-H | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | OP-003-I | 1 | coverage | out-of-scope | blocked-bridge-rejects-by-design | enum-constant value. Reclassified 2026-05-23 (was uncovered): the only source route to a type-level enum value-tree is a const-generic argument (W<V> where V: E is an enum const), which the bridge rejects by design at translate_generic_args (crates/regseq-driver/src/bridge/ty.rs:743-748, UnsupportedConst -- cross-ref Section 6 RJ-029) and at reverse materialisation (crates/regseq-driver/src/bridge/body/materialise.rs:673-684, coordinated gap with driver-37). More durably, Const::EnumValue is deliberately excluded from type-level admissibility -- only scalar consts (Bool/Char/Int/Uint/Float) may be a GenericArg::Const per crates/regseq-model/src/const_value.rs:54-64. Enum/non-scalar const-generics are out of scope for #![no_std] driver specs. Decision + analysis: .harness/audits/2026-05-23-c1-enum-const-eval-plan.md | blocked-bridge-rejects-by-design |
 | OP-003-J | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| OP-003-K | 1 | coverage | needs-validation | uncovered |  |  |
+| OP-003-K | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | PL-001 | 1 | coverage | validated-legacy-universal | covered | every fixture |  |
 | PL-002 | 1 | coverage | validated-legacy | covered | trait_object.rs (via &self deref) |  |
 | PL-003 | 1 | coverage | validated-legacy | covered | drop_glue_in_self_consuming_method.rs (_1.0), instance_completeness.rs (p.x) |  |
@@ -134,7 +134,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RJ-010 | 6 | coverage | needs-validation | uncovered |  |  |
 | RJ-011 | 6 | coverage | needs-validation | uncovered |  |  |
 | RJ-012 | 6 | coverage | needs-validation | uncovered |  |  |
-| RJ-013 | 6 | coverage | validated-runner | covered | regseq-driver-82: body-context reveal of an RPIT Alias(Opaque). Reframed rejected->positive covered-by-reveal (cf. FF-005 covered-by-rewrite). Snippet crates/bridge-coverage-runner/snippets/RJ-013.rs (mk() -> impl Fn() -> u32; f() { let g = mk(); g() }) bridges Ok via the body-context opaque-reveal arm in bridge/ty.rs (RevealOpaqueScope-gated); revealed closure invoked through a ClosureCall shim. RJ-009 carve-out preserved (uncalled RPIT stays zero-Instance). Proof in crates/regseq-driver/tests/bridge_rpit_opaque_reveal.rs. | sidecar:rows.toml |
+| RJ-013 | 6 | coverage | validated-runner | covered | regseq-driver-82: RECLASSIFIED rejected->positive **covered-by-reveal** (cf. FF-005's covered-by-rewrite). The A1 alias folder (crates/regseq-driver/src/bridge/ty.rs) gained a body-context-gated Alias(Opaque) arm that reveals the opaque to its concrete hidden type via normalize_erasing_regions(fully_monomorphized, ..) (PostAnalysis); the revealed closure / primitive bridges through the existing rigid arms. The reveal is scoped to per-Instance body materialisation via the RevealOpaqueScope RAII guard at materialise_function_body_inner AND construct_closure_call_instances, and never fires during identity-signature translation, so RJ-009's bucket-4 carve-out is preserved. A reachable such fn is reactively instantiated (opaque revealed) and its now-stale signature_non_rigid flag is cleared by reconcile_revealed_signature_flags before completeness validation; an uncalled one (RJ-009 opaque_adder) keeps its zero-Instance carve-out. The committed snippet crates/bridge-coverage-runner/snippets/RJ-013.rs (mk() -> impl Fn() -> u32; f() { let g = mk(); g() }) bridges Ok and routes the revealed closure through a ClosureCall shim; the runner predicate is the coarse SyntheticItemKind = ClosureCall (the discriminating signal is reaching Ok at all -- at HEAD the crate Rejected on f's opaque). The precise per-shape proof (revealed-to-closure, no surviving Alias, impl Copy / nested-RPIT reveal, RJ-009 carve-out intact) lives in crates/regseq-driver/tests/bridge_rpit_opaque_reveal.rs. The NonRigidTyKind::Alias arm remains a defensive backstop for surviving non-authorized projection aliases. Plan: .harness/audits/2026-05-25-rj013-opaque-reveal-plan.md |  |
 | RJ-014 | 6 | coverage | out-of-scope | blocked-rustc-infeasible | rustc rejects first | blocked-rustc-infeasible |
 | RJ-015 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-016 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |

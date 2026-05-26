@@ -32,9 +32,9 @@
 use serde::Deserialize;
 
 use regseq_model::{
-    AggregateKind, AssertKind, BinOp, CallCallee, CastKind, ClosureCallKind, Const, InstanceKind,
-    ItemKind, Linkage, NonDivergingIntrinsic, PlaceElem, PointerCoercion, RegseqModel, Rvalue,
-    StatementKind, SyntheticItemKind, TerminatorKind, Ty, UnOp,
+    AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, ClosureCallKind, Const,
+    InstanceKind, ItemKind, Linkage, NonDivergingIntrinsic, PlaceElem, PointerCoercion,
+    RegseqModel, Rvalue, StatementKind, SyntheticItemKind, TerminatorKind, Ty, UnOp,
 };
 
 /// Closed inspection-predicate enum per strategy section 7.
@@ -75,6 +75,14 @@ pub enum InspectionPredicate {
     PlaceElem(String),
     /// At least one Const matches the named variant.
     ConstVariant(String),
+    /// At least one `Const::Bytes` contains a byte cell matching the
+    /// named `Byte` variant (`"Uninit"`, `"Value"`, `"Reloc"`).
+    /// Distinguishes the inner byte-cell sub-axes that the flat
+    /// `ConstVariant("Bytes")` arm collapses (e.g. a padding-bearing
+    /// struct const's `Byte::Uninit` vs a pointer-bearing const's
+    /// `Byte::Reloc`), mirroring how `SyntheticItemKindSub` refines
+    /// `SyntheticItemKind`.
+    ConstBytesByte(String),
     /// At least one Rvalue::Aggregate uses the named AggregateKind.
     AggregateKind(String),
     /// At least one Rvalue::Cast uses the named CastKind.
@@ -234,6 +242,16 @@ fn const_variant_tag(c: &Const) -> &'static str {
         Const::EnumValue { .. } => "EnumValue",
         Const::NullPtr(_) => "NullPtr",
         Const::Reloc(_) => "Reloc",
+    }
+}
+
+/// Variant tag for a `Byte` cell (3 variants), used by the
+/// `ConstBytesByte` inner-byte sub-axis predicate.
+fn byte_variant_tag(b: &Byte) -> &'static str {
+    match b {
+        Byte::Uninit => "Uninit",
+        Byte::Value(_) => "Value",
+        Byte::Reloc(_) => "Reloc",
     }
 }
 
@@ -682,6 +700,21 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
             } else {
                 Err(InspectError::NotFound {
                     variant: "ConstVariant",
+                    arg: arg.clone(),
+                })
+            }
+        }
+        InspectionPredicate::ConstBytesByte(arg) => {
+            let needle = arg.as_str();
+            let hit = model.consts.iter().any(|(_, c)| match c {
+                Const::Bytes(bytes) => bytes.iter().any(|b| byte_variant_tag(b) == needle),
+                _ => false,
+            });
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "ConstBytesByte",
                     arg: arg.clone(),
                 })
             }
@@ -1290,6 +1323,59 @@ mod tests {
             }
             other => panic!("expected NotFound, got {other:?}"),
         }
+    }
+
+    #[test]
+    fn const_bytes_byte_arm_matches_inner_byte_variant_and_reports_not_found_otherwise() {
+        let mut model = empty_model();
+        // A Bytes const with a padding (Uninit) byte and value bytes but
+        // no Reloc -- mirrors a `#[repr(C)]` struct const's padding
+        // (OP-003-G-1).
+        model.consts.intern(Const::Bytes(vec![
+            Byte::Value(1),
+            Byte::Uninit,
+            Byte::Value(2),
+        ]));
+
+        // The inner Uninit and Value byte cells match.
+        assert!(check(
+            &model,
+            &InspectionPredicate::ConstBytesByte("Uninit".to_string()),
+        )
+        .is_ok());
+        assert!(check(
+            &model,
+            &InspectionPredicate::ConstBytesByte("Value".to_string()),
+        )
+        .is_ok());
+
+        // Reloc is absent: NotFound -- even though the flat
+        // `ConstVariant("Bytes")` arm DOES match the same const,
+        // confirming this arm is the discriminating inner sub-axis.
+        match check(
+            &model,
+            &InspectionPredicate::ConstBytesByte("Reloc".to_string()),
+        ) {
+            Err(InspectError::NotFound { variant, arg }) => {
+                assert_eq!(variant, "ConstBytesByte");
+                assert_eq!(arg, "Reloc");
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+        assert!(check(
+            &model,
+            &InspectionPredicate::ConstVariant("Bytes".to_string()),
+        )
+        .is_ok());
+
+        // A non-Bytes const (ZST) does not match any inner-byte query.
+        let mut zst_model = empty_model();
+        zst_model.consts.intern(Const::ZST);
+        assert!(check(
+            &zst_model,
+            &InspectionPredicate::ConstBytesByte("Value".to_string()),
+        )
+        .is_err());
     }
 
     #[test]

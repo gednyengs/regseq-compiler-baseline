@@ -667,6 +667,64 @@ cluster_key = "OP-003"
 snippet_path = "OP-003-J.rs"
 inspect = { kind = "ConstVariant", arg = "NullPtr" }
 
+# F-b1 const-surface batch: OP-003-C/F/G-1/G-3/K, the five
+# needs-validation const-surface rows from the driver-80 gate triage
+# (.harness/audits/2026-05-25-needs-validation-tail-triage.md, bucket A).
+# All bridge Ok at HEAD with no bridge change; witnesses + const shapes
+# probe-confirmed. G-1/G-3 use the new `ConstBytesByte` inner-byte
+# sub-axis predicate (a `Const::Bytes` byte cell), which discriminates
+# `Byte::Uninit`/`Byte::Reloc` that the flat `ConstVariant("Bytes")` arm
+# would collapse.
+[[row]]
+id = "OP-003-C"
+section = "1.3"
+construct = "Const::Int (signed-integer literal)"
+expectation = "positive"
+status = "covered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-C.rs"
+inspect = { kind = "ConstVariant", arg = "Int" }
+
+[[row]]
+id = "OP-003-F"
+section = "1.3"
+construct = "Const::ZST (zero-sized FnDef coercion to fn pointer)"
+expectation = "positive"
+status = "covered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-F.rs"
+inspect = { kind = "ConstVariant", arg = "ZST" }
+
+[[row]]
+id = "OP-003-G-1"
+section = "1.3"
+construct = "Byte::Uninit in Const::Bytes (#[repr(C)] struct padding)"
+expectation = "positive"
+status = "covered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-G-1.rs"
+inspect = { kind = "ConstBytesByte", arg = "Uninit" }
+
+[[row]]
+id = "OP-003-G-3"
+section = "1.3"
+construct = "Byte::Reloc in Const::Bytes (raw-pointer field to a static)"
+expectation = "positive"
+status = "covered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-G-3.rs"
+inspect = { kind = "ConstBytesByte", arg = "Reloc" }
+
+[[row]]
+id = "OP-003-K"
+section = "1.3"
+construct = "Const::Reloc (top-level whole-pointer fn-ptr const item)"
+expectation = "positive"
+status = "covered"
+cluster_key = "OP-003"
+snippet_path = "OP-003-K.rs"
+inspect = { kind = "ConstVariant", arg = "Reloc" }
+
 # Section 1.4 -- Rvalue sub-axes
 [[row]]
 id = "RV-002"

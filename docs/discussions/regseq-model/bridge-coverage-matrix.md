@@ -201,23 +201,23 @@ row is a `positive` expectation unless otherwise marked.
 | --------- | ------------- | ------ | ----- |
 | OP-003-A  | `Const::Bool(bool)` | uncovered | -- | requires `bool` literal in body |
 | OP-003-B  | `Const::Char(u32)` | uncovered | -- | requires `char` literal |
-| OP-003-C  | `Const::Int(IntKind, u128)` | covered | playground (`i32` literals) |
+| OP-003-C  | `Const::Int(IntKind, u128)` | covered | runner `OP-003-C` (`ConstVariant=Int`; F-b1) |
 | OP-003-D  | `Const::Uint(UintKind, u128)` | covered | many (e.g., `42_u32`) |
 | OP-003-E  | `Const::Float(FloatKind, u128)` | uncovered | depends on TY-005 |
-| OP-003-F  | `Const::ZST` | covered | playground (Reg unit-construction) -- needs verification |
+| OP-003-F  | `Const::ZST` | covered | runner `OP-003-F` (`ConstVariant=ZST`; zero-sized FnDef coercion; F-b1) |
 | OP-003-G  | `Const::Bytes(Vec<Byte>)` | partial | `diag_logging.rs` (string literal -- ConstMemoryStatic-backed) |
 | OP-003-H  | `Const::Aggregate(Vec<ConstId>)` | uncovered | array/tuple literal const |
 | OP-003-I  | `Const::EnumValue { variant_idx, payload }` | blocked-bridge-rejects-by-design | enum-constant value. Reclassified 2026-05-23 (was `uncovered`): the only source route to a type-level enum value-tree is a const-generic argument (`W<V>` where `V: E` is an enum const), which the bridge rejects by design at `translate_generic_args` (`crates/regseq-driver/src/bridge/ty.rs:743-748`, `UnsupportedConst` -- cross-ref Section 6 RJ-029) and at reverse materialisation (`crates/regseq-driver/src/bridge/body/materialise.rs:673-684`, coordinated gap with driver-37). More durably, `Const::EnumValue` is deliberately excluded from type-level admissibility -- only scalar consts (Bool/Char/Int/Uint/Float) may be a `GenericArg::Const` per `crates/regseq-model/src/const_value.rs:54-64`. Enum/non-scalar const-generics are out of scope for `#![no_std]` driver specs. Decision + analysis: `.harness/audits/2026-05-23-c1-enum-const-eval-plan.md` |
 | OP-003-J  | `Const::NullPtr(TyId)` | uncovered | -- | needs a `core::ptr::null()` or `0 as *mut T` call site |
-| OP-003-K  | `Const::Reloc(InstanceRef)` | uncovered | -- | function-pointer literal (e.g., `let p: fn() = foo;`) |
+| OP-003-K  | `Const::Reloc(InstanceRef)` | covered | runner `OP-003-K` (`ConstVariant=Reloc`; top-level fn-ptr const item `const P: fn() = g`; F-b1) |
 
 ### OP-003-G sub-axes (`Byte` enum -- 3 variants per `const_value.rs:69`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| OP-003-G-1 | `Byte::Uninit` | uncovered | -- | requires `MaybeUninit` or padding bytes |
+| OP-003-G-1 | `Byte::Uninit` | covered | runner `OP-003-G-1` (`ConstBytesByte=Uninit`; `#[repr(C)]` struct padding; F-b1) |
 | OP-003-G-2 | `Byte::Value(u8)` | covered | `diag_logging.rs` (string-literal bytes) |
-| OP-003-G-3 | `Byte::Reloc(InstanceRef)` | uncovered | -- | const block containing a reloc-bearing pointer |
+| OP-003-G-3 | `Byte::Reloc(InstanceRef)` | covered | runner `OP-003-G-3` (`ConstBytesByte=Reloc`; raw-pointer field to a static; F-b1) |
 
 ## 1.4 `Rvalue` -- `crates/regseq-model/src/rvalue.rs:19` + spec.md §21.1 (9 variants)
 
