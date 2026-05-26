@@ -104,7 +104,7 @@ row is a `positive` expectation unless otherwise marked.
 | TY-002  | `Ty::Char`                 | positive    | uncovered      | --                                 | no fixture uses `char` |
 | TY-003  | `Ty::Int(IntKind)`         | positive    | partial        | `instance_completeness.rs` (`i32` in `Point`) | per-IntKind sub-axes uncovered |
 | TY-004  | `Ty::Uint(UintKind)`       | positive    | partial        | many                                | per-UintKind sub-axes uncovered for u8/u16/u64/u128/usize |
-| TY-005  | `Ty::Float(FloatKind)`     | positive    | uncovered      | --                                 | no fixture uses `f16`/`f32`/`f64`/`f128` |
+| TY-005  | `Ty::Float(FloatKind)`     | positive    | covered      | runner `TY-005` (F-b2)                                 | `f32`/`f64` covered via runner (`TyVariant=Float`); `f16`/`f128` need feature gates |
 | TY-006  | `Ty::Str`                  | positive    | covered        | `diag_logging.rs`                  | `&'static str` in `log_*` calls |
 | TY-007  | `Ty::Never`                | positive    | blocked-generator-gap | --                          | `!` requires `loop {}` body or `panic!()` calls |
 | TY-008  | `Ty::Array(TyId, u64)`     | positive    | uncovered      | --                                 | no fixture uses `[T; N]` |
@@ -225,7 +225,7 @@ row is a `positive` expectation unless otherwise marked.
 | ------- | -------------------------- | ----------- | -------------- | ------------ | ----- |
 | RV-001  | `Rvalue::Use(Operand)`     | positive    | covered        | every fixture | ubiquitous in `_dst = _src;` |
 | RV-002  | `Rvalue::Repeat(Operand, u64)` | positive | uncovered      | --           | `[expr; N]` repeat literal |
-| RV-003  | `Rvalue::Ref(Provenance, Place)` | positive | covered    | trait fixtures | `&place` / `&mut place` |
+| RV-003  | `Rvalue::Ref(Provenance, Place)` | positive | covered    | trait fixtures + runner `RV-003` (`RvalueVariant=Ref`; F-b2) | `&place` / `&mut place` |
 | RV-004  | `Rvalue::RawPtr(Mutability, Place)` | positive | covered | `drop_glue_in_self_consuming_method.rs` | Drop-as-Call prelude |
 | RV-005  | `Rvalue::Cast(CastKind, Operand, TyId)` | positive | partial | -- | per-`CastKind` sub-axes below |
 | RV-006  | `Rvalue::BinaryOp(BinOp, Operand, Operand)` | positive | partial | playground (`+`) | per-`BinOp` sub-axes below |
@@ -256,7 +256,7 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| RV-006-A  | `BinOp::Add` | covered | playground |
+| RV-006-A  | `BinOp::Add` | covered | runner `RV-006-A` (`BinOp=Add`; F-b2) |
 | RV-006-B  | `BinOp::Sub` | uncovered | |
 | RV-006-C  | `BinOp::Mul` | uncovered | |
 | RV-006-D  | `BinOp::Div` | uncovered | |
@@ -264,7 +264,7 @@ row is a `positive` expectation unless otherwise marked.
 | RV-006-F  | `BinOp::AddUnchecked` | uncovered | |
 | RV-006-G  | `BinOp::SubUnchecked` | uncovered | |
 | RV-006-H  | `BinOp::MulUnchecked` | uncovered | |
-| RV-006-I  | `BinOp::AddWithOverflow` | covered | playground (auto-emitted from `+` on signed) |
+| RV-006-I  | `BinOp::AddWithOverflow` | covered | runner `RV-006-I` (`BinOp=AddWithOverflow`, `overflow_checks=true`; F-b2) |
 | RV-006-J  | `BinOp::SubWithOverflow` | uncovered | |
 | RV-006-K  | `BinOp::MulWithOverflow` | uncovered | |
 | RV-006-L  | `BinOp::BitXor` | uncovered | |
@@ -333,22 +333,22 @@ row is a `positive` expectation unless otherwise marked.
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| TM-005-A  | `CallCallee::Direct(InstanceId)` | covered | every direct fn call |
+| TM-005-A  | `CallCallee::Direct(InstanceId)` | covered | runner `TM-005-A` (`CallCallee=Direct`; F-b2) |
 | TM-005-B  | `CallCallee::Indirect(Operand)` | covered | `fn_ptr_translation_sig_sync.rs` |
 
 ### TM-005 sub-axes (`Call.target` -- divergence dichotomy per spec.md §23)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
-| TM-005-C  | `Call.target == Some(bb)` (non-diverging) | covered | every direct fn call |
-| TM-005-D  | `Call.target == None` (diverging, e.g., calls `!` return type) | uncovered | requires a `-> !` fn call |
+| TM-005-C  | `Call.target == Some(bb)` (non-diverging) | covered | runner `TM-005-C` (`CallDivergent=false`; F-b2) |
+| TM-005-D  | `Call.target == None` (diverging, e.g., calls `!` return type) | covered | runner `TM-005-D` (`CallDivergent=true`, `-> !` call; F-b2) |
 
 ### TM-006 sub-axes (`AssertKind` -- 8 variants per `terminator.rs:141`)
 
 | id        | sub-construct | status | notes |
 | --------- | ------------- | ------ | ----- |
 | TM-006-A  | `AssertKind::BoundsCheck { len, index }` | uncovered | array/slice indexing with non-const index |
-| TM-006-B  | `AssertKind::Overflow(BinOp, Operand, Operand)` | covered | playground (`AddWithOverflow`-via-`+`) |
+| TM-006-B  | `AssertKind::Overflow(BinOp, Operand, Operand)` | covered | runner `TM-006-B` (`AssertKind=Overflow`, `overflow_checks=true`; F-b2) |
 | TM-006-C  | `AssertKind::OverflowNeg(Operand)` | uncovered | `-i32::MIN` |
 | TM-006-D  | `AssertKind::DivisionByZero(Operand)` | uncovered | `a / b` |
 | TM-006-E  | `AssertKind::RemainderByZero(Operand)` | uncovered | `a % b` |

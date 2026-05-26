@@ -1486,12 +1486,12 @@
   },
   "RV-003": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RV-003",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RV-004": {
     "axis": "coverage",
@@ -1648,12 +1648,12 @@
   },
   "RV-006-A": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RV-006-A",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RV-006-B": {
     "axis": "coverage",
@@ -1720,12 +1720,12 @@
   },
   "RV-006-I": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "RV-006-I",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "RV-006-J": {
     "axis": "coverage",
@@ -2197,12 +2197,12 @@
   },
   "TM-005-A": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "TM-005-A",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "TM-005-B": {
     "axis": "coverage",
@@ -2215,21 +2215,21 @@
   },
   "TM-005-C": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "TM-005-C",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "TM-005-D": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "TM-005-D",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "TM-006": {
     "axis": "coverage",
@@ -2251,12 +2251,12 @@
   },
   "TM-006-B": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "TM-006-B",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "TM-006-C": {
     "axis": "coverage",
@@ -2458,12 +2458,12 @@
   },
   "TY-005": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "TY-005",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "1",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "TY-005-A": {
     "axis": "coverage",

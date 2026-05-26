@@ -585,6 +585,18 @@ cluster_key = "TY-005"
 snippet_path = "TY-005-D.rs"
 inspect = { kind = "ScalarKind", arg = "F128" }
 
+# F-b2 batch (driver-80 triage bucket A): TY-005. Bridges Ok at HEAD with
+# no bridge change; an `f32` parameter/return interns `Ty::Float(F32)`.
+[[row]]
+id = "TY-005"
+section = "1.1"
+construct = "Ty::Float (f32/f64)"
+expectation = "positive"
+status = "covered"
+cluster_key = "TY-005"
+snippet_path = "TY-005.rs"
+inspect = { kind = "TyVariant", arg = "Float" }
+
 # Section 1.2 -- PlaceElem
 [[row]]
 id = "PL-004"
@@ -1156,6 +1168,42 @@ cluster_key = "RV-009"
 snippet_path = "RV-009-E.rs"
 inspect = { kind = "AggregateKind", arg = "Union" }
 
+# F-b2 batch (driver-80 triage bucket A): RV-003, RV-006-A, RV-006-I.
+# All bridge Ok at HEAD with no bridge change. RV-006-I builds with
+# `overflow_checks = true` (driver-69 surface) so the checked add lowers
+# to `AddWithOverflow` (the same witness surfaces TM-006-B's overflow
+# assert in Section 1.6).
+[[row]]
+id = "RV-003"
+section = "1.4"
+construct = "Rvalue::Ref (reference to a local)"
+expectation = "positive"
+status = "covered"
+cluster_key = "RV-003"
+snippet_path = "RV-003.rs"
+inspect = { kind = "RvalueVariant", arg = "Ref" }
+
+[[row]]
+id = "RV-006-A"
+section = "1.4"
+construct = "BinOp::Add (overflow checks off -> plain Add)"
+expectation = "positive"
+status = "covered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-A.rs"
+inspect = { kind = "BinOp", arg = "Add" }
+
+[[row]]
+id = "RV-006-I"
+section = "1.4"
+construct = "BinOp::AddWithOverflow (overflow checks on)"
+expectation = "positive"
+status = "covered"
+cluster_key = "RV-006"
+snippet_path = "RV-006-I.rs"
+build_overrides = { overflow_checks = true }
+inspect = { kind = "BinOp", arg = "AddWithOverflow" }
+
 # Section 1.5 -- Statement (NonDivergingIntrinsic)
 [[row]]
 id = "ST-003-A"
@@ -1217,6 +1265,52 @@ status = "uncovered"
 cluster_key = "TM-006"
 snippet_path = "TM-006-E.rs"
 inspect = { kind = "AssertKind", arg = "RemainderByZero" }
+
+# F-b2 batch (driver-80 triage bucket A): TM-005-A/C/D, TM-006-B. All
+# bridge Ok at HEAD with no bridge change. TM-005-A and TM-005-C share a
+# witness (a direct, non-diverging call); TM-005-D is a diverging call
+# (`-> !`). TM-006-B builds with `overflow_checks = true` so the checked
+# add emits an `Assert{ msg: Overflow }` (same witness as RV-006-I).
+[[row]]
+id = "TM-005-A"
+section = "1.6"
+construct = "CallCallee::Direct (direct call to a named fn)"
+expectation = "positive"
+status = "covered"
+cluster_key = "TM-005"
+snippet_path = "TM-005-A.rs"
+inspect = { kind = "CallCallee", arg = "Direct" }
+
+[[row]]
+id = "TM-005-C"
+section = "1.6"
+construct = "Call.target == Some(bb) (converging call has a return edge)"
+expectation = "positive"
+status = "covered"
+cluster_key = "TM-005"
+snippet_path = "TM-005-C.rs"
+inspect = { kind = "CallDivergent", arg = false }
+
+[[row]]
+id = "TM-005-D"
+section = "1.6"
+construct = "Call.target == None (diverging call to a -> ! fn)"
+expectation = "positive"
+status = "covered"
+cluster_key = "TM-005"
+snippet_path = "TM-005-D.rs"
+inspect = { kind = "CallDivergent", arg = true }
+
+[[row]]
+id = "TM-006-B"
+section = "1.6"
+construct = "AssertKind::Overflow (checked add overflow assert)"
+expectation = "positive"
+status = "covered"
+cluster_key = "TM-006"
+snippet_path = "TM-006-B.rs"
+build_overrides = { overflow_checks = true }
+inspect = { kind = "AssertKind", arg = "Overflow" }
 
 # Section 3 -- source-level features
 [[row]]

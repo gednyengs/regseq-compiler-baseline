@@ -171,7 +171,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RJ-032-F | 6 | coverage | out-of-scope | blocked-unimplemented-phase | D8 short-circuits to Ok(()) because target_str_arg_bound (bridge/diag_log/peel.rs:179-180) is hard-wired None pending the backend target-binding wiring that populates max_str_args_per_call (spec §26.8/26.9 + per-target <target>-backend.md). Unreachable from source until that phase lands. See .harness/audits/2026-05-23-f1-rj032f-watchlist.md (F1) | blocked-unimplemented-phase |
 | RV-001 | 1 | coverage | validated-legacy-universal | covered | every fixture |  |
 | RV-002 | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| RV-003 | 1 | coverage | needs-validation | covered |  |  |
+| RV-003 | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RV-004 | 1 | coverage | validated-legacy | covered | drop_glue_in_self_consuming_method.rs |  |
 | RV-005 | 1 | coverage | needs-validation | partial |  |  |
 | RV-005-A | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
@@ -189,7 +189,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RV-005-M | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-005-N | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006 | 1 | coverage | needs-validation | partial |  |  |
-| RV-006-A | 1 | coverage | needs-validation | covered |  |  |
+| RV-006-A | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RV-006-B | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006-C | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006-D | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
@@ -197,7 +197,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RV-006-F | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006-G | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006-H | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| RV-006-I | 1 | coverage | needs-validation | covered |  |  |
+| RV-006-I | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | RV-006-J | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006-K | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-006-L | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
@@ -250,13 +250,13 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | TM-003 | 1 | coverage | validated-legacy-universal | covered | every fixture |  |
 | TM-004 | 1 | coverage | validated-runner | partial | sidecar:rows.toml |  |
 | TM-005 | 1 | coverage | validated-legacy-universal | covered | many |  |
-| TM-005-A | 1 | coverage | needs-validation | covered |  |  |
+| TM-005-A | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | TM-005-B | 1 | coverage | validated-legacy | covered | fn_ptr_translation_sig_sync.rs |  |
-| TM-005-C | 1 | coverage | needs-validation | covered |  |  |
-| TM-005-D | 1 | coverage | needs-validation | uncovered |  |  |
+| TM-005-C | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
+| TM-005-D | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | TM-006 | 1 | coverage | needs-validation | partial |  |  |
 | TM-006-A | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| TM-006-B | 1 | coverage | needs-validation | covered |  |  |
+| TM-006-B | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | TM-006-C | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | TM-006-D | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | TM-006-E | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
@@ -279,7 +279,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | TY-004-D | 1 | coverage | validated-legacy | covered | instance_completeness.rs (Wrap<u64>) |  |
 | TY-004-E | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | TY-004-F | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| TY-005 | 1 | coverage | needs-validation | uncovered |  |  |
+| TY-005 | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | TY-005-A | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | TY-005-B | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | TY-005-C | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
