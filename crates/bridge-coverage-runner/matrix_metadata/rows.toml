@@ -1494,6 +1494,30 @@ cluster_key = "RJ-009"
 snippet_path = "RJ-009.rs"
 inspect = { kind = "SignatureNonRigid" }
 
+# regseq-driver-82 (RJ-013): the sibling of RJ-009. RJ-009 covers an
+# UNCALLED RPIT opaque (identity-signature carve-out, kept rejecting);
+# RJ-013 covers a body-context USE of an RPIT opaque (`f` binds and
+# invokes `mk`'s `-> impl Fn() -> u32` return). At HEAD `f` rejected with
+# `NonRigidTyKind::Alias`; the body-context opaque reveal makes it bridge
+# `Ok`, with the revealed closure invoked through a `ClosureCall` shim.
+# Reframed `rejected`->`positive` covered-by-reveal (cf. FF-005's
+# covered-by-rewrite). The runner predicate is the coarse
+# `SyntheticItemKind = ClosureCall` shared by the 8 existing closure-call
+# rows -- the discriminating signal is reaching a positive bridge Ok AT
+# ALL (at HEAD the whole crate Rejects on `f`'s opaque). The precise
+# "f's opaque revealed to a closure, no Alias survives, RJ-009 stays
+# carved out" proof lives in the integration test
+# `crates/regseq-driver/tests/bridge_rpit_opaque_reveal.rs`.
+[[row]]
+id = "RJ-013"
+section = "6.2"
+construct = "Body-context reveal of an RPIT Alias(Opaque) to its concrete closure hidden type (revealed closure invoked via ClosureCall)"
+expectation = "positive"
+status = "covered"
+cluster_key = "RJ-013"
+snippet_path = "RJ-013.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureCall" }
+
 # F72 sub-task B: FF-007 committed after the ClosureOnceShim Phase-5
 # binding fix at `crates/regseq-driver/src/bridge/body/materialise.rs`.
 # The Fn-as-FnOnce coercion shape triggers rustc to synthesize an

@@ -2150,7 +2150,7 @@
           "id": "regseq-driver-82",
           "name": "Body-context reveal of RPIT opaque types (RJ-013)",
           "spec": ".harness/tasks/regseq-driver/82-rpit-opaque-reveal.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-81"
           ],

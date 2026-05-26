@@ -8,7 +8,7 @@ use regseq_model::{
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::ty::{self, GenericArgs, Instance, TyCtxt};
 
-use crate::bridge::{ty::translate_ty, BridgeCtxt, BridgeError};
+use crate::bridge::{ty::translate_ty, BridgeCtxt, BridgeError, RevealOpaqueScope};
 
 use super::{
     statement::translate_span, translate_basic_block, vtable_indirect::rewrite_vtable_indirect,
@@ -299,6 +299,17 @@ fn materialise_function_body_inner<'tcx>(
         arg_count: rustc_body.arg_count,
         span: translate_span(cx, rustc_body.span),
     };
+
+    // Per regseq-driver-82: enable body-context RPIT opaque reveal for
+    // the remainder of this per-Instance body materialisation -- the
+    // local-decl loop below AND the basic-block walk (statements,
+    // places, rvalues, terminators all route through `translate_ty`),
+    // including any Instance lazily created mid-walk. The RAII guard
+    // restores the prior flag on every exit path, including the `?`
+    // early returns in the loops, so the reveal cannot leak past this
+    // body into identity-signature translation.
+    let mut reveal_guard = RevealOpaqueScope::enter(cx);
+    let cx = &mut *reveal_guard;
 
     for local in rustc_body.local_decls.iter() {
         let ty = translate_ty(cx, local.ty)?;

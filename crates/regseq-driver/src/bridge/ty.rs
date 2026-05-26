@@ -66,7 +66,14 @@ fn translate_erased_ty<'tcx>(
     // `bridge/body/materialise.rs::translate_model_generic_args`
     // reads back the same (post-normalization) ty it would have
     // seen on the forward path.
-    let ty = normalize_authorized_projections(cx.input.tcx, ty);
+    //
+    // Per regseq-driver-82 the same folder additionally reveals RPIT
+    // `Alias(Opaque)` nodes to their concrete hidden type, but ONLY
+    // when `cx.reveal_opaque_types` is set (body-context scope, via
+    // the `RevealOpaqueScope` RAII guard). The reveal must not fire
+    // during identity-signature translation, so the flag is threaded
+    // in rather than always-on (RJ-009 carve-out coupling).
+    let ty = normalize_authorized_aliases(cx.input.tcx, ty, cx.reveal_opaque_types);
 
     let ty_id = translate_erased_ty_inner(cx, ty, allow_unsized_marker)?;
     // Audit-finding regseq-driver-43-2: cache the (TyId,
@@ -91,7 +98,9 @@ pub(crate) fn translate_ptr_pointee<'tcx>(
 }
 
 /// Node-local normalization of the two associated-type projection
-/// families authorized by regseq-driver-70:
+/// families authorized by regseq-driver-70, plus (regseq-driver-82)
+/// the body-context reveal of RPIT `Alias(Opaque)` nodes when
+/// `reveal_opaques` is set:
 ///
 ///   - `<T as core::ptr::Pointee>::Metadata` on `T = Slice(_)` or a
 ///     sized non-`Dynamic` non-`Slice` pointee (resolves to `usize`
@@ -99,6 +108,9 @@ pub(crate) fn translate_ptr_pointee<'tcx>(
 ///   - `<F as core::ops::Fn / FnMut / FnOnce<Args>>::Output` on
 ///     `F = FnPtr(..)` (resolves to the function pointer's return
 ///     type).
+///   - any `Alias(Opaque)` (an RPIT opaque) when `reveal_opaques`
+///     is `true` (resolves to the opaque's concrete hidden type --
+///     a closure / primitive that the rigid arms already bridge).
 ///
 /// Walks `ty` with a custom `TypeFolder` that, at every
 /// `TyKind::Alias(AliasTyKind::Projection, _)` node, checks whether
@@ -117,29 +129,48 @@ pub(crate) fn translate_ptr_pointee<'tcx>(
 /// under the pinned nightly), which would silently widen the
 /// bridge's effective alias-acceptance set beyond the two authorized
 /// families.
-fn normalize_authorized_projections<'tcx>(
+///
+/// The `Opaque` arm is node-local in the same sense, but note the
+/// reveal recursively normalizes aliases *inside* the opaque's
+/// hidden type (PostAnalysis reveal semantics): the no-widening
+/// property holds for projection nodes outside or containing the
+/// opaque (those still short-circuit at `translate_erased_ty_inner`),
+/// but a projection embedded inside a revealed hidden type is
+/// normalized too. This is codegen-faithful.
+fn normalize_authorized_aliases<'tcx>(
     tcx: ty::TyCtxt<'tcx>,
     ty: rustc_middle::ty::Ty<'tcx>,
+    reveal_opaques: bool,
 ) -> rustc_middle::ty::Ty<'tcx> {
     if !ty.has_aliases() {
         return ty;
     }
-    let mut folder = AuthorizedProjectionFolder { tcx };
+    let mut folder = AuthorizedAliasFolder {
+        tcx,
+        reveal_opaques,
+    };
     ty.fold_with(&mut folder)
 }
 
-struct AuthorizedProjectionFolder<'tcx> {
+struct AuthorizedAliasFolder<'tcx> {
     tcx: ty::TyCtxt<'tcx>,
+    /// Per regseq-driver-82: when `true`, reveal RPIT `Alias(Opaque)`
+    /// nodes to their concrete hidden type. Set only in body context
+    /// (see `RevealOpaqueScope`); never during identity-signature
+    /// translation.
+    reveal_opaques: bool,
 }
 
-impl<'tcx> TypeFolder<ty::TyCtxt<'tcx>> for AuthorizedProjectionFolder<'tcx> {
+impl<'tcx> TypeFolder<ty::TyCtxt<'tcx>> for AuthorizedAliasFolder<'tcx> {
     fn cx(&self) -> ty::TyCtxt<'tcx> {
         self.tcx
     }
 
     fn fold_ty(&mut self, ty: rustc_middle::ty::Ty<'tcx>) -> rustc_middle::ty::Ty<'tcx> {
-        if let TyKind::Alias(AliasTyKind::Projection, alias_ty) = ty.kind() {
-            if is_authorized_projection(self.tcx, *alias_ty) {
+        match ty.kind() {
+            TyKind::Alias(AliasTyKind::Projection, alias_ty)
+                if is_authorized_projection(self.tcx, *alias_ty) =>
+            {
                 // Normalize this single alias node. The query
                 // normalizer at
                 // `rustc_middle/src/ty/normalize_erasing_regions.rs`
@@ -151,6 +182,20 @@ impl<'tcx> TypeFolder<ty::TyCtxt<'tcx>> for AuthorizedProjectionFolder<'tcx> {
                     .normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(), ty);
                 return normalized.fold_with(self);
             }
+            TyKind::Alias(AliasTyKind::Opaque, _) if self.reveal_opaques => {
+                // Per regseq-driver-82: reveal the RPIT opaque to its
+                // concrete hidden type. `normalize_erasing_regions`
+                // with `TypingEnv::fully_monomorphized()` (PostAnalysis
+                // mode) instantiates the opaque's hidden type, which the
+                // rigid arms (`TyKind::Closure`, primitives, ...) then
+                // bridge. Re-folding handles a nested opaque/projection
+                // inside the revealed hidden type.
+                let revealed = self
+                    .tcx
+                    .normalize_erasing_regions(ty::TypingEnv::fully_monomorphized(), ty);
+                return revealed.fold_with(self);
+            }
+            _ => {}
         }
         ty.super_fold_with(self)
     }

@@ -168,6 +168,17 @@ pub struct BridgeCtxt<'tcx> {
     /// drained by `diag_log::dead_item_elim::eliminate_diag_log_peel_residue`
     /// at the end of Phase 5. See `DiagLogPeelResidue`.
     pub diag_log_peel_residue: DiagLogPeelResidue,
+    /// Transient flag (regseq-driver-82) gating the body-context
+    /// reveal of return-position `impl Trait` (RPIT) `Alias(Opaque)`
+    /// types in `ty::translate_erased_ty`'s alias folder. Default
+    /// `false`; set to `true` only for the duration of a per-Instance
+    /// body-derived type translation via the [`RevealOpaqueScope`]
+    /// RAII guard (materialise + closure-call construction), and
+    /// restored on guard `Drop`. It MUST stay `false` during
+    /// identity-signature translation (`construct_function_instances`)
+    /// so the RJ-009 bucket-4 `signature_non_rigid` carve-out is
+    /// preserved.
+    pub reveal_opaque_types: bool,
 }
 
 impl<'tcx> BridgeCtxt<'tcx> {
@@ -195,7 +206,61 @@ impl<'tcx> BridgeCtxt<'tcx> {
             collected_item_resolutions: HashMap::new(),
             ty_forward_cache: HashMap::new(),
             diag_log_peel_residue: DiagLogPeelResidue::default(),
+            reveal_opaque_types: false,
         }
+    }
+}
+
+/// RAII guard (regseq-driver-82) that enables body-context reveal of
+/// RPIT `Alias(Opaque)` types for the duration of a per-Instance
+/// body-derived type translation, restoring the prior flag value on
+/// `Drop`.
+///
+/// The reveal MUST be scoped to per-Instance body materialisation
+/// (`body::materialise::materialise_function_body_inner`) and
+/// closure-call instance construction (`construct_closure_call_instances`)
+/// and MUST NOT fire during identity-signature translation
+/// (`construct_function_instances`), where an uncalled fn's polymorphic
+/// RPIT return must keep rejecting `NonRigidTy` so the bucket-4
+/// `signature_non_rigid` carve-out (RJ-009) stays covered.
+///
+/// A guard (rather than a bare set/restore pair) is required because the
+/// body walk uses `?` and can lazily create further Instances mid-walk
+/// (`body/terminator.rs`); an early return must still restore the flag.
+/// The guard exposes the wrapped `BridgeCtxt` via `Deref`/`DerefMut` so
+/// the guarded region uses it exactly like the bare `&mut BridgeCtxt`.
+pub(crate) struct RevealOpaqueScope<'a, 'tcx> {
+    cx: &'a mut BridgeCtxt<'tcx>,
+    prev: bool,
+}
+
+impl<'a, 'tcx> RevealOpaqueScope<'a, 'tcx> {
+    /// Save the current `reveal_opaque_types` value, set it `true`, and
+    /// return a guard that restores the saved value on `Drop`.
+    pub(crate) fn enter(cx: &'a mut BridgeCtxt<'tcx>) -> Self {
+        let prev = cx.reveal_opaque_types;
+        cx.reveal_opaque_types = true;
+        Self { cx, prev }
+    }
+}
+
+impl<'tcx> std::ops::Deref for RevealOpaqueScope<'_, 'tcx> {
+    type Target = BridgeCtxt<'tcx>;
+
+    fn deref(&self) -> &Self::Target {
+        self.cx
+    }
+}
+
+impl<'tcx> std::ops::DerefMut for RevealOpaqueScope<'_, 'tcx> {
+    fn deref_mut(&mut self) -> &mut Self::Target {
+        self.cx
+    }
+}
+
+impl Drop for RevealOpaqueScope<'_, '_> {
+    fn drop(&mut self) {
+        self.cx.reveal_opaque_types = self.prev;
     }
 }
 
@@ -665,6 +730,22 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
     // InstanceId so terminator references survive the permutation.
     ctxt.model.sort_instances_by_f4_2();
 
+    // Per regseq-driver-82: a non-generic Function whose identity
+    // signature carries an RPIT `Alias(Opaque)` is eagerly flagged
+    // `signature_non_rigid` (bucket-4 carve-out) by
+    // `construct_function_instances`, which runs before any body is
+    // materialised. If such a function is ALSO called, Phase-5 body
+    // materialisation reveals the opaque (body-context scope) and
+    // creates a real reactive Instance for it. The carve-out flag is
+    // then stale: the item is an instantiated bucket-1 Function, not a
+    // zero-Instance bucket-4 carve-out. Clear the flag for any flagged
+    // Function that ended up with at least one Instance so the
+    // `Bucket4HasInstance` invariant holds. An UNCALLED RPIT function
+    // (RJ-009's `opaque_adder`) is never reactively instantiated, so
+    // its flag and zero-Instance status both stand -- the carve-out
+    // (and the `SignatureNonRigid` coverage predicate) is preserved.
+    reconcile_revealed_signature_flags(&mut ctxt);
+
     // Per regseq-driver-55 Change G (spec.md section 3.4 Phase 5 +
     // section 8.1 `ItemKind` mirrors `InstanceKind`): after the final
     // F4-2 Instance sort, assert every source-derived non-foreign
@@ -683,6 +764,44 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
         })?;
 
     Ok(ctxt.model)
+}
+
+/// Per regseq-driver-82: clear the `signature_non_rigid` carve-out
+/// flag on any Function Item that ended Phase 5 with at least one
+/// Instance.
+///
+/// The flag is set eagerly by `construct_function_instances` when a
+/// non-generic Function's identity signature rejects `NonRigidTy`
+/// (an RPIT `Alias(Opaque)` return). That eager pass runs before any
+/// body is materialised, so it cannot know whether the function is
+/// reachable. A reachable (called) such function is reactively
+/// instantiated during Phase-5 body materialisation, where the
+/// body-context opaque reveal makes its signature translatable. Once
+/// the Instance exists the carve-out no longer applies: the Item is a
+/// normal instantiated bucket-1 Function. Without this reconciliation
+/// the stale flag trips the `Bucket4HasInstance` invariant (a bucket-4
+/// Item must have zero Instances).
+///
+/// An uncalled RPIT function (e.g. RJ-009's private `opaque_adder`) is
+/// never reactively instantiated, so its instance count stays zero and
+/// its flag is left intact -- the bucket-4 carve-out and the
+/// `SignatureNonRigid` coverage predicate are preserved.
+fn reconcile_revealed_signature_flags(ctxt: &mut BridgeCtxt<'_>) {
+    // Count Instances per Item, mirroring the validator's
+    // `instance_counts` (model.rs:3618-3629).
+    let mut instance_counts: Vec<usize> = vec![0; ctxt.model.items.len()];
+    for instance in ctxt.model.instances.iter() {
+        let idx = instance.item.index();
+        if idx < instance_counts.len() {
+            instance_counts[idx] += 1;
+        }
+    }
+    for (item_id, flags) in ctxt.model.item_bridge_flags.iter_mut() {
+        let idx = item_id.index();
+        if flags.signature_non_rigid && idx < instance_counts.len() && instance_counts[idx] > 0 {
+            flags.signature_non_rigid = false;
+        }
+    }
 }
 
 /// Per regseq-driver-74 Change B: give an `Item`-flavored Function
@@ -2351,6 +2470,18 @@ fn construct_closure_call_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), Bri
         ClosureCallKind, FnAbi, FnSig, FunctionInstanceData, Instance, InstanceKind, Provenance,
         Safety, SyntheticItemKind, Ty,
     };
+
+    // Per regseq-driver-82: closure-call instance construction is
+    // body-derived but runs BEFORE `run_phase5_body_passes`, and it
+    // translates closure signature input/output types outside the
+    // materialise guard's window. A closure whose signature carries an
+    // RPIT opaque (e.g. `let c = || mk();`) would still reject without
+    // a guard here, so reveal body-context opaques for the duration of
+    // this pass. The RAII guard restores the prior flag on every exit
+    // path (including `?`), and this pass never reaches the
+    // identity-signature path, so RJ-009 is unaffected.
+    let mut reveal_guard = RevealOpaqueScope::enter(ctxt);
+    let ctxt = &mut *reveal_guard;
 
     // Snapshot every closure-family synthetic Item before iterating;
     // the loop body interns new `TyId`s, `FnSigId`s, and `Instance`

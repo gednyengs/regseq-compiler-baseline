@@ -134,7 +134,7 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RJ-010 | 6 | coverage | needs-validation | uncovered |  |  |
 | RJ-011 | 6 | coverage | needs-validation | uncovered |  |  |
 | RJ-012 | 6 | coverage | needs-validation | uncovered |  |  |
-| RJ-013 | 6 | coverage | needs-validation | uncovered |  |  |
+| RJ-013 | 6 | coverage | validated-runner | covered | regseq-driver-82: body-context reveal of an RPIT Alias(Opaque). Reframed rejected->positive covered-by-reveal (cf. FF-005 covered-by-rewrite). Snippet crates/bridge-coverage-runner/snippets/RJ-013.rs (mk() -> impl Fn() -> u32; f() { let g = mk(); g() }) bridges Ok via the body-context opaque-reveal arm in bridge/ty.rs (RevealOpaqueScope-gated); revealed closure invoked through a ClosureCall shim. RJ-009 carve-out preserved (uncalled RPIT stays zero-Instance). Proof in crates/regseq-driver/tests/bridge_rpit_opaque_reveal.rs. | sidecar:rows.toml |
 | RJ-014 | 6 | coverage | out-of-scope | blocked-rustc-infeasible | rustc rejects first | blocked-rustc-infeasible |
 | RJ-015 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RJ-016 | 6 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
