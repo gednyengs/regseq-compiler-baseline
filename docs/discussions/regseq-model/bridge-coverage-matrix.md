@@ -384,17 +384,17 @@ bridge bugs they surface.
 
 | id      | construct        | expectation | status      | fixture_path | notes |
 | ------- | ---------------- | ----------- | ----------- | ------------ | ----- |
-| SK-001  | `SyntheticItemKind::None` (source-derived) | positive | covered | most fixtures | |
+| SK-001  | `SyntheticItemKind::None` (source-derived) | positive | covered | runner `SK-001` (`SyntheticItemKind=None`; F-b3) | |
 | SK-002  | `SyntheticItemKind::ClosureCaptures { closure }` | positive | covered | `closure.rs`, `closure_call_sig_sync.rs` | |
 | SK-003  | `SyntheticItemKind::ClosureCall { closure, call_kind: Call }` | positive | covered | `crates/bridge-coverage-runner/snippets/SK-003.rs` | regseq-driver-71 (the `Fn::call` body path that was the OPEN BUG IX-004 now translates cleanly post-driver-62) |
 | SK-004  | `SyntheticItemKind::ClosureCall { closure, call_kind: CallMut }` | positive | covered | `crates/bridge-coverage-runner/snippets/SK-004.rs` | regseq-driver-72 sub-task A: committed via the new `InspectionPredicate::SyntheticItemKindSub` arm (Shape A.2.ii), which discriminates the `ClosureCall { call_kind }` sub-axis the flat `SyntheticItemKind` arm collapses to `"ClosureCall"` |
 | SK-005  | `SyntheticItemKind::ClosureCall { closure, call_kind: CallOnce }` | positive | covered | `crates/bridge-coverage-runner/snippets/SK-005.rs` | regseq-driver-72 sub-task A: committed via the new `InspectionPredicate::SyntheticItemKindSub` arm (Shape A.2.ii); the CallOnce sub-axis is now provable independently of the flat `"ClosureCall"` tag |
-| SK-006  | `SyntheticItemKind::ClosureDropGlue { closure }` | positive | uncovered | -- | closure with non-trivial captures + drop |
+| SK-006  | `SyntheticItemKind::ClosureDropGlue { closure }` | positive | covered | runner `SK-006` (`SyntheticItemKind=ClosureDropGlue`; F-b3) | closure with non-trivial captures + drop |
 | SK-007  | `SyntheticItemKind::DropGlue { self_ty }` | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | SK-008  | `SyntheticItemKind::VTableType { principal }` | positive | covered | `trait_object.rs`, `instance_completeness.rs` | |
 | SK-009  | `SyntheticItemKind::VTableInstance { principal, self_ty }` | positive | covered | `trait_object.rs` | |
 | SK-010  | `SyntheticItemKind::VTableMethodShim { ... }` | positive | covered | `trait_object.rs` | |
-| SK-011  | `SyntheticItemKind::VTableDropShim { principal, self_ty }` | positive | uncovered | -- | needs `dyn Trait` over a Drop type |
+| SK-011  | `SyntheticItemKind::VTableDropShim { principal, self_ty }` | positive | covered | runner `SK-011` (`SyntheticItemKind=VTableDropShim`; F-b3) | needs `dyn Trait` over a Drop type |
 | SK-012  | `SyntheticItemKind::ConstMemoryStatic { content_hash }` | positive | partial | `diag_logging.rs` (string-literal backing) | |
 
 ## 2.3 `FunctionInstanceFlavor` -- `crates/regseq-model/src/instance.rs:192` (15 variants)
@@ -443,12 +443,12 @@ bridge bugs they surface.
 | FT-001  | Drop impl on a concrete type | positive | covered | `drop_glue_in_self_consuming_method.rs` | |
 | FT-002  | Drop impl on a generic type (`impl<T> Drop for Wrapper<T>`) | positive | uncovered | -- | |
 | FT-003  | Nested Drop fields (Drop type holding another Drop type, field-drop ordering) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-003.rs` | regseq-driver-81 (DFS-RPO body normalization; multi-Drop drop-glue shim) |
-| FT-004  | `ManuallyDrop<T>` wrapping a Drop type | positive | uncovered | -- | NEGATIVE test for "drop is NOT scheduled" |
+| FT-004  | `ManuallyDrop<T>` wrapping a Drop type | positive | covered | runner `FT-004` (`Not(SyntheticItemKind=DropGlue)`; F-b3) | NEGATIVE test for "drop is NOT scheduled" -- asserts no drop glue synthesised |
 | FT-005  | Explicit `core::mem::drop(x)` call | positive | uncovered | -- | drop intrinsic call site |
 | FT-006  | Trait declaration + impl + concrete call | positive | covered | `trait_method_resolution.rs` | regseq-driver-56 |
 | FT-007  | Trait default method body | positive | covered | `trait_default_method.rs` | regseq-driver-60 |
 | FT-008  | Trait default method body overridden by impl | positive | uncovered | -- | |
-| FT-009  | Generic free fn called with concrete args | positive | uncovered | -- | needs driver-60 B4-style fixture |
+| FT-009  | Generic free fn called with concrete args | positive | covered | runner `FT-009` (`MonomorphizedInstance`; F-b3) | monomorphised `id::<u32>` instance carries generic_args |
 | FT-010  | Generic struct + concrete instantiation | positive | partial | `instance_completeness.rs` (`Wrap<u32>`, `Wrap<u64>`) | the struct EXISTS in model.items; per-Item-instance body materialisation under monomorphisation needs verification |
 | FT-011  | Closure with zero captures, called by ref (`impl Fn`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-011.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
 | FT-012  | Closure with N captures, called by ref | positive | covered | `crates/bridge-coverage-runner/snippets/FT-012.rs` | regseq-driver-71 (post-driver-62 reattempt PASS) |
@@ -456,9 +456,9 @@ bridge bugs they surface.
 | FT-014  | Closure called by value (`impl FnOnce`) | positive | covered | `crates/bridge-coverage-runner/snippets/FT-014.rs` | regseq-driver-71 (post-driver-62 reattempt PASS via the closure-call rewrite's `LangItem::FnOnce -> ClosureCallKind::CallOnce` arm) |
 | FT-015  | Trait object `&dyn Trait` static-method call | positive | covered | `trait_object.rs` | |
 | FT-016  | Trait object `Box<dyn Trait>` | rejected | blocked-bridge-rejects-by-design | -- | cross-ref Section 6 row RJ-001 |
-| FT-017  | `const fn` evaluated in const context | positive | partial | playground (`Reg::REG_0`) | |
+| FT-017  | `const fn` evaluated in const context | positive | covered | runner `FT-017` (`ItemKind=Const`; F-b3) | |
 | FT-018  | `const FOO: T = ...;` const item | positive | covered | `instance_completeness.rs`, playground | |
-| FT-019  | Associated const on an `impl` block | positive | covered | playground | |
+| FT-019  | Associated const on an `impl` block | positive | covered | runner `FT-019` (`ItemKind=Const`; F-b3) | |
 | FT-020  | `#[rseq::intrinsic("log_*")]` recognition | positive | covered | `diag_logging.rs` | |
 | FT-021  | Diagnostic-log format-template parse rejection | rejected | partial | -- | Section 6 RJ-031 sub-axes |
 
@@ -506,11 +506,11 @@ or, if uncovered, the bug class it would surface.
 | IX-013  | Closure × Captures with Drop type | positive | uncovered | -- | exercises ClosureDropGlue (SK-006) |
 | IX-014  | Closure × `FnOnce` consumed via Move | positive | covered | `crates/bridge-coverage-runner/snippets/IX-014.rs` | regseq-driver-71 PASS via closure-call rewrite to `ClosureCall { call_kind: CallOnce }`; the embedded FF-007 ClosureOnceShim sub-axis remains uncovered (separate Phase-5 `ItemMissingInstance` bridge gap surfaced by F71), and the SK-005 CallOnce sub-axis is masked by the runner predicate-precision gap |
 | IX-015  | Generic fn × Generic struct field access | positive | uncovered | -- | substitution in `Place::Field` |
-| IX-016  | Const eval × Const item used in body | positive | covered | playground | |
+| IX-016  | Const eval × Const item used in body | positive | covered | runner `IX-016` (`ConstVariant=Uint`; F-b3) | |
 | IX-017  | Diag-log intrinsic × generic caller | positive | uncovered | -- | log call inside `pub fn f<T>(t: T)` |
 | IX-018  | Validator invariant `sig_c_abi_lowerings.len() == sigs.len()` × Drop-as-Call FnSig synth | positive | covered | implicit via driver-61 debug_assert | |
 | IX-019  | Two adjacent end-of-scope drops (reverse-declaration-order scheduling) | positive | uncovered | -- | playground demonstrated; needs committed test |
-| IX-020  | Drop impl + assoc consts + inherent methods on same struct | positive | covered | playground (uncommitted user fixture) | |
+| IX-020  | Drop impl + assoc consts + inherent methods on same struct | positive | covered | runner `IX-020` (`SyntheticItemKind=DropGlue`, single-Drop; F-b3) | |
 | IX-021  | `dyn Trait + Send` (auto-trait combination) | positive | uncovered | -- | exercises TY-014-B |
 | IX-022  | `Const::Reloc` (function-pointer literal) × call-site translation | positive | uncovered | -- | exercises OP-003-K + RV-005-C |
 | IX-023  | Diverging call (`Call.target == None`) × subsequent block reachability analysis | positive | uncovered | -- | exercises TM-005-D |

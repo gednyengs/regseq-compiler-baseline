@@ -48,12 +48,12 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | FT-001 | 3 | coverage | validated-legacy | covered | drop_glue_in_self_consuming_method.rs |  |
 | FT-002 | 3 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | FT-003 | 3 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/FT-003.rs |  |
-| FT-004 | 3 | coverage | needs-validation | uncovered |  |  |
+| FT-004 | 3 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | FT-005 | 3 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | FT-006 | 3 | coverage | validated-legacy | covered | trait_method_resolution.rs |  |
 | FT-007 | 3 | coverage | validated-legacy | covered | trait_default_method.rs |  |
 | FT-008 | 3 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| FT-009 | 3 | coverage | needs-validation | uncovered |  |  |
+| FT-009 | 3 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | FT-010 | 3 | coverage | validated-legacy | partial | instance_completeness.rs (Wrap<u32>, Wrap<u64>) |  |
 | FT-011 | 3 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/FT-011.rs |  |
 | FT-012 | 3 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/FT-012.rs |  |
@@ -61,9 +61,9 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | FT-014 | 3 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/FT-014.rs |  |
 | FT-015 | 3 | coverage | validated-legacy | covered | trait_object.rs |  |
 | FT-016 | 3 | coverage | out-of-scope | blocked-bridge-rejects-by-design | -- | blocked-bridge-rejects-by-design |
-| FT-017 | 3 | coverage | needs-validation | partial |  |  |
+| FT-017 | 3 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | FT-018 | 3 | coverage | validated-legacy | covered | instance_completeness.rs, playground |  |
-| FT-019 | 3 | coverage | needs-validation | covered |  |  |
+| FT-019 | 3 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | FT-020 | 3 | coverage | validated-legacy | covered | diag_logging.rs |  |
 | FT-021 | 3 | coverage | needs-validation | partial |  |  |
 | IK-001 | 2 | coverage | validated-legacy-universal | covered | every fixture |  |
@@ -88,11 +88,11 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | IX-013 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | IX-014 | 5 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/IX-014.rs |  |
 | IX-015 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| IX-016 | 5 | coverage | needs-validation | covered |  |  |
+| IX-016 | 5 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | IX-017 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | IX-018 | 5 | coverage | validated-legacy-universal | covered | implicit via driver-61 debug_assert |  |
 | IX-019 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
-| IX-020 | 5 | coverage | needs-validation | covered |  |  |
+| IX-020 | 5 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | IX-021 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | IX-022 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | IX-023 | 5 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
@@ -228,17 +228,17 @@ CAVEAT: coverage of the enumerated rows is NOT a proof the enumeration is exhaus
 | RV-009-E | 1 | coverage | validated-runner | uncovered | sidecar:rows.toml |  |
 | RV-009-F | 1 | coverage | validated-legacy | covered | closure.rs, closure_call_sig_sync.rs |  |
 | RV-009-G | 1 | coverage | validated-runner | covered | sidecar:rows.toml |  |
-| SK-001 | 2 | coverage | needs-validation | covered |  |  |
+| SK-001 | 2 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | SK-002 | 2 | coverage | validated-legacy | covered | closure.rs, closure_call_sig_sync.rs |  |
 | SK-003 | 2 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/SK-003.rs |  |
 | SK-004 | 2 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/SK-004.rs |  |
 | SK-005 | 2 | coverage | validated-runner | covered | crates/bridge-coverage-runner/snippets/SK-005.rs |  |
-| SK-006 | 2 | coverage | needs-validation | uncovered |  |  |
+| SK-006 | 2 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | SK-007 | 2 | coverage | validated-legacy | covered | drop_glue_in_self_consuming_method.rs |  |
 | SK-008 | 2 | coverage | validated-legacy | covered | trait_object.rs, instance_completeness.rs |  |
 | SK-009 | 2 | coverage | validated-legacy | covered | trait_object.rs |  |
 | SK-010 | 2 | coverage | validated-legacy | covered | trait_object.rs |  |
-| SK-011 | 2 | coverage | needs-validation | uncovered |  |  |
+| SK-011 | 2 | coverage | validated-runner | covered | sidecar:rows.toml |  |
 | SK-012 | 2 | coverage | validated-legacy | partial | diag_logging.rs (string-literal backing) |  |
 | ST-001 | 1 | coverage | validated-legacy-universal | covered | every fixture |  |
 | ST-002 | 1 | coverage | validated-legacy | covered | enum_round_trip.rs |  |

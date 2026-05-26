@@ -379,12 +379,12 @@
   },
   "FT-004": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "FT-004",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "FT-005": {
     "axis": "coverage",
@@ -424,12 +424,12 @@
   },
   "FT-009": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "FT-009",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "FT-010": {
     "axis": "coverage",
@@ -496,12 +496,12 @@
   },
   "FT-017": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "FT-017",
-    "matrix_current_status": "partial",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "FT-018": {
     "axis": "coverage",
@@ -514,12 +514,12 @@
   },
   "FT-019": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "FT-019",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "3",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "FT-020": {
     "axis": "coverage",
@@ -739,12 +739,12 @@
   },
   "IX-016": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "IX-016",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "IX-017": {
     "axis": "coverage",
@@ -775,12 +775,12 @@
   },
   "IX-020": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "IX-020",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "5",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "IX-021": {
     "axis": "coverage",
@@ -1999,12 +1999,12 @@
   },
   "SK-001": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "SK-001",
     "matrix_current_status": "covered",
     "reason": "",
     "section": "2",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "SK-002": {
     "axis": "coverage",
@@ -2044,12 +2044,12 @@
   },
   "SK-006": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "SK-006",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "2",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "SK-007": {
     "axis": "coverage",
@@ -2089,12 +2089,12 @@
   },
   "SK-011": {
     "axis": "coverage",
-    "evidence": "",
+    "evidence": "sidecar:rows.toml",
     "id": "SK-011",
-    "matrix_current_status": "uncovered",
+    "matrix_current_status": "covered",
     "reason": "",
     "section": "2",
-    "truth": "needs-validation"
+    "truth": "validated-runner"
   },
   "SK-012": {
     "axis": "coverage",

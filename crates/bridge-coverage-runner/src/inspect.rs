@@ -117,10 +117,29 @@ pub enum InspectionPredicate {
     /// runner inspects the in-process model the bridge produces, so
     /// the side table is populated even though it is `#[serde(skip)]`.
     SignatureNonRigid,
+    /// At least one `Item`-flavored Function Instance carries a
+    /// non-empty `generic_args` -- i.e. a user generic free fn / method
+    /// monomorphised with concrete arguments (e.g. `id::<u32>`). The
+    /// `Item`-flavor restriction excludes shim/`Virtual`/drop-glue
+    /// instances, which also carry `generic_args` (the dropped / Self
+    /// type) but are not user-level monomorphisations. A plain
+    /// non-generic direct call interns a `Ty::FnDef` too, so
+    /// `TyVariant("FnDef")` does NOT discriminate monomorphisation;
+    /// this arm does.
+    MonomorphizedInstance,
     /// Composite: ALL of the listed predicates hold.
     All(Vec<InspectionPredicate>),
     /// Composite: AT LEAST ONE of the listed predicates holds.
     Any(Vec<InspectionPredicate>),
+    /// Composite: the wrapped predicate does NOT hold. The natural
+    /// complement to `All`/`Any`, used to assert the ABSENCE of a
+    /// construct (positive coverage of a negative guarantee). E.g.
+    /// `Not(SyntheticItemKind = "DropGlue")` asserts no drop glue was
+    /// synthesised -- the witness that a `ManuallyDrop` value's drop was
+    /// suppressed (FT-004). Holds iff the wrapped predicate returns an
+    /// error; if the wrapped predicate matches, `Not` fails with
+    /// `UnexpectedlyPresent`.
+    Not(Box<InspectionPredicate>),
 }
 
 /// Errors returned by [`check`].
@@ -139,6 +158,9 @@ pub enum InspectError {
         /// Per-child diagnostics.
         children: Vec<InspectError>,
     },
+    /// `Not` composite ran but the wrapped predicate DID hold, so the
+    /// asserted absence is violated.
+    UnexpectedlyPresent,
 }
 
 impl std::fmt::Display for InspectError {
@@ -155,6 +177,12 @@ impl std::fmt::Display for InspectError {
                     f,
                     "Any composite: no child predicate matched ({} child errors)",
                     children.len()
+                )
+            }
+            InspectError::UnexpectedlyPresent => {
+                write!(
+                    f,
+                    "Not composite: the wrapped predicate matched, but its absence was asserted"
                 )
             }
         }
@@ -1059,6 +1087,23 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
                 })
             }
         }
+        InspectionPredicate::MonomorphizedInstance => {
+            let hit = model.instances.iter().any(|inst| match &inst.kind {
+                InstanceKind::Function(data) => {
+                    data.flavor == regseq_model::FunctionInstanceFlavor::Item
+                        && !inst.generic_args.is_empty()
+                }
+                _ => false,
+            });
+            if hit {
+                Ok(())
+            } else {
+                Err(InspectError::NotFound {
+                    variant: "MonomorphizedInstance",
+                    arg: String::new(),
+                })
+            }
+        }
         InspectionPredicate::All(children) => {
             for child in children {
                 check(model, child)?;
@@ -1075,6 +1120,13 @@ pub fn check(model: &RegseqModel, pred: &InspectionPredicate) -> Result<(), Insp
             }
             Err(InspectError::AnyFailed { children: errors })
         }
+        InspectionPredicate::Not(child) => match check(model, child) {
+            // The wrapped predicate did NOT hold, so its asserted
+            // absence is satisfied.
+            Err(_) => Ok(()),
+            // The wrapped predicate matched: the absence is violated.
+            Ok(()) => Err(InspectError::UnexpectedlyPresent),
+        },
     }
 }
 
@@ -1376,6 +1428,103 @@ mod tests {
             &InspectionPredicate::ConstBytesByte("Value".to_string()),
         )
         .is_err());
+    }
+
+    /// Push a `Function` instance with the given flavor and generic args
+    /// (the helper above always uses empty args; this one controls them).
+    fn push_function_with_args(
+        model: &mut RegseqModel,
+        flavor: FunctionInstanceFlavor,
+        generic_args: GenericArgs,
+    ) {
+        let unit_ty = model.types.intern(Ty::Tuple {
+            fields: vec![],
+            layout: UNIT_LAYOUT,
+        });
+        let sig = model.sigs.intern(FnSig {
+            inputs: vec![],
+            output: unit_ty,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        let emission_name = model.strings.intern("mono_test_fn");
+        model.instances.push(regseq_model::Instance {
+            item: ItemId::ZERO,
+            generic_args,
+            emission_name,
+            span: dummy_span(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: sig,
+                body: None,
+                flavor,
+                virtual_idx: None,
+            }),
+        });
+    }
+
+    #[test]
+    fn monomorphized_instance_arm_matches_item_flavor_with_generic_args() {
+        // A plain non-generic fn: Item flavor, EMPTY generic args -> no
+        // match.
+        let mut plain = empty_model();
+        push_function_with_args(&mut plain, FunctionInstanceFlavor::Item, GenericArgs::new());
+        match check(&plain, &InspectionPredicate::MonomorphizedInstance) {
+            Err(InspectError::NotFound { variant, .. }) => {
+                assert_eq!(variant, "MonomorphizedInstance")
+            }
+            other => panic!("expected NotFound, got {other:?}"),
+        }
+
+        // A monomorphised user generic fn: Item flavor WITH a generic
+        // arg -> matches.
+        let mut mono = empty_model();
+        let ty = mono.types.intern(Ty::Bool);
+        push_function_with_args(
+            &mut mono,
+            FunctionInstanceFlavor::Item,
+            vec![regseq_model::GenericArg::Type(ty)],
+        );
+        assert!(check(&mono, &InspectionPredicate::MonomorphizedInstance).is_ok());
+
+        // A NON-Item flavor (drop glue) carrying generic args does NOT
+        // match -- the arm is restricted to user monomorphisations.
+        let mut shim = empty_model();
+        let ty2 = shim.types.intern(Ty::Bool);
+        push_function_with_args(
+            &mut shim,
+            FunctionInstanceFlavor::DropGlue,
+            vec![regseq_model::GenericArg::Type(ty2)],
+        );
+        assert!(check(&shim, &InspectionPredicate::MonomorphizedInstance).is_err());
+    }
+
+    #[test]
+    fn not_arm_inverts_wrapped_predicate() {
+        let mut model = empty_model();
+        model.consts.intern(Const::ZST);
+
+        // Wrapped predicate (ZST present) HOLDS -> Not fails.
+        match check(
+            &model,
+            &InspectionPredicate::Not(Box::new(InspectionPredicate::ConstVariant(
+                "ZST".to_string(),
+            ))),
+        ) {
+            Err(InspectError::UnexpectedlyPresent) => {}
+            other => panic!("expected UnexpectedlyPresent, got {other:?}"),
+        }
+
+        // Wrapped predicate (Reloc absent) does NOT hold -> Not succeeds
+        // (the asserted absence is satisfied).
+        assert!(check(
+            &model,
+            &InspectionPredicate::Not(Box::new(InspectionPredicate::ConstVariant(
+                "Reloc".to_string(),
+            ))),
+        )
+        .is_ok());
     }
 
     #[test]

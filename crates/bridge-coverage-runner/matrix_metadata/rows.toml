@@ -1880,3 +1880,102 @@ inspect = { kind = "All", arg = [
   { kind = "ItemKind", arg = "Struct" },
   { kind = "FunctionInstanceFlavor", arg = "DropGlue" },
 ] }
+
+# F-b3 batch (driver-80 triage bucket A): drop / closure / synth /
+# generics / const-fn rows SK-001/006/011, FT-004/009/017/019, IX-016/020.
+# All bridge Ok at HEAD with no bridge/model change; witnesses + model
+# shapes probe-confirmed. TWO new inspection predicates: `MonomorphizedInstance`
+# (FT-009 -- an Item-flavored Function instance carrying generic_args; a
+# plain call's `Ty::FnDef` does NOT discriminate monomorphisation) and
+# `Not(..)` (FT-004 -- asserts the ABSENCE of drop glue, i.e. the
+# ManuallyDrop drop-suppression guarantee; IX-020 conversely DOES produce
+# DropGlue).
+[[row]]
+id = "SK-001"
+section = "2.2"
+construct = "SyntheticItemKind::None (source-derived item)"
+expectation = "positive"
+status = "covered"
+cluster_key = "SK-001"
+snippet_path = "SK-001.rs"
+inspect = { kind = "SyntheticItemKind", arg = "None" }
+
+[[row]]
+id = "SK-006"
+section = "2.2"
+construct = "SyntheticItemKind::ClosureDropGlue (closure captures a Drop type by move)"
+expectation = "positive"
+status = "covered"
+cluster_key = "SK-006"
+snippet_path = "SK-006.rs"
+inspect = { kind = "SyntheticItemKind", arg = "ClosureDropGlue" }
+
+[[row]]
+id = "SK-011"
+section = "2.2"
+construct = "SyntheticItemKind::VTableDropShim (dyn Trait over a Drop concrete type)"
+expectation = "positive"
+status = "covered"
+cluster_key = "SK-011"
+snippet_path = "SK-011.rs"
+inspect = { kind = "SyntheticItemKind", arg = "VTableDropShim" }
+
+[[row]]
+id = "FT-004"
+section = "3"
+construct = "ManuallyDrop<T> over a Drop type suppresses drop (negative: no drop glue)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-004"
+snippet_path = "FT-004.rs"
+inspect = { kind = "Not", arg = { kind = "SyntheticItemKind", arg = "DropGlue" } }
+
+[[row]]
+id = "FT-009"
+section = "3"
+construct = "Generic free fn monomorphised with concrete args (id::<u32>)"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-009"
+snippet_path = "FT-009.rs"
+inspect = { kind = "MonomorphizedInstance" }
+
+[[row]]
+id = "FT-017"
+section = "3"
+construct = "const fn evaluated in a const context"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-017"
+snippet_path = "FT-017.rs"
+inspect = { kind = "ItemKind", arg = "Const" }
+
+[[row]]
+id = "FT-019"
+section = "3"
+construct = "Associated const on an inherent impl block"
+expectation = "positive"
+status = "covered"
+cluster_key = "FT-019"
+snippet_path = "FT-019.rs"
+inspect = { kind = "ItemKind", arg = "Const" }
+
+[[row]]
+id = "IX-016"
+section = "5"
+construct = "Const-eval x const item loaded in a body"
+expectation = "positive"
+status = "covered"
+cluster_key = "IX-016"
+snippet_path = "IX-016.rs"
+inspect = { kind = "ConstVariant", arg = "Uint" }
+
+[[row]]
+id = "IX-020"
+section = "5"
+construct = "Drop impl + assoc const + inherent method on one struct (single-Drop)"
+expectation = "positive"
+status = "covered"
+cluster_key = "IX-020"
+snippet_path = "IX-020.rs"
+inspect = { kind = "SyntheticItemKind", arg = "DropGlue" }
