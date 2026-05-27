@@ -191,9 +191,10 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   live in a `union` placed at offset 1). c2 uses the strictly-general
   **union-of-views** instead (the tag + each non-fieldless variant as full-object
   §14 views at **absolute** offsets in one `union`, collapsed inline for a
-  single view → matches §9.8/§9.9). **A small doc fix to §13 + Doc-2 D9 is
-  flagged** (mirrors the c1 §14/§15 + D10 doc fixes in `fe5b9ab`); not yet
-  applied — apply alongside the c2 close, or sooner if desired.
+  single view → matches §9.8/§9.9). **The §13 + Doc-2 D9 doc fix is APPLIED**
+  (`5d422fe`, Codex-APPROVED; the union-of-views replaces the broken
+  `union_start` form + corrects a stale `_Alignas(align)`→`aligned(align)` in
+  D9 — mirrors the c1 §14/§15 + D10 fixes in `fe5b9ab`). No open doc-fix item.
 - **Uncommitted state**: clean (everything committed; only the standing
   playground dirs untracked). **`origin/main` is at `a8b676a`** (the prior
   local chain was pushed this session). The unpushed local commits are,
@@ -558,11 +559,10 @@ assessed**; **c2 (`regseq-backends-08`) + `regseq-backends-07` both FILED,
 awaiting an implementer** (independent: 07 = c1 edge-case hardening; 08 = enum
 representation, the next feature). **The next task to DRAFT is d** (bodies —
 §7.1 terminators / §10 Rvalue / §11 casts / §12 Const / §4-§5 places-operands;
-d→e is the critical path to the first green fixture). **Open doc-fix
-follow-up** (from the c2 review): apply the §13 / Doc-2 D9 union-of-views
-override to the canonical docs (see § Current state in-flight bullet; mirrors
-`fe5b9ab`). **`origin/main` is at `a8b676a`** — offer to push the local chain
-(`6eb1c20` c2 filing → this HANDOFF commit) at session start.
+d→e is the critical path to the first green fixture). The §13/D9 doc fix from
+the c2 review is **APPLIED** (`5d422fe`). **`origin/main` is at `a8b676a`** —
+offer to push the local chain (`6eb1c20` c2 filing → `56c13a9` HANDOFF →
+`5d422fe` doc fix → this HANDOFF commit) at session start.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
@@ -598,8 +598,9 @@ the rest is stable.
   become full-object §14 views (fields at **absolute** offsets → naturally
   aligned, **no packing, no `union_start`**), all sharing one `union`,
   **collapsed inline** for a single view (→ §9.8 tag-only struct, §9.9
-  single-field struct). The spec **overrides** §13/D9 + **flags a doc fix**
-  (mirrors the c1 `fe5b9ab` §14/§15 + D10 fixes); **doc fix not yet applied**.
+  single-field struct). The spec **overrides** §13/D9; **the §13 + Doc-2 D9
+  doc fix is APPLIED** (`5d422fe`, Codex-APPROVED — also corrected a stale
+  `_Alignas(align)`→`aligned(align)` in D9; mirrors the c1 `fe5b9ab` fixes).
   Pre-grounded the "tag is always a prefix for `Direct`" premise against pinned
   rustc (`rustc_abi/src/layout.rs:803-824`, `StructKind::Prefixed`; variant
   fields at `prefix_size.align_to(prefix_align)`, lines 1260-1264). Codex r2
