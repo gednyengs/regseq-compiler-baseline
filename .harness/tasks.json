@@ -4752,6 +4752,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-10",
+          "name": "Generic-C scalar bodies + control flow (Phase-1 d1)",
+          "spec": ".harness/tasks/regseq-backends/10-generic-c-scalar-bodies-and-control-flow.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-09"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T19:25:19Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
