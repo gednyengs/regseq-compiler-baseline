@@ -4731,6 +4731,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-09",
+          "name": "Generic-C fn-pointer-value const placement (07 #3)",
+          "spec": ".harness/tasks/regseq-backends/09-generic-c-fn-ptr-const-placement.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-07"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T17:17:18Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
