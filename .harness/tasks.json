@@ -4668,6 +4668,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-06",
+          "name": "Generic-C type system + field-offset emission (Phase-1 task c1)",
+          "spec": ".harness/tasks/regseq-backends/06-generic-c-types-and-layout.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-05"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T02:44:24Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

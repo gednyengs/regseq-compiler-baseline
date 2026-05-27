@@ -38,7 +38,27 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
   handoff). Next is **`task.py` tasks** → implementation.
-- **Last completed**: **Phase-1 task b CLOSED (`regseq-backends-05`,
+- **Last completed**: **Phase-1 task c1 FILED (`regseq-backends-06`)** —
+  "Generic-C type system + field-offset emission": fills banks 2–3 (the
+  `Ty`→C spelling + D1 naming, the §14/D10 field-offset aggregate emitter,
+  the §15 bank-2/3 forward-decls/definitions + by-value-containment topo-sort,
+  the §3.2 `rust_slice_<T>`/`trait_obj_<Trait>` shapes). **The original "(c)"
+  was SPLIT** (user-approved): c1 = the type-system foundation (sized,
+  non-enum, non-`dyn`); **c2 (next) = enum representation §13/D9** (Doc-2
+  top-risk, reuses c1's D10 primitive); `dyn`/vtable/dispatch + field-access
+  are later/task-d. c1 produces **no green fixture** (needs a body+diag-log,
+  d/e); verified backend-internally (emit aggregate defs → compile → the
+  `_Static_assert` layout guards holding *is* the proof). Codex 2-round (r1
+  NOT_READY → 4 fixes [alignment via `__attribute__((aligned(layout.align)))`
+  not `_Alignas`/`aligned(n)`; fat-pointer topo edge for `Ref/Ptr`-to-unsized;
+  `generic_args`+`args_key_for_generic_args(model, …)`; discovery-roots
+  hand-off to d] → r2 APPROVED_WITH_MINOR_FIXES, both applied). **FOLLOW-UP
+  TO TRACK**: the review surfaced a **latent bug in canonical §14 / Doc-2
+  D10** — `repr(packed(n))` → `aligned(n)` over-aligns (true align =
+  `min(max_field_align,n)` = `layout.align`); the task spec **overrides** it +
+  flags a small doc fix to §14 + D10. Spec at
+  `.harness/tasks/regseq-backends/06-generic-c-types-and-layout.md`.
+  **Earlier: Phase-1 task b CLOSED (`regseq-backends-05`,
   implementer `5bfdcb8`)** — assessed **clean, no defects** (contrast task
   a's determinism hole). Gates all green: fmt / clippy (touched crates,
   all-targets) / tests — 6 backend structural units + **5 behavioral C tests**
@@ -134,10 +154,9 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **none.** Tasks a + b closed; **next is to draft task c**
-  (types + layout — §2/§13/§14: offset-faithful aggregate/enum emission +
-  `_Static_assert` guards + the bank-3 by-value-containment topo-sort). Then
-  d→e.
+- **In-flight**: **task c1 (`regseq-backends-06`) filed, awaiting implementer
+  pickup.** Tasks c2 (enum §13/D9) → d (bodies) → e (diag-log) remain to be
+  drafted. (Also tracking: the small §14/D10 `aligned(n)` doc fix.)
 - **Uncommitted state**: clean. Task-a chain committed: spec/registration
   (`0f6ea9c`), implementer scaffold (`a422d89`), determinism fix (`9e3f46b`),
   + this HANDOFF refresh. **None of the post-`74078b2` commits are pushed**
@@ -149,12 +168,14 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 
 1. **`task.py` tasks** — file the Phase-1 implementation tasks per the
    8-section template; Codex-reviewed; commit + push; implementer picks
-   up. **(a) DONE — `regseq-backends-04`** (`9e3f46b`); harness live (honest
-   `not-pass` baseline). **(b) DONE — `regseq-backends-05`** (`5bfdcb8`);
-   prelude + 5-bank envelope + panic/helpers landed + assessed clean; emit
-   seam live (returns the bank-1 prelude). **Next: draft task c** (types +
-   layout — §2/§13/§14), then d→e, one per pass. The natural breakdown
-   (input contract =
+   up. **(a) DONE — `regseq-backends-04`** (`9e3f46b`); harness live. **(b)
+   DONE — `regseq-backends-05`** (`5bfdcb8`); prelude + 5-bank envelope +
+   panic/helpers; emit seam live. **(c1) FILED — `regseq-backends-06`** (type
+   system + field-offset, banks 2–3), awaiting implementer. **The original
+   "(c) types + layout" was SPLIT into c1 (foundation, non-enum) + c2 (enum
+   §13/D9).** **Next: draft task c2** (enum representation, reusing c1's D10
+   primitive), then d (bodies) → e (diag-log, first green fixture). The
+   natural breakdown (input contract =
    `generic-c-backend.md` §§2–17, complete): (a) the
    **codegen-coverage-runner** crate +
    harness plumbing (Doc 3: pipeline, dual oracle, `manifest.toml`,
@@ -226,6 +247,24 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
   green fixture + no fixture FAILs. (Per-row Doc-1 `notes`/`spec ref` cells
   were not exhaustively repointed at the flip — historical; authoritative
   lowering = the spec-delta §§7.1/10–17 per Doc-2 D1–D12.)
+- **Task "(c) types + layout" SPLIT into c1 + c2 (2026-05-26, user-approved).**
+  c1 (`regseq-backends-06`) = the type-system foundation: `Ty`→C spelling +
+  D1 naming + the **§14/D10 field-offset emitter** (shared primitive) + the
+  §15 bank-2/3 topo-sort + the §3.2 `rust_slice`/`trait_obj` shapes — for
+  **sized, non-enum, non-`dyn`** types. c2 = **enum representation §13/D9**
+  (Doc-2 top-risk, "was WRONG" on first contact) **reusing c1's D10
+  primitive**. `dyn`/vtable/dispatch + field-*access* are later/task-d.
+  Rationale: isolate the top-risk enum for focused review; c1 unblocks the
+  critical path to the first green fixture (primitives → d → e) without
+  waiting on enum. Plan: a→b→**c1→c2**→d→e.
+- **Doc bug to fix (surfaced by task-c1 review): §14 / Doc-2 D10 alignment.**
+  Both say `repr(packed(n))` → `aligned(n)`; that **over-aligns** (the true
+  type alignment is `min(max_field_align, n) = layout.align`, which can be
+  `< n`), and `_Alignas` is invalid on a `struct`/`union` tag. The correct
+  emission is `__attribute__((aligned(layout.align)))` (+ `packed` when
+  `pack` is set). `regseq-backends-06` **overrides** the stale wording + the
+  `_Static_assert(_Alignof==layout.align)` guard self-corrects. **TODO**: a
+  small doc fix to `generic-c-backend.md` §14 + Doc-2 D10 (not yet done).
 - **Diag-log recognition (for the backend):** key on the durable model
   fact — a `Terminator::Call { callee: CallCallee::Direct(inst), .. }`
   where `model.instances[inst].item` carries
@@ -269,7 +308,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a `regseq-backends-04` + b `regseq-backends-05` DONE; c–e to draft) | `5bfdcb8` (b) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b DONE; c1 `regseq-backends-06` FILED; c2/d/e to draft — "(c)" split into c1+c2) | `5bfdcb8` (b) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -692,3 +731,19 @@ the rest is stable.
   **live** (returns the bank-1 prelude; banks 2–5 are empty c/d hooks). No
   Codex soundness pass needed (no load-bearing invariant relaxed; the
   change is additive + well-tested). **Next: draft task c** (types + layout).
+- 2026-05-26: **Phase-1 task "(c)" SPLIT + task c1 FILED** —
+  `regseq-backends-06` ("Generic-C type system + field-offset emission":
+  `Ty`→C spelling + D1 naming + the §14/D10 field-offset aggregate emitter +
+  the §15 bank-2/3 forward-decls/definitions topo-sort + the §3.2
+  `rust_slice`/`trait_obj` shapes; sized non-enum non-`dyn`). User approved
+  splitting the original "(c)" into **c1 (foundation) + c2 (enum §13/D9,
+  Doc-2 top-risk, reuses c1's D10 primitive)**; `dyn`/vtable/dispatch +
+  field-access are later/task-d. No green fixture (needs body+diag-log, d/e);
+  verified by emit→compile→`_Static_assert` layout guards. Codex 2-round (r1
+  NOT_READY → 4 fixes: alignment via `__attribute__((aligned(layout.align)))`;
+  fat-pointer topo edge for `Ref/Ptr`-to-unsized; `generic_args` +
+  `args_key_for_generic_args(model,…)`; discovery-roots hand-off to d → r2
+  APPROVED_WITH_MINOR_FIXES, both applied). Review **surfaced a latent §14/
+  Doc-2-D10 alignment doc bug** (`packed(n)`→`aligned(n)` over-aligns); the
+  task overrides it + a small doc fix is flagged (§ Decisions locked).
+  **Next: draft task c2** (enum representation).
