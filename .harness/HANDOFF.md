@@ -33,7 +33,7 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 
 ## § Current state (UPDATE EVERY TASK/DECISION CLOSE)
 
-- **Last updated**: 2026-05-26
+- **Last updated**: 2026-05-27
 - **Workstream status**: Phase-1 **planning + spec delta complete**
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
@@ -177,17 +177,29 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **task c1 CLOSED**; **`regseq-backends-07` (c1 robustness
-  fixes) FILED, awaiting implementer.** **Next to draft: task c2** (enum
-  §13/D9), then d (bodies) → e (diag-log). (07 is a parallel edge-case
-  hardening; it does not block drafting c2 or the d→e critical path.)
+- **In-flight**: **task c1 CLOSED**; **task c2 (`regseq-backends-08`) FILED**
+  (`6eb1c20`, Codex 2-round APPROVED); **`regseq-backends-07` (c1 robustness
+  fixes) FILED.** Both 07 and 08 await an implementer; they are independent
+  (07 = c1 edge-case hardening; 08 = the next feature). **Next to draft:
+  task d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts / §12 Const /
+  §4-§5 places-operands), then e (diag-log, first green fixture).
+  **DOC-FIX FOLLOW-UP TO TRACK (from the c2 review):** the c2 spec **overrides**
+  the §13 / Doc-2 D9 *literal* enum representation ("tag field + payload `union`
+  at `union_start`, fields at `offset−union_start`") — Codex r1 showed it is
+  **not C-placeable** for shifted-alignment `Direct` enums (`enum E { A(u8),
+  B(u32) }`: tag@0, A@1, B@4 — a naturally-aligned `uint32_t` payload cannot
+  live in a `union` placed at offset 1). c2 uses the strictly-general
+  **union-of-views** instead (the tag + each non-fieldless variant as full-object
+  §14 views at **absolute** offsets in one `union`, collapsed inline for a
+  single view → matches §9.8/§9.9). **A small doc fix to §13 + Doc-2 D9 is
+  flagged** (mirrors the c1 §14/§15 + D10 doc fixes in `fe5b9ab`); not yet
+  applied — apply alongside the c2 close, or sooner if desired.
 - **Uncommitted state**: clean (everything committed; only the standing
-  playground dirs untracked). **`origin/main` is at `74cb206` (pushed through
-  task b).** The unpushed local commits are, oldest→newest: `5ca81ce` (c1
-  filing) → `f410115` (c1 impl) → `fe5b9ab` (the two doc fixes) → `3dc36e2`
-  (c1 close + `regseq-backends-07` filing) → the HANDOFF refresh commit for
-  this hand-off. **Offer to push at session start.** The two standing
-  untracked dirs stay untouched by rule —
+  playground dirs untracked). **`origin/main` is at `a8b676a`** (the prior
+  local chain was pushed this session). The unpushed local commits are,
+  oldest→newest: `6eb1c20` (c2 / `regseq-backends-08` filing) → the HANDOFF
+  refresh commit for this hand-off. **Offer to push at session start.** The two
+  standing untracked dirs stay untouched by rule —
   `tests/fixtures/playground-pl011/`, `crates/regseq-driver/tests/fixtures/`
   (experimentation; never commit, never modify).
 
@@ -201,9 +213,11 @@ The volatility split means ~90% of updates touch only **§ Current state**.
    (`f410115`); type system + field-offset, banks 2–3 live; assessed clean on
    the common path; a soundness pass found 4 edge-case bugs → **`regseq-backends-07`
    FILED** (c1 robustness fixes). **The original "(c) types + layout" was
-   SPLIT into c1 (foundation, non-enum) + c2 (enum §13/D9).** **Next: draft
-   task c2** (enum representation, reusing c1's D10
-   primitive), then d (bodies) → e (diag-log, first green fixture). The
+   SPLIT into c1 (foundation, non-enum) + c2 (enum §13/D9).** **(c2) DONE
+   (filing) — `regseq-backends-08`** (`6eb1c20`); enum representation via the
+   union-of-views form (overrides the §13/D9 literal form — doc fix flagged).
+   **Next: draft task d** (bodies — terminators / Rvalue / casts / Const /
+   places-operands), then e (diag-log, first green fixture). The
    natural breakdown (input contract =
    `generic-c-backend.md` §§2–17, complete): (a) the
    **codegen-coverage-runner** crate +
@@ -341,7 +355,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1 DONE; c1-fixes `regseq-backends-07` FILED; c2/d/e to draft — "(c)" split into c1+c2) | `f410115` (c1) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1 DONE; c1-fixes `regseq-backends-07` + c2 `regseq-backends-08` FILED; d/e to draft — "(c)" split into c1+c2) | `6eb1c20` (c2 filing) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -539,19 +553,16 @@ uv run python scripts/python/task.py add-task \
 ## § First-action recommendations by user input (STABLE)
 
 **"Let's continue / what's next"** → § Current state → Next actions.
-**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1 are DONE
-+ assessed**; **`regseq-backends-07`** (c1 robustness fixes) is **filed,
-awaiting an implementer**; the **next task to DRAFT is c2** (enum §13/D9,
-reusing c1's D10 primitive). **The user's plan for this session: first review
-the `regseq-backends-06` (c1) results, then continue.** Those results:
-implementer commit `f410115` (the type-system/field-offset impl — fmt/clippy
-+ 34 tests green, layout fidelity proven by compile+`_Static_assert`), my
-close at `3dc36e2` (the soundness pass found 4 edge-case bugs → `…-07`), and
-`fe5b9ab` (two canonical-doc bugs fixed: §14/§15 + Doc-2 D10). Then either
-**start the implementer on `regseq-backends-07`** or **draft c2** — they're
-independent (07 is edge-case hardening; c2 is the next feature). **Nothing
-pushed past `74cb206`** — offer to push the local chain (`5ca81ce` →
-`f410115` → `fe5b9ab` → `3dc36e2` → this HANDOFF commit) at session start.
+**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1 DONE +
+assessed**; **c2 (`regseq-backends-08`) + `regseq-backends-07` both FILED,
+awaiting an implementer** (independent: 07 = c1 edge-case hardening; 08 = enum
+representation, the next feature). **The next task to DRAFT is d** (bodies —
+§7.1 terminators / §10 Rvalue / §11 casts / §12 Const / §4-§5 places-operands;
+d→e is the critical path to the first green fixture). **Open doc-fix
+follow-up** (from the c2 review): apply the §13 / Doc-2 D9 union-of-views
+override to the canonical docs (see § Current state in-flight bullet; mirrors
+`fe5b9ab`). **`origin/main` is at `a8b676a`** — offer to push the local chain
+(`6eb1c20` c2 filing → this HANDOFF commit) at session start.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
@@ -569,6 +580,32 @@ the rest is stable.
 
 ## § Update log (append-only)
 
+- 2026-05-27: **Phase-1 task c2 FILED** — `regseq-backends-08`
+  (`.harness/tasks/regseq-backends/08-generic-c-enum-representation.md`, group
+  `regseq-backends`, phase `1b`, dep `regseq-backends-06`; commit `6eb1c20`).
+  The enum half of the split "(c)": fills the bank-3 enum-body hook with the
+  offset-faithful C enum representation (gc §13 / Doc-2 D9), reusing c1's
+  §14/D10 field-offset primitive. **Representation only** — the tag
+  *operations* (`Discriminant`/`SetDiscriminant`/`Downcast`/`Aggregate::Enum`/
+  `Const::EnumValue`) + tag-value constants are **task d** (symmetric with c1
+  deferring struct field access). Codex **2-round** (r1 NOT_READY → r2
+  APPROVED_WITH_MINOR_FIXES, applied). **r1 caught a real soundness bug**: the
+  literal §13/D9 "tag field + payload `union` at `union_start`, fields at
+  `offset−union_start`" form is **not C-placeable** for shifted-alignment
+  `Direct` enums (`enum E { A(u8), B(u32) }`: tag@0, A@1, B@4 — a
+  naturally-aligned `uint32_t` payload cannot live in a `union` at offset 1).
+  **Resolved with the union-of-views**: the tag + each non-fieldless variant
+  become full-object §14 views (fields at **absolute** offsets → naturally
+  aligned, **no packing, no `union_start`**), all sharing one `union`,
+  **collapsed inline** for a single view (→ §9.8 tag-only struct, §9.9
+  single-field struct). The spec **overrides** §13/D9 + **flags a doc fix**
+  (mirrors the c1 `fe5b9ab` §14/§15 + D10 fixes); **doc fix not yet applied**.
+  Pre-grounded the "tag is always a prefix for `Direct`" premise against pinned
+  rustc (`rustc_abi/src/layout.rs:803-824`, `StructKind::Prefixed`; variant
+  fields at `prefix_size.align_to(prefix_align)`, lines 1260-1264). Codex r2
+  re-verified the union-of-views against the same source. (A stray `enum_layout`
+  ELF Codex compiled while probing was removed pre-commit, not tracked.)
+  **Next: draft task d** (bodies).
 - 2026-05-26: Generic-C backend workstream opened. Bridge front-end gate
   closed (`1a6a996`); bridge HANDOFF archived to
   `.harness/archive/2026-05-26-bridge-coverage-runner/HANDOFF.md`. Created
