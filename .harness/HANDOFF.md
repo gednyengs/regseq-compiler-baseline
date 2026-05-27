@@ -38,8 +38,21 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
   handoff). Next is **`task.py` tasks** → implementation.
-- **Last completed**: **Phase-1 task b FILED (`regseq-backends-05`)** —
-  "Generic-C prelude + 5-bank emission envelope + panic/helpers": the
+- **Last completed**: **Phase-1 task b CLOSED (`regseq-backends-05`,
+  implementer `5bfdcb8`)** — assessed **clean, no defects** (contrast task
+  a's determinism hole). Gates all green: fmt / clippy (touched crates,
+  all-targets) / tests — 6 backend structural units + **5 behavioral C tests**
+  (real compile+run via `toolchain`: `regseq_panic`→stderr+abort; saturating
+  f64→i32 = INT32_MAX/0/INT32_MIN; `*WithOverflow` = 5/0/1) + adapted
+  `emit_seam` (2) + existing 24; prelude `cc -fsyntax-only -Wall`
+  warning-free; emit byte-stable; ledger **unchanged** (169
+  covered-without-green, `not-pass`); diff scope clean (no matrix/ledger/spec
+  edits). Faithful: all 8 §16 `AssertKind` messages verbatim; §10.1/§11
+  helpers correct; the 3 filed fixes landed; `emit_seam` was *strengthened*
+  (now proves the pipeline advances past `Stage::Emit`→`Stage::Snapshot`),
+  not gutted. Implementer hand-set `status: done` (no task.py `completed`
+  event); end state correct. **Was: Phase-1 task b — "Generic-C prelude +
+  5-bank emission envelope + panic/helpers": the
   model-INDEPENDENT scaffolding behind the `emit_generic_c` seam (§15 5-bank
   driver; static prelude = includes + `struct rust_str` + `regseq_panic`
   [`static inline`] + the §16 `AssertKind` catalog; the §10/§11
@@ -121,8 +134,10 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **task b (`regseq-backends-05`) filed, awaiting implementer
-  pickup.** Tasks c→e remain to be drafted (one per pass).
+- **In-flight**: **none.** Tasks a + b closed; **next is to draft task c**
+  (types + layout — §2/§13/§14: offset-faithful aggregate/enum emission +
+  `_Static_assert` guards + the bank-3 by-value-containment topo-sort). Then
+  d→e.
 - **Uncommitted state**: clean. Task-a chain committed: spec/registration
   (`0f6ea9c`), implementer scaffold (`a422d89`), determinism fix (`9e3f46b`),
   + this HANDOFF refresh. **None of the post-`74078b2` commits are pushed**
@@ -135,10 +150,11 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 1. **`task.py` tasks** — file the Phase-1 implementation tasks per the
    8-section template; Codex-reviewed; commit + push; implementer picks
    up. **(a) DONE — `regseq-backends-04`** (`9e3f46b`); harness live (honest
-   `not-pass` baseline). **(b) FILED — `regseq-backends-05`** (prelude +
-   5-bank envelope + panic/helpers), awaiting implementer. **Next: draft
-   task c** (types + layout — §2/§13/§14), then d→e, one per pass. The
-   natural breakdown (input contract =
+   `not-pass` baseline). **(b) DONE — `regseq-backends-05`** (`5bfdcb8`);
+   prelude + 5-bank envelope + panic/helpers landed + assessed clean; emit
+   seam live (returns the bank-1 prelude). **Next: draft task c** (types +
+   layout — §2/§13/§14), then d→e, one per pass. The natural breakdown
+   (input contract =
    `generic-c-backend.md` §§2–17, complete): (a) the
    **codegen-coverage-runner** crate +
    harness plumbing (Doc 3: pipeline, dual oracle, `manifest.toml`,
@@ -253,7 +269,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a `regseq-backends-04` DONE `9e3f46b`; b `regseq-backends-05` FILED; c–e to draft) | `a422d89`+`9e3f46b` | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a `regseq-backends-04` + b `regseq-backends-05` DONE; c–e to draft) | `5bfdcb8` (b) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -663,3 +679,16 @@ the rest is stable.
   `NotImplemented`); filed without a 2nd round. **Next: draft task c**
   (types + layout — §2/§13/§14: the offset-faithful aggregate/enum emission
   + `_Static_assert` guards + the bank-3 by-value topo-sort).
+- 2026-05-26: **Phase-1 task b CLOSED** — implementer landed
+  `regseq-backends-05` (`5bfdcb8`): `regseq-backends/src/generic_c/{mod,prelude}.rs`
+  (the §15 5-bank driver + bank-1 static prelude + helper block), `lib.rs`
+  slimmed to a re-export, a 5-test behavioral suite in
+  `codegen-coverage-runner/tests/generic_c_prelude.rs`, and the `emit_seam`
+  test adapted (emit now returns `Ok`). **Assessment: clean, no defects.**
+  fmt / clippy / all tests green; the behavioral tests *compile + run real C*
+  asserting the §16 panic contract, §11 saturating cast, §10.1 overflow; the
+  prelude is `-Wall`-warning-free; emit is byte-stable; the ledger is
+  unchanged (no coverage added — correct for task b). The emit seam is now
+  **live** (returns the bank-1 prelude; banks 2–5 are empty c/d hooks). No
+  Codex soundness pass needed (no load-bearing invariant relaxed; the
+  change is additive + well-tested). **Next: draft task c** (types + layout).
