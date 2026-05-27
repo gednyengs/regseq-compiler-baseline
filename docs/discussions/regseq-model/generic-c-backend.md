@@ -919,15 +919,42 @@ IR-side definition: `spec.md` §11 (`Layout` / `EnumShape` / `TagEncoding`).
 Generalises the §9.8 (Direct, fieldless) and §9.9 (Niche, single-pointer)
 examples to **all** enum shapes.
 
-**Representation — offset-faithful.** An enum lowers to a C aggregate
-built by the §14 field-offset technique (NOT a naive `{ tag; union; }`,
-which falsely assumes tag-at-0 + contiguous payload). The tag cell (when
-present: `Single{scalar:Some}`, `Multiple`) is a `<TagScalar.scalar_ty>`
-field at `TagScalar.offset`; the payload region is a `union` of per-variant
-payload structs, each itself offset-faithful (variant field offsets are
-**absolute to the enum object**, not the payload start). `_Static_assert`
-guards validate every offset / `sizeof`. Niche enums simply carry no tag
-field — the niche cell is a payload field whose bit pattern *is* the tag.
+**Representation — offset-faithful (union-of-views).** An enum lowers to a
+C `struct` built by the §14 field-offset technique (NOT a naive
+`{ tag; union; }`, which falsely assumes tag-at-0 + contiguous payload).
+The tag cell and each variant's payload are emitted as **full-object
+views** — `struct`s whose fields sit at their **absolute** offsets from the
+enum object's start, so a field's offset within its view *is* its absolute
+offset (rustc already placed it at a naturally-aligned position, so **no
+view needs packing**). All views share **one** `union`, wrapped in the
+outer enum `struct` forced to `__attribute__((aligned(layout.align)))`:
+
+- a **tag view** — present iff `Single{scalar:Some}` or `Multiple{Direct}`
+  (**not** `Multiple{Niche}`) — holds `<TagScalar.scalar_ty>` at
+  `TagScalar.offset`;
+- a **variant view** per variant with ≥ 1 non-ZST field (fieldless variants
+  place no bytes → no view);
+- if exactly **one** view results, it is emitted **inline** (no `union`
+  wrapper) — collapsing the §9.8 fieldless `Direct` enum to a tag-only
+  `struct` and the §9.9 niche `Option<&T>` to a single-field `struct`;
+  **zero** views (an `Empty` enum, or a `Single{scalar:None}` whose sole
+  variant is fieldless) → a size-faithful (possibly empty) `struct`.
+
+`_Static_assert(sizeof==size)`, `_Static_assert(_Alignof==align)`, and a
+per-field `_Static_assert(offsetof(E, <view>.<field>)==<absolute offset>)`
+(nested member designator — a gcc/clang host assumption) validate every
+placement. Niche enums carry no tag view — the niche cell is a payload field
+*in a variant view* whose bit pattern *is* the tag.
+
+**Why not a single tag field + payload `union`?** A literal "tag field at
+`TagScalar.offset` + a payload `union` placed at some `union_start` (fields
+at `offset − union_start`)" is **not C-placeable** for shifted-alignment
+`Direct` enums: `enum E { A(u8), B(u32) }` lays out tag @0, `A.0` @1,
+`B.0` @4 — a C `union` containing a `uint32_t` has alignment 4 and **cannot
+sit at the first payload byte (offset 1)**, and `B.0` at `4 − 1 = 3` would be
+misaligned. The union-of-views uses **no `union_start`**: every field is
+placed at its absolute (naturally-aligned) offset within a view, and the
+`union` aliasing reproduces the exact byte layout.
 
 **Tag operations.**
 
