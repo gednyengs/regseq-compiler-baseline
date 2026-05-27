@@ -4710,6 +4710,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-08",
+          "name": "Generic-C enum representation (\u00a713/D9)",
+          "spec": ".harness/tasks/regseq-backends/08-generic-c-enum-representation.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T15:47:13Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
