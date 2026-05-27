@@ -177,12 +177,34 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **task c1 CLOSED**; **task c2 (`regseq-backends-08`) FILED**
-  (`6eb1c20`, Codex 2-round APPROVED); **`regseq-backends-07` (c1 robustness
-  fixes) FILED.** Both 07 and 08 await an implementer; they are independent
-  (07 = c1 edge-case hardening; 08 = the next feature). **Next to draft:
-  task d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts / §12 Const /
-  §4-§5 places-operands), then e (diag-log, first green fixture).
+- **In-flight**: **task c1 CLOSED**; **task `regseq-backends-07` (c1 robustness
+  fixes) CLOSED — implementer `34a4ae1`, assessed clean** (see below);
+  **task c2 (`regseq-backends-08`) IN PROGRESS** (implementer actively
+  building it — `enum_emit.rs` + `mod.rs`/`layout_emit.rs`/test edits are in
+  the working tree, uncommitted). **Next to draft: task d** (bodies — §7.1
+  terminators / §10 Rvalue / §11 casts / §12 Const / §4-§5 places-operands),
+  then e (diag-log, first green fixture).
+  - **`regseq-backends-07` assessment (`34a4ae1`):** verified in an isolated
+    worktree (the implementer was concurrently editing the main tree for 08):
+    fmt / clippy (`-D warnings`) / **all tests green** (32 backend-lib + 37
+    runner), determinism byte-stable, diff scope matches the spec, **ledger
+    untouched**. All 4 fixes correct (traced the edge split, `& &u32` →
+    `const uint32_t *const *`, the `PadNamer`, the recursive `fn_ptr_decl`).
+    A **Codex soundness pass returned UNSOUND with 3 findings — 2 are FALSE
+    POSITIVES**: #1 (slice-of-refs-to-aggregate panic) + #2 (fnptr-signature-
+    only aggregate panic) assume the aggregate isn't discovered, but the bridge
+    `nominal_adt_instances_pass` (`bridge/mod.rs:2375-2432`) makes **every**
+    interned nominal `Ty` an `InstanceKind` root, and `discover()` roots on all
+    of them — so `names.agg_name` can't panic. **Verified empirically** (bridged
+    Codex's exact `&[[&Inner;4]]` + fnptr-sig shapes → `emit` returns `Ok`, both
+    aggregates emitted). **1 real but minor finding (#3):** `&fn() -> i32`
+    emits `const` on the fn's **return type** instead of the fn-pointer **value**
+    (`const int32_t (*(*p))(void)` vs `int32_t (*const *p)(void)`) — a *silent
+    wrong qualifier* (compiles, no miscompile/panic), same class as the original
+    #4 but for the fn-ptr-pointee sub-case Fix B didn't cover. The implementer
+    **documented it in-code** as out-of-verified-scope (`types.rs` FnPtr branch).
+    **Does NOT block c2 or the d→e critical path.** **Open: decide whether to
+    file a tiny follow-up for #3 or fold it into a later hardening pass.**
   **DOC-FIX FOLLOW-UP TO TRACK (from the c2 review):** the c2 spec **overrides**
   the §13 / Doc-2 D9 *literal* enum representation ("tag field + payload `union`
   at `union_start`, fields at `offset−union_start`") — Codex r1 showed it is
@@ -356,7 +378,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1 DONE; c1-fixes `regseq-backends-07` + c2 `regseq-backends-08` FILED; d/e to draft — "(c)" split into c1+c2) | `6eb1c20` (c2 filing) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07 DONE; c2 `regseq-backends-08` IN PROGRESS [implementer]; d/e to draft — "(c)" split into c1+c2) | `34a4ae1` (07) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -554,15 +576,17 @@ uv run python scripts/python/task.py add-task \
 ## § First-action recommendations by user input (STABLE)
 
 **"Let's continue / what's next"** → § Current state → Next actions.
-**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1 DONE +
-assessed**; **c2 (`regseq-backends-08`) + `regseq-backends-07` both FILED,
-awaiting an implementer** (independent: 07 = c1 edge-case hardening; 08 = enum
-representation, the next feature). **The next task to DRAFT is d** (bodies —
-§7.1 terminators / §10 Rvalue / §11 casts / §12 Const / §4-§5 places-operands;
-d→e is the critical path to the first green fixture). The §13/D9 doc fix from
-the c2 review is **APPLIED** (`5d422fe`). **`origin/main` is at `a8b676a`** —
-offer to push the local chain (`6eb1c20` c2 filing → `56c13a9` HANDOFF →
-`5d422fe` doc fix → this HANDOFF commit) at session start.
+**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1, and
+`regseq-backends-07` DONE + assessed** (07 clean — Codex soundness pass
+over-flagged 2 false positives, 1 real-minor #3; see § Current state /
+§ Update log); **c2 (`regseq-backends-08`) IN PROGRESS** (implementer building
+`enum_emit.rs` etc. in the working tree — uncommitted). **The next task to
+DRAFT is d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts / §12 Const /
+§4-§5 places-operands; d→e is the critical path to the first green fixture).
+The §13/D9 doc fix is **APPLIED** (`5d422fe`). **Open: #3 fn-ptr-value const
+follow-up (file or fold).** **`origin/main` is at `a8b676a`** — local chain
+(`6eb1c20` → `56c13a9` → `5d422fe` → `600883d` → `34a4ae1` [07, implementer] →
+this HANDOFF commit) is unpushed; assess/push once c2 lands.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
@@ -580,6 +604,32 @@ the rest is stable.
 
 ## § Update log (append-only)
 
+- 2026-05-27: **Phase-1 task `regseq-backends-07` CLOSED** (c1 robustness
+  fixes; implementer `34a4ae1`). Assessed in an **isolated git worktree** at
+  `34a4ae1` (the implementer was concurrently editing the main tree for c2, so
+  a main-tree build would have been polluted): fmt / clippy (`-D warnings`) /
+  **all tests green** (32 backend-lib + 37 runner), determinism byte-stable,
+  diff scope = `generic_c/{mod,types,layout_emit}.rs` + tests + `tasks.json`,
+  **ledger unchanged** (`not-pass`). The 4 fixes are correct: the discovery/
+  ordering edge **split** (no false `ContainmentCycle` for `struct Inner { xs:
+  &[Inner] }`; array-element ordering edge; cyclic array-element slice = clean
+  error), the `declare_qualified` const placement (`& &u32` →
+  `const uint32_t *const *`), the collision-proof `PadNamer` (struct `_padN` +
+  union `_pad`), the recursive `fn_ptr_decl`. **Codex soundness pass: UNSOUND
+  (3 findings) — but 2 are FALSE POSITIVES** (#1 slice-of-refs-to-aggregate +
+  #2 fnptr-sig-only aggregate "panic": both assume the aggregate isn't
+  discovered, but the bridge `nominal_adt_instances_pass` `bridge/mod.rs:2375`
+  makes every interned nominal `Ty` an `InstanceKind` root and `discover()`
+  roots on all of them — **verified empirically**: bridged Codex's exact
+  `&[[&Inner;4]]` + fnptr-sig shapes → `emit` returns `Ok`, no panic). **1 real
+  minor finding (#3):** `&fn() -> i32` emits `const` on the fn return type, not
+  the fn-pointer value — a silent wrong qualifier (no panic/miscompile), same
+  class as the original #4 for the fn-ptr-pointee sub-case Fix B didn't cover;
+  the implementer documented it in-code as out-of-verified-scope. **Does not
+  block c2 / d→e.** Lesson reinforced: a soundness Codex pass can over-flag —
+  verify against the discovery-roots invariant + empirically before acting
+  ([[assessment-soundness-pass]]). **Open: file a tiny follow-up for #3 or fold
+  into a later hardening pass.**
 - 2026-05-27: **Phase-1 task c2 FILED** — `regseq-backends-08`
   (`.harness/tasks/regseq-backends/08-generic-c-enum-representation.md`, group
   `regseq-backends`, phase `1b`, dep `regseq-backends-06`; commit `6eb1c20`).
