@@ -4794,6 +4794,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-12",
+          "name": "Generic-C structured data \u2014 places, aggregates & slice/str fat pointers (Phase-1 d2)",
+          "spec": ".harness/tasks/regseq-backends/12-generic-c-structured-data.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-11"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T23:03:27Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
