@@ -9,9 +9,10 @@
 
 use super::*;
 use regseq_model::{
-    AutoTrait, CrateId, DefPath, Endian, EnumShape, FieldLayout, GenericArgs, Instance,
-    InstanceKind, Item, ItemKind, Layout, LayoutKind, Linkage, Provenance, ScalarLayouts,
-    SizeAlign, SourceFileId, Span, StableCrateId, TargetInfo, Ty, TyId, UintKind, VariantLayout,
+    AutoTrait, CrateId, DefPath, Endian, EnumShape, FieldLayout, FnAbi, FnSig, GenericArgs,
+    Instance, InstanceKind, IntKind, Item, ItemKind, Layout, LayoutKind, Linkage, Mutability,
+    Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TargetInfo,
+    Ty, TyId, UintKind, VariantLayout,
 };
 
 // ---------------------------------------------------------------------------
@@ -515,4 +516,314 @@ fn by_value_cycle_is_a_hard_error() {
         emit_generic_c(&m),
         Err(EmitError::ContainmentCycle)
     ));
+}
+
+// ---------------------------------------------------------------------------
+// Task-07 robustness fixes.
+//
+// Fix A: discovery edges (name + forward-decl) are split from by-value
+// ordering edges (complete-before), so a slice-only-reachable element no
+// longer panics, a non-array element is forward-decl-only (no false cycle),
+// and an array element is ordered complete-first.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn slice_of_tuple_reachable_only_via_slice_is_discovered_no_panic() {
+    // struct Holder { s: &[(u32, u32)] } -- the tuple aggregate is reachable
+    // ONLY through the slice element. Before Fix A it was never discovered,
+    // so spelling the fat struct's `data` field panicked on the NameTable.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let t0 = fl(&mut m, "_0", u32t, 0);
+    let t1 = fl(&mut m, "_1", u32t, 4);
+    let tuple = m.types.intern(Ty::Tuple {
+        fields: vec![u32t, u32t],
+        layout: struct_layout(8, 4, None, vec![t0, t1]),
+    });
+    let slice = m.types.intern(Ty::Slice(tuple));
+    let sref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let f = fl(&mut m, "s", sref, 0);
+    push_struct_instance(&mut m, "Holder", struct_layout(16, 8, None, vec![f]));
+
+    let tu = emit_generic_c(&m).expect("element is discovered, must not panic");
+    // The tuple element is named + forward-declared + defined.
+    assert!(
+        tu.contains("struct tuple_"),
+        "tuple element discovered + named"
+    );
+    // The slice fat struct spells `data` as a pointer to the tuple element.
+    assert!(tu.contains("*data;"), "slice data slot present:\n{tu}");
+}
+
+#[test]
+fn slice_of_struct_reachable_only_via_slice_is_discovered() {
+    // struct Holder { s: &[Inner] } where Inner is reachable ONLY via slice.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let iv = fl(&mut m, "v", u32t, 0);
+    let inner = intern_struct(&mut m, "Inner", struct_layout(4, 4, None, vec![iv]));
+    let slice = m.types.intern(Ty::Slice(inner));
+    let sref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let f = fl(&mut m, "s", sref, 0);
+    push_struct_instance(&mut m, "Holder", struct_layout(16, 8, None, vec![f]));
+
+    let tu = emit_generic_c(&m).expect("Inner is discovered, must not panic");
+    assert!(
+        tu.contains("struct Inner;"),
+        "Inner forward-declared (bank 2)"
+    );
+    assert!(tu.contains("struct Inner {"), "Inner body emitted (bank 3)");
+}
+
+#[test]
+fn self_referential_slice_field_is_not_a_containment_cycle() {
+    // struct Inner { xs: &[Inner] } -- Inner contains a slice of itself by a
+    // *pointer* (the fat struct's `data`), not by value: the discovery edge
+    // names Inner but no ordering edge is added, so it is NOT a cycle.
+    let mut m = model();
+    let l = m.types.len() as u32;
+    let inner_id = TyId::from_u32(l + 2); // after Slice (l) and Ref (l+1)
+    let slice = m.types.intern(Ty::Slice(inner_id));
+    let sref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let it = item(&mut m, ItemKind::Struct, "Inner");
+    let xs = fl(&mut m, "xs", sref, 0);
+    let inner = m.types.intern(Ty::Struct {
+        item: it,
+        args: GenericArgs::new(),
+        layout: struct_layout(16, 8, None, vec![xs]),
+    });
+    assert_eq!(inner, inner_id);
+    register_struct_root(&mut m, inner, "Inner");
+
+    let tu = emit_generic_c(&m).expect("self-ref via a slice pointer is not a cycle");
+    assert!(tu.contains("struct Inner {"), "Inner body emitted");
+}
+
+#[test]
+fn slice_of_array_of_struct_orders_element_before_the_slice() {
+    // struct Holder { s: &[[Inner; 4]] }. The slice `data` is
+    // `const struct Inner (*data)[4]`, and a C array element must be complete
+    // even behind a pointer, so Inner is ordered (complete) before the slice.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let iv = fl(&mut m, "v", u32t, 0);
+    let inner = intern_struct(&mut m, "Inner", struct_layout(4, 4, None, vec![iv]));
+    let arr = m.types.intern(Ty::Array(inner, 4));
+    let slice = m.types.intern(Ty::Slice(arr));
+    let sref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let f = fl(&mut m, "s", sref, 0);
+    push_struct_instance(&mut m, "Holder", struct_layout(16, 8, None, vec![f]));
+
+    let tu = emit_generic_c(&m).expect("array-element slice emits Ok");
+    let inner_def = tu.find("struct Inner {").expect("Inner body");
+    let slice_data = tu.find("(*data)[4]").expect("slice-of-array data slot");
+    assert!(
+        inner_def < slice_data,
+        "Inner must be complete before the slice struct:\n{tu}"
+    );
+}
+
+#[test]
+fn cyclic_array_element_slice_is_a_clean_error_not_a_panic() {
+    // struct Inner { xs: &[[Inner; 4]] } -- Inner needs the slice complete as
+    // a by-value field while the slice needs Inner complete as its array
+    // element: not C-representable. It surfaces as a clean ContainmentCycle,
+    // not a panic / silent mis-emission.
+    let mut m = model();
+    let l = m.types.len() as u32;
+    let inner_id = TyId::from_u32(l + 3); // after Array (l), Slice (l+1), Ref (l+2)
+    let arr = m.types.intern(Ty::Array(inner_id, 4));
+    let slice = m.types.intern(Ty::Slice(arr));
+    let sref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let it = item(&mut m, ItemKind::Struct, "Inner");
+    let xs = fl(&mut m, "xs", sref, 0);
+    let inner = m.types.intern(Ty::Struct {
+        item: it,
+        args: GenericArgs::new(),
+        layout: struct_layout(16, 8, None, vec![xs]),
+    });
+    assert_eq!(inner, inner_id);
+    register_struct_root(&mut m, inner, "Inner");
+
+    assert!(matches!(
+        emit_generic_c(&m),
+        Err(EmitError::ContainmentCycle)
+    ));
+}
+
+// ---------------------------------------------------------------------------
+// Fix B: pointer/ref `const` is placed *within* the declarator, adjacent to
+// the type it qualifies (no prefix-to-the-whole-inner bug).
+// ---------------------------------------------------------------------------
+
+/// Emit a single-field `struct Holder { p: <field_ty> }` (field at offset 0,
+/// pointer-sized) and return the TU; used by the declarator-placement tests.
+fn emit_pointer_field(m: &mut RegseqModel, field_ty: TyId) -> String {
+    let f = fl(m, "p", field_ty, 0);
+    push_struct_instance(m, "Holder", struct_layout(8, 8, None, vec![f]));
+    emit_generic_c(m).unwrap()
+}
+
+#[test]
+fn shared_ref_to_scalar_places_const_before_the_pointee() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let r = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let tu = emit_pointer_field(&mut m, r);
+    assert!(tu.contains("const uint32_t *p;"), "got:\n{tu}");
+}
+
+#[test]
+fn mut_ref_to_scalar_has_no_const() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let r = m.types.intern(Ty::Ref(u32t, Provenance::UniqueBorrow));
+    let tu = emit_pointer_field(&mut m, r);
+    assert!(tu.contains("uint32_t *p;"), "got:\n{tu}");
+    assert!(!tu.contains("const uint32_t *p;"), "&mut must not be const");
+}
+
+#[test]
+fn const_raw_ptr_to_scalar_places_const() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let p = m.types.intern(Ty::Ptr(u32t, Mutability::Not));
+    let tu = emit_pointer_field(&mut m, p);
+    assert!(tu.contains("const uint32_t *p;"), "got:\n{tu}");
+}
+
+#[test]
+fn nested_shared_ref_qualifies_each_level_correctly() {
+    // `& &u32` = pointer to const (pointer to const u32) =
+    // `const uint32_t *const *`. The inner pointer is const (it is the const
+    // pointee of the outer shared ref), placed as `*const` after the star --
+    // never `const const`, never on the wrong level.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let inner_ref = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let outer_ref = m.types.intern(Ty::Ref(inner_ref, Provenance::SharedBorrow));
+    let tu = emit_pointer_field(&mut m, outer_ref);
+    assert!(tu.contains("const uint32_t *const *p;"), "got:\n{tu}");
+    assert!(!tu.contains("const const"), "no doubled const:\n{tu}");
+}
+
+// ---------------------------------------------------------------------------
+// Fix C: synthetic padding members never collide with a real field name.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn struct_pad_filler_avoids_a_real_pad0_field() {
+    // struct S { _pad0: u8 @0, x: u32 @8 } -- the [1, 8) gap needs a filler;
+    // it must not reuse the real `_pad0` field name.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let p0 = fl(&mut m, "_pad0", u8t, 0);
+    let x = fl(&mut m, "x", u32t, 8);
+    push_struct_instance(&mut m, "S", struct_layout(12, 4, None, vec![p0, x]));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint8_t _pad0;"),
+        "real _pad0 field present:\n{tu}"
+    );
+    assert!(
+        tu.contains("unsigned char _pad1["),
+        "filler skips the taken _pad0:\n{tu}"
+    );
+    assert!(
+        !tu.contains("unsigned char _pad0["),
+        "filler must not reuse _pad0:\n{tu}"
+    );
+}
+
+#[test]
+fn union_pad_filler_avoids_a_real_pad_field() {
+    // union U { _pad: u8 } with layout size 4 -> a trailing filler that must
+    // not collide with the real `_pad` member.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let p = fl(&mut m, "_pad", u8t, 0);
+    let it = item(&mut m, ItemKind::Union, "U");
+    let ty = m.types.intern(Ty::Union {
+        item: it,
+        args: GenericArgs::new(),
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Union { fields: vec![p] },
+        },
+    });
+    let emission = m.strings.intern("U");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Union { layout: ty },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint8_t _pad;"),
+        "real _pad member present:\n{tu}"
+    );
+    assert!(
+        tu.contains("unsigned char _pad0["),
+        "filler skips the taken _pad:\n{tu}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Fix D: a fn-pointer return that is itself a fn pointer / pointer-to-array
+// recurses the declarator instead of concatenating a bare return type.
+// ---------------------------------------------------------------------------
+
+/// Intern a no-argument `fn() -> output` function-pointer `Ty`.
+fn fn_ptr_returning(m: &mut RegseqModel, output: TyId) -> TyId {
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    m.types.intern(Ty::FnPtr(sig))
+}
+
+#[test]
+fn fn_ptr_returning_fn_ptr_recurses_the_declarator() {
+    // `cb: fn() -> fn() -> i32` -> `int32_t (*(*cb)(void))(void)`.
+    let mut m = model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let inner = fn_ptr_returning(&mut m, i32t);
+    let outer = fn_ptr_returning(&mut m, inner);
+    let f = fl(&mut m, "cb", outer, 0);
+    push_struct_instance(&mut m, "Holder", struct_layout(8, 8, None, vec![f]));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("int32_t (*(*cb)(void))(void);"),
+        "nested fn-ptr return must recurse:\n{tu}"
+    );
+}
+
+#[test]
+fn fn_ptr_returning_pointer_to_array_recurses_the_declarator() {
+    // `cb: fn() -> &[u32; 4]` -> `const uint32_t (*(*cb)(void))[4]`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr = m.types.intern(Ty::Array(u32t, 4));
+    let aref = m.types.intern(Ty::Ref(arr, Provenance::SharedBorrow));
+    let fnptr = fn_ptr_returning(&mut m, aref);
+    let f = fl(&mut m, "cb", fnptr, 0);
+    push_struct_instance(&mut m, "Holder", struct_layout(8, 8, None, vec![f]));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("const uint32_t (*(*cb)(void))[4];"),
+        "pointer-to-array return must recurse:\n{tu}"
+    );
 }

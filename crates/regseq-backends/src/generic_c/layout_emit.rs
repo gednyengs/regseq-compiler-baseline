@@ -12,11 +12,42 @@
 //! the three `_Static_assert` guards. The static-asserts make the emitted
 //! TU self-checking: a wrong offset / size / alignment fails the compile.
 
+use std::collections::HashSet;
+
 use regseq_model::{Layout, LayoutKind, RegseqModel, Ty, TyId};
 
 use super::naming::sanitize;
 use super::types::declare;
 use super::NameTable;
+
+/// Generates synthetic padding-member names that never collide with the
+/// aggregate's real (sanitized) field names (Fix #1). A field literally named
+/// `_pad0` is a legal sanitized name, so the namer seeds its reserved set with
+/// the real member names and skips any `_pad<n>` already taken, reserving each
+/// name it yields (so successive fillers are also mutually distinct).
+struct PadNamer {
+    used: HashSet<String>,
+    next: usize,
+}
+
+impl PadNamer {
+    /// Seed the namer with the already-emitted real member names.
+    fn new(used: HashSet<String>) -> PadNamer {
+        PadNamer { used, next: 0 }
+    }
+
+    /// The next `_pad<n>` filler name not colliding with a real member or a
+    /// previously yielded filler. Reserves the returned name.
+    fn fresh(&mut self) -> String {
+        loop {
+            let candidate = format!("_pad{}", self.next);
+            self.next += 1;
+            if self.used.insert(candidate.clone()) {
+                return candidate;
+            }
+        }
+    }
+}
 
 /// One emittable (non-ZST accounted) field, normalized across the
 /// struct / tuple / union / closure shapes.
@@ -160,15 +191,15 @@ fn emit_struct_body(
         .collect();
     emittable.sort_by_key(|f| f.offset);
 
+    let mut padder = PadNamer::new(emittable.iter().map(|f| f.name.clone()).collect());
     let mut cursor: u64 = 0;
-    let mut pad_n: usize = 0;
     for f in &emittable {
         if f.offset > cursor {
             out.push_str(&format!(
-                "    unsigned char _pad{pad_n}[{}];\n",
+                "    unsigned char {}[{}];\n",
+                padder.fresh(),
                 f.offset - cursor
             ));
-            pad_n += 1;
         }
         out.push_str(&format!("    {};\n", declare(model, names, f.ty, &f.name)));
         guards.push_str(&format!(
@@ -181,7 +212,8 @@ fn emit_struct_body(
     }
     if cursor < view.layout.size {
         out.push_str(&format!(
-            "    unsigned char _pad{pad_n}[{}];\n",
+            "    unsigned char {}[{}];\n",
+            padder.fresh(),
             view.layout.size - cursor
         ));
     }
@@ -198,8 +230,13 @@ fn emit_union_body(
     out: &mut String,
     guards: &mut String,
 ) {
+    let emittable: Vec<&ViewField> = view
+        .fields
+        .iter()
+        .filter(|f| !is_zst(model, f.ty))
+        .collect();
     let mut largest: u64 = 0;
-    for f in view.fields.iter().filter(|f| !is_zst(model, f.ty)) {
+    for f in &emittable {
         out.push_str(&format!("    {};\n", declare(model, names, f.ty, &f.name)));
         guards.push_str(&format!(
             "_Static_assert(offsetof(union {agg_name}, {fname}) == 0, \"{agg_name}.{fname} offset\");\n",
@@ -208,6 +245,13 @@ fn emit_union_body(
         largest = largest.max(model.size_align_of(f.ty).size);
     }
     if largest < view.layout.size {
-        out.push_str(&format!("    unsigned char _pad[{}];\n", view.layout.size));
+        // Collision-proof the trailing filler against a real union member
+        // literally named `_pad` (Fix #1).
+        let mut padder = PadNamer::new(emittable.iter().map(|f| f.name.clone()).collect());
+        out.push_str(&format!(
+            "    unsigned char {}[{}];\n",
+            padder.fresh(),
+            view.layout.size
+        ));
     }
 }

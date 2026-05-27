@@ -121,22 +121,68 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     Ok(out)
 }
 
-/// The by-value-containment edges out of `node` (section 15 edge set):
-/// edges through `FieldLayout.ty` (struct / union / tuple / enum-payload /
-/// closure-capture fields) + the element of a reached `Ty::Array`; a
-/// field that is a `Ref` / `Ptr` to an unsized pointee edges to its fat
-/// struct (`rust_slice_<T>` / `trait_obj_<Trait>`; `rust_str` is bank 1,
-/// always complete). No edge through `Ref` / `Ptr` to a sized pointee,
-/// `FnPtr`, or `FnDef`. Fat-struct nodes hold pointers, so they have no
-/// onward by-value edge.
-fn node_edges(model: &RegseqModel, node: &Node) -> Vec<Node> {
+/// The by-value field / array-element edges out of an aggregate `ty` (the
+/// section 15 edge set shared by discovery and ordering): edges through
+/// `FieldLayout.ty` (struct / union / tuple / enum-payload / closure-capture
+/// fields) + the element of a reached `Ty::Array`; a field that is a `Ref`
+/// / `Ptr` to an unsized pointee edges to its fat struct (`rust_slice_<T>` /
+/// `trait_obj_<Trait>`; `rust_str` is bank 1, always complete). No edge
+/// through `Ref` / `Ptr` to a sized pointee, `FnPtr`, or `FnDef`.
+fn agg_edges(model: &RegseqModel, ty: TyId) -> Vec<Node> {
+    raw_field_tys(model, ty)
+        .into_iter()
+        .filter(|field_ty| model.size_align_of(*field_ty).size > 0)
+        .filter_map(|field_ty| containment_target(model, field_ty))
+        .collect()
+}
+
+/// Discovery edges out of `node` (used by [`discover`] / [`dfs_discover`]):
+/// the nodes that must be *named + bank-2 forward-declared* because `node`
+/// mentions them. Broader than [`ordering_edges`]: a `Node::Slice`'s `data`
+/// slot is a pointer to its element, so the element must be named +
+/// forward-declared (resolve `elem` through any `Ty::Array` to its base
+/// aggregate / fat node via [`containment_target`]) even though a pointer to
+/// a forward-declared type needs no complete-before ordering. Without this
+/// edge an aggregate reachable *only* through a slice never enters the
+/// [`NameTable`], so spelling the `data` field panics. `Node::TraitObj` has
+/// no discovery edge: its `data` is `void *` and the `<Trait>_VTable` is only
+/// forward-declared (deferred).
+fn discovery_edges(model: &RegseqModel, node: &Node) -> Vec<Node> {
     match node {
-        Node::Slice { .. } | Node::TraitObj { .. } => Vec::new(),
-        Node::Agg(ty) => raw_field_tys(model, *ty)
-            .into_iter()
-            .filter(|field_ty| model.size_align_of(*field_ty).size > 0)
-            .filter_map(|field_ty| containment_target(model, field_ty))
-            .collect(),
+        Node::TraitObj { .. } => Vec::new(),
+        Node::Slice { elem, .. } => containment_target(model, *elem).into_iter().collect(),
+        Node::Agg(ty) => agg_edges(model, *ty),
+    }
+}
+
+/// By-value ordering edges out of `node` (used by [`topo_sort`] /
+/// [`topo_visit`]): the nodes that must be *complete before* `node` is
+/// emitted. Narrower than [`discovery_edges`]: a `Node::Slice` whose element
+/// is a struct / union / tuple / closure spells `data` as `T *`, so a
+/// forward-decl suffices (no ordering edge -- this is what keeps the legal
+/// self-reference `struct Inner { xs: &[Inner] }` from being a false
+/// [`EmitError::ContainmentCycle`]). The single exception: a slice whose
+/// element is a `Ty::Array(base, N)` spells `data` as `base (*)[N]`, and a C
+/// array type needs its element complete even behind a pointer, so it edges
+/// (ordering) to `base`'s aggregate. `Node::TraitObj` has no ordering edge.
+fn ordering_edges(model: &RegseqModel, node: &Node) -> Vec<Node> {
+    match node {
+        Node::TraitObj { .. } => Vec::new(),
+        Node::Slice { elem, .. } => slice_array_base_node(model, *elem).into_iter().collect(),
+        Node::Agg(ty) => agg_edges(model, *ty),
+    }
+}
+
+/// The ordering edge for a slice element: `Some` only when `elem` is a
+/// `Ty::Array` (recursively through nested arrays) whose base resolves to an
+/// aggregate / fat node (which must be complete before the slice's
+/// pointer-to-array `data` slot); `None` for a non-array element (a pointer
+/// to a forward-declared struct suffices) or an array of scalars (a scalar
+/// base is always complete).
+fn slice_array_base_node(model: &RegseqModel, elem: TyId) -> Option<Node> {
+    match &model.types[elem] {
+        Ty::Array(_, _) => containment_target(model, elem),
+        _ => None,
     }
 }
 
@@ -246,7 +292,7 @@ fn dfs_discover(model: &RegseqModel, node: Node, seen: &mut HashSet<Node>, order
         return;
     }
     order.push(node.clone());
-    for child in node_edges(model, &node) {
+    for child in discovery_edges(model, &node) {
         dfs_discover(model, child, seen, order);
     }
 }
@@ -285,7 +331,7 @@ fn topo_visit(
         None => {}
     }
     state.insert(node.clone(), Mark::InProgress);
-    for child in node_edges(model, node) {
+    for child in ordering_edges(model, node) {
         topo_visit(model, &child, state, out)?;
     }
     state.insert(node.clone(), Mark::Done);
@@ -495,8 +541,13 @@ pub enum EmitError {
     /// a placeholder; not returned by the emit path.
     NotImplemented,
     /// A section 15 by-value containment cycle was detected. Sized Rust
-    /// types cannot contain themselves by value, so this signals model
-    /// corruption rather than a legal input.
+    /// types cannot contain themselves by value, so this normally signals
+    /// model corruption. It is also the clean surface for the one shape this
+    /// backend cannot spell in C: a genuinely cyclic array-element slice
+    /// (e.g. `struct Inner { xs: &[[Inner; 4]] }`), where `Inner` needs the
+    /// slice complete as an array element while the slice needs `Inner`
+    /// complete by value -- not C-representable, so it errors here rather
+    /// than panicking or mis-emitting.
     ContainmentCycle,
 }
 

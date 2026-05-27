@@ -24,9 +24,9 @@ use std::path::{Path, PathBuf};
 use codegen_coverage_runner::toolchain::{self, ToolchainError};
 use regseq_backends::emit_generic_c;
 use regseq_model::{
-    CrateId, DefPath, Endian, FieldLayout, GenericArgs, Instance, InstanceKind, Item, ItemKind,
-    Layout, LayoutKind, Linkage, RegseqModel, ScalarLayouts, SizeAlign, SourceFileId, Span,
-    StableCrateId, TargetInfo, Ty, UintKind,
+    CrateId, DefPath, Endian, FieldLayout, FnAbi, FnSig, GenericArgs, Instance, InstanceKind,
+    IntKind, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, Provenance, RegseqModel, Safety,
+    ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TargetInfo, Ty, TyId, UintKind,
 };
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
@@ -312,4 +312,227 @@ fn wrong_offset_fails_the_compile_on_the_static_assert() {
         matches!(err, ToolchainError::CompileFailed { .. }),
         "expected CompileFailed, got {err:?}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task-07 robustness fixes: hand-built models whose emitted TU compiles clean
+// under host `cc` (the layout guards + valid declarator syntax are the proof).
+// ---------------------------------------------------------------------------
+
+fn synth_span() -> Span {
+    Span {
+        file: SourceFileId::SYNTHESIZED,
+        lo: 0,
+        hi: 0,
+    }
+}
+
+fn mk_item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> ItemId {
+    let rid = model.strings.intern(rendered);
+    model.items.push(Item {
+        def_path: DefPath {
+            crate_id: CrateId::ZERO,
+            segments: Vec::new(),
+            rendered: rid,
+        },
+        kind,
+        span: synth_span(),
+        linkage: Linkage::Default,
+        link_section: None,
+        inline_hint: regseq_model::InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    })
+}
+
+fn mk_field(model: &mut RegseqModel, name: &str, ty: TyId, offset: u64) -> FieldLayout {
+    FieldLayout {
+        name: model.strings.intern(name),
+        ty,
+        offset,
+    }
+}
+
+fn slayout(size: u64, align: u64, fields: Vec<FieldLayout>) -> Layout {
+    Layout {
+        size,
+        align,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Struct { fields },
+    }
+}
+
+/// Intern a non-generic `Ty::Struct` without registering an instance (so it
+/// is only emitted if reached by containment from a real root).
+fn intern_struct(model: &mut RegseqModel, rendered: &str, layout: Layout) -> TyId {
+    let it = mk_item(model, ItemKind::Struct, rendered);
+    model.types.intern(Ty::Struct {
+        item: it,
+        args: GenericArgs::new(),
+        layout,
+    })
+}
+
+/// Intern a `Ty::Struct` AND register an `InstanceKind::Struct` root.
+fn root_struct(model: &mut RegseqModel, rendered: &str, layout: Layout) -> TyId {
+    let ty = intern_struct(model, rendered, layout);
+    let it = match &model.types[ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => unreachable!(),
+    };
+    let emission = model.strings.intern(rendered);
+    model.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: synth_span(),
+        kind: InstanceKind::Struct { layout: ty },
+    });
+    ty
+}
+
+/// Intern a no-argument `fn() -> output` function-pointer `Ty`.
+fn fn_ptr_returning(model: &mut RegseqModel, output: TyId) -> TyId {
+    let sig = model.sigs.intern(FnSig {
+        inputs: vec![],
+        output,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    model.types.intern(Ty::FnPtr(sig))
+}
+
+/// Append a trivial entry, compile the TU + entry under host `cc`, and assert
+/// a clean exit (so all type definitions / declarators are valid C).
+fn assert_compiles(tu: &str, what: &str) {
+    let full = format!("{tu}\nvoid regseq_main(void) {{}}\n");
+    let run = toolchain::compile_and_run(&full, "regseq_main", cc())
+        .unwrap_or_else(|e| panic!("{what} must compile: {e}"));
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "{what}: must exit 0: {}",
+        run.stderr
+    );
+    assert_eq!(run.stderr, "", "{what}: clean stderr");
+}
+
+#[test]
+fn slice_element_aggregates_compile() {
+    // Fix A: a struct/tuple element reachable only via a slice (forward-decl
+    // suffices) AND an array element (ordered complete-first) both compile.
+    let mut m = target_model();
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+
+    // Sa { s: &[InnerA] } -- InnerA reachable only through the slice.
+    let va = mk_field(&mut m, "v", u32t, 0);
+    let inner_a = intern_struct(&mut m, "InnerA", slayout(4, 4, vec![va]));
+    let slice_a = m.types.intern(Ty::Slice(inner_a));
+    let ref_a = m.types.intern(Ty::Ref(slice_a, Provenance::SharedBorrow));
+    let sa_field = mk_field(&mut m, "s", ref_a, 0);
+    root_struct(&mut m, "Sa", slayout(16, 8, vec![sa_field]));
+
+    // Sb { s: &[[InnerB; 4]] } -- array element ordered before the slice.
+    let vb = mk_field(&mut m, "v", u32t, 0);
+    let inner_b = intern_struct(&mut m, "InnerB", slayout(4, 4, vec![vb]));
+    let arr_b = m.types.intern(Ty::Array(inner_b, 4));
+    let slice_b = m.types.intern(Ty::Slice(arr_b));
+    let ref_b = m.types.intern(Ty::Ref(slice_b, Provenance::SharedBorrow));
+    let sb_field = mk_field(&mut m, "s", ref_b, 0);
+    root_struct(&mut m, "Sb", slayout(16, 8, vec![sb_field]));
+
+    let tu = emit_generic_c(&m).expect("slice-element aggregates emit Ok (no panic)");
+    assert!(
+        tu.contains("(*data)[4]"),
+        "array-element slice data slot:\n{tu}"
+    );
+    assert_compiles(&tu, "slice-element aggregates");
+}
+
+#[test]
+fn nested_const_ref_compiles() {
+    // Fix B: `& &u32` = `const uint32_t *const *` is valid, correctly-placed C.
+    let mut m = target_model();
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let inner_ref = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let outer_ref = m.types.intern(Ty::Ref(inner_ref, Provenance::SharedBorrow));
+    let f = mk_field(&mut m, "p", outer_ref, 0);
+    root_struct(&mut m, "Sc", slayout(8, 8, vec![f]));
+
+    let tu = emit_generic_c(&m).expect("nested ref emits Ok");
+    assert!(tu.contains("const uint32_t *const *p;"), "got:\n{tu}");
+    assert_compiles(&tu, "nested const ref");
+}
+
+#[test]
+fn pad_filler_collisions_compile() {
+    // Fix C: a struct with a real `_pad0` field + a gap, and a union with a
+    // real `_pad` member, both get distinct fillers and compile clean.
+    let mut m = target_model();
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+
+    let p0 = mk_field(&mut m, "_pad0", u8t, 0);
+    let x = mk_field(&mut m, "x", u32t, 8);
+    root_struct(&mut m, "Sd", slayout(12, 4, vec![p0, x]));
+
+    let pad = mk_field(&mut m, "_pad", u8t, 0);
+    let union_item = mk_item(&mut m, ItemKind::Union, "Ue");
+    let union_ty = m.types.intern(Ty::Union {
+        item: union_item,
+        args: GenericArgs::new(),
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Union { fields: vec![pad] },
+        },
+    });
+    let emission = m.strings.intern("Ue");
+    m.instances.push(Instance {
+        item: union_item,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: synth_span(),
+        kind: InstanceKind::Union { layout: union_ty },
+    });
+
+    let tu = emit_generic_c(&m).expect("pad-collision model emits Ok");
+    assert!(tu.contains("uint8_t _pad0;") && tu.contains("unsigned char _pad1["));
+    assert!(tu.contains("uint8_t _pad;") && tu.contains("unsigned char _pad0["));
+    assert_compiles(&tu, "pad-filler collisions");
+}
+
+#[test]
+fn fn_ptr_return_declarators_compile() {
+    // Fix D: a fn pointer returning a fn pointer, and one returning a
+    // pointer-to-array, both recurse the declarator into valid C.
+    let mut m = target_model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+
+    let inner_fn = fn_ptr_returning(&mut m, i32t);
+    let cb = fn_ptr_returning(&mut m, inner_fn);
+
+    let arr = m.types.intern(Ty::Array(u32t, 4));
+    let aref = m.types.intern(Ty::Ref(arr, Provenance::SharedBorrow));
+    let cb2 = fn_ptr_returning(&mut m, aref);
+
+    let cb_field = mk_field(&mut m, "cb", cb, 0);
+    let cb2_field = mk_field(&mut m, "cb2", cb2, 8);
+    root_struct(&mut m, "Sf", slayout(16, 8, vec![cb_field, cb2_field]));
+
+    let tu = emit_generic_c(&m).expect("fn-ptr-return model emits Ok");
+    assert!(tu.contains("int32_t (*(*cb)(void))(void);"), "got:\n{tu}");
+    assert!(
+        tu.contains("const uint32_t (*(*cb2)(void))[4];"),
+        "got:\n{tu}"
+    );
+    assert_compiles(&tu, "fn-ptr return declarators");
 }

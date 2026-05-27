@@ -74,27 +74,57 @@ pub(crate) fn c_type(model: &RegseqModel, names: &NameTable, ty: TyId) -> String
 /// *unsized* pointee is a by-value fat struct (section 3.2), not a
 /// pointer.
 pub(crate) fn declare(model: &RegseqModel, names: &NameTable, ty: TyId, decl: &str) -> String {
+    declare_qualified(model, names, ty, false, decl)
+}
+
+/// [`declare`] with an explicit outer `const` qualifier. `top_const` marks
+/// the outermost type constructor of `ty` as `const`-qualified and places
+/// the qualifier *adjacent to the type it qualifies*: before the base
+/// spelling for a scalar / aggregate, propagated to the element for an array,
+/// and after the star (`T *const`) for a pointer value. This is what spells
+/// nested pointers such as `& &u32` correctly (`const uint32_t *const *`)
+/// rather than prefixing `const` to the whole rendered inner (which would
+/// emit `const const uint32_t **` and qualify the wrong level).
+fn declare_qualified(
+    model: &RegseqModel,
+    names: &NameTable,
+    ty: TyId,
+    top_const: bool,
+    decl: &str,
+) -> String {
+    let q = |base: &str| -> String {
+        if top_const {
+            format!("const {base}")
+        } else {
+            base.to_string()
+        }
+    };
     match &model.types[ty] {
-        Ty::Bool => with_declarator("_Bool", decl),
-        Ty::Char => with_declarator("uint32_t", decl),
-        Ty::Int(kind) => with_declarator(int_spelling(*kind), decl),
-        Ty::Uint(kind) => with_declarator(uint_spelling(*kind), decl),
-        Ty::Float(kind) => with_declarator(float_spelling(*kind), decl),
+        Ty::Bool => with_declarator(&q("_Bool"), decl),
+        Ty::Char => with_declarator(&q("uint32_t"), decl),
+        Ty::Int(kind) => with_declarator(&q(int_spelling(*kind)), decl),
+        Ty::Uint(kind) => with_declarator(&q(uint_spelling(*kind)), decl),
+        Ty::Float(kind) => with_declarator(&q(float_spelling(*kind)), decl),
         // `Never` in return position is `void`; it is a ZST elsewhere and
         // is omitted as a field, so this spelling is only reached by `d`/`e`
         // for a divergent return.
-        Ty::Never => with_declarator("void", decl),
+        Ty::Never => with_declarator(&q("void"), decl),
         Ty::Struct { .. } | Ty::Tuple { .. } | Ty::Closure(_, _) | Ty::Enum { .. } => {
-            with_declarator(&format!("struct {}", names.agg_name(ty)), decl)
+            with_declarator(&q(&format!("struct {}", names.agg_name(ty))), decl)
         }
-        Ty::Union { .. } => with_declarator(&format!("union {}", names.agg_name(ty)), decl),
-        Ty::Array(elem, len) => declare(model, names, *elem, &format!("{decl}[{len}]")),
+        Ty::Union { .. } => with_declarator(&q(&format!("union {}", names.agg_name(ty))), decl),
+        // A `const` array is an array of `const` elements: the qualifier
+        // propagates to the element base (`const uint32_t arr[4]`).
+        Ty::Array(elem, len) => {
+            declare_qualified(model, names, *elem, top_const, &format!("{decl}[{len}]"))
+        }
         Ty::Ref(pointee, prov) => pointer_decl(
             model,
             names,
             ty,
             *pointee,
             ref_is_const(model, *pointee, *prov),
+            top_const,
             decl,
         ),
         Ty::Ptr(pointee, mutability) => pointer_decl(
@@ -103,15 +133,26 @@ pub(crate) fn declare(model: &RegseqModel, names: &NameTable, ty: TyId, decl: &s
             ty,
             *pointee,
             *mutability == Mutability::Not,
+            top_const,
             decl,
         ),
-        Ty::FnPtr(sig) => fn_ptr_decl(model, names, *sig, decl),
+        Ty::FnPtr(sig) => {
+            let inner = fn_ptr_decl(model, names, *sig, decl);
+            // Const-qualifying a function type is exotic and only reachable
+            // via a (rare) pointer-to-fn-ptr, outside this task's verified
+            // scope; a prefix keeps it syntactically valid.
+            if top_const {
+                format!("const {inner}")
+            } else {
+                inner
+            }
+        }
         // `FnDef` is a ZST function-identity tag with no C value emission.
-        Ty::FnDef(_, _) => with_declarator("/* FnDef ZST */", decl),
+        Ty::FnDef(_, _) => with_declarator(&q("/* FnDef ZST */"), decl),
         // Bare unsized markers never appear as a value type in a valid
         // model (they only occur behind `Ref`/`Ptr`, handled above).
         Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. } => {
-            with_declarator("void /* bare unsized marker */", decl)
+            with_declarator(&q("void /* bare unsized marker */"), decl)
         }
     }
 }
@@ -127,45 +168,57 @@ fn ref_is_const(model: &RegseqModel, pointee: TyId, prov: Provenance) -> bool {
 
 /// Declarator for a `Ref` / `Ptr`. An unsized pointee lowers to a
 /// by-value fat struct (section 3.2); a sized pointee lowers to a pointer
-/// via [`ptr_to`].
+/// via [`ptr_to`]. `pointee_const` qualifies the pointed-to type; `self_const`
+/// qualifies this pointer *value* itself (set when it is the const pointee of
+/// an enclosing shared reference, e.g. the inner pointer of `& &u32`).
 fn pointer_decl(
     model: &RegseqModel,
     names: &NameTable,
     ref_ty: TyId,
     pointee: TyId,
-    is_const: bool,
+    pointee_const: bool,
+    self_const: bool,
     decl: &str,
 ) -> String {
     if let Some(fat) = unsized_pointee_struct_name(model, names, ref_ty) {
-        return with_declarator(&format!("struct {fat}"), decl);
+        // The fat struct is a by-value aggregate, so `self_const` prefixes
+        // its base spelling like any other leaf.
+        let base = format!("struct {fat}");
+        let qualified = if self_const {
+            format!("const {base}")
+        } else {
+            base
+        };
+        return with_declarator(&qualified, decl);
     }
-    ptr_to(model, names, pointee, is_const, decl)
+    ptr_to(model, names, pointee, pointee_const, self_const, decl)
 }
 
-/// Declare a pointer to a sized `pointee` named by `decl`, with the
-/// pointer `const`-qualified when `is_const`. The pointer operator binds
-/// looser than the array `[N]` and function `(...)` declarators, so a
-/// pointer to an array or function pointer parenthesizes the declarator
-/// (`uint32_t (*p)[4]`, not the array-of-pointers `uint32_t *p[4]`).
+/// Declare a pointer to a sized `pointee` named by `decl`. `pointee_const`
+/// qualifies the pointed-to type (placed adjacent to it by the recursive
+/// [`declare_qualified`]); `self_const` qualifies the pointer value itself
+/// (`T *const decl`). The pointer operator binds looser than the array `[N]`
+/// and function `(...)` declarators, so a pointer to an array or function
+/// pointer parenthesizes the declarator (`uint32_t (*p)[4]`, not the
+/// array-of-pointers `uint32_t *p[4]`).
 fn ptr_to(
     model: &RegseqModel,
     names: &NameTable,
     pointee: TyId,
-    is_const: bool,
+    pointee_const: bool,
+    self_const: bool,
     decl: &str,
 ) -> String {
     let needs_parens = matches!(model.types[pointee], Ty::Array(_, _) | Ty::FnPtr(_));
+    // `self_const` sits immediately after this level's star (`*const`), so it
+    // qualifies the pointer; `pointee_const` is placed by the recursion.
+    let star = if self_const { "*const " } else { "*" };
     let ptr_decl = if needs_parens {
-        format!("(*{decl})")
+        format!("({star}{decl})")
     } else {
-        format!("*{decl}")
+        format!("{star}{decl}")
     };
-    let inner = declare(model, names, pointee, &ptr_decl);
-    if is_const {
-        format!("const {inner}")
-    } else {
-        inner
-    }
+    declare_qualified(model, names, pointee, pointee_const, &ptr_decl)
 }
 
 /// If `ref_ty` is a `Ref` / `Ptr` to an unsized pointee, the name of the
@@ -197,8 +250,12 @@ pub(crate) fn unsized_pointee_struct_name(
     }
 }
 
-/// Function-pointer declarator `R (*decl)(params)` (section 2). Used by
-/// `d`/`e`; a `FnPtr` field is rare in this task's verified scope.
+/// Function-pointer declarator `R (*decl)(params)` (section 2). The return
+/// type `R` is rendered through the recursive [`declare`] with the function
+/// declarator `(*decl)(params)` placed *inside* it, so a return that is
+/// itself a function pointer or pointer-to-array recurses the declarator
+/// (`fn() -> fn() -> i32` becomes `int32_t (*(*decl)(void))(void)`) instead of
+/// the invalid bare-type concatenation `int (*)(void) (*decl)(void)`.
 fn fn_ptr_decl(
     model: &RegseqModel,
     names: &NameTable,
@@ -206,7 +263,6 @@ fn fn_ptr_decl(
     decl: &str,
 ) -> String {
     let fn_sig = model.sigs.resolve(sig);
-    let ret = c_type(model, names, fn_sig.output);
     let params = if fn_sig.inputs.is_empty() {
         "void".to_string()
     } else {
@@ -217,7 +273,7 @@ fn fn_ptr_decl(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    format!("{ret} (*{decl})({params})")
+    declare(model, names, fn_sig.output, &format!("(*{decl})({params})"))
 }
 
 /// Emit the section 3.2 `struct rust_slice_<T>` body: a `data` pointer
@@ -231,8 +287,9 @@ pub(crate) fn emit_slice_struct(
 ) -> String {
     // The `data` slot is a (const?) pointer to the element type; use the
     // declarator builder so a non-trivial element (e.g. `[u32; 4]`) gets
-    // correct C syntax (`const uint32_t (*data)[4]`).
-    let data = ptr_to(model, names, elem, const_data, "data");
+    // correct C syntax (`const uint32_t (*data)[4]`). The pointer member
+    // itself is not const (only its pointee, per `const_data`).
+    let data = ptr_to(model, names, elem, const_data, false, "data");
     format!(
         "struct {struct_name} {{\n\
          \x20\x20\x20\x20{data};\n\

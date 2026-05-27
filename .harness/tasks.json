@@ -4694,7 +4694,7 @@
           "id": "regseq-backends-07",
           "name": "Generic-C type-emission robustness fixes (c1 soundness follow-up)",
           "spec": ".harness/tasks/regseq-backends/07-generic-c-type-robustness-fixes.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-06"
           ],
