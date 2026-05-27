@@ -179,11 +179,25 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
 - **In-flight**: **task c1 CLOSED**; **task `regseq-backends-07` (c1 robustness
   fixes) CLOSED — implementer `34a4ae1`, assessed clean** (see below);
-  **task c2 (`regseq-backends-08`) IN PROGRESS** (implementer actively
-  building it — `enum_emit.rs` + `mod.rs`/`layout_emit.rs`/test edits are in
-  the working tree, uncommitted). **Next to draft: task d** (bodies — §7.1
-  terminators / §10 Rvalue / §11 casts / §12 Const / §4-§5 places-operands),
-  then e (diag-log, first green fixture).
+  **task c2 (`regseq-backends-08`) CLOSED — implementer `3b66248`, assessed
+  CLEAN, Codex soundness pass SOUND (no issues).** Banks 2-3 now emit
+  definitions for **every** sized aggregate (struct/union/tuple/closure/array/
+  slice/**enum**); `dyn`/vtable + bodies (banks 4-5) remain. **Next to draft:
+  task d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts / §12 Const /
+  §4-§5 places-operands; **must also widen discovery roots** to signature/
+  local/static types per the c1 hand-off), then e (diag-log, first green
+  fixture).
+  - **`regseq-backends-08` assessment (`3b66248`):** the §13/D9 union-of-views
+    enum representation in a new `enum_emit.rs`, reusing the §14 primitive
+    (refactored to a shared `emit_offset_fields` + `GuardDesignator`). fmt /
+    clippy / **all tests green** (37 backend-lib + 10 `generic_c_layout`,
+    incl. the required shifted-alignment `enum Shift { A(u8), B(u32) }` + the
+    wrong-offset injection + §9.8/§9.9 collapse + Empty + byte-identical);
+    determinism stable; diff scope matches the spec; **ledger unchanged**; c1
+    non-enum output byte-for-byte preserved (`member_prefix:""`). **Codex
+    soundness pass: SOUND, no issues** (verified fidelity across all
+    EnumShape×TagEncoding, shifted-align/non-zero-start views, sizeof/alignof,
+    collapse logic, panic paths; re-ran the tests). No follow-ups from c2.
   - **`regseq-backends-07` assessment (`34a4ae1`):** verified in an isolated
     worktree (the implementer was concurrently editing the main tree for 08):
     fmt / clippy (`-D warnings`) / **all tests green** (32 backend-lib + 37
@@ -235,12 +249,13 @@ The volatility split means ~90% of updates touch only **§ Current state**.
    panic/helpers; emit seam live. **(c1) DONE — `regseq-backends-06`**
    (`f410115`); type system + field-offset, banks 2–3 live; assessed clean on
    the common path; a soundness pass found 4 edge-case bugs → **`regseq-backends-07`
-   FILED** (c1 robustness fixes). **The original "(c) types + layout" was
-   SPLIT into c1 (foundation, non-enum) + c2 (enum §13/D9).** **(c2) DONE
-   (filing) — `regseq-backends-08`** (`6eb1c20`); enum representation via the
-   union-of-views form (overrides the §13/D9 literal form — doc fix flagged).
+   DONE** (c1 robustness fixes; `34a4ae1`, assessed clean). **The original
+   "(c) types + layout" was SPLIT into c1 (foundation, non-enum) + c2 (enum
+   §13/D9).** **(c2) DONE + assessed CLEAN — `regseq-backends-08`** (`3b66248`,
+   Codex soundness SOUND); enum representation via the union-of-views form.
    **Next: draft task d** (bodies — terminators / Rvalue / casts / Const /
-   places-operands), then e (diag-log, first green fixture). The
+   places-operands; widen discovery roots), then e (diag-log, first green
+   fixture). The
    natural breakdown (input contract =
    `generic-c-backend.md` §§2–17, complete): (a) the
    **codegen-coverage-runner** crate +
@@ -378,7 +393,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07 DONE; c2 `regseq-backends-08` IN PROGRESS [implementer]; d/e to draft — "(c)" split into c1+c2) | `34a4ae1` (07) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2 DONE+assessed; d/e to draft — "(c)" split into c1+c2; banks 2-3 complete for all sized aggregates incl. enums) | `3b66248` (c2) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -576,17 +591,17 @@ uv run python scripts/python/task.py add-task \
 ## § First-action recommendations by user input (STABLE)
 
 **"Let's continue / what's next"** → § Current state → Next actions.
-**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1, and
-`regseq-backends-07` DONE + assessed** (07 clean — Codex soundness pass
-over-flagged 2 false positives, 1 real-minor #3; see § Current state /
-§ Update log); **c2 (`regseq-backends-08`) IN PROGRESS** (implementer building
-`enum_emit.rs` etc. in the working tree — uncommitted). **The next task to
-DRAFT is d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts / §12 Const /
-§4-§5 places-operands; d→e is the critical path to the first green fixture).
-The §13/D9 doc fix is **APPLIED** (`5d422fe`). **Open: #3 fn-ptr-value const
-follow-up (file or fold).** **`origin/main` is at `a8b676a`** — local chain
-(`6eb1c20` → `56c13a9` → `5d422fe` → `600883d` → `34a4ae1` [07, implementer] →
-this HANDOFF commit) is unpushed; assess/push once c2 lands.
+**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1,
+`regseq-backends-07`, and c2 (`regseq-backends-08`) all DONE + assessed clean**
+(07: Codex soundness over-flagged 2 false positives + 1 real-minor #3; c2:
+Codex soundness SOUND, no issues; see § Current state / § Update log). **The
+next task to DRAFT is d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts /
+§12 Const / §4-§5 places-operands; d→e is the critical path to the first green
+fixture; d must also widen discovery roots to signature/local/static types).
+The §13/D9 doc fix is **APPLIED** (`5d422fe`). **Open follow-up: #3 fn-ptr-value
+const placement** (`&fn() -> i32` — minor, documented; file a small task or fold
+into later hardening). **`origin/main` is at `a8b676a`** — the local chain
+(through `3b66248` c2 + this HANDOFF commit) is unpushed; offer to push.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
@@ -604,6 +619,25 @@ the rest is stable.
 
 ## § Update log (append-only)
 
+- 2026-05-27: **Phase-1 task c2 (`regseq-backends-08`) CLOSED** (enum
+  representation; implementer `3b66248`). The §13/D9 **union-of-views** form in
+  a new `generic_c/enum_emit.rs`, reusing the §14 primitive (refactored to a
+  shared `emit_offset_fields` + `GuardDesignator` carrying a member-path
+  prefix). Assessed in the main tree (implementer done, tree clean): fmt /
+  clippy (`-D warnings`) / **all tests green** (37 backend-lib + 10
+  `generic_c_layout` + the rest), incl. the required shifted-alignment
+  `enum Shift { A(u8), B(u32) }` (tag@0/A@1/B@4), the wrong-offset injection
+  (guards bite), §9.8/§9.9 inline collapse, `Empty`, and byte-identical
+  determinism. Diff scope = `enum_emit.rs` + `layout_emit.rs` refactor +
+  `mod.rs` bank-3 wiring + tests + `tasks.json`; **ledger unchanged**; c1
+  non-enum output byte-for-byte preserved (`member_prefix:""`). **Codex
+  soundness pass: SOUND, no issues** — verified fidelity across every
+  EnumShape×TagEncoding, shifted-align/non-zero-start views, sizeof/alignof
+  (views padded to size, union max, outer `aligned(layout.align)`), the
+  one-view/zero-view collapse, panic paths; re-ran the suite. **Banks 2-3 now
+  emit every sized aggregate incl. enums.** No c2 follow-ups. **Outstanding:
+  the 07 #3 fn-ptr-value const item (decide: file or fold). Next: draft task
+  d (bodies).**
 - 2026-05-27: **Phase-1 task `regseq-backends-07` CLOSED** (c1 robustness
   fixes; implementer `34a4ae1`). Assessed in an **isolated git worktree** at
   `34a4ae1` (the implementer was concurrently editing the main tree for c2, so
