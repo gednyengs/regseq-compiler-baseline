@@ -3,6 +3,7 @@ resolver = "2"
 members = [
     "crates/bridge-coverage-runner",
     "crates/cargo-regseq",
+    "crates/codegen-coverage-runner",
     "crates/regseq",
     "crates/regseq-analysis",
     "crates/regseq-backends",

@@ -4630,7 +4630,7 @@
           "id": "regseq-backends-04",
           "name": "Scaffold codegen-coverage-runner crate + 6-stage harness plumbing (Phase-1 task a)",
           "spec": ".harness/tasks/regseq-backends/04-codegen-coverage-runner-scaffold.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-03",
             "test-ir-fixtures-01"
