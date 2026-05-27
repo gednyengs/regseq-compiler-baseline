@@ -506,10 +506,13 @@ closure captures) is emitted by this technique:
 3. Insert explicit `unsigned char _padN[k];` fillers to advance from the
    previous field's end to the next field's `offset`, and a trailing pad
    to `layout.size`.
-4. Carry alignment: `_Alignas(layout.align)` on the aggregate (or
-   `__attribute__((aligned(align)))`); `pack: Some(1)` →
-   `__attribute__((packed))`; `pack: Some(n)` → `packed` +
-   `aligned(n)` (LY-2).
+4. Carry alignment: force the C **type** alignment to `layout.align` via
+   `__attribute__((aligned(layout.align)))` (not `_Alignas`, which is invalid
+   on a `struct`/`union` tag definition); `pack: Some(_)` adds `packed` →
+   `__attribute__((packed, aligned(layout.align)))` (LY-2). The alignment is
+   **always `layout.align`, never `pack`'s `n`** (`repr(packed(n))` true
+   alignment = `min(max_field_align, n) = layout.align`; the step-6 `_Alignof`
+   guard asserts it).
 5. **Unions** (`LayoutKind::Union`): all field offsets are 0
    (layout.rs:41) → a C `union` of the fields (no padding between; trailing
    pad to `size`).

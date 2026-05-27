@@ -971,9 +971,14 @@ by:
 3. Insert explicit `unsigned char _padN[k];` fillers to advance from the
    previous field's end to the next field's `offset`, and a trailing pad to
    `layout.size`.
-4. Carry alignment: `_Alignas(layout.align)` (or
-   `__attribute__((aligned(align)))`); `pack: Some(1)` →
-   `__attribute__((packed))`; `pack: Some(n)` → `packed` + `aligned(n)`.
+4. Carry alignment: force the aggregate's C **type** alignment to
+   `layout.align` via `__attribute__((aligned(layout.align)))` (`_Alignas` is
+   **not** valid on a `struct`/`union` *tag definition* — it specifies
+   objects/members, not a type). `pack: Some(_)` adds `packed` →
+   `__attribute__((packed, aligned(layout.align)))`. The alignment is
+   **always `layout.align`, never `pack`'s `n`** — under `repr(packed(n))` the
+   true type alignment is `min(max_field_align, n) = layout.align`, which can
+   be `< n`; the step-6 `_Alignof` guard asserts it.
 5. **Unions** (`LayoutKind::Union`): all field offsets are 0 → a C `union`
    of the fields, trailing pad to `size`.
 6. Emit `_Static_assert(sizeof(T)==size)`,
@@ -1015,6 +1020,18 @@ multi-file split is rename-free. The TU is emitted in five ordered banks:
    - **No** edge through `Ty::Ref` / `Ty::Ptr` / `Ty::FnPtr` (forward-decls
      in bank 2 break these — pointers to incomplete types are legal) or
      `Ty::FnDef` (a ZST; not emitted).
+   - **Fat-pointer exception (the lowered struct, not the pointee).** A
+     `Ref`/`Ptr` to an *unsized* pointee lowers to a **by-value** fat struct
+     (§3.2): a containing aggregate therefore edges to that fat struct
+     (`rust_slice_<T>` / `trait_obj_<Trait>`; `rust_str` is in the prelude).
+     The fat struct's `data` slot is a pointer, so it normally needs only a
+     forward-decl of the element — **except** for a slice whose element is a
+     `Ty::Array(base, N)`: `data` is then `base (*)[N]`, and a C **array type
+     needs its element complete even behind a pointer**, so the fat struct
+     edges (ordering, complete-before) to `base`'s aggregate. (Discovery —
+     naming + forward-decl — always edges to the element aggregate; only the
+     `Ty::Array` element case adds the *ordering* edge. A genuinely cyclic
+     array-element slice is not C-representable and is a hard emission error.)
 
    This is derivable purely from `FieldLayout.ty` + the `Ty` interner (no
    recomputation). F4 / instance kind-rank order is the deterministic
