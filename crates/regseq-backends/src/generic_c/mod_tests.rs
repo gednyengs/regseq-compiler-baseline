@@ -1110,11 +1110,11 @@ fn enum_emit_is_byte_identical_across_two_calls() {
 // ---------------------------------------------------------------------------
 
 use regseq_model::{
-    AssertKind, AttrData, BasicBlock, BinOp, BlockId, Body, CAbiLowering, CAbiShape, CallCallee,
-    CastKind, Const, FieldIdx, FnSigId, FunctionInstanceData, FunctionInstanceFlavor, InstanceId,
-    IntrinsicKind, LocalDecl, LocalId, LogLevel, NonDivergingIntrinsic, Operand, Place, PlaceElem,
-    Rvalue, Statement, StatementKind, SubstReason, SwitchTargets, Terminator, TerminatorKind,
-    UNIT_LAYOUT,
+    AggregateKind, AssertKind, AttrData, BasicBlock, BinOp, BlockId, Body, CAbiLowering, CAbiShape,
+    CallCallee, CastKind, Const, FieldIdx, FnSigId, FunctionInstanceData, FunctionInstanceFlavor,
+    InstanceId, IntrinsicKind, LocalDecl, LocalId, LogLevel, NonDivergingIntrinsic, Operand, Place,
+    PlaceElem, PointerCoercion, Rvalue, Statement, StatementKind, SubstReason, SwitchTargets,
+    Terminator, TerminatorKind, UnOp, UNIT_LAYOUT,
 };
 
 fn fnsig(
@@ -1892,43 +1892,145 @@ fn fn_with_stmt(m: &mut RegseqModel, rendered: &str, stmt: Statement) -> Instanc
 }
 
 #[test]
-fn field_place_projection_is_unsupported() {
+fn struct_aggregate_construct_and_field_access_spell_definition_names() {
+    // struct Point { a: u8 @4, b: u32 @0 } (repr(Rust) reordered). A fn
+    // builds `Point { a, b }` from two args and reads `.b`: construction is a
+    // designated initializer with the sanitize(name) fields (MIR order a, b)
+    // and access spells `.b` (by name, not a positional index).
     let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
     let u32t = uint(&mut m, UintKind::U32);
-    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
-    let dst = Place {
-        local: LocalId::from_u32(0),
-        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(0), u32t)]),
-    };
-    fn_with_stmt(
-        &mut m,
-        "field",
-        st(StatementKind::Assign(
-            dst,
-            Rvalue::Use(Operand::Constant(zero)),
-        )),
+    let a = fl(&mut m, "a", u8t, 4);
+    let b = fl(&mut m, "b", u32t, 0);
+    let point = intern_struct(&mut m, "Point", struct_layout(8, 4, None, vec![a, b]));
+    let sig = fnsig(&mut m, vec![u8t, u32t], u32t, FnAbi::Rust, false);
+    // locals: _0 u32 (ret), _1 u8 (arg a), _2 u32 (arg b), _3 Point.
+    let body = build_body(
+        2,
+        vec![u32t, u8t, u32t, point],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Aggregate(
+                        AggregateKind::Struct(point),
+                        Box::new([Operand::Copy(loc(1)), Operand::Copy(loc(2))]),
+                    ),
+                )),
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Copy(Place {
+                        local: LocalId::from_u32(3),
+                        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(1), u32t)]),
+                    })),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
     );
-    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+    fn_instance(&mut m, "build_point", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct Point){ .a = _1, .b = _2 }"),
+        "designated initializer in MIR field order:\n{tu}"
+    );
+    assert!(
+        tu.contains("_0 = _3.b;"),
+        "field access spells the definition name, not a positional index:\n{tu}"
+    );
 }
 
 #[test]
-fn aggregate_rvalue_is_unsupported() {
+fn tuple_aggregate_construct_and_field_access_use_indexed_names() {
+    // (u8, u32): _0 (u8) @4, _1 (u32) @0. A fn builds the tuple and reads ._1.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let t0 = fl(&mut m, "_0", u8t, 4);
+    let t1 = fl(&mut m, "_1", u32t, 0);
+    let tuple = m.types.intern(Ty::Tuple {
+        fields: vec![u8t, u32t],
+        layout: struct_layout(8, 4, None, vec![t0, t1]),
+    });
+    let sig = fnsig(&mut m, vec![u8t, u32t], u32t, FnAbi::Rust, false);
+    // locals: _0 u32 (ret), _1 u8 (arg), _2 u32 (arg), _3 tuple.
+    let body = build_body(
+        2,
+        vec![u32t, u8t, u32t, tuple],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Aggregate(
+                        AggregateKind::Tuple(tuple),
+                        Box::new([Operand::Copy(loc(1)), Operand::Copy(loc(2))]),
+                    ),
+                )),
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Copy(Place {
+                        local: LocalId::from_u32(3),
+                        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(1), u32t)]),
+                    })),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "build_tuple", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("._0 = _1, ._1 = _2 }"),
+        "tuple compound literal uses _<idx> names:\n{tu}"
+    );
+    assert!(tu.contains("_0 = _3._1;"), "tuple field access:\n{tu}");
+}
+
+#[test]
+fn union_aggregate_constructs_the_active_field() {
+    // union U { x: u32, y: u8 } -- build it with the `x` field active.
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
-    let tuple = m.types.intern(Ty::Tuple {
-        fields: vec![],
-        layout: UNIT_LAYOUT,
+    let u8t = uint(&mut m, UintKind::U8);
+    let x = fl(&mut m, "x", u32t, 0);
+    let y = fl(&mut m, "y", u8t, 0);
+    let it = item(&mut m, ItemKind::Union, "U");
+    let union_ty = m.types.intern(Ty::Union {
+        item: it,
+        args: GenericArgs::new(),
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Union { fields: vec![x, y] },
+        },
     });
-    fn_with_stmt(
-        &mut m,
-        "agg",
-        st(StatementKind::Assign(
-            loc(0),
-            Rvalue::Aggregate(regseq_model::AggregateKind::Tuple(tuple), Box::new([])),
-        )),
+    let sig = fnsig(&mut m, vec![u32t], union_ty, FnAbi::Rust, false);
+    // locals: _0 U (ret), _1 u32 (arg).
+    let body = build_body(
+        1,
+        vec![union_ty, u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::Union(union_ty, FieldIdx::from_u32(0)),
+                    Box::new([Operand::Copy(loc(1))]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
     );
-    let _ = u32t;
-    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+    fn_instance(&mut m, "build_union", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = (union U){ .x = _1 };"),
+        "union literal sets the active field:\n{tu}"
+    );
 }
 
 #[test]
@@ -1961,21 +2063,23 @@ fn const_aggregate_is_unsupported() {
 }
 
 #[test]
-fn ref_to_unsized_pointee_is_unsupported() {
+fn reborrow_of_a_whole_slice_is_an_identity_copy() {
+    // `fn reborrow(s: &[u8]) -> &[u8] { &*s }` -- `_0 = &(*_1)` re-borrows the
+    // whole slice, which is the fat pointer copied (`_0 = _1;`), not a
+    // pointer-to-pointer.
     let mut m = model();
     let u8t = uint(&mut m, UintKind::U8);
     let slice = m.types.intern(Ty::Slice(u8t));
     let slice_ref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
-    let u32t = uint(&mut m, UintKind::U32);
-    let sig = fnsig(&mut m, vec![slice_ref], u32t, FnAbi::Rust, false);
-    // _1: &[u8]; `&(*_1)` borrows the unsized [u8] -> fat-pointer construction (d2).
+    let sig = fnsig(&mut m, vec![slice_ref], slice_ref, FnAbi::Rust, false);
+    // _0: &[u8] (ret), _1: &[u8] (arg).
     let deref = Place {
         local: LocalId::from_u32(1),
         projection: Box::new([PlaceElem::Deref]),
     };
     let body = build_body(
         1,
-        vec![u32t, slice_ref],
+        vec![slice_ref, slice_ref],
         vec![bb(
             vec![st(StatementKind::Assign(
                 loc(0),
@@ -1984,8 +2088,13 @@ fn ref_to_unsized_pointee_is_unsupported() {
             tk(TerminatorKind::Return),
         )],
     );
-    fn_instance(&mut m, "ref_unsized", sig, Some(body));
-    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+    fn_instance(&mut m, "reborrow", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = _1;"),
+        "a whole-slice re-borrow copies the fat pointer:\n{tu}"
+    );
 }
 
 #[test]
@@ -2087,26 +2196,48 @@ fn float_to_int_from_constant_uses_saturating_helper() {
 }
 
 #[test]
-fn with_overflow_rvalue_is_unsupported() {
-    // The (T, bool) result aggregate + its field consumption are d2.
+fn with_overflow_writes_both_tuple_fields_via_the_helper() {
+    // checked_add-style: `_0: (u32, bool) = AddWithOverflow(_1, _2)`. The
+    // prelude helper is called once into a temp, then both `(T, bool)` fields
+    // are written (`_0` = the value, `_1` = the overflow flag).
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
-    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
-    let two = m.consts.intern(Const::Uint(UintKind::U32, 2));
-    fn_with_stmt(
-        &mut m,
-        "withovf",
-        st(StatementKind::Assign(
-            loc(0),
-            Rvalue::BinaryOp(
-                BinOp::AddWithOverflow,
-                Operand::Constant(one),
-                Operand::Constant(two),
-            ),
-        )),
+    let boolt = m.types.intern(Ty::Bool);
+    // tuple (u32, bool): _0 (u32) @0, _1 (bool) @4, size 8 align 4.
+    let f0 = fl(&mut m, "_0", u32t, 0);
+    let f1 = fl(&mut m, "_1", boolt, 4);
+    let tup = m.types.intern(Ty::Tuple {
+        fields: vec![u32t, boolt],
+        layout: struct_layout(8, 4, None, vec![f0, f1]),
+    });
+    let sig = fnsig(&mut m, vec![u32t, u32t], tup, FnAbi::Rust, false);
+    // _0 tuple (ret), _1 u32 (arg), _2 u32 (arg).
+    let body = build_body(
+        2,
+        vec![tup, u32t, u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::BinaryOp(
+                    BinOp::AddWithOverflow,
+                    Operand::Copy(loc(1)),
+                    Operand::Copy(loc(2)),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
     );
-    let _ = u32t;
-    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+    fn_instance(&mut m, "checked_add", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("struct regseq_overflow_uint32_t _ov = regseq_add_uint32_t((_1), (_2));"),
+        "helper called once into a temp:\n{tu}"
+    );
+    assert!(
+        tu.contains("_0._0 = _ov.v;") && tu.contains("_0._1 = _ov.overflow;"),
+        "both (T, bool) fields written:\n{tu}"
+    );
 }
 
 #[test]
@@ -2231,9 +2362,9 @@ fn zst_destination_transmute_is_elided_not_misemitted() {
 }
 
 #[test]
-fn call_argument_with_field_projection_is_unsupported() {
-    // A deferred place projection reached through a call argument must fail
-    // loud (validated before any ZST elision).
+fn call_argument_with_deferred_projection_is_unsupported() {
+    // A deferred place projection (here a `Downcast`, task d2.1) reached
+    // through a call argument must fail loud, validated before any ZST elision.
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
     let callee_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
@@ -2242,7 +2373,7 @@ fn call_argument_with_field_projection_is_unsupported() {
     let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
     let field_arg = Operand::Copy(Place {
         local: LocalId::from_u32(1),
-        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(0), u32t)]),
+        projection: Box::new([PlaceElem::Downcast(VariantIdx::from_u32(0))]),
     });
     let body = build_body(
         1,
@@ -2607,4 +2738,829 @@ fn prelude_ordinary_idents_all_defined_in_prelude() {
             "reserved prelude ident `{ident}` is not emitted as a function"
         );
     }
+}
+
+// ---------------------------------------------------------------------------
+// Task d2: structured-data lowering (B3 structural + B4 fail-loud negatives +
+// B5 determinism). Compile-and-run proof lives in the codegen-coverage-runner
+// behavioral tests; these pin the emitted shapes + the deferral seams.
+// ---------------------------------------------------------------------------
+
+/// A minimal 2-variant fieldless `Direct` enum `E` (registered as a root),
+/// used by the d2.1 negative tests that need a `Ty::Enum` predecessor.
+fn push_simple_enum(m: &mut RegseqModel) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(m, "A", Vec::new(), 0, Some(0)),
+            variant(m, "B", Vec::new(), 1, Some(1)),
+        ],
+    };
+    push_enum_instance(m, "E", enum_layout(1, 1, shape))
+}
+
+#[test]
+fn unsize_of_array_ref_builds_a_fat_slice() {
+    // `fn(p: &[u32; 4]) -> &[u32] { p }` -- the Unsize coercion builds the
+    // section 3.2 fat slice with the `.data` cast to the element pointer type
+    // and `.len` the source array length.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr = m.types.intern(Ty::Array(u32t, 4));
+    let arr_ref = m.types.intern(Ty::Ref(arr, Provenance::SharedBorrow));
+    let slice = m.types.intern(Ty::Slice(u32t));
+    let slice_ref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let sig = fnsig(&mut m, vec![arr_ref], slice_ref, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![slice_ref, arr_ref],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Cast(
+                    CastKind::PointerCoercion(PointerCoercion::Unsize),
+                    Operand::Copy(loc(1)),
+                    slice_ref,
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "as_slice", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct rust_slice_uint32_t){ .data = (const uint32_t *)(_1), .len = 4 }"),
+        "Unsize builds the fat slice with the element-pointer cast + length:\n{tu}"
+    );
+}
+
+#[test]
+fn str_construction_via_unsize_and_ptr_metadata() {
+    // Hand-built (a runtime &str without a string literal is awkward to
+    // bridge -- a literal is a Const::Aggregate carrier, task d2.2): Unsize a
+    // `&[u8; 3]` to `&str` then read its metadata. `.data` is cast to the
+    // monomorphic rust_str element pointer; PtrMetadata reads `.len`.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let arr = m.types.intern(Ty::Array(u8t, 3));
+    let arr_ref = m.types.intern(Ty::Ref(arr, Provenance::SharedBorrow));
+    let str_ty = m.types.intern(Ty::Str);
+    let str_ref = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+    let sig = fnsig(&mut m, vec![arr_ref], usize_t, FnAbi::Rust, false);
+    // _0 usize (ret), _1 &[u8;3] (arg), _2 &str.
+    let body = build_body(
+        1,
+        vec![usize_t, arr_ref, str_ref],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(2),
+                    Rvalue::Cast(
+                        CastKind::PointerCoercion(PointerCoercion::Unsize),
+                        Operand::Copy(loc(1)),
+                        str_ref,
+                    ),
+                )),
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::UnaryOp(UnOp::PtrMetadata, Operand::Copy(loc(2))),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "as_str_len", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct rust_str){ .data = (const uint8_t *)(_1), .len = 3 }"),
+        "str Unsize builds rust_str with the monomorphic data cast:\n{tu}"
+    );
+    assert!(
+        tu.contains("_0 = (_2).len;"),
+        "PtrMetadata of a &str reads the .len slot:\n{tu}"
+    );
+}
+
+#[test]
+fn fat_pointer_deref_index_and_from_end_read_the_data_and_len_slots() {
+    // `fn(s: &[u32], i: usize) -> u32` reading `(*s)[i]` and `(*s)[len - 1]`:
+    // a fat Deref yields `.data` (not `(*s)`), the runtime index uses it, and
+    // a from_end ConstantIndex reads the `.len` slot.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let slice = m.types.intern(Ty::Slice(u32t));
+    let slice_ref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let sig = fnsig(&mut m, vec![slice_ref, usize_t], u32t, FnAbi::Rust, false);
+    // _0 u32 (ret), _1 &[u32] (arg), _2 usize (arg), _3 u32.
+    let deref_index = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Deref, PlaceElem::Index(LocalId::from_u32(2))]),
+    };
+    let deref_from_end = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Deref,
+            PlaceElem::ConstantIndex {
+                offset: 1,
+                min_length: 1,
+                from_end: true,
+            },
+        ]),
+    };
+    let body = build_body(
+        2,
+        vec![u32t, slice_ref, usize_t, u32t],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Copy(deref_index)),
+                )),
+                st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Use(Operand::Copy(deref_from_end)),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "slice_read", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = _1.data[_2];"),
+        "fat Deref + Index reads the .data slot, not (*s):\n{tu}"
+    );
+    assert!(
+        tu.contains("_3 = _1.data[_1.len - 1];"),
+        "from_end ConstantIndex reads the .len slot:\n{tu}"
+    );
+}
+
+#[test]
+fn array_subslice_under_ref_is_a_thin_sub_array_pointer() {
+    // `fn(a: &[u32; 6]) -> &[u32; 3] { &(*a)[1..4] }` -- a sized-array Subslice
+    // under a Ref is a thin pointer to the sub-array, offset by `from`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr6 = m.types.intern(Ty::Array(u32t, 6));
+    let arr6_ref = m.types.intern(Ty::Ref(arr6, Provenance::SharedBorrow));
+    let arr3 = m.types.intern(Ty::Array(u32t, 3));
+    let arr3_ref = m.types.intern(Ty::Ref(arr3, Provenance::SharedBorrow));
+    let sig = fnsig(&mut m, vec![arr6_ref], arr3_ref, FnAbi::Rust, false);
+    // _0 &[u32;3] (ret), _1 &[u32;6] (arg). place = (*_1)[1..4].
+    let subslice = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Deref,
+            PlaceElem::Subslice {
+                from: 1,
+                to: 4,
+                from_end: false,
+            },
+        ]),
+    };
+    let body = build_body(
+        1,
+        vec![arr3_ref, arr6_ref],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Ref(Provenance::SharedBorrow, subslice),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "sub", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = (const uint32_t (*)[3])&((*_1)[1]);"),
+        "array Subslice under a Ref is a thin sub-array pointer:\n{tu}"
+    );
+}
+
+#[test]
+fn array_aggregate_and_repeat_lower_at_the_assign_site() {
+    // `[a, b, c]` is per-element stores; `[x; 4]` is a fill loop (C forbids
+    // array assignment).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr3 = m.types.intern(Ty::Array(u32t, 3));
+    let arr4 = m.types.intern(Ty::Array(u32t, 4));
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    // _0 u32 (ret), _1 u32 (arg), _2 [u32;3], _3 [u32;4].
+    let c0 = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let body = build_body(
+        1,
+        vec![u32t, u32t, arr3, arr4],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(2),
+                    Rvalue::Aggregate(
+                        AggregateKind::Array(arr3),
+                        Box::new([
+                            Operand::Copy(loc(1)),
+                            Operand::Copy(loc(1)),
+                            Operand::Constant(c0),
+                        ]),
+                    ),
+                )),
+                st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Repeat(Operand::Copy(loc(1)), 4),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "arrays", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_2[0] = _1; _2[1] = _1; _2[2] = ((uint32_t)(0U));"),
+        "array aggregate is per-element stores:\n{tu}"
+    );
+    assert!(
+        tu.contains("for (size_t _ri = 0; _ri < 4; _ri++) _3[_ri] = _1;"),
+        "Repeat is a fill loop:\n{tu}"
+    );
+}
+
+#[test]
+fn fat_raw_ptr_aggregate_builds_data_len_thin_drops_metadata() {
+    // `AggregateKind::RawPtr(Slice(u32), Mut)` builds `{ data, len }`; a sized
+    // (thin) pointee aggregate is just the data operand (metadata dropped).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let slice = m.types.intern(Ty::Slice(u32t));
+    let raw_slice = m.types.intern(Ty::Ptr(slice, Mutability::Mut));
+    let elem_ptr = m.types.intern(Ty::Ptr(u32t, Mutability::Mut));
+    let raw_thin = m.types.intern(Ty::Ptr(u32t, Mutability::Mut));
+    let sig = fnsig(
+        &mut m,
+        vec![elem_ptr, usize_t],
+        raw_slice,
+        FnAbi::Rust,
+        false,
+    );
+    // _0 *mut [u32] (ret), _1 *mut u32 (data, arg), _2 usize (len, arg),
+    // _3 *mut u32 (thin raw ptr).
+    let body = build_body(
+        2,
+        vec![raw_slice, elem_ptr, usize_t, raw_thin],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Aggregate(
+                        AggregateKind::RawPtr(slice, Mutability::Mut),
+                        Box::new([Operand::Copy(loc(1)), Operand::Copy(loc(2))]),
+                    ),
+                )),
+                st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Aggregate(
+                        AggregateKind::RawPtr(u32t, Mutability::Mut),
+                        Box::new([Operand::Copy(loc(1)), Operand::Copy(loc(2))]),
+                    ),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "raw_ptrs", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = (struct rust_slice_uint32_t){ .data = (uint32_t *)(_1), .len = _2 };"),
+        "fat raw pointer is {{ data, len }}:\n{tu}"
+    );
+    assert!(
+        tu.contains("_3 = _1;"),
+        "thin raw pointer aggregate is the data operand, metadata dropped:\n{tu}"
+    );
+}
+
+// --- B4: the deferred seams fail loud with the right family ---
+
+/// Assert that emitting `m` returns `EmitError::Unsupported`.
+fn assert_unsupported(m: &RegseqModel) {
+    assert!(matches!(emit_generic_c(m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn downcast_place_is_unsupported_d2_1() {
+    let mut m = model();
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let dst = Place {
+        local: LocalId::from_u32(0),
+        projection: Box::new([PlaceElem::Downcast(VariantIdx::from_u32(0))]),
+    };
+    fn_with_stmt(
+        &mut m,
+        "dc",
+        st(StatementKind::Assign(
+            dst,
+            Rvalue::Use(Operand::Constant(zero)),
+        )),
+    );
+    assert_unsupported(&m);
+}
+
+#[test]
+fn enum_discriminant_is_unsupported_d2_1() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let e_ty = push_simple_enum(&mut m);
+    let sig = fnsig(&mut m, vec![e_ty], u32t, FnAbi::Rust, false);
+    // _0 u32 (ret), _1 E (arg).
+    let body = build_body(
+        1,
+        vec![u32t, e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Discriminant(loc(1)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "disc", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn non_enum_discriminant_is_constant_zero() {
+    // section 21.2.8: a Discriminant of a non-enum predecessor is the constant 0.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![u32t, u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Discriminant(loc(1)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "disc0", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("_0 = 0;"), "non-enum discriminant is 0:\n{tu}");
+}
+
+#[test]
+fn enum_aggregate_is_unsupported_d2_1() {
+    let mut m = model();
+    let e_ty = push_simple_enum(&mut m);
+    let sig = fnsig(&mut m, vec![], e_ty, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(e_ty, VariantIdx::from_u32(0)),
+                    Box::new([]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "mk_enum", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn const_enum_value_is_unsupported_d2_1() {
+    let mut m = model();
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    fn_with_stmt(
+        &mut m,
+        "cev",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::Use(Operand::Constant(ev)),
+        )),
+    );
+    assert_unsupported(&m);
+}
+
+#[test]
+fn reloc_bearing_bytes_const_is_unsupported_d2_2() {
+    // A relocation-bearing Const::Bytes (a non-scalar const carrying a pointer
+    // slot) still fails loud at the const-lowering seam (task d2.2).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let target_sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let target = fn_instance(&mut m, "tgt", target_sig, None);
+    let bytes = m.consts.intern(Const::Bytes(vec![regseq_model::Byte::Reloc(
+        m.instance_ref_of(target),
+    )]));
+    fn_with_stmt(
+        &mut m,
+        "relocbytes",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::Use(Operand::Constant(bytes)),
+        )),
+    );
+    assert_unsupported(&m);
+}
+
+#[test]
+fn const_aggregate_reference_carrier_is_unsupported_d2_2() {
+    // The Const::Aggregate([Reloc, Uint]) reference carrier (transitively
+    // coupled to a Bytes static def) fails loud at the const seam (task d2.2).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let a_item = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "A",
+    );
+    let a_em = m.strings.intern("A");
+    let a_id = m.instances.push(Instance {
+        item: a_item,
+        generic_args: GenericArgs::new(),
+        emission_name: a_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u32t,
+            init: Some(one),
+        },
+    });
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(a_id)));
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let len = m.consts.intern(Const::Uint(UintKind::Usize, 3));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, len]));
+    let _ = usize_t;
+    fn_with_stmt(
+        &mut m,
+        "carrier",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::Use(Operand::Constant(carrier)),
+        )),
+    );
+    assert_unsupported(&m);
+}
+
+/// A `&dyn` reference type (the `vtable_ty` is a scalar -- the trait label is
+/// deterministic without a nominal vtable struct).
+fn dyn_ref(m: &mut RegseqModel) -> TyId {
+    let u32t = uint(m, UintKind::U32);
+    let dynamic = m.types.intern(Ty::Dynamic {
+        auto_traits: vec![],
+        vtable_ty: u32t,
+    });
+    m.types.intern(Ty::Ref(dynamic, Provenance::SharedBorrow))
+}
+
+#[test]
+fn unsize_to_dyn_is_unsupported_vtable() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let u32_ref = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let dref = dyn_ref(&mut m);
+    let sig = fnsig(&mut m, vec![u32_ref], dref, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![dref, u32_ref],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Cast(
+                    CastKind::PointerCoercion(PointerCoercion::Unsize),
+                    Operand::Copy(loc(1)),
+                    dref,
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "to_dyn", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn closure_fn_pointer_cast_is_unsupported_vtable() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    fn_with_stmt(
+        &mut m,
+        "clofn",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::Cast(
+                CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer),
+                Operand::Constant(zero),
+                u32t,
+            ),
+        )),
+    );
+    assert_unsupported(&m);
+}
+
+#[test]
+fn ptr_metadata_of_dyn_is_unsupported_vtable() {
+    let mut m = model();
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let dref = dyn_ref(&mut m);
+    let sig = fnsig(&mut m, vec![dref], usize_t, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![usize_t, dref],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::UnaryOp(UnOp::PtrMetadata, Operand::Copy(loc(1))),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "dyn_meta", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn ref_of_dyn_deref_is_unsupported_vtable() {
+    let mut m = model();
+    let dref = dyn_ref(&mut m);
+    let sig = fnsig(&mut m, vec![dref], dref, FnAbi::Rust, false);
+    let deref = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Deref]),
+    };
+    let body = build_body(
+        1,
+        vec![dref, dref],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Ref(Provenance::SharedBorrow, deref),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "ref_dyn", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn struct_aggregate_with_array_field_lowers_per_field() {
+    // struct S { xs: [u32; 2] @0, n: u32 @8 }. A compound literal cannot
+    // initialize the array member from an array expression, so the aggregate
+    // lowers per-field at the assign site: the array via memcpy, the scalar by
+    // assignment.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr2 = m.types.intern(Ty::Array(u32t, 2));
+    let xs = fl(&mut m, "xs", arr2, 0);
+    let n = fl(&mut m, "n", u32t, 8);
+    let s = intern_struct(&mut m, "S", struct_layout(12, 4, None, vec![xs, n]));
+    let sig = fnsig(&mut m, vec![u32t], s, FnAbi::Rust, false);
+    // _0 S (ret), _1 u32 (arg v), _2 [u32; 2].
+    let body = build_body(
+        1,
+        vec![s, u32t, arr2],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(2),
+                    Rvalue::Repeat(Operand::Copy(loc(1)), 2),
+                )),
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Aggregate(
+                        AggregateKind::Struct(s),
+                        Box::new([Operand::Copy(loc(2)), Operand::Copy(loc(1))]),
+                    ),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "build_s", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("memcpy(&_0.xs, &(_2), sizeof(_0.xs));"),
+        "array field lowers via memcpy:\n{tu}"
+    );
+    assert!(
+        tu.contains("_0.n = _1;"),
+        "scalar field by assignment:\n{tu}"
+    );
+    assert!(
+        !tu.contains("(struct S){"),
+        "no array-bearing compound literal:\n{tu}"
+    );
+}
+
+#[test]
+fn ref_of_packed_field_is_unsupported_misaligned() {
+    // #[repr(packed)] P { x: u8 @0, y: u32 @1 }. Taking the address of `y`
+    // (`&raw const p.y`) yields a possibly-misaligned pointer -> fail loud
+    // (section 14.7); a plain value load of the same field would be fine.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let x = fl(&mut m, "x", u8t, 0);
+    let y = fl(&mut m, "y", u32t, 1);
+    let p = intern_struct(&mut m, "P", struct_layout(5, 1, Some(1), vec![x, y]));
+    let raw = m.types.intern(Ty::Ptr(u32t, Mutability::Not));
+    let sig = fnsig(&mut m, vec![p], raw, FnAbi::Rust, false);
+    // _0 *const u32 (ret), _1 P (arg). `_0 = &raw const _1.y`.
+    let yplace = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(1), u32t)]),
+    };
+    let body = build_body(
+        1,
+        vec![raw, p],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::RawPtr(Mutability::Not, yplace),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "addr_packed", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn by_value_array_call_argument_is_unsupported() {
+    // Passing a `[u32; 3]` by value to a call would decay to a pointer in C
+    // (losing Rust by-value array semantics) -> fail loud (boundary 6).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr3 = m.types.intern(Ty::Array(u32t, 3));
+    let callee_sig = fnsig(&mut m, vec![arr3], u32t, FnAbi::Rust, false);
+    let callee = fn_instance(&mut m, "takes_array", callee_sig, None);
+    let sig = fnsig(&mut m, vec![arr3], u32t, FnAbi::Rust, false);
+    // _0 u32 (ret), _1 [u32; 3] (arg).
+    let mut body = build_body(
+        1,
+        vec![u32t, arr3],
+        vec![bb(
+            vec![],
+            tk(TerminatorKind::Call {
+                callee: CallCallee::Direct(callee),
+                args: Box::new([Operand::Copy(loc(1))]),
+                destination: loc(0),
+                target: Some(BlockId::from_u32(1)),
+            }),
+        )],
+    );
+    body.basic_blocks
+        .push(bb(vec![], tk(TerminatorKind::Return)));
+    fn_instance(&mut m, "passes_array", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn array_subslice_ref_through_packed_field_is_unsupported() {
+    // #[repr(packed)] P { x: u8 @0, arr: [u32; 4] @1 }. `&raw const p.arr[1..3]`
+    // takes the address of the sub-array through the packed `arr` field -> a
+    // possibly-misaligned pointer -> fail loud (section 14.7).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr4 = m.types.intern(Ty::Array(u32t, 4));
+    let arr2 = m.types.intern(Ty::Array(u32t, 2));
+    let raw2 = m.types.intern(Ty::Ptr(arr2, Mutability::Not));
+    let x = fl(&mut m, "x", u8t, 0);
+    let arr_field = fl(&mut m, "arr", arr4, 1);
+    let p = intern_struct(
+        &mut m,
+        "P",
+        struct_layout(17, 1, Some(1), vec![x, arr_field]),
+    );
+    let sig = fnsig(&mut m, vec![p], raw2, FnAbi::Rust, false);
+    let sub = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Field(FieldIdx::from_u32(1), arr4),
+            PlaceElem::Subslice {
+                from: 1,
+                to: 3,
+                from_end: false,
+            },
+        ]),
+    };
+    let body = build_body(
+        1,
+        vec![raw2, p],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::RawPtr(Mutability::Not, sub),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "sub_packed", sig, Some(body));
+    assert_unsupported(&m);
+}
+
+#[test]
+fn repeat_loop_var_avoids_a_colliding_body_local() {
+    // A body local literally named `_ri` forces the Repeat loop variable to a
+    // fresh, non-colliding name.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr2 = m.types.intern(Ty::Array(u32t, 2));
+    let sig = fnsig(&mut m, vec![u32t], arr2, FnAbi::Rust, false);
+    // _0 [u32; 2] (ret), _1 u32 (arg, debug-named `_ri`).
+    let mut body = build_body(
+        1,
+        vec![arr2, u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Repeat(Operand::Copy(loc(1)), 2),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    let ri = m.strings.intern("_ri");
+    body.local_decls[LocalId::from_u32(1)].debug_name = Some(ri);
+    fn_instance(&mut m, "fill", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    // The arg local renders as `_ri`; the loop var must not reuse it.
+    assert!(
+        tu.contains("for (size_t _ri_1 = 0;"),
+        "loop var is renamed off the colliding `_ri` local:\n{tu}"
+    );
+    assert!(
+        tu.contains("_0[_ri_1] = _ri;"),
+        "the renamed loop var indexes, the local supplies the value:\n{tu}"
+    );
+}
+
+#[test]
+fn structured_data_model_is_byte_identical_across_two_calls() {
+    let build = || {
+        let mut m = model();
+        let u8t = uint(&mut m, UintKind::U8);
+        let u32t = uint(&mut m, UintKind::U32);
+        let a = fl(&mut m, "a", u8t, 4);
+        let b = fl(&mut m, "b", u32t, 0);
+        let point = intern_struct(&mut m, "Point", struct_layout(8, 4, None, vec![a, b]));
+        let sig = fnsig(&mut m, vec![u8t, u32t], u32t, FnAbi::Rust, false);
+        let body = build_body(
+            2,
+            vec![u32t, u8t, u32t, point],
+            vec![bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(3),
+                        Rvalue::Aggregate(
+                            AggregateKind::Struct(point),
+                            Box::new([Operand::Copy(loc(1)), Operand::Copy(loc(2))]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(0),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(3),
+                            projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(1), u32t)]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::Return),
+            )],
+        );
+        fn_instance(&mut m, "build_point", sig, Some(body));
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
 }

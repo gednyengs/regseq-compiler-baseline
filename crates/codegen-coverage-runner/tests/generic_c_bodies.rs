@@ -25,12 +25,13 @@ use std::path::{Path, PathBuf};
 use codegen_coverage_runner::toolchain;
 use regseq_backends::emit_generic_c;
 use regseq_model::{
-    AssertKind, BasicBlock, BinOp, BlockId, Body, CastKind, Const, CrateId, DefPath, DefPathHash,
-    Endian, FloatKind, FnAbi, FnSig, FnSigId, FunctionInstanceData, FunctionInstanceFlavor,
-    GenericArgs, Instance, InstanceId, InstanceKind, Item, ItemId, ItemKind, LocalDecl, LocalId,
-    Mutability, Operand, Place, RegseqModel, Rvalue, Safety, ScalarLayouts, SizeAlign,
-    SourceFileId, Span, StableCrateId, Statement, StatementKind, TargetInfo, Terminator,
-    TerminatorKind, Ty, TyId, UintKind,
+    AssertKind, BasicBlock, BinOp, BlockId, Body, CallCallee, CastKind, Const, CrateId, DefPath,
+    DefPathHash, Endian, FieldIdx, FieldLayout, FloatKind, FnAbi, FnSig, FnSigId,
+    FunctionInstanceData, FunctionInstanceFlavor, GenericArgs, Instance, InstanceId, InstanceKind,
+    Item, ItemId, ItemKind, Layout, LayoutKind, LocalDecl, LocalId, Mutability, Operand, Place,
+    PlaceElem, RegseqModel, Rvalue, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span,
+    StableCrateId, Statement, StatementKind, SwitchTargets, TargetInfo, Terminator, TerminatorKind,
+    Ty, TyId, UintKind,
 };
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
@@ -174,6 +175,104 @@ fn bridged_scalar_body_aborts_on_a_wrong_result() {
         Some(0),
         "a wrong result must abort (non-zero)"
     );
+    assert!(
+        run.stderr.contains("wrong result"),
+        "the abort path ran: {}",
+        run.stderr
+    );
+}
+
+/// A structured-data driver (task d2): `regseq_main` builds a `repr(Rust)`
+/// struct (reordered fields) and reads each back, builds + indexes a fixed
+/// array, and takes a **runtime** slice (`&arr`) it indexes. Each wrong
+/// result calls the extern abort-callback. With correct lowering nothing
+/// aborts (exit 0); a wrong field offset / aggregate / slice lowering takes
+/// the abort path.
+///
+/// The fixture deliberately uses only language primitives (struct / tuple
+/// construction, field access, array + slice indexing), never a `core`
+/// method call (`.len()` / `wrapping_add`, which the bridge surfaces as
+/// body-less externs that would not link). The slice index `s[1]` is a MIR
+/// primitive whose bounds-check Assert reads the runtime length via
+/// `Len(*s)` -> `PtrMetadata` (the `.len` slot), so the runtime slice path
+/// (Unsize + fat `Deref` + `Index` + `PtrMetadata`) is exercised end-to-end.
+/// No string / array literal const is used (those are task d2.2): the slice
+/// is a runtime borrow of a local array.
+fn structured_snippet(field_expected: u32) -> String {
+    format!(
+        r#"#![no_std]
+
+extern "C" {{
+    fn regseq_test_fail();
+}}
+
+struct Point {{ a: u8, b: u32 }}
+
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn make_point(a: u8, b: u32) -> u32 {{
+    let p = Point {{ a, b }};
+    // Read both reordered fields back: proves section 14 field access.
+    p.b + (p.a as u32)
+}}
+
+#[no_mangle]
+pub extern "C" fn regseq_main() {{
+    if make_point(7, 100) != {field_expected} {{
+        unsafe {{ regseq_test_fail(); }}
+    }}
+    let arr = [10u32, 20, 30];
+    if arr[1] != 20 {{
+        unsafe {{ regseq_test_fail(); }}
+    }}
+    let s: &[u32] = &arr;
+    if s[1] != 20 {{
+        unsafe {{ regseq_test_fail(); }}
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn bridged_structured_data_body_runs_and_exits_zero() {
+    let snippet = TempSnippet::new("structured-ok", &structured_snippet(107));
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok for a d2 structured-data body");
+    let entry = fn_cname(&model, "regseq_main");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    let tu =
+        format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
+    let run = toolchain::compile_and_run(&tu, &entry, cc())
+        .expect("structured-data TU must compile + run");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "correct field / array / slice lowering exits 0; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn bridged_structured_data_body_aborts_on_a_wrong_field_result() {
+    // A wrong expected field value takes the abort path, proving the struct
+    // construction + field read lowering computes at runtime.
+    let snippet = TempSnippet::new("structured-bad", &structured_snippet(999));
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok");
+    let entry = fn_cname(&model, "regseq_main");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    let tu =
+        format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
+    let run =
+        toolchain::compile_and_run(&tu, &entry, cc()).expect("wrong-result TU must compile + run");
+    assert_ne!(run.exit_code, Some(0), "a wrong field result must abort");
     assert!(
         run.stderr.contains("wrong result"),
         "the abort path ran: {}",
@@ -535,4 +634,135 @@ fn foreign_and_never_linkage_compile() {
     let tu = format!("{tu}\n_Noreturn void host_abort(void) {{ exit(0); }}\n");
     let run = assert_runs(&tu, "regseq_main", "foreign-noreturn");
     assert_eq!(run.exit_code, Some(0), "host_abort exits 0: {}", run.stderr);
+}
+
+#[test]
+fn with_overflow_result_computes_both_components_at_runtime() {
+    // Change G compile-and-run: `regseq_main` computes `AddWithOverflow(2, 3)`
+    // into a `(u32, bool)` tuple and aborts (via the foreign fail callback) if
+    // either component is wrong -- `_0` must be 5 and `_1` (overflow) must be
+    // false. A clean exit proves the prelude helper + the two field writes
+    // produced the right `(T, bool)` at runtime. `overflowing_add` itself is a
+    // core method (a body-less extern that would not link), so the
+    // `*WithOverflow` op is hand-built.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u32t = uint(&mut m, UintKind::U32);
+    let boolt = m.types.intern(Ty::Bool);
+    // tuple (u32, bool): _0 (u32) @0, _1 (bool) @4, size 8 align 4.
+    let f0 = FieldLayout {
+        name: m.strings.intern("_0"),
+        ty: u32t,
+        offset: 0,
+    };
+    let f1 = FieldLayout {
+        name: m.strings.intern("_1"),
+        ty: boolt,
+        offset: 4,
+    };
+    let tup = m.types.intern(Ty::Tuple {
+        fields: vec![u32t, boolt],
+        layout: Layout {
+            size: 8,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Struct {
+                fields: vec![f0, f1],
+            },
+        },
+    });
+
+    // Foreign abort callback `regseq_test_fail()`.
+    let fail_sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    let fail = fn_instance(&mut m, "regseq_test_fail", fail_sig, None);
+    let fit = m.instances[fail].item;
+    m.items[fit].linkage = regseq_model::Linkage::Foreign;
+
+    let c2 = m.consts.intern(Const::Uint(UintKind::U32, 2));
+    let c3 = m.consts.intern(Const::Uint(UintKind::U32, 3));
+    let c5 = m.consts.intern(Const::Uint(UintKind::U32, 5));
+    let f0p = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(0), u32t)]),
+    };
+    let f1p = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(1), boolt)]),
+    };
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit (ret), _1 (u32, bool), _2 bool.
+    let body = build_body(
+        0,
+        vec![unit, tup, boolt],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::BinaryOp(
+                            BinOp::AddWithOverflow,
+                            Operand::Constant(c2),
+                            Operand::Constant(c3),
+                        ),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::BinaryOp(BinOp::Eq, Operand::Copy(f0p), Operand::Constant(c5)),
+                    )),
+                ],
+                // if `_0 != 5` (the Eq is false / 0) -> fail (bb3), else bb1.
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(3))]),
+                        otherwise: BlockId::from_u32(1),
+                    },
+                }),
+            ),
+            bb(
+                vec![],
+                // if `overflow` (the bool is 1) -> fail (bb3), else bb2 (ok).
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(f1p),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(2)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    let it = m.instances[id].item;
+    m.items[it].linkage = regseq_model::Linkage::NoMangle;
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("regseq_add_uint32_t("),
+        "the *WithOverflow helper is wired:\n{tu}"
+    );
+    let fail_name = fn_cname(&m, "regseq_test_fail");
+    let tu =
+        format!("{tu}\nvoid {fail_name}(void) {{ fprintf(stderr, \"wrong\\n\"); abort(); }}\n");
+    let run = assert_runs(&tu, "regseq_main", "with-overflow");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "both (T, bool) components correct -> exit 0; stderr: {}",
+        run.stderr
+    );
 }

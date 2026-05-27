@@ -140,6 +140,20 @@ pub(super) fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
     model.size_align_of(ty).size == 0
 }
 
+/// The C field name + field type the aggregate definition emits for field
+/// `idx` of a struct / tuple / union / closure `ty`: tuple fields are
+/// `_<idx>`, struct / union fields are `sanitize(FieldLayout.name)`, and a
+/// closure resolves through its parallel capture struct -- the same names
+/// [`emit_aggregate`] / [`emit_offset_fields`] emit. Task d2's field access
+/// (`.fname`) and aggregate construction (designated initializers) spell
+/// these names so they agree with the definition (and its `offsetof`
+/// guards). `idx` is the source / MIR field index. Returns `None` when `ty`
+/// is not a non-enum aggregate or `idx` is out of range.
+pub(super) fn field_c_name_ty(model: &RegseqModel, ty: TyId, idx: usize) -> Option<(String, TyId)> {
+    let view = resolve_view(model, ty)?;
+    view.fields.get(idx).map(|f| (f.name.clone(), f.ty))
+}
+
 /// The GNU type-attribute clause forcing the aggregate's C alignment to
 /// `layout.align` (section 14 step 4): `aligned(<align>)`, plus `packed`
 /// when `pack.is_some()`. The alignment is always `layout.align`, never

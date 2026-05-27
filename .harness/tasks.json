@@ -4799,7 +4799,7 @@
           "id": "regseq-backends-12",
           "name": "Generic-C structured data \u2014 places, aggregates & slice/str fat pointers (Phase-1 d2)",
           "spec": ".harness/tasks/regseq-backends/12-generic-c-structured-data.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-11"
           ],

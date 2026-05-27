@@ -291,6 +291,20 @@ fn fn_ptr_decl(
     declare(model, names, output, &format!("({star}{decl})({params})"))
 }
 
+/// The C type of a fat-pointer `data` slot for a slice element `elem`: a
+/// (const?) pointer to the element type (`const T *`), spelled the same way
+/// [`emit_slice_struct`]'s `data` member is. Task d2's fat-pointer
+/// construction casts the data operand to this type (not to the fat struct
+/// type); `const_data` matches the slice struct's `data` slot constness.
+pub(crate) fn slice_data_ptr_type(
+    model: &RegseqModel,
+    names: &NameTable,
+    elem: TyId,
+    const_data: bool,
+) -> String {
+    ptr_to(model, names, elem, const_data, false, "")
+}
+
 /// Emit the section 3.2 `struct rust_slice_<T>` body: a `data` pointer
 /// (const per the element + borrow flavor) and a `size_t len`.
 pub(crate) fn emit_slice_struct(

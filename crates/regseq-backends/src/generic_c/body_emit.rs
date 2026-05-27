@@ -9,22 +9,26 @@
 //! `const_expr`). The signature is spelled by the caller ([`super`] banks
 //! 4 / 5); only the body block lives here.
 //!
-//! Structured data -- `Field` / `Index` / `Downcast` projections,
-//! `Aggregate` / `Repeat` / `Discriminant` rvalues, `SetDiscriminant`, the
-//! aggregate / `Bytes` / `EnumValue` `Const` forms, fat-pointer
-//! construction -- is **deferred to task d2** and each site returns
-//! [`EmitError::Unsupported`] (fail loud). Diag-log call-site interception
-//! is **task e**; d1 emits the ordinary / divergent call and errors on a
-//! diag-log call.
+//! Task d2 adds the non-enum structured-data layer: section 4 place
+//! projections (`Field` / `Index` / `ConstantIndex` / `Subslice`) + section
+//! 14 field access, the section 10 `Aggregate` / `Repeat` rvalues, the
+//! `PtrMetadata` slot read + non-enum `Discriminant`, section 11 slice/str
+//! fat-pointer construction (`Unsize` + `Ref`/`RawPtr`-to-unsized), and the
+//! section 10.1 `*WithOverflow` result `(T, bool)`. The remaining deferrals
+//! still fail loud via [`EmitError::Unsupported`]: enum tag-ops (`Downcast`,
+//! enum `Discriminant`, `SetDiscriminant`, `Aggregate::Enum`,
+//! `Const::EnumValue`) are task d2.1; all non-scalar `Const` (`Bytes` /
+//! `Aggregate`) are task d2.2; `dyn` / vtable construction is the vtable
+//! task. Diag-log call-site interception is **task e**.
 
 use regseq_model::{
-    AssertKind, AttrData, BinOp, CallCallee, CastKind, Const, FloatKind, InstanceId, InstanceKind,
-    InstanceRef, IntKind, IntrinsicKind, LocalId, NonDivergingIntrinsic, Operand, Place, PlaceElem,
-    PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets, TerminatorKind, Ty, TyId,
-    UintKind, UnOp,
+    AggregateKind, AssertKind, AttrData, BinOp, CallCallee, CastKind, Const, FloatKind, InstanceId,
+    InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId, NonDivergingIntrinsic, Operand,
+    Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
+    TerminatorKind, Ty, TyId, UintKind, UnOp,
 };
 
-use super::{naming, types, EmitError, InstanceSymbols, NameTable};
+use super::{layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable};
 
 /// The C identifier for a body-local `local`. The return place is always
 /// `_0`; otherwise the sanitised `debug_name` when `Some`, else the
@@ -130,6 +134,19 @@ struct BodyEmit<'a> {
     output_ty: TyId,
 }
 
+/// The result of walking a place's projection chain ([`BodyEmit::place_walk`]):
+/// the C lvalue and the running (section 19.4 narrowed) type, plus -- when the
+/// chain crossed a fat (slice/str) `Deref` -- the lvalue of that fat pointer
+/// base (for a trailing `from_end` index `.len` or a `Subslice` re-borrow).
+struct PlaceWalk {
+    /// The C lvalue expression.
+    lvalue: String,
+    /// The running narrowed type after the full projection chain.
+    ty: TyId,
+    /// The most recent fat-pointer base lvalue, when a fat `Deref` was crossed.
+    fat_base: Option<String>,
+}
+
 impl BodyEmit<'_> {
     /// Whether `ty` is zero-sized (so it declares no local / is elided as a
     /// value). A bare unsized marker is treated as non-ZST to avoid
@@ -141,20 +158,17 @@ impl BodyEmit<'_> {
         }
     }
 
-    /// The resolved type of a (d1) place: the head local's type, narrowed
-    /// through `Deref` to the pointee. Field / index / downcast projections
-    /// are rejected upstream by [`Self::place_lvalue`].
+    /// The resolved type of a place: the head local's type narrowed through
+    /// the full section 19.4 projection chain (shared with [`Self::place_lvalue`]
+    /// via [`Self::place_walk`], so the lvalue and type cannot drift).
+    /// Infallible: on a deferred construct (`Downcast` / `dyn` `Deref`)
+    /// [`Self::place_walk`] errors and [`Self::place_lvalue`] (also via
+    /// `place_walk`) fails loud at the use site, so the head-local fallback
+    /// type returned here is never consumed for emission.
     fn place_ty(&self, place: &Place) -> TyId {
-        let mut ty = self.body.local_decls[place.local].ty;
-        for elem in place.projection.iter() {
-            if let PlaceElem::Deref = elem {
-                ty = match &self.model.types[ty] {
-                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
-                    _ => ty,
-                };
-            }
-        }
-        ty
+        self.place_walk(place)
+            .map(|w| w.ty)
+            .unwrap_or_else(|_| self.body.local_decls[place.local].ty)
     }
 
     /// The resolved type of an operand, when statically known: the place
@@ -293,46 +307,280 @@ impl BodyEmit<'_> {
         match kind {
             StatementKind::Assign(place, rvalue) => self.assign(place, rvalue),
             StatementKind::SetDiscriminant(_, _) => {
-                Err(EmitError::Unsupported("SetDiscriminant (task d2)"))
+                Err(EmitError::Unsupported("SetDiscriminant (task d2.1)"))
             }
             StatementKind::Intrinsic(intr) => Ok(Some(self.intrinsic(intr)?)),
         }
     }
 
     /// `Assign(place, rvalue)` -> `<place> = <rvalue>;`. A ZST destination
-    /// elides the statement (the local has no C declaration); `Transmute`
-    /// lowers to a `memcpy` rather than an assignment (section 11).
+    /// elides the statement (the local has no C declaration). Some rvalues
+    /// cannot be a plain `dst = <expr>;` and lower at the assign site:
+    /// `Transmute` (a `memcpy` reinterpret, section 11), an **array**
+    /// destination (`Aggregate(Array)` / `Repeat` -- C forbids array
+    /// assignment, section 14 / boundary 6), and `*WithOverflow` (a
+    /// multi-field `(T, bool)` write, section 10.1 / Change G).
     fn assign(&self, place: &Place, rvalue: &Rvalue) -> Result<Option<String>, EmitError> {
-        // Validate the destination place first (rejects d2 projections).
-        let dst = self.place_lvalue(place)?;
-        let dst_ty = self.place_ty(place);
+        // Validate the destination place first (rejects d2.1 / vtable
+        // projections) and recover its lvalue + type from the single walk.
+        let walk = self.place_walk(place)?;
+        let dst = walk.lvalue;
+        let dst_ty = walk.ty;
         let zst = self.is_zst(dst_ty);
 
-        if let Rvalue::Cast(CastKind::Transmute, op, _) = rvalue {
-            // Bit reinterpret via memcpy between equal-sizeof objects. Validate
-            // the source operand first, then -- as for any rvalue -- elide the
-            // write for a ZST destination (a 0-byte transmute is a no-op, and
-            // the ZST destination local is never declared so it cannot be
-            // addressed).
-            let src_addr = self.operand_addr(op)?;
-            if zst {
-                return Ok(None);
+        match rvalue {
+            Rvalue::Cast(CastKind::Transmute, op, _) => {
+                // Bit reinterpret via memcpy between equal-sizeof objects.
+                // Validate the source operand first, then elide the write for
+                // a ZST destination (a 0-byte transmute is a no-op, and the ZST
+                // destination local is never declared so it cannot be addressed).
+                let src_addr = self.operand_addr(op)?;
+                if zst {
+                    return Ok(None);
+                }
+                return Ok(Some(format!(
+                    "memcpy(&({dst}), {src_addr}, sizeof({dst}));"
+                )));
             }
-            return Ok(Some(format!(
-                "memcpy(&({dst}), {src_addr}, sizeof({dst}));"
-            )));
+            Rvalue::Aggregate(AggregateKind::Array(_), ops) => {
+                return self.assign_array(&dst, dst_ty, ops);
+            }
+            Rvalue::Aggregate(kind, ops)
+                if Self::is_struct_like(kind) && self.has_array_operand(ops) =>
+            {
+                // A struct / tuple / closure / union with an array field cannot
+                // be a compound-literal expression (C forbids an array
+                // initializer expression); lower it per-field here.
+                return self.assign_struct_fields(&dst, kind, ops, zst);
+            }
+            Rvalue::Repeat(op, n) => {
+                return self.assign_repeat(&dst, dst_ty, op, *n);
+            }
+            Rvalue::BinaryOp(
+                op @ (BinOp::AddWithOverflow | BinOp::SubWithOverflow | BinOp::MulWithOverflow),
+                a,
+                b,
+            ) => {
+                return self.assign_with_overflow(&dst, op, a, b, zst);
+            }
+            _ => {}
         }
 
-        // Lower the rvalue first so a deferred construct (e.g. an `Aggregate`
-        // / `Repeat` rvalue) fails loud even when the destination is ZST,
-        // rather than being silently dropped. Only after the rvalue is a
-        // recognized d1 form do we elide the assignment for a ZST destination
-        // (the local is never declared; a ZST write is a no-op).
+        // Lower the rvalue first so a deferred construct fails loud even when
+        // the destination is ZST, rather than being silently dropped. Only
+        // after the rvalue is a recognized form do we elide the assignment for
+        // a ZST destination (the local is never declared; a ZST write is a
+        // no-op).
         let value = self.rvalue_expr(rvalue, dst_ty)?;
         if zst {
             return Ok(None);
         }
         Ok(Some(format!("{dst} = {value};")))
+    }
+
+    /// The element type of an array `ty`, when it is one.
+    fn array_elem(&self, ty: TyId) -> Option<TyId> {
+        match &self.model.types[ty] {
+            Ty::Array(elem, _) => Some(*elem),
+            _ => None,
+        }
+    }
+
+    /// A temporary C identifier that cannot collide with any body-local C name
+    /// (so the `Repeat` loop variable / `*WithOverflow` temp are sound even
+    /// when a debug-named local sanitizes to the same base). Deterministic: a
+    /// pure function of the body's local names, so emission stays byte-stable.
+    fn fresh_temp_name(&self, base: &str) -> String {
+        let taken: std::collections::HashSet<String> = (0..self.body.local_decls.len())
+            .map(|i| local_c_name(self.model, self.body, LocalId::from_u32(i as u32)))
+            .collect();
+        if !taken.contains(base) {
+            return base.to_string();
+        }
+        let mut n = 1usize;
+        loop {
+            let candidate = format!("{base}_{n}");
+            if !taken.contains(&candidate) {
+                return candidate;
+            }
+            n += 1;
+        }
+    }
+
+    /// Whether any non-ZST operand is an array value (a place of `Ty::Array`).
+    /// A struct / tuple / closure / union aggregate with such a field cannot
+    /// use a designated-initializer compound literal (C forbids an array
+    /// expression as an initializer), so it lowers per-field at the assign site.
+    fn has_array_operand(&self, ops: &[Operand]) -> bool {
+        ops.iter().any(|op| {
+            !self.is_zst_operand(op)
+                && self
+                    .operand_ty(op)
+                    .is_some_and(|t| matches!(self.model.types[t], Ty::Array(_, _)))
+        })
+    }
+
+    /// A struct / tuple / closure / union aggregate **with an array-typed
+    /// field**, lowered per-field at the assign site (a compound literal cannot
+    /// initialize an array member from an array expression): a scalar /
+    /// aggregate field is `dst.f = <op>;`, an array field is
+    /// `memcpy(&dst.f, &<op>, sizeof dst.f);` (C array no-assignment, boundary 6).
+    fn assign_struct_fields(
+        &self,
+        dst: &str,
+        kind: &AggregateKind,
+        ops: &[Operand],
+        zst: bool,
+    ) -> Result<Option<String>, EmitError> {
+        let (ty, union_field) = match kind {
+            AggregateKind::Struct(ty) | AggregateKind::Tuple(ty) | AggregateKind::Closure(ty) => {
+                (*ty, None)
+            }
+            AggregateKind::Union(ty, field) => (*ty, Some(field.index())),
+            _ => unreachable!("assign_struct_fields on a non-struct-like aggregate"),
+        };
+        let mut stmts = Vec::new();
+        for (i, op) in ops.iter().enumerate() {
+            if self.is_zst_operand(op) {
+                continue;
+            }
+            let field_idx = union_field.unwrap_or(i);
+            let (name, fty) = layout_emit::field_c_name_ty(self.model, ty, field_idx).ok_or(
+                EmitError::Unsupported("Aggregate field of a non-aggregate type (task d2)"),
+            )?;
+            if matches!(self.model.types[fty], Ty::Array(_, _)) {
+                let src = self.operand_addr(op)?;
+                stmts.push(format!(
+                    "memcpy(&{dst}.{name}, {src}, sizeof({dst}.{name}));"
+                ));
+            } else {
+                let e = self.operand_expr(op, Some(fty))?;
+                stmts.push(format!("{dst}.{name} = {e};"));
+            }
+        }
+        if zst {
+            return Ok(None);
+        }
+        Ok(Some(stmts.join(" ")))
+    }
+
+    /// Whether an `AggregateKind` is a struct / tuple / closure / union (the
+    /// compound-literal kinds, as opposed to `Array` / `RawPtr` / `Enum`).
+    fn is_struct_like(kind: &AggregateKind) -> bool {
+        matches!(
+            kind,
+            AggregateKind::Struct(_)
+                | AggregateKind::Tuple(_)
+                | AggregateKind::Closure(_)
+                | AggregateKind::Union(_, _)
+        )
+    }
+
+    /// `Aggregate(Array, ops)` at the assign site (C forbids array
+    /// assignment, boundary 6): per-element `dst[i] = <opi>;` for a scalar /
+    /// non-array element, or `memcpy(&dst[i], &<opi>, ...)` for an array
+    /// element (which is itself not assignable). A ZST array writes nothing.
+    fn assign_array(
+        &self,
+        dst: &str,
+        dst_ty: TyId,
+        ops: &[Operand],
+    ) -> Result<Option<String>, EmitError> {
+        let elem_ty = self.array_elem(dst_ty);
+        if self.is_zst(dst_ty) {
+            // A ZST array ([ZST; n] or [T; 0]): validate each operand, emit
+            // nothing (the destination local is never declared).
+            for op in ops.iter() {
+                let _ = self.operand_expr(op, elem_ty)?;
+            }
+            return Ok(None);
+        }
+        let elem_ty = elem_ty.ok_or(EmitError::Unsupported(
+            "Array aggregate into a non-array destination (task d2)",
+        ))?;
+        let elem_is_array = matches!(self.model.types[elem_ty], Ty::Array(_, _));
+        let mut stmts = Vec::new();
+        for (i, op) in ops.iter().enumerate() {
+            if elem_is_array {
+                let src = self.operand_addr(op)?;
+                stmts.push(format!("memcpy(&{dst}[{i}], {src}, sizeof({dst}[{i}]));"));
+            } else {
+                let e = self.operand_expr(op, Some(elem_ty))?;
+                stmts.push(format!("{dst}[{i}] = {e};"));
+            }
+        }
+        Ok(Some(stmts.join(" ")))
+    }
+
+    /// `Repeat(op, n)` at the assign site (array fill, boundary 6): a
+    /// per-element fill loop. The loop variable ([`Self::fresh_temp_name`],
+    /// `_ri` by default) is collision-proofed against the body's local names
+    /// and lives in the `for`'s own scope, so sibling loops in the same block
+    /// do not collide. A ZST array writes nothing.
+    fn assign_repeat(
+        &self,
+        dst: &str,
+        dst_ty: TyId,
+        op: &Operand,
+        n: u64,
+    ) -> Result<Option<String>, EmitError> {
+        let elem_ty = self.array_elem(dst_ty);
+        if self.is_zst(dst_ty) {
+            let _ = self.operand_expr(op, elem_ty)?;
+            return Ok(None);
+        }
+        let elem_ty = elem_ty.ok_or(EmitError::Unsupported(
+            "Repeat into a non-array destination (task d2)",
+        ))?;
+        let iv = self.fresh_temp_name("_ri");
+        let store = if matches!(self.model.types[elem_ty], Ty::Array(_, _)) {
+            let src = self.operand_addr(op)?;
+            format!("memcpy(&{dst}[{iv}], {src}, sizeof({dst}[{iv}]));")
+        } else {
+            let e = self.operand_expr(op, Some(elem_ty))?;
+            format!("{dst}[{iv}] = {e};")
+        };
+        Ok(Some(format!(
+            "for (size_t {iv} = 0; {iv} < {n}; {iv}++) {store}"
+        )))
+    }
+
+    /// `*WithOverflow` at the assign site (section 10.1 / Change G): call the
+    /// prelude `regseq_{add,sub,mul}_<T>` helper once into a temporary, then
+    /// write the destination `(T, bool)` tuple's two fields (`_0` = the value
+    /// `v`, `_1` = the `overflow` flag). The temp ([`Self::fresh_temp_name`],
+    /// `_ov` by default) is collision-proofed against the body's local names
+    /// and lives in a fresh block scope, so it cannot collide with a body local
+    /// or a sibling site.
+    fn assign_with_overflow(
+        &self,
+        dst: &str,
+        op: &BinOp,
+        a: &Operand,
+        b: &Operand,
+        zst: bool,
+    ) -> Result<Option<String>, EmitError> {
+        let x = self.operand_expr(a, None)?;
+        let y = self.operand_expr(b, None)?;
+        let info = self.operand_int_info(a).ok_or(EmitError::Unsupported(
+            "*WithOverflow on a non-integer operand (task d2)",
+        ))?;
+        // (T, bool) is never zero-sized; the guard is defensive.
+        if zst {
+            return Ok(None);
+        }
+        let helper = match op {
+            BinOp::AddWithOverflow => "add",
+            BinOp::SubWithOverflow => "sub",
+            BinOp::MulWithOverflow => "mul",
+            _ => unreachable!("assign_with_overflow on a non-overflow BinOp"),
+        };
+        let ct = info.ctype;
+        let tmp = self.fresh_temp_name("_ov");
+        Ok(Some(format!(
+            "{{ struct regseq_overflow_{ct} {tmp} = regseq_{helper}_{ct}(({x}), ({y})); \
+             {dst}._0 = {tmp}.v; {dst}._1 = {tmp}.overflow; }}"
+        )))
     }
 
     /// `Intrinsic(..)` (section 6): the portable `Assume` form and the
@@ -359,37 +607,162 @@ impl BodyEmit<'_> {
 
     // -- section 4 places ----------------------------------------------------
 
-    /// The C lvalue of a place: the bare local, or `(*p)` for `Deref`.
-    /// Field / index / downcast projections are deferred to d2.
+    /// The C lvalue of a place (section 4). Delegates to the single shared
+    /// [`Self::place_walk`] so the lvalue and the running type cannot drift.
     fn place_lvalue(&self, place: &Place) -> Result<String, EmitError> {
+        Ok(self.place_walk(place)?.lvalue)
+    }
+
+    /// Walk a place's projection chain once, building the C lvalue and the
+    /// running section 19.4 narrowed type together (the single shared walk).
+    ///
+    /// - `Deref` (always index 0 per I-Deref-first): a **thin** pointer (to a
+    ///   sized pointee) -> `(*lv)`; a **fat** pointer (to `Slice` / `Str`) ->
+    ///   the `data` slot `lv.data`, remembering the fat base for a trailing
+    ///   `.len`; a `dyn` pointer -> the vtable task.
+    /// - `Field` (struct / tuple / closure / union predecessor) -> `lv.fname`
+    ///   (the section 14 name, [`layout_emit::field_c_name_ty`]); narrow to the
+    ///   inline post-narrow field type (place.rs). An enum predecessor is
+    ///   unreachable here (a prior `Downcast` errors first).
+    /// - `Index(local)` -> `lv[<local>]` (plus a pending array-`Subslice`
+    ///   `from` offset); narrow to the element type.
+    /// - `ConstantIndex` -> `[offset]` (`from_end:false`, plus a pending
+    ///   `from`) or `[<base>.len - offset]` (`from_end:true`, the remembered
+    ///   fat base); narrow to the element type.
+    /// - `Subslice` as a place lvalue: a sized array base (`from_end:false`)
+    ///   records the `from` offset + sub-array element so a follow-on index
+    ///   offsets by `from`; the lvalue base is unchanged (a slice `Subslice`
+    ///   is unsized and is materialised only under a `Ref`, [`Self::ref_expr`]).
+    /// - `Downcast` -> task d2.1.
+    fn place_walk(&self, place: &Place) -> Result<PlaceWalk, EmitError> {
         let mut lv = local_c_name(self.model, self.body, place.local);
+        let mut ty = self.body.local_decls[place.local].ty;
+        let mut fat_base: Option<String> = None;
+        let mut pending_from: Option<u64> = None;
+        let mut sub_array_elem: Option<TyId> = None;
+
         for elem in place.projection.iter() {
             match elem {
-                PlaceElem::Deref => lv = format!("(*{lv})"),
-                PlaceElem::Field(_, _) => {
-                    return Err(EmitError::Unsupported("Field place projection (task d2)"))
+                PlaceElem::Deref => {
+                    let pointee = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            // Not a pointer (malformed); preserve the d1 form.
+                            lv = format!("(*{lv})");
+                            continue;
+                        }
+                    };
+                    match &self.model.types[pointee] {
+                        Ty::Slice(_) | Ty::Str => {
+                            // Fat pointer: the data slot; remember the base.
+                            fat_base = Some(lv.clone());
+                            lv = format!("{lv}.data");
+                        }
+                        Ty::Dynamic { .. } => {
+                            return Err(EmitError::Unsupported(
+                                "Deref of a dyn pointer (vtable task)",
+                            ));
+                        }
+                        _ => {
+                            // Thin pointer.
+                            lv = format!("(*{lv})");
+                            fat_base = None;
+                        }
+                    }
+                    ty = pointee;
+                    pending_from = None;
+                    sub_array_elem = None;
                 }
-                PlaceElem::Index(_) => {
-                    return Err(EmitError::Unsupported("Index place projection (task d2)"))
+                PlaceElem::Field(idx, field_ty) => {
+                    let (name, _) = layout_emit::field_c_name_ty(self.model, ty, idx.index())
+                        .ok_or(EmitError::Unsupported(
+                            "Field projection of a non-aggregate predecessor",
+                        ))?;
+                    lv = format!("{lv}.{name}");
+                    ty = *field_ty;
+                    fat_base = None;
+                    pending_from = None;
+                    sub_array_elem = None;
                 }
-                PlaceElem::ConstantIndex { .. } => {
-                    return Err(EmitError::Unsupported(
-                        "ConstantIndex place projection (task d2)",
-                    ))
+                PlaceElem::Index(local) => {
+                    let idx_name = local_c_name(self.model, self.body, *local);
+                    let index_expr = match pending_from.take() {
+                        Some(from) => format!("{from} + {idx_name}"),
+                        None => idx_name,
+                    };
+                    lv = format!("{lv}[{index_expr}]");
+                    ty = self.index_elem_ty(ty, sub_array_elem.take())?;
+                    fat_base = None;
                 }
-                PlaceElem::Subslice { .. } => {
-                    return Err(EmitError::Unsupported(
-                        "Subslice place projection (task d2)",
-                    ))
+                PlaceElem::ConstantIndex {
+                    offset, from_end, ..
+                } => {
+                    if *from_end {
+                        let base = fat_base.clone().ok_or(EmitError::Unsupported(
+                            "ConstantIndex from_end on a non-slice place (task d2)",
+                        ))?;
+                        lv = format!("{lv}[{base}.len - {offset}]");
+                    } else {
+                        let index_expr = match pending_from.take() {
+                            Some(from) => format!("{}", from + offset),
+                            None => format!("{offset}"),
+                        };
+                        lv = format!("{lv}[{index_expr}]");
+                    }
+                    ty = self.index_elem_ty(ty, sub_array_elem.take())?;
+                    fat_base = None;
+                }
+                PlaceElem::Subslice { from, to, from_end } => {
+                    if *from_end {
+                        // A slice Subslice is unsized; it is materialised only
+                        // under a Ref ([`Self::ref_expr`]), never as a bare lvalue.
+                        return Err(EmitError::Unsupported(
+                            "Subslice from_end as a place lvalue (task d2)",
+                        ));
+                    }
+                    let elem = match &self.model.types[ty] {
+                        Ty::Array(elem, _) => *elem,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "Subslice of a non-array place lvalue (task d2)",
+                            ))
+                        }
+                    };
+                    // Record the `from` offset + sub-array element so a
+                    // follow-on index offsets by `from`; the lvalue is
+                    // unchanged (section 19.4: Array -> Array(elem, to - from)).
+                    pending_from = Some(pending_from.unwrap_or(0) + *from);
+                    sub_array_elem = Some(elem);
+                    let _ = to;
+                    fat_base = None;
                 }
                 PlaceElem::Downcast(_) => {
                     return Err(EmitError::Unsupported(
-                        "Downcast place projection (task d2)",
-                    ))
+                        "Downcast place projection (task d2.1)",
+                    ));
                 }
             }
         }
-        Ok(lv)
+        Ok(PlaceWalk {
+            lvalue: lv,
+            ty,
+            fat_base,
+        })
+    }
+
+    /// The element type reached by an `Index` / `ConstantIndex`: the tracked
+    /// sub-array element (from a prior array `Subslice`, boundary 7) if set,
+    /// else the `Array` / `Slice` element of the running type.
+    fn index_elem_ty(&self, ty: TyId, sub_array_elem: Option<TyId>) -> Result<TyId, EmitError> {
+        if let Some(elem) = sub_array_elem {
+            return Ok(elem);
+        }
+        match &self.model.types[ty] {
+            Ty::Array(elem, _) | Ty::Slice(elem) => Ok(*elem),
+            _ => Err(EmitError::Unsupported(
+                "Index of a non-array / non-slice place (task d2)",
+            )),
+        }
     }
 
     /// The address-of expression for a Transmute source operand: `&(lvalue)`
@@ -432,24 +805,320 @@ impl BodyEmit<'_> {
     fn rvalue_expr(&self, rvalue: &Rvalue, dest_ty: TyId) -> Result<String, EmitError> {
         match rvalue {
             Rvalue::Use(op) => self.operand_expr(op, Some(dest_ty)),
-            Rvalue::Ref(_, place) | Rvalue::RawPtr(_, place) => {
-                // Building a reference / raw pointer to a sized place is
-                // `&place`; an unsized pointee builds a fat pointer (d2).
+            Rvalue::Ref(_, place) | Rvalue::RawPtr(_, place) => self.ref_expr(place, dest_ty),
+            Rvalue::Cast(kind, op, ty) => self.cast_expr(kind, op, *ty),
+            Rvalue::BinaryOp(op, a, b) => self.binary_op(op, a, b),
+            Rvalue::UnaryOp(op, a) => self.unary_op(op, a),
+            // Array fill (Repeat) is handled at the assign site (C forbids
+            // array assignment); reaching here is defensive.
+            Rvalue::Repeat(_, _) => Err(EmitError::Unsupported(
+                "Rvalue::Repeat outside an assignment (task d2)",
+            )),
+            Rvalue::Discriminant(place) => {
+                // Section 21.2.8: a non-enum predecessor yields the constant 0;
+                // an enum predecessor reads the tag / niche (task d2.1).
+                match &self.model.types[self.place_ty(place)] {
+                    Ty::Enum { .. } => Err(EmitError::Unsupported(
+                        "Discriminant of an enum (task d2.1)",
+                    )),
+                    _ => Ok("0".to_string()),
+                }
+            }
+            Rvalue::Aggregate(kind, ops) => self.aggregate_expr(kind, ops, dest_ty),
+        }
+    }
+
+    /// `Ref(_, place)` / `RawPtr(_, place)` (section 10): the address of a
+    /// sized place (`&<place>`), or -- for an unsized slice/str place -- the
+    /// section 3.2 fat pointer built per section 11 (the same construction
+    /// reached from the place side, spec line 853). `dest_ty` is the
+    /// reference / raw-pointer destination type.
+    fn ref_expr(&self, place: &Place, dest_ty: TyId) -> Result<String, EmitError> {
+        match place.projection.last() {
+            Some(PlaceElem::Subslice { from, to, from_end }) => {
+                self.subslice_ref(place, *from, *to, *from_end, dest_ty)
+            }
+            Some(PlaceElem::Deref) => {
+                let pointee = self.place_ty(place);
+                if self.is_unsized(pointee) {
+                    // A re-borrow of a whole unsized place (`&(*p)`).
+                    self.fat_reborrow(place, pointee)
+                } else {
+                    Ok(format!("&({})", self.place_lvalue(place)?))
+                }
+            }
+            _ => {
                 if self.is_unsized(self.place_ty(place)) {
                     return Err(EmitError::Unsupported(
-                        "Ref / RawPtr to an unsized pointee (task d2)",
+                        "Ref / RawPtr to an unsized non-slice place (task d2)",
+                    ));
+                }
+                // Taking the address of a field reached through a packed
+                // aggregate yields a possibly-misaligned pointer (section 14.7):
+                // a plain value load/store of a packed member is sound directly,
+                // but its address is not, so fail loud rather than emit UB.
+                if self.ref_crosses_packed_field(place) {
+                    return Err(EmitError::Unsupported(
+                        "address of a misaligned packed field (section 14.7)",
                     ));
                 }
                 Ok(format!("&({})", self.place_lvalue(place)?))
             }
-            Rvalue::Cast(kind, op, ty) => self.cast_expr(kind, op, *ty),
-            Rvalue::BinaryOp(op, a, b) => self.binary_op(op, a, b),
-            Rvalue::UnaryOp(op, a) => self.unary_op(op, a),
-            Rvalue::Repeat(_, _) => Err(EmitError::Unsupported("Rvalue::Repeat (task d2)")),
-            Rvalue::Discriminant(_) => {
-                Err(EmitError::Unsupported("Rvalue::Discriminant (task d2)"))
+        }
+    }
+
+    /// Whether the address of `place` is taken through a `Field` projection
+    /// into a `repr(packed)` aggregate (so the resulting pointer may be
+    /// misaligned, section 14.7). A `Deref` resets alignment (the pointee is a
+    /// properly-aligned object); array / slice indexing keeps element alignment.
+    fn ref_crosses_packed_field(&self, place: &Place) -> bool {
+        let mut ty = self.body.local_decls[place.local].ty;
+        for elem in place.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => return false,
+                    };
+                }
+                PlaceElem::Field(_, field_ty) => {
+                    let packed = matches!(
+                        &self.model.types[ty],
+                        Ty::Struct { layout, .. }
+                            | Ty::Union { layout, .. }
+                            | Ty::Tuple { layout, .. }
+                            if layout.pack.is_some()
+                    );
+                    if packed {
+                        return true;
+                    }
+                    ty = *field_ty;
+                }
+                PlaceElem::Index(_)
+                | PlaceElem::ConstantIndex { .. }
+                | PlaceElem::Subslice { .. } => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Array(elem, _) | Ty::Slice(elem) => *elem,
+                        _ => return false,
+                    };
+                }
+                PlaceElem::Downcast(_) => return false,
             }
-            Rvalue::Aggregate(_, _) => Err(EmitError::Unsupported("Rvalue::Aggregate (task d2)")),
+        }
+        false
+    }
+
+    /// A re-borrow of a whole unsized place (`&(*p)` where `p` is a fat
+    /// pointer): the existing fat pointer copied (`{ .data, .len }` identity),
+    /// i.e. the fat base itself. A `dyn` pointee is the vtable task.
+    fn fat_reborrow(&self, place: &Place, pointee_ty: TyId) -> Result<String, EmitError> {
+        if matches!(self.model.types[pointee_ty], Ty::Dynamic { .. }) {
+            return Err(EmitError::Unsupported("Ref of a dyn deref (vtable task)"));
+        }
+        let walk = self.place_walk(place)?;
+        walk.fat_base.ok_or(EmitError::Unsupported(
+            "re-borrow of an unsized place without a fat base (task d2)",
+        ))
+    }
+
+    /// A `Subslice` under a `Ref` / `RawPtr`: a **slice** base builds a new
+    /// section 3.2 fat pointer (`{ .data = base.data + from, .len }`, the
+    /// `.data` cast to the element pointer type); a **sized array** base
+    /// builds a thin pointer to the sub-array (`(<dest>)&base[from]`, where
+    /// `<dest>` is the destination `&[elem; to - from]` C spelling). `dest_ty`
+    /// is the reference type.
+    fn subslice_ref(
+        &self,
+        place: &Place,
+        from: u64,
+        to: u64,
+        from_end: bool,
+        dest_ty: TyId,
+    ) -> Result<String, EmitError> {
+        let n = place.projection.len();
+        let base_place = Place {
+            local: place.local,
+            projection: place.projection[..n - 1].to_vec().into_boxed_slice(),
+        };
+        let base = self.place_walk(&base_place)?;
+        match &self.model.types[base.ty] {
+            Ty::Array(_, _) => {
+                if from_end {
+                    return Err(EmitError::Unsupported(
+                        "Subslice from_end on an array base (task d2)",
+                    ));
+                }
+                // `&base[from]` takes the address of the array base, so a base
+                // reached through a packed field is a possibly-misaligned
+                // pointer (section 14.7); fail loud rather than emit UB. (The
+                // slice branch below reads `.data` by value, so it is exempt.)
+                if self.ref_crosses_packed_field(&base_place) {
+                    return Err(EmitError::Unsupported(
+                        "address of a misaligned packed field (section 14.7)",
+                    ));
+                }
+                // dest_ty is `&[elem; to - from]`; its C spelling is exactly
+                // the pointer-to-array cast (with the correct const-ness).
+                let cast = types::c_type(self.model, self.names, dest_ty);
+                Ok(format!("({cast})&({}[{from}])", base.lvalue))
+            }
+            Ty::Slice(elem) => {
+                let fat = types::unsized_pointee_struct_name(self.model, self.names, dest_ty)
+                    .ok_or(EmitError::Unsupported(
+                        "Subslice ref with no fat-struct destination (task d2)",
+                    ))?;
+                let fbase = base.fat_base.clone().ok_or(EmitError::Unsupported(
+                    "Subslice of a slice without a fat base (task d2)",
+                ))?;
+                let data_ty = types::slice_data_ptr_type(
+                    self.model,
+                    self.names,
+                    *elem,
+                    slice_data_const(self.model, dest_ty),
+                );
+                let len = if from_end {
+                    // section 19.4 `[from .. len - to]`.
+                    format!("({fbase}.len - {to} - {from})")
+                } else {
+                    let len_val = to
+                        .checked_sub(from)
+                        .ok_or(EmitError::Unsupported("Subslice with to < from (task d2)"))?;
+                    format!("{len_val}")
+                };
+                Ok(format!(
+                    "(struct {fat}){{ .data = ({data_ty})(({}) + {from}), .len = {len} }}",
+                    base.lvalue
+                ))
+            }
+            _ => Err(EmitError::Unsupported(
+                "Subslice ref of a non-array / non-slice base (task d2)",
+            )),
+        }
+    }
+
+    /// `Aggregate(kind, ops)` (section 10) for the non-enum, expression-shaped
+    /// kinds (struct / tuple / union / closure compound literals + raw
+    /// pointers). Array aggregates are handled at the assign site (boundary 6);
+    /// `Enum` is task d2.1; a `dyn` raw pointer is the vtable task.
+    fn aggregate_expr(
+        &self,
+        kind: &AggregateKind,
+        ops: &[Operand],
+        dest_ty: TyId,
+    ) -> Result<String, EmitError> {
+        match kind {
+            AggregateKind::Struct(ty) | AggregateKind::Tuple(ty) | AggregateKind::Closure(ty) => {
+                self.struct_like_literal(*ty, ops)
+            }
+            AggregateKind::Union(ty, field) => self.union_literal(*ty, field.index(), ops),
+            AggregateKind::RawPtr(pointee, _) => self.raw_ptr_aggregate(*pointee, ops, dest_ty),
+            AggregateKind::Array(_) => Err(EmitError::Unsupported(
+                "Array aggregate outside an assignment (task d2)",
+            )),
+            AggregateKind::Enum(_, _) => Err(EmitError::Unsupported("Aggregate::Enum (task d2.1)")),
+        }
+    }
+
+    /// A struct / tuple / closure compound literal: a designated initializer
+    /// over the emittable (non-ZST) fields in MIR order, each mapped to its
+    /// section 14 C name (so field order is irrelevant + padding is
+    /// zero-filled deterministically).
+    fn struct_like_literal(&self, ty: TyId, ops: &[Operand]) -> Result<String, EmitError> {
+        let agg = self.names.agg_name(ty);
+        let mut inits = Vec::new();
+        for (i, op) in ops.iter().enumerate() {
+            if self.is_zst_operand(op) {
+                continue;
+            }
+            let (name, fty) = layout_emit::field_c_name_ty(self.model, ty, i).ok_or(
+                EmitError::Unsupported("Aggregate field of a non-aggregate type (task d2)"),
+            )?;
+            let e = self.operand_expr(op, Some(fty))?;
+            inits.push(format!(".{name} = {e}"));
+        }
+        Ok(format!("(struct {agg}){{ {} }}", inits.join(", ")))
+    }
+
+    /// A union compound literal: the single active field.
+    fn union_literal(
+        &self,
+        ty: TyId,
+        field_idx: usize,
+        ops: &[Operand],
+    ) -> Result<String, EmitError> {
+        let agg = self.names.agg_name(ty);
+        let op = ops.first().ok_or(EmitError::Unsupported(
+            "Union aggregate without an operand (task d2)",
+        ))?;
+        if self.is_zst_operand(op) {
+            return Ok(format!("(union {agg}){{0}}"));
+        }
+        let (name, fty) = layout_emit::field_c_name_ty(self.model, ty, field_idx).ok_or(
+            EmitError::Unsupported("Union field of a non-aggregate type (task d2)"),
+        )?;
+        let e = self.operand_expr(op, Some(fty))?;
+        Ok(format!("(union {agg}){{ .{name} = {e} }}"))
+    }
+
+    /// `Aggregate(RawPtr(pointee, _), ops)`: a **slice/str** pointee builds the
+    /// section 3.2 fat pointer (`{ .data, .len }`, the `.data` cast to the
+    /// element pointer type); a **sized** pointee is a thin pointer whose value
+    /// is the data operand (the metadata operand is unit / ZST, dropped); a
+    /// `dyn` pointee is the vtable task.
+    fn raw_ptr_aggregate(
+        &self,
+        pointee: TyId,
+        ops: &[Operand],
+        dest_ty: TyId,
+    ) -> Result<String, EmitError> {
+        let data_op = || {
+            ops.first().ok_or(EmitError::Unsupported(
+                "RawPtr aggregate missing the data operand (task d2)",
+            ))
+        };
+        match &self.model.types[pointee] {
+            Ty::Dynamic { .. } => Err(EmitError::Unsupported(
+                "RawPtr aggregate to a dyn pointer (vtable task)",
+            )),
+            Ty::Slice(elem) => {
+                let fat = types::unsized_pointee_struct_name(self.model, self.names, dest_ty)
+                    .ok_or(EmitError::Unsupported(
+                        "RawPtr aggregate with no fat-struct destination (task d2)",
+                    ))?;
+                let data = self.operand_expr(data_op()?, None)?;
+                let len = self.operand_expr(
+                    ops.get(1).ok_or(EmitError::Unsupported(
+                        "RawPtr aggregate missing the metadata operand (task d2)",
+                    ))?,
+                    None,
+                )?;
+                let data_ty = types::slice_data_ptr_type(
+                    self.model,
+                    self.names,
+                    *elem,
+                    slice_data_const(self.model, dest_ty),
+                );
+                Ok(format!(
+                    "(struct {fat}){{ .data = ({data_ty})({data}), .len = {len} }}"
+                ))
+            }
+            Ty::Str => {
+                let data = self.operand_expr(data_op()?, None)?;
+                let len = self.operand_expr(
+                    ops.get(1).ok_or(EmitError::Unsupported(
+                        "RawPtr aggregate missing the metadata operand (task d2)",
+                    ))?,
+                    None,
+                )?;
+                Ok(format!(
+                    "(struct rust_str){{ .data = (const uint8_t *)({data}), .len = {len} }}"
+                ))
+            }
+            _ => {
+                // Sized (thin) pointee: the raw pointer is the data pointer;
+                // the metadata operand is unit / ZST and is dropped.
+                self.operand_expr(data_op()?, Some(dest_ty))
+            }
         }
     }
 
@@ -482,7 +1151,22 @@ impl BodyEmit<'_> {
                 })
             }
             UnOp::Neg => Ok(format!("(-({e}))")),
-            UnOp::PtrMetadata => Err(EmitError::Unsupported("UnaryOp::PtrMetadata (task d2)")),
+            UnOp::PtrMetadata => {
+                // The section 3.2 metadata slot of a fat pointer: `.len` for a
+                // slice / str; `.vtable` (a `dyn` pointer) is the vtable task; a
+                // thin pointer's metadata is () (ZST), elided at the assign site.
+                let pointee = self.operand_ty(a).and_then(|t| match &self.model.types[t] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => Some(*p),
+                    _ => None,
+                });
+                match pointee.map(|p| &self.model.types[p]) {
+                    Some(Ty::Slice(_) | Ty::Str) => Ok(format!("({e}).len")),
+                    Some(Ty::Dynamic { .. }) => Err(EmitError::Unsupported(
+                        "PtrMetadata of a dyn pointer (vtable task)",
+                    )),
+                    _ => Ok(String::new()),
+                }
+            }
         }
     }
 
@@ -510,16 +1194,12 @@ impl BodyEmit<'_> {
             BinOp::Offset => Ok(simple("+")),
             BinOp::Cmp => Ok(format!("((int8_t)((({x}) > ({y})) - (({x}) < ({y}))))")),
             BinOp::AddWithOverflow | BinOp::SubWithOverflow | BinOp::MulWithOverflow => {
-                // The prelude `regseq_{add,sub,mul}_<T>` helpers return a
-                // `struct regseq_overflow_<T>`, but the rvalue's destination
-                // is the Rust tuple `(T, bool)`, whose C struct type is
-                // distinct and not assignment-compatible -- and consuming the
-                // result requires `Field` projections (`.0` / `.1`). Both the
-                // result-aggregate construction and its field access are d2,
-                // so the `*WithOverflow` rvalue fails loud here rather than
-                // mis-emitting an incompatible assignment.
+                // The `(T, bool)` result is a multi-field write built at the
+                // assign site ([`Self::assign_with_overflow`], Change G); a
+                // `*WithOverflow` never appears as a nested rvalue expression,
+                // so reaching here is defensive.
                 Err(EmitError::Unsupported(
-                    "*WithOverflow result aggregate (T, bool) (task d2)",
+                    "*WithOverflow as a nested rvalue (assign-site only)",
                 ))
             }
             BinOp::Shl | BinOp::ShlUnchecked => {
@@ -588,11 +1268,9 @@ impl BodyEmit<'_> {
             CastKind::Subtype => Ok(e),
             CastKind::PointerCoercion(PointerCoercion::UnsafeFnPointer) => Ok(e),
             CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer) => self.reify_fn_pointer(op),
-            CastKind::PointerCoercion(PointerCoercion::Unsize) => {
-                Err(EmitError::Unsupported("PointerCoercion::Unsize (task d2)"))
-            }
+            CastKind::PointerCoercion(PointerCoercion::Unsize) => self.unsize_cast(op, dest_ty),
             CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer) => Err(
-                EmitError::Unsupported("PointerCoercion::ClosureFnPointer (task d2)"),
+                EmitError::Unsupported("PointerCoercion::ClosureFnPointer (vtable task)"),
             ),
             CastKind::Transmute => {
                 // Reached only if a Transmute appears outside the Assign
@@ -634,6 +1312,74 @@ impl BodyEmit<'_> {
         Err(EmitError::Unsupported(
             "ReifyFnPointer of an unresolved function (task d2)",
         ))
+    }
+
+    /// `PointerCoercion::Unsize` (section 11): build the section 3.2 fat
+    /// pointer from a thin pointer to a sized source. The `.data` slot is cast
+    /// to the **element pointer type** (`const T *` per [`types::emit_slice_struct`]),
+    /// not the fat struct type; the `.len` is the source array length. An
+    /// already-fat source being re-unsized is an identity copy; a `dyn`
+    /// destination is the vtable task. `dest_ty` is the unsized reference type.
+    fn unsize_cast(&self, op: &Operand, dest_ty: TyId) -> Result<String, EmitError> {
+        let op_expr = self.operand_expr(op, None)?;
+        let pointee = match &self.model.types[dest_ty] {
+            Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "Unsize cast to a non-pointer destination (task d2)",
+                ))
+            }
+        };
+        // `Some(n)` for a thin pointer to `[T; n]`; `None` for an already-fat
+        // source (a slice/str re-unsize -> identity copy).
+        let src_len = self.unsize_source_len(op);
+        match &self.model.types[pointee] {
+            Ty::Dynamic { .. } => Err(EmitError::Unsupported(
+                "Unsize to a dyn pointer (vtable task)",
+            )),
+            Ty::Slice(elem) => match src_len {
+                Some(n) => {
+                    let fat = types::unsized_pointee_struct_name(self.model, self.names, dest_ty)
+                        .ok_or(EmitError::Unsupported(
+                        "Unsize to a slice with no fat-struct destination (task d2)",
+                    ))?;
+                    let data_ty = types::slice_data_ptr_type(
+                        self.model,
+                        self.names,
+                        *elem,
+                        slice_data_const(self.model, dest_ty),
+                    );
+                    Ok(format!(
+                        "(struct {fat}){{ .data = ({data_ty})({op_expr}), .len = {n} }}"
+                    ))
+                }
+                None => Ok(op_expr),
+            },
+            Ty::Str => match src_len {
+                Some(n) => Ok(format!(
+                    "(struct rust_str){{ .data = (const uint8_t *)({op_expr}), .len = {n} }}"
+                )),
+                None => Ok(op_expr),
+            },
+            _ => Err(EmitError::Unsupported(
+                "Unsize to a sized pointee (task d2)",
+            )),
+        }
+    }
+
+    /// The source array length for an `Unsize`: the `n` of a thin pointer to
+    /// `[T; n]`, or `None` when the source is already a fat pointer (a
+    /// slice/str re-unsize, which is an identity copy).
+    fn unsize_source_len(&self, op: &Operand) -> Option<u64> {
+        let ty = self.operand_ty(op)?;
+        let pointee = match &self.model.types[ty] {
+            Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+            _ => return None,
+        };
+        match &self.model.types[pointee] {
+            Ty::Array(_, n) => Some(*n),
+            _ => None,
+        }
     }
 
     // -- section 7.1 terminators --------------------------------------------
@@ -729,6 +1475,17 @@ impl BodyEmit<'_> {
             let expr = self.operand_expr(arg, None)?;
             if self.is_zst_operand(arg) {
                 continue;
+            }
+            // A by-value array argument would decay to a pointer in C, losing
+            // Rust's by-value (copied) array semantics. This is a rare Rust-ABI
+            // edge (boundary 6); fail loud rather than mis-emit.
+            if self
+                .operand_ty(arg)
+                .is_some_and(|t| matches!(self.model.types[t], Ty::Array(_, _)))
+            {
+                return Err(EmitError::Unsupported(
+                    "by-value array call argument (C array decay)",
+                ));
             }
             arg_strs.push(expr);
         }
@@ -871,8 +1628,9 @@ pub(super) fn static_initializer(
 
 /// `Const` -> C value expression / initializer (section 12), for the d1
 /// subset. `consumer_ty` supplies the pointer type for a `Reloc` to a static
-/// and the exact pointer spelling for a `NullPtr`. Aggregate / `Bytes` /
-/// `EnumValue` forms are deferred to d2.
+/// and the exact pointer spelling for a `NullPtr`. The non-scalar forms are
+/// still deferred: `Bytes` / `Aggregate` are task d2.2 (the whole non-scalar
+/// const lowering), `EnumValue` is task d2.1.
 fn const_expr(
     model: &RegseqModel,
     names: &NameTable,
@@ -899,9 +1657,9 @@ fn const_expr(
             _ => Ok(format!("(({} *)0)", types::c_type(model, names, *pointee))),
         },
         Const::Reloc(target) => Ok(reloc_designator(model, names, syms, *target, consumer_ty)),
-        Const::Bytes(_) => Err(EmitError::Unsupported("Const::Bytes (task d2)")),
-        Const::Aggregate(_) => Err(EmitError::Unsupported("Const::Aggregate (task d2)")),
-        Const::EnumValue { .. } => Err(EmitError::Unsupported("Const::EnumValue (task d2)")),
+        Const::Bytes(_) => Err(EmitError::Unsupported("Const::Bytes (task d2.2)")),
+        Const::Aggregate(_) => Err(EmitError::Unsupported("Const::Aggregate (task d2.2)")),
+        Const::EnumValue { .. } => Err(EmitError::Unsupported("Const::EnumValue (task d2.1)")),
     }
 }
 
