@@ -217,10 +217,16 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     wrong qualifier* (compiles, no miscompile/panic), same class as the original
     #4 but for the fn-ptr-pointee sub-case Fix B didn't cover. The implementer
     **documented it in-code** as out-of-verified-scope (`types.rs` FnPtr branch).
-    **Does NOT block c2 or the d→e critical path.** **FILED as
-    `regseq-backends-09`** (`25d0a3d`, Codex APPROVED) — small surgical
-    declarator fix (thread `self_const` into `fn_ptr_decl` → `(*const decl)
-    (params)`); independent of task d; awaits an implementer.
+    **Does NOT block c2 or the d→e critical path.** **CLOSED via
+    `regseq-backends-09`** (implementer `c25f7d6`, assessed clean): threaded
+    `self_const` into `fn_ptr_decl` → `(*const decl)(params)`; `&fn() -> i32`
+    now emits `int32_t (*const (*p))(void)` (const on the fn-ptr value).
+    fmt/clippy/tests green (40 backend-lib + 11 layout; +3 const-case units
+    [shared-ref / `&mut` / `*const`] + 1 behavioral compile, all asserting the
+    exact spelling + the negative "no const on return"); 07 Fix D recursive
+    path preserved; diff scope matches; ledger unchanged. No Codex soundness
+    pass (surgical, fully traced, no invariant relaxed; the spec review already
+    C11-probed the spelling).
   **DOC-FIX FOLLOW-UP TO TRACK (from the c2 review):** the c2 spec **overrides**
   the §13 / Doc-2 D9 *literal* enum representation ("tag field + payload `union`
   at `union_start`, fields at `offset−union_start`") — Codex r1 showed it is
@@ -395,7 +401,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2 DONE+assessed; d/e to draft — "(c)" split into c1+c2; banks 2-3 complete for all sized aggregates incl. enums) | `3b66248` (c2) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09 DONE+assessed; d/e to draft — "(c)" split into c1+c2; banks 2-3 complete for all sized aggregates incl. enums; const-correctness complete) | `c25f7d6` (09) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -601,10 +607,10 @@ next task to DRAFT is d** (bodies — §7.1 terminators / §10 Rvalue / §11 cas
 §12 Const / §4-§5 places-operands; d→e is the critical path to the first green
 fixture; d must also widen discovery roots to signature/local/static types).
 The §13/D9 doc fix is **APPLIED** (`5d422fe`). The 07 #3 fn-ptr-value const
-follow-up is **FILED** as `regseq-backends-09` (`25d0a3d`, awaits an
-implementer; independent of d). **`origin/main` is at `55795b0`** (pushed
-through the c2 close); the unpushed tail is `25d0a3d` (09 filing) + this
-HANDOFF commit.
+follow-up is **CLOSED** (`regseq-backends-09`, `c25f7d6`, assessed clean) — so
+**all filed generic-C backend tasks (a, b, c1, 07, c2, 09) are done + assessed**
+and the const-correctness story is complete. **`origin/main` is at `71be0f0`**;
+the unpushed tail is `c25f7d6` (09 impl) + this HANDOFF commit — offer to push.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
@@ -622,6 +628,23 @@ the rest is stable.
 
 ## § Update log (append-only)
 
+- 2026-05-27: **`regseq-backends-09` CLOSED** (07 #3 fn-ptr-value const
+  placement; implementer `c25f7d6`). Threaded a `self_const` flag into
+  `fn_ptr_decl` (emits `(*const decl)(params)`) and passed `top_const` through
+  the `Ty::FnPtr` arm of `declare_qualified`, dropping the old
+  `format!("const {inner}")` prefix. `&fn() -> i32` now emits
+  `int32_t (*const (*p))(void)` (const on the fn-pointer **value**), not
+  `const int32_t (*(*p))(void)` (return type). Assessed in the main tree
+  (tree clean): fmt / clippy / **all tests green** (40 backend-lib + 11
+  `generic_c_layout`), with 3 new const-case units (shared-ref / `&mut` /
+  `*const`, each asserting the exact spelling + the negative "no const on
+  return") + 1 behavioral compile; the 07 Fix D recursive fn-ptr-return path
+  is byte-identical (`star="*"`); diff scope = `types.rs` + tests + `tasks.json`;
+  **ledger unchanged**. No Codex soundness pass (surgical declarator change,
+  fully traced across all 4 const cases, comprehensive tests, no load-bearing
+  invariant relaxed; the spec review had already C11-probed the spelling).
+  **All filed generic-C backend tasks are now done + assessed. Next: draft
+  task d (bodies).**
 - 2026-05-27: **Phase-1 task c2 (`regseq-backends-08`) CLOSED** (enum
   representation; implementer `3b66248`). The §13/D9 **union-of-views** form in
   a new `generic_c/enum_emit.rs`, reusing the §14 primitive (refactored to a
