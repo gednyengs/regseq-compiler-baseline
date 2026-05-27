@@ -38,23 +38,26 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
   handoff). Next is **`task.py` tasks** → implementation.
-- **Last completed**: **Phase-1 task a FILED (`regseq-backends-04`)** — the
-  `codegen-coverage-runner` scaffold spec (Doc-3 harness: 6-stage pipeline,
-  dual oracle, manifest schema, Doc-1 matrix parser + coverage ledger,
-  host-`cc` toolchain, + the `regseq-backends` emit seam stub). Codex
-  2-round: r1 APPROVED_WITH_MINOR_FIXES → 4 fixes (matrix grouped-range IDs
-  `BO-1..5` verbatim; all 3 Doc-3 §5 drift directions; `unspecced`→`not-pass`
-  verdict per §6; entry-return contract is harness-owned, `{i,u}32` exit
-  deferred) → r2 **APPROVED**. Spec at
-  `.harness/tasks/regseq-backends/04-codegen-coverage-runner-scaffold.md`.
-  Three scope calls Codex endorsed: emit seam lives in `regseq-backends`
-  now (stub `emit_generic_c`); `kind="ir"` deferred; **no corpus ships**
-  (golden.c needs a working emit → honest `not-pass` baseline). One
-  **open process question flagged for the architect**: the Doc-1
-  **status-flip workflow** (an `unspecced` row the spec delta resolved must
-  read `covered` for `pass` to be reachable — edit Doc 1 per gap-close, or a
-  side scope-list). Harness machinery is correct either way. **Prior: spec
-  delta committed (`cb0b793`)** — now the complete §§1–17 input contract. Applied to the canonical
+- **Last completed**: **Phase-1 task a CLOSED (`regseq-backends-04`)** — the
+  `codegen-coverage-runner` scaffold landed + assessed. Implementer commit
+  `a422d89` (crate + 6-stage pipeline, dual oracle, manifest schema, Doc-1
+  matrix parser + coverage ledger, host-`cc` toolchain, the `regseq-backends`
+  `emit_generic_c` seam stub, 24 tests, empty corpus). **Assessment**: fmt /
+  clippy / 24 tests / Mode-A baseline (176 rows, verdict `not-pass`, exit 1)
+  all green; diff scope clean; seam faithful. **One load-bearing defect
+  caught + fixed** (`9e3f46b`): the committed `coverage_ledger.json` carried
+  a per-row wall-clock `last_run` → every run rewrote all 176 rows
+  (non-deterministic, violating Doc 3 §4 byte-stability + burying drift).
+  Root cause = a Doc-3 §5↔§4 tension (§5 listed `last_run`); fix drops it +
+  reconciles §5; ledger now byte-stable (verified by running twice). See
+  [[codegen-ledger-determinism]]. NOTE: the implementer hand-set
+  `status: done` (no task.py `completed` history event); end state correct.
+  The spec was Codex-2-round-APPROVED before filing; **open process question
+  still standing for the architect**: the Doc-1 **status-flip workflow** (an
+  `unspecced` row the spec delta resolved must read `covered` for `pass` to
+  be reachable — edit Doc 1 per gap-close, or a side scope-list). Harness
+  machinery is correct either way. **Prior: spec delta committed
+  (`cb0b793`)** — now the complete §§1–17 input contract. Applied to the canonical
   `docs/discussions/regseq-model/generic-c-backend.md` — every Doc-2
   `Spec-delta: yes` decision (D1,D2,D4,D5,D7,D8,D9,D10,D11,D12)
   transcribed: §7 identifier policy gains type-name derivation (D1); **new
@@ -104,24 +107,23 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **task a (`regseq-backends-04`) filed, awaiting implementer
-  pickup.** Tasks b–e remain to be drafted (one per pass, after a settles).
-- **Uncommitted state**: the spec delta is committed (`cb0b793`); the prior
-  HANDOFF refresh is committed (`74078b2`). **This session**: task-a spec +
-  `tasks.json` registration + this HANDOFF refresh committed together. Not
-  pushed (commit-only requested; offer to push). The two standing untracked
-  dirs stay untouched by rule — `tests/fixtures/playground-pl011/`,
-  `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
-  never modify).
+- **In-flight**: **none.** Task a is closed; **next is to draft task b**
+  (prelude + envelope — D2/§15 banks + D4/§16 panic + helpers).
+- **Uncommitted state**: clean. Task-a chain committed: spec/registration
+  (`0f6ea9c`), implementer scaffold (`a422d89`), determinism fix (`9e3f46b`),
+  + this HANDOFF refresh. **None of the post-`74078b2` commits are pushed**
+  (offer to push). The two standing untracked dirs stay untouched by rule —
+  `tests/fixtures/playground-pl011/`, `crates/regseq-driver/tests/fixtures/`
+  (experimentation; never commit, never modify).
 
 ### Next actions (in priority order)
 
 1. **`task.py` tasks** — file the Phase-1 implementation tasks per the
    8-section template; Codex-reviewed; commit + push; implementer picks
-   up. **(a) FILED as `regseq-backends-04`** (Codex-APPROVED 2 rounds;
-   committed this session) — implementer-ready (self-contained, unblocked;
-   the status-flip open question does NOT block it). **Remaining: draft
-   b→e**, one per pass. The natural breakdown (input contract =
+   up. **(a) DONE — `regseq-backends-04` landed + assessed + closed**
+   (`9e3f46b`); the `codegen-coverage-runner` harness is live (honest
+   `not-pass` baseline; the emit seam awaits a body). **Next: draft task b**,
+   then c→d→e, one per pass. The natural breakdown (input contract =
    `generic-c-backend.md` §§2–17, complete): (a) the
    **codegen-coverage-runner** crate +
    harness plumbing (Doc 3: pipeline, dual oracle, `manifest.toml`,
@@ -218,7 +220,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (task a `regseq-backends-04` filed, Codex-APPROVED; b–e to draft) | — | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (task a `regseq-backends-04` DONE `9e3f46b` — harness live; b–e to draft) | `a422d89`+`9e3f46b` | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -579,3 +581,24 @@ the rest is stable.
   way. Spec + `tasks.json` + this HANDOFF refresh committed together (not
   pushed). **Next: draft task b** (prelude + envelope, D2/§15 banks +
   D4/§16 panic + helpers).
+- 2026-05-26: **Phase-1 task a CLOSED** — implementer landed
+  `regseq-backends-04` (`a422d89`): the `codegen-coverage-runner` crate
+  (6-stage pipeline / dual oracle / manifest schema / Doc-1 matrix parser /
+  coverage ledger / host-`cc` toolchain) + the `regseq_backends::emit_generic_c`
+  seam stub + 24 tests + the empty-corpus README. **Assessment** (trust-but-
+  verify): fmt / clippy (2 crates, all-targets) / 24 runner tests / Mode-A
+  baseline run (176 rows, verdict `not-pass`, exit 1, `cc` recorded) all
+  green; diff scope clean (matches the spec file set); the emit seam is
+  faithful + well-documented; the impl even handled an unspecced edge
+  (`|` inside a matrix inline-code cell). **One load-bearing defect caught +
+  fixed** (`9e3f46b`): the committed `coverage_ledger.json` carried a per-row
+  wall-clock `last_run`, so every run rewrote all 176 rows — non-deterministic,
+  violating Doc 3 §4 byte-stability + defeating §5's drift-diff purpose. Root
+  cause = a Doc-3 §5↔§4 tension (§5's row schema listed `last_run`); fix drops
+  the field (ledger = pure function of matrix × results) + reconciles Doc 3 §5
+  + a determinism note in `ledger.rs`; verified byte-stable by running twice.
+  Lesson saved: [[codegen-ledger-determinism]] (run the producer twice when
+  assessing a determinism-bearing committed artifact — same applies to the
+  forthcoming golden `.c` snapshots). Implementer hand-set `status: done`
+  (no task.py `completed` history event); end state correct. **Next: draft
+  task b** (prelude + envelope).
