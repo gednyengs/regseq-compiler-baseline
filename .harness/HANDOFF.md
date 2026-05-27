@@ -38,8 +38,23 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
   handoff). Next is **`task.py` tasks** → implementation.
-- **Last completed**: **Phase-1 spec delta committed (`cb0b793`)** — now
-  the complete §§1–17 input contract. Applied to the canonical
+- **Last completed**: **Phase-1 task a FILED (`regseq-backends-04`)** — the
+  `codegen-coverage-runner` scaffold spec (Doc-3 harness: 6-stage pipeline,
+  dual oracle, manifest schema, Doc-1 matrix parser + coverage ledger,
+  host-`cc` toolchain, + the `regseq-backends` emit seam stub). Codex
+  2-round: r1 APPROVED_WITH_MINOR_FIXES → 4 fixes (matrix grouped-range IDs
+  `BO-1..5` verbatim; all 3 Doc-3 §5 drift directions; `unspecced`→`not-pass`
+  verdict per §6; entry-return contract is harness-owned, `{i,u}32` exit
+  deferred) → r2 **APPROVED**. Spec at
+  `.harness/tasks/regseq-backends/04-codegen-coverage-runner-scaffold.md`.
+  Three scope calls Codex endorsed: emit seam lives in `regseq-backends`
+  now (stub `emit_generic_c`); `kind="ir"` deferred; **no corpus ships**
+  (golden.c needs a working emit → honest `not-pass` baseline). One
+  **open process question flagged for the architect**: the Doc-1
+  **status-flip workflow** (an `unspecced` row the spec delta resolved must
+  read `covered` for `pass` to be reachable — edit Doc 1 per gap-close, or a
+  side scope-list). Harness machinery is correct either way. **Prior: spec
+  delta committed (`cb0b793`)** — now the complete §§1–17 input contract. Applied to the canonical
   `docs/discussions/regseq-model/generic-c-backend.md` — every Doc-2
   `Spec-delta: yes` decision (D1,D2,D4,D5,D7,D8,D9,D10,D11,D12)
   transcribed: §7 identifier policy gains type-name derivation (D1); **new
@@ -89,15 +104,13 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **none.** Next is **`task.py` tasks** (the generic-C
-  backend impl in `crates/regseq-backends` + the `codegen-coverage-runner`
-  crate + fixtures); see Next actions.
-- **Uncommitted state**: the three Phase-1 plan docs are committed
-  (`63b43cd`); the spec delta + Doc-2 D2 backport + §15 edge-set refinement
-  are committed (`cb0b793`). **Uncommitted now**: only this HANDOFF refresh
-  (no commit requested this turn). Neither commit is pushed (commit-only
-  requested; offer to push at session start). The two standing untracked dirs
-  stay untouched by rule — `tests/fixtures/playground-pl011/`,
+- **In-flight**: **task a (`regseq-backends-04`) filed, awaiting implementer
+  pickup.** Tasks b–e remain to be drafted (one per pass, after a settles).
+- **Uncommitted state**: the spec delta is committed (`cb0b793`); the prior
+  HANDOFF refresh is committed (`74078b2`). **This session**: task-a spec +
+  `tasks.json` registration + this HANDOFF refresh committed together. Not
+  pushed (commit-only requested; offer to push). The two standing untracked
+  dirs stay untouched by rule — `tests/fixtures/playground-pl011/`,
   `crates/regseq-driver/tests/fixtures/` (experimentation; never commit,
   never modify).
 
@@ -105,8 +118,12 @@ The volatility split means ~90% of updates touch only **§ Current state**.
 
 1. **`task.py` tasks** — file the Phase-1 implementation tasks per the
    8-section template; Codex-reviewed; commit + push; implementer picks
-   up. The natural breakdown (input contract = `generic-c-backend.md`
-   §§2–17, now complete): (a) the **codegen-coverage-runner** crate +
+   up. **(a) FILED as `regseq-backends-04`** (Codex-APPROVED 2 rounds;
+   committed this session) — implementer-ready (self-contained, unblocked;
+   the status-flip open question does NOT block it). **Remaining: draft
+   b→e**, one per pass. The natural breakdown (input contract =
+   `generic-c-backend.md` §§2–17, complete): (a) the
+   **codegen-coverage-runner** crate +
    harness plumbing (Doc 3: pipeline, dual oracle, `manifest.toml`,
    ledger) — buildable before the backend so fixtures can be authored;
    (b) the **prelude + envelope** (D2/§15 banks, D4/§16 panic, helpers);
@@ -201,7 +218,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | pending (tasks next) | — | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (task a `regseq-backends-04` filed, Codex-APPROVED; b–e to draft) | — | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -540,3 +557,25 @@ the rest is stable.
   (forward-declarable) or `FnDef` (ZST). Closes the precision gap so the
   types/layout task is a pure transcription. Codex APPROVED (4/4:
   C-correct / IR-faithful / spec↔Doc-2 agree / no new contradiction).
+- 2026-05-26: **Phase-1 task a filed** — `regseq-backends-04`
+  (`.harness/tasks/regseq-backends/04-codegen-coverage-runner-scaffold.md`,
+  group `regseq-backends`, phase `1b`, deps `regseq-backends-03` +
+  `test-ir-fixtures-01`). The `codegen-coverage-runner` scaffold per Doc 3:
+  6-stage pipeline (bridge → emit → snapshot → cc → run → behavioral) with
+  per-stage failure attribution; dual oracle; `manifest.toml` schema +
+  discovery; Doc-1 matrix parser (grouped-range IDs `BO-1..5` taken
+  verbatim) + coverage ledger (`.harness/generic-c/coverage_ledger.{json,md}`,
+  3 drift directions + Doc-3 §6 verdict); host-`cc` toolchain
+  (`-std=gnu11 -fwrapv -Wall`, hermetic temp dir). Adds the **emit seam**
+  `regseq_backends::emit_generic_c(&RegseqModel) -> Result<String, EmitError>`
+  as a `NotImplemented` stub (tasks b–e implement the body; the harness is
+  its first consumer). Scope calls (Codex-endorsed): seam in `regseq-backends`
+  now; `kind="ir"` deferred; no corpus ships (golden.c needs emit → honest
+  `not-pass` baseline); per-stage tests substitute for the impossible
+  whole-loop smoke. Codex 2-round (r1 APPROVED_WITH_MINOR_FIXES → 4 fixes →
+  r2 APPROVED). **Open process question for the architect**: the Doc-1
+  status-flip workflow (resolved `unspecced` rows must read `covered` for
+  `pass` to be reachable) — not decided; harness machinery correct either
+  way. Spec + `tasks.json` + this HANDOFF refresh committed together (not
+  pushed). **Next: draft task b** (prelude + envelope, D2/§15 banks +
+  D4/§16 panic + helpers).

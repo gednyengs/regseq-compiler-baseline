@@ -4625,6 +4625,28 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-04",
+          "name": "Scaffold codegen-coverage-runner crate + 6-stage harness plumbing (Phase-1 task a)",
+          "spec": ".harness/tasks/regseq-backends/04-codegen-coverage-runner-scaffold.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-03",
+            "test-ir-fixtures-01"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-26T23:22:21Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
