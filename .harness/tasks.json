@@ -4773,6 +4773,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-11",
+          "name": "Generic-C instance-symbol uniqueness + linkage-aware naming (d1 follow-up)",
+          "spec": ".harness/tasks/regseq-backends/11-generic-c-instance-symbol-uniqueness.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-10"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T21:19:48Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
