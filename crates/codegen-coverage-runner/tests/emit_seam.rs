@@ -1,8 +1,9 @@
 //! Stage-2 emit-seam test (Change J): the `regseq_backends` emit seam is
-//! connected and honest. On a real bridged model, `emit_generic_c`
-//! returns `Err(NotImplemented)`, and `pipeline::run_fixture` surfaces
-//! that as `Fail { stage: Emit, .. }` -- the Phase-1 baseline behavior
-//! until tasks b-e implement the lowering.
+//! connected and honest. As of regseq-backends-05 (Phase-1 task b) the seam
+//! is live: on a real bridged model `emit_generic_c` returns a real `Ok(tu)`
+//! (the section 15 bank-1 prelude; banks 2-5 are still empty hooks), and
+//! `pipeline::run_fixture` therefore advances *past* stage 2 -- it no longer
+//! fails at `Stage::Emit`.
 //!
 //! `#![feature(rustc_private)]` + `extern crate rustc_driver;` link the
 //! rustc-backed bridge (stage 1) into the test binary.
@@ -15,7 +16,7 @@ use std::path::{Path, PathBuf};
 
 use codegen_coverage_runner::manifest::{Expect, Fixture, FixtureKind, Manifest};
 use codegen_coverage_runner::pipeline::{self, FixtureVerdict, Stage};
-use regseq_backends::{emit_generic_c, EmitError};
+use regseq_backends::emit_generic_c;
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
 /// A temp directory (with an `input.rs`) removed on drop.
@@ -44,19 +45,21 @@ impl Drop for TempFixtureDir {
 }
 
 #[test]
-fn emit_seam_returns_not_implemented_on_a_real_model() {
+fn emit_seam_returns_a_real_tu_on_a_real_model() {
     let snippet = TempFixtureDir::new("direct", "#![no_std]\npub fn no_op() {}\n");
     let model = match try_bridge_fixture_path(&snippet.dir.join("input.rs")) {
         BridgeOutcome::Ok(model) => model,
         other => panic!("bridge must succeed, got {other:?}"),
     };
-    let err = emit_generic_c(&model).expect_err("stubbed emit must return Err");
-    assert!(matches!(err, EmitError::NotImplemented));
-    assert_eq!(err.to_string(), "generic-C emission not implemented");
+    // Task b: the seam is live -- a real bridged model emits the bank-1
+    // prelude (banks 2-5 are still empty hooks), never Err(NotImplemented).
+    let tu = emit_generic_c(&model).expect("emit must return Ok on a real model");
+    assert!(tu.contains("#include <stdint.h>"));
+    assert!(tu.contains("_Noreturn static inline void regseq_panic(const char *msg)"));
 }
 
 #[test]
-fn pipeline_tags_the_stubbed_emit_as_stage_emit_failure() {
+fn pipeline_advances_past_emit_now_that_the_seam_is_live() {
     let snippet = TempFixtureDir::new("pipeline", "#![no_std]\npub fn no_op() {}\n");
     let fixture = Fixture {
         manifest: Manifest {
@@ -75,18 +78,23 @@ fn pipeline_tags_the_stubbed_emit_as_stage_emit_failure() {
 
     let result = pipeline::run_fixture(&fixture, Path::new("cc"));
     assert_eq!(result.name, "seam_probe");
+    // Stage 1 (acquire) and stage 2 (emit) now both pass; with no committed
+    // golden.c the fixture stops at stage 3 (snapshot) -- proving emit no
+    // longer short-circuits the pipeline at Stage::Emit.
     match result.verdict {
         FixtureVerdict::Fail { stage, detail } => {
+            assert_ne!(stage, Stage::Acquire, "stage-1 acquire must pass");
+            assert_ne!(stage, Stage::Emit, "stage-2 emit must now pass");
             assert_eq!(
                 stage,
-                Stage::Emit,
-                "stage-1 must pass, stage-2 emit must fail"
+                Stage::Snapshot,
+                "with no golden.c the fixture stops at the snapshot stage"
             );
             assert!(
-                detail.contains("not implemented"),
-                "detail should carry the emit error: {detail:?}"
+                detail.contains("cannot read golden"),
+                "detail should carry the missing-golden error: {detail:?}"
             );
         }
-        other => panic!("expected Fail {{ Emit }}, got {other:?}"),
+        other => panic!("expected Fail {{ Snapshot }}, got {other:?}"),
     }
 }

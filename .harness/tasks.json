@@ -4652,7 +4652,7 @@
           "id": "regseq-backends-05",
           "name": "Generic-C prelude + 5-bank emission envelope + panic/helpers (Phase-1 task b)",
           "spec": ".harness/tasks/regseq-backends/05-generic-c-prelude-and-envelope.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-04"
           ],
