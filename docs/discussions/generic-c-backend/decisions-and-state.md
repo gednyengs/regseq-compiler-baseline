@@ -131,7 +131,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09 DONE+assessed; d/e to draft; banks 2-3 emit all sized aggregates incl. enums; const-correctness complete) | `c25f7d6` (09) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+**d1**+**d1.1** DONE+assessed; **d2/e to draft**; banks 2-3 emit all sized aggregates incl. enums; banks 4-5 emit scalar/pointer/control-flow bodies + prototypes + statics; instance symbols are linkage-aware + generic-disambiguated + clash-netted) | `d040b37` (d1.1=`-11`) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
