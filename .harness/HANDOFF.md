@@ -217,8 +217,10 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     wrong qualifier* (compiles, no miscompile/panic), same class as the original
     #4 but for the fn-ptr-pointee sub-case Fix B didn't cover. The implementer
     **documented it in-code** as out-of-verified-scope (`types.rs` FnPtr branch).
-    **Does NOT block c2 or the d→e critical path.** **Open: decide whether to
-    file a tiny follow-up for #3 or fold it into a later hardening pass.**
+    **Does NOT block c2 or the d→e critical path.** **FILED as
+    `regseq-backends-09`** (`25d0a3d`, Codex APPROVED) — small surgical
+    declarator fix (thread `self_const` into `fn_ptr_decl` → `(*const decl)
+    (params)`); independent of task d; awaits an implementer.
   **DOC-FIX FOLLOW-UP TO TRACK (from the c2 review):** the c2 spec **overrides**
   the §13 / Doc-2 D9 *literal* enum representation ("tag field + payload `union`
   at `union_start`, fields at `offset−union_start`") — Codex r1 showed it is
@@ -598,10 +600,11 @@ Codex soundness SOUND, no issues; see § Current state / § Update log). **The
 next task to DRAFT is d** (bodies — §7.1 terminators / §10 Rvalue / §11 casts /
 §12 Const / §4-§5 places-operands; d→e is the critical path to the first green
 fixture; d must also widen discovery roots to signature/local/static types).
-The §13/D9 doc fix is **APPLIED** (`5d422fe`). **Open follow-up: #3 fn-ptr-value
-const placement** (`&fn() -> i32` — minor, documented; file a small task or fold
-into later hardening). **`origin/main` is at `a8b676a`** — the local chain
-(through `3b66248` c2 + this HANDOFF commit) is unpushed; offer to push.
+The §13/D9 doc fix is **APPLIED** (`5d422fe`). The 07 #3 fn-ptr-value const
+follow-up is **FILED** as `regseq-backends-09` (`25d0a3d`, awaits an
+implementer; independent of d). **`origin/main` is at `55795b0`** (pushed
+through the c2 close); the unpushed tail is `25d0a3d` (09 filing) + this
+HANDOFF commit.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
@@ -635,9 +638,17 @@ the rest is stable.
   EnumShape×TagEncoding, shifted-align/non-zero-start views, sizeof/alignof
   (views padded to size, union max, outer `aligned(layout.align)`), the
   one-view/zero-view collapse, panic paths; re-ran the suite. **Banks 2-3 now
-  emit every sized aggregate incl. enums.** No c2 follow-ups. **Outstanding:
-  the 07 #3 fn-ptr-value const item (decide: file or fold). Next: draft task
-  d (bodies).**
+  emit every sized aggregate incl. enums.** No c2 follow-ups. **Next: draft
+  task d (bodies).**
+- 2026-05-27: **`regseq-backends-09` FILED** (`25d0a3d`, Codex APPROVED) — the
+  07 #3 fn-ptr-value const placement follow-up (user chose "file now"). A small
+  surgical declarator fix: thread `self_const` into `fn_ptr_decl` so a `Ref`/
+  `Ptr` to a fn-pointer pointee emits `const` on the fn-pointer **value**
+  (`int32_t (*const (*p))(void)`) not the return type, and drop the
+  `const`-prefix in `declare_qualified`'s `FnPtr` arm. Independent of task d;
+  awaits an implementer. Codex compiled a C11 probe confirming the target
+  spelling enforces read-only; the only review fix was stale doc anchors. The
+  local chain through the c2 close was **pushed** (`origin/main` = `55795b0`).
 - 2026-05-27: **Phase-1 task `regseq-backends-07` CLOSED** (c1 robustness
   fixes; implementer `34a4ae1`). Assessed in an **isolated git worktree** at
   `34a4ae1` (the implementer was concurrently editing the main tree for c2, so
