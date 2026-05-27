@@ -11,8 +11,9 @@ use super::*;
 use regseq_model::{
     AutoTrait, CrateId, DefPath, Endian, EnumShape, FieldLayout, FnAbi, FnSig, GenericArgs,
     Instance, InstanceKind, IntKind, Item, ItemKind, Layout, LayoutKind, Linkage, Mutability,
-    Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TargetInfo,
-    Ty, TyId, UintKind, VariantLayout,
+    Provenance, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TagEncoding,
+    TagScalar, TargetInfo, Ty, TyId, UintKind, VariantIdx, VariantLayout, VariantRange,
+    WrappingRange,
 };
 
 // ---------------------------------------------------------------------------
@@ -390,55 +391,8 @@ fn emit_is_byte_identical_for_a_rich_model() {
 }
 
 // ---------------------------------------------------------------------------
-// B4: scope hooks -- enum (forward-decl only) + dyn (trait_obj shape only).
+// B4 scope hook: dyn (trait_obj shape only).
 // ---------------------------------------------------------------------------
-
-#[test]
-fn enum_is_forward_declared_but_body_is_deferred_to_c2() {
-    let mut m = model();
-    let name = m.strings.intern("Idle");
-    let it = item(&mut m, ItemKind::Enum, "E");
-    let shape = EnumShape::Single {
-        variant: VariantLayout {
-            name,
-            fields: Vec::new(),
-            uninhabited: false,
-            discriminant: 0,
-            tag_value: None,
-        },
-        scalar: None,
-    };
-    let ty = m.types.intern(Ty::Enum {
-        item: it,
-        args: GenericArgs::new(),
-        layout: Layout {
-            size: 1,
-            align: 1,
-            pack: None,
-            uninhabited: false,
-            kind: LayoutKind::Enum { shape },
-        },
-    });
-    let emission = m.strings.intern("E");
-    m.instances.push(Instance {
-        item: it,
-        generic_args: GenericArgs::new(),
-        emission_name: emission,
-        span: span(),
-        kind: InstanceKind::Enum { layout: ty },
-    });
-
-    let tu = emit_generic_c(&m).unwrap();
-    assert!(tu.contains("struct E;"), "enum must be forward-declared");
-    assert!(
-        tu.contains("TODO(task c2): enum body for E"),
-        "enum body is the c2 hook"
-    );
-    assert!(
-        !tu.contains("_Static_assert(sizeof(struct E)"),
-        "no enum body / layout guards in c1"
-    );
-}
 
 #[test]
 fn dyn_field_emits_trait_obj_shape_and_vtable_forward_decl() {
@@ -826,4 +780,252 @@ fn fn_ptr_returning_pointer_to_array_recurses_the_declarator() {
         tu.contains("const uint32_t (*(*cb)(void))[4];"),
         "pointer-to-array return must recurse:\n{tu}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task c2: the section 13 / D9 offset-faithful union-of-views enum body.
+// Structural assertions over the emitted TU (compile-level layout-fidelity
+// proof lives in the codegen-coverage-runner behavioral tests).
+// ---------------------------------------------------------------------------
+
+/// Build a `LayoutKind::Enum` layout (`pack` is always `None` -- enums are
+/// never `repr(packed)`).
+fn enum_layout(size: u64, align: u64, shape: EnumShape) -> Layout {
+    Layout {
+        size,
+        align,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum { shape },
+    }
+}
+
+/// Intern a `Ty::Enum` AND register it as an `InstanceKind::Enum` root.
+fn push_enum_instance(model: &mut RegseqModel, rendered: &str, layout: Layout) -> TyId {
+    let it = item(model, ItemKind::Enum, rendered);
+    let ty = model.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout,
+    });
+    let emission = model.strings.intern(rendered);
+    model.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Enum { layout: ty },
+    });
+    ty
+}
+
+/// A `VariantLayout` with a source-interned name.
+fn variant(
+    model: &mut RegseqModel,
+    name: &str,
+    fields: Vec<FieldLayout>,
+    discriminant: u128,
+    tag_value: Option<u128>,
+) -> VariantLayout {
+    VariantLayout {
+        name: model.strings.intern(name),
+        fields,
+        uninhabited: false,
+        discriminant,
+        tag_value,
+    }
+}
+
+#[test]
+fn empty_enum_emits_a_size_faithful_empty_struct() {
+    // enum Void {} -- uninhabited, size 0 align 1: zero views -> an empty
+    // struct (a gnu11 extension; sizeof 0).
+    let mut m = model();
+    push_enum_instance(&mut m, "Void", enum_layout(0, 1, EnumShape::Empty));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("struct Void {\n}"), "empty body:\n{tu}");
+    assert!(tu.contains("_Static_assert(sizeof(struct Void) == 0, \"Void size\");"));
+    assert!(tu.contains("_Static_assert(_Alignof(struct Void) == 1, \"Void align\");"));
+    assert!(!tu.contains("unsigned char _pad0[0]"), "no zero-length pad");
+}
+
+#[test]
+fn single_scalar_none_fieldless_emits_size_faithful_struct() {
+    // A single-variant fieldless enum with no tag scalar: zero views -> a
+    // size-faithful filler struct (hand-built size 1 to exercise the pad).
+    let mut m = model();
+    let shape = EnumShape::Single {
+        variant: variant(&mut m, "Idle", Vec::new(), 0, None),
+        scalar: None,
+    };
+    push_enum_instance(&mut m, "E", enum_layout(1, 1, shape));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("struct E {"));
+    assert!(
+        tu.contains("unsigned char _pad0[1];"),
+        "size-faithful pad:\n{tu}"
+    );
+    assert!(tu.contains("_Static_assert(sizeof(struct E) == 1, \"E size\");"));
+    assert!(!tu.contains("union"), "zero-view enum has no union:\n{tu}");
+    assert!(!tu.contains(" tag;"), "scalar:None has no tag view");
+}
+
+#[test]
+fn fieldless_direct_enum_collapses_to_tag_only_struct() {
+    // Section 9.8: a `repr(u32)` fieldless `Direct` enum -> a single tag
+    // view -> collapsed `struct Status { uint32_t tag; }`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u32t,
+        valid_range: WrappingRange {
+            start: 0,
+            end: 0xDEAD,
+        },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "Idle", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Active", Vec::new(), 1, Some(1)),
+        ],
+    };
+    push_enum_instance(&mut m, "Status", enum_layout(4, 4, shape));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("uint32_t tag;"), "collapsed tag field:\n{tu}");
+    assert!(
+        !tu.contains("union"),
+        "single view collapses, no union:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Status, tag) == 0, \"Status.tag offset\");")
+    );
+    assert!(tu.contains("_Static_assert(sizeof(struct Status) == 4, \"Status size\");"));
+    assert!(tu.contains("__attribute__((aligned(4)))"));
+}
+
+#[test]
+fn niche_enum_collapses_to_single_field_struct() {
+    // Section 9.9: `Option<&u32>` is `Niche` (no tag view) with `None`
+    // fieldless + `Some` carrying the pointer at offset 0 -> a single view
+    // -> collapsed `struct Opt { const uint32_t *_0; }`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let some_field = fl(&mut m, "0", ref_ty, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(&mut m, "None", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    push_enum_instance(&mut m, "Opt", enum_layout(8, 8, shape));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("const uint32_t *_0;"),
+        "collapsed single pointer field:\n{tu}"
+    );
+    assert!(!tu.contains("union"), "niche single view collapses:\n{tu}");
+    assert!(!tu.contains(" tag;"), "niche enum has no tag view:\n{tu}");
+    assert!(tu.contains("_Static_assert(offsetof(struct Opt, _0) == 0, \"Opt._0 offset\");"));
+    assert!(tu.contains("_Static_assert(sizeof(struct Opt) == 8, \"Opt size\");"));
+}
+
+#[test]
+fn multi_view_direct_enum_emits_union_of_views() {
+    // The shifted-alignment case the literal `union_start` form cannot
+    // place: enum Shift { A(u8), B(u32) } -- tag u8 @0, A.0 @1, B.0 @4,
+    // size 8 align 4. Three views: `_tag`, `_v0` (A), `_v1` (B).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let a0 = fl(&mut m, "0", u8t, 1);
+    let b0 = fl(&mut m, "0", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", vec![a0], 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    push_enum_instance(&mut m, "Shift", enum_layout(8, 4, shape));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("    union {\n"),
+        "multi-view union wrapper:\n{tu}"
+    );
+    assert!(tu.contains("    } _tag;\n"), "tag view member:\n{tu}");
+    assert!(tu.contains("    } _v0;\n"), "variant A view member:\n{tu}");
+    assert!(tu.contains("    } _v1;\n"), "variant B view member:\n{tu}");
+    assert!(tu.contains("    } u;\n"), "union member:\n{tu}");
+    // Nested member-designator guards at the absolute offsets.
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Shift, u._tag.tag) == 0,"),
+        "tag @0:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Shift, u._v0._0) == 1,"),
+        "A.0 @1:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Shift, u._v1._0) == 4,"),
+        "B.0 @4:\n{tu}"
+    );
+    assert!(tu.contains("_Static_assert(sizeof(struct Shift) == 8, \"Shift size\");"));
+    assert!(tu.contains("_Static_assert(_Alignof(struct Shift) == 4, \"Shift align\");"));
+    assert!(tu.contains("__attribute__((aligned(4)))"));
+}
+
+#[test]
+fn enum_emit_is_byte_identical_across_two_calls() {
+    let build = || {
+        let mut m = model();
+        let u8t = uint(&mut m, UintKind::U8);
+        let u32t = uint(&mut m, UintKind::U32);
+        let a0 = fl(&mut m, "0", u8t, 1);
+        let b0 = fl(&mut m, "0", u32t, 4);
+        let tag = TagScalar {
+            offset: 0,
+            scalar_ty: u8t,
+            valid_range: WrappingRange { start: 0, end: 1 },
+        };
+        let shape = EnumShape::Multiple {
+            tag,
+            encoding: TagEncoding::Direct,
+            variants: vec![
+                variant(&mut m, "A", vec![a0], 0, Some(0)),
+                variant(&mut m, "B", vec![b0], 1, Some(1)),
+            ],
+        };
+        push_enum_instance(&mut m, "Shift", enum_layout(8, 4, shape));
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
 }

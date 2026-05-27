@@ -24,9 +24,10 @@ use std::path::{Path, PathBuf};
 use codegen_coverage_runner::toolchain::{self, ToolchainError};
 use regseq_backends::emit_generic_c;
 use regseq_model::{
-    CrateId, DefPath, Endian, FieldLayout, FnAbi, FnSig, GenericArgs, Instance, InstanceKind,
-    IntKind, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, Provenance, RegseqModel, Safety,
-    ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TargetInfo, Ty, TyId, UintKind,
+    CrateId, DefPath, Endian, EnumShape, FieldLayout, FnAbi, FnSig, GenericArgs, Instance,
+    InstanceKind, IntKind, Item, ItemId, ItemKind, Layout, LayoutKind, Linkage, Provenance,
+    RegseqModel, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span, StableCrateId, TagEncoding,
+    TagScalar, TargetInfo, Ty, TyId, UintKind, VariantLayout, WrappingRange,
 };
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
@@ -96,6 +97,75 @@ pub fn t_union(p: &Onion) -> u32 { unsafe { p.a } }
 pub fn t_tuple(_p: &WithTuple) -> u32 { 0 }
 pub fn t_array(_p: &WithArray) -> u32 { 0 }
 "#;
+
+/// A `#![no_std]` snippet exercising the four enum shapes task c2 lowers:
+/// a `repr(u32)` fieldless `Direct` enum (section 9.8, collapses to a
+/// tag-only struct), a niche `Option<&u32>` (section 9.9, collapses to a
+/// single-field struct), a multi-field-payload `repr(Rust)` enum, and the
+/// shifted-alignment `enum Shift { A(u8), B(u32) }` (tag u8 @0, A.0 @1,
+/// B.0 @4 -- the case the literal `union_start` form could not place).
+/// Each is touched by a straight-line function so Phase-2 surfaces its
+/// `Ty::Enum` + an `InstanceKind::Enum` root.
+const ENUMS_SNIPPET: &str = r#"#![no_std]
+
+#[repr(u32)]
+pub enum Status {
+    Idle   = 0,
+    Active = 1,
+    Error  = 0xFF,
+    Reset  = 0xDEAD,
+}
+
+pub enum Payload {
+    A(u8),
+    B { x: u32, y: u16 },
+    C,
+}
+
+pub enum Shift {
+    A(u8),
+    B(u32),
+}
+
+pub fn t_status(_s: &Status) -> u32 { 0 }
+pub fn t_option(_x: Option<&u32>) -> u32 { 0 }
+pub fn t_payload(_p: &Payload) -> u32 { 0 }
+pub fn t_shift(_s: &Shift) -> u32 { 0 }
+"#;
+
+#[test]
+fn bridged_enums_emit_a_tu_that_compiles_clean() {
+    let snippet = TempSnippet::new("enums", ENUMS_SNIPPET);
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok");
+
+    // Sanity: the union-of-views machinery surfaced for the multi-view
+    // enums (Payload / Shift), and the collapsed forms for Status / Option.
+    assert!(
+        tu.contains("uint32_t tag;"),
+        "the Direct tag view surfaced:\n{tu}"
+    );
+    assert!(
+        tu.contains("union {"),
+        "a multi-view enum surfaced a union:\n{tu}"
+    );
+    assert!(
+        tu.contains("offsetof(struct ") && tu.contains("u._tag.tag)"),
+        "nested member-designator tag guards:\n{tu}"
+    );
+
+    // Compile the TU + a trivial entry: the layout guards passing IS the
+    // proof that the emitted offsets reproduce rustc's enum layout for all
+    // four shapes (Direct fieldless, Niche, multi-field payload, shifted).
+    let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
+    let run = toolchain::compile_and_run(&tu, "regseq_main", cc())
+        .expect("enum TU must compile (layout guards hold) + run");
+    assert_eq!(run.exit_code, Some(0), "must exit 0: {}", run.stderr);
+    assert_eq!(run.stderr, "", "clean stderr");
+}
 
 #[test]
 fn bridged_aggregates_emit_a_tu_that_compiles_clean() {
@@ -535,4 +605,159 @@ fn fn_ptr_return_declarators_compile() {
         "got:\n{tu}"
     );
     assert_compiles(&tu, "fn-ptr return declarators");
+}
+
+// ---------------------------------------------------------------------------
+// Task c2: enum union-of-views (section 13 / D9). Hand-built models pin the
+// shifted-alignment absolute offset that the literal `union_start` form
+// could not place, and prove the `_Static_assert` guards bite for an enum.
+// ---------------------------------------------------------------------------
+
+/// Register an `InstanceKind::Enum` root for a hand-built enum `Layout`.
+fn root_enum(model: &mut RegseqModel, rendered: &str, layout: Layout) -> TyId {
+    let it = mk_item(model, ItemKind::Enum, rendered);
+    let ty = model.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout,
+    });
+    let emission = model.strings.intern(rendered);
+    model.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: synth_span(),
+        kind: InstanceKind::Enum { layout: ty },
+    });
+    ty
+}
+
+/// The shifted-alignment `enum Shift { A(u8), B(u32) }` shape: tag u8 @0,
+/// A.0 @1, B.0 @4, size 8 align 4.
+fn shift_shape(m: &mut RegseqModel) -> EnumShape {
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let a0 = mk_field(m, "0", u8t, 1);
+    let b0 = mk_field(m, "0", u32t, 4);
+    let a_name = m.strings.intern("A");
+    let b_name = m.strings.intern("B");
+    EnumShape::Multiple {
+        tag: TagScalar {
+            offset: 0,
+            scalar_ty: u8t,
+            valid_range: WrappingRange { start: 0, end: 1 },
+        },
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            VariantLayout {
+                name: a_name,
+                fields: vec![a0],
+                uninhabited: false,
+                discriminant: 0,
+                tag_value: Some(0),
+            },
+            VariantLayout {
+                name: b_name,
+                fields: vec![b0],
+                uninhabited: false,
+                discriminant: 1,
+                tag_value: Some(1),
+            },
+        ],
+    }
+}
+
+#[test]
+fn shifted_alignment_direct_enum_places_payload_at_absolute_offset() {
+    // enum Shift { A(u8), B(u32) } -- the union-of-views places B.0's
+    // uint32_t at its ABSOLUTE offset 4 (the case the literal union_start
+    // form could not place); the nested-designator guard asserts it and
+    // the TU compiles clean (the guards hold = layout-fidelity proof).
+    let mut m = target_model();
+    let shape = shift_shape(&mut m);
+    root_enum(
+        &mut m,
+        "Shift",
+        Layout {
+            size: 8,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Enum { shape },
+        },
+    );
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Shift, u._v1._0) == 4,"),
+        "B.0's uint32_t must land at absolute offset 4:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Shift, u._tag.tag) == 0,"),
+        "tag @0:\n{tu}"
+    );
+    assert_compiles(&tu, "shifted-alignment enum");
+}
+
+#[test]
+fn wrong_enum_field_offset_fails_the_compile_on_the_static_assert() {
+    // A multi-view Direct enum whose B variant claims its uint32_t at the
+    // impossible offset 1: the _v1 view places the uint32_t at its natural
+    // offset 4, so offsetof != 1 and the _Static_assert fails the compile.
+    let mut m = target_model();
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let a0 = mk_field(&mut m, "0", u8t, 1);
+    let bad_b0 = mk_field(&mut m, "0", u32t, 1); // impossible: u32 cannot sit @1
+    let a_name = m.strings.intern("A");
+    let b_name = m.strings.intern("B");
+    let shape = EnumShape::Multiple {
+        tag: TagScalar {
+            offset: 0,
+            scalar_ty: u8t,
+            valid_range: WrappingRange { start: 0, end: 1 },
+        },
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            VariantLayout {
+                name: a_name,
+                fields: vec![a0],
+                uninhabited: false,
+                discriminant: 0,
+                tag_value: Some(0),
+            },
+            VariantLayout {
+                name: b_name,
+                fields: vec![bad_b0],
+                uninhabited: false,
+                discriminant: 1,
+                tag_value: Some(1),
+            },
+        ],
+    };
+    root_enum(
+        &mut m,
+        "Bad",
+        Layout {
+            size: 8,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Enum { shape },
+        },
+    );
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Bad, u._v1._0) == 1"),
+        "the guard asserts the (wrong) injected offset:\n{tu}"
+    );
+
+    let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
+    let err = toolchain::compile_and_run(&tu, "regseq_main", cc())
+        .expect_err("a wrong enum field offset must fail the compile on the _Static_assert");
+    assert!(
+        matches!(err, ToolchainError::CompileFailed { .. }),
+        "expected CompileFailed, got {err:?}"
+    );
 }

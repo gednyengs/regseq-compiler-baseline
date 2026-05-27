@@ -4715,7 +4715,7 @@
           "id": "regseq-backends-08",
           "name": "Generic-C enum representation (\u00a713/D9)",
           "spec": ".harness/tasks/regseq-backends/08-generic-c-enum-representation.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-06"
           ],

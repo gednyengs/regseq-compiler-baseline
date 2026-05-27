@@ -10,13 +10,12 @@
 //! that orders the definitions. Banks 4-5 (prototypes, `extern` statics,
 //! function bodies, static initializers) remain task-d hooks.
 //!
-//! Scope (task c1): emits compilable C type definitions for sized,
-//! non-enum, non-`dyn` aggregates (struct / union / tuple / closure /
-//! array / slice / primitives), each with `_Static_assert` layout guards.
-//! Enum *bodies* are the task-c2 hook (`InstanceKind::Enum` is forward-
-//! declared + spelled but its body is skipped); `dyn` vtable construction +
-//! virtual dispatch are deferred (only the `trait_obj` shape + a VTable
-//! forward-decl ship here).
+//! Scope (tasks c1 + c2): emits compilable C type definitions for sized,
+//! non-`dyn` aggregates (struct / union / tuple / closure / array / slice /
+//! enum / primitives), each with `_Static_assert` layout guards. Task c2
+//! filled the enum body ([`enum_emit`], the section 13 / D9 union-of-views
+//! form); `dyn` vtable construction + virtual dispatch are deferred (only
+//! the `trait_obj` shape + a VTable forward-decl ship here).
 
 use std::collections::{HashMap, HashSet};
 
@@ -24,6 +23,7 @@ use regseq_model::{InstanceKind, Mutability, Provenance, RegseqModel, Ty, TyId};
 
 pub mod prelude;
 
+mod enum_emit;
 mod layout_emit;
 mod naming;
 mod types;
@@ -470,9 +470,8 @@ fn bank2_type_forward_decls(model: &RegseqModel, names: &NameTable, discovered: 
 
 /// Bank 3 (section 15): full `struct` / `union` bodies, topologically
 /// sorted by by-value containment. Non-enum aggregates go through the
-/// section 14 emitter; `InstanceKind::Enum` -> the task-c2 hook (no body;
-/// the bank-2 forward-decl stands); fat structs emit their section 3.2
-/// shape.
+/// section 14 emitter; enums go through the section 13 / D9 union-of-views
+/// emitter ([`enum_emit`]); fat structs emit their section 3.2 shape.
 fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node]) -> String {
     let mut out = String::new();
     if topo.is_empty() {
@@ -488,10 +487,9 @@ fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node])
         match node {
             Node::Agg(ty) => {
                 if matches!(model.types[*ty], Ty::Enum { .. }) {
-                    // Task-c2 hook (section 13 / D9): the enum body reuses
-                    // the section 14 primitive; the bank-2 forward-decl
-                    // stands until then.
-                    out.push_str(&format!("/* TODO(task c2): enum body for {name} */\n"));
+                    // Section 13 / D9: the offset-faithful union-of-views
+                    // enum body, reusing the section 14 primitive.
+                    out.push_str(&enum_emit::emit_enum(model, names, *ty, name));
                 } else if let Some(def) = layout_emit::emit_aggregate(model, names, *ty, name) {
                     out.push_str(&def);
                 }

@@ -50,14 +50,31 @@ impl PadNamer {
 }
 
 /// One emittable (non-ZST accounted) field, normalized across the
-/// struct / tuple / union / closure shapes.
-struct ViewField {
+/// struct / tuple / union / closure shapes (and, for task c2, an enum
+/// tag / variant-payload view).
+pub(super) struct ViewField {
     /// C field name (sanitized source name, or `_N` for a tuple).
-    name: String,
+    pub(super) name: String,
     /// Field type.
-    ty: TyId,
+    pub(super) ty: TyId,
     /// Byte offset within the aggregate (`0` for every union field).
-    offset: u64,
+    pub(super) offset: u64,
+}
+
+/// How a field body's per-field `offsetof` guard is spelled, so the same
+/// field-layout machinery ([`emit_offset_fields`]) serves both a plain
+/// aggregate (`offsetof(struct T, f)`) and an enum union-of-views member
+/// (`offsetof(struct E, u._v0.f)`).
+pub(super) struct GuardDesignator<'a> {
+    /// The `offsetof` type operand, e.g. `"struct T"` / `"union U"` /
+    /// `"struct E"`.
+    pub(super) type_operand: &'a str,
+    /// The aggregate label used in the assert message, e.g. `"T"` / `"E"`.
+    pub(super) label: &'a str,
+    /// The member-path prefix prepended to each field name in the
+    /// designator + message: `""` for a plain field, `"u._v0."` for an
+    /// enum union-of-views member.
+    pub(super) member_prefix: &'a str,
 }
 
 /// A normalized aggregate view: the resolved `Layout` plus the field
@@ -119,7 +136,7 @@ fn resolve_view<'a>(model: &'a RegseqModel, ty: TyId) -> Option<AggView<'a>> {
 
 /// Whether `ty` is a zero-sized type (omitted from emission per section
 /// 14 step 2; PhantomData / unit / ZST all collapse to size 0).
-fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
+pub(super) fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
     model.size_align_of(ty).size == 0
 }
 
@@ -129,7 +146,7 @@ fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
 /// `pack`'s `n` -- under `repr(packed(n))` the type's true alignment is
 /// `min(max_field_align, n) = layout.align`, which the `_Alignof` guard
 /// asserts.
-fn align_attr(layout: &Layout) -> String {
+pub(super) fn align_attr(layout: &Layout) -> String {
     if layout.pack.is_some() {
         format!("__attribute__((packed, aligned({})))", layout.align)
     } else {
@@ -157,7 +174,21 @@ pub(crate) fn emit_aggregate(
     if view.is_union {
         emit_union_body(model, names, &view, agg_name, &mut out, &mut guards);
     } else {
-        emit_struct_body(model, names, &view, agg_name, &mut out, &mut guards);
+        let type_operand = format!("struct {agg_name}");
+        let guard = GuardDesignator {
+            type_operand: &type_operand,
+            label: agg_name,
+            member_prefix: "",
+        };
+        emit_offset_fields(
+            model,
+            names,
+            &view.fields,
+            view.layout.size,
+            &guard,
+            &mut out,
+            &mut guards,
+        );
     }
 
     out.push_str(&format!("}} {};\n", align_attr(view.layout)));
@@ -173,22 +204,28 @@ pub(crate) fn emit_aggregate(
     Some(out)
 }
 
-/// Emit a struct / tuple / closure body: fields sorted by offset with
-/// explicit `_padN` fillers + a trailing pad, and per-field offsetof
-/// guards.
-fn emit_struct_body(
+/// Emit the section 14 field-layout body for `fields` within an aggregate
+/// of total byte `size`: filter ZST fields, sort by `offset`, insert
+/// explicit `_padN` fillers + a trailing pad to `size`, and append a
+/// per-field `offsetof` guard (spelled via `guard`). The 4-space-indented
+/// member lines go to `out`; the `_Static_assert` lines to `guards`.
+///
+/// Shared by [`emit_aggregate`] (a plain struct / tuple / closure body)
+/// and the enum emitter ([`super::enum_emit`], each tag / variant view).
+/// Field offsets are always absolute to the aggregate object -- the enum
+/// views start at the enum object's offset 0, so a view-relative offset
+/// *is* the absolute offset and no base-offset shifting is needed; the
+/// only enum-specific input is the member-path prefix in `guard`.
+pub(super) fn emit_offset_fields(
     model: &RegseqModel,
     names: &NameTable,
-    view: &AggView<'_>,
-    agg_name: &str,
+    fields: &[ViewField],
+    size: u64,
+    guard: &GuardDesignator<'_>,
     out: &mut String,
     guards: &mut String,
 ) {
-    let mut emittable: Vec<&ViewField> = view
-        .fields
-        .iter()
-        .filter(|f| !is_zst(model, f.ty))
-        .collect();
+    let mut emittable: Vec<&ViewField> = fields.iter().filter(|f| !is_zst(model, f.ty)).collect();
     emittable.sort_by_key(|f| f.offset);
 
     let mut padder = PadNamer::new(emittable.iter().map(|f| f.name.clone()).collect());
@@ -203,18 +240,20 @@ fn emit_struct_body(
         }
         out.push_str(&format!("    {};\n", declare(model, names, f.ty, &f.name)));
         guards.push_str(&format!(
-            "_Static_assert(offsetof({struct_kw} {agg_name}, {fname}) == {off}, \"{agg_name}.{fname} offset\");\n",
-            struct_kw = "struct",
+            "_Static_assert(offsetof({type_operand}, {prefix}{fname}) == {off}, \"{label}.{prefix}{fname} offset\");\n",
+            type_operand = guard.type_operand,
+            prefix = guard.member_prefix,
+            label = guard.label,
             fname = f.name,
             off = f.offset,
         ));
         cursor = f.offset + model.size_align_of(f.ty).size;
     }
-    if cursor < view.layout.size {
+    if cursor < size {
         out.push_str(&format!(
             "    unsigned char {}[{}];\n",
             padder.fresh(),
-            view.layout.size - cursor
+            size - cursor
         ));
     }
 }
