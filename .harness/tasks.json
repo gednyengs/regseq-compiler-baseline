@@ -4757,7 +4757,7 @@
           "id": "regseq-backends-10",
           "name": "Generic-C scalar bodies + control flow (Phase-1 d1)",
           "spec": ".harness/tasks/regseq-backends/10-generic-c-scalar-bodies-and-control-flow.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-09"
           ],

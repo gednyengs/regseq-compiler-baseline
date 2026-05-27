@@ -7,22 +7,32 @@
 //! naming ([`naming`] + [`NameTable`]), the section 14 / D10 field-offset
 //! aggregate emitter ([`layout_emit`]), the section 3.2 fat-pointer struct
 //! shapes, and the section 15 by-value-containment discovery + topo-sort
-//! that orders the definitions. Banks 4-5 (prototypes, `extern` statics,
-//! function bodies, static initializers) remain task-d hooks.
+//! that orders the definitions. Task d1 fills banks 4-5 for the scalar /
+//! pointer / control-flow subset: prototypes + `extern` statics (bank 4),
+//! function bodies ([`body_emit`]) + scalar / pointer static initializers
+//! (bank 5), and widens the section 15 discovery roots to signature / local
+//! / static / const types.
 //!
 //! Scope (tasks c1 + c2): emits compilable C type definitions for sized,
 //! non-`dyn` aggregates (struct / union / tuple / closure / array / slice /
 //! enum / primitives), each with `_Static_assert` layout guards. Task c2
 //! filled the enum body ([`enum_emit`], the section 13 / D9 union-of-views
 //! form); `dyn` vtable construction + virtual dispatch are deferred (only
-//! the `trait_obj` shape + a VTable forward-decl ship here).
+//! the `trait_obj` shape + a VTable forward-decl ship here). Task d1 adds
+//! the section 7 body lowering; structured-data bodies (field / index /
+//! downcast access, aggregate rvalues, enum tag-ops) are deferred to d2,
+//! each failing loud via [`EmitError::Unsupported`].
 
 use std::collections::{HashMap, HashSet};
 
-use regseq_model::{InstanceKind, Mutability, Provenance, RegseqModel, Ty, TyId};
+use regseq_model::{
+    CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceKind, Linkage, Mutability,
+    Provenance, RegseqModel, Ty, TyId,
+};
 
 pub mod prelude;
 
+mod body_emit;
 mod enum_emit;
 mod layout_emit;
 mod naming;
@@ -98,14 +108,16 @@ fn slice_data_const(model: &RegseqModel, ref_ty: TyId) -> bool {
 ///
 /// Banks: (1) the prelude + helper block (model-independent), (2) type
 /// forward-decls, (3) type definitions (topologically sorted by by-value
-/// containment), (4) declarations, (5) definitions (banks 4-5 are task-d
-/// hooks, empty for now). The output is a *pure function of the model* (no
+/// containment), (4) prototypes + `extern` statics, (5) function bodies +
+/// static initializers. The output is a *pure function of the model* (no
 /// wall-clock / iteration nondeterminism) so the snapshot oracle's
 /// byte-stability holds.
 ///
 /// Returns [`EmitError::ContainmentCycle`] if the section 15 by-value
 /// containment graph has a cycle (impossible for sized Rust types, so it
-/// signals model corruption); otherwise `Ok`.
+/// signals model corruption), or [`EmitError::Unsupported`] if a body /
+/// static-init construct outside the task-d1 scalar / pointer / control-flow
+/// subset is reached; otherwise `Ok`.
 pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     let discovered = discover(model);
     let names = build_name_table(model, &discovered);
@@ -116,8 +128,8 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     out.push_str(&prelude::helper_block());
     out.push_str(&bank2_type_forward_decls(model, &names, &discovered));
     out.push_str(&bank3_type_definitions(model, &names, &topo));
-    out.push_str(&bank4_declarations(model));
-    out.push_str(&bank5_definitions(model));
+    out.push_str(&bank4_declarations(model, &names)?);
+    out.push_str(&bank5_definitions(model, &names)?);
     Ok(out)
 }
 
@@ -150,8 +162,38 @@ fn agg_edges(model: &RegseqModel, ty: TyId) -> Vec<Node> {
 fn discovery_edges(model: &RegseqModel, node: &Node) -> Vec<Node> {
     match node {
         Node::TraitObj { .. } => Vec::new(),
-        Node::Slice { elem, .. } => containment_target(model, *elem).into_iter().collect(),
-        Node::Agg(ty) => agg_edges(model, *ty),
+        Node::Slice { elem, .. } => discovery_target(model, *elem).into_iter().collect(),
+        Node::Agg(ty) => raw_field_tys(model, *ty)
+            .into_iter()
+            .filter(|field_ty| model.size_align_of(*field_ty).size > 0)
+            .filter_map(|field_ty| discovery_target(model, field_ty))
+            .collect(),
+    }
+}
+
+/// The discovery-edge target of a type (task d1 Change A2): like
+/// [`containment_target`], but **also follows a sized `Ref` / `Ptr` edge to
+/// its pointee's discovery node** (recursing). A `&(u8, u32)` parameter /
+/// field reaches a structural tuple that the nominal-root safety net
+/// (`bridge/mod.rs`) misses, so without this edge spelling its `data` /
+/// declarator would panic the [`NameTable`]. This is **naming /
+/// forward-decl only** -- the by-value [`ordering_edges`] still stops at
+/// pointers, so no false [`EmitError::ContainmentCycle`] is introduced.
+fn discovery_target(model: &RegseqModel, ty: TyId) -> Option<Node> {
+    match &model.types[ty] {
+        Ty::Struct { .. }
+        | Ty::Union { .. }
+        | Ty::Enum { .. }
+        | Ty::Tuple { .. }
+        | Ty::Closure(_, _) => Some(Node::Agg(ty)),
+        Ty::Array(elem, _) => discovery_target(model, *elem),
+        Ty::Ref(pointee, _) | Ty::Ptr(pointee, _) => match unsized_pointee_node(model, ty) {
+            // An unsized pointee lowers to a by-value fat struct.
+            Some(node) => Some(node),
+            // A sized pointee: follow the pointer for naming / forward-decl.
+            None => discovery_target(model, *pointee),
+        },
+        _ => None,
     }
 }
 
@@ -264,24 +306,60 @@ fn unsized_pointee_node(model: &RegseqModel, ref_ty: TyId) -> Option<Node> {
     }
 }
 
-/// Discover every aggregate / fat-pointer node reachable by by-value
-/// containment from the nominal roots (every `InstanceKind::Struct` /
-/// `Union` / `Enum` instance). Returns first-seen order, a deterministic
-/// function of `InstanceId` order + the section 15 edge set. (Task c1's
-/// roots are nominal-containment only: structural aggregates used *only*
-/// in a signature / local / static type are NOT roots here -- task d must
-/// widen the roots when it adds banks 4-5.)
+/// Discover every aggregate / fat-pointer node that banks 2-5 must name +
+/// forward-declare. Returns first-seen order, a deterministic function of
+/// `InstanceId` order (plus per-instance position order) + the section 15
+/// edge set.
+///
+/// Task d1 (Change A1) widened the roots beyond the nominal aggregates:
+/// in addition to every `InstanceKind::Struct` / `Union` / `Enum` layout,
+/// `discover` roots on the **effective emitted types** of every function
+/// signature position (C-ABI effective for `abi == C`, raw otherwise),
+/// every body-local type, and every static / const type, so banks 4 / 5
+/// can spell them. Change A2 broadened [`discovery_target`] to follow a
+/// sized `Ref` / `Ptr` to its pointee (naming / forward-decl only), so a
+/// structural tuple / closure behind a pointer is named too. The
+/// **ordering** machinery ([`ordering_edges`] / [`topo_sort`]) is
+/// unchanged, so no false [`EmitError::ContainmentCycle`] is introduced and
+/// c1 / c2 output is preserved for models without such roots.
 fn discover(model: &RegseqModel) -> Vec<Node> {
     let mut seen: HashSet<Node> = HashSet::new();
     let mut order: Vec<Node> = Vec::new();
+    let root = |ty: TyId, seen: &mut HashSet<Node>, order: &mut Vec<Node>| {
+        if let Some(node) = discovery_target(model, ty) {
+            dfs_discover(model, node, seen, order);
+        }
+    };
     for instance in model.instances.iter() {
-        let root_ty = match instance.kind {
+        match &instance.kind {
             InstanceKind::Struct { layout }
             | InstanceKind::Enum { layout }
-            | InstanceKind::Union { layout } => layout,
-            _ => continue,
-        };
-        dfs_discover(model, Node::Agg(root_ty), &mut seen, &mut order);
+            | InstanceKind::Union { layout } => {
+                dfs_discover(model, Node::Agg(*layout), &mut seen, &mut order);
+            }
+            InstanceKind::Function(data) => {
+                // Each emitted signature position (C-ABI effective for
+                // `abi == C`), inputs then output, then every body local.
+                let fn_sig = model.sigs.resolve(data.fn_sig);
+                let lowering = c_abi_lowering(model, data.fn_sig);
+                for i in 0..fn_sig.inputs.len() {
+                    root(
+                        effective_input_ty(fn_sig, lowering, i),
+                        &mut seen,
+                        &mut order,
+                    );
+                }
+                root(effective_output_ty(fn_sig, lowering), &mut seen, &mut order);
+                if let Some(body) = data.body() {
+                    for decl in body.local_decls.iter() {
+                        root(decl.ty, &mut seen, &mut order);
+                    }
+                }
+            }
+            InstanceKind::Static { ty, .. } | InstanceKind::Const { ty, .. } => {
+                root(*ty, &mut seen, &mut order);
+            }
+        }
     }
     order
 }
@@ -512,20 +590,287 @@ fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node])
     out
 }
 
-/// Bank 4 (section 15): function prototypes for every function instance
-/// and `extern` declarations for every static. Task-d hook (empty here).
-fn bank4_declarations(model: &RegseqModel) -> String {
-    let _ = model;
-    // TODO(task d): section 15 bank 4 -- prototypes + extern statics.
-    String::new()
+/// The C-ABI lowering side-table entry for a signature, when present. Hand-
+/// built models may intern signatures without a parallel
+/// `sig_c_abi_lowerings` slot, so this bounds-checks rather than indexing
+/// (an absent entry means "use the raw `FnSig` types").
+fn c_abi_lowering(model: &RegseqModel, sig: FnSigId) -> Option<&CAbiLowering> {
+    let idx = sig.as_u32() as usize;
+    if idx < model.sig_c_abi_lowerings.len() {
+        model.sig_c_abi_lowerings[sig].as_ref()
+    } else {
+        None
+    }
 }
 
-/// Bank 5 (section 15): function bodies + static initializers, F4 order.
-/// Task-d hook (empty here).
-fn bank5_definitions(model: &RegseqModel) -> String {
-    let _ = model;
-    // TODO(task d): section 15 bank 5 -- function bodies + static inits.
-    String::new()
+/// The effective emitted type of input position `i` (section 15): the C-ABI
+/// `emit_as` for a `Substituted` position of a `C`-ABI signature, otherwise
+/// the position's own `FnSig` type.
+fn effective_input_ty(fn_sig: &FnSig, lowering: Option<&CAbiLowering>, i: usize) -> TyId {
+    match lowering {
+        Some(l) if fn_sig.abi == FnAbi::C => match &l.inputs[i] {
+            CAbiShape::Substituted { emit_as, .. } => *emit_as,
+            CAbiShape::Direct => fn_sig.inputs[i],
+        },
+        _ => fn_sig.inputs[i],
+    }
+}
+
+/// The effective emitted return type (section 15), mirroring
+/// [`effective_input_ty`].
+fn effective_output_ty(fn_sig: &FnSig, lowering: Option<&CAbiLowering>) -> TyId {
+    match lowering {
+        Some(l) if fn_sig.abi == FnAbi::C => match &l.output {
+            CAbiShape::Substituted { emit_as, .. } => *emit_as,
+            CAbiShape::Direct => fn_sig.output,
+        },
+        _ => fn_sig.output,
+    }
+}
+
+/// Whether `ty` is zero-sized (so it is omitted as a function parameter /
+/// return slot). A bare unsized marker is never a sized signature position,
+/// so the `size_align_of` guard only needs the aggregate / scalar path.
+fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
+    match &model.types[ty] {
+        Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. } => false,
+        _ => model.size_align_of(ty).size > 0,
+    }
+    .then_some(())
+    .is_none()
+}
+
+/// The section 17 inline / weak / link-section qualifier prefix for a
+/// function instance (everything but `extern` and `_Noreturn`). Shared by
+/// the bank-4 prototype and the bank-5 definition so the two stay
+/// consistent.
+fn fn_qualifiers(model: &RegseqModel, item: regseq_model::ItemId) -> String {
+    let item = &model.items[item];
+    let mut q = String::new();
+    match item.inline_hint {
+        InlineHint::Hint => q.push_str("inline "),
+        InlineHint::Always => q.push_str("inline __attribute__((always_inline)) "),
+        InlineHint::Never => q.push_str("__attribute__((noinline)) "),
+        InlineHint::None => {}
+    }
+    if item.linkage == Linkage::Weak {
+        q.push_str("__attribute__((weak)) ");
+    }
+    if let Some(section) = item.link_section {
+        q.push_str(&format!(
+            "__attribute__((section(\"{}\"))) ",
+            model.strings.resolve(section)
+        ));
+    }
+    q
+}
+
+/// The section 17 / section 15 function signature `<quals> <ret>
+/// <name>(<params>)` (no trailing `;` or body). `named` controls whether
+/// the parameters carry their body-local names (bank 5 definition) or are
+/// bare types (bank 4 prototype). Parameters / return are spelled from the
+/// C-ABI effective types; ZST positions are omitted. `c_variadic` appends a
+/// trailing `, ...`; a `Never` return is `_Noreturn`.
+fn fn_signature(
+    model: &RegseqModel,
+    names: &NameTable,
+    instance: &regseq_model::Instance,
+    named: bool,
+) -> String {
+    let data = instance
+        .kind
+        .as_function()
+        .expect("fn_signature on a non-function instance");
+    let fn_sig = model.sigs.resolve(data.fn_sig);
+    let lowering = c_abi_lowering(model, data.fn_sig);
+    let emission = emission_ident(model, instance);
+
+    let mut params: Vec<String> = Vec::new();
+    for i in 0..fn_sig.inputs.len() {
+        let eff = effective_input_ty(fn_sig, lowering, i);
+        if is_zst(model, eff) {
+            continue;
+        }
+        let pname = if named {
+            // Argument locals are `local_decls[1..=arg_count]`.
+            data.body()
+                .map(|body| {
+                    body_emit::local_c_name(
+                        model,
+                        body,
+                        regseq_model::LocalId::from_u32(i as u32 + 1),
+                    )
+                })
+                .unwrap_or_default()
+        } else {
+            String::new()
+        };
+        params.push(types::declare(model, names, eff, &pname));
+    }
+
+    let mut params_str = if params.is_empty() {
+        "void".to_string()
+    } else {
+        params.join(", ")
+    };
+    if fn_sig.c_variadic {
+        params_str.push_str(", ...");
+    }
+
+    let out_ty = effective_output_ty(fn_sig, lowering);
+    let ret = if is_zst(model, out_ty) {
+        "void".to_string()
+    } else {
+        types::c_type(model, names, out_ty)
+    };
+
+    let quals = fn_qualifiers(model, instance.item);
+    let noreturn = if matches!(model.types[fn_sig.output], Ty::Never) {
+        "_Noreturn "
+    } else {
+        ""
+    };
+    format!("{quals}{noreturn}{ret} {emission}({params_str})")
+}
+
+/// The C identifier for an instance's emission symbol. The bridge mints
+/// `emission_name` as the rendered `DefPath` (the same string `def_path`
+/// carries, with `::` and `{...}` segments), which is not a C identifier, so
+/// the backend sanitises it exactly as it derives type names
+/// (`naming::sanitize`). This is not a re-mint -- the bridge name is used
+/// verbatim modulo the deterministic C-identifier mapping.
+fn emission_ident(model: &RegseqModel, instance: &regseq_model::Instance) -> String {
+    naming::sanitize(model.strings.resolve(instance.emission_name))
+}
+
+/// Whether an instance's source item carries a diag-log recognition tag
+/// (section 15 diag-log exclusion: skipped in banks 4 / 5).
+fn is_diag_log_instance(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    use regseq_model::{AttrData, IntrinsicKind};
+    let attrs = &model.domain_attrs.item_attrs;
+    if item.as_u32() as usize >= attrs.len() {
+        return false;
+    }
+    attrs[item]
+        .iter()
+        .any(|a| matches!(a, AttrData::Intrinsic(IntrinsicKind::Log(_))))
+}
+
+/// Bank 4 (section 15): a section 17-qualified prototype for every
+/// non-diag-log function instance (`Foreign` -> `extern` decl only) and an
+/// `extern [const] T X;` declaration for every static.
+fn bank4_declarations(model: &RegseqModel, names: &NameTable) -> Result<String, EmitError> {
+    let mut out = String::new();
+    let mut wrote_header = false;
+    let header = |out: &mut String, wrote: &mut bool| {
+        if !*wrote {
+            out.push_str(
+                "\n/* ---------------------------------------------------------------------------\n\
+                 \x20* Bank 4 (section 15): prototypes + extern statics.\n\
+                 \x20* --------------------------------------------------------------------------- */\n",
+            );
+            *wrote = true;
+        }
+    };
+
+    for instance in model.instances.iter() {
+        match &instance.kind {
+            InstanceKind::Function(_) => {
+                if is_diag_log_instance(model, instance.item) {
+                    continue;
+                }
+                header(&mut out, &mut wrote_header);
+                let foreign = model.items[instance.item].linkage == Linkage::Foreign;
+                let prefix = if foreign { "extern " } else { "" };
+                out.push_str(&format!(
+                    "{prefix}{};\n",
+                    fn_signature(model, names, instance, false)
+                ));
+            }
+            InstanceKind::Static { ty, .. } => {
+                header(&mut out, &mut wrote_header);
+                let emission = emission_ident(model, instance);
+                let konst = if static_is_const(model, instance.item) {
+                    "const "
+                } else {
+                    ""
+                };
+                let decl = types::declare(model, names, *ty, &emission);
+                out.push_str(&format!("extern {konst}{decl};\n"));
+            }
+            // Const items materialise at use sites (an address-taken const is
+            // a synthetic ConstMemoryStatic, handled by the Static arm);
+            // aggregates are emitted in banks 2-3.
+            _ => {}
+        }
+    }
+    Ok(out)
+}
+
+/// Whether a static's source item declares `static` (`const`) vs
+/// `static mut` (non-const), per section 17.
+fn static_is_const(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    use regseq_model::ItemKind;
+    matches!(
+        model.items[item].kind,
+        ItemKind::Static {
+            mutability: Mutability::Not
+        }
+    )
+}
+
+/// Bank 5 (section 15): a section 17-qualified definition + section 7 body
+/// for every non-foreign, non-diag-log function, and a `[const] T X =
+/// <init>;` definition for every `init: Some` static, in F4 order.
+fn bank5_definitions(model: &RegseqModel, names: &NameTable) -> Result<String, EmitError> {
+    let mut out = String::new();
+    let mut wrote_header = false;
+    let header = |out: &mut String, wrote: &mut bool| {
+        if !*wrote {
+            out.push_str(
+                "\n/* ---------------------------------------------------------------------------\n\
+                 \x20* Bank 5 (section 15): function bodies + static initializers.\n\
+                 \x20* --------------------------------------------------------------------------- */\n",
+            );
+            *wrote = true;
+        }
+    };
+
+    for instance in model.instances.iter() {
+        match &instance.kind {
+            InstanceKind::Function(data) => {
+                let foreign = model.items[instance.item].linkage == Linkage::Foreign;
+                if foreign || is_diag_log_instance(model, instance.item) {
+                    continue;
+                }
+                let Some(body) = data.body() else {
+                    continue;
+                };
+                header(&mut out, &mut wrote_header);
+                let sig = fn_signature(model, names, instance, true);
+                let block = body_emit::emit_body(model, names, instance, body)?;
+                out.push_str(&format!("{sig}{block}"));
+            }
+            InstanceKind::Static {
+                ty,
+                init: Some(init),
+            } => {
+                header(&mut out, &mut wrote_header);
+                let emission = emission_ident(model, instance);
+                let konst = if static_is_const(model, instance.item) {
+                    "const "
+                } else {
+                    ""
+                };
+                let decl = types::declare(model, names, *ty, &emission);
+                let value =
+                    body_emit::static_initializer(model, names, model.consts.resolve(*init), *ty)?;
+                out.push_str(&format!("{konst}{decl} = {value};\n"));
+            }
+            _ => {}
+        }
+    }
+    Ok(out)
 }
 
 /// Errors from generic-C emission.
@@ -547,6 +892,12 @@ pub enum EmitError {
     /// complete by value -- not C-representable, so it errors here rather
     /// than panicking or mis-emitting.
     ContainmentCycle,
+    /// A body / static-init construct outside the Phase-1 task-d1 scalar /
+    /// pointer / control-flow subset was reached. The `&'static str` names
+    /// the deferred construct (e.g. `"Field place projection (task d2)"`).
+    /// Task d2 replaces each such site with the real lowering; until then
+    /// the backend fails loud rather than mis-emitting.
+    Unsupported(&'static str),
 }
 
 impl std::fmt::Display for EmitError {
@@ -557,6 +908,12 @@ impl std::fmt::Display for EmitError {
                 write!(
                     f,
                     "generic-C emission: by-value containment cycle (model corruption)"
+                )
+            }
+            EmitError::Unsupported(what) => {
+                write!(
+                    f,
+                    "generic-C emission: unsupported construct: {what} (task d2)"
                 )
             }
         }

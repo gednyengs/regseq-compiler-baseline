@@ -99,7 +99,7 @@ fn span() -> Span {
 
 fn item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> regseq_model::ItemId {
     let rid = model.strings.intern(rendered);
-    model.items.push(Item {
+    let id = model.items.push(Item {
         def_path: DefPath {
             crate_id: CrateId::ZERO,
             segments: Vec::new(),
@@ -115,7 +115,15 @@ fn item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> regseq_model
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
-    })
+    });
+    // Keep the `item_def_paths` side table parallel + globally unique so
+    // `instance_ref_of` (used by `Const::Reloc` resolution, task d1) works on
+    // these hand-built models. c1 / c2 tests do not read it.
+    model.item_def_paths.push(regseq_model::DefPathHash {
+        stable_crate_id: StableCrateId(1),
+        local_hash: id.as_u32() as u64,
+    });
+    id
 }
 
 fn fl(model: &mut RegseqModel, name: &str, ty: TyId, offset: u64) -> FieldLayout {
@@ -1091,4 +1099,1140 @@ fn enum_emit_is_byte_identical_across_two_calls() {
         emit_generic_c(&m).unwrap()
     };
     assert_eq!(build(), build());
+}
+
+// ---------------------------------------------------------------------------
+// Task d1: banks 4-5 (prototypes / extern statics + bodies / static inits),
+// the section 7 envelope + section 7.1 terminators + section 6/10/11/12/16
+// value lowering, and the d1/d2 fail-loud boundary. Structural assertions
+// over the emitted TU; the compile-and-run proof lives in the
+// codegen-coverage-runner behavioral tests.
+// ---------------------------------------------------------------------------
+
+use regseq_model::{
+    AssertKind, AttrData, BasicBlock, BinOp, BlockId, Body, CAbiLowering, CAbiShape, CallCallee,
+    CastKind, Const, FieldIdx, FnSigId, FunctionInstanceData, FunctionInstanceFlavor, InstanceId,
+    IntrinsicKind, LocalDecl, LocalId, LogLevel, NonDivergingIntrinsic, Operand, Place, PlaceElem,
+    Rvalue, Statement, StatementKind, SubstReason, SwitchTargets, Terminator, TerminatorKind,
+    UNIT_LAYOUT,
+};
+
+fn fnsig(
+    m: &mut RegseqModel,
+    inputs: Vec<TyId>,
+    output: TyId,
+    abi: FnAbi,
+    variadic: bool,
+) -> FnSigId {
+    m.sigs.intern(FnSig {
+        inputs,
+        output,
+        abi,
+        c_variadic: variadic,
+        safety: Safety::Safe,
+    })
+}
+
+fn ld(ty: TyId) -> LocalDecl {
+    LocalDecl {
+        ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    }
+}
+
+fn st(kind: StatementKind) -> Statement {
+    Statement { kind, span: span() }
+}
+
+fn tk(kind: TerminatorKind) -> Terminator {
+    Terminator { kind, span: span() }
+}
+
+fn bb(stmts: Vec<Statement>, terminator: Terminator) -> BasicBlock {
+    BasicBlock {
+        statements: stmts.into_boxed_slice(),
+        terminator,
+    }
+}
+
+fn build_body(arg_count: usize, local_tys: Vec<TyId>, blocks: Vec<BasicBlock>) -> Body {
+    let mut body = Body {
+        arg_count,
+        ..Default::default()
+    };
+    for ty in local_tys {
+        body.push_local(ld(ty));
+    }
+    for block in blocks {
+        body.basic_blocks.push(block);
+    }
+    body
+}
+
+fn loc(n: u32) -> Place {
+    Place::from(LocalId::from_u32(n))
+}
+
+fn fn_instance(
+    m: &mut RegseqModel,
+    rendered: &str,
+    sig: FnSigId,
+    body: Option<Body>,
+) -> InstanceId {
+    let it = item(m, ItemKind::Function, rendered);
+    let emission = m.strings.intern(rendered);
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    })
+}
+
+fn never(m: &mut RegseqModel) -> TyId {
+    m.types.intern(Ty::Never)
+}
+
+/// `add(a: u32, b: u32) -> u32 { a + b }` -- the canonical d1 scalar body.
+#[test]
+fn scalar_function_emits_prototype_and_body() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t, u32t], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        2,
+        vec![u32t, u32t, u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::BinaryOp(BinOp::Add, Operand::Copy(loc(1)), Operand::Copy(loc(2))),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "add", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t add(uint32_t, uint32_t);"),
+        "proto:\n{tu}"
+    );
+    assert!(
+        tu.contains("uint32_t add(uint32_t _1, uint32_t _2) {"),
+        "def:\n{tu}"
+    );
+    assert!(tu.contains("uint32_t _0;"), "return-place decl:\n{tu}");
+    assert!(tu.contains("_0 = ((_1) + (_2));"), "add stmt:\n{tu}");
+    assert!(tu.contains("return _0;"), "return:\n{tu}");
+}
+
+#[test]
+fn static_emits_extern_decl_and_initializer() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let init = m.consts.intern(Const::Uint(UintKind::U32, 42));
+    let it = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "FOO",
+    );
+    let emission = m.strings.intern("FOO");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u32t,
+            init: Some(init),
+        },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("extern const uint32_t FOO;"),
+        "extern decl:\n{tu}"
+    );
+    assert!(
+        tu.contains("const uint32_t FOO = ((uint32_t)(42U));"),
+        "static def:\n{tu}"
+    );
+}
+
+#[test]
+fn mut_static_is_not_const() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let init = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let it = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Mut,
+        },
+        "MUT",
+    );
+    let emission = m.strings.intern("MUT");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u32t,
+            init: Some(init),
+        },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("extern uint32_t MUT;"), "extern decl:\n{tu}");
+    assert!(
+        !tu.contains("const uint32_t MUT"),
+        "mut static is not const:\n{tu}"
+    );
+}
+
+#[test]
+fn foreign_function_emits_extern_decl_only() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let id = fn_instance(&mut m, "ext_fn", sig, None);
+    let it = m.instances[id].item;
+    m.items[it].linkage = Linkage::Foreign;
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("extern uint32_t ext_fn(uint32_t);"),
+        "extern decl:\n{tu}"
+    );
+    // No definition: the only `ext_fn(` occurrence is the prototype.
+    assert_eq!(
+        tu.matches("ext_fn(").count(),
+        1,
+        "no body for foreign fn:\n{tu}"
+    );
+}
+
+#[test]
+fn weak_link_section_and_inline_qualifiers() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(
+                    m.consts.intern(Const::Uint(UintKind::U32, 0)),
+                )),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    let id = fn_instance(&mut m, "wfn", sig, Some(body));
+    let it = m.instances[id].item;
+    m.items[it].linkage = Linkage::Weak;
+    m.items[it].inline_hint = regseq_model::InlineHint::Hint;
+    let section = m.strings.intern(".init");
+    m.items[it].link_section = Some(section);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("__attribute__((weak))"), "weak:\n{tu}");
+    assert!(
+        tu.contains("__attribute__((section(\".init\")))"),
+        "section:\n{tu}"
+    );
+    assert!(tu.contains("inline "), "inline:\n{tu}");
+}
+
+#[test]
+fn never_output_function_is_noreturn() {
+    let mut m = model();
+    let never_ty = never(&mut m);
+    let sig = fnsig(&mut m, vec![], never_ty, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![never_ty],
+        vec![bb(vec![], tk(TerminatorKind::Unreachable))],
+    );
+    fn_instance(&mut m, "dies", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("_Noreturn void dies(void)"), "_Noreturn:\n{tu}");
+    assert!(
+        tu.contains("regseq_unreachable();"),
+        "unreachable trap:\n{tu}"
+    );
+}
+
+#[test]
+fn diag_log_instance_is_excluded_from_banks_4_and_5() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(
+                    m.consts.intern(Const::Uint(UintKind::U32, 0)),
+                )),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    let id = fn_instance(&mut m, "zz_logfn", sig, Some(body));
+    let it = m.instances[id].item;
+    while m.domain_attrs.item_attrs.len() <= it.as_u32() as usize {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+    m.domain_attrs.item_attrs[it].push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        !tu.contains("zz_logfn"),
+        "log-marked instance excluded:\n{tu}"
+    );
+}
+
+#[test]
+fn c_abi_substituted_parameter_uses_emit_as_type() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let u64t = uint(&mut m, UintKind::U64);
+    // f(x: <u64 raw>) -> u32, with the input C-ABI-substituted to u32.
+    let sig = fnsig(&mut m, vec![u64t], u32t, FnAbi::C, false);
+    // Populate the parallel C-ABI side table for this signature.
+    while m.sig_c_abi_lowerings.len() <= sig.as_u32() as usize {
+        m.sig_c_abi_lowerings.push(None);
+    }
+    m.sig_c_abi_lowerings[sig] = Some(CAbiLowering {
+        inputs: vec![CAbiShape::Substituted {
+            emit_as: u32t,
+            reason: SubstReason::TagScalar,
+        }],
+        output: CAbiShape::Direct,
+    });
+    fn_instance(&mut m, "cf", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t cf(uint32_t);"),
+        "substituted param:\n{tu}"
+    );
+    assert!(
+        !tu.contains("cf(uint64_t)"),
+        "raw type must not be emitted:\n{tu}"
+    );
+}
+
+#[test]
+fn c_variadic_appends_ellipsis() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::C, true);
+    fn_instance(&mut m, "vf", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t vf(uint32_t, ...);"),
+        "variadic:\n{tu}"
+    );
+}
+
+#[test]
+fn switch_int_emits_c_switch() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let body = build_body(
+        1,
+        vec![u32t, u32t],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(1)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(1)), (1, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+        ],
+    );
+    fn_instance(&mut m, "sw", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("switch (_1) {"), "switch:\n{tu}");
+    assert!(tu.contains("case 0ULL: goto bb_1;"), "case 0:\n{tu}");
+    assert!(tu.contains("case 1ULL: goto bb_2;"), "case 1:\n{tu}");
+    assert!(tu.contains("default: goto bb_3;"), "default:\n{tu}");
+}
+
+#[test]
+fn divergent_call_emits_unreachable() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let never_ty = never(&mut m);
+    let dsig = fnsig(&mut m, vec![], never_ty, FnAbi::Rust, false);
+    let diverge = fn_instance(&mut m, "diverge", dsig, None);
+
+    let csig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![u32t],
+        vec![bb(
+            vec![],
+            tk(TerminatorKind::Call {
+                callee: CallCallee::Direct(diverge),
+                args: Box::new([]),
+                destination: loc(0),
+                target: None,
+            }),
+        )],
+    );
+    fn_instance(&mut m, "caller", csig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("diverge(); __builtin_unreachable();"),
+        "divergent call:\n{tu}"
+    );
+}
+
+#[test]
+fn indirect_call_through_fn_pointer() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let cb_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let cb_ty = m.types.intern(Ty::FnPtr(cb_sig));
+    let sig = fnsig(&mut m, vec![cb_ty, u32t], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        2,
+        vec![u32t, cb_ty, u32t],
+        vec![bb(
+            vec![],
+            tk(TerminatorKind::Call {
+                callee: CallCallee::Indirect(Operand::Copy(loc(1))),
+                args: Box::new([Operand::Copy(loc(2))]),
+                destination: loc(0),
+                target: Some(BlockId::from_u32(1)),
+            }),
+        )
+        .clone()],
+    );
+    // Append a trivial return block so bb_1 exists.
+    let mut body = body;
+    body.basic_blocks
+        .push(bb(vec![], tk(TerminatorKind::Return)));
+    fn_instance(&mut m, "call_indirect", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = (_1)(_2); goto bb_1;"),
+        "indirect call:\n{tu}"
+    );
+}
+
+#[test]
+fn assume_intrinsic_uses_portable_form() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let boolt = m.types.intern(Ty::Bool);
+    let sig = fnsig(&mut m, vec![boolt], u32t, FnAbi::Rust, false);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let body = build_body(
+        1,
+        vec![u32t, boolt],
+        vec![bb(
+            vec![
+                st(StatementKind::Intrinsic(NonDivergingIntrinsic::Assume(
+                    Operand::Copy(loc(1)),
+                ))),
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "with_assume", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("if (!(_1)) __builtin_unreachable();"),
+        "assume:\n{tu}"
+    );
+}
+
+#[test]
+fn copy_nonoverlapping_reads_named_fields_in_c_order() {
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let ptr = m.types.intern(Ty::Ptr(u8t, Mutability::Mut));
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let sig = fnsig(&mut m, vec![ptr, ptr, usize_t], unit, FnAbi::Rust, false);
+    let body = build_body(
+        3,
+        vec![unit, ptr, ptr, usize_t],
+        vec![bb(
+            vec![st(StatementKind::Intrinsic(
+                NonDivergingIntrinsic::CopyNonOverlapping(regseq_model::CopyNonOverlapping {
+                    src: Operand::Copy(loc(1)),
+                    dst: Operand::Copy(loc(2)),
+                    count: Operand::Copy(loc(3)),
+                }),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "do_copy", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    // C order is (dst, src, count): dst is _2, src is _1.
+    assert!(
+        tu.contains("memcpy(_2, _1, (_3) * sizeof(*(_2)));"),
+        "memcpy named-field order:\n{tu}"
+    );
+}
+
+#[test]
+fn assert_routes_fixed_and_operand_messages_to_regseq_panic() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let boolt = m.types.intern(Ty::Bool);
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let sig = fnsig(
+        &mut m,
+        vec![boolt, usize_t, usize_t],
+        u32t,
+        FnAbi::Rust,
+        false,
+    );
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let body = build_body(
+        3,
+        vec![u32t, boolt, usize_t, usize_t],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Assert {
+                    cond: Operand::Copy(loc(1)),
+                    expected: true,
+                    msg: AssertKind::DivisionByZero(Operand::Copy(loc(2))),
+                    target: BlockId::from_u32(1),
+                }),
+            ),
+            bb(
+                vec![],
+                tk(TerminatorKind::Assert {
+                    cond: Operand::Copy(loc(1)),
+                    expected: true,
+                    msg: AssertKind::BoundsCheck {
+                        len: Operand::Copy(loc(2)),
+                        index: Operand::Copy(loc(3)),
+                    },
+                    target: BlockId::from_u32(2),
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+        ],
+    );
+    fn_instance(&mut m, "asserts", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains(
+            "if ((_1) == 1) goto bb_1; else { regseq_panic(REGSEQ_MSG_DIVISION_BY_ZERO); }"
+        ),
+        "fixed-message assert:\n{tu}"
+    );
+    assert!(
+        tu.contains("REGSEQ_MSG_BOUNDS_CHECK"),
+        "operand-bearing template:\n{tu}"
+    );
+    assert!(
+        tu.contains("regseq_panic(_m);"),
+        "operand-bearing panic:\n{tu}"
+    );
+}
+
+#[test]
+fn invalid_enum_construction_is_operand_bearing() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let boolt = m.types.intern(Ty::Bool);
+    let sig = fnsig(&mut m, vec![boolt, u32t], u32t, FnAbi::Rust, false);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let body = build_body(
+        2,
+        vec![u32t, boolt, u32t],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Assert {
+                    cond: Operand::Copy(loc(1)),
+                    expected: true,
+                    msg: AssertKind::InvalidEnumConstruction(Operand::Copy(loc(2))),
+                    target: BlockId::from_u32(1),
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+        ],
+    );
+    fn_instance(&mut m, "invenum", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("REGSEQ_MSG_INVALID_ENUM_CONSTRUCTION") && tu.contains("regseq_panic(_m);"),
+        "InvalidEnumConstruction interpolates its operand:\n{tu}"
+    );
+}
+
+#[test]
+fn reloc_to_function_is_address_of_emission_name() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let target_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let target = fn_instance(&mut m, "target_fn", target_sig, None);
+    let fp_ty = m.types.intern(Ty::FnPtr(target_sig));
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(target)));
+    let it = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "FP",
+    );
+    let emission = m.strings.intern("FP");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: fp_ty,
+            init: Some(reloc),
+        },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("(&target_fn)"), "reloc to function:\n{tu}");
+}
+
+#[test]
+fn reloc_to_static_is_cast_address() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let a_item = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "A",
+    );
+    let a_em = m.strings.intern("A");
+    let a_id = m.instances.push(Instance {
+        item: a_item,
+        generic_args: GenericArgs::new(),
+        emission_name: a_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u32t,
+            init: Some(one),
+        },
+    });
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(a_id)));
+    let pa_item = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "PA",
+    );
+    let pa_em = m.strings.intern("PA");
+    m.instances.push(Instance {
+        item: pa_item,
+        generic_args: GenericArgs::new(),
+        emission_name: pa_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: ref_ty,
+            init: Some(reloc),
+        },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(tu.contains("&A"), "reloc to static address:\n{tu}");
+    assert!(
+        tu.contains("(const uint32_t *)&A"),
+        "reloc cast to consumer ptr:\n{tu}"
+    );
+}
+
+#[test]
+fn body_bearing_model_is_byte_identical_across_two_calls() {
+    let build = || {
+        let mut m = model();
+        let u32t = uint(&mut m, UintKind::U32);
+        let sig = fnsig(&mut m, vec![u32t, u32t], u32t, FnAbi::Rust, false);
+        let body = build_body(
+            2,
+            vec![u32t, u32t, u32t],
+            vec![bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::BinaryOp(BinOp::Mul, Operand::Copy(loc(1)), Operand::Copy(loc(2))),
+                ))],
+                tk(TerminatorKind::Return),
+            )],
+        );
+        fn_instance(&mut m, "mul", sig, Some(body));
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
+}
+
+// --- the d1/d2 fail-loud boundary: one negative test per construct family ---
+
+/// A one-block function returning `u32` whose single statement is `stmt`.
+fn fn_with_stmt(m: &mut RegseqModel, rendered: &str, stmt: Statement) -> InstanceId {
+    let u32t = uint(m, UintKind::U32);
+    let sig = fnsig(m, vec![], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![u32t],
+        vec![bb(vec![stmt], tk(TerminatorKind::Return))],
+    );
+    fn_instance(m, rendered, sig, Some(body))
+}
+
+#[test]
+fn field_place_projection_is_unsupported() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let dst = Place {
+        local: LocalId::from_u32(0),
+        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(0), u32t)]),
+    };
+    fn_with_stmt(
+        &mut m,
+        "field",
+        st(StatementKind::Assign(
+            dst,
+            Rvalue::Use(Operand::Constant(zero)),
+        )),
+    );
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn aggregate_rvalue_is_unsupported() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let tuple = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    fn_with_stmt(
+        &mut m,
+        "agg",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::Aggregate(regseq_model::AggregateKind::Tuple(tuple), Box::new([])),
+        )),
+    );
+    let _ = u32t;
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn set_discriminant_is_unsupported() {
+    let mut m = model();
+    fn_with_stmt(
+        &mut m,
+        "setdisc",
+        st(StatementKind::SetDiscriminant(
+            loc(0),
+            VariantIdx::from_u32(0),
+        )),
+    );
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn const_aggregate_is_unsupported() {
+    let mut m = model();
+    let agg = m.consts.intern(Const::Aggregate(vec![]));
+    fn_with_stmt(
+        &mut m,
+        "constagg",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::Use(Operand::Constant(agg)),
+        )),
+    );
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn ref_to_unsized_pointee_is_unsupported() {
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let slice = m.types.intern(Ty::Slice(u8t));
+    let slice_ref = m.types.intern(Ty::Ref(slice, Provenance::SharedBorrow));
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![slice_ref], u32t, FnAbi::Rust, false);
+    // _1: &[u8]; `&(*_1)` borrows the unsized [u8] -> fat-pointer construction (d2).
+    let deref = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Deref]),
+    };
+    let body = build_body(
+        1,
+        vec![u32t, slice_ref],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Ref(Provenance::SharedBorrow, deref),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "ref_unsized", sig, Some(body));
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn bytes_static_initializer_is_unsupported() {
+    // Boundary 6: an address-taken `const` surfaces as a ConstMemoryStatic
+    // whose own `Bytes` initializer fails loud at the bank-5 static def.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let arr = m.types.intern(Ty::Array(u8t, 1));
+    let bytes = m
+        .consts
+        .intern(Const::Bytes(vec![regseq_model::Byte::Value(b'x')]));
+    let it = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "BUF",
+    );
+    let emission = m.strings.intern("BUF");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: arr,
+            init: Some(bytes),
+        },
+    });
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+// --- Codex Task Review fixes: NullPtr, FloatToInt(const), *WithOverflow, wide switch ---
+
+#[test]
+fn null_ptr_static_emits_typed_null_pointer() {
+    // NullPtr(pointee) consumed by a `*const u32` static -> `(const uint32_t *)0`
+    // (the consumer pointer type), not a scalar cast of the pointee.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let ptr_ty = m.types.intern(Ty::Ptr(u32t, Mutability::Not));
+    let init = m.consts.intern(Const::NullPtr(u32t)); // payload is the pointee
+    let it = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "NP",
+    );
+    let emission = m.strings.intern("NP");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: ptr_ty,
+            init: Some(init),
+        },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("NP = ((const uint32_t *)0);"),
+        "typed null pointer:\n{tu}"
+    );
+}
+
+#[test]
+fn float_to_int_from_constant_uses_saturating_helper() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let f64t = m.types.intern(Ty::Float(regseq_model::FloatKind::F64));
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let c = m.consts.intern(Const::Float(
+        regseq_model::FloatKind::F64,
+        2.5f64.to_bits() as u128,
+    ));
+    let body = build_body(
+        0,
+        vec![u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Cast(CastKind::FloatToInt, Operand::Constant(c), u32t),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    let _ = f64t;
+    fn_instance(&mut m, "f2i", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("regseq_f64_to_uint32_t("),
+        "FloatToInt(const) uses the saturating helper:\n{tu}"
+    );
+}
+
+#[test]
+fn with_overflow_rvalue_is_unsupported() {
+    // The (T, bool) result aggregate + its field consumption are d2.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let two = m.consts.intern(Const::Uint(UintKind::U32, 2));
+    fn_with_stmt(
+        &mut m,
+        "withovf",
+        st(StatementKind::Assign(
+            loc(0),
+            Rvalue::BinaryOp(
+                BinOp::AddWithOverflow,
+                Operand::Constant(one),
+                Operand::Constant(two),
+            ),
+        )),
+    );
+    let _ = u32t;
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+#[test]
+fn wide_switch_int_compares_128bit_halves() {
+    let mut m = model();
+    let u128t = uint(&mut m, UintKind::U128);
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u128t], u32t, FnAbi::Rust, false);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    // A case value above u64::MAX exercises the halves construction.
+    let big: u128 = (1u128 << 70) | 5;
+    let body = build_body(
+        1,
+        vec![u32t, u128t],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(1)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(big, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                ))],
+                tk(TerminatorKind::Return),
+            ),
+        ],
+    );
+    fn_instance(&mut m, "wsw", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(__uint128_t)(_1)"),
+        "128-bit discr compare:\n{tu}"
+    );
+    assert!(
+        tu.contains("(((__uint128_t)") && tu.contains("ULL << 64)"),
+        "128-bit case via halves:\n{tu}"
+    );
+}
+
+#[test]
+fn transmute_lowers_to_memcpy() {
+    // f32 -> u32 bit reinterpret: `_0 = transmute(_1)` -> memcpy between
+    // equal-sizeof objects (never a value cast, which would convert).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let f32t = m.types.intern(Ty::Float(regseq_model::FloatKind::F32));
+    let sig = fnsig(&mut m, vec![f32t], u32t, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![u32t, f32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Cast(CastKind::Transmute, Operand::Copy(loc(1)), u32t),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "bits", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("memcpy(&(_0), &(_1), sizeof(_0));"),
+        "transmute -> memcpy:\n{tu}"
+    );
+}
+
+#[test]
+fn zst_destination_transmute_is_elided_not_misemitted() {
+    // A transmute into a unit (ZST) destination writes 0 bytes: the ZST local
+    // is never declared, so it must be elided rather than emitting a
+    // `memcpy(&<undeclared>, ...)`.
+    let mut m = model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let zst = m.consts.intern(Const::ZST);
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    // _0 u32 (ret), _1 unit (inner): `_1 = transmute(ZST)` is elided.
+    let body = build_body(
+        0,
+        vec![u32t, unit],
+        vec![bb(
+            vec![
+                st(StatementKind::Assign(
+                    loc(1),
+                    Rvalue::Cast(CastKind::Transmute, Operand::Constant(zst), unit),
+                )),
+                st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Use(Operand::Constant(zero)),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "zst_transmute", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        !tu.contains("memcpy"),
+        "ZST transmute must be elided:\n{tu}"
+    );
+}
+
+#[test]
+fn call_argument_with_field_projection_is_unsupported() {
+    // A deferred place projection reached through a call argument must fail
+    // loud (validated before any ZST elision).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let callee_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let callee = fn_instance(&mut m, "callee", callee_sig, None);
+
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let field_arg = Operand::Copy(Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(0), u32t)]),
+    });
+    let body = build_body(
+        1,
+        vec![u32t, u32t],
+        vec![bb(
+            vec![],
+            tk(TerminatorKind::Call {
+                callee: CallCallee::Direct(callee),
+                args: Box::new([field_arg]),
+                destination: loc(0),
+                target: Some(BlockId::from_u32(1)),
+            }),
+        )],
+    );
+    let mut body = body;
+    body.basic_blocks
+        .push(bb(vec![], tk(TerminatorKind::Return)));
+    fn_instance(&mut m, "calls_with_field_arg", sig, Some(body));
+
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
 }

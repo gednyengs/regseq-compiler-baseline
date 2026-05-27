@@ -266,25 +266,29 @@ fn fn_ptr_decl(
     decl: &str,
 ) -> String {
     let fn_sig = model.sigs.resolve(sig);
-    let params = if fn_sig.inputs.is_empty() {
+    // Section 15 line 1080: a nested fn-pointer declarator is spelled from
+    // the C-ABI *effective* types of its own signature, recursing through
+    // this same table. For `abi == Rust` (or an absent lowering) the
+    // effective type is the raw `FnSig` type, so the output is byte-identical
+    // to the pre-d1 spelling (the common case; c1's fn-pointer tests stay
+    // green).
+    let lowering = super::c_abi_lowering(model, sig);
+    let params: Vec<String> = (0..fn_sig.inputs.len())
+        .map(|i| c_type(model, names, super::effective_input_ty(fn_sig, lowering, i)))
+        .collect();
+    let mut params = if params.is_empty() {
         "void".to_string()
     } else {
-        fn_sig
-            .inputs
-            .iter()
-            .map(|input| c_type(model, names, *input))
-            .collect::<Vec<_>>()
-            .join(", ")
+        params.join(", ")
     };
+    if fn_sig.c_variadic {
+        params.push_str(", ...");
+    }
     // `self_const` sits immediately after this fn-pointer's star (`*const`),
     // qualifying the pointer value; the return type renders unqualified.
     let star = if self_const { "*const " } else { "*" };
-    declare(
-        model,
-        names,
-        fn_sig.output,
-        &format!("({star}{decl})({params})"),
-    )
+    let output = super::effective_output_ty(fn_sig, lowering);
+    declare(model, names, output, &format!("({star}{decl})({params})"))
 }
 
 /// Emit the section 3.2 `struct rust_slice_<T>` body: a `data` pointer

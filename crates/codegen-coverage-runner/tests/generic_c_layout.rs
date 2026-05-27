@@ -92,8 +92,12 @@ pub struct WithArray {
     arr: [u32; 4],
 }
 
+// Each type is "touched" by a `&T` parameter, which surfaces its `Ty` +
+// an `InstanceKind` root. The bodies return a constant (rather than reading
+// a field) so they lower under the task-d1 scalar subset: layout discovery
+// comes from the parameter type, not the body.
 pub fn t_reordered(_p: &Reordered) -> u32 { 0 }
-pub fn t_union(p: &Onion) -> u32 { unsafe { p.a } }
+pub fn t_union(_p: &Onion) -> u32 { 0 }
 pub fn t_tuple(_p: &WithTuple) -> u32 { 0 }
 pub fn t_array(_p: &WithArray) -> u32 { 0 }
 "#;

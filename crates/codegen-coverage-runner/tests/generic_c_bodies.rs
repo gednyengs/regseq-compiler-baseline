@@ -1,0 +1,538 @@
+//! Behavioral body-lowering tests for the generic-C backend banks 4-5
+//! (regseq-backends-10, task d1). The first task whose verification *runs*
+//! the emitted program, not just compiles it.
+//!
+//! The bridged tests compile + run a `void regseq_main(void)` whose lowered
+//! body computes a scalar value and calls an extern abort-callback on a
+//! wrong result. A clean exit (code 0) *is* the proof the section 7 body
+//! lowering computed correctly; a wrong lowering takes the abort path
+//! (non-zero exit). The callback is a real `extern "C"` call (kept by
+//! rustc's optimizer, unlike `unreachable_unchecked`), so the comparison +
+//! conditional call survive into the emitted C and the runtime check is
+//! genuine. Hand-built models pin shapes the bridge cannot surface
+//! (`Assert` -> section 16 message, the cast table, `Foreign` / `Weak` /
+//! `link_section` / `inline` linkage, a `Reloc` static initializer).
+//!
+//! `#![feature(rustc_private)]` + `extern crate rustc_driver;` link the
+//! rustc-backed bridge into the test binary.
+
+#![feature(rustc_private)]
+
+extern crate rustc_driver;
+
+use std::path::{Path, PathBuf};
+
+use codegen_coverage_runner::toolchain;
+use regseq_backends::emit_generic_c;
+use regseq_model::{
+    AssertKind, BasicBlock, BinOp, BlockId, Body, CastKind, Const, CrateId, DefPath, DefPathHash,
+    Endian, FloatKind, FnAbi, FnSig, FnSigId, FunctionInstanceData, FunctionInstanceFlavor,
+    GenericArgs, Instance, InstanceId, InstanceKind, Item, ItemId, ItemKind, LocalDecl, LocalId,
+    Mutability, Operand, Place, RegseqModel, Rvalue, Safety, ScalarLayouts, SizeAlign,
+    SourceFileId, Span, StableCrateId, Statement, StatementKind, TargetInfo, Terminator,
+    TerminatorKind, Ty, TyId, UintKind,
+};
+use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
+
+/// The host `cc`, matching the runner's default.
+fn cc() -> &'static Path {
+    Path::new("cc")
+}
+
+/// A temp `.rs` file removed on drop.
+struct TempSnippet {
+    path: PathBuf,
+}
+
+impl TempSnippet {
+    fn new(label: &str, src: &str) -> TempSnippet {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let path =
+            std::env::temp_dir().join(format!("ccr-d1-{label}-{}-{nanos}.rs", std::process::id()));
+        std::fs::write(&path, src).expect("must write temp snippet");
+        TempSnippet { path }
+    }
+}
+
+impl Drop for TempSnippet {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_file(&self.path);
+    }
+}
+
+/// Map a rendered `DefPath` to the C identifier the backend emits for it
+/// (the bridge mints `emission_name = def_path.rendered`, which the backend
+/// sanitises -- this mirrors `naming::sanitize`).
+fn c_ident(s: &str) -> String {
+    s.replace("::", "_")
+        .chars()
+        .map(|c| {
+            if c.is_ascii_alphanumeric() || c == '_' {
+                c
+            } else {
+                '_'
+            }
+        })
+        .collect()
+}
+
+/// The emitted C name of the function instance whose rendered path ends in
+/// `suffix` (e.g. `regseq_main`).
+fn fn_cname(model: &RegseqModel, suffix: &str) -> String {
+    for inst in model.instances.iter() {
+        if matches!(inst.kind, InstanceKind::Function(_)) {
+            let rendered = model.strings.resolve(inst.emission_name);
+            if rendered.ends_with(suffix) {
+                return c_ident(rendered);
+            }
+        }
+    }
+    panic!("no function instance whose path ends in {suffix:?}");
+}
+
+/// A scalar driver whose `regseq_main` computes `combine(2, 3) == 2 ^ 3 == 1`
+/// via a non-inlined helper (so the `Call` terminator is genuinely emitted)
+/// and calls the abort-callback if the result is not `expected`. With
+/// `expected = 1` the callback is never reached (correct lowering -> exit 0);
+/// with a wrong `expected` it always fires (abort -> non-zero exit). `^` is a
+/// pure `BinOp` (no overflow check, no helper call), so the helper body pulls
+/// in no undefined symbol.
+fn scalar_snippet(expected: u32) -> String {
+    format!(
+        r#"#![no_std]
+
+extern "C" {{
+    fn regseq_test_fail();
+}}
+
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn combine(a: u32, b: u32) -> u32 {{
+    a ^ b
+}}
+
+#[no_mangle]
+pub extern "C" fn regseq_main() {{
+    let r = combine(2, 3);
+    if r != {expected} {{
+        unsafe {{ regseq_test_fail(); }}
+    }}
+}}
+"#
+    )
+}
+
+#[test]
+fn bridged_scalar_body_runs_and_exits_zero_on_a_correct_result() {
+    let snippet = TempSnippet::new("scalar-ok", &scalar_snippet(1));
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok for a d1-subset body");
+    let entry = fn_cname(&model, "regseq_main");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    // Sanity: the section 7 envelope surfaced (the `regseq_main` definition).
+    assert!(
+        tu.contains("uint32_t") && tu.contains(&format!("void {entry}(void)")),
+        "prototypes / definitions surfaced:\n{tu}"
+    );
+
+    let tu =
+        format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
+    let run =
+        toolchain::compile_and_run(&tu, &entry, cc()).expect("scalar-body TU must compile + run");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "a correct lowering exits 0; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn bridged_scalar_body_aborts_on_a_wrong_result() {
+    // The same body with a wrong expected value always takes the abort path,
+    // proving the comparison + conditional call lowering fires at runtime.
+    let snippet = TempSnippet::new("scalar-bad", &scalar_snippet(2));
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok");
+    let entry = fn_cname(&model, "regseq_main");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    let tu =
+        format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
+    let run =
+        toolchain::compile_and_run(&tu, &entry, cc()).expect("wrong-result TU must compile + run");
+    assert_ne!(
+        run.exit_code,
+        Some(0),
+        "a wrong result must abort (non-zero)"
+    );
+    assert!(
+        run.stderr.contains("wrong result"),
+        "the abort path ran: {}",
+        run.stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Hand-built model scaffolding (mirrors generic_c_layout.rs) for shapes the
+// bridge cannot surface here: an Assert -> section 16 panic, the cast table,
+// section 17 linkage, a Reloc static initializer, a float constant.
+// ---------------------------------------------------------------------------
+
+fn target_model() -> RegseqModel {
+    let mut model = RegseqModel::with_primary("d1", StableCrateId(1));
+    let triple = model.strings.intern("x86_64");
+    let data_layout = model.strings.intern("dl");
+    let sa = |size, align| SizeAlign { size, align };
+    model.target = TargetInfo {
+        triple,
+        pointer_width: 64,
+        endian: Endian::Little,
+        data_layout,
+        scalar_layouts: ScalarLayouts {
+            bool_: sa(1, 1),
+            char_: sa(4, 4),
+            int: [sa(1, 1), sa(2, 2), sa(4, 4), sa(8, 8), sa(16, 16), sa(8, 8)],
+            uint: [sa(1, 1), sa(2, 2), sa(4, 4), sa(8, 8), sa(16, 16), sa(8, 8)],
+            float: [sa(2, 2), sa(4, 4), sa(8, 8), sa(16, 16)],
+            fn_ptr: sa(8, 8),
+            data_ptr: sa(8, 8),
+        },
+    };
+    model
+}
+
+fn span() -> Span {
+    Span {
+        file: SourceFileId::SYNTHESIZED,
+        lo: 0,
+        hi: 0,
+    }
+}
+
+fn mk_item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> ItemId {
+    let rid = model.strings.intern(rendered);
+    let id = model.items.push(Item {
+        def_path: DefPath {
+            crate_id: CrateId::ZERO,
+            segments: Vec::new(),
+            rendered: rid,
+        },
+        kind,
+        span: span(),
+        linkage: regseq_model::Linkage::Default,
+        link_section: None,
+        inline_hint: regseq_model::InlineHint::None,
+        is_unsafe: false,
+        is_phantom_data: false,
+        is_unsafe_cell: false,
+        is_manually_drop: false,
+        opaque_handle_eligible: false,
+    });
+    model.item_def_paths.push(DefPathHash {
+        stable_crate_id: StableCrateId(1),
+        local_hash: id.as_u32() as u64,
+    });
+    id
+}
+
+fn uint(model: &mut RegseqModel, kind: UintKind) -> TyId {
+    model.types.intern(Ty::Uint(kind))
+}
+
+fn fnsig(model: &mut RegseqModel, inputs: Vec<TyId>, output: TyId, abi: FnAbi) -> FnSigId {
+    model.sigs.intern(FnSig {
+        inputs,
+        output,
+        abi,
+        c_variadic: false,
+        safety: Safety::Safe,
+    })
+}
+
+fn ld(ty: TyId) -> LocalDecl {
+    LocalDecl {
+        ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    }
+}
+
+fn st(kind: StatementKind) -> Statement {
+    Statement { kind, span: span() }
+}
+
+fn tk(kind: TerminatorKind) -> Terminator {
+    Terminator { kind, span: span() }
+}
+
+fn bb(stmts: Vec<Statement>, terminator: Terminator) -> BasicBlock {
+    BasicBlock {
+        statements: stmts.into_boxed_slice(),
+        terminator,
+    }
+}
+
+fn build_body(arg_count: usize, local_tys: Vec<TyId>, blocks: Vec<BasicBlock>) -> Body {
+    let mut body = Body {
+        arg_count,
+        ..Default::default()
+    };
+    for ty in local_tys {
+        body.push_local(ld(ty));
+    }
+    for block in blocks {
+        body.basic_blocks.push(block);
+    }
+    body
+}
+
+fn loc(n: u32) -> Place {
+    Place::from(LocalId::from_u32(n))
+}
+
+fn fn_instance(
+    model: &mut RegseqModel,
+    rendered: &str,
+    sig: FnSigId,
+    body: Option<Body>,
+) -> InstanceId {
+    let it = mk_item(model, ItemKind::Function, rendered);
+    let emission = model.strings.intern(rendered);
+    model.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    })
+}
+
+/// Compile + run the TU with a trivial entry (or the named entry), asserting
+/// the exit code.
+fn assert_runs(tu: &str, entry: &str, what: &str) -> toolchain::RunOutput {
+    toolchain::compile_and_run(tu, entry, cc())
+        .unwrap_or_else(|e| panic!("{what} must compile: {e}"))
+}
+
+#[test]
+fn assert_failure_prints_the_section_16_message_and_aborts() {
+    // regseq_main: `if (cond == 1) goto ok; else regseq_panic(DivisionByZero)`.
+    // `cond` is the constant `false`, so the assert always fails -> the
+    // section 16 panic fires: stderr carries the message and the process
+    // aborts (non-zero exit).
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let boolt = m.types.intern(Ty::Bool);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    let false_c = m.consts.intern(Const::Bool(false));
+    let body = build_body(
+        0,
+        vec![unit],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Assert {
+                    cond: Operand::Constant(false_c),
+                    expected: true,
+                    msg: AssertKind::DivisionByZero(Operand::Constant(false_c)),
+                    target: BlockId::from_u32(1),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    let _ = boolt;
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    // `regseq_main` is the harness entry; it must be a plain external symbol.
+    let it = m.instances[id].item;
+    m.items[it].linkage = regseq_model::Linkage::NoMangle;
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("regseq_panic(REGSEQ_MSG_DIVISION_BY_ZERO);"),
+        "assert routes to the section 16 panic:\n{tu}"
+    );
+    let run = assert_runs(&tu, "regseq_main", "assert-panic");
+    assert_ne!(run.exit_code, Some(0), "a failing assert aborts");
+    assert!(
+        run.stderr.contains("attempt to divide by zero"),
+        "the section 16 message reached stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn cast_and_binop_table_compiles_and_runs() {
+    // regseq_main: r = (u32)((f64)x via IntToFloat) then FloatToInt back;
+    // verify a few d1 casts + binops emit valid C that runs. Computes
+    // `((a << 1) >> 1) ^ a` (== 0 for the masked-shift round trip on the low
+    // bit being preserved) and a saturating float cast, asserting nothing at
+    // runtime (the clean exit proves the lowering is valid C).
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u32t = uint(&mut m, UintKind::U32);
+    let f64t = m.types.intern(Ty::Float(FloatKind::F64));
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    let c7 = m.consts.intern(Const::Uint(UintKind::U32, 7));
+    let c1 = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    // locals: _0 unit (ret), _1 u32, _2 u32, _3 f64, _4 u32.
+    let body = build_body(
+        0,
+        vec![unit, u32t, u32t, f64t, u32t],
+        vec![bb(
+            vec![
+                // _1 = 7u32
+                st(StatementKind::Assign(
+                    loc(1),
+                    Rvalue::Use(Operand::Constant(c7)),
+                )),
+                // _2 = (_1 << 1) >> 1   (masked shifts)
+                st(StatementKind::Assign(
+                    loc(2),
+                    Rvalue::BinaryOp(BinOp::Shl, Operand::Copy(loc(1)), Operand::Constant(c1)),
+                )),
+                st(StatementKind::Assign(
+                    loc(2),
+                    Rvalue::BinaryOp(BinOp::Shr, Operand::Copy(loc(2)), Operand::Constant(c1)),
+                )),
+                // _3 = (f64)_2   (IntToFloat)
+                st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Cast(CastKind::IntToFloat, Operand::Copy(loc(2)), f64t),
+                )),
+                // _4 = (u32)_3   (saturating FloatToInt)
+                st(StatementKind::Assign(
+                    loc(4),
+                    Rvalue::Cast(CastKind::FloatToInt, Operand::Copy(loc(3)), u32t),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    let it = m.instances[id].item;
+    m.items[it].linkage = regseq_model::Linkage::NoMangle;
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("regseq_f64_to_uint32_t("),
+        "saturating cast helper:\n{tu}"
+    );
+    assert!(tu.contains("<< (("), "masked shift:\n{tu}");
+    let run = assert_runs(&tu, "regseq_main", "cast-binop");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "cast/binop body runs: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn float_constant_static_initializer_compiles() {
+    // A `const double X = <hex-float>;` static -- the section 12 hex-float
+    // constant expression must be valid C.
+    let mut m = target_model();
+    let f64t = m.types.intern(Ty::Float(FloatKind::F64));
+    let init = m
+        .consts
+        .intern(Const::Float(FloatKind::F64, 1.5f64.to_bits() as u128));
+    let it = mk_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "PI_ISH",
+    );
+    let emission = m.strings.intern("PI_ISH");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: f64t,
+            init: Some(init),
+        },
+    });
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("const double PI_ISH = 0x1.8p0;"),
+        "hex-float init:\n{tu}"
+    );
+    let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
+    let run = assert_runs(&tu, "regseq_main", "float-const");
+    assert_eq!(run.exit_code, Some(0));
+}
+
+#[test]
+fn foreign_and_never_linkage_compile() {
+    // section 17: a Foreign extern declaration (decl only) + a `_Noreturn`
+    // function that calls the foreign one divergently. The clean compile
+    // proves the linkage spelling is valid C.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let never_ty = m.types.intern(Ty::Never);
+
+    let dsig = fnsig(&mut m, vec![], never_ty, FnAbi::C);
+    let diverge = fn_instance(&mut m, "host_abort", dsig, None);
+    let dit = m.instances[diverge].item;
+    m.items[dit].linkage = regseq_model::Linkage::Foreign;
+
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    let body = build_body(
+        0,
+        vec![unit],
+        vec![bb(
+            vec![],
+            tk(TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(diverge),
+                args: Box::new([]),
+                destination: loc(0),
+                target: None,
+            }),
+        )],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    let it = m.instances[id].item;
+    m.items[it].linkage = regseq_model::Linkage::NoMangle;
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("extern _Noreturn void host_abort(void);"),
+        "foreign noreturn:\n{tu}"
+    );
+    assert!(
+        tu.contains("host_abort(); __builtin_unreachable();"),
+        "divergent call:\n{tu}"
+    );
+    // Provide a definition for the foreign abort callback so it links + runs.
+    let tu = format!("{tu}\n_Noreturn void host_abort(void) {{ exit(0); }}\n");
+    let run = assert_runs(&tu, "regseq_main", "foreign-noreturn");
+    assert_eq!(run.exit_code, Some(0), "host_abort exits 0: {}", run.stderr);
+}
