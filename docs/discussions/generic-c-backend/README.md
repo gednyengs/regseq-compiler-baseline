@@ -21,6 +21,12 @@ workstream (which closed the *front-end* feature-complete gate — see
   codegen analog of `../regseq-model/bridge-coverage-matrix.md`).
 - **Cross-backend strategy** — design notes meant to serve the future
   per-OS backends (Linux, Zephyr) as well as generic-C.
+- **`decisions-and-state.md`** — the durable cold-start digest of locked
+  decisions, the phase arc, project orientation, and key file anchors
+  (the project-side half of the former single-file handoff; cross-refs
+  `roadmap.md` / `phase-1/02` as authoritative). Its process-side sibling
+  is `.harness/generic-c/methodology.md`; volatile session state lives in
+  `.handoff/` (session-handoff plugin).
 
 ## What does NOT live here (the governance split)
 

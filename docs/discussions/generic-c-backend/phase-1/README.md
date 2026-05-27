@@ -51,7 +51,7 @@ verdict is `pass`. (Mirrors the front-end feature-complete gate.)
 
 **Skeletons only.** The construct-surface re-derivation (Doc 1) is the
 next action and is intended for a fresh session with full budget — see
-`.harness/HANDOFF.md` § Current state. Docs 2 and 3 are outlined and
+the latest `.handoff/` snapshot + `../decisions-and-state.md`. Docs 2 and 3 are outlined and
 embed the already-locked decisions; they are filled after Doc 1.
 
 ## Inputs / pointers

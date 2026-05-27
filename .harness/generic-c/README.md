@@ -25,8 +25,14 @@ registered task spec.
 
 ## Entry points
 
-- Session-to-session resume: **`.harness/HANDOFF.md`** (top-level,
-  scoped to this workstream).
+- Session-to-session resume: the latest **`.handoff/<timestamp>.md`**
+  snapshot (session-handoff plugin), which points at the two durable
+  workstream-reference docs:
+  - **`.harness/generic-c/methodology.md`** — process / how we work.
+  - **`docs/discussions/generic-c-backend/decisions-and-state.md`** —
+    locked decisions / phase arc / orientation / file anchors.
 - Design HQ: `docs/discussions/generic-c-backend/`.
 - Prior (bridge) workstream record, now closed:
-  `.harness/archive/2026-05-26-bridge-coverage-runner/HANDOFF.md`.
+  `.harness/archive/2026-05-26-bridge-coverage-runner/HANDOFF.md`. The
+  pre-2026-05-27 single-file generic-C handoff is at
+  `.harness/archive/2026-05-27-generic-c-handoff.md`.

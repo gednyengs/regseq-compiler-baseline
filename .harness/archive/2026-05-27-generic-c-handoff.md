@@ -1,5 +1,13 @@
 # Session Handoff — Generic-C Backend Workstream
 
+> **ARCHIVED 2026-05-27 — FROZEN, not live state.** This was the single
+> rolling generic-C handoff until we adopted the `session-handoff` plugin and
+> split its content. Live state is now: the latest `.handoff/<timestamp>.md`
+> snapshot (volatile) + `.harness/generic-c/methodology.md` (process) +
+> `docs/discussions/generic-c-backend/decisions-and-state.md` (decisions /
+> phase arc / orientation / anchors). Kept here for the full § Update log
+> history and the at-a-glance record up to the migration.
+
 Persistent snapshot of in-flight work state for fresh-session
 resumption. Incrementally updated after each task/decision close so the
 next session can pick up at full quality.

@@ -9,7 +9,7 @@ emitted-C determinism rests on Doc 2's naming (D1) + declaration order
 (D2), and the behavioral oracle on Doc 2's diag-log interception (D6) +
 panic-to-stderr split (D4).
 
-**Locked direction** (from `.harness/HANDOFF.md` § Decisions locked): the
+**Locked direction** (from `../decisions-and-state.md` → Decisions locked): the
 pipeline is `bridge → RegseqModel → emit C → host cc → run → assert`, with
 a **dual oracle** — diag-log **golden stdout** (behavior) + **golden
 C-file snapshot** (determinism/diff) — and fixtures that log *computed*
