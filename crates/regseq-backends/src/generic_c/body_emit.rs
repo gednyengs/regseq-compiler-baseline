@@ -24,7 +24,7 @@ use regseq_model::{
     UintKind, UnOp,
 };
 
-use super::{naming, types, EmitError, NameTable};
+use super::{naming, types, EmitError, InstanceSymbols, NameTable};
 
 /// The C identifier for a body-local `local`. The return place is always
 /// `_0`; otherwise the sanitised `debug_name` when `Some`, else the
@@ -50,6 +50,7 @@ pub(super) fn local_c_name(
 pub(super) fn emit_body(
     model: &RegseqModel,
     names: &NameTable,
+    syms: &InstanceSymbols,
     instance: &regseq_model::Instance,
     body: &regseq_model::Body,
 ) -> Result<String, EmitError> {
@@ -61,6 +62,7 @@ pub(super) fn emit_body(
     let emitter = BodyEmit {
         model,
         names,
+        syms,
         body,
         output_ty,
     };
@@ -123,6 +125,7 @@ struct IntInfo {
 struct BodyEmit<'a> {
     model: &'a RegseqModel,
     names: &'a NameTable,
+    syms: &'a InstanceSymbols,
     body: &'a regseq_model::Body,
     output_ty: TyId,
 }
@@ -397,7 +400,7 @@ impl BodyEmit<'_> {
             Operand::Copy(p) | Operand::Move(p) => Ok(format!("&({})", self.place_lvalue(p)?)),
             Operand::Constant(id) => {
                 let c = self.model.consts.resolve(*id);
-                let value = const_expr(self.model, self.names, c, None)?;
+                let value = const_expr(self.model, self.names, self.syms, c, None)?;
                 let cty = const_c_type(self.model, c);
                 Ok(format!("&({cty}){{{value}}}"))
             }
@@ -415,6 +418,7 @@ impl BodyEmit<'_> {
             Operand::Constant(id) => const_expr(
                 self.model,
                 self.names,
+                self.syms,
                 self.model.consts.resolve(*id),
                 consumer_ty,
             ),
@@ -607,18 +611,21 @@ impl BodyEmit<'_> {
     fn reify_fn_pointer(&self, op: &Operand) -> Result<String, EmitError> {
         if let Operand::Constant(id) = op {
             if let Const::Reloc(target) = self.model.consts.resolve(*id) {
-                return Ok(reloc_designator(self.model, self.names, *target, None));
+                return Ok(reloc_designator(
+                    self.model, self.names, self.syms, *target, None,
+                ));
             }
         }
         if let Some(ty) = self.operand_ty(op) {
             if let Ty::FnDef(item, args) = &self.model.types[ty] {
                 for idx in 0..self.model.instances.len() {
-                    let inst = &self.model.instances[InstanceId::from_u32(idx as u32)];
+                    let id = InstanceId::from_u32(idx as u32);
+                    let inst = &self.model.instances[id];
                     if matches!(inst.kind, InstanceKind::Function(_))
                         && inst.item == *item
                         && &inst.generic_args == args
                     {
-                        let name = naming::sanitize(self.model.strings.resolve(inst.emission_name));
+                        let name = self.syms.symbol(id);
                         return Ok(format!("(&{name})"));
                     }
                 }
@@ -708,7 +715,7 @@ impl BodyEmit<'_> {
                 if self.is_diag_log(instance.item) {
                     return Err(EmitError::Unsupported("diag-log call (task e)"));
                 }
-                naming::sanitize(self.model.strings.resolve(instance.emission_name))
+                self.syms.symbol(*inst).to_string()
             }
             CallCallee::Indirect(op) => format!("({})", self.operand_expr(op, None)?),
         };
@@ -855,10 +862,11 @@ impl BodyEmit<'_> {
 pub(super) fn static_initializer(
     model: &RegseqModel,
     names: &NameTable,
+    syms: &InstanceSymbols,
     c: &Const,
     consumer_ty: TyId,
 ) -> Result<String, EmitError> {
-    const_expr(model, names, c, Some(consumer_ty))
+    const_expr(model, names, syms, c, Some(consumer_ty))
 }
 
 /// `Const` -> C value expression / initializer (section 12), for the d1
@@ -868,6 +876,7 @@ pub(super) fn static_initializer(
 fn const_expr(
     model: &RegseqModel,
     names: &NameTable,
+    syms: &InstanceSymbols,
     c: &Const,
     consumer_ty: Option<TyId>,
 ) -> Result<String, EmitError> {
@@ -889,7 +898,7 @@ fn const_expr(
             }
             _ => Ok(format!("(({} *)0)", types::c_type(model, names, *pointee))),
         },
-        Const::Reloc(target) => Ok(reloc_designator(model, names, *target, consumer_ty)),
+        Const::Reloc(target) => Ok(reloc_designator(model, names, syms, *target, consumer_ty)),
         Const::Bytes(_) => Err(EmitError::Unsupported("Const::Bytes (task d2)")),
         Const::Aggregate(_) => Err(EmitError::Unsupported("Const::Aggregate (task d2)")),
         Const::EnumValue { .. } => Err(EmitError::Unsupported("Const::EnumValue (task d2)")),
@@ -919,6 +928,7 @@ fn const_c_type(_model: &RegseqModel, c: &Const) -> &'static str {
 fn reloc_designator(
     model: &RegseqModel,
     names: &NameTable,
+    syms: &InstanceSymbols,
     target: InstanceRef,
     consumer_ty: Option<TyId>,
 ) -> String {
@@ -929,15 +939,17 @@ fn reloc_designator(
         )
     });
     let inst = &model.instances[id];
-    let name = naming::sanitize(model.strings.resolve(inst.emission_name));
     match &inst.kind {
-        InstanceKind::Function(_) => format!("(&{name})"),
-        InstanceKind::Static { .. } => match consumer_ty {
-            Some(t) if is_pointer(model, t) => {
-                format!("(({})&{name})", types::c_type(model, names, t))
+        InstanceKind::Function(_) => format!("(&{})", syms.symbol(id)),
+        InstanceKind::Static { .. } => {
+            let name = syms.symbol(id);
+            match consumer_ty {
+                Some(t) if is_pointer(model, t) => {
+                    format!("(({})&{name})", types::c_type(model, names, t))
+                }
+                _ => format!("(&{name})"),
             }
-            _ => format!("(&{name})"),
-        },
+        }
         InstanceKind::Const { .. }
         | InstanceKind::Struct { .. }
         | InstanceKind::Enum { .. }

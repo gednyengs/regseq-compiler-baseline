@@ -282,10 +282,33 @@ ret_ty fn_name(arg_ty1 arg1, ..., arg_tyN argN) {
 }
 ```
 
-**Identifier emission policy.** Instances (functions, statics,
-consts) emit under their bridge-minted `Instance.emission_name`
-(uniqueness guaranteed); the backend does not re-mint. **Type**
-names (struct / enum / union / tuple / closure) are *derived*:
+**Identifier emission policy.** _(task-11 canonical-doc fix: the
+prior text claimed instance `emission_name` was unique and emitted
+without re-mint — a wrong premise. The bridge mints
+`Instance.emission_name = DefPath.rendered` keyed by the **item**,
+so every monomorphization of one generic item shares it; it is also
+generic-agnostic and possibly not a valid C identifier. The backend
+therefore **derives** the final instance symbol the same way it
+derives type names.)_ **Instance** symbols (functions, statics) are
+*derived* and linkage-aware:
+**external** linkage (`NoMangle` / `export_name` / `Foreign`) →
+`sanitize(emission_name)` with **no** generic suffix, so the ABI
+symbol is stable across monomorphizations (real external items are
+non-generic); **internal** linkage (`Default` / `Weak`) →
+`sanitize(emission_name) + generic_suffix(generic_args)`, so distinct
+monomorphizations get distinct symbols. (The base is `sanitize`, not
+the raw bytes: the bridge mints `DefPath.rendered` — e.g.
+`crate::{extern#0}::foo` — for every linkage, not a bare ABI
+identifier, and the behavioral harness sanitises identically on both
+sides, so `sanitize` is the cross-TU contract; only a generic
+*suffix* on an external symbol would break linkage.) Consts
+materialise at use sites and have no standalone symbol. A
+`_clash_<n>` net over the instance-symbol table (separate from the
+type-tag table — C ordinary-identifier vs struct/union/enum tag
+namespaces — and reserving the prelude `regseq_*` helpers + the
+external symbols' final names) disambiguates any residual internal
+collision. **Type** names (struct / enum / union / tuple / closure)
+are *derived*:
 `sanitize(DefPath.rendered)` (mapping `::` and any
 non-`[A-Za-z0-9_]` to `_`) plus, for generic items, a canonical
 `__<hex>` suffix from the interner's `ArgsKey` — so the name is
@@ -1130,9 +1153,10 @@ fields), §9 (`InstanceKind`).
 
 - **`Linkage`**: `Default` → ordinary file-scope definition **without**
   `static` (cross-instance refs exist within the one TU); `NoMangle` /
-  `export_name` → definition under the verbatim `emission_name`; `Foreign`
-  → **declaration only** (`extern`, bank 4), never defined; `Weak` →
-  `__attribute__((weak))` on the definition.
+  `export_name` → definition under the §7-derived external symbol
+  (`sanitize(emission_name)`, **no** generic suffix -- not the raw
+  `emission_name`); `Foreign` → **declaration only** (`extern`, bank 4),
+  never defined; `Weak` → `__attribute__((weak))` on the definition.
 - **`link_section: Some(s)`** → `__attribute__((section("<s>")))` on the
   definition.
 - **`inline_hint`**: `Hint` → `inline`; `Always` → `inline
@@ -1150,6 +1174,10 @@ fields), §9 (`InstanceKind`).
   as ordinary C functions from their bridge-synthesised `body` (no
   per-flavor special case). `virtual_idx: Some(i)` participates only in
   **vtable** construction — slot `i` is initialised to `&<shim
-  emission_name>` (§9.6). Coroutine / async flavors are unreachable
+  emission_name>` (§9.6), where `<shim emission_name>` is shorthand for the
+  shim's **derived** final symbol per the §7 identifier-emission policy (the
+  linkage-aware `sanitize` / `generic_suffix` rule, not the raw
+  `emission_name`); the actual vtable-slot emission lands with the deferred
+  `dyn`/vtable task. Coroutine / async flavors are unreachable
   (`spec.md` §15.1).
 - `is_unsafe` / `FnSig.safety` are **not** lowered (no C equivalent).

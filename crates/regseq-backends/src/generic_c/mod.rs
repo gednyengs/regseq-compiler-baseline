@@ -26,8 +26,8 @@
 use std::collections::{HashMap, HashSet};
 
 use regseq_model::{
-    CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceKind, Linkage, Mutability,
-    Provenance, RegseqModel, Ty, TyId,
+    CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceId, InstanceKind, Linkage,
+    Mutability, Provenance, RegseqModel, Ty, TyId,
 };
 
 pub mod prelude;
@@ -91,6 +91,33 @@ impl NameTable {
     }
 }
 
+/// The task-11 instance-symbol table: a pure function of the model mapping
+/// every `Function` / `Static` instance to its final, linkage-aware C symbol
+/// via [`naming::instance_symbol_base`]. External-linkage symbols (`NoMangle`
+/// -- including `export_name` -- and `Foreign`) are `sanitize(emission_name)`
+/// with **no** generic suffix (an ABI contract: stable across monos);
+/// internal symbols (`Default` / `Weak`) are `sanitize(emission_name) +
+/// generic_suffix(args)` with a `_clash_<n>` net, mirroring [`NameTable`].
+/// Built once in [`emit_generic_c`] and threaded
+/// through banks 4 / 5 + [`body_emit`] so the prototype, the definition,
+/// every call / `&fn` / `Reloc`, and every static reference all spell the
+/// same symbol. `Const` instances materialise at use sites (no standalone
+/// symbol) and aggregate instances are type *tags* (a different C
+/// namespace), so neither is in this table.
+struct InstanceSymbols {
+    symbols: HashMap<InstanceId, String>,
+}
+
+impl InstanceSymbols {
+    /// The final C symbol for instance `id`. Panics if `id` is not a
+    /// `Function` / `Static` instance (the only kinds the table covers).
+    fn symbol(&self, id: InstanceId) -> &str {
+        self.symbols
+            .get(&id)
+            .expect("InstanceSymbols queried for an instance without an emitted symbol")
+    }
+}
+
 /// Whether the `data` pointer of the fat slice struct for a `Ref` / `Ptr`
 /// `ref_ty` is `const` (section 3.1 / section 3.2 table).
 fn slice_data_const(model: &RegseqModel, ref_ty: TyId) -> bool {
@@ -121,6 +148,7 @@ fn slice_data_const(model: &RegseqModel, ref_ty: TyId) -> bool {
 pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     let discovered = discover(model);
     let names = build_name_table(model, &discovered);
+    let syms = build_instance_symbols(model);
     let topo = topo_sort(model, &discovered)?;
 
     let mut out = String::new();
@@ -128,8 +156,8 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     out.push_str(&prelude::helper_block());
     out.push_str(&bank2_type_forward_decls(model, &names, &discovered));
     out.push_str(&bank3_type_definitions(model, &names, &topo));
-    out.push_str(&bank4_declarations(model, &names)?);
-    out.push_str(&bank5_definitions(model, &names)?);
+    out.push_str(&bank4_declarations(model, &names, &syms)?);
+    out.push_str(&bank5_definitions(model, &names, &syms)?);
     Ok(out)
 }
 
@@ -436,6 +464,124 @@ fn build_name_table(model: &RegseqModel, nodes: &[Node]) -> NameTable {
     NameTable { names }
 }
 
+/// Build the task-11 [`InstanceSymbols`] table (Change B). Construction is a
+/// deterministic, two-pass function of the model in `InstanceId` order:
+///
+/// 1. Reserve into `used` the prelude ordinary-namespace identifiers (the
+///    `regseq_*` helpers) **and** every external instance's base name (its
+///    final symbol: `sanitize(emission_name)`, no suffix), so a derived
+///    internal symbol can never be renamed onto an ABI name or a prelude
+///    helper.
+/// 2. Assign each `Function` / `Static` instance a symbol: an external
+///    instance takes its base as-is (already reserved; an external / external
+///    collision is a model / ABI error that surfaces as a duplicate C symbol,
+///    never a silent rename); an internal instance takes its base
+///    `_clash_<n>`-disambiguated against `used` (the [`build_name_table`]
+///    algorithm).
+fn build_instance_symbols(model: &RegseqModel) -> InstanceSymbols {
+    let mut symbols: HashMap<InstanceId, String> = HashMap::new();
+    let mut used: HashSet<String> = prelude_ordinary_idents().into_iter().collect();
+
+    // Pass 1: reserve the external symbols (taken as-is, never renamed).
+    for idx in 0..model.instances.len() {
+        let id = InstanceId::from_u32(idx as u32);
+        let instance = &model.instances[id];
+        if emits_ordinary_symbol(&instance.kind) && is_external_linkage(model, instance.item) {
+            used.insert(naming::instance_symbol_base(model, instance));
+        }
+    }
+
+    // Pass 2: assign each function / static a final symbol.
+    for idx in 0..model.instances.len() {
+        let id = InstanceId::from_u32(idx as u32);
+        let instance = &model.instances[id];
+        if !emits_ordinary_symbol(&instance.kind) {
+            continue;
+        }
+        let base = naming::instance_symbol_base(model, instance);
+        let symbol = if is_external_linkage(model, instance.item) {
+            base
+        } else {
+            let mut candidate = base.clone();
+            let mut n = 1usize;
+            while used.contains(&candidate) {
+                candidate = format!("{base}_clash_{n}");
+                n += 1;
+            }
+            used.insert(candidate.clone());
+            candidate
+        };
+        symbols.insert(id, symbol);
+    }
+
+    InstanceSymbols { symbols }
+}
+
+/// Whether an instance kind emits an ordinary-namespace C symbol (a bank-4 /
+/// bank-5 function or static). `Const` instances materialise at use sites and
+/// aggregate instances are type tags (a different C namespace), so neither is
+/// in the instance-symbol table.
+fn emits_ordinary_symbol(kind: &InstanceKind) -> bool {
+    matches!(
+        kind,
+        InstanceKind::Function(_) | InstanceKind::Static { .. }
+    )
+}
+
+/// Whether an item's linkage is external (an ABI contract -> a suffix-free
+/// symbol): `NoMangle` (which also covers `export_name`) or `Foreign`.
+fn is_external_linkage(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    matches!(
+        model.items[item].linkage,
+        Linkage::NoMangle | Linkage::Foreign
+    )
+}
+
+/// The prelude's ordinary-namespace (function) identifiers that an internal
+/// derived instance symbol must not shadow (Change B step 1). Mirrors the
+/// `regseq_*` helpers emitted by [`prelude::helper_block`] -- the two fixed
+/// panic helpers plus the per-type `regseq_{add,sub,mul}_<T>` and
+/// `regseq_<fprefix>_to_<T>` families over the prelude's fixed integer C
+/// type set. The tag-namespace `struct regseq_overflow_<T>` / `struct
+/// rust_str` are a different C namespace and are deliberately not reserved;
+/// libc names (`memcpy` / `printf` / `abort`) are an accepted low-risk edge
+/// (a `Default` item rendering to exactly one of those fails the C compile
+/// loudly, never silently). The
+/// `prelude_ordinary_idents_all_defined_in_prelude` test pins this list
+/// against the actually-emitted prelude text.
+fn prelude_ordinary_idents() -> Vec<String> {
+    // The integer C type spellings of the prelude's fixed helper set
+    // (prelude.rs `INT_TYPES`) and the float prefixes (`FLOAT_TYPES`).
+    const INT_CTYPES: [&str; 12] = [
+        "int8_t",
+        "int16_t",
+        "int32_t",
+        "int64_t",
+        "intptr_t",
+        "__int128",
+        "uint8_t",
+        "uint16_t",
+        "uint32_t",
+        "uint64_t",
+        "size_t",
+        "__uint128_t",
+    ];
+    const FLOAT_PREFIXES: [&str; 4] = ["f32", "f64", "f16", "f128"];
+
+    let mut idents = vec!["regseq_panic".to_string(), "regseq_unreachable".to_string()];
+    for ty in INT_CTYPES {
+        for op in ["add", "sub", "mul"] {
+            idents.push(format!("regseq_{op}_{ty}"));
+        }
+    }
+    for prefix in FLOAT_PREFIXES {
+        for ity in INT_CTYPES {
+            idents.push(format!("regseq_{prefix}_to_{ity}"));
+        }
+    }
+    idents
+}
+
 /// The derived base name (pre-`_clash_<n>`) for a node.
 fn base_name(model: &RegseqModel, node: &Node) -> String {
     match node {
@@ -674,6 +820,8 @@ fn fn_qualifiers(model: &RegseqModel, item: regseq_model::ItemId) -> String {
 fn fn_signature(
     model: &RegseqModel,
     names: &NameTable,
+    syms: &InstanceSymbols,
+    id: InstanceId,
     instance: &regseq_model::Instance,
     named: bool,
 ) -> String {
@@ -683,7 +831,7 @@ fn fn_signature(
         .expect("fn_signature on a non-function instance");
     let fn_sig = model.sigs.resolve(data.fn_sig);
     let lowering = c_abi_lowering(model, data.fn_sig);
-    let emission = emission_ident(model, instance);
+    let emission = emission_ident(syms, id);
 
     let mut params: Vec<String> = Vec::new();
     for i in 0..fn_sig.inputs.len() {
@@ -733,14 +881,17 @@ fn fn_signature(
     format!("{quals}{noreturn}{ret} {emission}({params_str})")
 }
 
-/// The C identifier for an instance's emission symbol. The bridge mints
-/// `emission_name` as the rendered `DefPath` (the same string `def_path`
-/// carries, with `::` and `{...}` segments), which is not a C identifier, so
-/// the backend sanitises it exactly as it derives type names
-/// (`naming::sanitize`). This is not a re-mint -- the bridge name is used
-/// verbatim modulo the deterministic C-identifier mapping.
-fn emission_ident(model: &RegseqModel, instance: &regseq_model::Instance) -> String {
-    naming::sanitize(model.strings.resolve(instance.emission_name))
+/// The final C symbol for instance `id`, looked up in the task-11
+/// [`InstanceSymbols`] table. The bridge mints `emission_name` as the
+/// generic-agnostic, possibly-not-C-valid `DefPath.rendered`, so the backend
+/// *derives* the final symbol (`sanitize(rendered)` with no suffix for
+/// external linkage, `sanitize + generic_suffix` clash-netted for internal)
+/// -- see [`build_instance_symbols`].
+/// Routing this single helper (used by the bank-4 / bank-5 function
+/// prototype + definition and the static decl + def) through the table keeps
+/// every instance-symbol site in agreement.
+fn emission_ident(syms: &InstanceSymbols, id: InstanceId) -> &str {
+    syms.symbol(id)
 }
 
 /// Whether an instance's source item carries a diag-log recognition tag
@@ -759,7 +910,11 @@ fn is_diag_log_instance(model: &RegseqModel, item: regseq_model::ItemId) -> bool
 /// Bank 4 (section 15): a section 17-qualified prototype for every
 /// non-diag-log function instance (`Foreign` -> `extern` decl only) and an
 /// `extern [const] T X;` declaration for every static.
-fn bank4_declarations(model: &RegseqModel, names: &NameTable) -> Result<String, EmitError> {
+fn bank4_declarations(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
     let header = |out: &mut String, wrote: &mut bool| {
@@ -773,7 +928,9 @@ fn bank4_declarations(model: &RegseqModel, names: &NameTable) -> Result<String, 
         }
     };
 
-    for instance in model.instances.iter() {
+    for idx in 0..model.instances.len() {
+        let id = InstanceId::from_u32(idx as u32);
+        let instance = &model.instances[id];
         match &instance.kind {
             InstanceKind::Function(_) => {
                 if is_diag_log_instance(model, instance.item) {
@@ -784,18 +941,18 @@ fn bank4_declarations(model: &RegseqModel, names: &NameTable) -> Result<String, 
                 let prefix = if foreign { "extern " } else { "" };
                 out.push_str(&format!(
                     "{prefix}{};\n",
-                    fn_signature(model, names, instance, false)
+                    fn_signature(model, names, syms, id, instance, false)
                 ));
             }
             InstanceKind::Static { ty, .. } => {
                 header(&mut out, &mut wrote_header);
-                let emission = emission_ident(model, instance);
+                let emission = emission_ident(syms, id);
                 let konst = if static_is_const(model, instance.item) {
                     "const "
                 } else {
                     ""
                 };
-                let decl = types::declare(model, names, *ty, &emission);
+                let decl = types::declare(model, names, *ty, emission);
                 out.push_str(&format!("extern {konst}{decl};\n"));
             }
             // Const items materialise at use sites (an address-taken const is
@@ -822,7 +979,11 @@ fn static_is_const(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
 /// Bank 5 (section 15): a section 17-qualified definition + section 7 body
 /// for every non-foreign, non-diag-log function, and a `[const] T X =
 /// <init>;` definition for every `init: Some` static, in F4 order.
-fn bank5_definitions(model: &RegseqModel, names: &NameTable) -> Result<String, EmitError> {
+fn bank5_definitions(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
     let header = |out: &mut String, wrote: &mut bool| {
@@ -836,7 +997,9 @@ fn bank5_definitions(model: &RegseqModel, names: &NameTable) -> Result<String, E
         }
     };
 
-    for instance in model.instances.iter() {
+    for idx in 0..model.instances.len() {
+        let id = InstanceId::from_u32(idx as u32);
+        let instance = &model.instances[id];
         match &instance.kind {
             InstanceKind::Function(data) => {
                 let foreign = model.items[instance.item].linkage == Linkage::Foreign;
@@ -847,8 +1010,8 @@ fn bank5_definitions(model: &RegseqModel, names: &NameTable) -> Result<String, E
                     continue;
                 };
                 header(&mut out, &mut wrote_header);
-                let sig = fn_signature(model, names, instance, true);
-                let block = body_emit::emit_body(model, names, instance, body)?;
+                let sig = fn_signature(model, names, syms, id, instance, true);
+                let block = body_emit::emit_body(model, names, syms, instance, body)?;
                 out.push_str(&format!("{sig}{block}"));
             }
             InstanceKind::Static {
@@ -856,15 +1019,20 @@ fn bank5_definitions(model: &RegseqModel, names: &NameTable) -> Result<String, E
                 init: Some(init),
             } => {
                 header(&mut out, &mut wrote_header);
-                let emission = emission_ident(model, instance);
+                let emission = emission_ident(syms, id);
                 let konst = if static_is_const(model, instance.item) {
                     "const "
                 } else {
                     ""
                 };
-                let decl = types::declare(model, names, *ty, &emission);
-                let value =
-                    body_emit::static_initializer(model, names, model.consts.resolve(*init), *ty)?;
+                let decl = types::declare(model, names, *ty, emission);
+                let value = body_emit::static_initializer(
+                    model,
+                    names,
+                    syms,
+                    model.consts.resolve(*init),
+                    *ty,
+                )?;
                 out.push_str(&format!("{konst}{decl} = {value};\n"));
             }
             _ => {}

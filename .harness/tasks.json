@@ -4778,7 +4778,7 @@
           "id": "regseq-backends-11",
           "name": "Generic-C instance-symbol uniqueness + linkage-aware naming (d1 follow-up)",
           "spec": ".harness/tasks/regseq-backends/11-generic-c-instance-symbol-uniqueness.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-10"
           ],

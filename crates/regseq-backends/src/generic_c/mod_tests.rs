@@ -1197,6 +1197,34 @@ fn fn_instance(
     })
 }
 
+/// Push a `Function` monomorphization for an *existing* `item` with explicit
+/// `generic_args` and `emission_name`, returning its `InstanceId`. Models the
+/// bridge minting one `emission_name` (the per-item, generic-agnostic
+/// `DefPath.rendered`) for every monomorphization of a generic item -- the
+/// shape the task-11 instance-symbol fix disambiguates.
+fn push_fn_mono(
+    m: &mut RegseqModel,
+    fn_item: regseq_model::ItemId,
+    rendered: &str,
+    generic_args: GenericArgs,
+    sig: FnSigId,
+    body: Option<Body>,
+) -> InstanceId {
+    let emission = m.strings.intern(rendered);
+    m.instances.push(Instance {
+        item: fn_item,
+        generic_args,
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    })
+}
+
 fn never(m: &mut RegseqModel) -> TyId {
     m.types.intern(Ty::Never)
 }
@@ -2235,4 +2263,348 @@ fn call_argument_with_field_projection_is_unsupported() {
     fn_instance(&mut m, "calls_with_field_arg", sig, Some(body));
 
     assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+}
+
+// ---------------------------------------------------------------------------
+// Task 11: instance-symbol uniqueness + linkage-aware naming (d1 follow-up).
+// A generic item's monomorphizations share one bridge-minted emission_name,
+// so the backend must derive distinct, linkage-aware C symbols. Structural
+// assertions over the emitted TU; the compile-and-run proof lives in the
+// codegen-coverage-runner behavioral tests.
+// ---------------------------------------------------------------------------
+
+/// The task-11 internal-symbol form for `rendered` at `args`:
+/// `sanitize(rendered) + __<ArgsKey:x>` (mirrors `naming::instance_symbol_base`).
+fn internal_symbol(m: &RegseqModel, rendered: &str, args: &GenericArgs) -> String {
+    format!(
+        "{}__{:x}",
+        rendered,
+        regseq_model::args_key_for_generic_args(m, args).0
+    )
+}
+
+/// A one-block `id`-style body `{ _0 = _1; return _0; }` for an `(T) -> T`
+/// monomorphization of element type `ty`.
+fn identity_body(ty: TyId) -> Body {
+    build_body(
+        1,
+        vec![ty, ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Copy(loc(1))),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    )
+}
+
+#[test]
+fn default_generic_monos_get_distinct_suffixed_symbols() {
+    // fn id<T>(x: T) -> T used as id::<u32> and id::<i64>: two Function
+    // instances sharing one item (one bridge-minted emission_name "id"),
+    // distinct generic_args, Default linkage. The fix derives distinct
+    // suffixed symbols, so the TU has no duplicate symbol (pre-fix both
+    // emitted bare "id").
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let i64t = m.types.intern(Ty::Int(IntKind::I64));
+    let id_item = item(&mut m, ItemKind::Function, "id");
+
+    let args_u32 = vec![regseq_model::GenericArg::Type(u32t)];
+    let args_i64 = vec![regseq_model::GenericArg::Type(i64t)];
+
+    let sig_u32 = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    push_fn_mono(
+        &mut m,
+        id_item,
+        "id",
+        args_u32.clone(),
+        sig_u32,
+        Some(identity_body(u32t)),
+    );
+    let sig_i64 = fnsig(&mut m, vec![i64t], i64t, FnAbi::Rust, false);
+    push_fn_mono(
+        &mut m,
+        id_item,
+        "id",
+        args_i64.clone(),
+        sig_i64,
+        Some(identity_body(i64t)),
+    );
+
+    let tu = emit_generic_c(&m).unwrap();
+    let sym_u32 = internal_symbol(&m, "id", &args_u32);
+    let sym_i64 = internal_symbol(&m, "id", &args_i64);
+    assert_ne!(sym_u32, sym_i64, "distinct monos -> distinct symbols");
+    assert!(
+        tu.contains(&format!("uint32_t {sym_u32}(uint32_t);")),
+        "u32 mono prototype:\n{tu}"
+    );
+    assert!(
+        tu.contains(&format!("int64_t {sym_i64}(int64_t);")),
+        "i64 mono prototype:\n{tu}"
+    );
+    assert!(
+        !tu.contains(" id("),
+        "the colliding unsuffixed symbol must be gone:\n{tu}"
+    );
+}
+
+#[test]
+fn external_instance_symbol_is_sanitized_with_no_generic_suffix() {
+    // External linkage (Foreign) sanitises the bridge-minted DefPath -- the
+    // bridge mints `emission_name = def_path.rendered` (e.g. `crate::ext::cb`),
+    // NOT a bare ABI symbol, so a raw-verbatim emit would be invalid C -- but
+    // adds NO generic suffix, so the ABI symbol is stable across monos. A
+    // generic instance makes the absence of a `__<hex>` suffix observable.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let it = item(&mut m, ItemKind::Function, "crate::ext::cb");
+    m.items[it].linkage = Linkage::Foreign;
+    let args = vec![regseq_model::GenericArg::Type(u32t)];
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    push_fn_mono(&mut m, it, "crate::ext::cb", args, sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("extern uint32_t crate_ext_cb(uint32_t);"),
+        "sanitized external decl, no generic suffix:\n{tu}"
+    );
+    assert!(
+        !tu.contains("crate_ext_cb__"),
+        "external symbol carries no generic suffix:\n{tu}"
+    );
+    assert!(
+        !tu.contains("crate::ext::cb"),
+        "the raw DefPath must not leak into C:\n{tu}"
+    );
+}
+
+#[test]
+fn default_nongeneric_instance_symbol_is_sanitize_with_no_suffix() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    fn_instance(&mut m, "plain_fn", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t plain_fn(void);"),
+        "non-generic prototype:\n{tu}"
+    );
+    assert!(
+        !tu.contains("plain_fn__"),
+        "non-generic symbol has no generic suffix:\n{tu}"
+    );
+}
+
+#[test]
+fn call_and_reloc_to_generic_instance_match_definition_symbol() {
+    // A generic Default instance g::<u32>; a caller that calls it and a static
+    // FP = &g. The call site and the Reloc must both spell g's suffixed symbol
+    // (body_emit sites :711 Call and :932 Reloc routed through the table).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let g_item = item(&mut m, ItemKind::Function, "g");
+    let args = vec![regseq_model::GenericArg::Type(u32t)];
+    let g_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let g_id = push_fn_mono(
+        &mut m,
+        g_item,
+        "g",
+        args.clone(),
+        g_sig,
+        Some(identity_body(u32t)),
+    );
+
+    let zero = m.consts.intern(Const::Uint(UintKind::U32, 0));
+    let csig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    let cbody = build_body(
+        0,
+        vec![u32t],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(g_id),
+                    args: Box::new([Operand::Constant(zero)]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "caller", csig, Some(cbody));
+
+    let fp_ty = m.types.intern(Ty::FnPtr(g_sig));
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(g_id)));
+    let fp_item = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "FP",
+    );
+    let fp_em = m.strings.intern("FP");
+    m.instances.push(Instance {
+        item: fp_item,
+        generic_args: GenericArgs::new(),
+        emission_name: fp_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: fp_ty,
+            init: Some(reloc),
+        },
+    });
+
+    let tu = emit_generic_c(&m).unwrap();
+    let sym = internal_symbol(&m, "g", &args);
+    assert!(
+        tu.contains(&format!("uint32_t {sym}(uint32_t _1) {{")),
+        "definition spells the suffixed symbol:\n{tu}"
+    );
+    assert!(
+        tu.contains(&format!("{sym}(((uint32_t)(0U)))")),
+        "call site spells the same symbol:\n{tu}"
+    );
+    assert!(
+        tu.contains(&format!("(&{sym})")),
+        "Reloc spells the same symbol:\n{tu}"
+    );
+}
+
+#[test]
+fn reify_fn_pointer_to_generic_instance_matches_definition_symbol() {
+    // ReifyFnPointer of a generic instance (the body_emit FnDef-scan site
+    // :621) spells the same suffixed symbol as the definition.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let h_item = item(&mut m, ItemKind::Function, "h");
+    let args = vec![regseq_model::GenericArg::Type(u32t)];
+    let h_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    push_fn_mono(
+        &mut m,
+        h_item,
+        "h",
+        args.clone(),
+        h_sig,
+        Some(identity_body(u32t)),
+    );
+
+    let fndef_ty = m.types.intern(Ty::FnDef(h_item, args.clone()));
+    let fnptr_ty = m.types.intern(Ty::FnPtr(h_sig));
+    let csig = fnsig(&mut m, vec![], fnptr_ty, FnAbi::Rust, false);
+    // _0: fnptr (return), _1: fndef (ZST inner local).
+    let cbody = build_body(
+        0,
+        vec![fnptr_ty, fndef_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Cast(
+                    CastKind::PointerCoercion(regseq_model::PointerCoercion::ReifyFnPointer),
+                    Operand::Copy(loc(1)),
+                    fnptr_ty,
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "reifier", csig, Some(cbody));
+
+    let tu = emit_generic_c(&m).unwrap();
+    let sym = internal_symbol(&m, "h", &args);
+    assert!(
+        tu.contains(&format!("_0 = (&{sym});")),
+        "ReifyFnPointer spells the suffixed symbol:\n{tu}"
+    );
+}
+
+#[test]
+fn internal_symbol_colliding_with_prelude_helper_is_clash_renamed() {
+    // A Default instance whose emission_name is exactly a prelude helper
+    // (`regseq_panic`) must be `_clash_1`-renamed, never shadow the helper.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    fn_instance(&mut m, "regseq_panic", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t regseq_panic_clash_1(void);"),
+        "instance symbol clash-renamed off the prelude helper:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Noreturn static inline void regseq_panic(const char *msg)"),
+        "the real prelude helper is untouched:\n{tu}"
+    );
+}
+
+#[test]
+fn two_internal_instances_with_same_base_get_clash_suffix() {
+    // Two distinct Default function items rendering the same name -> the
+    // second instance symbol is `_clash_1`-disambiguated (the cross-item
+    // sanitize-collision net).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig1 = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
+    fn_instance(&mut m, "dup", sig1, None);
+    let sig2 = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    fn_instance(&mut m, "dup", sig2, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t dup(void);"),
+        "first keeps the base:\n{tu}"
+    );
+    assert!(
+        tu.contains("uint32_t dup_clash_1(uint32_t);"),
+        "second is clash-renamed:\n{tu}"
+    );
+}
+
+#[test]
+fn generic_instance_model_is_byte_identical_across_two_calls() {
+    let build = || {
+        let mut m = model();
+        let u32t = uint(&mut m, UintKind::U32);
+        let i64t = m.types.intern(Ty::Int(IntKind::I64));
+        let id_item = item(&mut m, ItemKind::Function, "id");
+        let sig_u32 = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+        push_fn_mono(
+            &mut m,
+            id_item,
+            "id",
+            vec![regseq_model::GenericArg::Type(u32t)],
+            sig_u32,
+            Some(identity_body(u32t)),
+        );
+        let sig_i64 = fnsig(&mut m, vec![i64t], i64t, FnAbi::Rust, false);
+        push_fn_mono(
+            &mut m,
+            id_item,
+            "id",
+            vec![regseq_model::GenericArg::Type(i64t)],
+            sig_i64,
+            Some(identity_body(i64t)),
+        );
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
+}
+
+#[test]
+fn prelude_ordinary_idents_all_defined_in_prelude() {
+    // The reserved-identifier mirror in `prelude_ordinary_idents` must stay in
+    // sync with the actually-emitted prelude + helper block (Change B step 1):
+    // every reserved name appears as a function definition in the prelude text.
+    let prelude_text = format!("{}{}", prelude::PRELUDE, prelude::helper_block());
+    for ident in prelude_ordinary_idents() {
+        assert!(
+            prelude_text.contains(&format!("{ident}(")),
+            "reserved prelude ident `{ident}` is not emitted as a function"
+        );
+    }
 }

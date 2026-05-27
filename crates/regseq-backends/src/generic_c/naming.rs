@@ -4,14 +4,22 @@
 //! the section 14 aggregate emitter ([`super::layout_emit`]). Aggregate
 //! **type** names are *derived* -- `sanitize(DefPath.rendered)` plus a
 //! `generic_suffix(ArgsKey)` -- so they are a pure function of the model
-//! and byte-stable; instance symbols (fn / static / const `emission_name`)
-//! are out of scope for this task (bank 4/5, task d).
+//! and byte-stable. Task-11 adds [`instance_symbol_base`], the parallel
+//! linkage-aware derivation for an instance's (fn / static) C symbol:
+//! `sanitize(rendered)` with **no** generic suffix for external linkage (an
+//! ABI contract, stable across monomorphizations) and the same
+//! `sanitize(rendered) + generic_suffix(args)` form as type names for
+//! internal linkage (so distinct monomorphizations of one generic item get
+//! distinct symbols). Const instances materialise at use sites and so have
+//! no standalone symbol.
 //!
 //! Collisions are impossible in a well-formed model because `(DefPath,
 //! ArgsKey)` is the nominal identity key; the `_clash_<n>` disambiguation
 //! pass in [`super::NameTable`] is the safety net.
 
-use regseq_model::{args_key_for_generic_args, GenericArgs, RegseqModel, Ty, TyId};
+use regseq_model::{
+    args_key_for_generic_args, GenericArgs, Instance, Linkage, RegseqModel, Ty, TyId,
+};
 
 /// Sanitize a rendered path into a C identifier body per D1: collapse
 /// `::` to a single `_`, then map every remaining non-`[A-Za-z0-9_]`
@@ -64,6 +72,42 @@ pub(crate) fn aggregate_base_name(model: &RegseqModel, ty: TyId) -> String {
         }
         Ty::Tuple { fields, .. } => tuple_base_name(fields),
         other => panic!("aggregate_base_name on non-aggregate Ty: {other:?}"),
+    }
+}
+
+/// The pre-clash C symbol base for a (fn / static) `instance` (task-11
+/// Change A), linkage-aware. The base is `sanitize(emission_name)` for every
+/// linkage; the difference is the generic suffix:
+///
+/// - **External** linkage (`NoMangle` -- which also covers `export_name` --
+///   or `Foreign`) carries an ABI contract, so it gets **no generic suffix**:
+///   the symbol is stable across every monomorphization (other translation
+///   units / the harness link by that one name). Real external items are
+///   non-generic (Rust rejects `#[no_mangle]` / `export_name` on generics),
+///   so this matters only as a defensive guarantee.
+/// - **Internal** linkage (`Default` / `Weak`) is translation-unit-local:
+///   the symbol is `sanitize(emission_name) + generic_suffix(generic_args)`,
+///   mirroring [`aggregate_base_name`]. The bridge mints one
+///   `emission_name` (the generic-agnostic `DefPath.rendered`) per *item*,
+///   so the `generic_suffix` of the *instance's* `generic_args` is what
+///   distinguishes monomorphizations. The caller's `_clash_<n>` net
+///   disambiguates any residual base collision.
+///
+/// Note: the base is `sanitize(emission_name)`, **not** the raw bytes. The
+/// bridge mints `emission_name = DefPath.rendered` for *every* linkage
+/// (including `Foreign` / `NoMangle`), e.g. `crate::{extern#0}::foo` -- not a
+/// bare ABI identifier -- so the raw string is not valid C. The sibling
+/// behavioral harness sanitises identically on both the emitted symbol and
+/// the linked stub, so `sanitize` is the actual cross-TU contract; only a
+/// generic *suffix* on an external symbol would break linkage, which is what
+/// the linkage branch suppresses.
+pub(crate) fn instance_symbol_base(model: &RegseqModel, instance: &Instance) -> String {
+    let base = sanitize(model.strings.resolve(instance.emission_name));
+    match model.items[instance.item].linkage {
+        Linkage::NoMangle | Linkage::Foreign => base,
+        Linkage::Default | Linkage::Weak => {
+            format!("{base}{}", generic_suffix(model, &instance.generic_args))
+        }
     }
 }
 
