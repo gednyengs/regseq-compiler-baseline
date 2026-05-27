@@ -3,6 +3,11 @@
 //! pass/fail/n-a table, detect drift in both directions, compute the
 //! phase verdict, and write `coverage_ledger.{json,md}`.
 //!
+//! The committed ledger is a **pure function of `(matrix x fixture
+//! results)`** -- no wall-clock or run metadata -- so re-runs are
+//! byte-stable (Doc 3 section 4) and a `git` diff reflects only real
+//! coverage drift, not run-timestamp noise (Doc 3 section 5).
+//!
 //! Doc 3 section 6 verdict rules:
 //! - `out-of-scope` rows never gate.
 //! - `deferred` rows are not gated this phase (deferred by design).
@@ -13,7 +18,6 @@
 //!   green-without-covered drift; else `not-pass`.
 
 use std::path::Path;
-use std::time::{SystemTime, UNIX_EPOCH};
 
 use serde::Serialize;
 
@@ -54,8 +58,6 @@ pub struct LedgerRow {
     pub fixtures: Vec<String>,
     /// Aggregated per-row result.
     pub result: RowResult,
-    /// Timestamp of the run that produced this row (unix seconds).
-    pub last_run: u64,
 }
 
 /// Host-`cc` reproducibility record (Doc 3 section 7).
@@ -148,8 +150,6 @@ pub fn build(
     results: &[FixtureResult],
     toolchain: ToolchainInfo,
 ) -> Result<Ledger, LedgerError> {
-    let last_run = unix_seconds();
-
     // Index matrix rows by ID.
     let mut status_of: std::collections::BTreeMap<&str, Status> = std::collections::BTreeMap::new();
     for row in rows {
@@ -205,7 +205,6 @@ pub fn build(
             status: row.status,
             fixtures,
             result,
-            last_run,
         });
     }
     ledger_rows.sort_by(|a, b| a.id.cmp(&b.id));
@@ -356,12 +355,4 @@ fn render_md(ledger: &Ledger) -> String {
         ));
     }
     out
-}
-
-/// Seconds since the unix epoch (0 if the clock is before the epoch).
-fn unix_seconds() -> u64 {
-    SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_secs())
-        .unwrap_or(0)
 }

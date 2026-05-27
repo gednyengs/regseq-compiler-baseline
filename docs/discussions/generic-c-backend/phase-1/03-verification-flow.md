@@ -142,7 +142,13 @@ bridge era's `coverage_ledger.{json,md}`):
 
 - `coverage_ledger.json` — machine-readable: per matrix-row-ID
   `{ status: covered|deferred|unspecced|out-of-scope, fixtures: [...],
-  result: pass|fail|n/a, last_run }`, plus a top-level `verdict`.
+  result: pass|fail|n/a }`, plus a top-level `verdict`, `drift` record, and
+  a `toolchain` reproducibility stamp (`cc` + version). The committed JSON is
+  a **pure function of (matrix × fixture results)** — **no wall-clock /
+  `last_run` timestamp** — so re-runs are byte-stable (§4) and a diff shows
+  only real coverage drift (the earlier `last_run` field is dropped: a
+  per-row timestamp made every run rewrite the whole ledger, defeating §4's
+  byte-stability and burying drift in noise).
 - `coverage_ledger.md` — human-readable rollup regenerated from the JSON.
 
 **Regeneration.** The runner (re)writes both on each Mode-A run from
