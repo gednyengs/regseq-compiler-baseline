@@ -783,6 +783,69 @@ fn fn_ptr_returning_pointer_to_array_recurses_the_declarator() {
 }
 
 // ---------------------------------------------------------------------------
+// Task 09 (07 follow-up #3): a Ref / Ptr to a fn-pointer pointee places
+// `const` on the fn-pointer VALUE (`int32_t (*const (*p))(void)`), not on the
+// function's return type.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn shared_ref_to_fn_ptr_places_const_on_the_fn_ptr_value() {
+    // `&fn() -> i32` -> the fn-pointer value is const: the qualifier sits
+    // adjacent to the fn-pointer's own `*` (`int32_t (*const (*p))(void)`),
+    // never as a leading `const` on the return type.
+    let mut m = model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let fnptr = fn_ptr_returning(&mut m, i32t);
+    let r = m.types.intern(Ty::Ref(fnptr, Provenance::SharedBorrow));
+    let tu = emit_pointer_field(&mut m, r);
+    assert!(
+        tu.contains("int32_t (*const (*p))(void);"),
+        "const on the fn-ptr value:\n{tu}"
+    );
+    assert!(
+        !tu.contains("const int32_t (*"),
+        "const must not land on the return type:\n{tu}"
+    );
+}
+
+#[test]
+fn const_raw_ptr_to_fn_ptr_places_const_on_the_fn_ptr_value() {
+    // `*const fn() -> i32` -> same const-on-value placement as a shared ref.
+    let mut m = model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let fnptr = fn_ptr_returning(&mut m, i32t);
+    let p = m.types.intern(Ty::Ptr(fnptr, Mutability::Not));
+    let tu = emit_pointer_field(&mut m, p);
+    assert!(
+        tu.contains("int32_t (*const (*p))(void);"),
+        "const on the fn-ptr value:\n{tu}"
+    );
+    assert!(!tu.contains("const int32_t (*"), "got:\n{tu}");
+}
+
+#[test]
+fn mut_ref_to_fn_ptr_has_no_const_on_the_fn_ptr_value() {
+    // `&mut fn() -> i32` -> no const anywhere: `int32_t (*(*p))(void)`.
+    let mut m = model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let fnptr = fn_ptr_returning(&mut m, i32t);
+    let r = m.types.intern(Ty::Ref(fnptr, Provenance::UniqueBorrow));
+    let tu = emit_pointer_field(&mut m, r);
+    assert!(
+        tu.contains("int32_t (*(*p))(void);"),
+        "no const for &mut:\n{tu}"
+    );
+    assert!(
+        !tu.contains("*const (*p)"),
+        "no const on the fn-ptr value:\n{tu}"
+    );
+    assert!(
+        !tu.contains("const int32_t (*"),
+        "no const on the return type:\n{tu}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task c2: the section 13 / D9 offset-faithful union-of-views enum body.
 // Structural assertions over the emitted TU (compile-level layout-fidelity
 // proof lives in the codegen-coverage-runner behavioral tests).

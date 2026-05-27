@@ -136,17 +136,13 @@ fn declare_qualified(
             top_const,
             decl,
         ),
-        Ty::FnPtr(sig) => {
-            let inner = fn_ptr_decl(model, names, *sig, decl);
-            // Const-qualifying a function type is exotic and only reachable
-            // via a (rare) pointer-to-fn-ptr, outside this task's verified
-            // scope; a prefix keeps it syntactically valid.
-            if top_const {
-                format!("const {inner}")
-            } else {
-                inner
-            }
-        }
+        // A `const` fn-pointer pointee (a shared `Ref` / `*const` to a
+        // `FnPtr`) qualifies the fn-pointer *value*, not the return type:
+        // `top_const` is threaded as the declarator's `self_const`, placing
+        // `const` adjacent to the fn-pointer's own `*` (`int32_t (*const
+        // (*p))(void)`), mirroring `ptr_to`'s `*const` for a const pointer
+        // value. The return type renders unqualified through the recursion.
+        Ty::FnPtr(sig) => fn_ptr_decl(model, names, *sig, top_const, decl),
         // `FnDef` is a ZST function-identity tag with no C value emission.
         Ty::FnDef(_, _) => with_declarator(&q("/* FnDef ZST */"), decl),
         // Bare unsized markers never appear as a value type in a valid
@@ -256,10 +252,17 @@ pub(crate) fn unsized_pointee_struct_name(
 /// itself a function pointer or pointer-to-array recurses the declarator
 /// (`fn() -> fn() -> i32` becomes `int32_t (*(*decl)(void))(void)`) instead of
 /// the invalid bare-type concatenation `int (*)(void) (*decl)(void)`.
+///
+/// `self_const` qualifies the fn-pointer *value* itself (set when it is the
+/// const pointee of an enclosing shared `Ref` / `*const`, e.g. `&fn() -> i32`).
+/// It emits `const` immediately after the fn-pointer's own `*`
+/// (`(*const decl)(params)`), so the qualifier lands on the fn-pointer value
+/// rather than on the return type.
 fn fn_ptr_decl(
     model: &RegseqModel,
     names: &NameTable,
     sig: regseq_model::FnSigId,
+    self_const: bool,
     decl: &str,
 ) -> String {
     let fn_sig = model.sigs.resolve(sig);
@@ -273,7 +276,15 @@ fn fn_ptr_decl(
             .collect::<Vec<_>>()
             .join(", ")
     };
-    declare(model, names, fn_sig.output, &format!("(*{decl})({params})"))
+    // `self_const` sits immediately after this fn-pointer's star (`*const`),
+    // qualifying the pointer value; the return type renders unqualified.
+    let star = if self_const { "*const " } else { "*" };
+    declare(
+        model,
+        names,
+        fn_sig.output,
+        &format!("({star}{decl})({params})"),
+    )
 }
 
 /// Emit the section 3.2 `struct rust_slice_<T>` body: a `data` pointer

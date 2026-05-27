@@ -607,6 +607,30 @@ fn fn_ptr_return_declarators_compile() {
     assert_compiles(&tu, "fn-ptr return declarators");
 }
 
+#[test]
+fn shared_ref_to_fn_ptr_places_const_on_the_value_and_compiles() {
+    // Task 09 (07 #3): `&fn() -> i32` places `const` on the fn-pointer VALUE
+    // (`int32_t (*const (*p))(void)`), not the return type. The exact spelling
+    // pins the const level; the clean compile proves it is valid C.
+    let mut m = target_model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let fnptr = fn_ptr_returning(&mut m, i32t);
+    let r = m.types.intern(Ty::Ref(fnptr, Provenance::SharedBorrow));
+    let f = mk_field(&mut m, "p", r, 0);
+    root_struct(&mut m, "Sg", slayout(8, 8, vec![f]));
+
+    let tu = emit_generic_c(&m).expect("ref-to-fn-ptr model emits Ok");
+    assert!(
+        tu.contains("int32_t (*const (*p))(void);"),
+        "const on the fn-ptr value:\n{tu}"
+    );
+    assert!(
+        !tu.contains("const int32_t (*"),
+        "const must not land on the return type:\n{tu}"
+    );
+    assert_compiles(&tu, "shared ref to fn-ptr const placement");
+}
+
 // ---------------------------------------------------------------------------
 // Task c2: enum union-of-views (section 13 / D9). Hand-built models pin the
 // shifted-alignment absolute offset that the literal `union_start` form

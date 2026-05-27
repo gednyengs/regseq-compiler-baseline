@@ -4736,7 +4736,7 @@
           "id": "regseq-backends-09",
           "name": "Generic-C fn-pointer-value const placement (07 #3)",
           "spec": ".harness/tasks/regseq-backends/09-generic-c-fn-ptr-const-placement.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-07"
           ],
