@@ -4689,6 +4689,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-07",
+          "name": "Generic-C type-emission robustness fixes (c1 soundness follow-up)",
+          "spec": ".harness/tasks/regseq-backends/07-generic-c-type-robustness-fixes.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-06"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-27T03:46:12Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

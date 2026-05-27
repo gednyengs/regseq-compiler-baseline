@@ -38,8 +38,31 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   (all 3 Level-2 plan docs + the `generic-c-backend.md` spec delta filled
   + Codex-approved). The bridge front-end gate PASSES (`1a6a996`, archived
   handoff). Next is **`task.py` tasks** → implementation.
-- **Last completed**: **Phase-1 task c1 FILED (`regseq-backends-06`)** —
-  "Generic-C type system + field-offset emission": fills banks 2–3 (the
+- **Last completed**: **Phase-1 task c1 CLOSED (`regseq-backends-06`,
+  implementer `f410115`)** — assessed: fmt/clippy + **34 tests** green (19
+  backend units + 3 behavioral layout tests that bridge real
+  `repr(Rust)`/union/tuple/array aggregates → emit → **compile** [the §14
+  `_Static_assert` guards holding *is* the layout-fidelity proof] + a
+  negative wrong-offset test; + the existing suite); emit byte-stable; ledger
+  unchanged; diff scope clean. Implementation is high quality (all 4 filed
+  fixes landed; declarator handling sophisticated; determinism via Vec-order
+  not HashSet). **A soundness Codex pass found 4 real EDGE-CASE bugs** beyond
+  the tested common path → **follow-up `regseq-backends-07`**: (#2, HIGH/panic)
+  `Node::Slice` has no discovery edge to its element aggregate → panic on
+  `&[(tuple)]`/`&[[Struct;N]]` reachable only via the slice; (#4, MED/silent)
+  `const` prefixed to the whole rendered inner declaration → wrong qualifier
+  for nested pointer pointees; (#1, low) synthetic `_padN` can collide with a
+  real field named `_pad0`; (#3, low) nested fn-ptr *return* declarator emits
+  invalid C. **None block the d→e critical path** (the first green fixture
+  won't hit them); c1's verified scope is correct. **Follow-up
+  `regseq-backends-07` FILED** (Codex-reviewed; the 4 fixes — discovery/
+  ordering edge split incl. the array-element ordering case, declarator
+  `const` placement, collision-proof pad names incl. union `_pad`, recursive
+  fn-ptr-return declarator). **The two canonical-doc bugs the reviews
+  surfaced are FIXED** (§14/Doc-2-D10 alignment + §15 fat-pointer/array
+  exception — see § Decisions locked). Was: **task c1 FILED
+  (`regseq-backends-06`)** — "Generic-C type system + field-offset emission":
+  fills banks 2–3 (the
   `Ty`→C spelling + D1 naming, the §14/D10 field-offset aggregate emitter,
   the §15 bank-2/3 forward-decls/definitions + by-value-containment topo-sort,
   the §3.2 `rust_slice_<T>`/`trait_obj_<Trait>` shapes). **The original "(c)"
@@ -154,13 +177,17 @@ The volatility split means ~90% of updates touch only **§ Current state**.
     (`pass` ⇔ every in-scope `covered` row green), toolchain (`-fwrapv
     -std=gnu11`, gcc/clang host assumptions). Codex APPROVED.
   - Prior: Level-1 roadmap (`e74fbb3`), scaffolding (`2a8aa60`).
-- **In-flight**: **task c1 (`regseq-backends-06`) filed, awaiting implementer
-  pickup.** Tasks c2 (enum §13/D9) → d (bodies) → e (diag-log) remain to be
-  drafted. (Also tracking: the small §14/D10 `aligned(n)` doc fix.)
-- **Uncommitted state**: clean. Task-a chain committed: spec/registration
-  (`0f6ea9c`), implementer scaffold (`a422d89`), determinism fix (`9e3f46b`),
-  + this HANDOFF refresh. **None of the post-`74078b2` commits are pushed**
-  (offer to push). The two standing untracked dirs stay untouched by rule —
+- **In-flight**: **task c1 CLOSED**; **`regseq-backends-07` (c1 robustness
+  fixes) FILED, awaiting implementer.** **Next to draft: task c2** (enum
+  §13/D9), then d (bodies) → e (diag-log). (07 is a parallel edge-case
+  hardening; it does not block drafting c2 or the d→e critical path.)
+- **Uncommitted state**: the `regseq-backends-04..06` chain + status-flip +
+  HANDOFFs are committed; `origin/main` is at `74cb206` (pushed through task
+  b). **Uncommitted now**: the canonical-doc fixes (§14/§15/Doc-2 D10), the
+  `regseq-backends-07` spec + registration, + this HANDOFF refresh — not yet
+  committed this turn. Commits `5ca81ce`(c1 filing)→`f410115`(c1 impl) are
+  committed but **not pushed**. The two standing untracked dirs stay
+  untouched by rule —
   `tests/fixtures/playground-pl011/`, `crates/regseq-driver/tests/fixtures/`
   (experimentation; never commit, never modify).
 
@@ -170,10 +197,12 @@ The volatility split means ~90% of updates touch only **§ Current state**.
    8-section template; Codex-reviewed; commit + push; implementer picks
    up. **(a) DONE — `regseq-backends-04`** (`9e3f46b`); harness live. **(b)
    DONE — `regseq-backends-05`** (`5bfdcb8`); prelude + 5-bank envelope +
-   panic/helpers; emit seam live. **(c1) FILED — `regseq-backends-06`** (type
-   system + field-offset, banks 2–3), awaiting implementer. **The original
-   "(c) types + layout" was SPLIT into c1 (foundation, non-enum) + c2 (enum
-   §13/D9).** **Next: draft task c2** (enum representation, reusing c1's D10
+   panic/helpers; emit seam live. **(c1) DONE — `regseq-backends-06`**
+   (`f410115`); type system + field-offset, banks 2–3 live; assessed clean on
+   the common path; a soundness pass found 4 edge-case bugs → **`regseq-backends-07`
+   FILED** (c1 robustness fixes). **The original "(c) types + layout" was
+   SPLIT into c1 (foundation, non-enum) + c2 (enum §13/D9).** **Next: draft
+   task c2** (enum representation, reusing c1's D10
    primitive), then d (bodies) → e (diag-log, first green fixture). The
    natural breakdown (input contract =
    `generic-c-backend.md` §§2–17, complete): (a) the
@@ -257,14 +286,18 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
   Rationale: isolate the top-risk enum for focused review; c1 unblocks the
   critical path to the first green fixture (primitives → d → e) without
   waiting on enum. Plan: a→b→**c1→c2**→d→e.
-- **Doc bug to fix (surfaced by task-c1 review): §14 / Doc-2 D10 alignment.**
-  Both say `repr(packed(n))` → `aligned(n)`; that **over-aligns** (the true
-  type alignment is `min(max_field_align, n) = layout.align`, which can be
-  `< n`), and `_Alignas` is invalid on a `struct`/`union` tag. The correct
-  emission is `__attribute__((aligned(layout.align)))` (+ `packed` when
-  `pack` is set). `regseq-backends-06` **overrides** the stale wording + the
-  `_Static_assert(_Alignof==layout.align)` guard self-corrects. **TODO**: a
-  small doc fix to `generic-c-backend.md` §14 + Doc-2 D10 (not yet done).
+- **Canonical-doc fixes (FIXED 2026-05-26, surfaced by the c1 reviews).**
+  Two latent bugs in the frozen design docs, both corrected:
+  (a) **§14 / Doc-2 D10 alignment** — said `repr(packed(n))` → `aligned(n)`
+  (over-aligns; true align = `min(max_field_align, n) = layout.align`) and
+  `_Alignas` on a tag (invalid). Now: `__attribute__((aligned(layout.align)))`
+  (+ `packed`), always `layout.align`.
+  (b) **§15 fat-pointer exception** — the blanket "no edge through Ref/Ptr"
+  missed that a slice fat struct whose element is a `Ty::Array(base,N)` emits
+  `base (*)[N]`, and a C array needs its element **complete** even behind a
+  pointer → an ordering edge to `base` (the non-array element still needs only
+  a forward-decl). Now pinned in §15. (Both surfaced by Codex; the
+  `regseq-backends-07` fixes implement (b).)
 - **Diag-log recognition (for the backend):** key on the durable model
   fact — a `Terminator::Call { callee: CallCallee::Direct(inst), .. }`
   where `model.instances[inst].item` carries
@@ -308,7 +341,7 @@ Converged with the architect (2026-05-26). Record so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `docs/discussions/generic-c-backend/roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12 decisions, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | (uncommitted) | gc §§10–17 (Rvalue/casts/Const/enum/field-offset/decl-order/panic/symbols) + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b DONE; c1 `regseq-backends-06` FILED; c2/d/e to draft — "(c)" split into c1+c2) | `5bfdcb8` (b) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1 DONE; c1-fixes `regseq-backends-07` FILED; c2/d/e to draft — "(c)" split into c1+c2) | `f410115` (c1) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
@@ -747,3 +780,22 @@ the rest is stable.
   Doc-2-D10 alignment doc bug** (`packed(n)`→`aligned(n)` over-aligns); the
   task overrides it + a small doc fix is flagged (§ Decisions locked).
   **Next: draft task c2** (enum representation).
+- 2026-05-26: **Phase-1 task c1 CLOSED + soundness follow-up `regseq-backends-07`
+  FILED + canonical-doc fixes.** c1 (`f410115`) assessed: fmt/clippy + 34
+  tests green (incl. 3 behavioral tests that bridge real
+  `repr(Rust)`/union/tuple/array aggregates → emit → compile [§14
+  `_Static_assert` guards = layout-fidelity proof] + a negative wrong-offset
+  test); byte-stable; ledger unchanged; high-quality impl (all 4 c1-filed
+  fixes landed; determinism via Vec-order). **A Codex soundness pass found 4
+  real edge-case bugs** (UNSOUND verdict): #2 (HIGH/panic) `Node::Slice` has
+  no discovery edge to its element aggregate → panic on `&[(tuple)]`/
+  `&[[Struct;N]]`; #4 (MED/silent) `const` prefixed to the rendered inner
+  declaration → wrong qualifier for nested pointers; #1 `_padN`/union-`_pad`
+  collide with real fields named that; #3 nested fn-ptr-return declarator
+  invalid. None block the d→e path. Filed `regseq-backends-07` (Codex 3-round:
+  the array-slice-element completeness distinction [pointer-to-struct =
+  forward-decl ok; pointer-to-array = element must be complete] + the union
+  `_pad` were the deeper catches). **Fixed two canonical-doc bugs the reviews
+  surfaced**: §14/Doc-2-D10 alignment (`aligned(layout.align)` not
+  `aligned(n)`/`_Alignas`-on-tag) + §15 fat-pointer/array-element ordering
+  exception. **Next: draft task c2** (enum §13/D9).
