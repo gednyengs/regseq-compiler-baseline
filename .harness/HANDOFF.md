@@ -181,13 +181,13 @@ The volatility split means ~90% of updates touch only **§ Current state**.
   fixes) FILED, awaiting implementer.** **Next to draft: task c2** (enum
   §13/D9), then d (bodies) → e (diag-log). (07 is a parallel edge-case
   hardening; it does not block drafting c2 or the d→e critical path.)
-- **Uncommitted state**: the `regseq-backends-04..06` chain + status-flip +
-  HANDOFFs are committed; `origin/main` is at `74cb206` (pushed through task
-  b). **Uncommitted now**: the canonical-doc fixes (§14/§15/Doc-2 D10), the
-  `regseq-backends-07` spec + registration, + this HANDOFF refresh — not yet
-  committed this turn. Commits `5ca81ce`(c1 filing)→`f410115`(c1 impl) are
-  committed but **not pushed**. The two standing untracked dirs stay
-  untouched by rule —
+- **Uncommitted state**: clean (everything committed; only the standing
+  playground dirs untracked). **`origin/main` is at `74cb206` (pushed through
+  task b).** The unpushed local commits are, oldest→newest: `5ca81ce` (c1
+  filing) → `f410115` (c1 impl) → `fe5b9ab` (the two doc fixes) → `3dc36e2`
+  (c1 close + `regseq-backends-07` filing) → the HANDOFF refresh commit for
+  this hand-off. **Offer to push at session start.** The two standing
+  untracked dirs stay untouched by rule —
   `tests/fixtures/playground-pl011/`, `crates/regseq-driver/tests/fixtures/`
   (experimentation; never commit, never modify).
 
@@ -538,9 +538,20 @@ uv run python scripts/python/task.py add-task \
 
 ## § First-action recommendations by user input (STABLE)
 
-**"Let's continue / what's next"** → § Current state → Next actions
-(currently: **file the Phase-1 `task.py` implementation tasks** — the
-plan + spec are complete and committed; see the Next-actions a→e sequence).
+**"Let's continue / what's next"** → § Current state → Next actions.
+**Currently (fresh-session entry point):** Phase-1 tasks **a, b, c1 are DONE
++ assessed**; **`regseq-backends-07`** (c1 robustness fixes) is **filed,
+awaiting an implementer**; the **next task to DRAFT is c2** (enum §13/D9,
+reusing c1's D10 primitive). **The user's plan for this session: first review
+the `regseq-backends-06` (c1) results, then continue.** Those results:
+implementer commit `f410115` (the type-system/field-offset impl — fmt/clippy
++ 34 tests green, layout fidelity proven by compile+`_Static_assert`), my
+close at `3dc36e2` (the soundness pass found 4 edge-case bugs → `…-07`), and
+`fe5b9ab` (two canonical-doc bugs fixed: §14/§15 + Doc-2 D10). Then either
+**start the implementer on `regseq-backends-07`** or **draft c2** — they're
+independent (07 is edge-case hardening; c2 is the next feature). **Nothing
+pushed past `74cb206`** — offer to push the local chain (`5ca81ce` →
+`f410115` → `fe5b9ab` → `3dc36e2` → this HANDOFF commit) at session start.
 
 **"Implementer is done"** → `git fetch && git log --oneline HEAD..origin/main`
 → `git pull --ff-only` → read the task spec + any expectations → verify
