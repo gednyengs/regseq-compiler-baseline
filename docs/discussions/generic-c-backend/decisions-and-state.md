@@ -130,9 +130,42 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   (content-dedup collision); a `Bytes`-over-`Ty::Union` byte image (size equality
   isn't byte-preserving for a padded spanning member — needs a union `_raw` member);
   a typed-valtree `Const::Aggregate` over `Ty::Union` (`Const::Aggregate` carries no
-  active `FieldIdx`; `pretty.rs:714-718` already rejects it). All rare. **task e
-  likely takes priority over d2.3** — e (the first green ledger fixture) only needs
-  d2.2's `&str` carrier + `u8` CMS, both shipped.
+  active `FieldIdx`; `pretty.rs:714-718` already rejects it). All rare. **e took
+  priority over d2.3 and is now DONE (`567e6e3`); d2.3 still NOT drafted.**
+- **task e (`regseq-backends-15`) DONE + assessed (2026-05-28, `567e6e3`); the
+  FIRST GREEN coverage-ledger milestone, and it spawned a soundness follow-up
+  task.** e implemented the §8 diag-log → `printf` lowering (call-site interception
+  of a `Direct` Log-callee → `printf` + `goto`; a backend-local §26.7-subset
+  template parser reading `args[0]` from its CMS via `model.consts` + `resolve_reloc`;
+  the `(Modifier,Ty)→(specifier,cast)` mapping with the `ll` for 64-bit hex + the
+  two-step source-width cast for signed hex + an admissible-type whitelist gating
+  `printf_spec`; the C-string escaper; both §8.3 `&str` strategies) + the harness
+  bring-up (activate `--bless` to write **only** `golden.c`; the entry-symbol fix via
+  the exported `naming::entry_c_symbol`) + the first 10 `kind=rust` on-disk fixtures.
+  **Ledger flips `DL-1/2/3/4/6/7` + `TM-2/3/5/8` green, verdict stays `not-pass`,
+  byte-stable across runs** (the canonical clean-process Mode-A context;
+  [[golden-c-emit-process-determinism]] — the bridged MIR is process-global-interner
+  sensitive, so the corpus snapshot test is isolated in `corpus_e2e.rs`). Gates:
+  159 backend unit + 34 runner compile-AND-RUN + 1 isolated corpus + 7 bless/entry.
+  **The mandatory post-close Codex soundness pass found a real latent silent
+  miscompile** (5th catch after d1/d2/d2.1/d2.2, [[assessment-soundness-pass]]):
+  **interior-NUL `&str` truncation** — a Rust `&str` (the template literal or a `&str`
+  value) is length-prefixed and may contain an interior `\0`, but the emission goes
+  through C's NUL-terminated `printf` format string + `%s`, so an interior NUL
+  silently truncates the output (verified: `info!("pre\0post={}", 7u32)` →
+  `printf("[INFO] pre\000post=%u\n", …)` → prints only `[INFO] pre`). e is correct
+  for all NUL-free text (the milestone stands); the fix is the next task.
+- **task `&str`-NUL faithfulness (the fwrite redesign, NOT yet drafted; architect-chosen
+  disposition 2026-05-28).** The sound fix for the interior-NUL truncation is a **full
+  length-aware emission redesign**, as its **own task**: replace the single
+  `printf(fmt, args)` with **segmented emission** — `printf`/`snprintf` for the numeric
+  conversions, `fwrite(bytes, 1, n, stdout)` for every literal run AND every `&str`
+  value (static via its CMS bytes+len; non-static via the fat-pointer `.data`/`.len`) —
+  so all content incl. interior NUL is faithful. A deliberate **§8.1 spec delta**
+  ("single emitter (printf)" → printf-for-numerics + fwrite-for-bytes) + §8.3 (the
+  `&str` strategy moves off `%s`/stack-buffer to fwrite); re-bless all 10 golden.c + add
+  an interior-NUL fixture. ([[diag-log-str-nul-faithfulness]].) Until it lands the tree
+  carries this documented narrow silent-truncation (interior-NUL log text only).
 - **Enum representation = the union-of-views form (§13/D9; FIXED 2026-05-27,
   `5d422fe`).** The c2 review showed the literal "tag field + payload `union` at
   a `union_start` (fields at `offset−union_start`)" form is **not C-placeable**
@@ -188,7 +221,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+**d2.2** DONE+assessed; **d2.3 + e to draft** (e likely first); banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` byte-image member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + **ALL non-scalar `Const`** (`Bytes` byte-image walker, the `Aggregate` reference carrier + typed valtree, multi-member `EnumValue` via `_raw`, `ConstMemoryStatic` re-typed by consumer pointee via a shared `body_emit::place_ty` walk); five rare const shapes deferred to d2.3) | `0347d92` (d2.2=`-14` + soundness fix) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+d2.2+**e** DONE+assessed; **first GREEN ledger** — `DL-1/2/3/4/6/7`+`TM-2/3/5/8` green, verdict still `not-pass`; **d2.3 + the `&str`-NUL fwrite-faithfulness task to draft**; banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + ALL non-scalar `Const`; **e** adds the §8 diag-log → `printf` lowering (interception, template parser, specifier+cast mapping, both `&str` strategies) + the codegen-coverage harness bring-up (`--bless`, entry-symbol resolution) + the first 10 on-disk fixtures; five rare const shapes deferred to d2.3, interior-NUL `&str` faithfulness deferred to the fwrite task) | `567e6e3` (e=`-15`) | generic-C backend MVP + first-green codegen-coverage harness |
 
 ---
 
