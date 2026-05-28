@@ -1717,6 +1717,144 @@ fn array_reference_const_reads_re_typed_element_runs_and_exits_zero() {
 }
 
 #[test]
+fn array_slot_reference_const_through_indexed_place_is_re_typed() {
+    // Change F SOUNDNESS REGRESSION (d2.2 close): a `&[u32; 4]` carrier to a
+    // `ConstMemoryStatic` assigned through a NON-`Field` projection (an array
+    // element `_1[0]`, a `ConstantIndex` place). The Change-F scan must narrow
+    // that destination via the SAME walk the body emitter lowers the const
+    // against (`body_emit::place_ty`); the old `place_consumer_ty` shortcut
+    // returned `None` for `ConstantIndex` -> the CMS was missed, stayed the
+    // bridge `uint8_t[16]`, and `regseq_main` read it through a
+    // `(const uint32_t (*)[4])` cast = strict-aliasing/alignment UB. This test
+    // pins the re-typing (`uint32_t CMS_IDX[4]`, not `uint8_t[16]`) AND a clean
+    // run; it FAILS the structural assert without the fix.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    // The assignment destination: a 1-element array of the reference.
+    let arr_ref = m.types.intern(Ty::Array(ref_arr, 1));
+
+    let mut bytes = Vec::new();
+    for v in [10u32, 20, 30, 40] {
+        bytes.extend(
+            v.to_le_bytes()
+                .iter()
+                .map(|b| regseq_model::Byte::Value(*b)),
+        );
+    }
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms_item = mk_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "CMS_IDX",
+    );
+    let cms_em = m.strings.intern("CMS_IDX");
+    let cms = m.instances.push(Instance {
+        item: cms_item,
+        generic_args: GenericArgs::new(),
+        emission_name: cms_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: arr_u8,
+            init: Some(cms_bytes),
+        },
+    });
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 [&[u32;4]; 1], _2 u32 (the read element).
+    let elem0 = PlaceElem::ConstantIndex {
+        offset: 0,
+        min_length: 1,
+        from_end: false,
+    };
+    let body = build_body(
+        0,
+        vec![unit, arr_ref, u32t],
+        vec![
+            bb(
+                vec![
+                    // _1[0] = carrier  (the non-Field-projection destination).
+                    st(StatementKind::Assign(
+                        Place {
+                            local: LocalId::from_u32(1),
+                            projection: Box::new([elem0.clone()]),
+                        },
+                        Rvalue::Use(Operand::Constant(carrier)),
+                    )),
+                    // _2 = (*_1[0])[2]
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(1),
+                            projection: Box::new([
+                                elem0,
+                                PlaceElem::Deref,
+                                PlaceElem::ConstantIndex {
+                                    offset: 2,
+                                    min_length: 4,
+                                    from_end: false,
+                                },
+                            ]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(30, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("uint32_t CMS_IDX[4] ="),
+        "the CMS reached through an indexed place is re-typed to uint32_t[4], \
+         not uint8_t[16]:\n{tu}"
+    );
+    assert!(
+        !tu.contains("uint8_t CMS_IDX[16]"),
+        "the CMS must NOT stay the bridge uint8_t[16] (the soundness bug):\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "array-slot-ref-const");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "(*_1[0])[2] == 30 over the re-typed CMS; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
 fn multiview_direct_enum_const_match_runs_and_exits_zero() {
     // Change E: a payload-bearing multi-view `Const::EnumValue` serializes to
     // the `_raw` byte image; `regseq_main` reads the discriminant (d2.1 tag

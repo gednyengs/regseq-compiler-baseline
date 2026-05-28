@@ -1095,19 +1095,10 @@ impl BodyEmit<'_> {
         })
     }
 
-    /// The element type reached by an `Index` / `ConstantIndex`: the tracked
-    /// sub-array element (from a prior array `Subslice`, boundary 7) if set,
-    /// else the `Array` / `Slice` element of the running type.
+    /// [`index_elem_ty`] over the emitter's model (a thin forwarder so the
+    /// `place_walk` call sites read unchanged).
     fn index_elem_ty(&self, ty: TyId, sub_array_elem: Option<TyId>) -> Result<TyId, EmitError> {
-        if let Some(elem) = sub_array_elem {
-            return Ok(elem);
-        }
-        match &self.model.types[ty] {
-            Ty::Array(elem, _) | Ty::Slice(elem) => Ok(*elem),
-            _ => Err(EmitError::Unsupported(
-                "Index of a non-array / non-slice place (task d2)",
-            )),
-        }
+        index_elem_ty(self.model, ty, sub_array_elem)
     }
 
     /// The address-of expression for a Transmute source operand: `&(lvalue)`
@@ -1964,6 +1955,94 @@ impl BodyEmit<'_> {
             _ => ("%lld", "(long long)"),
         }
     }
+}
+
+/// The element type reached by an `Index` / `ConstantIndex`: the tracked
+/// sub-array element (from a prior array `Subslice`, boundary 7) if set, else
+/// the `Array` / `Slice` element of the running type. Shared by
+/// [`BodyEmit::place_walk`] and the type-only [`place_ty`].
+fn index_elem_ty(
+    model: &RegseqModel,
+    ty: TyId,
+    sub_array_elem: Option<TyId>,
+) -> Result<TyId, EmitError> {
+    if let Some(elem) = sub_array_elem {
+        return Ok(elem);
+    }
+    match &model.types[ty] {
+        Ty::Array(elem, _) | Ty::Slice(elem) => Ok(*elem),
+        _ => Err(EmitError::Unsupported(
+            "Index of a non-array / non-slice place (task d2)",
+        )),
+    }
+}
+
+/// The section 19.4 narrowed type of a place -- **type only** (no lvalue, no
+/// `NameTable` / `InstanceSymbols`). The single source of truth for a place's
+/// running type, consumed by **both** the body emitter's
+/// [`BodyEmit::place_walk`] (which lowers an assigned const against exactly
+/// this type) and the task-d2.2 Change-F `ConstMemoryStatic` scan
+/// (`super::const_memory_static_storage`). Mirrors `place_walk`'s type arms
+/// exactly so the scan cannot drift from what the emitter lowers a const
+/// against -- a drift would re-introduce the mismatched-type
+/// `ConstMemoryStatic` cast Change F removes (the soundness bug the
+/// `place_consumer_ty` shortcut caused). The two are pinned by the regression
+/// fixtures that assign a CMS-backed reference const through a non-`Field`
+/// projection.
+pub(super) fn place_ty(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    place: &Place,
+) -> Result<TyId, EmitError> {
+    let mut ty = body.local_decls[place.local].ty;
+    let mut sub_array_elem: Option<TyId> = None;
+    let mut pending_variant = false;
+    for elem in place.projection.iter() {
+        match elem {
+            PlaceElem::Deref => {
+                // Thin / fat / dyn all narrow to the pointee; a non-pointer
+                // (malformed) leaves `ty` unchanged, mirroring `place_walk`.
+                ty = match &model.types[ty] {
+                    Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                    _ => ty,
+                };
+                sub_array_elem = None;
+            }
+            PlaceElem::Field(_, field_ty) => {
+                ty = *field_ty;
+                sub_array_elem = None;
+                pending_variant = false;
+            }
+            PlaceElem::Index(_) | PlaceElem::ConstantIndex { .. } => {
+                ty = index_elem_ty(model, ty, sub_array_elem.take())?;
+            }
+            PlaceElem::Subslice { from_end, .. } => {
+                if *from_end {
+                    return Err(EmitError::Unsupported(
+                        "Subslice from_end as a place lvalue (task d2)",
+                    ));
+                }
+                let elem = match &model.types[ty] {
+                    Ty::Array(elem, _) => *elem,
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "Subslice of a non-array place lvalue (task d2)",
+                        ))
+                    }
+                };
+                sub_array_elem = Some(elem);
+            }
+            PlaceElem::Downcast(_) => {
+                pending_variant = true;
+            }
+        }
+    }
+    if pending_variant {
+        return Err(EmitError::Unsupported(
+            "Downcast not followed by a Field (malformed place)",
+        ));
+    }
+    Ok(ty)
 }
 
 /// `Const` -> a C static / `const` initializer (section 12), the d1 subset.

@@ -1228,7 +1228,7 @@ pub(super) fn callee_param_tys(
             .unwrap_or_default(),
         CallCallee::Indirect(op) => {
             let ty = match op {
-                Operand::Copy(p) | Operand::Move(p) => place_consumer_ty(body, p),
+                Operand::Copy(p) | Operand::Move(p) => body_emit::place_ty(model, body, p).ok(),
                 Operand::Constant(_) => None,
             };
             ty.and_then(|t| match &model.types[t] {
@@ -1254,12 +1254,20 @@ fn scan_rvalue(
     use regseq_model::Rvalue;
     match rvalue {
         Rvalue::Use(op) => {
-            if let Some(ty) = place_consumer_ty(body, place) {
+            // The destination's section 19.4 narrowed type, via the SAME walk
+            // the body emitter lowers the const against (`body_emit::place_ty`).
+            // A non-`Field` projection (`Index` / `ConstantIndex` / `Subslice`
+            // / `Deref`) must be narrowed too: otherwise a CMS-backed reference
+            // const assigned through it is missed by the scan, stays the
+            // bridge `Array(u8, N)`, and is read through a mismatched-type
+            // pointer (the d2.2-soundness bug the `place_consumer_ty` shortcut
+            // caused).
+            if let Ok(ty) = body_emit::place_ty(model, body, place) {
                 scan_operand_const(model, op, ty, map)?;
             }
         }
         Rvalue::Repeat(op, _) => {
-            if let Some(ty) = place_consumer_ty(body, place) {
+            if let Ok(ty) = body_emit::place_ty(model, body, place) {
                 if let Ty::Array(elem, _) = model.types[ty] {
                     scan_operand_const(model, op, elem, map)?;
                 }
@@ -1326,18 +1334,6 @@ fn scan_operand_const(
         scan_const(model, model.consts.resolve(*c), consumer_ty, map)?;
     }
     Ok(())
-}
-
-/// The consumer type of an assignment destination place: a bare local's
-/// declared type, or a trailing `Field`'s carried type. `None` for other
-/// projections (a `ConstMemoryStatic` reference is assigned to a simple
-/// place in practice).
-fn place_consumer_ty(body: &regseq_model::Body, place: &regseq_model::Place) -> Option<TyId> {
-    match place.projection.last() {
-        None => Some(body.local_decls[place.local].ty),
-        Some(regseq_model::PlaceElem::Field(_, ty)) => Some(*ty),
-        _ => None,
-    }
 }
 
 /// Record a reference carrier's pointee storage for a `ConstMemoryStatic`
