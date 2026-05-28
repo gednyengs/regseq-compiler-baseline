@@ -76,6 +76,23 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   non-enum, non-`dyn`** types. c2 (`regseq-backends-08`) = **enum representation
   §13/D9** (Doc-2 top-risk) **reusing c1's D10 primitive**. `dyn`/vtable/dispatch
   + field-*access* are later/task-d. Plan: a→b→**c1→c2**→d→e.
+- **Task "(d) bodies" SPLIT into d1 + d2, and d2 further deferred into d2.1 / d2.2 /
+  vtable (2026-05-27, user-approved).** d1 (`regseq-backends-10`/`-11`) = scalar /
+  pointer / control-flow bodies + §15 root-widening + instance-symbol naming. **d2
+  (`regseq-backends-12`) = non-enum, non-const structured data**: §4
+  `Field`/`Index`/`ConstantIndex`/`Subslice` places + §14 access (a single shared
+  `place_walk` mirroring §19.4), §10 `Aggregate`/`Repeat`, `PtrMetadata` + non-enum
+  `Discriminant`, §11 **slice/str fat-pointer construction** (`Unsize` /
+  `Ref`-to-unsized / `Subslice` under a `Ref`), §10.1 `*WithOverflow`. Three
+  fail-loud deferrals (distinct `EmitError::Unsupported` labels): **d2.1** = §13 enum
+  tag-ops (`Downcast`/`Discriminant`/`SetDiscriminant`/`Aggregate::Enum`/`EnumValue`);
+  **d2.2** = ALL non-scalar const (the bridge emits these as `Const::Bytes` flat
+  byte-images, often relocation-bearing, + the `Const::Aggregate([Reloc,Uint])`
+  reference carrier whose `Reloc`→`ConstMemoryStatic` is itself a `Bytes` static —
+  so the carrier is transitively coupled to byte-image lowering and can't be carved
+  from it); **vtable task** = `dyn`/`Unsize`-to-dyn/`ClosureFnPointer`/vtable/dispatch.
+  Plan now: …→d1→**d2**→d2.1→d2.2→e. (The d2.2 carve-out emerged in the d2 spec's
+  Codex review — drafting caught it before any code.)
 - **Enum representation = the union-of-views form (§13/D9; FIXED 2026-05-27,
   `5d422fe`).** The c2 review showed the literal "tag field + payload `union` at
   a `union_start` (fields at `offset−union_start`)" form is **not C-placeable**
@@ -131,7 +148,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+**d1**+**d1.1** DONE+assessed; **d2/e to draft**; banks 2-3 emit all sized aggregates incl. enums; banks 4-5 emit scalar/pointer/control-flow bodies + prototypes + statics; instance symbols are linkage-aware + generic-disambiguated + clash-netted) | `d040b37` (d1.1=`-11`) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+**d2** DONE+assessed; **d2.1/d2.2/e to draft**; banks 2-3 emit all sized aggregates incl. enums; banks 4-5 emit scalar/pointer/control-flow bodies + **non-enum structured data** (§4 places + §14 access, aggregates, slice/str fat-pointer construction, *WithOverflow); instance symbols linkage-aware + clash-netted) | `19f5b25` (d2=`-12` + soundness fix) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
