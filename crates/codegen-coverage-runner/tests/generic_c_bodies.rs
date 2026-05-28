@@ -1102,6 +1102,145 @@ fn niche_enum_construct_match_runs_and_exits_zero() {
 }
 
 #[test]
+fn niche_bool_construct_match_distinguishes_some_true_from_none() {
+    // `Option<bool>`: untagged `Some(b)` is the bool byte at @0 (0 or 1);
+    // niched `None` carries `tag_value = 2` (bool's first invalid bit pattern).
+    // Construct `Some(true)` + `None`, read each Discriminant, and read Some's
+    // bool payload via Downcast+Field; abort on a wrong result. Regression
+    // for the d2.1 soundness-pass finding: before the raw-storage-integer
+    // niche fix, `render_tag_value(Bool, 2) = "1"` and `(_Bool){2}` normalized
+    // to 1, so `Some(true)` (byte 1) collided with `None` -- this fixture's
+    // `Discriminant(Some(true)) == 1 (Some)` assertion catches that.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let boolt = m.types.intern(Ty::Bool);
+    let some_field = fl(&mut m, "0", boolt, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: boolt,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 2,
+        },
+        variants: vec![
+            variant(&mut m, "None", Vec::new(), 0, Some(2)),
+            variant(&mut m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    let opt = push_enum_instance(&mut m, "OptBool", enum_layout(1, 1, shape));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let true_c = m.consts.intern(Const::Bool(true));
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 bool true, _2 OptBool some, _3 OptBool none, _4 u8 dS,
+    // _5 u8 dN, _6 bool payload.
+    let body = build_body(
+        0,
+        vec![unit, boolt, opt, opt, u8t, u8t, boolt],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(true_c)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(opt, VariantIdx::from_u32(1)),
+                            Box::new([Operand::Copy(loc(1))]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(3),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(opt, VariantIdx::from_u32(0)),
+                            Box::new([]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(loc(4), Rvalue::Discriminant(loc(2)))),
+                    st(StatementKind::Assign(loc(5), Rvalue::Discriminant(loc(3)))),
+                ],
+                // Some(true) must discriminate to 1 (Some); the buggy path
+                // returns 0 (None), falling through `otherwise` to fail.
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(4)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(1, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(
+                vec![],
+                // None must discriminate to 0 (None).
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(5)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(6),
+                    Rvalue::Use(Operand::Copy(Place {
+                        local: LocalId::from_u32(2),
+                        projection: Box::new([
+                            PlaceElem::Downcast(VariantIdx::from_u32(1)),
+                            PlaceElem::Field(FieldIdx::from_u32(0), boolt),
+                        ]),
+                    })),
+                ))],
+                // Some's payload must read back as `true` (1).
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(6)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(1, BlockId::from_u32(3))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(3)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok for an Option<bool> body");
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "niche-bool");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "Option<bool>: Some(true) discriminates as Some (not None), None as None; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
 fn repr_int_enum_discriminant_maps_tag_to_explicit_value() {
     // `enum E { A = 10, B = 20 }` (fieldless Direct, explicit discriminants !=
     // storage index): construct `B`, read its discriminant -> 20 (NOT the

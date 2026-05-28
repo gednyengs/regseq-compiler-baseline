@@ -3701,6 +3701,37 @@ fn push_opt_tuple_niche_enum(m: &mut RegseqModel) -> TyId {
     push_enum_instance(m, "OptT", enum_layout(2, 1, shape))
 }
 
+/// `Option<bool>` shape: untagged `Some(bool)` holds the bool @0 (the niche
+/// cell IS the bool); `None` is niched with `tag_value = Some(2)` (bool's first
+/// invalid bit pattern). Inline (one view), the niche cell coincides with the
+/// bool field by offset+type -- but `_Bool` normalizes, so a const literal
+/// can't carry a raw 2 (the d2.1 soundness-pass finding).
+fn push_opt_bool_niche_enum(m: &mut RegseqModel) -> TyId {
+    let boolt = m.types.intern(Ty::Bool);
+    let some_field = fl(m, "0", boolt, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: boolt,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 2,
+        },
+        variants: vec![
+            variant(m, "None", Vec::new(), 0, Some(2)),
+            variant(m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    push_enum_instance(m, "OptBool", enum_layout(1, 1, shape))
+}
+
 /// The `EmitError::Unsupported` label `m` fails with (panics if `m` emits Ok
 /// or a different error).
 fn unsupported_reason(m: &RegseqModel) -> &'static str {
@@ -3895,8 +3926,8 @@ fn niche_discriminant_reads_the_cell_at_the_assign_site() {
         "niche read via byte storage at TagScalar.offset:\n{tu}"
     );
     assert!(
-        tu.contains("_nd == ((const uint32_t *)0ULL) ?"),
-        "ternary over the niche-cell temp with the untagged fallback:\n{tu}"
+        tu.contains("_nd == ((uint64_t)(0ULL)) ?"),
+        "ternary over the niche-cell temp (raw uint storage) with the untagged fallback:\n{tu}"
     );
 }
 
@@ -3999,8 +4030,8 @@ fn set_discriminant_niche_writes_cell_and_untagged_is_a_noop() {
     fn_instance(&mut m, "setd", sig, Some(body));
     let tu = emit_generic_c(&m).unwrap();
     assert!(
-        tu.contains("memcpy((unsigned char *)&(_1) + 0, &(const uint32_t *){((const uint32_t *)0ULL)}, sizeof(const uint32_t *));"),
-        "niche cell write via byte storage:\n{tu}"
+        tu.contains("memcpy((unsigned char *)&(_1) + 0, &(uint64_t){((uint64_t)(0ULL))}, sizeof(uint64_t));"),
+        "niche cell write via raw-storage byte memcpy:\n{tu}"
     );
     // The untagged Some SetDiscriminant is a no-op: exactly one niche memcpy.
     assert_eq!(
@@ -4034,8 +4065,8 @@ fn enum_construct_niche_niched_writes_only_the_cell() {
     fn_instance(&mut m, "mk_none", sig, Some(body));
     let tu = emit_generic_c(&m).unwrap();
     assert!(
-        tu.contains("memcpy((unsigned char *)&(_0) + 0, &(const uint32_t *){((const uint32_t *)0ULL)}, sizeof(const uint32_t *));"),
-        "niche niched construction writes only the niche cell:\n{tu}"
+        tu.contains("memcpy((unsigned char *)&(_0) + 0, &(uint64_t){((uint64_t)(0ULL))}, sizeof(uint64_t));"),
+        "niche niched construction writes only the niche cell (raw-storage memcpy):\n{tu}"
     );
 }
 
@@ -4158,6 +4189,39 @@ fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_2() {
     assert!(
         unsupported_reason(&m).contains("(multi-member): task d2.2"),
         "non-coinciding niche cell defers to d2.2"
+    );
+}
+
+#[test]
+fn const_enum_value_bool_niche_is_d2_2() {
+    // An inline niche `Const::EnumValue` whose niche cell IS a directly
+    // coinciding `_Bool` field still defers to d2.2: a const compound literal
+    // writes through the field's logical C type, and `(_Bool){2}` normalizes to
+    // 1 -- the raw niche bit pattern can't round-trip through a `_Bool` field.
+    // The runtime niche path uses raw-integer byte storage (`niche_storage_kind`)
+    // and is unaffected. (The d2.1 soundness-pass finding.)
+    let mut m = model();
+    let opt = push_opt_bool_niche_enum(&mut m);
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    let sig = fnsig(&mut m, vec![], opt, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![opt],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(ev)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "knone_bool", sig, Some(body));
+    assert!(
+        unsupported_reason(&m).contains("(multi-member): task d2.2"),
+        "bool-niche EnumValue normalization-lossy -> d2.2"
     );
 }
 

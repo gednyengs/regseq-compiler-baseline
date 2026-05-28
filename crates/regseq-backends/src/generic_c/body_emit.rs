@@ -747,16 +747,22 @@ impl BodyEmit<'_> {
                 "niche untagged variant index out of range",
             ))?
             .discriminant;
+        // The niche cell is a raw bit pattern; read it as the scalar's raw
+        // storage unsigned integer (not the logical C type, which may normalize
+        // -- `_Bool` -- or constrain the value), so an invalid-bit-pattern niche
+        // tag (e.g. `Option<bool>`'s `None == 2`) round-trips and compares
+        // correctly against `tag_value` (also a raw bit pattern, mod 2^width).
+        let storage_kind = niche_storage_kind(self.model, scalar_ty)?;
         let mut expr = render_discriminant(self.model, dst_ty, untagged_disc)?;
         let tmp = self.fresh_temp_name("_nd");
         for v in variants.iter().rev() {
             if let Some(tv) = v.tag_value {
-                let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
+                let tvr = render_uint(storage_kind, tv);
                 let d = render_discriminant(self.model, dst_ty, v.discriminant)?;
                 expr = format!("({tmp} == {tvr} ? {d} : {expr})");
             }
         }
-        let tmp_cty = types::c_type(self.model, self.names, scalar_ty);
+        let tmp_cty = uint_ctype(storage_kind);
         Ok(Some(format!(
             "{{ {tmp_cty} {tmp}; memcpy(&{tmp}, (const unsigned char *)&({enum_lv}) + {offset}, \
              sizeof({tmp})); {dst} = {expr}; }}"
@@ -805,11 +811,16 @@ impl BodyEmit<'_> {
             },
             enum_emit::EnumTag::Niche { offset, scalar_ty } => match tag_value {
                 Some(tv) => {
-                    let scalar_cty = types::c_type(self.model, self.names, scalar_ty);
-                    let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
+                    // Write the raw niche bit pattern through the scalar's raw
+                    // storage unsigned integer (see `assign_niche_discriminant`):
+                    // `(_Bool){2}` would normalize to 1, so a `_Bool` niche needs
+                    // `(uint8_t){2}`.
+                    let storage_kind = niche_storage_kind(self.model, scalar_ty)?;
+                    let raw_cty = uint_ctype(storage_kind);
+                    let tvr = render_uint(storage_kind, tv);
                     Ok(Some(format!(
-                        "memcpy((unsigned char *)&({enum_lv}) + {offset}, &({scalar_cty}){{{tvr}}}, \
-                         sizeof({scalar_cty}));"
+                        "memcpy((unsigned char *)&({enum_lv}) + {offset}, &({raw_cty}){{{tvr}}}, \
+                         sizeof({raw_cty}));"
                     )))
                 }
                 // Niche untagged variant: the payload is the tag -> no-op.
@@ -2179,6 +2190,15 @@ fn niche_coinciding_field(
         } => (untagged_variant.index(), variants),
         _ => return None,
     };
+    // A `Const::EnumValue` writes the niche cell through the field's logical C
+    // type (a const compound literal has no raw-byte/memcpy escape hatch). A
+    // type that normalizes a raw bit pattern -- `_Bool`, where `(_Bool){2}`
+    // stores 1 -- therefore cannot carry an arbitrary niche value as a const, so
+    // defer it to d2.2. (The runtime niche path uses raw-integer byte storage
+    // and is unaffected.)
+    if matches!(model.types[scalar_ty], Ty::Bool) {
+        return None;
+    }
     let variant = variants.get(untagged)?;
     for (idx, f) in variant.fields.iter().enumerate() {
         if f.offset == offset && f.ty == scalar_ty {
@@ -2208,11 +2228,33 @@ fn variant_layout(shape: &EnumShape, v: usize) -> Option<&VariantLayout> {
     }
 }
 
-/// Render an enum tag value of logical type `scalar_ty` (section 13 / 11.1).
+/// The raw storage unsigned-integer [`UintKind`] for a niche tag cell of
+/// logical type `scalar_ty`. A niche tag is a raw bit pattern (`tag_value mod
+/// 2^scalar_width`), so the cell is read / written / compared as an unsigned
+/// integer of the scalar's storage width -- never the logical C type, which can
+/// normalize (`_Bool`) or constrain (an invalid `char`) the value. The width is
+/// the scalar's byte size; fails loud for a width outside {1,2,4,8,16}.
+fn niche_storage_kind(model: &RegseqModel, scalar_ty: TyId) -> Result<UintKind, EmitError> {
+    match model.size_align_of(scalar_ty).size {
+        1 => Ok(UintKind::U8),
+        2 => Ok(UintKind::U16),
+        4 => Ok(UintKind::U32),
+        8 => Ok(UintKind::U64),
+        16 => Ok(UintKind::U128),
+        _ => Err(EmitError::Unsupported(
+            "niche tag cell of an unsupported storage width",
+        )),
+    }
+}
+
+/// Render an enum tag value of logical type `scalar_ty` (section 13 / 11.1) for
+/// a `_tag`-view (`Direct` / `Single { scalar: Some }`) write or a non-`Bool`
+/// inline-niche const field, where the value is in-range for the logical type.
 /// Every admitted `TagScalar.scalar_ty` is covered: `Int` / `Uint` via the d1
 /// signed / unsigned renderers; `Bool` / `Char` via their d1 const forms; a
 /// `Ptr` / `Ref` tag (the niche tag *is* the pointer, e.g. `Option<&T>`) as
-/// the integer bit pattern cast to the pointer's C type.
+/// the integer bit pattern cast to the pointer's C type. (The runtime niche
+/// cell path uses [`niche_storage_kind`] + `render_uint` for raw bit patterns.)
 fn render_tag_value(
     model: &RegseqModel,
     names: &NameTable,
