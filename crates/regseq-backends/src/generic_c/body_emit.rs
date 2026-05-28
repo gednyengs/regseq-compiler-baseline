@@ -17,15 +17,18 @@
 //! section 10.1 `*WithOverflow` result `(T, bool)`. Task d2.1 adds the
 //! section 13 enum tag-ops over the c2 union-of-views (`Downcast`+`Field`,
 //! enum `Discriminant`, `SetDiscriminant`, `Aggregate::Enum`, single-member
-//! `Const::EnumValue`). The remaining deferrals still fail loud via
-//! [`EmitError::Unsupported`]: all non-scalar `Const` (`Bytes` / `Aggregate`)
-//! plus the multi-member `Const::EnumValue` are task d2.2; `dyn` / vtable
-//! construction is the vtable task. Diag-log call-site interception is
-//! **task e**.
+//! `Const::EnumValue`). Task d2.2 completes the non-scalar `Const` layer: the
+//! `Const::Bytes` byte-image walker, the `Const::Aggregate` reference carrier
+//! and typed valtree, and the multi-member `Const::EnumValue` (the `_raw`
+//! byte image). A narrow set of d2.3 carve-outs still fail loud via
+//! [`EmitError::Unsupported`] (a relocation in an enum / aggregate const, an
+//! inline bool-niche, a `ConstMemoryStatic` at incompatible pointee types, a
+//! union byte image / valtree); `dyn` / vtable construction is the vtable
+//! task. Diag-log call-site interception is **task e**.
 
 use regseq_model::{
-    AggregateKind, AssertKind, AttrData, BinOp, CallCallee, CastKind, Const, ConstId, EnumShape,
-    FloatKind, InstanceId, InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId,
+    AggregateKind, AssertKind, AttrData, BinOp, Byte, CallCallee, CastKind, Const, ConstId, Endian,
+    EnumShape, FloatKind, InstanceId, InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId,
     NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue,
     StatementKind, SwitchTargets, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp,
     VariantIdx, VariantLayout,
@@ -33,6 +36,7 @@ use regseq_model::{
 
 use super::{
     enum_emit, layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable,
+    StorageTy,
 };
 
 /// The C identifier for a body-local `local`. The return place is always
@@ -1114,7 +1118,7 @@ impl BodyEmit<'_> {
             Operand::Copy(p) | Operand::Move(p) => Ok(format!("&({})", self.place_lvalue(p)?)),
             Operand::Constant(id) => {
                 let c = self.model.consts.resolve(*id);
-                let value = const_expr(self.model, self.names, self.syms, c, None)?;
+                let value = const_expr(self.model, self.names, self.syms, c, None, false)?;
                 let cty = const_c_type(self.model, c);
                 Ok(format!("&({cty}){{{value}}}"))
             }
@@ -1135,6 +1139,7 @@ impl BodyEmit<'_> {
                 self.syms,
                 self.model.consts.resolve(*id),
                 consumer_ty,
+                false,
             ),
         }
     }
@@ -1806,13 +1811,22 @@ impl BodyEmit<'_> {
             CallCallee::Indirect(op) => format!("({})", self.operand_expr(op, None)?),
         };
 
+        // The callee's parameter types, threaded as the per-argument consumer
+        // type so a non-scalar / reference const argument lowers against the
+        // parameter type (a scalar argument ignores it). The recovery is the
+        // single helper the Change-F pre-pass also uses, so emission + scan
+        // cannot disagree on which arguments carry a known consumer type; an
+        // unrecoverable signature lowers arguments at `None` (a non-scalar
+        // const argument then fails loud).
+        let param_tys = super::callee_param_tys(self.model, self.body, callee);
+
         let mut arg_strs = Vec::new();
-        for arg in args.iter() {
+        for (i, arg) in args.iter().enumerate() {
             // Lower (validate) every argument first so a deferred place
             // projection reached through an argument fails loud, then drop the
             // ZST arguments from the C call (a ZST value carries no bytes and
             // is omitted from the prototype's parameter list, section 15).
-            let expr = self.operand_expr(arg, None)?;
+            let expr = self.operand_expr(arg, param_tys.get(i).copied())?;
             if self.is_zst_operand(arg) {
                 continue;
             }
@@ -1963,21 +1977,74 @@ pub(super) fn static_initializer(
     c: &Const,
     consumer_ty: TyId,
 ) -> Result<String, EmitError> {
-    const_expr(model, names, syms, c, Some(consumer_ty))
+    // A static initializer is an init-list position (`T X = <here>;`), so an
+    // array reconstruction omits the compound-literal cast (C forbids
+    // initializing an array object from a compound-literal expression).
+    const_expr(model, names, syms, c, Some(consumer_ty), true)
 }
 
-/// `Const` -> C value expression / initializer (section 12), for the d1
-/// scalar subset plus the section 13 single-member `EnumValue` literal.
-/// `consumer_ty` supplies the pointer type for a `Reloc` to a static, the
-/// exact pointer spelling for a `NullPtr`, and the enum type for an
-/// `EnumValue`. The non-scalar forms are still deferred: `Bytes` / `Aggregate`
-/// and the multi-member `EnumValue` are task d2.2.
+/// Reconstruct the initializer for a `ConstMemoryStatic` re-typed to its
+/// consumer pointee `storage` (d2.2 Change F). `c` is the bridge's
+/// `Const::Bytes` byte image; the value is reconstructed at the storage shape
+/// (`Sized` walks the pointee type, `Array` walks `count` element slices), so
+/// the emitted definition matches the re-typed declaration. Always an
+/// init-list position.
+pub(super) fn const_memory_static_initializer(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    c: &Const,
+    storage: &StorageTy,
+) -> Result<String, EmitError> {
+    let Const::Bytes(bytes) = c else {
+        return Err(EmitError::Unsupported(
+            "ConstMemoryStatic initializer is not a byte image",
+        ));
+    };
+    match storage {
+        StorageTy::Sized(ty) => bytes_to_typed_literal(model, names, syms, bytes, *ty, true),
+        StorageTy::Array { elem, count } => {
+            let esize = model.size_align_of(*elem).size as usize;
+            let mut parts = Vec::with_capacity(*count as usize);
+            for i in 0..*count as usize {
+                let lo = i * esize;
+                let hi = lo + esize;
+                if hi > bytes.len() {
+                    return Err(EmitError::Unsupported(
+                        "ConstMemoryStatic byte image shorter than its element array",
+                    ));
+                }
+                parts.push(bytes_to_typed_literal(
+                    model,
+                    names,
+                    syms,
+                    &bytes[lo..hi],
+                    *elem,
+                    true,
+                )?);
+            }
+            Ok(format!("{{ {} }}", parts.join(", ")))
+        }
+    }
+}
+
+/// `Const` -> C value expression / initializer (section 12). `consumer_ty`
+/// supplies the pointer type for a `Reloc` to a static, the exact pointer
+/// spelling for a `NullPtr`, the enum type for an `EnumValue`, and -- task
+/// d2.2 -- the consumer `Ty` the non-scalar forms reconstruct against:
+/// `Bytes` (the byte-image walker, Change B), `Aggregate` (the reference
+/// carrier / typed valtree, Changes C/D), and multi-member `EnumValue` (the
+/// `_raw` byte image, Change E). `at_init` is set at an init-list position (a
+/// static initializer or a recursed aggregate member); it controls whether an
+/// array reconstruction omits the compound-literal cast (C forbids
+/// initializing an array object from a compound-literal expression).
 fn const_expr(
     model: &RegseqModel,
     names: &NameTable,
     syms: &InstanceSymbols,
     c: &Const,
     consumer_ty: Option<TyId>,
+    at_init: bool,
 ) -> Result<String, EmitError> {
     match c {
         Const::Bool(b) => Ok(if *b { "1".to_string() } else { "0".to_string() }),
@@ -1998,8 +2065,15 @@ fn const_expr(
             _ => Ok(format!("(({} *)0)", types::c_type(model, names, *pointee))),
         },
         Const::Reloc(target) => Ok(reloc_designator(model, names, syms, *target, consumer_ty)),
-        Const::Bytes(_) => Err(EmitError::Unsupported("Const::Bytes (task d2.2)")),
-        Const::Aggregate(_) => Err(EmitError::Unsupported("Const::Aggregate (task d2.2)")),
+        Const::Bytes(bytes) => {
+            let ty = consumer_ty.ok_or(EmitError::Unsupported(
+                "Const::Bytes without a known consumer type",
+            ))?;
+            bytes_to_typed_literal(model, names, syms, bytes, ty, at_init)
+        }
+        Const::Aggregate(children) => {
+            aggregate_const_expr(model, names, syms, children, consumer_ty, at_init)
+        }
         Const::EnumValue {
             variant_idx,
             payload,
@@ -2007,23 +2081,604 @@ fn const_expr(
     }
 }
 
-/// `Const::EnumValue` (section 13 / 12): the **single-member** cases lower to
-/// one C compound literal; everything requiring two members relabels to task
-/// d2.2.
+// -- d2.2 Change B: the `Const::Bytes` byte-image walker ---------------
+
+/// Reconstruct a `Const::Bytes` byte image as a **typed** C initializer for
+/// the consumer `Ty` (d2.2 Change B). Dispatches on `model.types[ty]`:
+/// scalars decode `size_of(ty)` bytes per `model.target.endian`; pointers
+/// match a complete `pointer_size` `Byte::Reloc` run / all-zero null;
+/// `Tuple` / `Struct` / `Array` slice per `FieldLayout.offset` (source order)
+/// and recurse; a `Ty::Union` byte image cannot be soundly reproduced (a
+/// padded spanning member is not byte-preserving) -> task d2.3; an `Enum`
+/// initializes the multi-view `_raw` member (no `Reloc`) or reconstructs the
+/// inline fields. `at_init` controls the array cast omission. The walk is
+/// purely positional + layout-driven; no tag / discriminant re-derivation.
+pub(super) fn bytes_to_typed_literal(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    consumer_ty: TyId,
+    at_init: bool,
+) -> Result<String, EmitError> {
+    match &model.types[consumer_ty] {
+        Ty::Bool | Ty::Char | Ty::Int(_) | Ty::Uint(_) | Ty::Float(_) => {
+            scalar_from_bytes(model, bytes, consumer_ty)
+        }
+        Ty::Ptr(_, _) | Ty::Ref(_, _) | Ty::FnPtr(_) => {
+            pointer_from_bytes(model, names, syms, bytes, consumer_ty)
+        }
+        Ty::Tuple { .. } | Ty::Struct { .. } | Ty::Closure(_, _) => {
+            aggregate_from_bytes(model, names, syms, bytes, consumer_ty)
+        }
+        Ty::Array(elem, n) => array_from_bytes(model, names, syms, bytes, *elem, *n, at_init),
+        Ty::Union { .. } => Err(EmitError::Unsupported("Const union byte-image: task d2.3")),
+        Ty::Enum { .. } => enum_from_bytes(model, names, syms, bytes, consumer_ty),
+        _ => Err(EmitError::Unsupported(
+            "Const::Bytes for an unsupported consumer type",
+        )),
+    }
+}
+
+/// Decode a scalar consumer from its `size_of` byte slice (per target endian)
+/// into the d1 renderer (`Bytes` `Uninit` -> 0; a `Reloc` byte where a scalar
+/// is expected is malformed).
+fn scalar_from_bytes(model: &RegseqModel, bytes: &[Byte], ty: TyId) -> Result<String, EmitError> {
+    let size = model.size_align_of(ty).size as usize;
+    let bits = decode_scalar_bits(bytes, size, model.target.endian)?;
+    match &model.types[ty] {
+        Ty::Bool => Ok(if bits != 0 { "1" } else { "0" }.to_string()),
+        Ty::Char => Ok(format!("(uint32_t){}U", bits as u32)),
+        Ty::Int(kind) => Ok(render_int(*kind, bits)),
+        Ty::Uint(kind) => Ok(render_uint(*kind, bits)),
+        Ty::Float(kind) => Ok(render_float(*kind, bits)),
+        _ => Err(EmitError::Unsupported(
+            "scalar byte image over a non-scalar type",
+        )),
+    }
+}
+
+/// Assemble the `size`-byte scalar bit pattern from `bytes` per `endian`
+/// (`Uninit` -> 0; a `Reloc` byte is malformed for a scalar).
+fn decode_scalar_bits(bytes: &[Byte], size: usize, endian: Endian) -> Result<u128, EmitError> {
+    if bytes.len() < size {
+        return Err(EmitError::Unsupported(
+            "byte image shorter than the scalar width",
+        ));
+    }
+    let mut val: u128 = 0;
+    for (i, b) in bytes.iter().take(size).enumerate() {
+        let byte = match b {
+            Byte::Value(v) => *v,
+            Byte::Uninit => 0,
+            Byte::Reloc(_) => {
+                return Err(EmitError::Unsupported(
+                    "relocation byte where a scalar value was expected",
+                ))
+            }
+        };
+        let shift = match endian {
+            Endian::Little => 8 * i,
+            Endian::Big => 8 * (size - 1 - i),
+        };
+        val |= u128::from(byte) << shift;
+    }
+    Ok(val)
+}
+
+/// Reconstruct a pointer consumer from its `pointer_size` byte slice: a
+/// complete `Byte::Reloc(r)` run -> the d1 `&<target>` cast; all-zero (no
+/// `Reloc`) -> the typed null pointer; anything else (mixed / partial reloc)
+/// is malformed. A fat (unsized-pointee) reference is not a single pointer
+/// slot, so its all-zero case is not a valid typed-null cast -> fail loud.
+fn pointer_from_bytes(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    ty: TyId,
+) -> Result<String, EmitError> {
+    let size = model.size_align_of(ty).size as usize;
+    if bytes.len() < size {
+        return Err(EmitError::Unsupported(
+            "byte image shorter than the pointer width",
+        ));
+    }
+    if let Byte::Reloc(r) = bytes[0] {
+        if bytes[..size].iter().all(|b| *b == Byte::Reloc(r)) {
+            return Ok(reloc_designator(model, names, syms, r, Some(ty)));
+        }
+        return Err(EmitError::Unsupported(
+            "partial pointer relocation in a byte image",
+        ));
+    }
+    let all_zero = bytes[..size]
+        .iter()
+        .all(|b| matches!(b, Byte::Value(0) | Byte::Uninit));
+    if all_zero && types::unsized_pointee_struct_name(model, names, ty).is_none() {
+        return Ok(format!("(({})0)", types::c_type(model, names, ty)));
+    }
+    Err(EmitError::Unsupported(
+        "non-null non-relocation pointer byte image",
+    ))
+}
+
+/// Reconstruct a `Tuple` / `Struct` / `Closure` consumer from its byte image
+/// (section 14): walk `FieldLayout` in source / MIR order, slice each non-ZST
+/// field at its `offset`, recurse, and designate by the field's C name
+/// ([`layout_emit::field_c_name_ty`]). ZST fields contribute no designator.
+/// Emitted with the compound-literal cast (valid in both value + init
+/// positions; nested array members brace-init via `at_init = true`).
+fn aggregate_from_bytes(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    ty: TyId,
+) -> Result<String, EmitError> {
+    let fields = agg_field_layouts(model, ty).ok_or(EmitError::Unsupported(
+        "byte image over an unresolved aggregate",
+    ))?;
+    let mut parts = Vec::new();
+    for (idx, f) in fields.iter().enumerate() {
+        if layout_emit::is_zst(model, f.ty) {
+            continue;
+        }
+        let (fname, fty) = layout_emit::field_c_name_ty(model, ty, idx).ok_or(
+            EmitError::Unsupported("aggregate field navigation failed in a byte image"),
+        )?;
+        let fsize = model.size_align_of(fty).size as usize;
+        let off = f.offset as usize;
+        if off + fsize > bytes.len() {
+            return Err(EmitError::Unsupported(
+                "aggregate field slice exceeds the byte image",
+            ));
+        }
+        let recon =
+            bytes_to_typed_literal(model, names, syms, &bytes[off..off + fsize], fty, true)?;
+        parts.push(format!(".{fname} = {recon}"));
+    }
+    let agg = names.agg_name(ty);
+    if parts.is_empty() {
+        Ok(format!("(struct {agg}){{0}}"))
+    } else {
+        Ok(format!("(struct {agg}){{ {} }}", parts.join(", ")))
+    }
+}
+
+/// The source / MIR-order `FieldLayout`s of a `Tuple` / `Struct` / `Closure`
+/// (the same lookup [`layout_emit`] uses; a closure resolves through its
+/// parallel capture `Ty::Struct`). `None` for any other type.
+fn agg_field_layouts(model: &RegseqModel, ty: TyId) -> Option<&[regseq_model::FieldLayout]> {
+    use regseq_model::LayoutKind;
+    let layout = match &model.types[ty] {
+        Ty::Struct { layout, .. } | Ty::Tuple { layout, .. } => layout,
+        Ty::Closure(item, args) => {
+            model
+                .types
+                .iter()
+                .find_map(|(_, candidate)| match candidate {
+                    Ty::Struct {
+                        item: s_item,
+                        args: s_args,
+                        layout,
+                    } if s_item == item && s_args == args => Some(layout),
+                    _ => None,
+                })?
+        }
+        _ => return None,
+    };
+    match &layout.kind {
+        LayoutKind::Struct { fields } => Some(fields),
+        _ => None,
+    }
+}
+
+/// Reconstruct an `Array(elem, n)` consumer from its byte image: `n` element
+/// slices of `size_of(elem)` bytes, each recursed at `elem`. The array
+/// type-name is the **declarator-aware** `types::declare(elem, "[n]")` (valid
+/// for an array-of-array / fn-pointer element); the compound-literal cast is
+/// omitted at an init-list position (`at_init`), since C forbids initializing
+/// an array object from a compound-literal expression.
+fn array_from_bytes(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    elem: TyId,
+    n: u64,
+    at_init: bool,
+) -> Result<String, EmitError> {
+    let esize = model.size_align_of(elem).size as usize;
+    let mut parts = Vec::with_capacity(n as usize);
+    for i in 0..n as usize {
+        let lo = i * esize;
+        let hi = lo + esize;
+        if hi > bytes.len() {
+            return Err(EmitError::Unsupported(
+                "array element slice exceeds the byte image",
+            ));
+        }
+        parts.push(bytes_to_typed_literal(
+            model,
+            names,
+            syms,
+            &bytes[lo..hi],
+            elem,
+            true,
+        )?);
+    }
+    let inner = if parts.is_empty() {
+        "{0}".to_string()
+    } else {
+        format!("{{ {} }}", parts.join(", "))
+    };
+    if at_init {
+        Ok(inner)
+    } else {
+        let tyname = types::declare(model, names, elem, &format!("[{n}]"));
+        Ok(format!("({tyname}){inner}"))
+    }
+}
+
+/// Reconstruct an `Enum` consumer from its byte image: a multi-view enum
+/// initializes the section 13 `_raw` union member directly from the bytes
+/// (sound iff the bytes carry no `Byte::Reloc` -- a reloc cannot be written
+/// into `_raw`); an inline enum reconstructs its inline view fields.
+fn enum_from_bytes(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    enum_ty: TyId,
+) -> Result<String, EmitError> {
+    let shape = enum_emit::enum_shape(model, enum_ty).ok_or(EmitError::Unsupported(
+        "byte image over a non-enum consumer",
+    ))?;
+    if enum_emit::enum_is_inline(model, shape) {
+        return reconstruct_inline_enum_from_bytes(model, names, syms, bytes, enum_ty, shape);
+    }
+    if bytes.iter().any(|b| matches!(b, Byte::Reloc(_))) {
+        return Err(EmitError::Unsupported(
+            "Const enum/aggregate with relocation payload: task d2.3",
+        ));
+    }
+    let raw = enum_emit::enum_raw_member(model, shape).ok_or(EmitError::Unsupported(
+        "multi-view enum byte image without a _raw union member",
+    ))?;
+    let agg = names.agg_name(enum_ty);
+    Ok(format!(
+        "(struct {agg}){{ .{raw} = {} }}",
+        raw_byte_image(bytes)?
+    ))
+}
+
+/// Render a raw byte image as an `unsigned char[]` initializer (`{ b0, ..,
+/// bN-1 }`, `Uninit` -> 0). A `Reloc` byte cannot be written into `_raw`.
+fn raw_byte_image(bytes: &[Byte]) -> Result<String, EmitError> {
+    let mut parts = Vec::with_capacity(bytes.len());
+    for b in bytes {
+        match b {
+            Byte::Value(v) => parts.push(v.to_string()),
+            Byte::Uninit => parts.push("0".to_string()),
+            Byte::Reloc(_) => {
+                return Err(EmitError::Unsupported(
+                    "Const enum/aggregate with relocation payload: task d2.3",
+                ))
+            }
+        }
+    }
+    Ok(format!("{{ {} }}", parts.join(", ")))
+}
+
+/// Reconstruct an inline (<= 1 view, no `union`) enum from its byte image: a
+/// tag-only view decodes the tag cell; a niche / single-variant payload view
+/// reconstructs the untagged variant's inline fields (byte-faithful for both
+/// the untagged and niched variants, since the niche is encoded in the payload
+/// bytes). An inline bool-niche cannot round-trip a raw bit pattern through a
+/// `_Bool` field -> task d2.3.
+fn reconstruct_inline_enum_from_bytes(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    enum_ty: TyId,
+    shape: &EnumShape,
+) -> Result<String, EmitError> {
+    let agg = names.agg_name(enum_ty);
+    match enum_emit::enum_tag(model, shape) {
+        enum_emit::EnumTag::View {
+            member_path,
+            scalar_ty,
+        } => {
+            let offset = direct_tag_offset(shape).ok_or(EmitError::Unsupported(
+                "inline tag-view enum without a tag offset",
+            ))? as usize;
+            let size = model.size_align_of(scalar_ty).size as usize;
+            if offset + size > bytes.len() {
+                return Err(EmitError::Unsupported(
+                    "inline enum tag slice exceeds the byte image",
+                ));
+            }
+            let recon = scalar_from_bytes(model, &bytes[offset..offset + size], scalar_ty)?;
+            Ok(format!("(struct {agg}){{ .{member_path} = {recon} }}"))
+        }
+        enum_emit::EnumTag::Niche { scalar_ty, .. } => {
+            if matches!(model.types[scalar_ty], Ty::Bool) {
+                return Err(EmitError::Unsupported(
+                    "Const::EnumValue (inline bool-niche): task d2.3",
+                ));
+            }
+            reconstruct_inline_variant_fields(model, names, syms, bytes, enum_ty, shape)
+        }
+        enum_emit::EnumTag::None => {
+            reconstruct_inline_variant_fields(model, names, syms, bytes, enum_ty, shape)
+        }
+    }
+}
+
+/// Reconstruct the inline payload-bearing variant's non-ZST fields from a byte
+/// image (a `Single { scalar: None }` variant, or a niche untagged variant),
+/// designating by the navigator's member path. The byte image already encodes
+/// the active variant, so this is byte-faithful for niched variants too.
+fn reconstruct_inline_variant_fields(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    enum_ty: TyId,
+    shape: &EnumShape,
+) -> Result<String, EmitError> {
+    let agg = names.agg_name(enum_ty);
+    let v = inline_payload_variant(shape).ok_or(EmitError::Unsupported(
+        "inline enum byte image without a payload variant",
+    ))?;
+    let variant = variant_layout(shape, v).ok_or(EmitError::Unsupported(
+        "inline enum payload variant out of range",
+    ))?;
+    let mut parts = Vec::new();
+    for (idx, f) in variant.fields.iter().enumerate() {
+        if layout_emit::is_zst(model, f.ty) {
+            continue;
+        }
+        let (member_path, fty) = enum_emit::enum_variant_field(model, enum_ty, v, idx).ok_or(
+            EmitError::Unsupported("inline enum field navigation failed in a byte image"),
+        )?;
+        let fsize = model.size_align_of(fty).size as usize;
+        let off = f.offset as usize;
+        if off + fsize > bytes.len() {
+            return Err(EmitError::Unsupported(
+                "inline enum field slice exceeds the byte image",
+            ));
+        }
+        let recon =
+            bytes_to_typed_literal(model, names, syms, &bytes[off..off + fsize], fty, true)?;
+        parts.push(format!(".{member_path} = {recon}"));
+    }
+    if parts.is_empty() {
+        Ok(format!("(struct {agg}){{0}}"))
+    } else {
+        Ok(format!("(struct {agg}){{ {} }}", parts.join(", ")))
+    }
+}
+
+/// The variant index whose inline payload view an inline enum collapses to: a
+/// `Single`'s only variant, or a niche enum's untagged variant. `None` for a
+/// shape with no inline payload view.
+fn inline_payload_variant(shape: &EnumShape) -> Option<usize> {
+    match shape {
+        EnumShape::Single { .. } => Some(0),
+        EnumShape::Multiple {
+            encoding: TagEncoding::Niche {
+                untagged_variant, ..
+            },
+            ..
+        } => Some(untagged_variant.index()),
+        _ => None,
+    }
+}
+
+// -- d2.2 Changes C / D: `Const::Aggregate` ----------------------------
+
+/// Lower a `Const::Aggregate` (d2.2 Changes C / D): the `[Reloc,
+/// Uint(meta)]` **reference carrier** when the consumer is `Ty::Ref(..)`, else
+/// the typed valtree aggregate over a `Tuple` / `Struct` / `Array`.
+fn aggregate_const_expr(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    children: &[ConstId],
+    consumer_ty: Option<TyId>,
+    at_init: bool,
+) -> Result<String, EmitError> {
+    let consumer = consumer_ty.ok_or(EmitError::Unsupported(
+        "Const::Aggregate without a known consumer type",
+    ))?;
+    if let Ty::Ref(pointee, _) = &model.types[consumer] {
+        let pointee = *pointee;
+        reference_carrier(model, names, syms, children, consumer, pointee)
+    } else {
+        typed_valtree_aggregate(model, names, syms, children, consumer, at_init)
+    }
+}
+
+/// The `Const::Aggregate([Reloc, Uint(meta)])` reference carrier (d2.2
+/// Change C) for a `Ty::Ref(pointee, _)` consumer: a sized pointee -> the d1
+/// reloc designator cast to the consumer pointer type (the `Uint` placeholder
+/// dropped); `Ty::Str` / `Ty::Slice(elem)` -> the section 3.2 fat struct with
+/// `.data` cast via [`types::slice_data_ptr_type`] (the mutability /
+/// `UnsafeCell`-correct spelling) and `.len = (size_t)<meta>`; `Ty::Dynamic`
+/// -> the vtable task. The carrier shape is enforced defensively.
+fn reference_carrier(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    children: &[ConstId],
+    consumer_ty: TyId,
+    pointee: TyId,
+) -> Result<String, EmitError> {
+    // The carrier shape is exactly `[Reloc(_), Uint(Usize, meta)]` (the bridge
+    // contract, const_.rs:390-405); any other shape is malformed.
+    if children.len() != 2 {
+        return Err(EmitError::Unsupported(
+            "Const::Aggregate reference carrier with an unexpected child count",
+        ));
+    }
+    let Const::Reloc(target) = model.consts.resolve(children[0]) else {
+        return Err(EmitError::Unsupported(
+            "Const::Aggregate reference carrier without a leading relocation",
+        ));
+    };
+    let target = *target;
+    let Const::Uint(UintKind::Usize, meta) = model.consts.resolve(children[1]) else {
+        return Err(EmitError::Unsupported(
+            "Const::Aggregate reference carrier metadata is not a usize",
+        ));
+    };
+    // The fat-carrier `.len` (`size_t`); dropped for a thin (sized) carrier.
+    let len_expr = render_uint(UintKind::Usize, *meta);
+    match &model.types[pointee] {
+        Ty::Dynamic { .. } => Err(EmitError::Unsupported(
+            "Const::Aggregate reference carrier to a dyn pointee: vtable task",
+        )),
+        Ty::Str => {
+            let fat = types::unsized_pointee_struct_name(model, names, consumer_ty).ok_or(
+                EmitError::Unsupported("&str reference carrier without a fat struct name"),
+            )?;
+            let data = reloc_designator(model, names, syms, target, None);
+            // `rust_str.data` is monomorphic `const uint8_t *` (bank 1).
+            Ok(format!(
+                "(struct {fat}){{ .data = (const uint8_t *){data}, .len = {len_expr} }}"
+            ))
+        }
+        Ty::Slice(elem) => {
+            let elem = *elem;
+            let fat = types::unsized_pointee_struct_name(model, names, consumer_ty).ok_or(
+                EmitError::Unsupported("&[T] reference carrier without a fat struct name"),
+            )?;
+            let const_data = slice_data_const(model, consumer_ty);
+            let data_ty = types::slice_data_ptr_type(model, names, elem, const_data);
+            let data = reloc_designator(model, names, syms, target, None);
+            Ok(format!(
+                "(struct {fat}){{ .data = ({data_ty}){data}, .len = {len_expr} }}"
+            ))
+        }
+        // A sized pointee is a thin reference: the reloc cast to the consumer
+        // pointer type. The `Uint` placeholder is dropped (already validated).
+        _ => Ok(reloc_designator(
+            model,
+            names,
+            syms,
+            target,
+            Some(consumer_ty),
+        )),
+    }
+}
+
+/// The typed valtree `Const::Aggregate` (d2.2 Change D) over a non-`Ref`
+/// consumer: a `Tuple` / `Struct` / `Closure` pairs `children[i]` with
+/// `FieldLayout[i]` (source order), designating by the field's C name; a
+/// non-`u8` `Array(elem, n)` lowers each child at `elem` (the declarator-aware
+/// array type-name, cast omitted at an init position). A `Ty::Union` consumer
+/// carries no active `FieldIdx` -> task d2.3; an enum consumer is defensively
+/// rejected (the bridge uses `EnumValue` for enums). ZST children are recursed
+/// (fail-loud) but omitted from designators.
+fn typed_valtree_aggregate(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    children: &[ConstId],
+    consumer_ty: TyId,
+    at_init: bool,
+) -> Result<String, EmitError> {
+    match &model.types[consumer_ty] {
+        Ty::Tuple { .. } | Ty::Struct { .. } | Ty::Closure(_, _) => {
+            let fields = agg_field_layouts(model, consumer_ty).ok_or(EmitError::Unsupported(
+                "Const::Aggregate over an unresolved aggregate",
+            ))?;
+            if children.len() != fields.len() {
+                return Err(EmitError::Unsupported(
+                    "Const::Aggregate child count does not match the field count",
+                ));
+            }
+            let mut parts = Vec::new();
+            for (idx, child_id) in children.iter().enumerate() {
+                let child = model.consts.resolve(*child_id);
+                let (fname, fty) = layout_emit::field_c_name_ty(model, consumer_ty, idx).ok_or(
+                    EmitError::Unsupported("Const::Aggregate field navigation failed"),
+                )?;
+                // A ZST child is still lowered (so a deferred shape fails loud)
+                // but contributes no designator.
+                if layout_emit::is_zst(model, fty) {
+                    let _ = const_expr(model, names, syms, child, Some(fty), true)?;
+                    continue;
+                }
+                let e = const_expr(model, names, syms, child, Some(fty), true)?;
+                parts.push(format!(".{fname} = {e}"));
+            }
+            let agg = names.agg_name(consumer_ty);
+            if parts.is_empty() {
+                Ok(format!("(struct {agg}){{0}}"))
+            } else {
+                Ok(format!("(struct {agg}){{ {} }}", parts.join(", ")))
+            }
+        }
+        Ty::Array(elem, n) => {
+            let elem = *elem;
+            let n = *n;
+            if children.len() != n as usize {
+                return Err(EmitError::Unsupported(
+                    "Const::Aggregate array child count does not match the length",
+                ));
+            }
+            let mut parts = Vec::with_capacity(n as usize);
+            for child_id in children {
+                let child = model.consts.resolve(*child_id);
+                parts.push(const_expr(model, names, syms, child, Some(elem), true)?);
+            }
+            let inner = if parts.is_empty() {
+                "{0}".to_string()
+            } else {
+                format!("{{ {} }}", parts.join(", "))
+            };
+            if at_init {
+                Ok(inner)
+            } else {
+                let tyname = types::declare(model, names, elem, &format!("[{n}]"));
+                Ok(format!("({tyname}){inner}"))
+            }
+        }
+        Ty::Union { .. } => Err(EmitError::Unsupported(
+            "Const::Aggregate over a union (no active field): task d2.3",
+        )),
+        Ty::Enum { .. } => Err(EmitError::Unsupported(
+            "Const::Aggregate consumed by an enum (the bridge uses EnumValue)",
+        )),
+        _ => Err(EmitError::Unsupported(
+            "Const::Aggregate for an unsupported consumer type",
+        )),
+    }
+}
+
+/// `Const::EnumValue` (section 13 / 12): lower a value-position enum const to
+/// one C compound literal (d2.2 Change E completes the multi-member
+/// cases d2.1 handed off).
 ///
-/// - inline enum (<= 1 view): a fieldless-collapsed `Direct` / `Single {
-///   scalar: Some }` tag view -> `(struct E){ .tag = <tag_value> }`; a
-///   `Single { scalar: None }` / niche **untagged** payload -> the payload
-///   children (ZST omitted); a niche **niched** variant -> `(struct E){ .<F>
-///   = <tag_value> }` **only** when its niche cell coincides exactly with one
-///   inline scalar field `F` (else task d2.2);
-/// - multi-view enum: a **fieldless** `Direct` variant -> `(struct E){
-///   .u._tag = { .tag = <tag_value> } }`; anything else (a payload-bearing
-///   `Direct` variant -> two members; any niche-cell write in a multi-view
-///   enum) -> `EmitError::Unsupported` labelled task d2.2.
-///
-/// A non-scalar payload child (`Bytes` / `Aggregate` / a deferred
-/// `EnumValue`) **transitively defers** when [`const_expr`] recurses into it.
+/// - inline enum (<= 1 view, no `union`): a fieldless-collapsed `Direct` /
+///   `Single { scalar: Some }` tag view -> `(struct E){ .tag = <tag_value> }`;
+///   a `Single { scalar: None }` / niche **untagged** payload -> the payload
+///   children (ZST omitted); a niche **niched** variant -> `(struct E){ .<F> =
+///   <tag_value> }` when its niche cell coincides with one inline scalar field
+///   `F`. An inline bool-niche / a niche cell inside a nested aggregate cannot
+///   round-trip a raw bit pattern through a const literal -> task d2.3.
+/// - multi-view enum (a `union u` with the Change-A `_raw` member): a
+///   **fieldless** `Direct` variant stays the d2.1 single tag-member init
+///   (`(struct E){ .u._tag.tag = <tv> }`); a fully byte-serializable value (a
+///   payload-bearing `Direct` variant with a scalar payload, or any niched /
+///   untagged variant -- including a **bool-niche**) serializes the tag +
+///   payload to a `layout.size` byte image and initializes the union via
+///   `(struct E){ .u._raw = { ... } }`. A pointer / `Reloc` / non-scalar
+///   payload cannot be written into `_raw` -> task d2.3.
 fn enum_value_expr(
     model: &RegseqModel,
     names: &NameTable,
@@ -2033,27 +2688,23 @@ fn enum_value_expr(
     payload: &[ConstId],
 ) -> Result<String, EmitError> {
     let enum_ty = consumer_ty.ok_or(EmitError::Unsupported(
-        "Const::EnumValue without a known enum type (task d2.2)",
+        "Const::EnumValue without a known enum type",
     ))?;
     let shape = enum_emit::enum_shape(model, enum_ty).ok_or(EmitError::Unsupported(
-        "Const::EnumValue with a non-enum consumer (task d2.2)",
+        "Const::EnumValue with a non-enum consumer",
     ))?;
     let v = variant_idx.index();
     let agg = names.agg_name(enum_ty).to_string();
 
-    // Lower EVERY payload child through `const_expr` up front (whatever the
-    // single-member shape turns out to be), so a non-scalar child -- including
-    // one of an omitted ZST field -- transitively defers to its own d2.2 arm
-    // before any designator is built. `kept` is the designators for the
-    // non-ZST (in-view) fields; the omitted ZST fields contribute none.
-    let kept = lower_enum_payload(model, names, syms, enum_ty, v, payload)?;
-
     if enum_emit::enum_is_inline(model, shape) {
+        // Inline: lower every payload child through `const_expr` up front, so a
+        // non-scalar child (including one of an omitted ZST field) transitively
+        // defers before any designator is built. `kept` holds the designators
+        // for the non-ZST (in-view) fields.
+        let kept = lower_enum_payload(model, names, syms, enum_ty, v, payload)?;
         match enum_emit::enum_tag(model, shape) {
-            // Inline tag view: all variants are fieldless (a payload would add
-            // a second view), so the single view is `_tag`. The designator is
-            // the shared navigator's tag member path (`tag` inline), never a
-            // re-derived name.
+            // Inline tag view: all variants are fieldless, so the single view is
+            // `_tag`. The designator is the shared navigator's tag member path.
             enum_emit::EnumTag::View {
                 member_path,
                 scalar_ty,
@@ -2063,19 +2714,27 @@ fn enum_value_expr(
             // Inline niche.
             enum_emit::EnumTag::Niche { offset, scalar_ty } => {
                 let variant = variant_layout(shape, v).ok_or(EmitError::Unsupported(
-                    "Const::EnumValue variant index out of range (task d2.2)",
+                    "Const::EnumValue variant index out of range",
                 ))?;
                 match variant.tag_value {
                     // A niched variant: write the niche cell, only when it
-                    // coincides exactly with one inline scalar field.
+                    // coincides exactly with one inline scalar field (an inline
+                    // enum has no `_raw` to write a byte image through).
                     Some(tv) => {
-                        let (fname, _) =
-                            niche_coinciding_field(model, enum_ty, shape, offset, scalar_ty)
-                                .ok_or(EmitError::Unsupported(
-                                    "Const::EnumValue (multi-member): task d2.2",
-                                ))?;
-                        let tvr = render_tag_value(model, names, scalar_ty, tv)?;
-                        Ok(format!("(struct {agg}){{ .{fname} = {tvr} }}"))
+                        match niche_coinciding_field(model, enum_ty, shape, offset, scalar_ty) {
+                            Some((fname, _)) => {
+                                let tvr = render_tag_value(model, names, scalar_ty, tv)?;
+                                Ok(format!("(struct {agg}){{ .{fname} = {tvr} }}"))
+                            }
+                            None if matches!(model.types[scalar_ty], Ty::Bool) => {
+                                Err(EmitError::Unsupported(
+                                    "Const::EnumValue (inline bool-niche): task d2.3",
+                                ))
+                            }
+                            None => Err(EmitError::Unsupported(
+                                "Const::EnumValue (inline niche cell not a top-level field): task d2.3",
+                            )),
+                        }
                     }
                     // The untagged variant: the payload IS the value.
                     None => Ok(enum_value_payload_literal(&agg, &kept)),
@@ -2083,25 +2742,169 @@ fn enum_value_expr(
             }
         }
     } else {
-        match enum_emit::enum_tag(model, shape) {
-            // A multi-view `Direct` enum: only a fieldless variant (the `_tag`
-            // member alone) is single-member; a payload-bearing variant needs
-            // the `_tag` member and the `_v<v>` payload member -> task d2.2.
-            // The designator is the navigator's nested tag member path
-            // (`u._tag.tag`), a valid C99 designator-list.
-            enum_emit::EnumTag::View {
-                member_path,
-                scalar_ty,
-            } if payload_all_zst(model, shape, v) => {
-                enum_value_tag_literal(model, names, &agg, shape, v, &member_path, scalar_ty)
+        // A fieldless `Direct` variant of a multi-view enum stays a single
+        // tag-member init (the d2.1 path; one union member, no double-init).
+        if let enum_emit::EnumTag::View {
+            member_path,
+            scalar_ty,
+        } = enum_emit::enum_tag(model, shape)
+        {
+            if payload_all_zst(model, shape, v) {
+                return enum_value_tag_literal(
+                    model,
+                    names,
+                    &agg,
+                    shape,
+                    v,
+                    &member_path,
+                    scalar_ty,
+                );
             }
-            // A payload-bearing `Direct` variant, or any niche-cell write in a
-            // multi-view enum: two members.
-            _ => Err(EmitError::Unsupported(
-                "Const::EnumValue (multi-member): task d2.2",
-            )),
         }
+        // Every other multi-view value (a payload-bearing `Direct` variant, or
+        // any niched / untagged niche variant) serializes to the `_raw` byte
+        // image -- the union cannot be const-initialized through separate
+        // `_tag` / `_v<v>` members (a second union designator overrides the
+        // first).
+        serialize_multiview_enum_value(model, &agg, enum_ty, shape, v, payload)
     }
+}
+
+/// Serialize a fully-known multi-view enum value to a `layout.size` byte image
+/// and emit `(struct E){ .u._raw = { ... } }` (d2.2 Change E). Mirrors
+/// `assign_enum`'s tag-then-payload write, but into bytes: the variant's
+/// `tag_value` (when present) at the tag cell over its raw storage width, then
+/// each non-ZST scalar payload child at its `FieldLayout.offset`, endian per
+/// `model.target.endian`. A pointer / `Reloc` / non-scalar payload child
+/// cannot be encoded into `_raw` -> task d2.3. `_raw` is written through the
+/// `enum_raw_member` navigator path (the single source of truth).
+fn serialize_multiview_enum_value(
+    model: &RegseqModel,
+    agg: &str,
+    enum_ty: TyId,
+    shape: &EnumShape,
+    v: usize,
+    payload: &[ConstId],
+) -> Result<String, EmitError> {
+    let variant = variant_layout(shape, v).ok_or(EmitError::Unsupported(
+        "Const::EnumValue variant index out of range",
+    ))?;
+    let size = model.size_align_of(enum_ty).size as usize;
+    let mut image = vec![0u8; size];
+    let endian = model.target.endian;
+
+    // Tag write: a `Direct` / niched variant carries a `tag_value`; the
+    // untagged niche variant has `None` (its payload is the tag).
+    if let Some(tv) = variant.tag_value {
+        let (offset, width) = enum_tag_location(model, shape).ok_or(EmitError::Unsupported(
+            "multi-view enum value without a tag cell location",
+        ))?;
+        write_bits_into(&mut image, offset, width, tv, endian)?;
+    }
+
+    // Payload write: each non-ZST field's scalar bit pattern at its offset.
+    for (i, child_id) in payload.iter().enumerate() {
+        let field = variant.fields.get(i).ok_or(EmitError::Unsupported(
+            "Const::EnumValue payload exceeds the variant field count",
+        ))?;
+        if layout_emit::is_zst(model, field.ty) {
+            continue;
+        }
+        let child = model.consts.resolve(*child_id);
+        let bits = const_scalar_bits(child).ok_or(EmitError::Unsupported(
+            "Const enum/aggregate with relocation payload: task d2.3",
+        ))?;
+        let width = model.size_align_of(field.ty).size as usize;
+        write_bits_into(&mut image, field.offset as usize, width, bits, endian)?;
+    }
+
+    let raw = enum_emit::enum_raw_member(model, shape).ok_or(EmitError::Unsupported(
+        "multi-view enum value without a _raw union member",
+    ))?;
+    let img = image
+        .iter()
+        .map(|b| b.to_string())
+        .collect::<Vec<_>>()
+        .join(", ");
+    Ok(format!("(struct {agg}){{ .{raw} = {{ {img} }} }}"))
+}
+
+/// The (offset, raw storage width) of an enum's tag cell, for serializing a
+/// value-position const into a byte image: the `_tag` view's `TagScalar`
+/// offset + scalar width (`Direct`), or the niche cell's offset + scalar width
+/// (`Niche`). `None` for an enum with no tag bytes. Reads `TagScalar` /
+/// `enum_tag` as certificates -- no niche-formula re-derivation.
+fn enum_tag_location(model: &RegseqModel, shape: &EnumShape) -> Option<(usize, usize)> {
+    match enum_emit::enum_tag(model, shape) {
+        enum_emit::EnumTag::View { scalar_ty, .. } => {
+            let offset = direct_tag_offset(shape)?;
+            Some((
+                offset as usize,
+                model.size_align_of(scalar_ty).size as usize,
+            ))
+        }
+        enum_emit::EnumTag::Niche { offset, scalar_ty } => Some((
+            offset as usize,
+            model.size_align_of(scalar_ty).size as usize,
+        )),
+        enum_emit::EnumTag::None => None,
+    }
+}
+
+/// The `TagScalar.offset` of a `_tag`-view enum (`Single { scalar: Some }` /
+/// `Multiple { Direct }`), read directly as a layout certificate.
+fn direct_tag_offset(shape: &EnumShape) -> Option<u64> {
+    match shape {
+        EnumShape::Single {
+            scalar: Some(tag), ..
+        } => Some(tag.offset),
+        EnumShape::Multiple {
+            tag,
+            encoding: TagEncoding::Direct,
+            ..
+        } => Some(tag.offset),
+        _ => None,
+    }
+}
+
+/// The scalar bit pattern of a value-level scalar `Const` (for serializing an
+/// enum payload into a byte image), or `None` for a non-scalar (`Reloc` /
+/// `NullPtr` / `Aggregate` / `Bytes` / `EnumValue` / `ZST`), which cannot be
+/// encoded into `_raw`. `Int` / `Float` already carry their (sign-extended /
+/// IEEE) bit pattern; `Bool` / `Char` map to their integer value.
+fn const_scalar_bits(c: &Const) -> Option<u128> {
+    match c {
+        Const::Bool(b) => Some(u128::from(*b)),
+        Const::Char(u) => Some(u128::from(*u)),
+        Const::Int(_, v) | Const::Uint(_, v) | Const::Float(_, v) => Some(*v),
+        _ => None,
+    }
+}
+
+/// Write the low `width` bytes of `bits` into `image[offset..]` in target byte
+/// order. Fails loud if the write would run past the image (a layout / size
+/// inconsistency).
+fn write_bits_into(
+    image: &mut [u8],
+    offset: usize,
+    width: usize,
+    bits: u128,
+    endian: Endian,
+) -> Result<(), EmitError> {
+    if offset + width > image.len() {
+        return Err(EmitError::Unsupported(
+            "enum value byte image write exceeds the layout size",
+        ));
+    }
+    for i in 0..width {
+        let byte = (bits >> (8 * i)) as u8;
+        let pos = match endian {
+            Endian::Little => offset + i,
+            Endian::Big => offset + width - 1 - i,
+        };
+        image[pos] = byte;
+    }
+    Ok(())
 }
 
 /// Lower every `Const::EnumValue` payload child through [`const_expr`],
@@ -2122,11 +2925,14 @@ fn lower_enum_payload(
         let child = model.consts.resolve(*child_id);
         match enum_emit::enum_variant_field(model, enum_ty, v, i) {
             Some((member_path, fty)) => {
-                let e = const_expr(model, names, syms, child, Some(fty))?;
+                // An enum payload field sits in an init-list position inside
+                // the enum compound literal, so children reconstruct with
+                // `at_init = true` (an array field uses `{ ... }`, not a cast).
+                let e = const_expr(model, names, syms, child, Some(fty), true)?;
                 inits.push(format!(".{member_path} = {e}"));
             }
             None => {
-                let _ = const_expr(model, names, syms, child, None)?;
+                let _ = const_expr(model, names, syms, child, None, true)?;
             }
         }
     }
@@ -2149,7 +2955,7 @@ fn enum_value_tag_literal(
     let tv = variant_layout(shape, v)
         .and_then(|vl| vl.tag_value)
         .ok_or(EmitError::Unsupported(
-            "Const::EnumValue (multi-member): task d2.2",
+            "tag-view enum variant without a tag value (model corruption)",
         ))?;
     let tvr = render_tag_value(model, names, scalar_ty, tv)?;
     Ok(format!("(struct {agg}){{ .{tag_member_path} = {tvr} }}"))
@@ -2171,7 +2977,7 @@ fn enum_value_payload_literal(agg: &str, kept: &[String]) -> String {
 /// (`field.offset == TagScalar.offset` **and** `field.ty == scalar_ty`), as
 /// the member path the navigator spells, or `None` when no single inline
 /// scalar field coincides (the niche is a sub-byte of a nested aggregate
-/// field -> task d2.2). The inline view is the niche untagged variant's
+/// field -> task d2.3). The inline view is the niche untagged variant's
 /// payload.
 fn niche_coinciding_field(
     model: &RegseqModel,

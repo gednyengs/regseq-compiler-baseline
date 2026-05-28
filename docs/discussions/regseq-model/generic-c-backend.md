@@ -928,9 +928,9 @@ initializer.
 | `Uint(k, v)` | unsigned literal (`U` / `ULL`) |
 | `Float(k, bits)` | a **constant-expression** that is exact + bit-faithful (incl. NaN payloads): finite → C99 **hex-float literal**; ±∞ → `__builtin_inff()` / `__builtin_inf()`; NaN → `__builtin_nanf("0x<payload>")` (quiet) / `__builtin_nansf(...)` (signaling). These are GCC/Clang constant expressions (the primitives behind `<math.h>` `INFINITY` / `NAN`); a host-target assumption. **Not** a union member access (which is not a constant expression). `_Float16` / `_Float128` host-dependent. |
 | `ZST` | no bytes — value position: no-op / `(void)0`; aggregate field: omitted (§14) |
-| `Bytes(Vec<Byte>)` | `unsigned char[]` initializer: `Value(b)`→`b`; `Uninit`→`0` (uninit lowered to a defined zero for host determinism); `Reloc(r)`→ the pointer-width address slot `&<r>` |
-| `Aggregate(children)` | C compound literal in §14 field order |
-| `EnumValue { variant_idx, payload }` | §13 (tag write + payload fields) |
+| `Bytes(Vec<Byte>)` | reconstructed as a **typed** initializer for the consumer `Ty` (byte-image walker): scalars decode `size_of` bytes per `target.endian` into the matching literal (`Uninit`→`0`); `Tuple` / `Struct` / `Array` slice per `FieldLayout.offset` (source order, ZST omitted) and recurse; a complete pointer-width `Reloc(r)` run → `&<r>`; a multi-view enum value initializes the §13 `_raw` union member. A `ConstMemoryStatic` is declared as its consumer **pointee storage type** (re-typing, §13 note), so `&X` is the right type + naturally aligned (a flat `unsigned char[]` is the special case of a `[u8; N]` consumer). A `Ty::Union` byte image is unsupported (a padded spanning member is not byte-preserving — needs a byte-covering union member). |
+| `Aggregate(children)` | dual role: the `[Reloc, Uint(meta)]` **reference carrier** over `Ty::Ref` (a sized pointee → the reloc designator cast to the pointer type; `Ty::Str` / `Ty::Slice` → the §3.2 `rust_str` / `rust_slice_<T>` fat struct, `.data` via the mutability-correct slice-data pointer type, `.len = (size_t)<meta>`) vs the typed valtree aggregate over `Tuple` / `Struct` / non-`u8` `Array` in §14 field order (a `Ty::Union` valtree is unsupported — `Const::Aggregate` carries no active field) |
+| `EnumValue { variant_idx, payload }` | §13: a multi-view value serializes the tag + payload to a `layout.size` byte image written into the `_raw` union member; an inline value uses the inline fields / single tag member |
 | `NullPtr(ty)` | `(T*)0` |
 | `Reloc(InstanceRef)` | `&<emission_name>` of the referenced instance |
 
@@ -969,6 +969,18 @@ per-field `_Static_assert(offsetof(E, <view>.<field>)==<absolute offset>)`
 placement. Niche enums carry no tag view — the niche cell is a payload field
 *in a variant view* whose bit pattern *is* the tag.
 
+Every **multi-view** enum's shared `union u` also carries a full-object
+`unsigned char _raw[size]` member, used **only** to const-initialize a
+value-position enum const (§12 `EnumValue` / `Bytes`): a C designated
+initializer cannot set two members of the same `union` (`.u._tag` and
+`.u._v<v>` share offset 0 — a later union designator overrides the earlier),
+so a fully-known value is written as `(struct E){ .u._raw = { <bytes> } }`.
+Runtime reads stay **in-place** typed-view accesses (`x.u._tag.tag`,
+`x.u._v<v>.<f>`) — gnu11 `union` type-punning, valid because the read never
+takes the address of an inactive member and dereferences a typed pointer
+later. `_raw` is layout-neutral: the views are already full-object size, it
+has alignment 1, and the size / align `_Static_assert`s are unchanged.
+
 **Why not a single tag field + payload `union`?** A literal "tag field at
 `TagScalar.offset` + a payload `union` placed at some `union_start` (fields
 at `offset − union_start`)" is **not C-placeable** for shifted-alignment
@@ -997,9 +1009,14 @@ placed at its absolute (naturally-aligned) offset within a view, and the
   no-op.
 - `Downcast(v)` then `Field(i, _)` → access variant `v`'s payload field `i`
   at its `FieldLayout.offset` (§14 access).
-- `Aggregate::Enum(ty, v)` / `Const::EnumValue` → write the active
-  variant's payload fields at their offsets + the tag write (as
-  `SetDiscriminant(v)`).
+- `Aggregate::Enum(ty, v)` → write the active variant's payload fields at
+  their offsets + the tag write (as `SetDiscriminant(v)`), as sequential
+  statements through the typed views.
+- `Const::EnumValue` (a value-position const) → an **inline** enum uses the
+  inline fields / single tag member; a **multi-view** enum cannot set the
+  `_tag` and `_v<v>` union members in one initializer, so a fully-known value
+  is serialized to a byte image and written into the `_raw` union member
+  (`(struct E){ .u._raw = { ... } }`).
 
 A readability optimisation (a named `{ tag; union; }` when the layout is
 provably tag-prefix-compatible) is **deferred** — not Phase 1.

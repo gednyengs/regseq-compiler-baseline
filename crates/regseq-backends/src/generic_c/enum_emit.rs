@@ -123,6 +123,15 @@ pub(crate) fn emit_enum(
             }
         }
         if union_wrap {
+            // Change A (d2.2): a full-object byte-image member so a
+            // value-position enum const can initialize the union through one
+            // expression (`.u._raw = { ... }`). A C designated initializer
+            // that names a second union member overrides the first, so the
+            // tag and payload cannot be set separately in a const; `_raw`
+            // carries the whole serialized value. Layout-neutral: the views
+            // are already full-object size, `_raw` is alignment 1, and the
+            // outer `aligned` + the size/align `_Static_assert`s still hold.
+            out.push_str(&format!("    unsigned char _raw[{}];\n", layout.size));
             out.push_str("    } u;\n");
         }
     }
@@ -292,6 +301,16 @@ pub(super) fn enum_shape(model: &RegseqModel, ty: TyId) -> Option<&EnumShape> {
 /// for the `Const::EnumValue` designator (task d2.1).
 pub(super) fn enum_is_inline(model: &RegseqModel, shape: &EnumShape) -> bool {
     build_views(model, shape).len() <= 1
+}
+
+/// The `u._raw` byte-image union member path for a value-position enum const
+/// (d2.2 Change A): `Some("u._raw")` for a multi-view enum (whose `union
+/// u` carries `unsigned char _raw[size]`), `None` for an inline / single-view
+/// / `Empty` enum (which has no union, so the const init takes the inline
+/// path or a d2.3 carve-out). The single source of truth for the `_raw`
+/// member path; the body side spells `.u._raw` only through this.
+pub(super) fn enum_raw_member(model: &RegseqModel, shape: &EnumShape) -> Option<String> {
+    (!enum_is_inline(model, shape)).then(|| "u._raw".to_string())
 }
 
 /// The C member-designator suffix + post-narrow type for variant `variant_idx`'s

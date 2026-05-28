@@ -2098,9 +2098,9 @@ fn reborrow_of_a_whole_slice_is_an_identity_copy() {
 }
 
 #[test]
-fn bytes_static_initializer_is_unsupported() {
-    // Boundary 6: an address-taken `const` surfaces as a ConstMemoryStatic
-    // whose own `Bytes` initializer fails loud at the bank-5 static def.
+fn bytes_static_initializer_reconstructs_typed_byte_array() {
+    // Change B: a non-scalar `static` arrives as `Const::Bytes`; a `[u8; 1]`
+    // consumer reconstructs as a typed `uint8_t[1]` initializer, not a deferral.
     let mut m = model();
     let u8t = uint(&mut m, UintKind::U8);
     let arr = m.types.intern(Ty::Array(u8t, 1));
@@ -2125,7 +2125,11 @@ fn bytes_static_initializer_is_unsupported() {
             init: Some(bytes),
         },
     });
-    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("const uint8_t BUF[1] = { ((uint8_t)(120U)) };"),
+        "byte array reconstructs as a typed uint8_t[1] initializer:\n{tu}"
+    );
 }
 
 // --- Codex Task Review fixes: NullPtr, FloatToInt(const), *WithOverflow, wide switch ---
@@ -3182,33 +3186,68 @@ fn non_enum_discriminant_is_constant_zero() {
 }
 
 #[test]
-fn reloc_bearing_bytes_const_is_unsupported_d2_2() {
-    // A relocation-bearing Const::Bytes (a non-scalar const carrying a pointer
-    // slot) still fails loud at the const-lowering seam (task d2.2).
+fn reloc_bearing_bytes_const_reconstructs_the_pointer() {
+    // Change B pointer arm: a relocation-bearing `Const::Bytes` over a raw
+    // `*const u32` consumer -- a complete pointer-width `Byte::Reloc` run --
+    // reconstructs as the d1 reloc designator (`&A` cast to the consumer type).
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
-    let target_sig = fnsig(&mut m, vec![], u32t, FnAbi::Rust, false);
-    let target = fn_instance(&mut m, "tgt", target_sig, None);
-    let bytes = m.consts.intern(Const::Bytes(vec![regseq_model::Byte::Reloc(
-        m.instance_ref_of(target),
-    )]));
-    fn_with_stmt(
+    let ptr_ty = m.types.intern(Ty::Ptr(u32t, Mutability::Not));
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let a_item = item(
         &mut m,
-        "relocbytes",
-        st(StatementKind::Assign(
-            loc(0),
-            Rvalue::Use(Operand::Constant(bytes)),
-        )),
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "A",
     );
-    assert_unsupported(&m);
+    let a_em = m.strings.intern("A");
+    let a_id = m.instances.push(Instance {
+        item: a_item,
+        generic_args: GenericArgs::new(),
+        emission_name: a_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u32t,
+            init: Some(one),
+        },
+    });
+    // A pointer-width run of Byte::Reloc(A) (the 64-bit-target pointer slot).
+    let reloc_byte = regseq_model::Byte::Reloc(m.instance_ref_of(a_id));
+    let bytes = m.consts.intern(Const::Bytes(vec![reloc_byte; 8]));
+    let p_item = item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "P",
+    );
+    let p_em = m.strings.intern("P");
+    m.instances.push(Instance {
+        item: p_item,
+        generic_args: GenericArgs::new(),
+        emission_name: p_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: ptr_ty,
+            init: Some(bytes),
+        },
+    });
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("P = ((const uint32_t *)&A);"),
+        "a pointer-width Reloc run reconstructs as the reloc designator:\n{tu}"
+    );
 }
 
 #[test]
-fn const_aggregate_reference_carrier_is_unsupported_d2_2() {
-    // The Const::Aggregate([Reloc, Uint]) reference carrier (transitively
-    // coupled to a Bytes static def) fails loud at the const seam (task d2.2).
+fn const_aggregate_reference_carrier_reconstructs_the_pointer() {
+    // Change C: the `Const::Aggregate([Reloc, Uint])` reference carrier over a
+    // thin `&u32` consumer reconstructs as the d1 reloc designator (the `Uint`
+    // metadata placeholder is dropped for a sized pointee).
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
     let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
     let a_item = item(
         &mut m,
@@ -3229,19 +3268,31 @@ fn const_aggregate_reference_carrier_is_unsupported_d2_2() {
         },
     });
     let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(a_id)));
-    let usize_t = uint(&mut m, UintKind::Usize);
-    let len = m.consts.intern(Const::Uint(UintKind::Usize, 3));
+    let len = m.consts.intern(Const::Uint(UintKind::Usize, 0));
     let carrier = m.consts.intern(Const::Aggregate(vec![reloc, len]));
-    let _ = usize_t;
-    fn_with_stmt(
+    let r_item = item(
         &mut m,
-        "carrier",
-        st(StatementKind::Assign(
-            loc(0),
-            Rvalue::Use(Operand::Constant(carrier)),
-        )),
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "R",
     );
-    assert_unsupported(&m);
+    let r_em = m.strings.intern("R");
+    m.instances.push(Instance {
+        item: r_item,
+        generic_args: GenericArgs::new(),
+        emission_name: r_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: ref_ty,
+            init: Some(carrier),
+        },
+    });
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("((const uint32_t *)&A)"),
+        "the thin reference carrier reconstructs as the reloc designator:\n{tu}"
+    );
 }
 
 /// A `&dyn` reference type (the `vtable_ty` is a scalar -- the trait label is
@@ -4133,9 +4184,11 @@ fn const_enum_value_inline_niche_none_designates_the_coinciding_cell() {
 }
 
 #[test]
-fn const_enum_value_payload_bearing_direct_multiview_is_d2_2() {
+fn const_enum_value_payload_bearing_direct_multiview_uses_raw() {
     // A `Const::EnumValue` for a payload-bearing Direct variant in a multi-view
-    // enum needs two members (the _tag and the _v<v> payload) -> task d2.2.
+    // enum serializes tag + scalar payload to the `_raw` byte image (Change E):
+    // `AB::B(42)` -- tag u8 `1` @0, payload u32 `42` @4, size 8 LE -> bytes
+    // { 1, 0, 0, 0, 42, 0, 0, 0 }.
     let mut m = model();
     let e_ty = push_ab_enum(&mut m);
     let child = m.consts.intern(Const::Uint(UintKind::U32, 42));
@@ -4156,17 +4209,19 @@ fn const_enum_value_payload_bearing_direct_multiview_is_d2_2() {
         )],
     );
     fn_instance(&mut m, "kb", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
     assert!(
-        unsupported_reason(&m).contains("(multi-member): task d2.2"),
-        "payload-bearing multi-view EnumValue defers to d2.2"
+        tu.contains("(struct AB){ .u._raw = { 1, 0, 0, 0, 42, 0, 0, 0 } }"),
+        "payload-bearing multi-view EnumValue serializes to the _raw byte image:\n{tu}"
     );
 }
 
 #[test]
-fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_2() {
+fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_3() {
     // An inline niche `Const::EnumValue` whose niche cell is a sub-byte of a
     // nested aggregate field (no single coinciding inline scalar field) ->
-    // task d2.2 (the narrowed predicate, Change E).
+    // task d2.3 (an inline enum has no `_raw` union member to write a byte
+    // image through, Change E).
     let mut m = model();
     let opt_t = push_opt_tuple_niche_enum(&mut m);
     let ev = m.consts.intern(Const::EnumValue {
@@ -4187,19 +4242,20 @@ fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_2() {
     );
     fn_instance(&mut m, "knone_t", sig, Some(body));
     assert!(
-        unsupported_reason(&m).contains("(multi-member): task d2.2"),
-        "non-coinciding niche cell defers to d2.2"
+        unsupported_reason(&m).contains("inline niche cell not a top-level field): task d2.3"),
+        "non-coinciding inline niche cell defers to d2.3"
     );
 }
 
 #[test]
-fn const_enum_value_bool_niche_is_d2_2() {
-    // An inline niche `Const::EnumValue` whose niche cell IS a directly
-    // coinciding `_Bool` field still defers to d2.2: a const compound literal
-    // writes through the field's logical C type, and `(_Bool){2}` normalizes to
-    // 1 -- the raw niche bit pattern can't round-trip through a `_Bool` field.
-    // The runtime niche path uses raw-integer byte storage (`niche_storage_kind`)
-    // and is unaffected. (The d2.1 soundness-pass finding.)
+fn const_enum_value_inline_bool_niche_is_d2_3() {
+    // An *inline* niche `Const::EnumValue` whose niche cell IS a directly
+    // coinciding `_Bool` field defers to d2.3: a const compound literal writes
+    // through the field's logical C type, and `(_Bool){2}` normalizes to 1 --
+    // the raw niche bit pattern can't round-trip through a `_Bool` field, and
+    // an inline enum has no `_raw` member to write the byte image through. (A
+    // *multi-view* bool-niche const IS handled via `_raw`, Change E.) The
+    // runtime niche path uses raw-integer byte storage and is unaffected.
     let mut m = model();
     let opt = push_opt_bool_niche_enum(&mut m);
     let ev = m.consts.intern(Const::EnumValue {
@@ -4220,8 +4276,8 @@ fn const_enum_value_bool_niche_is_d2_2() {
     );
     fn_instance(&mut m, "knone_bool", sig, Some(body));
     assert!(
-        unsupported_reason(&m).contains("(multi-member): task d2.2"),
-        "bool-niche EnumValue normalization-lossy -> d2.2"
+        unsupported_reason(&m).contains("(inline bool-niche): task d2.3"),
+        "inline bool-niche EnumValue normalization-lossy -> d2.3"
     );
 }
 
@@ -4234,6 +4290,23 @@ fn no_task_d2_1_label_remains_in_body_emit() {
         !src.contains("task d2.1"),
         "no task d2.1 deferral label may remain in body_emit.rs"
     );
+}
+
+#[test]
+fn no_task_d2_2_label_remains_in_backend() {
+    // The d2.2 seams are filled (Changes A-F): no `task d2.2` label may remain
+    // in body_emit.rs / mod.rs / enum_emit.rs. The deferred shapes carry
+    // distinct `task d2.3` / vtable-task labels instead.
+    for (name, src) in [
+        ("body_emit.rs", include_str!("body_emit.rs")),
+        ("mod.rs", include_str!("mod.rs")),
+        ("enum_emit.rs", include_str!("enum_emit.rs")),
+    ] {
+        assert!(
+            !src.contains("task d2.2"),
+            "no task d2.2 deferral label may remain in {name}"
+        );
+    }
 }
 
 #[test]
@@ -4261,4 +4334,649 @@ fn enum_body_model_is_byte_identical_across_two_calls() {
         emit_generic_c(&m).unwrap()
     };
     assert_eq!(build(), build());
+}
+
+// ---------------------------------------------------------------------------
+// Task d2.2 (Changes A-F): non-scalar const lowering -- structural assertions
+// + the d2.3 / vtable fail-loud carve-outs. Compile-and-run proof lives in the
+// codegen-coverage-runner behavioral tests.
+// ---------------------------------------------------------------------------
+
+/// Push a `const` (`static FOO`) instance of declared type `ty` with
+/// initializer `init`, returning its `InstanceId` (so a carrier / reloc can
+/// target it).
+fn push_static(
+    m: &mut RegseqModel,
+    name: &str,
+    ty: TyId,
+    init: regseq_model::ConstId,
+) -> InstanceId {
+    let it = item(
+        m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        name,
+    );
+    let em = m.strings.intern(name);
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty,
+            init: Some(init),
+        },
+    })
+}
+
+/// Little-endian `Byte::Value` image of a `u32`.
+fn le32(v: u32) -> Vec<regseq_model::Byte> {
+    v.to_le_bytes()
+        .iter()
+        .map(|b| regseq_model::Byte::Value(*b))
+        .collect()
+}
+
+#[test]
+fn multi_view_enum_struct_carries_raw_union_member() {
+    // Change A: every multi-view enum's `union u` carries a full-object
+    // `unsigned char _raw[size]`; the size/align asserts are unchanged.
+    let mut m = model();
+    let _ = push_shift_enum(&mut m); // enum Shift, size 8 align 4.
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("unsigned char _raw[8];"),
+        "the _raw byte-image union member:\n{tu}"
+    );
+    assert!(tu.contains("_Static_assert(sizeof(struct Shift) == 8, \"Shift size\");"));
+    assert!(tu.contains("_Static_assert(_Alignof(struct Shift) == 4, \"Shift align\");"));
+}
+
+#[test]
+fn str_reference_carrier_builds_rust_str_fat_struct() {
+    // Change C: a `&str` carrier lowers to the rust_str fat struct with a
+    // `const uint8_t *` data cast and a `size_t` length; the CMS stays
+    // `uint8_t[N]` (1-byte data -- Change F leaves it unchanged).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let str_ty = m.types.intern(Ty::Str);
+    let ref_str = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+    let cms_bytes = m.consts.intern(Const::Bytes(vec![
+        regseq_model::Byte::Value(b'h'),
+        regseq_model::Byte::Value(b'i'),
+    ]));
+    let arr = m.types.intern(Ty::Array(u8t, 2));
+    let cms = push_static(&mut m, "CMS0", arr, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 2));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+    push_static(&mut m, "S", ref_str, carrier);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct rust_str){ .data = (const uint8_t *)(&CMS0), .len = "),
+        "rust_str fat carrier:\n{tu}"
+    );
+    assert!(
+        tu.contains("const uint8_t CMS0[2] ="),
+        "str CMS stays uint8_t[2]:\n{tu}"
+    );
+}
+
+#[test]
+fn slice_reference_carrier_uses_slice_data_ptr_type() {
+    // Change C: a `&[u32]` carrier lowers to the fat struct with `.data` cast
+    // via slice_data_ptr_type (`const uint32_t *`, not a hardcoded const); the
+    // CMS is re-typed to `uint32_t[2]` (Change F).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let slice_u32 = m.types.intern(Ty::Slice(u32t));
+    let ref_slice = m.types.intern(Ty::Ref(slice_u32, Provenance::SharedBorrow));
+    let mut bytes = le32(1);
+    bytes.extend(le32(2));
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr = m.types.intern(Ty::Array(u8t, 8));
+    let cms = push_static(&mut m, "CMS1", arr, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 2));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+    push_static(&mut m, "SL", ref_slice, carrier);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains(".data = (const uint32_t *)(&CMS1), .len = "),
+        "slice carrier .data via slice_data_ptr_type:\n{tu}"
+    );
+    assert!(
+        tu.contains("rust_slice"),
+        "the fat slice struct surfaced:\n{tu}"
+    );
+    assert!(
+        tu.contains("uint32_t CMS1[2] ="),
+        "slice CMS re-typed to uint32_t[2]:\n{tu}"
+    );
+}
+
+#[test]
+fn const_memory_static_retyped_to_nonchar_array_pointee() {
+    // Change F: a `&[u32; 4]` reference const re-types the CMS from the
+    // bridge's `uint8_t[16]` to `uint32_t[4]` (same-type, aligned); the thin
+    // reference is the reloc designator cast to the array pointer type.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    let mut bytes = le32(10);
+    bytes.extend(le32(20));
+    bytes.extend(le32(30));
+    bytes.extend(le32(40));
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms = push_static(&mut m, "CMS2", arr_u8, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+    push_static(&mut m, "R", ref_arr, carrier);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMS2[4] = { ((uint32_t)(10U)), ((uint32_t)(20U)), ((uint32_t)(30U)), ((uint32_t)(40U)) };"),
+        "non-char CMS re-typed to uint32_t[4]:\n{tu}"
+    );
+    assert!(
+        !tu.contains("uint8_t CMS2"),
+        "CMS2 is not declared as a byte array:\n{tu}"
+    );
+    assert!(
+        tu.contains("(*)[4])&CMS2)"),
+        "the array reference is a pointer-to-array cast at the re-typed CMS:\n{tu}"
+    );
+}
+
+#[test]
+fn const_memory_static_char_retyped_to_uint32_array() {
+    // Change F: a `&[char]` reference const declares the CMS as `uint32_t[n]`
+    // (4 bytes/elem, since Ty::Char renders as uint32_t), never `uint8_t[4n]`.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let char_ty = m.types.intern(Ty::Char);
+    let slice_char = m.types.intern(Ty::Slice(char_ty));
+    let ref_slice = m
+        .types
+        .intern(Ty::Ref(slice_char, Provenance::SharedBorrow));
+    // Two chars 'A' (0x41) and 'B' (0x42), 4 bytes each, LE.
+    let cms_bytes = m.consts.intern(Const::Bytes(vec![
+        regseq_model::Byte::Value(0x41),
+        regseq_model::Byte::Value(0),
+        regseq_model::Byte::Value(0),
+        regseq_model::Byte::Value(0),
+        regseq_model::Byte::Value(0x42),
+        regseq_model::Byte::Value(0),
+        regseq_model::Byte::Value(0),
+        regseq_model::Byte::Value(0),
+    ]));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 8));
+    let cms = push_static(&mut m, "CMS3", arr_u8, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 2));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+    push_static(&mut m, "RC", ref_slice, carrier);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMS3[2] = { (uint32_t)65U, (uint32_t)66U };"),
+        "Ty::Char CMS re-typed to uint32_t[2] (4 bytes/elem):\n{tu}"
+    );
+    assert!(
+        !tu.contains("CMS3[8]"),
+        "the char CMS is not a uint8_t[8] byte array:\n{tu}"
+    );
+}
+
+#[test]
+fn typed_valtree_struct_aggregate_const() {
+    // Change D: a struct valtree `Const::Aggregate` pairs children with the
+    // source-order fields, designating by the field C name.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    // struct Pt { a: u8 @4, b: u32 @0 } (repr(Rust) reordered); source order [a, b].
+    let a = fl(&mut m, "a", u8t, 4);
+    let b = fl(&mut m, "b", u32t, 0);
+    let pt = intern_struct(&mut m, "Pt", struct_layout(8, 4, None, vec![a, b]));
+    let ca = m.consts.intern(Const::Uint(UintKind::U8, 7));
+    let cb = m.consts.intern(Const::Uint(UintKind::U32, 9));
+    let agg = m.consts.intern(Const::Aggregate(vec![ca, cb]));
+    register_struct_root(&mut m, pt, "Pt");
+    push_static(&mut m, "P", pt, agg);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct Pt){ .a = ((uint8_t)(7U)), .b = ((uint32_t)(9U)) }"),
+        "struct valtree aggregate designates source-order field names:\n{tu}"
+    );
+}
+
+#[test]
+fn typed_valtree_array_aggregate_const_is_brace_init_at_static() {
+    // Change D: an array valtree `Const::Aggregate` at a static-init position
+    // is a brace list (no compound-literal cast -- C forbids initializing an
+    // array object from one).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr = m.types.intern(Ty::Array(u32t, 3));
+    let c0 = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let c1 = m.consts.intern(Const::Uint(UintKind::U32, 2));
+    let c2 = m.consts.intern(Const::Uint(UintKind::U32, 3));
+    let agg = m.consts.intern(Const::Aggregate(vec![c0, c1, c2]));
+    push_static(&mut m, "ARR", arr, agg);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t ARR[3] = { ((uint32_t)(1U)), ((uint32_t)(2U)), ((uint32_t)(3U)) };"),
+        "array valtree aggregate is a brace-init at a static position:\n{tu}"
+    );
+}
+
+#[test]
+fn const_enum_value_multiview_payload_serializes_to_raw() {
+    // Change E: see also const_enum_value_payload_bearing_direct_multiview_uses_raw.
+    // A multi-view bool-niche niched variant writes byte 2 directly into _raw
+    // (no `_Bool` normalization), proving the multi-view bool-niche path.
+    let mut m = model();
+    let boolt = m.types.intern(Ty::Bool);
+    let u32t = uint(&mut m, UintKind::U32);
+    // Artificial 2-view niche enum: variant 0 "Some" (untagged) holds bool@0;
+    // variant 1 "Big" carries a u32@4 view (forcing a 2nd view -> multi-view);
+    // variant 1 is the niched variant (tag_value 2 in the bool niche cell @0).
+    let some_b = fl(&mut m, "0", boolt, 0);
+    let big_u = fl(&mut m, "0", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: boolt,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(0),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(1),
+                end: VariantIdx::from_u32(1),
+            },
+            niche_start: 2,
+        },
+        variants: vec![
+            variant(&mut m, "Some", vec![some_b], 0, None),
+            variant(&mut m, "Big", vec![big_u], 1, Some(2)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "NB", enum_layout(8, 4, shape));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![],
+    });
+    push_static(&mut m, "N", e_ty, ev);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("unsigned char _raw[8];"),
+        "multi-view enum has a _raw member:\n{tu}"
+    );
+    assert!(
+        tu.contains("(struct NB){ .u._raw = { 2, 0, 0, 0, 0, 0, 0, 0 } }"),
+        "multi-view bool-niche writes raw byte 2 (not _Bool-normalized):\n{tu}"
+    );
+}
+
+#[test]
+fn bytes_over_union_is_d2_3() {
+    // Change B: a union byte image cannot be soundly reproduced (a padded
+    // spanning member is not byte-preserving) -> task d2.3.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let u8t = uint(&mut m, UintKind::U8);
+    let x = fl(&mut m, "x", u32t, 0);
+    let y = fl(&mut m, "y", u8t, 0);
+    let uit = item(&mut m, ItemKind::Union, "U");
+    let union_ty = m.types.intern(Ty::Union {
+        item: uit,
+        args: GenericArgs::new(),
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Union { fields: vec![x, y] },
+        },
+    });
+    let bytes = m.consts.intern(Const::Bytes(le32(7)));
+    push_static(&mut m, "UB", union_ty, bytes);
+    assert!(
+        unsupported_reason(&m).contains("Const union byte-image: task d2.3"),
+        "Bytes over a union defers to d2.3"
+    );
+}
+
+#[test]
+fn typed_valtree_aggregate_over_union_is_d2_3() {
+    // Change D: a `Const::Aggregate` carries no active FieldIdx, so a union
+    // consumer cannot be lowered (matching pretty.rs) -> task d2.3.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let x = fl(&mut m, "x", u32t, 0);
+    let uit = item(&mut m, ItemKind::Union, "U2");
+    let union_ty = m.types.intern(Ty::Union {
+        item: uit,
+        args: GenericArgs::new(),
+        layout: Layout {
+            size: 4,
+            align: 4,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Union { fields: vec![x] },
+        },
+    });
+    let child = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let agg = m.consts.intern(Const::Aggregate(vec![child]));
+    push_static(&mut m, "UA", union_ty, agg);
+    assert!(
+        unsupported_reason(&m).contains("over a union (no active field): task d2.3"),
+        "typed valtree aggregate over a union defers to d2.3"
+    );
+}
+
+#[test]
+fn const_memory_static_incompatible_pointee_types_is_d2_3() {
+    // Change F: the content-dedup may merge two reference consts with identical
+    // bytes onto one CMS; incompatible pointee types fail the whole emit loud.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let u64t = uint(&mut m, UintKind::U64);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let arr_u64 = m.types.intern(Ty::Array(u64t, 2));
+    let ref_u32 = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    let ref_u64 = m.types.intern(Ty::Ref(arr_u64, Provenance::SharedBorrow));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms_bytes = m
+        .consts
+        .intern(Const::Bytes(vec![regseq_model::Byte::Value(0); 16]));
+    let cms = push_static(&mut m, "CMSX", arr_u8, cms_bytes);
+    let cms_ref = m.instance_ref_of(cms);
+    let zero = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let reloc1 = m.consts.intern(Const::Reloc(cms_ref));
+    let carrier1 = m.consts.intern(Const::Aggregate(vec![reloc1, zero]));
+    let reloc2 = m.consts.intern(Const::Reloc(cms_ref));
+    let carrier2 = m.consts.intern(Const::Aggregate(vec![reloc2, zero]));
+    push_static(&mut m, "R1", ref_u32, carrier1);
+    push_static(&mut m, "R2", ref_u64, carrier2);
+    assert!(
+        unsupported_reason(&m).contains("incompatible pointee types: task d2.3"),
+        "a CMS referenced at incompatible pointee types fails loud"
+    );
+}
+
+#[test]
+fn const_aggregate_carrier_to_dyn_is_vtable_task() {
+    // Change C: a reference carrier to a `dyn` pointee is the vtable task.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let dref = dyn_ref(&mut m);
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let a = push_static(&mut m, "A", u32t, one);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(a)));
+    let zero = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, zero]));
+    push_static(&mut m, "D", dref, carrier);
+    assert!(
+        unsupported_reason(&m).contains("dyn pointee: vtable task"),
+        "a dyn reference carrier is the vtable task"
+    );
+}
+
+#[test]
+fn multiview_enum_const_with_pointer_payload_is_d2_3() {
+    // Change E: a multi-view enum value with a pointer / reloc payload cannot
+    // be encoded into the _raw byte image -> task d2.3.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    // enum E { A, B(&u32) }: tag u8 @0, B.0 (&u32) @8, size 16 align 8.
+    let b0 = fl(&mut m, "0", ref_ty, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "EP", enum_layout(16, 8, shape));
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let a = push_static(&mut m, "A", u32t, one);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(a)));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![reloc],
+    });
+    push_static(&mut m, "EV", e_ty, ev);
+    assert!(
+        unsupported_reason(&m).contains("relocation payload: task d2.3"),
+        "a multi-view enum const with a pointer payload defers to d2.3"
+    );
+}
+
+#[test]
+fn nonscalar_const_emit_is_byte_identical_across_two_calls() {
+    // B5 determinism: a model with a re-typed CMS, a multi-view enum const, a
+    // fat carrier, and a typed valtree aggregate emits byte-identically.
+    let build = || {
+        let mut m = model();
+        let u8t = uint(&mut m, UintKind::U8);
+        let u32t = uint(&mut m, UintKind::U32);
+        // re-typed CMS via a &[u32;2] reference const.
+        let arr_u32 = m.types.intern(Ty::Array(u32t, 2));
+        let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+        let mut bytes = le32(1);
+        bytes.extend(le32(2));
+        let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+        let arr_u8 = m.types.intern(Ty::Array(u8t, 8));
+        let cms = push_static(&mut m, "CMS", arr_u8, cms_bytes);
+        let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+        let zero = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+        let carrier = m.consts.intern(Const::Aggregate(vec![reloc, zero]));
+        push_static(&mut m, "R", ref_arr, carrier);
+        // multi-view enum const.
+        let e_ty = push_ab_enum(&mut m);
+        let child = m.consts.intern(Const::Uint(UintKind::U32, 42));
+        let ev = m.consts.intern(Const::EnumValue {
+            variant_idx: VariantIdx::from_u32(1),
+            payload: vec![child],
+        });
+        push_static(&mut m, "EV", e_ty, ev);
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
+}
+
+#[test]
+fn const_memory_static_via_aggregate_operand_is_re_typed() {
+    // Change F (pre-pass thoroughness): a CMS reference reached through a struct
+    // `Rvalue::Aggregate` operand (not a bare `Use`) is still re-typed -- the
+    // pre-pass threads the aggregate field consumer type.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 2));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    // struct Holder { p: &[u32; 2] } -- one pointer field @0.
+    let p = fl(&mut m, "p", ref_arr, 0);
+    let holder = intern_struct(&mut m, "Holder", struct_layout(8, 8, None, vec![p]));
+    register_struct_root(&mut m, holder, "Holder");
+    // The CMS the field points at.
+    let mut bytes = le32(7);
+    bytes.extend(le32(8));
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 8));
+    let cms = push_static(&mut m, "CMSA", arr_u8, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let zero = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, zero]));
+    // A function builds `Holder { p: <carrier> }` via Rvalue::Aggregate.
+    let sig = fnsig(&mut m, vec![], holder, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![holder],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::Struct(holder),
+                    Box::new([Operand::Constant(carrier)]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "mk_holder", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMSA[2] ="),
+        "CMS reached via an aggregate operand is re-typed to uint32_t[2]:\n{tu}"
+    );
+    assert!(
+        !tu.contains("uint8_t CMSA"),
+        "the aggregate-operand CMS is not left as a byte array:\n{tu}"
+    );
+}
+
+#[test]
+fn const_memory_static_via_call_argument_is_re_typed_and_cast() {
+    // Change F + the call-argument consumer-type threading: a `&[u32; 4]`
+    // carrier passed as a Direct call argument is re-typed (pre-pass scans the
+    // call arg at the param type) and the call site casts the reloc to the
+    // parameter pointer type (emission threads the same param type).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    // The callee `consume(&[u32; 4])`.
+    let consume_sig = fnsig(&mut m, vec![ref_arr], unit, FnAbi::Rust, false);
+    let consume = fn_instance(&mut m, "consume", consume_sig, None);
+    // The CMS the carrier points at.
+    let mut bytes = le32(1);
+    bytes.extend(le32(2));
+    bytes.extend(le32(3));
+    bytes.extend(le32(4));
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms = push_static(&mut m, "CMSC", arr_u8, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let zero = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, zero]));
+    // `regseq_main` calls `consume(<carrier>)`.
+    let main_sig = fnsig(&mut m, vec![], unit, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![unit],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(consume),
+                    args: Box::new([Operand::Constant(carrier)]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "caller", main_sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMSC[4] ="),
+        "the call-argument CMS is re-typed to uint32_t[4]:\n{tu}"
+    );
+    assert!(
+        tu.contains("(*)[4])&CMSC)"),
+        "the call argument casts the reloc to the parameter pointer type:\n{tu}"
+    );
+}
+
+#[test]
+fn const_memory_static_via_inline_enum_byte_image_is_re_typed() {
+    // Change F (pre-pass thoroughness, soundness): a CMS reference nested inside
+    // an INLINE enum byte image (an `Option<&[u32; 4]>` niche static whose Some
+    // pointer field is a reloc run to a CMS) is still re-typed -- the byte-image
+    // scan descends the inline enum's payload-variant fields.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    // Option<&[u32;4]>: niche enum, Some(&[u32;4]) @0 (the pointer is the niche),
+    // None niched (tag_value 0 = null), size 8 align 8, inline (one view).
+    let some_field = fl(&mut m, "0", ref_arr, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_arr,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(&mut m, "None", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    let opt = push_enum_instance(&mut m, "OptArr", enum_layout(8, 8, shape));
+    // The CMS the Some pointer field points at.
+    let mut bytes = le32(10);
+    bytes.extend(le32(20));
+    bytes.extend(le32(30));
+    bytes.extend(le32(40));
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms = push_static(&mut m, "CMSE", arr_u8, cms_bytes);
+    // The enum static's byte image: an 8-byte pointer reloc run to the CMS.
+    let reloc_byte = regseq_model::Byte::Reloc(m.instance_ref_of(cms));
+    let enum_bytes = m.consts.intern(Const::Bytes(vec![reloc_byte; 8]));
+    push_static(&mut m, "OE", opt, enum_bytes);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMSE[4] ="),
+        "CMS reached via an inline enum byte image is re-typed to uint32_t[4]:\n{tu}"
+    );
+    assert!(
+        !tu.contains("uint8_t CMSE"),
+        "the inline-enum-referenced CMS is not left as a byte array:\n{tu}"
+    );
 }

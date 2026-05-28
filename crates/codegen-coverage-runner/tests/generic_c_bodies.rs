@@ -1594,3 +1594,387 @@ fn single_scalar_some_enum_discriminant_runs_and_exits_zero() {
         run.stderr
     );
 }
+
+// ---------------------------------------------------------------------------
+// Task d2.2 (Changes A-F): non-scalar const lowering (compile-AND-run). A
+// `void regseq_main` reads back a reconstructed const and aborts (via the
+// Foreign fail callback) on a wrong value; a clean exit (code 0) proves the
+// byte-image / carrier / `_raw` lowering reproduced the value at runtime.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn array_reference_const_reads_re_typed_element_runs_and_exits_zero() {
+    // Change C + F + B: `&[u32; 4]` carrier to a re-typed `ConstMemoryStatic`
+    // (`uint32_t[4]`, sound + aligned). `regseq_main` reads `(*R)[2]` -> 30 and
+    // aborts on a wrong value.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+
+    // ConstMemoryStatic holding [10, 20, 30, 40] u32 LE = 16 bytes.
+    let mut bytes = Vec::new();
+    for v in [10u32, 20, 30, 40] {
+        bytes.extend(
+            v.to_le_bytes()
+                .iter()
+                .map(|b| regseq_model::Byte::Value(*b)),
+        );
+    }
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms_item = mk_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "CMS_ARR",
+    );
+    let cms_em = m.strings.intern("CMS_ARR");
+    let cms = m.instances.push(Instance {
+        item: cms_item,
+        generic_args: GenericArgs::new(),
+        emission_name: cms_em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: arr_u8,
+            init: Some(cms_bytes),
+        },
+    });
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 &[u32;4], _2 u32 (the read element).
+    let body = build_body(
+        0,
+        vec![unit, ref_arr, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(carrier)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(1),
+                            projection: Box::new([
+                                PlaceElem::Deref,
+                                PlaceElem::ConstantIndex {
+                                    offset: 2,
+                                    min_length: 4,
+                                    from_end: false,
+                                },
+                            ]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(30, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("uint32_t CMS_ARR[4] ="),
+        "the CMS is re-typed to uint32_t[4], not uint8_t[16]:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "array-ref-const");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "(*R)[2] == 30 over the re-typed CMS; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn multiview_direct_enum_const_match_runs_and_exits_zero() {
+    // Change E: a payload-bearing multi-view `Const::EnumValue` serializes to
+    // the `_raw` byte image; `regseq_main` reads the discriminant (d2.1 tag
+    // view) -> 1 and the payload (Downcast+Field) -> 42 and aborts on a wrong
+    // value. Proves the `_raw` init + the in-place union reads agree.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let b0 = fl(&mut m, "0", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let ab = push_enum_instance(&mut m, "AB", enum_layout(8, 4, shape));
+    let fortytwo = m.consts.intern(Const::Uint(UintKind::U32, 42));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![fortytwo],
+    });
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 AB (the const), _2 u8 (disc), _3 u32 (payload).
+    let body = build_body(
+        0,
+        vec![unit, ab, u8t, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(ev)),
+                    )),
+                    st(StatementKind::Assign(loc(2), Rvalue::Discriminant(loc(1)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(1, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Use(Operand::Copy(Place {
+                        local: LocalId::from_u32(1),
+                        projection: Box::new([
+                            PlaceElem::Downcast(VariantIdx::from_u32(1)),
+                            PlaceElem::Field(FieldIdx::from_u32(0), u32t),
+                        ]),
+                    })),
+                ))],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(3)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(42, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(2)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains(".u._raw = { 1, 0, 0, 0, 42, 0, 0, 0 }"),
+        "the payload-bearing enum const serializes to the _raw byte image:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "multiview-enum-const");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "_raw const init + in-place union reads agree; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn typed_valtree_struct_const_field_read_runs_and_exits_zero() {
+    // Change D: a struct valtree `Const::Aggregate` reconstructs as a designated
+    // compound literal; `regseq_main` reads `p.b` -> 9 and aborts on a wrong
+    // value. `Pt { a: u8 @4, b: u32 @0 }` (repr(Rust) reordered).
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let a = fl(&mut m, "a", u8t, 4);
+    let b = fl(&mut m, "b", u32t, 0);
+    let pt = {
+        let it = mk_item(&mut m, ItemKind::Struct, "Pt");
+        m.types.intern(Ty::Struct {
+            item: it,
+            args: GenericArgs::new(),
+            layout: Layout {
+                size: 8,
+                align: 4,
+                pack: None,
+                uninhabited: false,
+                kind: LayoutKind::Struct { fields: vec![a, b] },
+            },
+        })
+    };
+    let ca = m.consts.intern(Const::Uint(UintKind::U8, 7));
+    let cb = m.consts.intern(Const::Uint(UintKind::U32, 9));
+    let agg = m.consts.intern(Const::Aggregate(vec![ca, cb]));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 Pt (the const), _2 u32 (the read field b).
+    let body = build_body(
+        0,
+        vec![unit, pt, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(agg)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(1),
+                            projection: Box::new([PlaceElem::Field(FieldIdx::from_u32(1), u32t)]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(9, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("(struct Pt){ .a = ((uint8_t)(7U)), .b = ((uint32_t)(9U)) }"),
+        "struct valtree designated literal:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "struct-valtree-const");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "p.b == 9 over the reconstructed struct const; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn tuple_static_byte_image_compiles_and_runs() {
+    // Change B: a `(u32, u64)` tuple `static` arrives as `Const::Bytes`; the
+    // byte image reconstructs as a typed compound literal whose section 14
+    // `_Static_assert`s hold at compile time (a wrong field offset fails `cc`).
+    let mut m = target_model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let u64t = uint(&mut m, UintKind::U64);
+    // (u32 @0, u64 @8), size 16 align 8.
+    let f0 = fl(&mut m, "_0", u32t, 0);
+    let f1 = fl(&mut m, "_1", u64t, 8);
+    let tup = m.types.intern(Ty::Tuple {
+        fields: vec![u32t, u64t],
+        layout: Layout {
+            size: 16,
+            align: 8,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Struct {
+                fields: vec![f0, f1],
+            },
+        },
+    });
+    // Bytes: u32 1 @0 (+ 4 pad), u64 2 @8.
+    let mut bytes = Vec::new();
+    bytes.extend(
+        1u32.to_le_bytes()
+            .iter()
+            .map(|b| regseq_model::Byte::Value(*b)),
+    );
+    bytes.extend(std::iter::repeat_n(regseq_model::Byte::Uninit, 4));
+    bytes.extend(
+        2u64.to_le_bytes()
+            .iter()
+            .map(|b| regseq_model::Byte::Value(*b)),
+    );
+    let init = m.consts.intern(Const::Bytes(bytes));
+    let it = mk_item(
+        &mut m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "PAIR",
+    );
+    let em = m.strings.intern("PAIR");
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: tup,
+            init: Some(init),
+        },
+    });
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("._0 = ((uint32_t)(1U))") && tu.contains("._1 = ((uint64_t)(2ULL))"),
+        "tuple byte image reconstructs both fields:\n{tu}"
+    );
+    let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
+    let run = assert_runs(&tu, "regseq_main", "tuple-static");
+    assert_eq!(run.exit_code, Some(0));
+}

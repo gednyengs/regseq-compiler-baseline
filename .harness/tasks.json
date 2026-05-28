@@ -4841,7 +4841,7 @@
           "id": "regseq-backends-14",
           "name": "Generic-C non-scalar consts: byte-image reconstruction, enum _raw union member, reference carrier & multi-member Const::EnumValue (d2.2)",
           "spec": ".harness/tasks/regseq-backends/14-generic-c-nonscalar-const.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-13"
           ],

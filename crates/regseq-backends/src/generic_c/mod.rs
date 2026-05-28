@@ -26,8 +26,8 @@
 use std::collections::{HashMap, HashSet};
 
 use regseq_model::{
-    CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceId, InstanceKind, Linkage,
-    Mutability, Provenance, RegseqModel, Ty, TyId,
+    CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceId, InstanceKind,
+    InstanceRef, Linkage, Mutability, Provenance, RegseqModel, Ty, TyId,
 };
 
 pub mod prelude;
@@ -150,14 +150,18 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     let names = build_name_table(model, &discovered);
     let syms = build_instance_symbols(model);
     let topo = topo_sort(model, &discovered)?;
+    // Task d2.2 Change F: recover each `ConstMemoryStatic`'s consumer pointee
+    // storage type, so banks 4 / 5 declare it as the type the consumer reads
+    // (sound + naturally aligned) instead of the bridge's `Array(u8, len)`.
+    let cms_storage = const_memory_static_storage(model)?;
 
     let mut out = String::new();
     out.push_str(prelude::PRELUDE);
     out.push_str(&prelude::helper_block());
     out.push_str(&bank2_type_forward_decls(model, &names, &discovered));
     out.push_str(&bank3_type_definitions(model, &names, &topo));
-    out.push_str(&bank4_declarations(model, &names, &syms)?);
-    out.push_str(&bank5_definitions(model, &names, &syms)?);
+    out.push_str(&bank4_declarations(model, &names, &syms, &cms_storage)?);
+    out.push_str(&bank5_definitions(model, &names, &syms, &cms_storage)?);
     Ok(out)
 }
 
@@ -907,6 +911,540 @@ fn is_diag_log_instance(model: &RegseqModel, item: regseq_model::ItemId) -> bool
         .any(|a| matches!(a, AttrData::Intrinsic(IntrinsicKind::Log(_))))
 }
 
+/// A backend-local descriptor of a `ConstMemoryStatic`'s consumer pointee
+/// storage type (d2.2 Change F). The bridge synthesises every
+/// `ConstMemoryStatic` as a `Static { ty: Array(u8, byte_len) }`
+/// (`const_.rs:221-230`); reading it through `(const T *)&X` for a non-char
+/// `T` is strict-aliasing UB and may be mis-aligned. This descriptor records
+/// the type the consumer actually reads, so banks 4 / 5 declare `&X` at the
+/// right type (same-type cast, naturally aligned -- sound). It references only
+/// already-interned element / pointee `TyId`s; it never interns an
+/// `Array(elem, meta)` (the bridge interns `Slice(elem)` but not the array
+/// wrapper), spelling the array case via the declarator-aware
+/// [`types::declare`] instead.
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(super) enum StorageTy {
+    /// A sized pointee `T` (thin `&T` / `*const T`): declared `T <ident>`.
+    Sized(TyId),
+    /// A slice / str backing `[elem; count]`: declared via the
+    /// declarator-aware `types::declare(elem, "<ident>[count]")`.
+    Array {
+        /// The element type (already interned: `u8` / a `Slice(elem)`'s elem).
+        elem: TyId,
+        /// The element count (the reference metadata / `byte_len / size_of`).
+        count: u64,
+    },
+}
+
+/// The C declaration of a `ConstMemoryStatic` re-typed to `storage`
+/// (d2.2 Change F): a sized pointee via [`types::declare`]; an element
+/// array via the **declarator-aware** `types::declare(elem, "<ident>[count]")`
+/// (not a bare `<c_type(elem)> X[count]` string, which is invalid C for an
+/// array-of-array / fn-pointer element).
+fn declare_storage(
+    model: &RegseqModel,
+    names: &NameTable,
+    storage: &StorageTy,
+    ident: &str,
+) -> String {
+    match storage {
+        StorageTy::Sized(ty) => types::declare(model, names, *ty, ident),
+        StorageTy::Array { elem, count } => {
+            types::declare(model, names, *elem, &format!("{ident}[{count}]"))
+        }
+    }
+}
+
+/// Task d2.2 Change F pre-pass: recover each `ConstMemoryStatic`'s consumer
+/// pointee storage type, returning a deterministic `InstanceId -> StorageTy`
+/// map (only `Array(u8, _)`-typed statics -- the CMS shape -- are recorded; a
+/// regular static already carries its real type). Scans every const reachable
+/// from instances (static inits, const values, function-body operand
+/// constants), threading the consumer type the way `const_expr` does. A
+/// content-dedup collision (one CMS referenced at two incompatible pointee
+/// types, `const_.rs:145-152`) fails the whole emit loud (task d2.3). No
+/// model interning, no new aggregate type, no discovery / topo edge.
+fn const_memory_static_storage(
+    model: &RegseqModel,
+) -> Result<HashMap<InstanceId, StorageTy>, EmitError> {
+    let mut map: HashMap<InstanceId, StorageTy> = HashMap::new();
+    for idx in 0..model.instances.len() {
+        let id = InstanceId::from_u32(idx as u32);
+        match &model.instances[id].kind {
+            InstanceKind::Static {
+                ty,
+                init: Some(init),
+            } => scan_const(model, model.consts.resolve(*init), *ty, &mut map)?,
+            InstanceKind::Const { ty, value } => {
+                scan_const(model, model.consts.resolve(*value), *ty, &mut map)?
+            }
+            InstanceKind::Function(data) => {
+                if let Some(body) = data.body() {
+                    scan_body(model, body, &mut map)?;
+                }
+            }
+            _ => {}
+        }
+    }
+    Ok(map)
+}
+
+/// Scan a const at consumer type `consumer_ty`, recording any
+/// `ConstMemoryStatic` reference's pointee storage.
+fn scan_const(
+    model: &RegseqModel,
+    c: &regseq_model::Const,
+    consumer_ty: TyId,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    use regseq_model::Const;
+    match c {
+        Const::Aggregate(children) => match &model.types[consumer_ty] {
+            Ty::Ref(pointee, _) => {
+                // The `[Reloc, Uint(meta)]` reference carrier.
+                if children.len() == 2 {
+                    if let (Const::Reloc(target), Const::Uint(_, meta)) = (
+                        model.consts.resolve(children[0]),
+                        model.consts.resolve(children[1]),
+                    ) {
+                        record_ref_storage(model, *target, *pointee, *meta as u64, map)?;
+                    }
+                }
+            }
+            _ => scan_aggregate_children(model, children, consumer_ty, map)?,
+        },
+        Const::Reloc(target) => {
+            // A bare reloc consumed by a raw pointer `*const T` / `*mut T`.
+            if let Ty::Ptr(pointee, _) = &model.types[consumer_ty] {
+                record_sized(model, *target, *pointee, map)?;
+            }
+        }
+        Const::Bytes(bytes) => scan_bytes(model, bytes, consumer_ty, map)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Pair a typed-valtree aggregate's children with their field / element types
+/// and scan each (so a nested reference carrier / reloc is recovered). Covers
+/// every aggregate shape `typed_valtree_aggregate` lowers (Struct / Tuple /
+/// Closure via [`layout_emit::field_c_name_ty`]; Array by element), so the
+/// scan cannot miss a consumer the emission would re-type.
+fn scan_aggregate_children(
+    model: &RegseqModel,
+    children: &[regseq_model::ConstId],
+    consumer_ty: TyId,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    match &model.types[consumer_ty] {
+        Ty::Tuple { .. } | Ty::Struct { .. } | Ty::Closure(_, _) => {
+            for (i, child) in children.iter().enumerate() {
+                if let Some((_, fty)) = layout_emit::field_c_name_ty(model, consumer_ty, i) {
+                    scan_const(model, model.consts.resolve(*child), fty, map)?;
+                }
+            }
+        }
+        Ty::Array(elem, _) => {
+            let elem = *elem;
+            for child in children {
+                scan_const(model, model.consts.resolve(*child), elem, map)?;
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Scan a `Const::Bytes` image for nested pointer-field relocations to a
+/// `ConstMemoryStatic` (the nested-byte-reloc consumer), threading the field /
+/// element type the way [`body_emit`]'s walker does. Covers every shape the
+/// byte-image walker reconstructs into a pointer cast: Ref / Ptr, Struct /
+/// Tuple / Closure, Array, and an **inline** Enum's payload-variant fields
+/// (a multi-view enum byte image with a reloc defers to d2.3, so it emits no
+/// CMS cast and needs no scan).
+fn scan_bytes(
+    model: &RegseqModel,
+    bytes: &[regseq_model::Byte],
+    consumer_ty: TyId,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    use regseq_model::Byte;
+    match &model.types[consumer_ty] {
+        Ty::Ref(pointee, _) | Ty::Ptr(pointee, _) => {
+            let size = model.size_align_of(consumer_ty).size as usize;
+            if size != 0 && size <= bytes.len() {
+                if let Byte::Reloc(r) = bytes[0] {
+                    if bytes[..size].iter().all(|b| *b == Byte::Reloc(r)) {
+                        record_sized(model, r, *pointee, map)?;
+                    }
+                }
+            }
+        }
+        Ty::Tuple { .. } | Ty::Struct { .. } | Ty::Closure(_, _) => {
+            if let Some(fields) = agg_field_layouts(model, consumer_ty) {
+                for f in fields {
+                    scan_byte_field(model, bytes, f.ty, f.offset, map)?;
+                }
+            }
+        }
+        Ty::Array(elem, n) => {
+            let elem = *elem;
+            let esize = model.size_align_of(elem).size as usize;
+            for i in 0..*n as usize {
+                scan_byte_field(model, bytes, elem, (i * esize) as u64, map)?;
+            }
+        }
+        Ty::Enum { .. } => {
+            if let Some(shape) = enum_emit::enum_shape(model, consumer_ty) {
+                if enum_emit::enum_is_inline(model, shape) {
+                    if let Some(variant) = inline_payload_variant_layout(shape) {
+                        for f in &variant.fields {
+                            scan_byte_field(model, bytes, f.ty, f.offset, map)?;
+                        }
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Scan the `[offset .. offset + size_of(field_ty)]` slice of a byte image at
+/// `field_ty` (bounds-checked), recursing into [`scan_bytes`].
+fn scan_byte_field(
+    model: &RegseqModel,
+    bytes: &[regseq_model::Byte],
+    field_ty: TyId,
+    offset: u64,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    let fsize = model.size_align_of(field_ty).size as usize;
+    let off = offset as usize;
+    if off + fsize <= bytes.len() {
+        scan_bytes(model, &bytes[off..off + fsize], field_ty, map)?;
+    }
+    Ok(())
+}
+
+/// The source / MIR-order `FieldLayout`s of a `Tuple` / `Struct` / `Closure`
+/// (a closure resolves through its parallel capture `Ty::Struct`), mirroring
+/// [`body_emit`]'s `agg_field_layouts`. `None` for any other type.
+fn agg_field_layouts(model: &RegseqModel, ty: TyId) -> Option<&[regseq_model::FieldLayout]> {
+    use regseq_model::LayoutKind;
+    let layout = match &model.types[ty] {
+        Ty::Struct { layout, .. } | Ty::Tuple { layout, .. } => layout,
+        Ty::Closure(item, args) => {
+            model
+                .types
+                .iter()
+                .find_map(|(_, candidate)| match candidate {
+                    Ty::Struct {
+                        item: s_item,
+                        args: s_args,
+                        layout,
+                    } if s_item == item && s_args == args => Some(layout),
+                    _ => None,
+                })?
+        }
+        _ => return None,
+    };
+    match &layout.kind {
+        LayoutKind::Struct { fields } => Some(fields),
+        _ => None,
+    }
+}
+
+/// The inline payload-bearing variant of an enum (a `Single`'s only variant or
+/// a niche untagged variant), whose inline fields a byte image reconstructs.
+/// `None` for a fieldless tag-only / multi-view shape.
+fn inline_payload_variant_layout(
+    shape: &regseq_model::EnumShape,
+) -> Option<&regseq_model::VariantLayout> {
+    use regseq_model::{EnumShape, TagEncoding};
+    match shape {
+        EnumShape::Single { variant, .. } => Some(variant),
+        EnumShape::Multiple {
+            encoding: TagEncoding::Niche {
+                untagged_variant, ..
+            },
+            variants,
+            ..
+        } => variants.get(untagged_variant.index()),
+        _ => None,
+    }
+}
+
+/// Scan a function body's operand constants (Change F), threading the same
+/// consumer type each operand site lowers against in [`body_emit`]: an
+/// `Assign(place, rvalue)` (`Use` / `Repeat` at the place / element type; an
+/// `Aggregate` at its field / element / variant-field types) plus `Call`
+/// argument constants at the callee's parameter types. These cover every
+/// position where the bridge surfaces a reference / raw-pointer const to a
+/// `ConstMemoryStatic`.
+fn scan_body(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    use regseq_model::{StatementKind, TerminatorKind};
+    for block in body.basic_blocks.iter() {
+        for stmt in block.statements.iter() {
+            if let StatementKind::Assign(place, rvalue) = &stmt.kind {
+                scan_rvalue(model, body, place, rvalue, map)?;
+            }
+        }
+        if let TerminatorKind::Call { callee, args, .. } = &block.terminator.kind {
+            let param_tys = callee_param_tys(model, body, callee);
+            for (i, arg) in args.iter().enumerate() {
+                if let Some(ty) = param_tys.get(i) {
+                    scan_operand_const(model, arg, *ty, map)?;
+                }
+            }
+        }
+    }
+    Ok(())
+}
+
+/// The callee's parameter types (the per-argument consumer types): a `Direct`
+/// instance's `FnSig.inputs`, or an `Indirect` callee's `FnPtr` signature
+/// inputs (recovered from a bare-local / trailing-`Field` callee operand's
+/// type). Empty when the signature is not recoverable. This is the **single
+/// source of truth** shared by [`body_emit`]'s call-argument emission and the
+/// Change-F pre-pass scan, so the two cannot disagree on which arguments carry
+/// a known consumer type (a more deeply projected `FnPtr` callee is threaded
+/// in neither -- a non-scalar const argument there fails loud, not mis-typed).
+pub(super) fn callee_param_tys(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    callee: &regseq_model::CallCallee,
+) -> Vec<TyId> {
+    use regseq_model::{CallCallee, Operand};
+    match callee {
+        CallCallee::Direct(id) => model.instances[*id]
+            .kind
+            .as_function()
+            .map(|d| model.sigs.resolve(d.fn_sig).inputs.clone())
+            .unwrap_or_default(),
+        CallCallee::Indirect(op) => {
+            let ty = match op {
+                Operand::Copy(p) | Operand::Move(p) => place_consumer_ty(body, p),
+                Operand::Constant(_) => None,
+            };
+            ty.and_then(|t| match &model.types[t] {
+                Ty::FnPtr(sig) => Some(model.sigs.resolve(*sig).inputs.clone()),
+                _ => None,
+            })
+            .unwrap_or_default()
+        }
+    }
+}
+
+/// Scan an assignment's rvalue operand constants at the type each lowers
+/// against: `Use` at the destination place type, `Repeat` at the array
+/// element type, and an `Aggregate` at its per-operand field / element /
+/// variant-field types (the same consumer types [`body_emit`] threads).
+fn scan_rvalue(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    place: &regseq_model::Place,
+    rvalue: &regseq_model::Rvalue,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    use regseq_model::Rvalue;
+    match rvalue {
+        Rvalue::Use(op) => {
+            if let Some(ty) = place_consumer_ty(body, place) {
+                scan_operand_const(model, op, ty, map)?;
+            }
+        }
+        Rvalue::Repeat(op, _) => {
+            if let Some(ty) = place_consumer_ty(body, place) {
+                if let Ty::Array(elem, _) = model.types[ty] {
+                    scan_operand_const(model, op, elem, map)?;
+                }
+            }
+        }
+        Rvalue::Aggregate(kind, ops) => scan_aggregate_operands(model, kind, ops, map)?,
+        _ => {}
+    }
+    Ok(())
+}
+
+/// Scan an `Aggregate` rvalue's operand constants at their field / element /
+/// variant-field consumer types (the same names [`body_emit`] designates).
+fn scan_aggregate_operands(
+    model: &RegseqModel,
+    kind: &regseq_model::AggregateKind,
+    ops: &[regseq_model::Operand],
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    use regseq_model::AggregateKind;
+    match kind {
+        AggregateKind::Struct(ty) | AggregateKind::Tuple(ty) | AggregateKind::Closure(ty) => {
+            for (i, op) in ops.iter().enumerate() {
+                if let Some((_, fty)) = layout_emit::field_c_name_ty(model, *ty, i) {
+                    scan_operand_const(model, op, fty, map)?;
+                }
+            }
+        }
+        AggregateKind::Union(ty, field) => {
+            if let (Some((_, fty)), Some(op)) = (
+                layout_emit::field_c_name_ty(model, *ty, field.index()),
+                ops.first(),
+            ) {
+                scan_operand_const(model, op, fty, map)?;
+            }
+        }
+        AggregateKind::Array(elem) => {
+            for op in ops {
+                scan_operand_const(model, op, *elem, map)?;
+            }
+        }
+        AggregateKind::Enum(ty, variant) => {
+            for (i, op) in ops.iter().enumerate() {
+                if let Some((_, fty)) =
+                    enum_emit::enum_variant_field(model, *ty, variant.index(), i)
+                {
+                    scan_operand_const(model, op, fty, map)?;
+                }
+            }
+        }
+        AggregateKind::RawPtr(_, _) => {}
+    }
+    Ok(())
+}
+
+/// Scan a single operand: if it is a constant, scan it at `consumer_ty`.
+fn scan_operand_const(
+    model: &RegseqModel,
+    op: &regseq_model::Operand,
+    consumer_ty: TyId,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    if let regseq_model::Operand::Constant(c) = op {
+        scan_const(model, model.consts.resolve(*c), consumer_ty, map)?;
+    }
+    Ok(())
+}
+
+/// The consumer type of an assignment destination place: a bare local's
+/// declared type, or a trailing `Field`'s carried type. `None` for other
+/// projections (a `ConstMemoryStatic` reference is assigned to a simple
+/// place in practice).
+fn place_consumer_ty(body: &regseq_model::Body, place: &regseq_model::Place) -> Option<TyId> {
+    match place.projection.last() {
+        None => Some(body.local_decls[place.local].ty),
+        Some(regseq_model::PlaceElem::Field(_, ty)) => Some(*ty),
+        _ => None,
+    }
+}
+
+/// Record a reference carrier's pointee storage for a `ConstMemoryStatic`
+/// `target`: a sized pointee -> `Sized`; `Ty::Slice(elem)` -> `Array{elem,
+/// count}`; `Ty::Str` -> `Array{u8, count}` (the u8 element is read from the
+/// CMS's own bridge `Array(u8, _)` type, so &str / &[u8] resolve to the same
+/// `uint8_t[N]` and participate in the incompatible-pointee collision check);
+/// `Ty::Dynamic` is the vtable task (the body emit fails loud).
+fn record_ref_storage(
+    model: &RegseqModel,
+    target: InstanceRef,
+    pointee: TyId,
+    meta: u64,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    match &model.types[pointee] {
+        Ty::Dynamic { .. } => Ok(()),
+        Ty::Str => match cms_array_elem(model, target) {
+            Some(elem) => record(model, target, StorageTy::Array { elem, count: meta }, map),
+            None => Ok(()),
+        },
+        Ty::Slice(elem) => record(
+            model,
+            target,
+            StorageTy::Array {
+                elem: *elem,
+                count: meta,
+            },
+            map,
+        ),
+        _ => record(model, target, StorageTy::Sized(pointee), map),
+    }
+}
+
+/// The element type of a `ConstMemoryStatic` target's bridge `Array(elem, _)`
+/// type (always `u8`), for re-typing a `&str` carrier to `Array{u8, count}`.
+/// `None` if `target` does not resolve to an `Array`-typed static.
+fn cms_array_elem(model: &RegseqModel, target: InstanceRef) -> Option<TyId> {
+    let id = resolve_instance(model, target)?;
+    match &model.instances[id].kind {
+        InstanceKind::Static { ty, .. } => match model.types[*ty] {
+            Ty::Array(elem, _) => Some(elem),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Record a sized-pointee storage for a `ConstMemoryStatic` `target` (a thin
+/// `&T` / `*const T` or a nested byte-reloc). A non-sized pointee (`Str` /
+/// `Slice` / `Dynamic`) is not a thin pointer and is handled elsewhere.
+fn record_sized(
+    model: &RegseqModel,
+    target: InstanceRef,
+    pointee: TyId,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    if matches!(
+        model.types[pointee],
+        Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. }
+    ) {
+        return Ok(());
+    }
+    record(model, target, StorageTy::Sized(pointee), map)
+}
+
+/// Record `storage` for `target`, but only for a `ConstMemoryStatic`-shaped
+/// `Static` (declared `Array(u8, _)` by the bridge). A conflicting prior
+/// record (the content-dedup collision) fails the whole emit loud (task
+/// d2.3). Re-typing an `Array(u8, _)` static is idempotent when the consumer
+/// matches its real type, so a user `[u8; N]` static is unaffected.
+fn record(
+    model: &RegseqModel,
+    target: InstanceRef,
+    storage: StorageTy,
+    map: &mut HashMap<InstanceId, StorageTy>,
+) -> Result<(), EmitError> {
+    let Some(id) = resolve_instance(model, target) else {
+        return Ok(());
+    };
+    let is_cms_shape = matches!(
+        &model.instances[id].kind,
+        InstanceKind::Static { ty, .. } if matches!(model.types[*ty], Ty::Array(elem, _) if matches!(model.types[elem], Ty::Uint(regseq_model::UintKind::U8)))
+    );
+    if !is_cms_shape {
+        return Ok(());
+    }
+    match map.get(&id) {
+        Some(existing) if *existing != storage => Err(EmitError::Unsupported(
+            "ConstMemoryStatic at incompatible pointee types: task d2.3",
+        )),
+        _ => {
+            map.insert(id, storage);
+            Ok(())
+        }
+    }
+}
+
+/// The `InstanceId` whose canonical `InstanceRef` equals `target` (mirrors
+/// the body emitter's `resolve_reloc`).
+fn resolve_instance(model: &RegseqModel, target: InstanceRef) -> Option<InstanceId> {
+    (0..model.instances.len()).find_map(|idx| {
+        let id = InstanceId::from_u32(idx as u32);
+        (model.instance_ref_of(id) == target).then_some(id)
+    })
+}
+
 /// Bank 4 (section 15): a section 17-qualified prototype for every
 /// non-diag-log function instance (`Foreign` -> `extern` decl only) and an
 /// `extern [const] T X;` declaration for every static.
@@ -914,6 +1452,7 @@ fn bank4_declarations(
     model: &RegseqModel,
     names: &NameTable,
     syms: &InstanceSymbols,
+    cms_storage: &HashMap<InstanceId, StorageTy>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
@@ -952,7 +1491,13 @@ fn bank4_declarations(
                 } else {
                     ""
                 };
-                let decl = types::declare(model, names, *ty, emission);
+                // Task d2.2 Change F: a `ConstMemoryStatic` is declared from
+                // its recovered consumer pointee storage type, not the
+                // bridge's `Array(u8, len)`.
+                let decl = match cms_storage.get(&id) {
+                    Some(storage) => declare_storage(model, names, storage, emission),
+                    None => types::declare(model, names, *ty, emission),
+                };
                 out.push_str(&format!("extern {konst}{decl};\n"));
             }
             // Const items materialise at use sites (an address-taken const is
@@ -983,6 +1528,7 @@ fn bank5_definitions(
     model: &RegseqModel,
     names: &NameTable,
     syms: &InstanceSymbols,
+    cms_storage: &HashMap<InstanceId, StorageTy>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
@@ -1025,14 +1571,22 @@ fn bank5_definitions(
                 } else {
                     ""
                 };
-                let decl = types::declare(model, names, *ty, emission);
-                let value = body_emit::static_initializer(
-                    model,
-                    names,
-                    syms,
-                    model.consts.resolve(*init),
-                    *ty,
-                )?;
+                let init_const = model.consts.resolve(*init);
+                // Task d2.2 Change F: a `ConstMemoryStatic` is declared and its
+                // byte image reconstructed at its recovered storage type, so
+                // `&X` is the consumer pointee type (same-type, aligned).
+                let (decl, value) = match cms_storage.get(&id) {
+                    Some(storage) => (
+                        declare_storage(model, names, storage, emission),
+                        body_emit::const_memory_static_initializer(
+                            model, names, syms, init_const, storage,
+                        )?,
+                    ),
+                    None => (
+                        types::declare(model, names, *ty, emission),
+                        body_emit::static_initializer(model, names, syms, init_const, *ty)?,
+                    ),
+                };
                 out.push_str(&format!("{konst}{decl} = {value};\n"));
             }
             _ => {}
