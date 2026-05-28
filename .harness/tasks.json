@@ -4836,6 +4836,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-14",
+          "name": "Generic-C non-scalar consts: byte-image reconstruction, enum _raw union member, reference carrier & multi-member Const::EnumValue (d2.2)",
+          "spec": ".harness/tasks/regseq-backends/14-generic-c-nonscalar-const.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-13"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-28T04:19:22Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
