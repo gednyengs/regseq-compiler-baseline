@@ -145,6 +145,9 @@ struct PlaceWalk {
     ty: TyId,
     /// The most recent fat-pointer base lvalue, when a fat `Deref` was crossed.
     fat_base: Option<String>,
+    /// Accumulated `from` offset from array `Subslice` projections not yet
+    /// consumed by an `Index` / `ConstantIndex`.
+    pending_from: u64,
 }
 
 impl BodyEmit<'_> {
@@ -747,6 +750,7 @@ impl BodyEmit<'_> {
             lvalue: lv,
             ty,
             fat_base,
+            pending_from: pending_from.unwrap_or(0),
         })
     }
 
@@ -941,6 +945,7 @@ impl BodyEmit<'_> {
             projection: place.projection[..n - 1].to_vec().into_boxed_slice(),
         };
         let base = self.place_walk(&base_place)?;
+        let effective_from = base.pending_from + from;
         match &self.model.types[base.ty] {
             Ty::Array(_, _) => {
                 if from_end {
@@ -960,7 +965,7 @@ impl BodyEmit<'_> {
                 // dest_ty is `&[elem; to - from]`; its C spelling is exactly
                 // the pointer-to-array cast (with the correct const-ness).
                 let cast = types::c_type(self.model, self.names, dest_ty);
-                Ok(format!("({cast})&({}[{from}])", base.lvalue))
+                Ok(format!("({cast})&({}[{effective_from}])", base.lvalue))
             }
             Ty::Slice(elem) => {
                 let fat = types::unsized_pointee_struct_name(self.model, self.names, dest_ty)
@@ -978,7 +983,7 @@ impl BodyEmit<'_> {
                 );
                 let len = if from_end {
                     // section 19.4 `[from .. len - to]`.
-                    format!("({fbase}.len - {to} - {from})")
+                    format!("({fbase}.len - {to} - {effective_from})")
                 } else {
                     let len_val = to
                         .checked_sub(from)
@@ -986,7 +991,7 @@ impl BodyEmit<'_> {
                     format!("{len_val}")
                 };
                 Ok(format!(
-                    "(struct {fat}){{ .data = ({data_ty})(({}) + {from}), .len = {len} }}",
+                    "(struct {fat}){{ .data = ({data_ty})(({}) + {effective_from}), .len = {len} }}",
                     base.lvalue
                 ))
             }
@@ -1117,6 +1122,9 @@ impl BodyEmit<'_> {
             _ => {
                 // Sized (thin) pointee: the raw pointer is the data pointer;
                 // the metadata operand is unit / ZST and is dropped.
+                if let Some(metadata) = ops.get(1) {
+                    let _ = self.operand_expr(metadata, None)?;
+                }
                 self.operand_expr(data_op()?, Some(dest_ty))
             }
         }

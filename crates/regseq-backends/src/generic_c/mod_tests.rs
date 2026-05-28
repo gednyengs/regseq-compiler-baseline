@@ -2952,6 +2952,56 @@ fn array_subslice_under_ref_is_a_thin_sub_array_pointer() {
 }
 
 #[test]
+fn nested_array_subslice_under_ref_accumulates_offsets() {
+    // `fn() -> &[u32; 2] { &_1[1..5][1..3] }` -- the final address is `_1[2]`,
+    // not `_1[1]`: both array Subslice `from` offsets contribute.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr8 = m.types.intern(Ty::Array(u32t, 8));
+    let arr2 = m.types.intern(Ty::Array(u32t, 2));
+    let arr2_ref = m.types.intern(Ty::Ref(arr2, Provenance::SharedBorrow));
+    let sig = fnsig(&mut m, vec![], arr2_ref, FnAbi::Rust, false);
+    // _0 &[u32;2] (ret), _1 [u32;8]. place = _1[1..5][1..3].
+    let subslice = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Subslice {
+                from: 1,
+                to: 5,
+                from_end: false,
+            },
+            PlaceElem::Subslice {
+                from: 1,
+                to: 3,
+                from_end: false,
+            },
+        ]),
+    };
+    let body = build_body(
+        0,
+        vec![arr2_ref, arr8],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Ref(Provenance::SharedBorrow, subslice),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "nested_sub", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = (const uint32_t (*)[2])&(_1[2]);"),
+        "nested array Subslice under a Ref accumulates offsets:\n{tu}"
+    );
+    assert!(
+        !tu.contains("_0 = (const uint32_t (*)[2])&(_1[1]);"),
+        "nested array Subslice must not use only the final offset:\n{tu}"
+    );
+}
+
+#[test]
 fn array_aggregate_and_repeat_lower_at_the_assign_site() {
     // `[a, b, c]` is per-element stores; `[x; 4]` is a fill loop (C forbids
     // array assignment).
@@ -3053,6 +3103,34 @@ fn fat_raw_ptr_aggregate_builds_data_len_thin_drops_metadata() {
         tu.contains("_3 = _1;"),
         "thin raw pointer aggregate is the data operand, metadata dropped:\n{tu}"
     );
+}
+
+#[test]
+fn thin_raw_ptr_aggregate_lowers_metadata_before_dropping_it() {
+    // A sized RawPtr aggregate still emits the data operand, but its metadata
+    // operand must be lowered first so deferred constants fail loud.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let raw_thin = m.types.intern(Ty::Ptr(u32t, Mutability::Mut));
+    let sig = fnsig(&mut m, vec![raw_thin], raw_thin, FnAbi::Rust, false);
+    let metadata = m.consts.intern(Const::Aggregate(vec![]));
+    let body = build_body(
+        1,
+        vec![raw_thin, raw_thin],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::RawPtr(u32t, Mutability::Mut),
+                    Box::new([Operand::Copy(loc(1)), Operand::Constant(metadata)]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "thin_raw_ptr_bad_metadata", sig, Some(body));
+
+    assert!(matches!(emit_generic_c(&m), Err(EmitError::Unsupported(_))));
 }
 
 // --- B4: the deferred seams fail loud with the right family ---
