@@ -4857,6 +4857,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-15",
+          "name": "Generic-C diag-log \u2192 printf + harness bring-up + first green ledger fixtures (task e)",
+          "spec": ".harness/tasks/regseq-backends/15-generic-c-diag-log-printf.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-14"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-28T08:05:16Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
