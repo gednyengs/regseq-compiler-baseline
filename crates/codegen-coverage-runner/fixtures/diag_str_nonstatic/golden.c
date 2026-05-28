@@ -685,7 +685,7 @@ void input_regseq_main(void) {
         goto bb_2;
     }
     bb_2: {
-        char _logstr0[256]; { size_t _n = ((_3).len) < (256 - 1) ? ((_3).len) : (256 - 1); memcpy(_logstr0, ((_3).data), _n); _logstr0[_n] = '\0'; } printf("[INFO] name=%s\n", _logstr0); goto bb_3;
+        fwrite("[INFO] name=", 1, 12, stdout); fwrite((_3).data, 1, (_3).len, stdout); fwrite("\n", 1, 1, stdout); goto bb_3;
     }
     bb_3: {
         return;

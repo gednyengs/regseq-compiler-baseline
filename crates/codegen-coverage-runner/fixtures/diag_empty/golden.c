@@ -666,7 +666,7 @@ void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_
 }
 void input_regseq_main(void) {
     bb_0: {
-        printf("[INFO] connected\n"); goto bb_1;
+        fwrite("[INFO] connected\n", 1, 17, stdout); goto bb_1;
     }
     bb_1: {
         return;

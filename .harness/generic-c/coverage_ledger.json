@@ -374,6 +374,7 @@
         "diag_bool",
         "diag_escapes",
         "diag_hex",
+        "diag_nul",
         "diag_numeric_widths"
       ],
       "result": "pass"
@@ -382,9 +383,10 @@
       "id": "DL-4",
       "status": "covered",
       "fixtures": [
+        "diag_nul",
+        "diag_str_long",
         "diag_str_nonstatic",
-        "diag_str_static",
-        "diag_str_truncation"
+        "diag_str_static"
       ],
       "result": "pass"
     },

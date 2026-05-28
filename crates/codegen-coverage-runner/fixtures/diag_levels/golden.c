@@ -605,14 +605,14 @@ void input_regseq_main(void) {
         goto bb_4;
     }
     bb_4: {
-        printf("[DEBUG] d=%u\n", (unsigned)(_7)); goto bb_5;
+        fwrite("[DEBUG] d=", 1, 10, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_7)); fwrite(_n0, 1, _l0, stdout); } fwrite("\n", 1, 1, stdout); goto bb_5;
     }
     bb_5: {
         _14 = _5;
         goto bb_6;
     }
     bb_6: {
-        printf("[INFO] i=%u\n", (unsigned)(_14)); goto bb_7;
+        fwrite("[INFO] i=", 1, 9, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_14)); fwrite(_n0, 1, _l0, stdout); } fwrite("\n", 1, 1, stdout); goto bb_7;
     }
     bb_7: {
         _21 = _1;
@@ -620,7 +620,7 @@ void input_regseq_main(void) {
         goto bb_8;
     }
     bb_8: {
-        printf("[WARN] w=%u\n", (unsigned)(_22)); goto bb_9;
+        fwrite("[WARN] w=", 1, 9, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_22)); fwrite(_n0, 1, _l0, stdout); } fwrite("\n", 1, 1, stdout); goto bb_9;
     }
     bb_9: {
         _29 = _1;
@@ -628,7 +628,7 @@ void input_regseq_main(void) {
         goto bb_10;
     }
     bb_10: {
-        printf("[ERROR] e=%u\n", (unsigned)(_30)); goto bb_11;
+        fwrite("[ERROR] e=", 1, 10, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_30)); fwrite(_n0, 1, _l0, stdout); } fwrite("\n", 1, 1, stdout); goto bb_11;
     }
     bb_11: {
         return;

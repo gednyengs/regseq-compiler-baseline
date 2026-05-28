@@ -644,8 +644,11 @@ void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_in
 void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
 struct rust_str input_id(struct rust_str);
 void input_regseq_main(void);
-extern const uint8_t input__regseq_synth__const_memory_static_35a9f51240b145264e30002c6e1202b8[2];
-extern const uint8_t input__regseq_synth__const_memory_static_f099639d65be34b7bff6611bc65ac219[300];
+extern const uint8_t input__regseq_synth__const_memory_static_074bba1f653bfa0340ac9d7985949c2e[4];
+extern const uint8_t input__regseq_synth__const_memory_static_4feb019e8b2c4e2ecc57e44b8755d1d6[4];
+extern const uint8_t input__regseq_synth__const_memory_static_96f52e2e456b2848ac9f300f2883b976[3];
+extern const uint8_t input__regseq_synth__const_memory_static_b113b124abf8cbc0fcce18a4247c2f0e[6];
+extern const uint8_t input__regseq_synth__const_memory_static_fae2e27aba2c37d3703688d7104c0069[3];
 
 /* ---------------------------------------------------------------------------
  * Bank 5 (section 15): function bodies + static initializers.
@@ -673,23 +676,42 @@ struct rust_str input_id(struct rust_str _1) {
     }
 }
 void input_regseq_main(void) {
-    struct rust_str _1;
-    struct rust_str _2;
-    struct rust_str _3;
+    uint32_t _1;
+    uint32_t _2;
+    struct rust_str _15;
+    struct rust_str _16;
+    struct rust_str _17;
     bb_0: {
-        _1 = (struct rust_str){ .data = (const uint8_t *)(&input__regseq_synth__const_memory_static_f099639d65be34b7bff6611bc65ac219), .len = ((size_t)(300ULL)) };
+        _1 = ((((uint32_t)(3U))) + (((uint32_t)(4U))));
         _2 = _1;
-        _3 = input_id(_2); goto bb_1;
+        goto bb_1;
     }
     bb_1: {
-        goto bb_2;
+        fwrite("[INFO] a\000b=", 1, 11, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_2)); fwrite(_n0, 1, _l0, stdout); } fwrite("\n", 1, 1, stdout); goto bb_2;
     }
     bb_2: {
-        char _logstr0[256]; { size_t _n = ((_3).len) < (256 - 1) ? ((_3).len) : (256 - 1); memcpy(_logstr0, ((_3).data), _n); _logstr0[_n] = '\0'; } printf("[INFO] %s\n", _logstr0); goto bb_3;
+        goto bb_3;
     }
     bb_3: {
+        fwrite("[INFO] s=", 1, 9, stdout); fwrite("x\000y", 1, 3, stdout); fwrite("\n", 1, 1, stdout); goto bb_4;
+    }
+    bb_4: {
+        _15 = (struct rust_str){ .data = (const uint8_t *)(&input__regseq_synth__const_memory_static_96f52e2e456b2848ac9f300f2883b976), .len = ((size_t)(3ULL)) };
+        _16 = _15;
+        _17 = input_id(_16); goto bb_5;
+    }
+    bb_5: {
+        goto bb_6;
+    }
+    bb_6: {
+        fwrite("[INFO] d=", 1, 9, stdout); fwrite((_17).data, 1, (_17).len, stdout); fwrite("\n", 1, 1, stdout); goto bb_7;
+    }
+    bb_7: {
         return;
     }
 }
-const uint8_t input__regseq_synth__const_memory_static_35a9f51240b145264e30002c6e1202b8[2] = { ((uint8_t)(123U)), ((uint8_t)(125U)) };
-const uint8_t input__regseq_synth__const_memory_static_f099639d65be34b7bff6611bc65ac219[300] = { ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)), ((uint8_t)(97U)) };
+const uint8_t input__regseq_synth__const_memory_static_074bba1f653bfa0340ac9d7985949c2e[4] = { ((uint8_t)(100U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_4feb019e8b2c4e2ecc57e44b8755d1d6[4] = { ((uint8_t)(115U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_96f52e2e456b2848ac9f300f2883b976[3] = { ((uint8_t)(112U)), ((uint8_t)(0U)), ((uint8_t)(113U)) };
+const uint8_t input__regseq_synth__const_memory_static_b113b124abf8cbc0fcce18a4247c2f0e[6] = { ((uint8_t)(97U)), ((uint8_t)(0U)), ((uint8_t)(98U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_fae2e27aba2c37d3703688d7104c0069[3] = { ((uint8_t)(120U)), ((uint8_t)(0U)), ((uint8_t)(121U)) };

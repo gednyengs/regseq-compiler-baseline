@@ -12417,8 +12417,9 @@ and lowers the call directly into the target backend's native
 severity-tagged emitter via Pipeline A (post-DiagLogPeel
 flat-arg Call per §26.6; backends consume the peeled operands
 element-by-element). Per-target emitter shapes (e.g., the
-generic-C target's `printf` with leading severity tag) are
-backend-codegen content; see `generic-c-backend.md` §8 for
+generic-C target's libc-stdio (`fwrite`) emission with leading
+severity tag) are backend-codegen content; see
+`generic-c-backend.md` §8 for
 the generic-C target's binding and the phase-2
 `<target>-backend.md` artifacts for each subsequent target.
 Emission suppression in the deployed artifact is delegated
@@ -12891,7 +12892,7 @@ author-source expression, not to bridge-internal machinery.
 | D4 | Every operand's source-Rust `Ty` is admissible per §26.4's `From`-closed set; rejection list per §26.4 | macro expansion + bridge fingerprint validation (defense in depth) |
 | D6 | `args[0]` resolves to a string literal at the **MIR shape** (pre-Regseq-const-lowering); not an indirect const reference, not a runtime expression, not a non-string literal. Checked at DiagLogPeel step 1 (§25.7.3) because post-Regseq-const-lowering both literal and const-reference forms serialise to `Const::Aggregate([Reloc, Uint])` (§9.7) and are no longer distinguishable. | DiagLogPeel step 1 (pre-lowering) |
 | D7 | Template does NOT end in `\n`, `\r`, or `\r\n`                                              | post-DiagLogPeel fingerprint validation  |
-| D8 | `&str` operand count in args[1..] <= **selected binding target's** declared `max_str_args_per_call` (the bound is backend-declared per-target -- see `generic-c-backend.md` §8.4 for the generic-C target; phase-2 targets declare in their respective `<target>-backend.md` artifacts; counts ALL `Ty::Ref(Ty::Str, _)` operands without provenance distinction; args[0] format template excluded). Bounds per-call stack use against the per-`%s`-site temporary-buffer allocation. Evaluated once per (call site, target) pair: a single build is one target; cross-target validation (when a future stage adds multi-target build) repeats D8 per target. | post-DiagLogPeel fingerprint validation against the build's selected target |
+| D8 | `&str` operand count in args[1..] <= **selected binding target's** declared `max_str_args_per_call` (the bound is backend-declared per-target -- see `generic-c-backend.md` §8.4 for the generic-C target; phase-2 targets declare in their respective `<target>-backend.md` artifacts; counts ALL `Ty::Ref(Ty::Str, _)` operands without provenance distinction; args[0] format template excluded). A bridge-side argument-count ceiling on how many `&str` operands one call site may carry (the generic-C target writes each `&str` with `fwrite`, allocating no per-`%s` stack buffer). Evaluated once per (call site, target) pair: a single build is one target; cross-target validation (when a future stage adds multi-target build) repeats D8 per target. | post-DiagLogPeel fingerprint validation against the build's selected target |
 
 **D5 deferred.** The atomic-context analysis ("Call site is
 reachable from an atomic context for which the target offers
@@ -12927,7 +12928,7 @@ per-arg C format specifier, `&str` NUL-termination strategy,
 content and live in the per-target backend merger artifact
 (see README §5.9 rule 7). Stage 14 specs the **generic-C
 binding** -- the phase-1 implementation territory: hosted
-userspace, libc, `printf` -- at `generic-c-backend.md` §8.
+userspace, libc stdio -- at `generic-c-backend.md` §8.
 
 Forward-looking content for phase-2 targets (Linux kernel
 `pr_*` / `dev_*` family, Linux `max_str_args_per_call`
@@ -13005,9 +13006,9 @@ Lifecycle + driver-struct discovery + RegseqError):**
 - **Per-target `&str` null-termination strategy choice**
   -- each binding backend pins its own materialisation
   strategy at implementation-sweep time. **Generic-C is
-  pinned in `generic-c-backend.md` §8.3** (static-literal
-  direct emission + temporary stack-buffer fallback for
-  non-static `&str`). Linux backend (phase-2 stage 15) pins
+  pinned in `generic-c-backend.md` §8.3** (byte-faithful
+  `fwrite` emission of the full `&str` byte range; no
+  NUL-termination needed). Linux backend (phase-2 stage 15) pins
   null-termination at its implementation sweep in
   `linux-backend.md`; future targets pin theirs when their
   backend artifacts open.

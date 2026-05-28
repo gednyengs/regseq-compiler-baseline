@@ -27,7 +27,7 @@ expectations to phase-2 stages 15 / 16 / 17; see
 
 This file specifies how RegseqModel constructs lower to C in
 the **generic-C backend** (phase-1 implementation territory:
-hosted userspace, libc, `printf`, `main()`, host-platform
+hosted userspace, libc stdio, `main()`, host-platform
 integer conventions). The Linux kernel backend, Zephyr backend,
 etc. each get their own merger artifact under the project
 `README.md` §2 "Dual backend" rule.
@@ -360,9 +360,10 @@ terminator vocabulary). Control flow is the `bb_N:` labels of
   - **Diag-log interception (first).** If `callee` is
     `Direct(inst)` and `model.instances[inst]`'s source `item`
     carries `AttrData::Intrinsic(IntrinsicKind::Log(..))`
-    (`spec.md` §26), emit the §8 `printf` **instead of** a call
-    (the log-marked item is a recognition tag and emits no C
-    definition — see §15), then `goto bb_<target>;`.
+    (`spec.md` §26), emit the §8 diagnostic-logging stdio
+    emission sequence **instead of** a call (the log-marked item
+    is a recognition tag and emits no C definition — see §15),
+    then `goto bb_<target>;`.
   - **Ordinary call.** `Direct(inst)` → `name(args...)` with
     `name = emission_name(inst)`; `Indirect(op)` →
     `(<op>)(args...)`.
@@ -393,20 +394,49 @@ live IR-side in `spec.md` §26.8 and §26.9; this section
 declares the generic-C target's bindings the bridge consults
 when enforcing them.
 
-### 8.1 Per-`LogLevel` C call shape
+### 8.1 Per-`LogLevel` C emission shape
 
-| `LogLevel` | Lowered C call shape |
-|------------|----------------------|
-| `Error`    | `printf("[ERROR] " <fmt> "\n", <args>...)` |
-| `Warn`     | `printf("[WARN] " <fmt> "\n", <args>...)`  |
-| `Info`     | `printf("[INFO] " <fmt> "\n", <args>...)`  |
-| `Debug`    | `printf("[DEBUG] " <fmt> "\n", <args>...)` |
+Each diag-log call lowers to a deterministic **statement
+sequence** writing to a single output stream (stdout), with
+severity rendered as a leading bracketed tag:
 
-Single emitter (`printf`); single output stream (stdout);
-severity rendered as a leading bracketed tag; explicit `\n`
-appended by lowering. The format string emitted to the C
-code is the concatenation of the bracketed severity tag, the
-author template (per `spec.md` §26.7), and a literal `\n`.
+| `LogLevel` | Leading tag |
+|------------|-------------|
+| `Error`    | `[ERROR] `  |
+| `Warn`     | `[WARN] `   |
+| `Info`     | `[INFO] `   |
+| `Debug`    | `[DEBUG] `  |
+
+**Uniform `fwrite` emission.** Every byte that reaches stdout
+is written by `fwrite(ptr, 1, n, stdout)` with an **explicit
+byte count** `n`:
+
+- every **literal run** (the bracketed tag, the author
+  template's literal text per `spec.md` §26.7, and the trailing
+  `\n` appended by lowering) is written as a single
+  `fwrite("<bytes>", 1, <decoded-byte-length>, stdout)` -- the
+  count is the decoded byte length (an interior NUL rendered
+  `\000` in the C string literal counts as one byte), not the
+  escaped C-literal length;
+- every **numeric conversion** is rendered into a fixed stack
+  buffer with `snprintf` (the §8.2 specifier + cast), then the
+  returned length is `fwrite`n;
+- every **`&str` value** is written by `fwrite` of its full
+  byte range (§8.3).
+
+Adjacent literal text coalesces, so the tag merges into the
+leading literal run and the `\n` into the trailing run; one
+statement is emitted per piece, in template order, on the one
+stdout stream (bytes land in call order).
+
+**Rationale.** A Rust `&str` (and the format-template literal)
+is length-prefixed and may contain an interior `\0` (valid
+UTF-8). A NUL-terminated `printf` format string and the `%s`
+conversion both stop at the first NUL, **silently truncating**
+such content. `fwrite` with an explicit byte count reproduces
+every byte faithfully, including interior NUL. (This replaces
+the earlier single-`printf(fmt, args)` emitter, which carried
+that latent truncation.)
 
 ### 8.2 Per-arg C specifier
 
@@ -418,66 +448,50 @@ RegseqModel `Ty`:
 | `Ty::Bool`                 | `%d` (lowered through `int`; printed `0` / `1`) |
 | `Ty::Uint(UintKind::U8..U64)` | `%u` / `%u` / `%u` / `%llu` per width |
 | `Ty::Int(IntKind::I8..I64)`  | `%d` / `%d` / `%d` / `%lld` per width |
-| `Ty::Ref(Ty::Str, _)`      | `%s` (see §8.3 `&str` NUL-termination contract) |
+| `Ty::Ref(Ty::Str, _)`      | written byte-faithfully via `fwrite` (§8.3); not a `printf`/`snprintf` specifier |
 
+The numeric rows give the `snprintf` format specifier used to
+render each numeric operand into the §8.1 stack buffer.
 Modifier-specifiers from `spec.md` §26.7 compose with the
 per-width specifier (e.g., `{:08x}` on a `U32`-typed operand
-lowers to `%08x` in the emitted C format string).
+lowers to the `snprintf` format `%08x`).
 
-### 8.3 `&str` NUL-termination contract
+### 8.3 `&str` byte-faithful emission
 
 Rust `&str` is a length-prefixed slice (data pointer + byte
 length), not a NUL-terminated C string. The generic-C backend
-MUST pass a NUL-terminated `const char *` to `printf`'s `%s`
-specifier; the backend materialises the NUL-terminated form
-from the `&str` data pointer + length pair at the lowering
-site. Two materialisation strategies are admissible:
+writes both static and non-static `&str` values with `fwrite`
+of the **full** byte range -- exactly `len` bytes -- so the
+content is reproduced verbatim, including any interior NUL.
+There is **no NUL termination, no stack buffer, no length cap,
+and no truncation**.
 
 - **Static literals.** When the `&str` operand traces to a
   static string literal Constant (the `args[0]` template
   case, and any author-provided `Str` argument that resolves
-  to a static literal at lowering time), the backend may emit
-  the C string literal directly with an implicit trailing
-  `\0` (C string literals are NUL-terminated by the C
-  standard); no temporary buffer is needed.
-- **Non-static `&str` operands.** For `&str` operands that
-  do not trace to a static literal (e.g., author-provided
-  `&str` arguments that borrow from a runtime-constructed
-  string), the backend emits a temporary fixed-size stack
-  buffer at the call site, copies the byte range, appends a
-  `\0`, and passes the buffer pointer to `printf`. The
-  **normative overflow contract** (binding, observable
-  behaviour):
-  - **Deterministic truncation algorithm** (applied
-    unconditionally for every non-static `&str` operand):
-    copy `min(source.len(), cap - 1)` bytes from the source
-    into the buffer, then write `\0` at index
-    `min(source.len(), cap - 1)`. **Truncation occurs
-    whenever `source.len() >= cap`** (when source length
-    equals or exceeds the cap, the algorithm copies
-    `cap - 1` bytes and the buffer is full minus the
-    terminator). No panic; no read past `source.len()`; no
-    write past `cap - 1`.
-  - **Guaranteed NUL termination** in all cases (truncated
-    output included; the trailing byte of the buffer is
-    always `\0`).
-  - **No truncation indicator** in the emitted output -- the
-    lowering does NOT append `"..."` or a similar marker.
-    Authors needing truncation-aware behaviour bound their
-    `&str` arguments at the source.
-  - **Minimum buffer size: 256 bytes** (`cap >= 256`).
-    Implementations MAY use a larger cap; this floor gives
-    authors a portable lower bound on `&str` argument length
-    that won't truncate.
-  - **Per-`%s`-site buffer.** A call with multiple `&str`
-    args gets independent buffers per `%s` site, not a
-    single shared buffer. (Two `&str` args of length `cap`
-    each must both fit; the buffers are stack-allocated and
-    independent.)
-  - The numeric cap value above the 256-byte floor is an
-    implementation constant; the phase-1 implementation
-    sweep picks the concrete cap, with the above contract
-    binding the observable behaviour.
+  to a static literal at lowering time), the backend emits the
+  CMS bytes as a C string literal and `fwrite`s them with their
+  known decoded byte length: `fwrite("<bytes>", 1, <len>,
+  stdout)`. An interior NUL renders `\000` in the C literal and
+  is counted as one byte; the literal's implicit trailing `\0`
+  is irrelevant because `fwrite` writes exactly `len` bytes.
+- **Non-static `&str` operands.** For `&str` operands that do
+  not trace to a static literal (e.g., author-provided `&str`
+  arguments that borrow from a runtime-constructed string), the
+  backend emits `fwrite((<operand>).data, 1, (<operand>).len,
+  stdout)` against the §3.2 fat-pointer struct
+  (`rust_str { const uint8_t *data; size_t len; }`). This
+  writes exactly `.len` bytes from `.data` -- the fat pointer
+  guarantees `.len` valid bytes, so there is no over-read -- and
+  a `&str` of any length prints in full.
+
+(Earlier revisions materialised a NUL-terminated copy in a
+fixed-size stack buffer for the non-static case, with a 256-byte
+floor and a deterministic truncation-at-`cap-1` contract. That
+mechanism is **removed**: a NUL-terminated `%s` silently
+truncated content at the first interior NUL, and the cap
+truncated long strings. `fwrite` with an explicit byte count
+needs neither a buffer nor a cap.)
 
 ### 8.4 `max_str_args_per_call` declaration
 
@@ -489,27 +503,26 @@ operands is rejected at bridge-side validation per `spec.md`
 §26.8 D8. The bound counts **all** `&str` operands, not only
 the non-static ones -- the bridge does not need to trace
 operand provenance to decide D8; the count is read directly
-off the fingerprint's `arg_tys` field. The 8-arg ceiling
-bounds per-call stack use at `8 * cap` bytes (`>= 2 KB` at
-the 256-byte cap floor; comfortably below realistic stack
-budgets while accommodating typical driver-logging patterns
-of 0-3 `&str` args per call). The bound is strictly tighter
-than necessary -- static-literal `&str` args don't allocate
-buffers in practice -- but the simpler formulation avoids
-bridge-side provenance analysis. Authors needing more than 8
-`&str` operands at one call site compose multiple `log!`
-calls.
+off the fingerprint's `arg_tys` field. With the §8.3
+byte-faithful `fwrite` emission no per-`&str` stack buffer is
+allocated, so the bound is no longer a stack-use limit; it is
+now purely a bridge-side argument-count ceiling (a sanity bound
+on how many `&str` operands one call site may carry, read off
+the fingerprint without provenance analysis). Authors needing
+more than 8 `&str` operands at one call site compose multiple
+`log!` calls.
 
 ### 8.5 Pipeline A consumption
 
 The generic-C backend reads the post-DiagLogPeel flat-arg IR
-shape (per `spec.md` §26.6) and emits the `printf` call with
-each peeled operand rendered element-by-element through §8.2's
-per-arg specifier. The backend **MUST NOT** reconstruct a
-`LogArg` slice or any pre-DiagLogPeel carrier shape; the
-prohibition is normative per `spec.md` §26.9 Pipeline A
-uniformity rule, and the zero-runtime-cost-on-emit guarantee
-rests on it.
+shape (per `spec.md` §26.6) and emits the §8.1 uniform-`fwrite`
+statement sequence over the peeled operands in template order:
+numeric operands through §8.2's specifier + cast (rendered via
+`snprintf`), `&str` operands and literal runs through `fwrite`
+(§8.3 / §8.1). The backend **MUST NOT** reconstruct a `LogArg`
+slice or any pre-DiagLogPeel carrier shape; the prohibition is
+normative per `spec.md` §26.9 Pipeline A uniformity rule, and
+the zero-runtime-cost-on-emit guarantee rests on it.
 
 ---
 

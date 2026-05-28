@@ -1,0 +1,5 @@
+name   = "diag_nul"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["DL-3", "DL-4"]
+expect = "pass"

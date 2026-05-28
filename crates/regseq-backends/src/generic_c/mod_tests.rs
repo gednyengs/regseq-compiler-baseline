@@ -5236,13 +5236,14 @@ fn require_default_modifier_rejects_hex_on_str() {
 }
 
 #[test]
-fn c_escape_doubles_percent_only_in_format_and_octal_escapes_nonprintable() {
-    // The format string doubles a literal `%`; an argument literal does not.
-    assert_eq!(c_escape(b"50% done", true), "50%% done");
-    assert_eq!(c_escape(b"50% done", false), "50% done");
+fn c_escape_octal_escapes_nonprintable_and_does_not_double_percent() {
+    // Literals are `fwrite`n raw (not a printf format), so a `%` is NOT doubled.
+    assert_eq!(c_escape(b"50% done"), "50% done");
     // Quote / backslash / control escapes; a non-ASCII byte -> 3-digit octal.
-    assert_eq!(c_escape(b"a\"b\\c\n\t\r", false), "a\\\"b\\\\c\\n\\t\\r");
-    assert_eq!(c_escape(&[0xff, b'z'], false), "\\377z");
+    assert_eq!(c_escape(b"a\"b\\c\n\t\r"), "a\\\"b\\\\c\\n\\t\\r");
+    assert_eq!(c_escape(&[0xff, b'z']), "\\377z");
+    // An interior NUL renders `\000` (three C-literal chars, one decoded byte).
+    assert_eq!(c_escape(&[b'a', 0, b'b']), "a\\000b");
 }
 
 #[test]
@@ -5356,48 +5357,113 @@ fn emit_diag_call(
 
 #[test]
 fn diag_call_emits_tag_specifier_cast_and_goto() {
-    // Happy path: a numeric-constant arg under `{}` -> the `[INFO] ` tag, the
-    // `%u` specifier, the `(unsigned)` cast, a trailing `\n`, and the
-    // `goto bb_<target>` with no destination assignment. Also exercises the
-    // `diag_numeric_ty` constant arm.
+    // Happy path: a numeric-constant arg under `{}` -> the tag merged into the
+    // leading literal `fwrite` (decoded count 9), one `snprintf`+`fwrite` block
+    // (the `[24]` buffer, the `%u` specifier, the `(unsigned)` cast), the
+    // trailing `\n` `fwrite`, and `goto bb_<target>` with no destination
+    // assignment. Also exercises the `diag_numeric_ty` constant arm.
     let tu = emit_diag_call(
         "x={}",
         vec![DiagArg::ConstU32(7)],
         Some(BlockId::from_u32(1)),
     )
     .expect("happy-path diag call must emit");
+    // The tag merges into the leading literal run; count is the decoded length.
     assert!(
-        tu.contains("printf(\"[INFO] x=%u\\n\", (unsigned)("),
-        "tag + specifier + cast:\n{tu}"
+        tu.contains("fwrite(\"[INFO] x=\", 1, 9, stdout);"),
+        "merged tag + leading literal fwrite:\n{tu}"
+    );
+    // The numeric snprintf+fwrite block: [24] buffer, reused specifier + cast.
+    assert!(
+        tu.contains("char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, \"%u\", (unsigned)("),
+        "snprintf block + specifier + cast:\n{tu}"
+    );
+    assert!(
+        tu.contains("fwrite(_n0, 1, _l0, stdout);"),
+        "numeric fwrite of the returned length:\n{tu}"
+    );
+    // The trailing `\n` merges into the final literal fwrite.
+    assert!(
+        tu.contains("fwrite(\"\\n\", 1, 1, stdout);"),
+        "trailing newline fwrite:\n{tu}"
     );
     assert!(tu.contains("goto bb_1;"), "goto target:\n{tu}");
+    // No residual task-e printf format string / %s / stack buffer in the diag
+    // path (the prelude's `fprintf`/`%s` panic text is unaffected).
+    assert!(
+        !tu.contains("[INFO] x=%u") && !tu.contains("_logstr"),
+        "no residual printf format / stack-buffer in the diag path:\n{tu}"
+    );
 }
 
 #[test]
-fn diag_call_non_static_str_args_get_independent_buffers() {
-    // Two non-static `&str` place args in one call -> two independent per-%s
-    // stack buffers (`_logstr0` / `_logstr1`), each cap 256, min(len, 255)
-    // copy, guaranteed NUL.
+fn diag_call_non_static_str_args_emit_value_fwrites() {
+    // Two non-static `&str` place args in one call -> two value `fwrite`s of
+    // the section-3.2 fat pointer's full byte range (`(op).data` / `(op).len`),
+    // with no stack buffer, no cap, no `%s`. The literal runs between/around
+    // them flush at their decoded byte counts.
     let tu = emit_diag_call(
         "a={} b={}",
         vec![DiagArg::StrPlace, DiagArg::StrPlace],
         Some(BlockId::from_u32(1)),
     )
     .expect("non-static str diag call must emit");
-    assert!(tu.contains("char _logstr0[256];"), "first buffer:\n{tu}");
+    // The leading + middle literal runs, decoded counts.
     assert!(
-        tu.contains("char _logstr1[256];"),
-        "second independent buffer:\n{tu}"
+        tu.contains("fwrite(\"[INFO] a=\", 1, 9, stdout);"),
+        "leading literal fwrite:\n{tu}"
     );
     assert!(
-        tu.contains("< (256 - 1) ?") && tu.contains("] = '\\0';"),
-        "min(len, cap-1) copy + guaranteed NUL:\n{tu}"
+        tu.contains("fwrite(\" b=\", 1, 3, stdout);"),
+        "middle literal fwrite:\n{tu}"
     );
-    // Both %s sites in the format string.
+    // Two value fwrites of `.data`/`.len` (exactly `.len` bytes, no over-read).
+    assert_eq!(
+        tu.matches(").data, 1, (").count(),
+        2,
+        "two non-static &str value fwrites of `.data`/`.len`:\n{tu}"
+    );
+    assert_eq!(
+        tu.matches(").len, stdout);").count(),
+        2,
+        "each `&str` fwrite writes exactly `.len` bytes:\n{tu}"
+    );
+    // No residual stack buffer / cap / `%s` from the task-e path.
     assert!(
-        tu.contains("[INFO] a=%s b=%s\\n"),
-        "two %s specifiers:\n{tu}"
+        !tu.contains("_logstr") && !tu.contains("[256]") && !tu.contains("=%s"),
+        "no residual buffer / cap / %s in the diag path:\n{tu}"
     );
+}
+
+#[test]
+fn diag_call_literal_fwrite_count_is_decoded_byte_length() {
+    // The literal-run fwrite COUNT is the decoded byte length, NOT the escaped
+    // C-literal length: an interior `\0` (rendered `\000`) counts as one byte
+    // and an embedded `\n` counts as one byte. Template "a\0b\nc={}" -> the
+    // leading run "[INFO] a\0b\nc=" is 7 + 6 = 13 decoded bytes.
+    let tu = emit_diag_call(
+        "a\u{0}b\nc={}",
+        vec![DiagArg::ConstU32(7)],
+        Some(BlockId::from_u32(1)),
+    )
+    .expect("interior-NUL/newline template must emit");
+    assert!(
+        tu.contains("fwrite(\"[INFO] a\\000b\\nc=\", 1, 13, stdout);"),
+        "decoded byte count (interior NUL = 1, embedded \\n = 1):\n{tu}"
+    );
+}
+
+#[test]
+fn diag_call_zero_placeholder_template_merges_into_one_literal_fwrite() {
+    // No placeholders -> the tag + literal + trailing `\n` merge into a single
+    // literal `fwrite` whose count is the decoded byte length (17, not 16).
+    let tu = emit_diag_call("connected", vec![], Some(BlockId::from_u32(1)))
+        .expect("zero-placeholder template must emit");
+    assert!(
+        tu.contains("fwrite(\"[INFO] connected\\n\", 1, 17, stdout);"),
+        "single merged literal fwrite:\n{tu}"
+    );
+    assert!(tu.contains("goto bb_1;"), "goto target:\n{tu}");
 }
 
 #[test]

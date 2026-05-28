@@ -1,4 +1,4 @@
-name   = "diag_str_truncation"
+name   = "diag_str_long"
 kind   = "rust"
 entry  = "regseq_main"
 covers = ["DL-4"]

@@ -4878,6 +4878,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-16",
+          "name": "Generic-C diag-log byte-faithful fwrite emission (interior-NUL &str fix)",
+          "spec": ".harness/tasks/regseq-backends/16-generic-c-diag-log-fwrite-faithfulness.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-backends-15"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-28T22:43:12Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

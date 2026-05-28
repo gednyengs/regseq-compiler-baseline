@@ -708,7 +708,7 @@ void input_regseq_main(void) {
         goto bb_4;
     }
     bb_4: {
-        printf("[INFO] u8=%u u16=%u u32=%u u64=%llu\n", (unsigned)(_10), (unsigned)(_12), (unsigned)(_14), (unsigned long long)(_16)); goto bb_5;
+        fwrite("[INFO] u8=", 1, 10, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_10)); fwrite(_n0, 1, _l0, stdout); } fwrite(" u16=", 1, 5, stdout); { char _n1[24]; int _l1 = snprintf(_n1, sizeof _n1, "%u", (unsigned)(_12)); fwrite(_n1, 1, _l1, stdout); } fwrite(" u32=", 1, 5, stdout); { char _n2[24]; int _l2 = snprintf(_n2, sizeof _n2, "%u", (unsigned)(_14)); fwrite(_n2, 1, _l2, stdout); } fwrite(" u64=", 1, 5, stdout); { char _n3[24]; int _l3 = snprintf(_n3, sizeof _n3, "%llu", (unsigned long long)(_16)); fwrite(_n3, 1, _l3, stdout); } fwrite("\n", 1, 1, stdout); goto bb_5;
     }
     bb_5: {
         _23 = _6;
@@ -727,7 +727,7 @@ void input_regseq_main(void) {
         goto bb_9;
     }
     bb_9: {
-        printf("[INFO] i8=%d i16=%d i32=%d i64=%lld\n", (int)(_23), (int)(_25), (int)(_27), (long long)(_29)); goto bb_10;
+        fwrite("[INFO] i8=", 1, 10, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%d", (int)(_23)); fwrite(_n0, 1, _l0, stdout); } fwrite(" i16=", 1, 5, stdout); { char _n1[24]; int _l1 = snprintf(_n1, sizeof _n1, "%d", (int)(_25)); fwrite(_n1, 1, _l1, stdout); } fwrite(" i32=", 1, 5, stdout); { char _n2[24]; int _l2 = snprintf(_n2, sizeof _n2, "%d", (int)(_27)); fwrite(_n2, 1, _l2, stdout); } fwrite(" i64=", 1, 5, stdout); { char _n3[24]; int _l3 = snprintf(_n3, sizeof _n3, "%lld", (long long)(_29)); fwrite(_n3, 1, _l3, stdout); } fwrite("\n", 1, 1, stdout); goto bb_10;
     }
     bb_10: {
         return;

@@ -669,7 +669,7 @@ void input_regseq_main(void) {
         goto bb_1;
     }
     bb_1: {
-        printf("[INFO] dev=%s\n", "uart0"); goto bb_2;
+        fwrite("[INFO] dev=", 1, 11, stdout); fwrite("uart0", 1, 5, stdout); fwrite("\n", 1, 1, stdout); goto bb_2;
     }
     bb_2: {
         return;

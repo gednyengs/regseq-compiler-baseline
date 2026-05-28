@@ -1792,10 +1792,10 @@ impl BodyEmit<'_> {
         target: Option<regseq_model::BlockId>,
     ) -> Result<String, EmitError> {
         // Diag-log interception (section 7.1 / section 8): a `Direct` callee
-        // whose source item carries `IntrinsicKind::Log(level)` lowers to a
-        // `printf` (Changes B-D) + `goto bb_<target>` instead of a C call.
-        // Recognition is keyed by instance identity, so an `Indirect` callee
-        // can never satisfy it.
+        // whose source item carries `IntrinsicKind::Log(level)` lowers to the
+        // section-8 byte-faithful `fwrite` statement sequence + `goto
+        // bb_<target>` instead of a C call. Recognition is keyed by instance
+        // identity, so an `Indirect` callee can never satisfy it.
         if let CallCallee::Direct(inst) = callee {
             if let Some(IntrinsicKind::Log(level)) = self.model.instance_intrinsic(*inst) {
                 let level = level.clone();
@@ -1950,14 +1950,18 @@ impl BodyEmit<'_> {
         }
     }
 
-    // ---- section 8 diagnostic-logging -> printf ----
+    // ---- section 8 diagnostic-logging -> stdio (fwrite) ----
 
-    /// Lower a diag-log `Call` to its section-8 `printf` + `goto bb_<target>`
-    /// (Changes A-D). `args` is the post-DiagLogPeel flat operand slice
-    /// `[fmt_literal, v1, ..., vN]` (Pipeline-A, section 8.5): the format
-    /// template literal followed by the value operands. `level` selects the
-    /// section-8.1 bracketed tag; `target` is the (always-`Some`) unit-return
-    /// successor.
+    /// Lower a diag-log `Call` to its section-8 byte-faithful `fwrite`
+    /// statement sequence + `goto bb_<target>` (Changes A-D). `args` is the
+    /// post-DiagLogPeel flat operand slice `[fmt_literal, v1, ..., vN]`
+    /// (Pipeline-A, section 8.5): the format template literal followed by the
+    /// value operands. `level` selects the section-8.1 bracketed tag; `target`
+    /// is the (always-`Some`) unit-return successor. Every byte that reaches
+    /// stdout is written via `fwrite(ptr, 1, n, stdout)` with an explicit byte
+    /// count, so an interior NUL in a length-prefixed `&str` / literal is
+    /// reproduced faithfully (a NUL-terminated `printf` format + `%s` would
+    /// silently truncate at the first NUL).
     fn emit_diag_log(
         &self,
         level: LogLevel,
@@ -1988,89 +1992,99 @@ impl BodyEmit<'_> {
             ));
         }
 
-        // Build the format string (section 8.1: tag ++ interleave ++ "\n")
-        // and the parallel argument list. A non-static `&str` argument emits
-        // a per-%s-site stack buffer prelude (section 8.3); `next_buf` is the
-        // per-call-site, per-%s counter giving independent buffers.
-        let mut fmt = String::from("[");
-        fmt.push_str(level_tag(level));
-        fmt.push_str("] ");
-        let mut c_args: Vec<String> = Vec::new();
-        let mut buffers: Vec<String> = Vec::new();
-        let mut next_buf = 0u32;
+        // section 8.1 (byte-faithful fwrite redesign): every byte that reaches
+        // stdout is written by `fwrite(ptr, 1, n, stdout)` with an explicit
+        // byte count, so an interior NUL in a length-prefixed `&str` / literal
+        // is reproduced. Accumulate literal bytes (the leading bracketed tag,
+        // the template's literal text, the trailing `\n`) into `pending` and
+        // flush each run as a single literal `fwrite`; render numerics via
+        // `snprintf` into a fixed stack buffer then `fwrite`; `fwrite` each
+        // `&str` value's full byte range. `k` is the per-call numeric-block
+        // counter (independent `_n<k>` / `_l<k>` names).
+        let mut pending: Vec<u8> = Vec::new();
+        pending.push(b'[');
+        pending.extend_from_slice(level_tag(level).as_bytes());
+        pending.extend_from_slice(b"] ");
+        let mut stmts: Vec<String> = Vec::new();
+        let mut k = 0u32;
         let mut value_idx = 0usize;
 
         for seg in &segments {
             match seg {
                 Segment::Literal(bytes) => {
-                    // Literal bytes in the format string: C-escaped with
-                    // literal `%` doubled to `%%`.
-                    fmt.push_str(&c_escape(bytes, true));
+                    // Defer: coalesce into the running literal run.
+                    pending.extend_from_slice(bytes);
                 }
                 Segment::Placeholder(modifier) => {
+                    // Flush the literal run accumulated before this placeholder
+                    // (the tag merges into the first run), then emit the value.
+                    flush_literal(&mut pending, &mut stmts);
                     let op = &value_ops[value_idx];
                     value_idx += 1;
 
                     // section 8.3 static `&str`: an `Operand::Constant` resolving
-                    // to the `&str` carrier -> a direct C string literal (no
-                    // buffer). A hex modifier on a `&str` is integer-only ->
+                    // to the `&str` carrier -> the CMS bytes as a C string
+                    // literal `fwrite`n with their explicit decoded byte count
+                    // (no buffer, no cap, no truncation, no NUL append; an
+                    // interior NUL renders `\000` and is counted as one byte --
+                    // faithful). A hex modifier on a `&str` is integer-only ->
                     // Unsupported (the bridge's D2 already forbids it).
                     if let Some(bytes) = self.read_static_str_bytes(op)? {
                         require_default_modifier(*modifier)?;
-                        fmt.push_str("%s");
-                        // The escaper, with no `%`-doubling -- it is an argument.
-                        c_args.push(format!("\"{}\"", c_escape(&bytes, false)));
+                        stmts.push(format!(
+                            "fwrite(\"{}\", 1, {}, stdout);",
+                            c_escape(&bytes),
+                            bytes.len()
+                        ));
                         continue;
                     }
 
                     // section 8.3 non-static `&str`: any other `&str`-typed place
-                    // (a runtime-borrowed / sliced `&str`) -> a per-%s-site stack
-                    // buffer (cap 256, min(len, 255) copy, guaranteed NUL, no
-                    // marker, no over-read/over-write).
+                    // (a runtime-borrowed / sliced `&str`) -> `fwrite` of the
+                    // section 3.2 fat pointer's full byte range. The `&str`
+                    // lowers to the fat struct `rust_str { const uint8_t *data;
+                    // size_t len; }`; `fwrite((op).data, 1, (op).len, stdout)`
+                    // writes exactly `.len` bytes (the fat pointer guarantees
+                    // `.len` valid bytes -> no over-read), reproducing any
+                    // interior NUL. No buffer, no cap, no truncation, no NUL.
                     if self.is_str_ref_place(op) {
                         require_default_modifier(*modifier)?;
-                        fmt.push_str("%s");
-                        let k = next_buf;
-                        next_buf += 1;
                         let expr = self.operand_expr(op, None)?;
-                        // The `&str` lowers to the section 3.2 fat struct
-                        // `rust_str { const uint8_t *data; size_t len; }`.
-                        buffers.push(format!(
-                            "char _logstr{k}[256]; {{ size_t _n = (({expr}).len) < (256 - 1) ? (({expr}).len) : (256 - 1); memcpy(_logstr{k}, (({expr}).data), _n); _logstr{k}[_n] = '\\0'; }}"
-                        ));
-                        c_args.push(format!("_logstr{k}"));
+                        stmts.push(format!("fwrite(({expr}).data, 1, ({expr}).len, stdout);"));
                         continue;
                     }
 
-                    // section 8.2 numeric: the specifier composes the format text
-                    // and the cast keeps the C varargs value width matching the
-                    // conversion. The operand `Ty` comes from a place's decl or a
-                    // scalar constant's variant.
+                    // section 8.2 numeric: the reused (specifier, cast) renders
+                    // into a fixed [24] stack buffer via `snprintf`, then the
+                    // returned length is `fwrite`n. The buffer is provably larger
+                    // than the widest admissible rendering (20 bytes: `%lld` of
+                    // i64::MIN / `%llu` of u64::MAX; any hex form <= 18;
+                    // Isize/Usize are non-admissible -- rejected by the whitelist
+                    // -- so never reach here), so `snprintf` never truncates ->
+                    // `_l<k>` is the exact, non-negative length < 24 and `fwrite`
+                    // reads only in-bounds bytes (no clamp needed). The operand
+                    // `Ty` comes from a place's decl or a scalar constant.
                     let ty = self
                         .diag_numeric_ty(op)
                         .ok_or(EmitError::Unsupported("diag-log argument of unknown type"))?;
                     let (spec, cast) = diag_specifier_and_cast_for(*modifier, &ty)?;
-                    fmt.push_str(&spec);
                     let expr = self.operand_expr(op, None)?;
-                    c_args.push(format!("{cast}({expr})"));
+                    stmts.push(format!(
+                        "{{ char _n{k}[24]; int _l{k} = snprintf(_n{k}, sizeof _n{k}, \"{spec}\", {cast}({expr})); fwrite(_n{k}, 1, _l{k}, stdout); }}"
+                    ));
+                    k += 1;
                 }
             }
         }
-        fmt.push_str("\\n");
+        // The trailing `\n` merges into the final literal run, which is always
+        // non-empty (it holds at least the tag and/or the `\n`).
+        pending.push(b'\n');
+        flush_literal(&mut pending, &mut stmts);
 
-        // Statement: the buffer preludes, then the printf, then the goto.
-        let mut out = String::new();
-        for b in &buffers {
-            out.push_str(b);
-            out.push(' ');
-        }
-        if c_args.is_empty() {
-            out.push_str(&format!("printf(\"{fmt}\");"));
-        } else {
-            out.push_str(&format!("printf(\"{fmt}\", {});", c_args.join(", ")));
-        }
-        out.push_str(&format!(" goto bb_{};", target.as_u32()));
-        Ok(out)
+        // No destination assignment (unit return); the successor `goto` closes
+        // the interception.
+        stmts.push(format!("goto bb_{};", target.as_u32()));
+        Ok(stmts.join(" "))
     }
 
     /// Read the format-template text bytes from a diag-log `args[0]` operand
@@ -3928,10 +3942,10 @@ pub(crate) fn parse_placeholder(inner: &[u8]) -> Result<Modifier, EmitError> {
 /// Render a byte run as the body of a C string literal (Change D escaper).
 /// `"` -> `\"`, `\` -> `\\`, the C escapes `\n` / `\t` / `\r`, other
 /// non-printable / non-ASCII bytes -> a 3-digit octal `\nnn` (fixed width so a
-/// following digit cannot extend the escape), printable ASCII verbatim. When
-/// `double_percent` is set (the format string only, never an emitted `&str`
-/// *value* literal), a literal `%` is doubled to `%%`.
-pub(crate) fn c_escape(bytes: &[u8], double_percent: bool) -> String {
+/// following digit cannot extend the escape), printable ASCII verbatim. Every
+/// literal run and every static `&str` value is `fwrite`n raw (section 8.1),
+/// never used as a `printf` format string, so a literal `%` needs no doubling.
+pub(crate) fn c_escape(bytes: &[u8]) -> String {
     let mut out = String::new();
     for &b in bytes {
         match b {
@@ -3940,12 +3954,29 @@ pub(crate) fn c_escape(bytes: &[u8], double_percent: bool) -> String {
             b'\n' => out.push_str("\\n"),
             b'\t' => out.push_str("\\t"),
             b'\r' => out.push_str("\\r"),
-            b'%' if double_percent => out.push_str("%%"),
             0x20..=0x7e => out.push(b as char),
             _ => out.push_str(&format!("\\{b:03o}")),
         }
     }
     out
+}
+
+/// Flush a pending literal byte run as a single `fwrite` statement (Change D):
+/// `fwrite("<c_escape(run)>", 1, <decoded byte len>, stdout);`. The count is the
+/// DECODED byte length (`run.len()`) -- an embedded `\n` is one byte and an
+/// interior `\0` renders `\000` (three C-literal chars) but counts as one
+/// decoded byte -- not the escaped C-literal length. An empty run emits nothing
+/// (two adjacent placeholders leave no literal between them). Clears `run`.
+fn flush_literal(run: &mut Vec<u8>, stmts: &mut Vec<String>) {
+    if run.is_empty() {
+        return;
+    }
+    stmts.push(format!(
+        "fwrite(\"{}\", 1, {}, stdout);",
+        c_escape(run),
+        run.len()
+    ));
+    run.clear();
 }
 
 /// The section-8.1 bracketed-tag body (between `[` and `]`) for a `LogLevel`.

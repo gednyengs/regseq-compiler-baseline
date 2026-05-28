@@ -231,8 +231,8 @@
 | CO-9 | Covered | Fail | - |
 | DL-1 | Covered | Pass | diag_levels |
 | DL-2 | Covered | Pass | diag_empty, diag_levels, diag_newline |
-| DL-3 | Covered | Pass | diag_bool, diag_escapes, diag_hex, diag_numeric_widths |
-| DL-4 | Covered | Pass | diag_str_nonstatic, diag_str_static, diag_str_truncation |
+| DL-3 | Covered | Pass | diag_bool, diag_escapes, diag_hex, diag_nul, diag_numeric_widths |
+| DL-4 | Covered | Pass | diag_nul, diag_str_long, diag_str_nonstatic, diag_str_static |
 | DL-5 | Covered | Fail | - |
 | DL-6 | Covered | Pass | diag_levels |
 | DL-7 | Covered | Pass | diag_levels |

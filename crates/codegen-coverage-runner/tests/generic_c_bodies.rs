@@ -2117,7 +2117,7 @@ fn tuple_static_byte_image_compiles_and_runs() {
     assert_eq!(run.exit_code, Some(0));
 }
 
-// ---- section 8 diagnostic-logging -> printf: compile-AND-run (task e, B2) ----
+// ---- section 8 diagnostic-logging -> stdio (fwrite): compile-AND-run (B2) ----
 
 /// The self-contained diag-log prelude shared by the B2 fixtures: the
 /// `#![no_std]` + `register_tool(rseq)` log shim (mirroring
@@ -2328,13 +2328,14 @@ fn diag_log_static_str_emits_a_direct_c_string_literal() {
 }
 
 /// An `#[inline(never)]` identity over `&str`: its return value is a runtime
-/// (non-static) `&str` operand, exercising the section-8.3 stack-buffer path.
+/// (non-static) `&str` operand, exercising the section-8.3 non-static `&str`
+/// value `fwrite` path (`fwrite((op).data, 1, (op).len, stdout)`).
 const STR_ID_HELPER: &str = "#[inline(never)]\nfn id(s: &str) -> &str { s }";
 
 #[test]
-fn diag_log_non_static_str_copies_into_a_stack_buffer() {
-    // A runtime-borrowed `&str` of length `< 256` -> the per-%s stack buffer,
-    // printed in full. DL-4 non-static path.
+fn diag_log_non_static_str_writes_its_full_byte_range() {
+    // A runtime-borrowed `&str` -> a value `fwrite` of its full `.data`/`.len`
+    // byte range, printed in full. DL-4 non-static path.
     let stdout = run_diag(
         "str-nonstatic",
         STR_ID_HELPER,
@@ -2344,14 +2345,17 @@ fn diag_log_non_static_str_copies_into_a_stack_buffer() {
 }
 
 #[test]
-fn diag_log_non_static_str_truncates_at_cap_minus_one() {
-    // A non-static `&str` of length `>= 256` truncates to the first 255 bytes
-    // (copy cap-1, NUL at cap-1, no marker). DL-4 normative truncation.
+fn diag_log_non_static_str_long_prints_in_full_no_truncation() {
+    // A non-static `&str` of length `>= 256` prints IN FULL under `fwrite`
+    // (no buffer, no cap, no truncation, no marker). The task-e printf/%s path
+    // with the 256-byte stack buffer would have truncated to the first 255
+    // bytes; this is the regression guard for the removed truncation contract.
+    // DL-4 non-static, full-length.
     let long = "a".repeat(300);
     let body = r#"    regseq::log::info!("{}", id(LONG));"#.to_string();
     let extra = format!("{STR_ID_HELPER}\nconst LONG: &str = \"{long}\";");
-    let stdout = run_diag("str-trunc", &extra, &body);
-    let expected = format!("[INFO] {}\n", "a".repeat(255));
+    let stdout = run_diag("str-long", &extra, &body);
+    let expected = format!("[INFO] {}\n", "a".repeat(300));
     assert_eq!(stdout, expected);
 }
 
@@ -2386,4 +2390,45 @@ fn diag_log_embedded_newline_yields_multiple_output_lines() {
     regseq::log::info!("line1\nline2={}", n);"#,
     );
     assert_eq!(stdout, "[INFO] line1\nline2=7\n");
+}
+
+#[test]
+fn diag_log_template_interior_nul_is_written_faithfully() {
+    // An interior NUL in the format-template literal (valid UTF-8, length-
+    // prefixed) is reproduced byte-for-byte. The task-e printf path (a NUL-
+    // terminated C format string) would have truncated the output at the
+    // first NUL, dropping everything after `[INFO] a`.
+    let stdout = run_diag(
+        "tpl-nul",
+        "",
+        r#"    let n: u32 = 3 + 4;
+    regseq::log::info!("a\0b={}", n);"#,
+    );
+    assert_eq!(stdout, "[INFO] a\0b=7\n");
+}
+
+#[test]
+fn diag_log_static_str_interior_nul_is_written_faithfully() {
+    // An interior NUL in a STATIC `&str` value (CMS bytes emitted as a C string
+    // literal `fwrite`n with the explicit decoded count) is reproduced. The
+    // task-e `%s` would have stopped at the first NUL.
+    let stdout = run_diag(
+        "static-nul",
+        "",
+        r#"    regseq::log::info!("s={}", "x\0y");"#,
+    );
+    assert_eq!(stdout, "[INFO] s=x\0y\n");
+}
+
+#[test]
+fn diag_log_non_static_str_interior_nul_is_written_faithfully() {
+    // An interior NUL in a NON-STATIC `&str` value (`fwrite((op).data, 1,
+    // (op).len, stdout)`) is reproduced -- `.len` includes the NUL byte, so
+    // the full range prints. The task-e `%s` would have truncated at the NUL.
+    let stdout = run_diag(
+        "nonstatic-nul",
+        STR_ID_HELPER,
+        r#"    regseq::log::info!("d={}", id("p\0q"));"#,
+    );
+    assert_eq!(stdout, "[INFO] d=p\0q\n");
 }

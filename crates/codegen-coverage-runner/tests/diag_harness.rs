@@ -143,13 +143,15 @@ fn bless_writes_golden_c_from_emit_and_never_expected_stdout() {
     assert!(!fixture.expected_stdout.exists());
 
     let outcome = pipeline::bless_fixture(&fixture, cc());
-    // golden.c was written and equals the stage-2 emit (the section-8 printf).
+    // golden.c was written and equals the stage-2 emit (the section-8
+    // byte-faithful fwrite sequence).
     assert!(fixture.golden_c.exists(), "golden.c must be written");
     assert!(outcome.blessed_bytes.is_some());
     let golden = std::fs::read_to_string(&fixture.golden_c).unwrap();
     assert!(
-        golden.contains("printf(\"[INFO] r=%d\\n\", (int)("),
-        "golden.c is the section-8 emit:\n{golden}"
+        golden.contains("fwrite(\"[INFO] r=\", 1, 9, stdout);")
+            && golden.contains("snprintf(_n0, sizeof _n0, \"%d\", (int)("),
+        "golden.c is the section-8 fwrite emit:\n{golden}"
     );
     // The honesty invariant: --bless NEVER writes expected.stdout.
     assert!(
