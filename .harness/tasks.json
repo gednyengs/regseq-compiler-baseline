@@ -4815,6 +4815,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-13",
+          "name": "Generic-C enum tag-ops \u2014 \u00a713 union-of-views navigation (Phase-1 d2.1)",
+          "spec": ".harness/tasks/regseq-backends/13-generic-c-enum-tag-ops.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-12"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-28T00:54:36Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
