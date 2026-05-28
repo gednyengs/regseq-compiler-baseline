@@ -148,7 +148,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+**d2** DONE+assessed; **d2.1/d2.2/e to draft**; banks 2-3 emit all sized aggregates incl. enums; banks 4-5 emit scalar/pointer/control-flow bodies + **non-enum structured data** (§4 places + §14 access, aggregates, slice/str fat-pointer construction, *WithOverflow); instance symbols linkage-aware + clash-netted) | `19f5b25` (d2=`-12` + soundness fix) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+**d2.1** DONE+assessed; **d2.2/e to draft**; banks 2-3 emit all sized aggregates incl. enums; banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + **§13 enum tag-ops** (Downcast+Field, Discriminant, SetDiscriminant, Aggregate::Enum, single-member Const::EnumValue) via a shared `enum_emit` view/tag navigator; niche cell via raw-storage-integer §14.7 memcpy; instance symbols linkage-aware + clash-netted) | `c8cadaa` (d2.1=`-13` + soundness fix) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
