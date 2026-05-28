@@ -91,8 +91,48 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   reference carrier whose `Reloc`→`ConstMemoryStatic` is itself a `Bytes` static —
   so the carrier is transitively coupled to byte-image lowering and can't be carved
   from it); **vtable task** = `dyn`/`Unsize`-to-dyn/`ClosureFnPointer`/vtable/dispatch.
-  Plan now: …→d1→**d2**→d2.1→d2.2→e. (The d2.2 carve-out emerged in the d2 spec's
+  Plan now: …→d1→d2→d2.1→**d2.2**→d2.3→e. (The d2.2 carve-out emerged in the d2 spec's
   Codex review — drafting caught it before any code.)
+- **d2.2 (`regseq-backends-14`) DONE + assessed clean (2026-05-27, `0347d92`); it
+  spawned a new task d2.3.** d2.2 lowers ALL non-scalar `Const` (`Bytes` byte-images,
+  the `Aggregate` reference carrier + typed valtree, multi-member `EnumValue`,
+  `ConstMemoryStatic` defs) **soundly** under the pinned `cc` flags
+  (`-std=gnu11 -fwrapv -Wall`, no `-fno-strict-aliasing`). Two validated primitives
+  (Codex spec review: 8 rounds incl. 2 architectural redesigns + a design consult →
+  APPROVED): **(1) the enum `_raw` union member** — `unsigned char _raw[size]` on
+  every multi-view enum's `union u`; a value-position enum const inits
+  `(struct E){ .u._raw = {bytes} }` (the union-of-views CANNOT be const-initialized
+  with separate `_tag`/`_v<v>` members — a second C union designator overrides the
+  first), runtime reads stay in-place union accesses (gnu11 type-punning, sound;
+  layout-neutral). **(2) `ConstMemoryStatic` re-typing by consumer pointee** — the
+  bridge synthesises every CMS as `Static{ty: Array(u8, byte_len)}`, and reading it
+  through a non-char `(const T*)&X` cast is strict-aliasing UB; a backend pre-pass
+  recovers each CMS's consumer pointee as a backend-local `StorageTy` descriptor
+  (`Sized(TyId)` / `Array{elem, count}`, declarator-aware declaration, no model
+  interning) and re-declares it, so `&X` is same-type + aligned (content-dedup
+  collision → fail loud d2.3). Bonus: bool-niche multi-view enum consts are RESCUED
+  (the `_raw` byte goes in directly; only **inline** bool-niche defers). A bounded
+  §12/§13 `generic-c-backend.md` Doc delta (Change G) corrected the §12 `Bytes` row
+  (it had described the unsound flat `unsigned char[]` lowering). **The mandatory
+  post-close Codex soundness pass found a latent silent miscompile** the 21 green
+  fixtures missed ([[assessment-soundness-pass]], 4th time after d1/d2/d2.1): the
+  Change-F scan used a `place_consumer_ty` shortcut that returned `None` for
+  non-`Field` last projections, so a CMS reference assigned through an
+  `Index`/`ConstantIndex`/`Subslice`/`Deref` place was missed → stayed `uint8_t[N]`
+  → mismatched-type cast. **Fixed (`0347d92`)** by a shared free
+  `body_emit::place_ty(model, body, place)` (the §19.4 narrowing, the single source
+  of truth `place_walk` mirrors) consumed by the scan, + a compile-AND-RUN regression
+  (a `&[u32;4]` CMS carrier through a `ConstantIndex` place; fails the structural
+  assert without the fix). Gates: 142 backend unit + 22 runner compile-AND-RUN.
+- **task d2.3 (the d2.2 carve-outs, NOT yet drafted).** Five distinct fail-loud
+  labels d2.2 left: a relocation-payload enum/aggregate const; an **inline**
+  bool-niche enum const; a `ConstMemoryStatic` at incompatible pointee types
+  (content-dedup collision); a `Bytes`-over-`Ty::Union` byte image (size equality
+  isn't byte-preserving for a padded spanning member — needs a union `_raw` member);
+  a typed-valtree `Const::Aggregate` over `Ty::Union` (`Const::Aggregate` carries no
+  active `FieldIdx`; `pretty.rs:714-718` already rejects it). All rare. **task e
+  likely takes priority over d2.3** — e (the first green ledger fixture) only needs
+  d2.2's `&str` carrier + `u8` CMS, both shipped.
 - **Enum representation = the union-of-views form (§13/D9; FIXED 2026-05-27,
   `5d422fe`).** The c2 review showed the literal "tag field + payload `union` at
   a `union_start` (fields at `offset−union_start`)" form is **not C-placeable**
@@ -148,7 +188,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+**d2.1** DONE+assessed; **d2.2/e to draft**; banks 2-3 emit all sized aggregates incl. enums; banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + **§13 enum tag-ops** (Downcast+Field, Discriminant, SetDiscriminant, Aggregate::Enum, single-member Const::EnumValue) via a shared `enum_emit` view/tag navigator; niche cell via raw-storage-integer §14.7 memcpy; instance symbols linkage-aware + clash-netted) | `c8cadaa` (d2.1=`-13` + soundness fix) | generic-C backend MVP + codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+**d2.2** DONE+assessed; **d2.3 + e to draft** (e likely first); banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` byte-image member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + **ALL non-scalar `Const`** (`Bytes` byte-image walker, the `Aggregate` reference carrier + typed valtree, multi-member `EnumValue` via `_raw`, `ConstMemoryStatic` re-typed by consumer pointee via a shared `body_emit::place_ty` walk); five rare const shapes deferred to d2.3) | `0347d92` (d2.2=`-14` + soundness fix) | generic-C backend MVP + codegen-coverage harness |
 
 ---
 
