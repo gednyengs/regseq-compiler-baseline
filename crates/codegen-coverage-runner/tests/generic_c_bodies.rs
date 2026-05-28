@@ -2116,3 +2116,274 @@ fn tuple_static_byte_image_compiles_and_runs() {
     let run = assert_runs(&tu, "regseq_main", "tuple-static");
     assert_eq!(run.exit_code, Some(0));
 }
+
+// ---- section 8 diagnostic-logging -> printf: compile-AND-run (task e, B2) ----
+
+/// The self-contained diag-log prelude shared by the B2 fixtures: the
+/// `#![no_std]` + `register_tool(rseq)` log shim (mirroring
+/// `test-ir-fixtures/fixtures/diag_logging.rs`) extended with a `LogArg`
+/// variant + `From` impl for every arg type the B2 bodies log (all integer
+/// widths, `bool`, `&str`) and the four severity macros. The intrinsic fns
+/// carry the `#[rseq::intrinsic("log-<sev>")]` recognition tag; the bridge's
+/// DiagLogPeel flattens each call to the `[fmt, v1, ..., vN]` shape and DCE
+/// removes the `LogArg` carrier.
+const DIAG_PRELUDE: &str = r#"#![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+pub mod regseq {
+    pub mod log {
+        pub mod intrinsics {
+            pub enum LogArg<'a> {
+                U8(u8), U16(u16), U32(u32), U64(u64),
+                I8(i8), I16(i16), I32(i32), I64(i64),
+                Bool(bool), Str(&'a str),
+            }
+            impl From<u8> for LogArg<'_> { fn from(v: u8) -> Self { LogArg::U8(v) } }
+            impl From<u16> for LogArg<'_> { fn from(v: u16) -> Self { LogArg::U16(v) } }
+            impl From<u32> for LogArg<'_> { fn from(v: u32) -> Self { LogArg::U32(v) } }
+            impl From<u64> for LogArg<'_> { fn from(v: u64) -> Self { LogArg::U64(v) } }
+            impl From<i8> for LogArg<'_> { fn from(v: i8) -> Self { LogArg::I8(v) } }
+            impl From<i16> for LogArg<'_> { fn from(v: i16) -> Self { LogArg::I16(v) } }
+            impl From<i32> for LogArg<'_> { fn from(v: i32) -> Self { LogArg::I32(v) } }
+            impl From<i64> for LogArg<'_> { fn from(v: i64) -> Self { LogArg::I64(v) } }
+            impl From<bool> for LogArg<'_> { fn from(v: bool) -> Self { LogArg::Bool(v) } }
+            impl<'a> From<&'a str> for LogArg<'a> { fn from(v: &'a str) -> Self { LogArg::Str(v) } }
+
+            #[inline(never)] #[rseq::intrinsic("log-debug")]
+            pub fn log_debug(_fmt: &'static str, _args: &[LogArg<'_>]) {}
+            #[inline(never)] #[rseq::intrinsic("log-info")]
+            pub fn log_info(_fmt: &'static str, _args: &[LogArg<'_>]) {}
+            #[inline(never)] #[rseq::intrinsic("log-warn")]
+            pub fn log_warn(_fmt: &'static str, _args: &[LogArg<'_>]) {}
+            #[inline(never)] #[rseq::intrinsic("log-error")]
+            pub fn log_error(_fmt: &'static str, _args: &[LogArg<'_>]) {}
+        }
+        macro_rules! debug { ($fmt:literal $(, $arg:expr)* $(,)?) => {
+            $crate::regseq::log::intrinsics::log_debug($fmt, &[$($crate::regseq::log::intrinsics::LogArg::from($arg)),*]) }; }
+        pub(crate) use debug;
+        macro_rules! info { ($fmt:literal $(, $arg:expr)* $(,)?) => {
+            $crate::regseq::log::intrinsics::log_info($fmt, &[$($crate::regseq::log::intrinsics::LogArg::from($arg)),*]) }; }
+        pub(crate) use info;
+        macro_rules! log_warn { ($fmt:literal $(, $arg:expr)* $(,)?) => {
+            $crate::regseq::log::intrinsics::log_warn($fmt, &[$($crate::regseq::log::intrinsics::LogArg::from($arg)),*]) }; }
+        pub(crate) use log_warn as warn;
+        macro_rules! error { ($fmt:literal $(, $arg:expr)* $(,)?) => {
+            $crate::regseq::log::intrinsics::log_error($fmt, &[$($crate::regseq::log::intrinsics::LogArg::from($arg)),*]) }; }
+        pub(crate) use error;
+    }
+}
+"#;
+
+/// Build a full diag-log snippet: the shared prelude + the supplied
+/// `regseq_main` body, plus any extra item text (e.g. `#[inline(never)]`
+/// identity helpers for non-static `&str` arguments).
+fn diag_snippet(extra_items: &str, body: &str) -> String {
+    format!(
+        "{DIAG_PRELUDE}\n{extra_items}\n#[no_mangle]\npub extern \"C\" fn regseq_main() {{\n{body}\n}}\n"
+    )
+}
+
+/// Bridge + emit + compile + run a diag-log snippet, returning its captured
+/// stdout (asserting a clean exit). The single source of the B2 "log a
+/// computed value -> observe stdout" loop.
+fn run_diag(label: &str, extra_items: &str, body: &str) -> String {
+    let snippet = TempSnippet::new(label, &diag_snippet(extra_items, body));
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet {label:?} must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok for a diag-log body");
+    let entry = fn_cname(&model, "regseq_main");
+    let run = toolchain::compile_and_run(&tu, &entry, cc())
+        .unwrap_or_else(|e| panic!("diag-log TU {label:?} must compile + run: {e}"));
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "diag-log {label:?} exits 0; stderr: {}\nstdout: {}",
+        run.stderr,
+        run.stdout
+    );
+    run.stdout
+}
+
+#[test]
+fn diag_log_levels_print_the_four_bracketed_tags() {
+    // One call per severity, each logging a computed value (so stdout proves
+    // the exercised path). DL-2 (all four tags), DL-7 (interception), TM-5/8.
+    let stdout = run_diag(
+        "levels",
+        "",
+        r#"    let a: u32 = 2 + 3;
+    regseq::log::debug!("d={}", a);
+    regseq::log::info!("i={}", a + 1);
+    regseq::log::warn!("w={}", a + 2);
+    regseq::log::error!("e={}", a + 3);"#,
+    );
+    assert_eq!(
+        stdout, "[DEBUG] d=5\n[INFO] i=6\n[WARN] w=7\n[ERROR] e=8\n",
+        "four tags + computed values in order"
+    );
+}
+
+#[test]
+fn diag_log_numeric_widths_use_the_matching_specifier_and_cast() {
+    // Each width logged through its `%u`/`%llu`/`%d`/`%lld` specifier with the
+    // matching cast. The `u64` value is `> u32::MAX` (`(1 << 32) + 1`), so a
+    // missing `(unsigned long long)` cast would truncate to `1` -- the golden
+    // catches it. DL-3.
+    let stdout = run_diag(
+        "widths",
+        "",
+        r#"    let u8v: u8 = 200 + 50;
+    let u16v: u16 = 60000 + 1;
+    let u32v: u32 = 4000000000 + 1;
+    let u64v: u64 = (1u64 << 32) + 1;
+    let i8v: i8 = 100 - 110;
+    let i16v: i16 = 30000 - 30001;
+    let i32v: i32 = 2000000000 - 2000000001;
+    let i64v: i64 = -5000000000 - 1;
+    regseq::log::info!("u8={} u16={} u32={} u64={}", u8v, u16v, u32v, u64v);
+    regseq::log::info!("i8={} i16={} i32={} i64={}", i8v, i16v, i32v, i64v);"#,
+    );
+    assert_eq!(
+        stdout,
+        "[INFO] u8=250 u16=60001 u32=4000000001 u64=4294967297\n\
+         [INFO] i8=-10 i16=-1 i32=-1 i64=-5000000001\n",
+    );
+}
+
+#[test]
+fn diag_log_bool_prints_one_or_zero_via_int_cast() {
+    // `bool` lowered through `(int)` -> `%d` -> 1 / 0. DL-3.
+    let stdout = run_diag(
+        "bool",
+        "",
+        r#"    let t: bool = 2 > 1;
+    let f: bool = 1 > 2;
+    regseq::log::info!("t={} f={}", t, f);"#,
+    );
+    assert_eq!(stdout, "[INFO] t=1 f=0\n");
+}
+
+#[test]
+fn diag_log_hex_modifiers_compose_specifier_and_padding() {
+    // The bridge's full accepted set (incl. the uppercase-padded `:08X` /
+    // `:#010X` beyond section 26.7's table). DL-3 modifier composition.
+    let stdout = run_diag(
+        "hex",
+        "",
+        r#"    let v: u32 = 0xabc0 + 0xd;
+    regseq::log::info!("x={:x} X={:X} ax={:#x} aX={:#X}", v, v, v, v);
+    regseq::log::info!("z={:08x} Z={:08X} az={:#010x} aZ={:#010X}", v, v, v, v);"#,
+    );
+    assert_eq!(
+        stdout,
+        "[INFO] x=abcd X=ABCD ax=0xabcd aX=0XABCD\n\
+         [INFO] z=0000abcd Z=0000ABCD az=0x0000abcd aZ=0X0000ABCD\n",
+    );
+}
+
+#[test]
+fn diag_log_64bit_hex_inserts_the_ll_length_modifier() {
+    // A `u64` value `> u32::MAX` under `{:08x}` -> `%08llx`: without the `ll`
+    // (or the `(unsigned long long)` cast) printf reads 32 bits and prints the
+    // wrong value. Proves the mandatory 64-bit length modifier.
+    let stdout = run_diag(
+        "hex64",
+        "",
+        r#"    let v: u64 = (0xdeadbeefu64 << 8) | 0xff;
+    regseq::log::info!("v={:08x} a={:#010X}", v, v);"#,
+    );
+    assert_eq!(stdout, "[INFO] v=deadbeefff a=0XDEADBEEFFF\n");
+}
+
+#[test]
+fn diag_log_signed_hex_preserves_source_width_twos_complement() {
+    // `{:x}` on a negative value renders its SOURCE-width two's-complement via
+    // the two-step `(varargs-unsigned)(unsigned-of-source-width)` cast: -1i8 ->
+    // `ff` (NOT `ffffffff`), -1i16 -> `ffff`, -1i32 -> `ffffffff`, -1i64 ->
+    // `ffffffffffffffff`. A plain `(unsigned)` on -1i8 would wrongly sign-extend.
+    let stdout = run_diag(
+        "signedhex",
+        "",
+        r#"    let a: i8 = 5 - 6;
+    let b: i16 = 5 - 6;
+    let c: i32 = 5 - 6;
+    let d: i64 = 5 - 6;
+    regseq::log::info!("a={:x} b={:x} c={:x} d={:x}", a, b, c, d);"#,
+    );
+    assert_eq!(stdout, "[INFO] a=ff b=ffff c=ffffffff d=ffffffffffffffff\n");
+}
+
+#[test]
+fn diag_log_static_str_emits_a_direct_c_string_literal() {
+    // A static string literal argument -> direct C string literal `%s`. DL-4.
+    let stdout = run_diag(
+        "str-static",
+        "",
+        r#"    regseq::log::info!("dev={}", "uart0");"#,
+    );
+    assert_eq!(stdout, "[INFO] dev=uart0\n");
+}
+
+/// An `#[inline(never)]` identity over `&str`: its return value is a runtime
+/// (non-static) `&str` operand, exercising the section-8.3 stack-buffer path.
+const STR_ID_HELPER: &str = "#[inline(never)]\nfn id(s: &str) -> &str { s }";
+
+#[test]
+fn diag_log_non_static_str_copies_into_a_stack_buffer() {
+    // A runtime-borrowed `&str` of length `< 256` -> the per-%s stack buffer,
+    // printed in full. DL-4 non-static path.
+    let stdout = run_diag(
+        "str-nonstatic",
+        STR_ID_HELPER,
+        r#"    regseq::log::info!("name={}", id("ethernet0"));"#,
+    );
+    assert_eq!(stdout, "[INFO] name=ethernet0\n");
+}
+
+#[test]
+fn diag_log_non_static_str_truncates_at_cap_minus_one() {
+    // A non-static `&str` of length `>= 256` truncates to the first 255 bytes
+    // (copy cap-1, NUL at cap-1, no marker). DL-4 normative truncation.
+    let long = "a".repeat(300);
+    let body = r#"    regseq::log::info!("{}", id(LONG));"#.to_string();
+    let extra = format!("{STR_ID_HELPER}\nconst LONG: &str = \"{long}\";");
+    let stdout = run_diag("str-trunc", &extra, &body);
+    let expected = format!("[INFO] {}\n", "a".repeat(255));
+    assert_eq!(stdout, expected);
+}
+
+#[test]
+fn diag_log_empty_template_prints_just_the_tag() {
+    // Zero placeholders -> `[INFO] connected\n`.
+    let stdout = run_diag("empty", "", r#"    regseq::log::info!("connected");"#);
+    assert_eq!(stdout, "[INFO] connected\n");
+}
+
+#[test]
+fn diag_log_brace_and_percent_escapes_render_literally() {
+    // `{{`/`}}` -> literal `{`/`}`; a literal `%` is doubled to `%%` in the C
+    // format string (so it renders as a single `%`).
+    let stdout = run_diag(
+        "escapes",
+        "",
+        r#"    let n: u32 = 25 + 25;
+    regseq::log::info!("{{x}} {}% done", n);"#,
+    );
+    assert_eq!(stdout, "[INFO] {x} 50% done\n");
+}
+
+#[test]
+fn diag_log_embedded_newline_yields_multiple_output_lines() {
+    // An embedded `\n` in the template is ordinary literal text -> two output
+    // lines from one call (plus the lowering's trailing `\n`).
+    let stdout = run_diag(
+        "newline",
+        "",
+        r#"    let n: u32 = 1 + 6;
+    regseq::log::info!("line1\nline2={}", n);"#,
+    );
+    assert_eq!(stdout, "[INFO] line1\nline2=7\n");
+}

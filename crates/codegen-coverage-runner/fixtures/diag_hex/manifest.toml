@@ -1,0 +1,5 @@
+name   = "diag_hex"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["DL-3"]
+expect = "pass"

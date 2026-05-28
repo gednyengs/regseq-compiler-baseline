@@ -24,13 +24,13 @@
 //! [`EmitError::Unsupported`] (a relocation in an enum / aggregate const, an
 //! inline bool-niche, a `ConstMemoryStatic` at incompatible pointee types, a
 //! union byte image / valtree); `dyn` / vtable construction is the vtable
-//! task. Diag-log call-site interception is **task e**.
+//! task. Diag-log call-site interception lowers to the section 8 `printf`.
 
 use regseq_model::{
-    AggregateKind, AssertKind, AttrData, BinOp, Byte, CallCallee, CastKind, Const, ConstId, Endian,
+    AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const, ConstId, Endian,
     EnumShape, FloatKind, InstanceId, InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId,
-    NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue,
-    StatementKind, SwitchTargets, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp,
+    LogLevel, NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, RegseqModel,
+    Rvalue, StatementKind, SwitchTargets, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp,
     VariantIdx, VariantLayout,
 };
 
@@ -1782,8 +1782,8 @@ impl BodyEmit<'_> {
         }
     }
 
-    /// `Call` (section 7.1): the ordinary / divergent call. Diag-log
-    /// interception is task e; a diag-log callee errors here.
+    /// `Call` (section 7.1): the ordinary / divergent call. A diag-log callee
+    /// is intercepted here and lowered to the section 8 `printf`.
     fn call(
         &self,
         callee: &CallCallee,
@@ -1791,14 +1791,20 @@ impl BodyEmit<'_> {
         destination: &Place,
         target: Option<regseq_model::BlockId>,
     ) -> Result<String, EmitError> {
-        let callee_expr = match callee {
-            CallCallee::Direct(inst) => {
-                let instance = &self.model.instances[*inst];
-                if self.is_diag_log(instance.item) {
-                    return Err(EmitError::Unsupported("diag-log call (task e)"));
-                }
-                self.syms.symbol(*inst).to_string()
+        // Diag-log interception (section 7.1 / section 8): a `Direct` callee
+        // whose source item carries `IntrinsicKind::Log(level)` lowers to a
+        // `printf` (Changes B-D) + `goto bb_<target>` instead of a C call.
+        // Recognition is keyed by instance identity, so an `Indirect` callee
+        // can never satisfy it.
+        if let CallCallee::Direct(inst) = callee {
+            if let Some(IntrinsicKind::Log(level)) = self.model.instance_intrinsic(*inst) {
+                let level = level.clone();
+                return self.emit_diag_log(level, args, target);
             }
+        }
+
+        let callee_expr = match callee {
+            CallCallee::Direct(inst) => self.syms.symbol(*inst).to_string(),
             CallCallee::Indirect(op) => format!("({})", self.operand_expr(op, None)?),
         };
 
@@ -1848,18 +1854,6 @@ impl BodyEmit<'_> {
                 Ok(format!("{assign} goto bb_{};", t.as_u32()))
             }
         }
-    }
-
-    /// Whether the instance's source item carries a diag-log recognition tag
-    /// (section 15 diag-log exclusion / interception).
-    fn is_diag_log(&self, item: regseq_model::ItemId) -> bool {
-        let attrs = &self.model.domain_attrs.item_attrs;
-        if item.index() >= attrs.len() {
-            return false;
-        }
-        attrs[item]
-            .iter()
-            .any(|a| matches!(a, AttrData::Intrinsic(IntrinsicKind::Log(_))))
     }
 
     /// `Assert` (section 7.1 + section 16): branch on success, panic on
@@ -1953,6 +1947,227 @@ impl BodyEmit<'_> {
             Some(Ty::Int(IntKind::Isize)) => ("%lld", "(long long)"),
             Some(Ty::Uint(UintKind::Usize)) => ("%zu", "(size_t)"),
             _ => ("%lld", "(long long)"),
+        }
+    }
+
+    // ---- section 8 diagnostic-logging -> printf ----
+
+    /// Lower a diag-log `Call` to its section-8 `printf` + `goto bb_<target>`
+    /// (Changes A-D). `args` is the post-DiagLogPeel flat operand slice
+    /// `[fmt_literal, v1, ..., vN]` (Pipeline-A, section 8.5): the format
+    /// template literal followed by the value operands. `level` selects the
+    /// section-8.1 bracketed tag; `target` is the (always-`Some`) unit-return
+    /// successor.
+    fn emit_diag_log(
+        &self,
+        level: LogLevel,
+        args: &[Operand],
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        // A Log callee always returns unit and never diverges, so a `None`
+        // target is model corruption (section 7.1 / I-DiagLog-CallArity).
+        let target = target.ok_or(EmitError::Unsupported("diag-log call with no target"))?;
+
+        // Pipeline-A: read `args[0]` as the format template literal and
+        // `args[1..]` as the flat value operands. Never reconstruct a LogArg.
+        let fmt_op = args.first().ok_or(EmitError::Unsupported(
+            "diag-log call with no format operand",
+        ))?;
+        let template = self.read_template_bytes(fmt_op)?;
+        let segments = parse_template(&template)?;
+        let value_ops = &args[1..];
+
+        // I-DiagLog-CallArity: placeholder count == args.len() - 1.
+        let placeholders = segments
+            .iter()
+            .filter(|s| matches!(s, Segment::Placeholder(_)))
+            .count();
+        if placeholders != value_ops.len() {
+            return Err(EmitError::Unsupported(
+                "diag-log placeholder/argument arity mismatch",
+            ));
+        }
+
+        // Build the format string (section 8.1: tag ++ interleave ++ "\n")
+        // and the parallel argument list. A non-static `&str` argument emits
+        // a per-%s-site stack buffer prelude (section 8.3); `next_buf` is the
+        // per-call-site, per-%s counter giving independent buffers.
+        let mut fmt = String::from("[");
+        fmt.push_str(level_tag(level));
+        fmt.push_str("] ");
+        let mut c_args: Vec<String> = Vec::new();
+        let mut buffers: Vec<String> = Vec::new();
+        let mut next_buf = 0u32;
+        let mut value_idx = 0usize;
+
+        for seg in &segments {
+            match seg {
+                Segment::Literal(bytes) => {
+                    // Literal bytes in the format string: C-escaped with
+                    // literal `%` doubled to `%%`.
+                    fmt.push_str(&c_escape(bytes, true));
+                }
+                Segment::Placeholder(modifier) => {
+                    let op = &value_ops[value_idx];
+                    value_idx += 1;
+
+                    // section 8.3 static `&str`: an `Operand::Constant` resolving
+                    // to the `&str` carrier -> a direct C string literal (no
+                    // buffer). A hex modifier on a `&str` is integer-only ->
+                    // Unsupported (the bridge's D2 already forbids it).
+                    if let Some(bytes) = self.read_static_str_bytes(op)? {
+                        require_default_modifier(*modifier)?;
+                        fmt.push_str("%s");
+                        // The escaper, with no `%`-doubling -- it is an argument.
+                        c_args.push(format!("\"{}\"", c_escape(&bytes, false)));
+                        continue;
+                    }
+
+                    // section 8.3 non-static `&str`: any other `&str`-typed place
+                    // (a runtime-borrowed / sliced `&str`) -> a per-%s-site stack
+                    // buffer (cap 256, min(len, 255) copy, guaranteed NUL, no
+                    // marker, no over-read/over-write).
+                    if self.is_str_ref_place(op) {
+                        require_default_modifier(*modifier)?;
+                        fmt.push_str("%s");
+                        let k = next_buf;
+                        next_buf += 1;
+                        let expr = self.operand_expr(op, None)?;
+                        // The `&str` lowers to the section 3.2 fat struct
+                        // `rust_str { const uint8_t *data; size_t len; }`.
+                        buffers.push(format!(
+                            "char _logstr{k}[256]; {{ size_t _n = (({expr}).len) < (256 - 1) ? (({expr}).len) : (256 - 1); memcpy(_logstr{k}, (({expr}).data), _n); _logstr{k}[_n] = '\\0'; }}"
+                        ));
+                        c_args.push(format!("_logstr{k}"));
+                        continue;
+                    }
+
+                    // section 8.2 numeric: the specifier composes the format text
+                    // and the cast keeps the C varargs value width matching the
+                    // conversion. The operand `Ty` comes from a place's decl or a
+                    // scalar constant's variant.
+                    let ty = self
+                        .diag_numeric_ty(op)
+                        .ok_or(EmitError::Unsupported("diag-log argument of unknown type"))?;
+                    let (spec, cast) = diag_specifier_and_cast_for(*modifier, &ty)?;
+                    fmt.push_str(&spec);
+                    let expr = self.operand_expr(op, None)?;
+                    c_args.push(format!("{cast}({expr})"));
+                }
+            }
+        }
+        fmt.push_str("\\n");
+
+        // Statement: the buffer preludes, then the printf, then the goto.
+        let mut out = String::new();
+        for b in &buffers {
+            out.push_str(b);
+            out.push(' ');
+        }
+        if c_args.is_empty() {
+            out.push_str(&format!("printf(\"{fmt}\");"));
+        } else {
+            out.push_str(&format!("printf(\"{fmt}\", {});", c_args.join(", ")));
+        }
+        out.push_str(&format!(" goto bb_{};", target.as_u32()));
+        Ok(out)
+    }
+
+    /// Read the format-template text bytes from a diag-log `args[0]` operand
+    /// (Change B part 1). Mirrors the bridge's `extract_format_template_literal`
+    /// (`peel.rs`) but walks `model.consts` + `resolve_reloc` + the CMS
+    /// instance's `Static { init }` (the backend cannot see the bridge cache).
+    /// D6 guarantees a literal, so a bridged model always succeeds; any other
+    /// shape fails loud defensively.
+    fn read_template_bytes(&self, op: &Operand) -> Result<Vec<u8>, EmitError> {
+        self.read_str_carrier_bytes(op)
+            .ok_or(EmitError::Unsupported(
+                "diag-log format operand is not a string literal",
+            ))
+    }
+
+    /// Read the bytes of a *static* `&str` argument carrier, or `None` if the
+    /// operand is not a static-literal carrier (then it is a non-static `&str`,
+    /// section 8.3). The static-vs-non-static discriminator is purely the
+    /// operand form: an `Operand::Constant` resolving to the `&str` carrier is
+    /// static; anything else of `&str` type is non-static.
+    fn read_static_str_bytes(&self, op: &Operand) -> Result<Option<Vec<u8>>, EmitError> {
+        Ok(self.read_str_carrier_bytes(op))
+    }
+
+    /// The shared `&str` carrier byte read: an `Operand::Constant` resolving to
+    /// `Aggregate([Reloc -> CMS, Uint(len)])` -> the CMS `Const::Bytes` ->
+    /// `bytes[0..len]`'s concrete `Byte::Value`s. `None` for any other shape.
+    fn read_str_carrier_bytes(&self, op: &Operand) -> Option<Vec<u8>> {
+        let cid = match op {
+            Operand::Constant(cid) => *cid,
+            _ => return None,
+        };
+        let (reloc_cid, len_cid) = match self.model.consts.resolve(cid) {
+            Const::Aggregate(parts) if parts.len() == 2 => (parts[0], parts[1]),
+            _ => return None,
+        };
+        let target = match self.model.consts.resolve(reloc_cid) {
+            Const::Reloc(r) => *r,
+            _ => return None,
+        };
+        let len = match self.model.consts.resolve(len_cid) {
+            Const::Uint(_, v) => *v as usize,
+            _ => return None,
+        };
+        let cms_id = resolve_reloc(self.model, target)?;
+        let bytes_cid = match &self.model.instances[cms_id].kind {
+            InstanceKind::Static { init: Some(c), .. } => *c,
+            _ => return None,
+        };
+        let raw = match self.model.consts.resolve(bytes_cid) {
+            Const::Bytes(bytes) => bytes,
+            _ => return None,
+        };
+        // The carrier metadata `len` must not exceed the CMS byte image: reading
+        // `bytes[0..len]` out of bounds is model corruption (a bridged carrier
+        // never does this). Fail loud rather than silently read fewer bytes.
+        if len > raw.len() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(len);
+        for b in &raw[..len] {
+            match b {
+                Byte::Value(v) => out.push(*v),
+                // A relocation or uninit byte inside a string literal is not a
+                // literal text byte: a bridged template never carries one.
+                Byte::Reloc(_) | Byte::Uninit => return None,
+            }
+        }
+        Some(out)
+    }
+
+    /// Whether the operand is a place (`Copy` / `Move`) of `&str` type -- the
+    /// section-8.3 non-static `&str` form (a static-literal carrier is an
+    /// `Operand::Constant`, handled separately). The discriminator is purely
+    /// the operand form, no provenance tracing.
+    fn is_str_ref_place(&self, op: &Operand) -> bool {
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => return false,
+        };
+        matches!(&self.model.types[self.place_ty(place)], Ty::Ref(pointee, _) if matches!(self.model.types[*pointee], Ty::Str))
+    }
+
+    /// The `Ty` of a numeric diag-log argument: a place's declared type, or a
+    /// scalar constant's variant (`Uint` / `Int` / `Bool`). `None` for any
+    /// other operand shape (the caller then fails loud). Returns an owned `Ty`
+    /// so a constant -- which carries its kind, not a `TyId` -- maps uniformly
+    /// with a place into [`diag_specifier_and_cast_for`].
+    fn diag_numeric_ty(&self, op: &Operand) -> Option<Ty> {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) => Some(self.model.types[self.place_ty(p)].clone()),
+            Operand::Constant(cid) => match self.model.consts.resolve(*cid) {
+                Const::Uint(kind, _) => Some(Ty::Uint(*kind)),
+                Const::Int(kind, _) => Some(Ty::Int(*kind)),
+                Const::Bool(_) => Some(Ty::Bool),
+                _ => None,
+            },
         }
     }
 }
@@ -3477,5 +3692,268 @@ mod tests {
             "(-__builtin_inf())"
         );
         assert!(render_float(FloatKind::F64, f64::NAN.to_bits() as u128).contains("__builtin_nan"));
+    }
+}
+
+// ---- section 8 diagnostic-logging: format template parser + escaper ----
+
+/// The section-8.2 / section-26.7 `(specifier, cast)` for a numeric operand
+/// `Ty` under `modifier` (Change C). Module-level so [`mod_tests`] can pin the
+/// mapping directly. Gates on the section-26.4-admissible numeric set: any
+/// other `Ty` (incl. `Char` / `Isize` / `Usize` / `&str` -- the broader
+/// `printf_spec` accepts the first three, but diag-log must not) fails loud.
+/// For a hex modifier the cast is the two-step
+/// `(varargs-unsigned)(unsigned-of-source-width)` so a negative signed value
+/// renders its source-width two's-complement, and the `ll` length modifier is
+/// inserted for 64-bit operands.
+pub(crate) fn diag_specifier_and_cast_for(
+    modifier: Modifier,
+    ty: &Ty,
+) -> Result<(String, String), EmitError> {
+    match modifier {
+        Modifier::None => {
+            let (spec, cast) = match ty {
+                Ty::Bool | Ty::Int(IntKind::I8 | IntKind::I16 | IntKind::I32) => ("%d", "(int)"),
+                Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32) => ("%u", "(unsigned)"),
+                Ty::Uint(UintKind::U64) => ("%llu", "(unsigned long long)"),
+                Ty::Int(IntKind::I64) => ("%lld", "(long long)"),
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "diag-log argument of non-admissible type",
+                    ))
+                }
+            };
+            Ok((spec.to_string(), cast.to_string()))
+        }
+        Modifier::Hex {
+            upper,
+            alternate,
+            width,
+        } => {
+            // Source-width unsigned reinterpret + varargs-unsigned cast.
+            let (src_cast, varargs, is_64) = match ty {
+                Ty::Int(IntKind::I8) => ("(uint8_t)", "(unsigned)", false),
+                Ty::Int(IntKind::I16) => ("(uint16_t)", "(unsigned)", false),
+                Ty::Int(IntKind::I32) => ("(uint32_t)", "(unsigned)", false),
+                Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32) => ("", "(unsigned)", false),
+                Ty::Uint(UintKind::U64) | Ty::Int(IntKind::I64) => {
+                    ("", "(unsigned long long)", true)
+                }
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "diag-log hex modifier on a non-integer operand",
+                    ))
+                }
+            };
+            let letter = if upper { "X" } else { "x" };
+            let hash = if alternate { "#" } else { "" };
+            let pad = if width > 0 {
+                format!("0{width}")
+            } else {
+                String::new()
+            };
+            let length = if is_64 { "ll" } else { "" };
+            let spec = format!("%{hash}{pad}{length}{letter}");
+            let cast = format!("{varargs}{src_cast}");
+            Ok((spec, cast))
+        }
+    }
+}
+
+/// A `&str` argument admits only the default `{}` placeholder: a hex modifier
+/// is integer-only (section 26.8 D2). Fails loud on any non-default modifier
+/// (the bridge already rejects a hex modifier on a `&str`, so a bridged model
+/// never reaches this).
+pub(crate) fn require_default_modifier(modifier: Modifier) -> Result<(), EmitError> {
+    if matches!(modifier, Modifier::None) {
+        Ok(())
+    } else {
+        Err(EmitError::Unsupported(
+            "diag-log hex modifier on a non-integer operand",
+        ))
+    }
+}
+
+/// A parsed format-template placeholder modifier (section 26.7, the bridge's
+/// actual accepted set). `None` is the default `{}`; `Hex` carries the bridge's
+/// `{ upper, alternate, width }` flag tuple (mirroring the driver's
+/// `FormatSpecifier`), covering the eight accepted forms `{x,X}` x
+/// `{plain, #-alternate, 08-zero-pad, #010-zero-pad-alternate}`.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum Modifier {
+    /// The default `{}` placeholder.
+    None,
+    /// A hex placeholder with its flag tuple.
+    Hex {
+        /// Uppercase conversion (`X` vs `x`).
+        upper: bool,
+        /// The `#` alternate flag.
+        alternate: bool,
+        /// The zero-pad width (`0` for none).
+        width: u32,
+    },
+}
+
+/// One segment of a parsed format template: literal text bytes, or a
+/// placeholder carrying its modifier.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum Segment {
+    /// Literal text bytes (already brace-unescaped).
+    Literal(Vec<u8>),
+    /// A `{...}` placeholder.
+    Placeholder(Modifier),
+}
+
+/// Parse a format-template byte string into an ordered segment sequence
+/// (Change B part 2). Accepts the bridge's actual set: the default `{}`, the
+/// eight hex forms, `{{`/`}}` brace escapes (-> a literal `{`/`}`), embedded
+/// newlines (ordinary literal text), and the empty template (zero
+/// placeholders). A malformed brace (an unclosed `{`, a stray unescaped `}`)
+/// or any inner text outside the accepted set fails loud defensively (the
+/// bridge already rejects these, so a bridged model never carries one).
+pub(crate) fn parse_template(bytes: &[u8]) -> Result<Vec<Segment>, EmitError> {
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut literal: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        let b = bytes[i];
+        match b {
+            b'{' => {
+                if bytes.get(i + 1) == Some(&b'{') {
+                    // `{{` -> literal `{`.
+                    literal.push(b'{');
+                    i += 2;
+                    continue;
+                }
+                // A real placeholder: scan to the closing `}`.
+                let close = bytes[i + 1..]
+                    .iter()
+                    .position(|&c| c == b'}')
+                    .map(|p| i + 1 + p)
+                    .ok_or(EmitError::Unsupported("diag-log unclosed `{` in template"))?;
+                let inner = &bytes[i + 1..close];
+                let modifier = parse_placeholder(inner)?;
+                if !literal.is_empty() {
+                    segments.push(Segment::Literal(std::mem::take(&mut literal)));
+                }
+                segments.push(Segment::Placeholder(modifier));
+                i = close + 1;
+            }
+            b'}' => {
+                if bytes.get(i + 1) == Some(&b'}') {
+                    // `}}` -> literal `}`.
+                    literal.push(b'}');
+                    i += 2;
+                    continue;
+                }
+                return Err(EmitError::Unsupported("diag-log stray `}` in template"));
+            }
+            _ => {
+                literal.push(b);
+                i += 1;
+            }
+        }
+    }
+    if !literal.is_empty() {
+        segments.push(Segment::Literal(literal));
+    }
+    Ok(segments)
+}
+
+/// Parse a placeholder's inner text (between `{` and `}`) into a [`Modifier`].
+/// Empty inner -> the default; otherwise it must be `:<hex-spec>` from the
+/// bridge's accepted set. Anything else (positional / named / `:?` / `:b` /
+/// `:o` / `:p` / precision / other widths) fails loud.
+pub(crate) fn parse_placeholder(inner: &[u8]) -> Result<Modifier, EmitError> {
+    if inner.is_empty() {
+        return Ok(Modifier::None);
+    }
+    if inner[0] != b':' {
+        return Err(EmitError::Unsupported(
+            "diag-log non-empty placeholder spec",
+        ));
+    }
+    let spec = &inner[1..];
+    // The eight accepted forms, by exact byte match.
+    let modifier = match spec {
+        b"x" => Modifier::Hex {
+            upper: false,
+            alternate: false,
+            width: 0,
+        },
+        b"X" => Modifier::Hex {
+            upper: true,
+            alternate: false,
+            width: 0,
+        },
+        b"#x" => Modifier::Hex {
+            upper: false,
+            alternate: true,
+            width: 0,
+        },
+        b"#X" => Modifier::Hex {
+            upper: true,
+            alternate: true,
+            width: 0,
+        },
+        b"08x" => Modifier::Hex {
+            upper: false,
+            alternate: false,
+            width: 8,
+        },
+        b"08X" => Modifier::Hex {
+            upper: true,
+            alternate: false,
+            width: 8,
+        },
+        b"#010x" => Modifier::Hex {
+            upper: false,
+            alternate: true,
+            width: 10,
+        },
+        b"#010X" => Modifier::Hex {
+            upper: true,
+            alternate: true,
+            width: 10,
+        },
+        _ => {
+            return Err(EmitError::Unsupported(
+                "diag-log out-of-subset format modifier",
+            ))
+        }
+    };
+    Ok(modifier)
+}
+
+/// Render a byte run as the body of a C string literal (Change D escaper).
+/// `"` -> `\"`, `\` -> `\\`, the C escapes `\n` / `\t` / `\r`, other
+/// non-printable / non-ASCII bytes -> a 3-digit octal `\nnn` (fixed width so a
+/// following digit cannot extend the escape), printable ASCII verbatim. When
+/// `double_percent` is set (the format string only, never an emitted `&str`
+/// *value* literal), a literal `%` is doubled to `%%`.
+pub(crate) fn c_escape(bytes: &[u8], double_percent: bool) -> String {
+    let mut out = String::new();
+    for &b in bytes {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\t' => out.push_str("\\t"),
+            b'\r' => out.push_str("\\r"),
+            b'%' if double_percent => out.push_str("%%"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\{b:03o}")),
+        }
+    }
+    out
+}
+
+/// The section-8.1 bracketed-tag body (between `[` and `]`) for a `LogLevel`.
+pub(crate) fn level_tag(level: LogLevel) -> &'static str {
+    match level {
+        LogLevel::Error => "ERROR",
+        LogLevel::Warn => "WARN",
+        LogLevel::Info => "INFO",
+        LogLevel::Debug => "DEBUG",
     }
 }

@@ -1,0 +1,5 @@
+name   = "diag_str_truncation"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["DL-4"]
+expect = "pass"

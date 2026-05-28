@@ -4862,7 +4862,7 @@
           "id": "regseq-backends-15",
           "name": "Generic-C diag-log \u2192 printf + harness bring-up + first green ledger fixtures (task e)",
           "spec": ".harness/tasks/regseq-backends/15-generic-c-diag-log-printf.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-14"
           ],

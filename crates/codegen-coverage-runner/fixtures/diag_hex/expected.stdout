@@ -1,0 +1,4 @@
+[INFO] x=abcd X=ABCD ax=0xabcd aX=0XABCD
+[INFO] z=0000abcd Z=0000ABCD az=0x0000abcd aZ=0X0000ABCD
+[INFO] w=deadbeefff aw=0XDEADBEEFFF
+[INFO] a=ff b=ffff c=ffffffff d=ffffffffffffffff

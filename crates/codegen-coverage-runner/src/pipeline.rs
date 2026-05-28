@@ -138,8 +138,17 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
         return fail(Stage::Snapshot, mismatch.summary);
     }
 
+    // Stage 4 prep: resolve the entry symbol the backend actually emits
+    // (Change F). The manifest's `entry` is a rendered-path suffix (default
+    // `regseq_main`); the backend emits `sanitize(emission_name)`, so passing
+    // the suffix verbatim would be an undefined symbol at link.
+    let entry = match resolve_entry(&model, &fixture.manifest.entry) {
+        Ok(sym) => sym,
+        Err(detail) => return fail(Stage::Compile, detail),
+    };
+
     // Stages 4-5: Compile + Run.
-    let run = match toolchain::compile_and_run(&emitted, &fixture.manifest.entry, cc) {
+    let run = match toolchain::compile_and_run(&emitted, &entry, cc) {
         Ok(run) => run,
         Err(toolchain::ToolchainError::CompileFailed { stderr }) => {
             return fail(Stage::Compile, stderr);
@@ -204,4 +213,182 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
 /// Build a `Fail` verdict for `stage` with `detail`.
 fn fail(stage: Stage, detail: String) -> FixtureVerdict {
     FixtureVerdict::Fail { stage, detail }
+}
+
+/// Resolve the manifest `entry` (a rendered-path suffix) to the C symbol the
+/// backend emits (Change F), via the backend's single-source-of-truth
+/// `entry_c_symbol`. A missing or ambiguous suffix is a clear stage-4 error
+/// string (the caller tags it `Stage::Compile`).
+fn resolve_entry(model: &regseq_model::RegseqModel, entry: &str) -> Result<String, String> {
+    match regseq_backends::entry_c_symbol(model, entry) {
+        regseq_backends::EntrySymbol::Resolved(sym) => Ok(sym),
+        regseq_backends::EntrySymbol::NotFound => Err(format!(
+            "no function instance whose emission_name ends with entry suffix {entry:?}"
+        )),
+        regseq_backends::EntrySymbol::Ambiguous(syms) => Err(format!(
+            "ambiguous entry suffix {entry:?}: matches {} function instances ({})",
+            syms.len(),
+            syms.join(", ")
+        )),
+    }
+}
+
+/// The outcome of blessing one fixture (Change E): the emitted C was written
+/// to `golden.c` (always, when stages 1-2 succeed), plus a report of whether
+/// the freshly-blessed emit compiled, ran, and matched the hand-authored
+/// `expected.stdout` -- printed for a human, never auto-blessed.
+#[derive(Debug)]
+pub struct BlessOutcome {
+    /// Fixture name.
+    pub name: String,
+    /// Bytes written to `golden.c`, or `None` if stages 1-2 failed (nothing
+    /// was written).
+    pub blessed_bytes: Option<usize>,
+    /// A human-readable line per fixture (the bless report).
+    pub report: String,
+    /// Whether the fixture emitted AND (where `expected.stdout` exists)
+    /// matched -- the bless run's per-fixture success bit.
+    pub ok: bool,
+}
+
+/// Bless one fixture (Change E): run stage-1 (acquire) + stage-2 (emit), write
+/// the emitted C to `golden.c` (creating / overwriting it), **skip** the
+/// stage-3 snapshot compare, then run stages 4-6 in **report mode** (print the
+/// actual stdout on a miss so a human can author `expected.stdout`). NEVER
+/// writes `expected.stdout` / `expected.stderr` (the honesty invariant): the
+/// behavioral oracle stays hand-authored.
+pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
+    let name = fixture.manifest.name.clone();
+
+    // Stage 1: Acquire.
+    let model = match fixture.manifest.kind {
+        FixtureKind::Ir => {
+            return BlessOutcome {
+                name,
+                blessed_bytes: None,
+                report: "skipped (kind=ir)".to_string(),
+                ok: false,
+            };
+        }
+        FixtureKind::Rust => match try_bridge_fixture_path(&fixture.input) {
+            BridgeOutcome::Ok(model) => model,
+            other => {
+                return BlessOutcome {
+                    name,
+                    blessed_bytes: None,
+                    report: format!("acquire failed: {other:?}"),
+                    ok: false,
+                };
+            }
+        },
+    };
+
+    // Stage 2: Emit.
+    let emitted = match regseq_backends::emit_generic_c(&model) {
+        Ok(c) => c,
+        Err(err) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes: None,
+                report: format!("emit failed: {err}"),
+                ok: false,
+            };
+        }
+    };
+
+    // Write golden.c (the ONLY file --bless ever writes). Stage 3 is skipped.
+    if let Err(err) = std::fs::write(&fixture.golden_c, &emitted) {
+        return BlessOutcome {
+            name,
+            blessed_bytes: None,
+            report: format!("could not write golden.c: {err}"),
+            ok: false,
+        };
+    }
+    let blessed_bytes = Some(emitted.len());
+
+    // Stages 4-6 in REPORT mode. A compile/run miss is reported, never fatal;
+    // golden.c is already written for diff review.
+    let entry = match resolve_entry(&model, &fixture.manifest.entry) {
+        Ok(sym) => sym,
+        Err(detail) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes,
+                report: format!(
+                    "blessed golden.c ({} bytes); entry unresolved: {detail}",
+                    emitted.len()
+                ),
+                ok: false,
+            };
+        }
+    };
+    let run = match toolchain::compile_and_run(&emitted, &entry, cc) {
+        Ok(run) => run,
+        Err(err) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes,
+                report: format!(
+                    "blessed golden.c ({} bytes); compile/run failed: {err}",
+                    emitted.len()
+                ),
+                ok: false,
+            };
+        }
+    };
+
+    // Stage-5 boundary (report mode): a non-zero exit or any stderr is a
+    // broken-run miss -- report it (so a broken emit is not silently blessed),
+    // but golden.c is still written for diff review.
+    if run.exit_code != Some(0) || !run.stderr.is_empty() {
+        return BlessOutcome {
+            name,
+            blessed_bytes,
+            report: format!(
+                "blessed golden.c ({} bytes); run did not exit cleanly (exit={:?}, stderr={:?}) -- actual stdout:\n{}",
+                emitted.len(),
+                run.exit_code,
+                run.stderr,
+                run.stdout
+            ),
+            ok: false,
+        };
+    }
+
+    // Stage-6 report (do not certify) against the hand-authored expected.stdout.
+    // `ok` is true only when the run exited cleanly AND a hand-authored
+    // expected.stdout exists AND matches: a missing expected.stdout (a human
+    // must still author + verify it) or a mismatch is reported, never blessed.
+    let (report, ok) = match std::fs::read_to_string(&fixture.expected_stdout) {
+        Ok(expected) if run.stdout == expected => (
+            format!(
+                "blessed golden.c ({} bytes); stdout matches expected.stdout",
+                emitted.len()
+            ),
+            true,
+        ),
+        Ok(_) => (
+            format!(
+                "blessed golden.c ({} bytes); stdout MISMATCH -- actual stdout:\n{}",
+                emitted.len(),
+                run.stdout
+            ),
+            false,
+        ),
+        Err(_) => (
+            format!(
+                "blessed golden.c ({} bytes); no expected.stdout yet -- actual stdout:\n{}",
+                emitted.len(),
+                run.stdout
+            ),
+            false,
+        ),
+    };
+    BlessOutcome {
+        name,
+        blessed_bytes,
+        report,
+        ok,
+    }
 }

@@ -352,26 +352,41 @@
     {
       "id": "DL-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "DL-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_empty",
+        "diag_levels",
+        "diag_newline"
+      ],
+      "result": "pass"
     },
     {
       "id": "DL-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_bool",
+        "diag_escapes",
+        "diag_hex",
+        "diag_numeric_widths"
+      ],
+      "result": "pass"
     },
     {
       "id": "DL-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_str_nonstatic",
+        "diag_str_static",
+        "diag_str_truncation"
+      ],
+      "result": "pass"
     },
     {
       "id": "DL-5",
@@ -382,14 +397,18 @@
     {
       "id": "DL-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "DL-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-1",
@@ -880,14 +899,18 @@
     {
       "id": "TM-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-4",
@@ -898,8 +921,10 @@
     {
       "id": "TM-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-6",
@@ -916,8 +941,10 @@
     {
       "id": "TM-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "diag_levels"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-9",
@@ -1116,13 +1143,7 @@
       "CO-7",
       "CO-8",
       "CO-9",
-      "DL-1",
-      "DL-2",
-      "DL-3",
-      "DL-4",
       "DL-5",
-      "DL-6",
-      "DL-7",
       "FS-1",
       "FS-10",
       "FS-2",
@@ -1200,13 +1221,9 @@
       "ST-4",
       "TM-1",
       "TM-10",
-      "TM-2",
-      "TM-3",
       "TM-4",
-      "TM-5",
       "TM-6",
       "TM-7",
-      "TM-8",
       "TM-9",
       "TY-1",
       "TY-10",

@@ -4980,3 +4980,440 @@ fn const_memory_static_via_inline_enum_byte_image_is_re_typed() {
         "the inline-enum-referenced CMS is not left as a byte array:\n{tu}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// Section 8 diagnostic-logging -> printf: structural assertions (task e, B3).
+// The format-template parser, the (Modifier, Ty) -> (specifier, cast) mapping,
+// the C-string escaper, and the section-8 emission seam's defensive paths.
+// Compile-AND-run proof of the observable output lives in the
+// codegen-coverage-runner `generic_c_bodies.rs` behavioral tests.
+// ---------------------------------------------------------------------------
+
+use super::body_emit::{
+    c_escape, diag_specifier_and_cast_for, level_tag, parse_placeholder, parse_template,
+    require_default_modifier, Modifier, Segment,
+};
+
+#[test]
+fn parse_template_default_placeholder_and_literals() {
+    // `x={}` -> Literal("x=") then a default placeholder.
+    let segs = parse_template(b"x={}").unwrap();
+    assert_eq!(
+        segs,
+        vec![
+            Segment::Literal(b"x=".to_vec()),
+            Segment::Placeholder(Modifier::None),
+        ]
+    );
+}
+
+#[test]
+fn parse_template_accepts_all_eight_bridge_hex_forms() {
+    // The bridge's actual accepted set, incl. the uppercase-padded `:08X` /
+    // `:#010X` beyond section 26.7's table, each into the {upper, alternate,
+    // width} tuple.
+    let cases: &[(&[u8], Modifier)] = &[
+        (
+            b"{:x}",
+            Modifier::Hex {
+                upper: false,
+                alternate: false,
+                width: 0,
+            },
+        ),
+        (
+            b"{:X}",
+            Modifier::Hex {
+                upper: true,
+                alternate: false,
+                width: 0,
+            },
+        ),
+        (
+            b"{:#x}",
+            Modifier::Hex {
+                upper: false,
+                alternate: true,
+                width: 0,
+            },
+        ),
+        (
+            b"{:#X}",
+            Modifier::Hex {
+                upper: true,
+                alternate: true,
+                width: 0,
+            },
+        ),
+        (
+            b"{:08x}",
+            Modifier::Hex {
+                upper: false,
+                alternate: false,
+                width: 8,
+            },
+        ),
+        (
+            b"{:08X}",
+            Modifier::Hex {
+                upper: true,
+                alternate: false,
+                width: 8,
+            },
+        ),
+        (
+            b"{:#010x}",
+            Modifier::Hex {
+                upper: false,
+                alternate: true,
+                width: 10,
+            },
+        ),
+        (
+            b"{:#010X}",
+            Modifier::Hex {
+                upper: true,
+                alternate: true,
+                width: 10,
+            },
+        ),
+    ];
+    for (src, want) in cases {
+        let segs = parse_template(src).unwrap();
+        assert_eq!(segs, vec![Segment::Placeholder(*want)], "form {src:?}");
+    }
+}
+
+#[test]
+fn parse_template_brace_escapes_and_embedded_newline() {
+    // `{{`/`}}` -> literal `{`/`}`; an embedded `\n` is ordinary literal text.
+    let segs = parse_template(b"{{x}}\n{}").unwrap();
+    assert_eq!(
+        segs,
+        vec![
+            Segment::Literal(b"{x}\n".to_vec()),
+            Segment::Placeholder(Modifier::None),
+        ]
+    );
+}
+
+#[test]
+fn parse_template_empty_yields_no_segments() {
+    assert_eq!(parse_template(b"").unwrap(), Vec::<Segment>::new());
+}
+
+#[test]
+fn parse_template_rejects_out_of_subset_and_malformed_braces() {
+    // Positional / named / out-of-subset specs and malformed braces all fail
+    // loud (the bridge already rejects these defensively).
+    for bad in [
+        &b"{0}"[..], // positional
+        b"{name}",   // named
+        b"{:?}",     // debug
+        b"{:b}",     // binary
+        b"{:5}",     // unsupported width
+        b"{:04x}",   // unsupported pad width
+        b"{",        // unclosed
+        b"a}b",      // stray close
+    ] {
+        assert!(
+            matches!(parse_template(bad), Err(EmitError::Unsupported(_))),
+            "{bad:?} must be Unsupported"
+        );
+    }
+}
+
+#[test]
+fn parse_placeholder_empty_is_default() {
+    assert_eq!(parse_placeholder(b"").unwrap(), Modifier::None);
+}
+
+#[test]
+fn specifier_default_arms_reuse_the_printf_widths_and_casts() {
+    // The admissible numeric defaults: each (Ty) -> (conversion, cast).
+    let cases: &[(Ty, &str, &str)] = &[
+        (Ty::Bool, "%d", "(int)"),
+        (Ty::Int(IntKind::I8), "%d", "(int)"),
+        (Ty::Int(IntKind::I16), "%d", "(int)"),
+        (Ty::Int(IntKind::I32), "%d", "(int)"),
+        (Ty::Int(IntKind::I64), "%lld", "(long long)"),
+        (Ty::Uint(UintKind::U8), "%u", "(unsigned)"),
+        (Ty::Uint(UintKind::U16), "%u", "(unsigned)"),
+        (Ty::Uint(UintKind::U32), "%u", "(unsigned)"),
+        (Ty::Uint(UintKind::U64), "%llu", "(unsigned long long)"),
+    ];
+    for (ty, spec, cast) in cases {
+        let got = diag_specifier_and_cast_for(Modifier::None, ty).unwrap();
+        assert_eq!(got, (spec.to_string(), cast.to_string()), "default {ty:?}");
+    }
+}
+
+#[test]
+fn specifier_hex_inserts_ll_for_64bit_and_two_step_signed_cast() {
+    // Signed hex uses the two-step (varargs-unsigned)(unsigned-of-source-width)
+    // cast so a negative value renders its source-width two's-complement; the
+    // `ll` length modifier is inserted for 64-bit operands.
+    let m = Modifier::Hex {
+        upper: false,
+        alternate: false,
+        width: 0,
+    };
+    assert_eq!(
+        diag_specifier_and_cast_for(m, &Ty::Int(IntKind::I8)).unwrap(),
+        ("%x".to_string(), "(unsigned)(uint8_t)".to_string())
+    );
+    assert_eq!(
+        diag_specifier_and_cast_for(m, &Ty::Int(IntKind::I16)).unwrap(),
+        ("%x".to_string(), "(unsigned)(uint16_t)".to_string())
+    );
+    assert_eq!(
+        diag_specifier_and_cast_for(m, &Ty::Int(IntKind::I32)).unwrap(),
+        ("%x".to_string(), "(unsigned)(uint32_t)".to_string())
+    );
+    assert_eq!(
+        diag_specifier_and_cast_for(m, &Ty::Int(IntKind::I64)).unwrap(),
+        ("%llx".to_string(), "(unsigned long long)".to_string())
+    );
+    assert_eq!(
+        diag_specifier_and_cast_for(m, &Ty::Uint(UintKind::U32)).unwrap(),
+        ("%x".to_string(), "(unsigned)".to_string())
+    );
+    // Padding + alternate + uppercase + 64-bit compose: `{:#010X}` on a u64.
+    let padded = Modifier::Hex {
+        upper: true,
+        alternate: true,
+        width: 10,
+    };
+    assert_eq!(
+        diag_specifier_and_cast_for(padded, &Ty::Uint(UintKind::U64)).unwrap(),
+        ("%#010llX".to_string(), "(unsigned long long)".to_string())
+    );
+}
+
+#[test]
+fn specifier_rejects_hex_on_non_integer_and_default_on_non_admissible() {
+    let hex = Modifier::Hex {
+        upper: false,
+        alternate: false,
+        width: 0,
+    };
+    // Hex on a bool is integer-only -> Unsupported.
+    assert!(matches!(
+        diag_specifier_and_cast_for(hex, &Ty::Bool),
+        Err(EmitError::Unsupported(_))
+    ));
+    // A non-admissible Ty (Char / Isize / Usize) -> Unsupported even though
+    // the broader `printf_spec` would accept all three.
+    for ty in [Ty::Char, Ty::Int(IntKind::Isize), Ty::Uint(UintKind::Usize)] {
+        assert!(
+            matches!(
+                diag_specifier_and_cast_for(Modifier::None, &ty),
+                Err(EmitError::Unsupported(_))
+            ),
+            "default on {ty:?} must be Unsupported"
+        );
+        assert!(
+            matches!(
+                diag_specifier_and_cast_for(hex, &ty),
+                Err(EmitError::Unsupported(_))
+            ),
+            "hex on {ty:?} must be Unsupported"
+        );
+    }
+}
+
+#[test]
+fn require_default_modifier_rejects_hex_on_str() {
+    assert!(require_default_modifier(Modifier::None).is_ok());
+    assert!(matches!(
+        require_default_modifier(Modifier::Hex {
+            upper: false,
+            alternate: false,
+            width: 0
+        }),
+        Err(EmitError::Unsupported(_))
+    ));
+}
+
+#[test]
+fn c_escape_doubles_percent_only_in_format_and_octal_escapes_nonprintable() {
+    // The format string doubles a literal `%`; an argument literal does not.
+    assert_eq!(c_escape(b"50% done", true), "50%% done");
+    assert_eq!(c_escape(b"50% done", false), "50% done");
+    // Quote / backslash / control escapes; a non-ASCII byte -> 3-digit octal.
+    assert_eq!(c_escape(b"a\"b\\c\n\t\r", false), "a\\\"b\\\\c\\n\\t\\r");
+    assert_eq!(c_escape(&[0xff, b'z'], false), "\\377z");
+}
+
+#[test]
+fn level_tag_maps_every_severity() {
+    assert_eq!(level_tag(LogLevel::Error), "ERROR");
+    assert_eq!(level_tag(LogLevel::Warn), "WARN");
+    assert_eq!(level_tag(LogLevel::Info), "INFO");
+    assert_eq!(level_tag(LogLevel::Debug), "DEBUG");
+}
+
+#[test]
+fn no_task_e_label_remains_in_body_emit() {
+    // The section-8 seam is filled; no `task e` deferral label may remain.
+    let src = include_str!("body_emit.rs");
+    assert!(
+        !src.contains("task e"),
+        "no task e deferral label may remain in body_emit.rs"
+    );
+}
+
+/// A section-8 value argument for the [`emit_diag_call`] structural harness,
+/// interpreted in the harness's own model so no cross-model handle leaks.
+enum DiagArg {
+    /// A `u32` numeric-constant operand (the `diag_numeric_ty` constant arm).
+    ConstU32(u32),
+    /// A non-static `&str` place operand (a fresh `&str` body local) -- the
+    /// section-8.3 stack-buffer path.
+    StrPlace,
+}
+
+/// Build a model whose `regseq_main` calls a `Log(Info)`-marked callee with a
+/// `&str`-literal `template` as `args[0]`, the given `value_args`, and `target`,
+/// then return `emit_generic_c`. The single structural harness for the
+/// section-8 interception (incl. the defensive arity / `None`-target paths a
+/// bridged model never reaches).
+fn emit_diag_call(
+    template: &str,
+    value_args: Vec<DiagArg>,
+    target: Option<BlockId>,
+) -> Result<String, EmitError> {
+    let mut m = model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let str_ty = m.types.intern(Ty::Str);
+    let ref_str = m.types.intern(Ty::Ref(str_ty, Provenance::SharedBorrow));
+
+    // The Log callee: excluded from emission; only its intrinsic tag matters.
+    let log_sig = fnsig(&mut m, vec![], unit, FnAbi::Rust, false);
+    let log_id = fn_instance(&mut m, "log_info", log_sig, None);
+    let log_item = m.instances[log_id].item;
+    while m.domain_attrs.item_attrs.len() <= log_item.as_u32() as usize {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+    m.domain_attrs.item_attrs[log_item]
+        .push(AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Info)));
+
+    // args[0]: the &str-literal template carrier (Aggregate([Reloc->CMS, len])).
+    let raw: Vec<regseq_model::Byte> = template.bytes().map(regseq_model::Byte::Value).collect();
+    let n = raw.len() as u64;
+    let cms_bytes = m.consts.intern(Const::Bytes(raw));
+    let arr = m.types.intern(Ty::Array(u8t, n));
+    let cms = push_static(&mut m, "TPL", arr, cms_bytes);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, n as u128));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+
+    // Build the value operands in-model. A `StrPlace` gets a fresh `&str` body
+    // local; `loc(0)` is the unit return place, so the first arg local is 1.
+    let mut args: Vec<Operand> = vec![Operand::Constant(carrier)];
+    let mut locals = vec![unit];
+    for varg in value_args {
+        match varg {
+            DiagArg::ConstU32(v) => {
+                let cid = m.consts.intern(Const::Uint(UintKind::U32, v as u128));
+                args.push(Operand::Constant(cid));
+            }
+            DiagArg::StrPlace => {
+                let idx = locals.len() as u32;
+                locals.push(ref_str);
+                args.push(Operand::Copy(loc(idx)));
+            }
+        }
+    }
+
+    let main_sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    let body = build_body(
+        0,
+        locals,
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(log_id),
+                    args: args.into_boxed_slice(),
+                    destination: loc(0),
+                    target,
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    let main_id = fn_instance(&mut m, "regseq_main", main_sig, Some(body));
+    let it = m.instances[main_id].item;
+    m.items[it].linkage = Linkage::NoMangle;
+
+    emit_generic_c(&m)
+}
+
+#[test]
+fn diag_call_emits_tag_specifier_cast_and_goto() {
+    // Happy path: a numeric-constant arg under `{}` -> the `[INFO] ` tag, the
+    // `%u` specifier, the `(unsigned)` cast, a trailing `\n`, and the
+    // `goto bb_<target>` with no destination assignment. Also exercises the
+    // `diag_numeric_ty` constant arm.
+    let tu = emit_diag_call(
+        "x={}",
+        vec![DiagArg::ConstU32(7)],
+        Some(BlockId::from_u32(1)),
+    )
+    .expect("happy-path diag call must emit");
+    assert!(
+        tu.contains("printf(\"[INFO] x=%u\\n\", (unsigned)("),
+        "tag + specifier + cast:\n{tu}"
+    );
+    assert!(tu.contains("goto bb_1;"), "goto target:\n{tu}");
+}
+
+#[test]
+fn diag_call_non_static_str_args_get_independent_buffers() {
+    // Two non-static `&str` place args in one call -> two independent per-%s
+    // stack buffers (`_logstr0` / `_logstr1`), each cap 256, min(len, 255)
+    // copy, guaranteed NUL.
+    let tu = emit_diag_call(
+        "a={} b={}",
+        vec![DiagArg::StrPlace, DiagArg::StrPlace],
+        Some(BlockId::from_u32(1)),
+    )
+    .expect("non-static str diag call must emit");
+    assert!(tu.contains("char _logstr0[256];"), "first buffer:\n{tu}");
+    assert!(
+        tu.contains("char _logstr1[256];"),
+        "second independent buffer:\n{tu}"
+    );
+    assert!(
+        tu.contains("< (256 - 1) ?") && tu.contains("] = '\\0';"),
+        "min(len, cap-1) copy + guaranteed NUL:\n{tu}"
+    );
+    // Both %s sites in the format string.
+    assert!(
+        tu.contains("[INFO] a=%s b=%s\\n"),
+        "two %s specifiers:\n{tu}"
+    );
+}
+
+#[test]
+fn diag_call_arity_mismatch_fails_loud() {
+    // One placeholder, zero value operands -> the I-DiagLog-CallArity check.
+    assert!(matches!(
+        emit_diag_call("{}", vec![], Some(BlockId::from_u32(1))),
+        Err(EmitError::Unsupported(msg)) if msg.contains("arity")
+    ));
+}
+
+#[test]
+fn diag_call_none_target_fails_loud() {
+    // A Log callee always returns unit; a `None` target is model corruption.
+    assert!(matches!(
+        emit_diag_call("", vec![], None),
+        Err(EmitError::Unsupported(msg)) if msg.contains("no target")
+    ));
+}

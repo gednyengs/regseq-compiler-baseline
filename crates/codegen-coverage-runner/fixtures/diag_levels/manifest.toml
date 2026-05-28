@@ -1,0 +1,5 @@
+name   = "diag_levels"
+kind   = "rust"
+entry  = "regseq_main"
+covers = ["DL-1", "DL-2", "DL-6", "DL-7", "TM-2", "TM-3", "TM-5", "TM-8"]
+expect = "pass"

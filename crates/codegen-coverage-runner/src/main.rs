@@ -106,14 +106,22 @@ fn main() -> ExitCode {
     };
 
     if args.bless {
-        // --bless regenerates goldens from the actual emit/run. With the
-        // empty corpus + stubbed emit it is inert this task (Doc 3
-        // section 2: the harness never auto-blesses); the flag + plumbing
-        // ship now and activate once emit lands (tasks b-e).
-        eprintln!(
-            "--bless: inert this phase ({} fixture(s); emit is stubbed)",
-            fixtures.len()
-        );
+        // --bless regenerates `golden.c` from the actual emit (Change E):
+        // per fixture run stages 1-2, (over)write golden.c, then run stages
+        // 4-6 in report mode. It NEVER writes expected.stdout/stderr -- the
+        // behavioral oracle stays hand-authored (Doc 3 section 2 honesty
+        // invariant). No ledger is written in bless mode.
+        let mut all_ok = true;
+        for fixture in &fixtures {
+            let outcome = pipeline::bless_fixture(fixture, &args.cc);
+            println!("{}: {}", outcome.name, outcome.report);
+            all_ok &= outcome.ok;
+        }
+        return if all_ok {
+            ExitCode::from(0)
+        } else {
+            ExitCode::from(1)
+        };
     }
 
     let toolchain = ledger::probe_toolchain(&args.cc);

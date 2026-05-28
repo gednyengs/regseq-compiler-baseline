@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (0 with a green fixture)
+- **Covered rows:** 169 (10 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -63,13 +63,7 @@
 - `CO-7`
 - `CO-8`
 - `CO-9`
-- `DL-1`
-- `DL-2`
-- `DL-3`
-- `DL-4`
 - `DL-5`
-- `DL-6`
-- `DL-7`
 - `FS-1`
 - `FS-10`
 - `FS-2`
@@ -147,13 +141,9 @@
 - `ST-4`
 - `TM-1`
 - `TM-10`
-- `TM-2`
-- `TM-3`
 - `TM-4`
-- `TM-5`
 - `TM-6`
 - `TM-7`
-- `TM-8`
 - `TM-9`
 - `TY-1`
 - `TY-10`
@@ -239,13 +229,13 @@
 | CO-7 | Covered | Fail | - |
 | CO-8 | Covered | Fail | - |
 | CO-9 | Covered | Fail | - |
-| DL-1 | Covered | Fail | - |
-| DL-2 | Covered | Fail | - |
-| DL-3 | Covered | Fail | - |
-| DL-4 | Covered | Fail | - |
+| DL-1 | Covered | Pass | diag_levels |
+| DL-2 | Covered | Pass | diag_empty, diag_levels, diag_newline |
+| DL-3 | Covered | Pass | diag_bool, diag_escapes, diag_hex, diag_numeric_widths |
+| DL-4 | Covered | Pass | diag_str_nonstatic, diag_str_static, diag_str_truncation |
 | DL-5 | Covered | Fail | - |
-| DL-6 | Covered | Fail | - |
-| DL-7 | Covered | Fail | - |
+| DL-6 | Covered | Pass | diag_levels |
+| DL-7 | Covered | Pass | diag_levels |
 | FS-1 | Covered | Fail | - |
 | FS-10 | Covered | Fail | - |
 | FS-11 | OutOfScope | NotApplicable | - |
@@ -327,13 +317,13 @@
 | ST-4 | Covered | Fail | - |
 | TM-1 | Covered | Fail | - |
 | TM-10 | Covered | Fail | - |
-| TM-2 | Covered | Fail | - |
-| TM-3 | Covered | Fail | - |
+| TM-2 | Covered | Pass | diag_levels |
+| TM-3 | Covered | Pass | diag_levels |
 | TM-4 | Covered | Fail | - |
-| TM-5 | Covered | Fail | - |
+| TM-5 | Covered | Pass | diag_levels |
 | TM-6 | Covered | Fail | - |
 | TM-7 | Covered | Fail | - |
-| TM-8 | Covered | Fail | - |
+| TM-8 | Covered | Pass | diag_levels |
 | TM-9 | Covered | Fail | - |
 | TY-1 | Covered | Fail | - |
 | TY-10 | Covered | Fail | - |

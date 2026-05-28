@@ -18,8 +18,48 @@
 //! pass in [`super::NameTable`] is the safety net.
 
 use regseq_model::{
-    args_key_for_generic_args, GenericArgs, Instance, Linkage, RegseqModel, Ty, TyId,
+    args_key_for_generic_args, GenericArgs, Instance, InstanceKind, Linkage, RegseqModel, Ty, TyId,
 };
+
+/// The result of resolving an entry symbol from a model
+/// ([`entry_c_symbol`]): the resolution either succeeds, finds no matching
+/// function instance, or finds more than one (an ambiguous suffix).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum EntrySymbol {
+    /// Exactly one function instance matched; the emitted C symbol.
+    Resolved(String),
+    /// No function instance's `emission_name` ends with the suffix.
+    NotFound,
+    /// More than one function instance matched (an ambiguous suffix); the
+    /// matched emitted symbols, for a precise diagnostic.
+    Ambiguous(Vec<String>),
+}
+
+/// Resolve the entry function's emitted C symbol by a rendered-`emission_name`
+/// suffix (Change F). Finds the **function** instance whose rendered
+/// `emission_name` ends with `rendered_suffix`, then applies [`sanitize`] to
+/// produce the emitted C symbol -- the single source of truth for the symbol
+/// convention, reused by the on-disk coverage pipeline (it mints the entry the
+/// same way the in-crate `fn_cname` resolver does). Returns [`EntrySymbol`] so a
+/// caller can distinguish a missing entry from an ambiguous one.
+pub fn entry_c_symbol(model: &RegseqModel, rendered_suffix: &str) -> EntrySymbol {
+    let mut matches: Vec<String> = model
+        .instances
+        .iter()
+        .filter(|inst| matches!(inst.kind, InstanceKind::Function(_)))
+        .filter_map(|inst| {
+            let rendered = model.strings.resolve(inst.emission_name);
+            rendered
+                .ends_with(rendered_suffix)
+                .then(|| sanitize(rendered))
+        })
+        .collect();
+    match matches.len() {
+        0 => EntrySymbol::NotFound,
+        1 => EntrySymbol::Resolved(matches.pop().expect("len == 1")),
+        _ => EntrySymbol::Ambiguous(matches),
+    }
+}
 
 /// Sanitize a rendered path into a C identifier body per D1: collapse
 /// `::` to a single `_`, then map every remaining non-`[A-Za-z0-9_]`
