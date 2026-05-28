@@ -3160,28 +3160,6 @@ fn downcast_place_is_unsupported_d2_1() {
 }
 
 #[test]
-fn enum_discriminant_is_unsupported_d2_1() {
-    let mut m = model();
-    let u32t = uint(&mut m, UintKind::U32);
-    let e_ty = push_simple_enum(&mut m);
-    let sig = fnsig(&mut m, vec![e_ty], u32t, FnAbi::Rust, false);
-    // _0 u32 (ret), _1 E (arg).
-    let body = build_body(
-        1,
-        vec![u32t, e_ty],
-        vec![bb(
-            vec![st(StatementKind::Assign(
-                loc(0),
-                Rvalue::Discriminant(loc(1)),
-            ))],
-            tk(TerminatorKind::Return),
-        )],
-    );
-    fn_instance(&mut m, "disc", sig, Some(body));
-    assert_unsupported(&m);
-}
-
-#[test]
 fn non_enum_discriminant_is_constant_zero() {
     // section 21.2.8: a Discriminant of a non-enum predecessor is the constant 0.
     let mut m = model();
@@ -3201,47 +3179,6 @@ fn non_enum_discriminant_is_constant_zero() {
     fn_instance(&mut m, "disc0", sig, Some(body));
     let tu = emit_generic_c(&m).unwrap();
     assert!(tu.contains("_0 = 0;"), "non-enum discriminant is 0:\n{tu}");
-}
-
-#[test]
-fn enum_aggregate_is_unsupported_d2_1() {
-    let mut m = model();
-    let e_ty = push_simple_enum(&mut m);
-    let sig = fnsig(&mut m, vec![], e_ty, FnAbi::Rust, false);
-    let body = build_body(
-        0,
-        vec![e_ty],
-        vec![bb(
-            vec![st(StatementKind::Assign(
-                loc(0),
-                Rvalue::Aggregate(
-                    AggregateKind::Enum(e_ty, VariantIdx::from_u32(0)),
-                    Box::new([]),
-                ),
-            ))],
-            tk(TerminatorKind::Return),
-        )],
-    );
-    fn_instance(&mut m, "mk_enum", sig, Some(body));
-    assert_unsupported(&m);
-}
-
-#[test]
-fn const_enum_value_is_unsupported_d2_1() {
-    let mut m = model();
-    let ev = m.consts.intern(Const::EnumValue {
-        variant_idx: VariantIdx::from_u32(0),
-        payload: vec![],
-    });
-    fn_with_stmt(
-        &mut m,
-        "cev",
-        st(StatementKind::Assign(
-            loc(0),
-            Rvalue::Use(Operand::Constant(ev)),
-        )),
-    );
-    assert_unsupported(&m);
 }
 
 #[test]
@@ -3638,6 +3575,625 @@ fn structured_data_model_is_byte_identical_across_two_calls() {
             )],
         );
         fn_instance(&mut m, "build_point", sig, Some(body));
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
+}
+
+// ---------------------------------------------------------------------------
+// Task d2.1: section 13 enum tag-ops over the c2 union-of-views. Structural
+// assertions (navigator agreement + the lowered shapes) + the d2.2 fail-loud
+// negatives + determinism. Compile-and-run proof lives in the
+// codegen-coverage-runner behavioral tests.
+// ---------------------------------------------------------------------------
+
+/// `enum Shift { A(u8), B(u32) }` -- the shifted-alignment multi-view Direct
+/// enum (tag u8 @0, A.0 @1, B.0 @4, size 8 align 4): three views (`_tag`,
+/// `_v0`, `_v1`), so the body navigator must use the `u.<member>.` prefix.
+fn push_shift_enum(m: &mut RegseqModel) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let u32t = uint(m, UintKind::U32);
+    let a0 = fl(m, "0", u8t, 1);
+    let b0 = fl(m, "0", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(m, "A", vec![a0], 0, Some(0)),
+            variant(m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    push_enum_instance(m, "Shift", enum_layout(8, 4, shape))
+}
+
+/// `enum AB { A, B(u32) }` -- a multi-view Direct enum with a **fieldless**
+/// variant `A` (tag-only) and a payload-bearing `B` (tag u8 @0, B.0 @4, size 8
+/// align 4): two views (`_tag`, `_v1`).
+fn push_ab_enum(m: &mut RegseqModel) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let u32t = uint(m, UintKind::U32);
+    let b0 = fl(m, "0", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(m, "A", Vec::new(), 0, Some(0)),
+            variant(m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    push_enum_instance(m, "AB", enum_layout(8, 4, shape))
+}
+
+/// `Option<&u32>` -- a `Niche` enum collapsing to an inline single-field
+/// struct (the pointer @0 *is* the tag; None is the niched variant with
+/// `tag_value: Some(0)`). Returns `(enum_ty, &u32 ref ty)`.
+fn push_opt_ref_enum(m: &mut RegseqModel) -> (TyId, TyId) {
+    let u32t = uint(m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let some_field = fl(m, "0", ref_ty, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(m, "None", Vec::new(), 0, Some(0)),
+            variant(m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    let opt = push_enum_instance(m, "Opt", enum_layout(8, 8, shape));
+    (opt, ref_ty)
+}
+
+/// An inline `Niche` enum whose niche cell is a sub-byte of a nested tuple
+/// field (the `Option<(u8, NonZeroU8)>` shape): untagged `Some` holds a
+/// `(u8, u8)` tuple @0; the niche cell is at offset 1 (inside the tuple), so
+/// it does **not** coincide with one top-level inline scalar field.
+fn push_opt_tuple_niche_enum(m: &mut RegseqModel) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let t0 = fl(m, "_0", u8t, 0);
+    let t1 = fl(m, "_1", u8t, 1);
+    let tup = m.types.intern(Ty::Tuple {
+        fields: vec![u8t, u8t],
+        layout: struct_layout(2, 1, None, vec![t0, t1]),
+    });
+    let some_field = fl(m, "0", tup, 0);
+    let tag = TagScalar {
+        offset: 1,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 1, end: 255 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(m, "None", Vec::new(), 0, Some(0)),
+            variant(m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    push_enum_instance(m, "OptT", enum_layout(2, 1, shape))
+}
+
+/// The `EmitError::Unsupported` label `m` fails with (panics if `m` emits Ok
+/// or a different error).
+fn unsupported_reason(m: &RegseqModel) -> &'static str {
+    match emit_generic_c(m) {
+        Err(EmitError::Unsupported(s)) => s,
+        other => panic!("expected Unsupported, got {other:?}"),
+    }
+}
+
+#[test]
+fn enum_downcast_field_spells_multiview_navigator_path() {
+    // `(_1 as B).0` on a multi-view enum -> `_1.u._v1._0`, the SAME member
+    // path `emit_enum` spells in its `offsetof` guard (navigator agreement).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let e_ty = push_shift_enum(&mut m);
+    let sig = fnsig(&mut m, vec![e_ty], u32t, FnAbi::Rust, false);
+    let place = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Downcast(VariantIdx::from_u32(1)),
+            PlaceElem::Field(FieldIdx::from_u32(0), u32t),
+        ]),
+    };
+    let body = build_body(
+        1,
+        vec![u32t, e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Copy(place)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "read_b", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = _1.u._v1._0;"),
+        "downcast+field spells the variant view path:\n{tu}"
+    );
+    assert!(
+        tu.contains("offsetof(struct Shift, u._v1._0)"),
+        "the definition's offsetof guard spells the same path:\n{tu}"
+    );
+}
+
+#[test]
+fn inline_enum_downcast_field_has_no_union_prefix() {
+    // `(_1 as Some).0` on an inline niche enum -> `_1._0` (no `u._v1.` prefix),
+    // matching the collapsed single-field struct definition.
+    let mut m = model();
+    let (opt, ref_ty) = push_opt_ref_enum(&mut m);
+    let sig = fnsig(&mut m, vec![opt], ref_ty, FnAbi::Rust, false);
+    let place = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Downcast(VariantIdx::from_u32(1)),
+            PlaceElem::Field(FieldIdx::from_u32(0), ref_ty),
+        ]),
+    };
+    let body = build_body(
+        1,
+        vec![ref_ty, opt],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Copy(place)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "get_some", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = _1._0;"),
+        "inline enum field has no union prefix:\n{tu}"
+    );
+    assert!(
+        !tu.contains("u._v1._0"),
+        "inline enum must not use a union member path:\n{tu}"
+    );
+}
+
+#[test]
+fn direct_discriminant_maps_tag_to_semantic_discriminant() {
+    // A fieldless Direct enum with explicit discriminants (10, 20) != storage
+    // index: `Discriminant` is a ternary over the inline `_tag` read mapping
+    // each tag_value to the matched variant's semantic discriminant.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 255 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 10, Some(10)),
+            variant(&mut m, "B", Vec::new(), 20, Some(20)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "E", enum_layout(1, 1, shape));
+    let u8r = uint(&mut m, UintKind::U8);
+    let sig = fnsig(&mut m, vec![e_ty], u8r, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![u8r, e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Discriminant(loc(1)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "disc", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_1.tag == ((uint8_t)(10U)) ?"),
+        "ternary over the inline tag read:\n{tu}"
+    );
+    assert!(
+        tu.contains("((uint8_t)(20U))"),
+        "fallthrough is the last variant's discriminant:\n{tu}"
+    );
+}
+
+#[test]
+fn single_enum_discriminant_is_the_variant_discriminant_constant() {
+    // `enum Only { A = 5 }` (Single { scalar: Some }): Discriminant is the
+    // constant 5 (the discriminant, not the storage index 0).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 5, end: 5 },
+    };
+    let shape = EnumShape::Single {
+        variant: variant(&mut m, "A", Vec::new(), 5, Some(5)),
+        scalar: Some(tag),
+    };
+    let e_ty = push_enum_instance(&mut m, "Only", enum_layout(1, 1, shape));
+    let u8r = uint(&mut m, UintKind::U8);
+    let sig = fnsig(&mut m, vec![e_ty], u8r, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![u8r, e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Discriminant(loc(1)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "disc", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0 = ((uint8_t)(5U));"),
+        "single-variant discriminant is the constant:\n{tu}"
+    );
+}
+
+#[test]
+fn niche_discriminant_reads_the_cell_at_the_assign_site() {
+    // `Option<&u32>`: the niche cell has no `_tag` view, so Discriminant reads
+    // it via a section 14.7 byte-storage memcpy into a temp then a ternary with
+    // the untagged-variant fallback.
+    let mut m = model();
+    let (opt, _ref_ty) = push_opt_ref_enum(&mut m);
+    let usize_t = uint(&mut m, UintKind::Usize);
+    let sig = fnsig(&mut m, vec![opt], usize_t, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![usize_t, opt],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Discriminant(loc(1)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "disc", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("memcpy(&_nd, (const unsigned char *)&(_1) + 0, sizeof(_nd));"),
+        "niche read via byte storage at TagScalar.offset:\n{tu}"
+    );
+    assert!(
+        tu.contains("_nd == ((const uint32_t *)0ULL) ?"),
+        "ternary over the niche-cell temp with the untagged fallback:\n{tu}"
+    );
+}
+
+#[test]
+fn enum_construct_direct_writes_tag_and_payload() {
+    // `Shift::B(_1)`: the tag write through `u._tag` and the payload write
+    // through the `_v1` view (disjoint union members).
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let e_ty = push_shift_enum(&mut m);
+    let sig = fnsig(&mut m, vec![u32t], e_ty, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![e_ty, u32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(e_ty, VariantIdx::from_u32(1)),
+                    Box::new([Operand::Copy(loc(1))]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "mk_b", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0.u._tag.tag = ((uint8_t)(1U));"),
+        "tag write through the _tag view:\n{tu}"
+    );
+    assert!(
+        tu.contains("_0.u._v1._0 = _1;"),
+        "payload write through the _v1 view:\n{tu}"
+    );
+}
+
+#[test]
+fn enum_construct_fieldless_direct_writes_only_tag() {
+    // `E::B` of a fieldless Direct enum (collapsed inline to a tag-only
+    // struct): only the inline `tag` member is written, no payload view.
+    let mut m = model();
+    let e_ty = push_simple_enum(&mut m);
+    let sig = fnsig(&mut m, vec![], e_ty, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(e_ty, VariantIdx::from_u32(1)),
+                    Box::new([]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "mk_b", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("_0.tag = ((uint8_t)(1U));"),
+        "fieldless construct writes only the inline tag:\n{tu}"
+    );
+    assert!(
+        !tu.contains("_v"),
+        "no payload view for a fieldless variant:\n{tu}"
+    );
+}
+
+#[test]
+fn set_discriminant_niche_writes_cell_and_untagged_is_a_noop() {
+    // SetDiscriminant on an `Option<&u32>` local: the niched None writes the
+    // niche cell via a section 14.7 memcpy; the untagged Some is a no-op
+    // (elided), so only the memcpy is emitted.
+    let mut m = model();
+    let (opt, _r) = push_opt_ref_enum(&mut m);
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let sig = fnsig(&mut m, vec![opt], unit, FnAbi::Rust, false);
+    let body = build_body(
+        1,
+        vec![unit, opt],
+        vec![bb(
+            vec![
+                st(StatementKind::SetDiscriminant(
+                    loc(1),
+                    VariantIdx::from_u32(0),
+                )),
+                st(StatementKind::SetDiscriminant(
+                    loc(1),
+                    VariantIdx::from_u32(1),
+                )),
+            ],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "setd", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("memcpy((unsigned char *)&(_1) + 0, &(const uint32_t *){((const uint32_t *)0ULL)}, sizeof(const uint32_t *));"),
+        "niche cell write via byte storage:\n{tu}"
+    );
+    // The untagged Some SetDiscriminant is a no-op: exactly one niche memcpy.
+    assert_eq!(
+        tu.matches("memcpy((unsigned char *)&(_1) + 0,").count(),
+        1,
+        "the untagged variant SetDiscriminant is elided:\n{tu}"
+    );
+}
+
+#[test]
+fn enum_construct_niche_niched_writes_only_the_cell() {
+    // `Option<&u32>::None` (niche niched, fieldless): construction writes only
+    // the niche cell (no payload), via the section 14.7 memcpy.
+    let mut m = model();
+    let (opt, _r) = push_opt_ref_enum(&mut m);
+    let sig = fnsig(&mut m, vec![], opt, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![opt],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(opt, VariantIdx::from_u32(0)),
+                    Box::new([]),
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "mk_none", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("memcpy((unsigned char *)&(_0) + 0, &(const uint32_t *){((const uint32_t *)0ULL)}, sizeof(const uint32_t *));"),
+        "niche niched construction writes only the niche cell:\n{tu}"
+    );
+}
+
+#[test]
+fn const_enum_value_fieldless_direct_multiview_designates_the_tag() {
+    // A single-member `Const::EnumValue` for a fieldless variant of a
+    // multi-view Direct enum -> `(struct AB){ .u._tag.tag = <tv> }` (the shared
+    // navigator's nested tag designator).
+    let mut m = model();
+    let e_ty = push_ab_enum(&mut m);
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    let sig = fnsig(&mut m, vec![], e_ty, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(ev)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "ka", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct AB){ .u._tag.tag = ((uint8_t)(0U)) }"),
+        "fieldless multi-view EnumValue designates the navigator tag path:\n{tu}"
+    );
+}
+
+#[test]
+fn const_enum_value_inline_niche_none_designates_the_coinciding_cell() {
+    // A single-member `Const::EnumValue` for `Option<&u32>::None` (inline
+    // niche, the cell coincides with the inline pointer field) ->
+    // `(struct Opt){ ._0 = <tag_value as scalar_ty> }`.
+    let mut m = model();
+    let (opt, _r) = push_opt_ref_enum(&mut m);
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    let sig = fnsig(&mut m, vec![], opt, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![opt],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(ev)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "knone", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct Opt){ ._0 = ((const uint32_t *)0ULL) }"),
+        "inline niche None designates the coinciding cell field:\n{tu}"
+    );
+}
+
+#[test]
+fn const_enum_value_payload_bearing_direct_multiview_is_d2_2() {
+    // A `Const::EnumValue` for a payload-bearing Direct variant in a multi-view
+    // enum needs two members (the _tag and the _v<v> payload) -> task d2.2.
+    let mut m = model();
+    let e_ty = push_ab_enum(&mut m);
+    let child = m.consts.intern(Const::Uint(UintKind::U32, 42));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![child],
+    });
+    let sig = fnsig(&mut m, vec![], e_ty, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(ev)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "kb", sig, Some(body));
+    assert!(
+        unsupported_reason(&m).contains("(multi-member): task d2.2"),
+        "payload-bearing multi-view EnumValue defers to d2.2"
+    );
+}
+
+#[test]
+fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_2() {
+    // An inline niche `Const::EnumValue` whose niche cell is a sub-byte of a
+    // nested aggregate field (no single coinciding inline scalar field) ->
+    // task d2.2 (the narrowed predicate, Change E).
+    let mut m = model();
+    let opt_t = push_opt_tuple_niche_enum(&mut m);
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    let sig = fnsig(&mut m, vec![], opt_t, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![opt_t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(ev)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "knone_t", sig, Some(body));
+    assert!(
+        unsupported_reason(&m).contains("(multi-member): task d2.2"),
+        "non-coinciding niche cell defers to d2.2"
+    );
+}
+
+#[test]
+fn no_task_d2_1_label_remains_in_body_emit() {
+    // The d2.1 seams are filled: no `task d2.1` label may remain in the body
+    // emitter source.
+    let src = include_str!("body_emit.rs");
+    assert!(
+        !src.contains("task d2.1"),
+        "no task d2.1 deferral label may remain in body_emit.rs"
+    );
+}
+
+#[test]
+fn enum_body_model_is_byte_identical_across_two_calls() {
+    let build = || {
+        let mut m = model();
+        let u32t = uint(&mut m, UintKind::U32);
+        let e_ty = push_shift_enum(&mut m);
+        let sig = fnsig(&mut m, vec![u32t], e_ty, FnAbi::Rust, false);
+        let body = build_body(
+            1,
+            vec![e_ty, u32t],
+            vec![bb(
+                vec![st(StatementKind::Assign(
+                    loc(0),
+                    Rvalue::Aggregate(
+                        AggregateKind::Enum(e_ty, VariantIdx::from_u32(1)),
+                        Box::new([Operand::Copy(loc(1))]),
+                    ),
+                ))],
+                tk(TerminatorKind::Return),
+            )],
+        );
+        fn_instance(&mut m, "mk_b", sig, Some(body));
         emit_generic_c(&m).unwrap()
     };
     assert_eq!(build(), build());

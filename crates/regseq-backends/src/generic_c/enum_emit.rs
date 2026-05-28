@@ -40,6 +40,11 @@ struct View {
     /// The `union` member name (`_tag` for the tag cell, `_v<idx>` for a
     /// variant payload).
     member: String,
+    /// `None` for the tag view; `Some(variant_idx)` for a variant payload
+    /// view. The body-side navigator looks views up by this so it reads the
+    /// `member` / field names `build_views` produced rather than re-deriving
+    /// them.
+    variant: Option<usize>,
     /// The view's fields, at their absolute offsets.
     fields: Vec<ViewField>,
 }
@@ -72,26 +77,37 @@ pub(crate) fn emit_enum(
     let mut guards = String::new();
     out.push_str(&format!("struct {enum_name} {{\n"));
 
-    match views.as_slice() {
+    let type_operand = format!("struct {enum_name}");
+    if views.is_empty() {
         // Zero views: a size-faithful struct (an `Empty` enum, or a
         // `Single { scalar: None }` whose sole variant is fieldless). A
         // size-0 uninhabited enum collapses to an empty `struct` (a
         // gnu11 extension).
-        [] => {
-            if layout.size > 0 {
-                out.push_str(&format!("    unsigned char _pad0[{}];\n", layout.size));
-            }
+        if layout.size > 0 {
+            out.push_str(&format!("    unsigned char _pad0[{}];\n", layout.size));
         }
-        // Exactly one view: emit it inline (no `union` wrapper), so a
-        // fieldless `Direct` enum collapses to a tag-only struct (section
-        // 9.8) and a niche `Option<&T>` to a single-field struct (section
-        // 9.9). The designator has no member prefix.
-        [view] => {
-            let type_operand = format!("struct {enum_name}");
+    } else {
+        // One view collapses inline (no `union` wrapper, empty member
+        // prefix), so a fieldless `Direct` enum becomes a tag-only struct
+        // (section 9.8) and a niche `Option<&T>` a single-field struct
+        // (section 9.9); two or more views share a `union { ... } u;` with
+        // the nested `u.<member>.<field>` designator. The inline-vs-`union`
+        // collapse + member-prefix spelling is [`member_prefix`] -- the one
+        // source of truth shared with the body-side navigator (task d2.1),
+        // so the access path cannot drift from this definition.
+        let union_wrap = views.len() >= 2;
+        if union_wrap {
+            out.push_str("    union {\n");
+        }
+        for view in &views {
+            if union_wrap {
+                out.push_str("    struct {\n");
+            }
+            let prefix = member_prefix(&views, &view.member);
             let guard = GuardDesignator {
                 type_operand: &type_operand,
                 label: enum_name,
-                member_prefix: "",
+                member_prefix: &prefix,
             };
             emit_offset_fields(
                 model,
@@ -102,32 +118,11 @@ pub(crate) fn emit_enum(
                 &mut out,
                 &mut guards,
             );
-        }
-        // Two or more views: the `union { ... } u;` wrapper, each view a
-        // section 14 struct padded to the enum size; guards use the nested
-        // `u.<member>.<field>` member designator.
-        _ => {
-            let type_operand = format!("struct {enum_name}");
-            out.push_str("    union {\n");
-            for view in &views {
-                out.push_str("    struct {\n");
-                let prefix = format!("u.{}.", view.member);
-                let guard = GuardDesignator {
-                    type_operand: &type_operand,
-                    label: enum_name,
-                    member_prefix: &prefix,
-                };
-                emit_offset_fields(
-                    model,
-                    names,
-                    &view.fields,
-                    layout.size,
-                    &guard,
-                    &mut out,
-                    &mut guards,
-                );
+            if union_wrap {
                 out.push_str(&format!("    }} {};\n", view.member));
             }
+        }
+        if union_wrap {
             out.push_str("    } u;\n");
         }
     }
@@ -152,6 +147,7 @@ fn build_views(model: &RegseqModel, shape: &EnumShape) -> Vec<View> {
     if let Some(tag) = tag_view_scalar(shape) {
         views.push(View {
             member: "_tag".to_string(),
+            variant: None,
             fields: vec![ViewField {
                 name: "tag".to_string(),
                 ty: tag.scalar_ty,
@@ -164,6 +160,7 @@ fn build_views(model: &RegseqModel, shape: &EnumShape) -> Vec<View> {
         if fields.iter().any(|f| !is_zst(model, f.ty)) {
             views.push(View {
                 member: format!("_v{idx}"),
+                variant: Some(idx),
                 fields,
             });
         }
@@ -230,5 +227,126 @@ fn view_field_name(raw: &str, idx: usize) -> String {
         format!("_{idx}")
     } else {
         s
+    }
+}
+
+/// The C member-designator prefix for a view `member` given the full view
+/// list: empty when the enum collapses to <= 1 view (emitted inline, no
+/// `union` wrapper), else `u.<member>.` (the shared `union { ... } u;`).
+///
+/// This is the single source of truth for the inline-vs-`union` collapse,
+/// consumed by both [`emit_enum`] (the definition + its `offsetof` guards)
+/// and the body-side navigator below (task d2.1's `Downcast`/`Field`,
+/// `SetDiscriminant`, `Aggregate::Enum`, `Const::EnumValue` access), so the
+/// access path can never disagree with the emitted member path.
+fn member_prefix(views: &[View], member: &str) -> String {
+    if views.len() <= 1 {
+        String::new()
+    } else {
+        format!("u.{member}.")
+    }
+}
+
+// -- task d2.1 body-side navigator (the shared source of truth) -----------
+
+/// The tag cell of an enum, as the body side accesses it (task d2.1). A thin
+/// read of [`build_views`] / [`tag_view_scalar`] / [`TagScalar`]; recomputes
+/// no offset, tag value, or name.
+pub(super) enum EnumTag {
+    /// A `_tag` view exists (`Single { scalar: Some }` / `Multiple { Direct }`):
+    /// the cell is the member at `member_path` (`tag` inline / `u._tag.tag`
+    /// multi-view) of logical C type `scalar_ty`.
+    View {
+        /// The member designator suffix appended to the enum lvalue.
+        member_path: String,
+        /// The tag scalar's logical type.
+        scalar_ty: TyId,
+    },
+    /// A niche cell (`Multiple { Niche }`): no view -- a byte region at
+    /// `offset` of logical type `scalar_ty`, accessed via the section 14.7
+    /// byte-storage (memcpy) technique.
+    Niche {
+        /// Byte offset of the niche cell within the enum object.
+        offset: u64,
+        /// The niche scalar's logical type.
+        scalar_ty: TyId,
+    },
+    /// No tag bytes (`Single { scalar: None }` / `Empty`).
+    None,
+}
+
+/// Resolve the [`EnumShape`] of an enum `ty`, or `None` if `ty` is not an
+/// enum. The body-side entry point into the shared enum machinery.
+pub(super) fn enum_shape(model: &RegseqModel, ty: TyId) -> Option<&EnumShape> {
+    match &model.types[ty] {
+        Ty::Enum { layout, .. } => match &layout.kind {
+            LayoutKind::Enum { shape } => Some(shape),
+            _ => None,
+        },
+        _ => None,
+    }
+}
+
+/// Whether `shape` collapses to its single view inline (no `union` wrapper,
+/// empty member prefix): true for 0 or 1 views. The body side consults this
+/// for the `Const::EnumValue` designator (task d2.1).
+pub(super) fn enum_is_inline(model: &RegseqModel, shape: &EnumShape) -> bool {
+    build_views(model, shape).len() <= 1
+}
+
+/// The C member-designator suffix + post-narrow type for variant `variant_idx`'s
+/// payload field `field_idx` of enum `enum_ty`: `u._v<variant>.<name>`
+/// (multi-view) or `<name>` (inline). The `_v<variant>` member name and the
+/// `<name>` payload field name are read straight from the [`View`] /
+/// [`ViewField`] [`build_views`] produced (not re-derived), so they match the
+/// emitted definition exactly. `None` when the variant contributes no view
+/// (all fields ZST), the field is ZST (omitted from the view), or out of range
+/// -- a caller-handled signal, not a silent default.
+pub(super) fn enum_variant_field(
+    model: &RegseqModel,
+    enum_ty: TyId,
+    variant_idx: usize,
+    field_idx: usize,
+) -> Option<(String, TyId)> {
+    let shape = enum_shape(model, enum_ty)?;
+    let views = build_views(model, shape);
+    let view = views.iter().find(|v| v.variant == Some(variant_idx))?;
+    let field = view.fields.get(field_idx)?;
+    if is_zst(model, field.ty) {
+        return None;
+    }
+    let prefix = member_prefix(&views, &view.member);
+    Some((format!("{prefix}{}", field.name), field.ty))
+}
+
+/// The tag cell descriptor for `shape` (task d2.1). The `_tag` view member /
+/// field names are read straight from the [`View`] [`build_views`] produced
+/// (not re-derived); the niche cell reads [`TagScalar`] directly -- never
+/// re-deriving the niche formula.
+pub(super) fn enum_tag(model: &RegseqModel, shape: &EnumShape) -> EnumTag {
+    if let Some(tag) = tag_view_scalar(shape) {
+        let views = build_views(model, shape);
+        // The tag view is the one with `variant == None`; its single field is
+        // the `tag` cell. Read both names from `build_views`.
+        let view = views
+            .iter()
+            .find(|v| v.variant.is_none())
+            .expect("a tag scalar implies a tag view");
+        let prefix = member_prefix(&views, &view.member);
+        return EnumTag::View {
+            member_path: format!("{prefix}{}", view.fields[0].name),
+            scalar_ty: tag.scalar_ty,
+        };
+    }
+    match shape {
+        EnumShape::Multiple {
+            tag,
+            encoding: TagEncoding::Niche { .. },
+            ..
+        } => EnumTag::Niche {
+            offset: tag.offset,
+            scalar_ty: tag.scalar_ty,
+        },
+        _ => EnumTag::None,
     }
 }

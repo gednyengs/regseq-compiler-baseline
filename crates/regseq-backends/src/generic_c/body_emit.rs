@@ -14,21 +14,26 @@
 //! 14 field access, the section 10 `Aggregate` / `Repeat` rvalues, the
 //! `PtrMetadata` slot read + non-enum `Discriminant`, section 11 slice/str
 //! fat-pointer construction (`Unsize` + `Ref`/`RawPtr`-to-unsized), and the
-//! section 10.1 `*WithOverflow` result `(T, bool)`. The remaining deferrals
-//! still fail loud via [`EmitError::Unsupported`]: enum tag-ops (`Downcast`,
-//! enum `Discriminant`, `SetDiscriminant`, `Aggregate::Enum`,
-//! `Const::EnumValue`) are task d2.1; all non-scalar `Const` (`Bytes` /
-//! `Aggregate`) are task d2.2; `dyn` / vtable construction is the vtable
-//! task. Diag-log call-site interception is **task e**.
+//! section 10.1 `*WithOverflow` result `(T, bool)`. Task d2.1 adds the
+//! section 13 enum tag-ops over the c2 union-of-views (`Downcast`+`Field`,
+//! enum `Discriminant`, `SetDiscriminant`, `Aggregate::Enum`, single-member
+//! `Const::EnumValue`). The remaining deferrals still fail loud via
+//! [`EmitError::Unsupported`]: all non-scalar `Const` (`Bytes` / `Aggregate`)
+//! plus the multi-member `Const::EnumValue` are task d2.2; `dyn` / vtable
+//! construction is the vtable task. Diag-log call-site interception is
+//! **task e**.
 
 use regseq_model::{
-    AggregateKind, AssertKind, AttrData, BinOp, CallCallee, CastKind, Const, FloatKind, InstanceId,
-    InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId, NonDivergingIntrinsic, Operand,
-    Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
-    TerminatorKind, Ty, TyId, UintKind, UnOp,
+    AggregateKind, AssertKind, AttrData, BinOp, CallCallee, CastKind, Const, ConstId, EnumShape,
+    FloatKind, InstanceId, InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId,
+    NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue,
+    StatementKind, SwitchTargets, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp,
+    VariantIdx, VariantLayout,
 };
 
-use super::{layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable};
+use super::{
+    enum_emit, layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable,
+};
 
 /// The C identifier for a body-local `local`. The return place is always
 /// `_0`; otherwise the sanitised `debug_name` when `Some`, else the
@@ -164,10 +169,10 @@ impl BodyEmit<'_> {
     /// The resolved type of a place: the head local's type narrowed through
     /// the full section 19.4 projection chain (shared with [`Self::place_lvalue`]
     /// via [`Self::place_walk`], so the lvalue and type cannot drift).
-    /// Infallible: on a deferred construct (`Downcast` / `dyn` `Deref`)
-    /// [`Self::place_walk`] errors and [`Self::place_lvalue`] (also via
-    /// `place_walk`) fails loud at the use site, so the head-local fallback
-    /// type returned here is never consumed for emission.
+    /// Infallible: on a deferred construct (a `dyn` `Deref`, or a malformed
+    /// `Downcast`) [`Self::place_walk`] errors and [`Self::place_lvalue`]
+    /// (also via `place_walk`) fails loud at the use site, so the head-local
+    /// fallback type returned here is never consumed for emission.
     fn place_ty(&self, place: &Place) -> TyId {
         self.place_walk(place)
             .map(|w| w.ty)
@@ -309,8 +314,8 @@ impl BodyEmit<'_> {
     fn statement(&self, kind: &StatementKind) -> Result<Option<String>, EmitError> {
         match kind {
             StatementKind::Assign(place, rvalue) => self.assign(place, rvalue),
-            StatementKind::SetDiscriminant(_, _) => {
-                Err(EmitError::Unsupported("SetDiscriminant (task d2.1)"))
+            StatementKind::SetDiscriminant(place, variant) => {
+                self.set_discriminant(place, variant.index())
             }
             StatementKind::Intrinsic(intr) => Ok(Some(self.intrinsic(intr)?)),
         }
@@ -347,6 +352,19 @@ impl BodyEmit<'_> {
             }
             Rvalue::Aggregate(AggregateKind::Array(_), ops) => {
                 return self.assign_array(&dst, dst_ty, ops);
+            }
+            Rvalue::Aggregate(AggregateKind::Enum(enum_ty, variant), ops) => {
+                // Enum construction is a tag write + disjoint payload-field
+                // writes through the variant views (C forbids a single
+                // compound literal designating two union members), so it
+                // lowers at the assign site like the array cases (Change D).
+                return self.assign_enum(&dst, *enum_ty, variant.index(), ops, zst);
+            }
+            Rvalue::Discriminant(place) if self.is_niche_discriminant_place(place) => {
+                // The niche cell has no `_tag` view (section 13); the read is
+                // a section 14.7 byte-storage memcpy into a temp then a
+                // ternary, so it lowers at the assign site (Change C).
+                return self.assign_niche_discriminant(&dst, dst_ty, place, zst);
             }
             Rvalue::Aggregate(kind, ops)
                 if Self::is_struct_like(kind) && self.has_array_operand(ops) =>
@@ -586,6 +604,275 @@ impl BodyEmit<'_> {
         )))
     }
 
+    // -- section 13 enum tag-ops ---------------------------------------------
+
+    /// Whether a `Discriminant(place)` reads a `Multiple { Niche }` enum (the
+    /// niche cell has no `_tag` view, so the read lowers at the assign site).
+    fn is_niche_discriminant_place(&self, place: &Place) -> bool {
+        matches!(
+            enum_emit::enum_shape(self.model, self.place_ty(place)),
+            Some(EnumShape::Multiple {
+                encoding: TagEncoding::Niche { .. },
+                ..
+            })
+        )
+    }
+
+    /// `Discriminant(place)` as a pure C expression (section 13 / 21.2.8). A
+    /// non-enum predecessor yields the constant `0`; an enum yields the
+    /// **matched variant's `discriminant`** (not the raw cell, not
+    /// `tag_value`). The `Multiple { Niche }` case has no `_tag` view and is
+    /// handled at the assign site ([`Self::assign_niche_discriminant`]), so it
+    /// is defensive here. `result_ty` renders the discriminant literal.
+    fn discriminant_expr(&self, place: &Place, result_ty: TyId) -> Result<String, EmitError> {
+        let ty = self.place_ty(place);
+        let Some(shape) = enum_emit::enum_shape(self.model, ty) else {
+            // Section 21.2.8: a non-enum predecessor's discriminant is 0.
+            return Ok("0".to_string());
+        };
+        match shape {
+            // An uninhabited enum has no runtime value, so `Discriminant` on
+            // it is statically unreachable; a defensive `0` keeps the (dead)
+            // expression well-typed.
+            EnumShape::Empty => Ok("0".to_string()),
+            EnumShape::Single { variant, .. } => {
+                render_discriminant(self.model, result_ty, variant.discriminant)
+            }
+            EnumShape::Multiple {
+                encoding: TagEncoding::Direct,
+                variants,
+                ..
+            } => {
+                let enum_lv = self.place_lvalue(place)?;
+                let (member, scalar_ty) = match enum_emit::enum_tag(self.model, shape) {
+                    enum_emit::EnumTag::View {
+                        member_path,
+                        scalar_ty,
+                    } => (member_path, scalar_ty),
+                    _ => {
+                        return Err(EmitError::Unsupported(
+                            "Direct enum without a tag view (malformed layout)",
+                        ))
+                    }
+                };
+                self.direct_discriminant_ternary(&enum_lv, &member, scalar_ty, variants, result_ty)
+            }
+            EnumShape::Multiple {
+                encoding: TagEncoding::Niche { .. },
+                ..
+            } => Err(EmitError::Unsupported(
+                "niche Discriminant outside an assignment (assign-site only)",
+            )),
+        }
+    }
+
+    /// The `Multiple { Direct }` discriminant ternary over the `_tag` read:
+    /// `(<read> == <tv0> ? <d0> : ... : <d_last>)`. `tvN` is rendered per the
+    /// tag `scalar_ty`, `dN` per `result_ty`; the last variant is the
+    /// fallthrough. Deterministic in variant order.
+    fn direct_discriminant_ternary(
+        &self,
+        enum_lv: &str,
+        tag_member: &str,
+        scalar_ty: TyId,
+        variants: &[VariantLayout],
+        result_ty: TyId,
+    ) -> Result<String, EmitError> {
+        if variants.is_empty() {
+            return Err(EmitError::Unsupported("Multiple enum with no variants"));
+        }
+        let tag_read = format!("{enum_lv}.{tag_member}");
+        let n = variants.len();
+        let mut expr = render_discriminant(self.model, result_ty, variants[n - 1].discriminant)?;
+        for v in variants[..n - 1].iter().rev() {
+            let tv = v.tag_value.ok_or(EmitError::Unsupported(
+                "Direct variant without a tag_value (malformed layout)",
+            ))?;
+            let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
+            let d = render_discriminant(self.model, result_ty, v.discriminant)?;
+            expr = format!("({tag_read} == {tvr} ? {d} : {expr})");
+        }
+        Ok(expr)
+    }
+
+    /// `Discriminant` of a `Multiple { Niche }` enum at the assign site: the
+    /// niche cell has no `_tag` view, so read it via the section 14.7 byte-
+    /// storage technique (memcpy into a typed temp, sound under `-std=gnu11`
+    /// with no `-fno-strict-aliasing`), then a ternary over the **niched**
+    /// variants (`tag_value: Some`) falling through to the `untagged_variant`'s
+    /// `discriminant` (section 13 "no match -> untagged_variant"). The temp
+    /// ([`Self::fresh_temp_name`]) lives in its own block scope.
+    fn assign_niche_discriminant(
+        &self,
+        dst: &str,
+        dst_ty: TyId,
+        enum_place: &Place,
+        zst: bool,
+    ) -> Result<Option<String>, EmitError> {
+        let ty = self.place_ty(enum_place);
+        let shape = enum_emit::enum_shape(self.model, ty).ok_or(EmitError::Unsupported(
+            "niche Discriminant on a non-enum place",
+        ))?;
+        let (untagged, variants) = match shape {
+            EnumShape::Multiple {
+                encoding:
+                    TagEncoding::Niche {
+                        untagged_variant, ..
+                    },
+                variants,
+                ..
+            } => (untagged_variant.index(), variants.as_slice()),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "assign_niche_discriminant on a non-niche enum",
+                ))
+            }
+        };
+        let (offset, scalar_ty) = match enum_emit::enum_tag(self.model, shape) {
+            enum_emit::EnumTag::Niche { offset, scalar_ty } => (offset, scalar_ty),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "niche enum without a niche cell (malformed layout)",
+                ))
+            }
+        };
+        let enum_lv = self.place_lvalue(enum_place)?;
+        // The discriminant result is an integer, never ZST; defensive guard.
+        if zst {
+            return Ok(None);
+        }
+        let untagged_disc = variants
+            .get(untagged)
+            .ok_or(EmitError::Unsupported(
+                "niche untagged variant index out of range",
+            ))?
+            .discriminant;
+        let mut expr = render_discriminant(self.model, dst_ty, untagged_disc)?;
+        let tmp = self.fresh_temp_name("_nd");
+        for v in variants.iter().rev() {
+            if let Some(tv) = v.tag_value {
+                let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
+                let d = render_discriminant(self.model, dst_ty, v.discriminant)?;
+                expr = format!("({tmp} == {tvr} ? {d} : {expr})");
+            }
+        }
+        let tmp_cty = types::c_type(self.model, self.names, scalar_ty);
+        Ok(Some(format!(
+            "{{ {tmp_cty} {tmp}; memcpy(&{tmp}, (const unsigned char *)&({enum_lv}) + {offset}, \
+             sizeof({tmp})); {dst} = {expr}; }}"
+        )))
+    }
+
+    /// `SetDiscriminant(place, v)` (section 13): resolve the enum lvalue, then
+    /// write `VariantLayout[v].tag_value` to the tag cell -- the `_tag` view
+    /// member (`Direct` / `Single { scalar: Some }`), or the niche cell via a
+    /// section 14.7 memcpy (`Niche` niched). A `Niche` untagged variant /
+    /// `Single { scalar: None }` is a no-op (the statement is elided).
+    fn set_discriminant(&self, place: &Place, v: usize) -> Result<Option<String>, EmitError> {
+        let walk = self.place_walk(place)?;
+        let shape = enum_emit::enum_shape(self.model, walk.ty).ok_or(EmitError::Unsupported(
+            "SetDiscriminant on a non-enum place",
+        ))?;
+        self.emit_set_discriminant(&walk.lvalue, shape, v)
+    }
+
+    /// The tag-write statement for variant `v` of `shape` at the (already
+    /// resolved) enum lvalue `enum_lv`, or `None` when the variant writes no
+    /// tag bytes. Shared by [`Self::set_discriminant`] and the construction
+    /// path ([`Self::assign_enum`]).
+    fn emit_set_discriminant(
+        &self,
+        enum_lv: &str,
+        shape: &EnumShape,
+        v: usize,
+    ) -> Result<Option<String>, EmitError> {
+        let tag_value = variant_layout(shape, v)
+            .ok_or(EmitError::Unsupported(
+                "SetDiscriminant variant index out of range",
+            ))?
+            .tag_value;
+        match enum_emit::enum_tag(self.model, shape) {
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } => match tag_value {
+                Some(tv) => {
+                    let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
+                    Ok(Some(format!("{enum_lv}.{member_path} = {tvr};")))
+                }
+                // A tag-view variant always carries a `tag_value`; defensive.
+                None => Ok(None),
+            },
+            enum_emit::EnumTag::Niche { offset, scalar_ty } => match tag_value {
+                Some(tv) => {
+                    let scalar_cty = types::c_type(self.model, self.names, scalar_ty);
+                    let tvr = render_tag_value(self.model, self.names, scalar_ty, tv)?;
+                    Ok(Some(format!(
+                        "memcpy((unsigned char *)&({enum_lv}) + {offset}, &({scalar_cty}){{{tvr}}}, \
+                         sizeof({scalar_cty}));"
+                    )))
+                }
+                // Niche untagged variant: the payload is the tag -> no-op.
+                None => Ok(None),
+            },
+            // Single { scalar: None } / Empty: no tag bytes -> no-op.
+            enum_emit::EnumTag::None => Ok(None),
+        }
+    }
+
+    /// `Aggregate::Enum(ty, v)` at the assign site (section 13): the tag write
+    /// (per the variant's encoding) followed by each non-ZST payload field,
+    /// written through the variant view at its naturally-aligned offset (a
+    /// direct member access; an array-typed field via `memcpy`, the d2 array
+    /// rule). Tag and payload occupy disjoint byte ranges aliased through
+    /// different `union` members; tag-first for determinism.
+    fn assign_enum(
+        &self,
+        dst: &str,
+        enum_ty: TyId,
+        v: usize,
+        ops: &[Operand],
+        zst: bool,
+    ) -> Result<Option<String>, EmitError> {
+        let shape = enum_emit::enum_shape(self.model, enum_ty)
+            .ok_or(EmitError::Unsupported("Aggregate::Enum on a non-enum type"))?;
+        let mut stmts = Vec::new();
+        if let Some(tag_stmt) = self.emit_set_discriminant(dst, shape, v)? {
+            stmts.push(tag_stmt);
+        }
+        for (i, op) in ops.iter().enumerate() {
+            if self.is_zst_operand(op) {
+                continue;
+            }
+            match enum_emit::enum_variant_field(self.model, enum_ty, v, i) {
+                Some((member_path, fty)) => {
+                    if matches!(self.model.types[fty], Ty::Array(_, _)) {
+                        let src = self.operand_addr(op)?;
+                        stmts.push(format!(
+                            "memcpy(&{dst}.{member_path}, {src}, sizeof({dst}.{member_path}));"
+                        ));
+                    } else {
+                        let e = self.operand_expr(op, Some(fty))?;
+                        stmts.push(format!("{dst}.{member_path} = {e};"));
+                    }
+                }
+                None => {
+                    // A non-ZST operand with no view field is a navigation
+                    // mismatch (a ZST operand was skipped above). Validate the
+                    // operand, then fail loud rather than drop the write.
+                    let _ = self.operand_expr(op, None)?;
+                    return Err(EmitError::Unsupported(
+                        "enum construction payload field navigation failed",
+                    ));
+                }
+            }
+        }
+        if zst {
+            return Ok(None);
+        }
+        Ok(Some(stmts.join(" ")))
+    }
+
     /// `Intrinsic(..)` (section 6): the portable `Assume` form and the
     /// named-field `CopyNonOverlapping` -> `memcpy`.
     fn intrinsic(&self, intr: &NonDivergingIntrinsic) -> Result<String, EmitError> {
@@ -636,13 +923,17 @@ impl BodyEmit<'_> {
     ///   records the `from` offset + sub-array element so a follow-on index
     ///   offsets by `from`; the lvalue base is unchanged (a slice `Subslice`
     ///   is unsized and is materialised only under a `Ref`, [`Self::ref_expr`]).
-    /// - `Downcast` -> task d2.1.
+    /// - `Downcast(v)` -> records a pending variant the following `Field`
+    ///   consumes to spell the variant payload member path (section 13).
     fn place_walk(&self, place: &Place) -> Result<PlaceWalk, EmitError> {
         let mut lv = local_c_name(self.model, self.body, place.local);
         let mut ty = self.body.local_decls[place.local].ty;
         let mut fat_base: Option<String> = None;
         let mut pending_from: Option<u64> = None;
         let mut sub_array_elem: Option<TyId> = None;
+        // Set by a `Downcast(v)`; consumed by the following `Field` to spell
+        // the variant payload member path (I-Downcast-followed-by-Field).
+        let mut pending_variant: Option<usize> = None;
 
         for elem in place.projection.iter() {
             match elem {
@@ -677,11 +968,34 @@ impl BodyEmit<'_> {
                     sub_array_elem = None;
                 }
                 PlaceElem::Field(idx, field_ty) => {
-                    let (name, _) = layout_emit::field_c_name_ty(self.model, ty, idx.index())
-                        .ok_or(EmitError::Unsupported(
+                    if let Some(v) = pending_variant.take() {
+                        // Enum variant payload field: spell the variant view
+                        // member path via the shared `enum_emit` navigator
+                        // (Change A), so it matches the emitted definition.
+                        // Payload views are naturally aligned, so this is a
+                        // direct member access (no section 14.7 memcpy).
+                        match enum_emit::enum_variant_field(self.model, ty, v, idx.index()) {
+                            Some((member_path, _)) => lv = format!("{lv}.{member_path}"),
+                            None => {
+                                // The navigator omits ZST payload fields from
+                                // the view; a ZST field's lvalue is never
+                                // materialised (ZST-elision drops its
+                                // assignment), so leave `lv` unchanged. A
+                                // non-ZST `None` is a real navigation failure.
+                                if !self.is_zst(*field_ty) {
+                                    return Err(EmitError::Unsupported(
+                                        "enum variant payload field navigation failed",
+                                    ));
+                                }
+                            }
+                        }
+                    } else {
+                        let (name, _) = layout_emit::field_c_name_ty(self.model, ty, idx.index())
+                            .ok_or(EmitError::Unsupported(
                             "Field projection of a non-aggregate predecessor",
                         ))?;
-                    lv = format!("{lv}.{name}");
+                        lv = format!("{lv}.{name}");
+                    }
                     ty = *field_ty;
                     fat_base = None;
                     pending_from = None;
@@ -739,12 +1053,24 @@ impl BodyEmit<'_> {
                     let _ = to;
                     fat_base = None;
                 }
-                PlaceElem::Downcast(_) => {
-                    return Err(EmitError::Unsupported(
-                        "Downcast place projection (task d2.1)",
-                    ));
+                PlaceElem::Downcast(v) => {
+                    // Record the active variant; the running `ty` stays the
+                    // enum (the section 19.4 narrowing is realised by the
+                    // following `Field`'s carried type). By
+                    // I-Downcast-followed-by-Field the next elem is a `Field`.
+                    pending_variant = Some(v.index());
+                    fat_base = None;
+                    pending_from = None;
+                    sub_array_elem = None;
                 }
             }
+        }
+        // A `Downcast` is never last (I-Downcast-followed-by-Field); a still-
+        // pending variant means a malformed place.
+        if pending_variant.is_some() {
+            return Err(EmitError::Unsupported(
+                "Downcast not followed by a Field (malformed place)",
+            ));
         }
         Ok(PlaceWalk {
             lvalue: lv,
@@ -818,16 +1144,7 @@ impl BodyEmit<'_> {
             Rvalue::Repeat(_, _) => Err(EmitError::Unsupported(
                 "Rvalue::Repeat outside an assignment (task d2)",
             )),
-            Rvalue::Discriminant(place) => {
-                // Section 21.2.8: a non-enum predecessor yields the constant 0;
-                // an enum predecessor reads the tag / niche (task d2.1).
-                match &self.model.types[self.place_ty(place)] {
-                    Ty::Enum { .. } => Err(EmitError::Unsupported(
-                        "Discriminant of an enum (task d2.1)",
-                    )),
-                    _ => Ok("0".to_string()),
-                }
-            }
+            Rvalue::Discriminant(place) => self.discriminant_expr(place, dest_ty),
             Rvalue::Aggregate(kind, ops) => self.aggregate_expr(kind, ops, dest_ty),
         }
     }
@@ -1003,8 +1320,8 @@ impl BodyEmit<'_> {
 
     /// `Aggregate(kind, ops)` (section 10) for the non-enum, expression-shaped
     /// kinds (struct / tuple / union / closure compound literals + raw
-    /// pointers). Array aggregates are handled at the assign site (boundary 6);
-    /// `Enum` is task d2.1; a `dyn` raw pointer is the vtable task.
+    /// pointers). Array and `Enum` aggregates are handled at the assign site
+    /// (boundary 6 / section 13); a `dyn` raw pointer is the vtable task.
     fn aggregate_expr(
         &self,
         kind: &AggregateKind,
@@ -1020,7 +1337,11 @@ impl BodyEmit<'_> {
             AggregateKind::Array(_) => Err(EmitError::Unsupported(
                 "Array aggregate outside an assignment (task d2)",
             )),
-            AggregateKind::Enum(_, _) => Err(EmitError::Unsupported("Aggregate::Enum (task d2.1)")),
+            // Enum construction lowers at the assign site (tag + disjoint
+            // payload writes), mirroring `Array`; reaching here is defensive.
+            AggregateKind::Enum(_, _) => Err(EmitError::Unsupported(
+                "Aggregate::Enum outside an assignment (assign-site only)",
+            )),
         }
     }
 
@@ -1635,10 +1956,11 @@ pub(super) fn static_initializer(
 }
 
 /// `Const` -> C value expression / initializer (section 12), for the d1
-/// subset. `consumer_ty` supplies the pointer type for a `Reloc` to a static
-/// and the exact pointer spelling for a `NullPtr`. The non-scalar forms are
-/// still deferred: `Bytes` / `Aggregate` are task d2.2 (the whole non-scalar
-/// const lowering), `EnumValue` is task d2.1.
+/// scalar subset plus the section 13 single-member `EnumValue` literal.
+/// `consumer_ty` supplies the pointer type for a `Reloc` to a static, the
+/// exact pointer spelling for a `NullPtr`, and the enum type for an
+/// `EnumValue`. The non-scalar forms are still deferred: `Bytes` / `Aggregate`
+/// and the multi-member `EnumValue` are task d2.2.
 fn const_expr(
     model: &RegseqModel,
     names: &NameTable,
@@ -1667,7 +1989,268 @@ fn const_expr(
         Const::Reloc(target) => Ok(reloc_designator(model, names, syms, *target, consumer_ty)),
         Const::Bytes(_) => Err(EmitError::Unsupported("Const::Bytes (task d2.2)")),
         Const::Aggregate(_) => Err(EmitError::Unsupported("Const::Aggregate (task d2.2)")),
-        Const::EnumValue { .. } => Err(EmitError::Unsupported("Const::EnumValue (task d2.1)")),
+        Const::EnumValue {
+            variant_idx,
+            payload,
+        } => enum_value_expr(model, names, syms, consumer_ty, *variant_idx, payload),
+    }
+}
+
+/// `Const::EnumValue` (section 13 / 12): the **single-member** cases lower to
+/// one C compound literal; everything requiring two members relabels to task
+/// d2.2.
+///
+/// - inline enum (<= 1 view): a fieldless-collapsed `Direct` / `Single {
+///   scalar: Some }` tag view -> `(struct E){ .tag = <tag_value> }`; a
+///   `Single { scalar: None }` / niche **untagged** payload -> the payload
+///   children (ZST omitted); a niche **niched** variant -> `(struct E){ .<F>
+///   = <tag_value> }` **only** when its niche cell coincides exactly with one
+///   inline scalar field `F` (else task d2.2);
+/// - multi-view enum: a **fieldless** `Direct` variant -> `(struct E){
+///   .u._tag = { .tag = <tag_value> } }`; anything else (a payload-bearing
+///   `Direct` variant -> two members; any niche-cell write in a multi-view
+///   enum) -> `EmitError::Unsupported` labelled task d2.2.
+///
+/// A non-scalar payload child (`Bytes` / `Aggregate` / a deferred
+/// `EnumValue`) **transitively defers** when [`const_expr`] recurses into it.
+fn enum_value_expr(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    consumer_ty: Option<TyId>,
+    variant_idx: VariantIdx,
+    payload: &[ConstId],
+) -> Result<String, EmitError> {
+    let enum_ty = consumer_ty.ok_or(EmitError::Unsupported(
+        "Const::EnumValue without a known enum type (task d2.2)",
+    ))?;
+    let shape = enum_emit::enum_shape(model, enum_ty).ok_or(EmitError::Unsupported(
+        "Const::EnumValue with a non-enum consumer (task d2.2)",
+    ))?;
+    let v = variant_idx.index();
+    let agg = names.agg_name(enum_ty).to_string();
+
+    // Lower EVERY payload child through `const_expr` up front (whatever the
+    // single-member shape turns out to be), so a non-scalar child -- including
+    // one of an omitted ZST field -- transitively defers to its own d2.2 arm
+    // before any designator is built. `kept` is the designators for the
+    // non-ZST (in-view) fields; the omitted ZST fields contribute none.
+    let kept = lower_enum_payload(model, names, syms, enum_ty, v, payload)?;
+
+    if enum_emit::enum_is_inline(model, shape) {
+        match enum_emit::enum_tag(model, shape) {
+            // Inline tag view: all variants are fieldless (a payload would add
+            // a second view), so the single view is `_tag`. The designator is
+            // the shared navigator's tag member path (`tag` inline), never a
+            // re-derived name.
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } => enum_value_tag_literal(model, names, &agg, shape, v, &member_path, scalar_ty),
+            // Inline, no tag (Single { scalar: None }): the payload children.
+            enum_emit::EnumTag::None => Ok(enum_value_payload_literal(&agg, &kept)),
+            // Inline niche.
+            enum_emit::EnumTag::Niche { offset, scalar_ty } => {
+                let variant = variant_layout(shape, v).ok_or(EmitError::Unsupported(
+                    "Const::EnumValue variant index out of range (task d2.2)",
+                ))?;
+                match variant.tag_value {
+                    // A niched variant: write the niche cell, only when it
+                    // coincides exactly with one inline scalar field.
+                    Some(tv) => {
+                        let (fname, _) =
+                            niche_coinciding_field(model, enum_ty, shape, offset, scalar_ty)
+                                .ok_or(EmitError::Unsupported(
+                                    "Const::EnumValue (multi-member): task d2.2",
+                                ))?;
+                        let tvr = render_tag_value(model, names, scalar_ty, tv)?;
+                        Ok(format!("(struct {agg}){{ .{fname} = {tvr} }}"))
+                    }
+                    // The untagged variant: the payload IS the value.
+                    None => Ok(enum_value_payload_literal(&agg, &kept)),
+                }
+            }
+        }
+    } else {
+        match enum_emit::enum_tag(model, shape) {
+            // A multi-view `Direct` enum: only a fieldless variant (the `_tag`
+            // member alone) is single-member; a payload-bearing variant needs
+            // the `_tag` member and the `_v<v>` payload member -> task d2.2.
+            // The designator is the navigator's nested tag member path
+            // (`u._tag.tag`), a valid C99 designator-list.
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } if payload_all_zst(model, shape, v) => {
+                enum_value_tag_literal(model, names, &agg, shape, v, &member_path, scalar_ty)
+            }
+            // A payload-bearing `Direct` variant, or any niche-cell write in a
+            // multi-view enum: two members.
+            _ => Err(EmitError::Unsupported(
+                "Const::EnumValue (multi-member): task d2.2",
+            )),
+        }
+    }
+}
+
+/// Lower every `Const::EnumValue` payload child through [`const_expr`],
+/// returning the designators for the non-ZST (in-view) fields. Children of
+/// omitted (ZST / no-view) fields are still lowered -- so a non-scalar child
+/// (`Bytes` / `Aggregate` / a deferred `EnumValue`) transitively defers to its
+/// own d2.2 arm -- but contribute no designator (matching the view).
+fn lower_enum_payload(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    enum_ty: TyId,
+    v: usize,
+    payload: &[ConstId],
+) -> Result<Vec<String>, EmitError> {
+    let mut inits = Vec::new();
+    for (i, child_id) in payload.iter().enumerate() {
+        let child = model.consts.resolve(*child_id);
+        match enum_emit::enum_variant_field(model, enum_ty, v, i) {
+            Some((member_path, fty)) => {
+                let e = const_expr(model, names, syms, child, Some(fty))?;
+                inits.push(format!(".{member_path} = {e}"));
+            }
+            None => {
+                let _ = const_expr(model, names, syms, child, None)?;
+            }
+        }
+    }
+    Ok(inits)
+}
+
+/// The single-member tag designator literal for a fieldless variant `v`:
+/// `(struct E){ .<tag_member_path> = <tag_value> }`, where `tag_member_path`
+/// is the shared navigator's tag cell path (`tag` inline / `u._tag.tag`
+/// multi-view, both valid C designator-lists) -- not a re-derived name.
+fn enum_value_tag_literal(
+    model: &RegseqModel,
+    names: &NameTable,
+    agg: &str,
+    shape: &EnumShape,
+    v: usize,
+    tag_member_path: &str,
+    scalar_ty: TyId,
+) -> Result<String, EmitError> {
+    let tv = variant_layout(shape, v)
+        .and_then(|vl| vl.tag_value)
+        .ok_or(EmitError::Unsupported(
+            "Const::EnumValue (multi-member): task d2.2",
+        ))?;
+    let tvr = render_tag_value(model, names, scalar_ty, tv)?;
+    Ok(format!("(struct {agg}){{ .{tag_member_path} = {tvr} }}"))
+}
+
+/// Assemble the payload-field compound literal from the already-lowered `kept`
+/// designators (`Single { scalar: None }` or a niche untagged variant):
+/// `(struct E){ .<field> = <child>, ... }`, or `{0}` when every field was a
+/// ZST omitted from the view.
+fn enum_value_payload_literal(agg: &str, kept: &[String]) -> String {
+    if kept.is_empty() {
+        format!("(struct {agg}){{0}}")
+    } else {
+        format!("(struct {agg}){{ {} }}", kept.join(", "))
+    }
+}
+
+/// The inline view field whose niche cell coincides exactly with the niche
+/// (`field.offset == TagScalar.offset` **and** `field.ty == scalar_ty`), as
+/// the member path the navigator spells, or `None` when no single inline
+/// scalar field coincides (the niche is a sub-byte of a nested aggregate
+/// field -> task d2.2). The inline view is the niche untagged variant's
+/// payload.
+fn niche_coinciding_field(
+    model: &RegseqModel,
+    enum_ty: TyId,
+    shape: &EnumShape,
+    offset: u64,
+    scalar_ty: TyId,
+) -> Option<(String, TyId)> {
+    let (untagged, variants) = match shape {
+        EnumShape::Multiple {
+            encoding: TagEncoding::Niche {
+                untagged_variant, ..
+            },
+            variants,
+            ..
+        } => (untagged_variant.index(), variants),
+        _ => return None,
+    };
+    let variant = variants.get(untagged)?;
+    for (idx, f) in variant.fields.iter().enumerate() {
+        if f.offset == offset && f.ty == scalar_ty {
+            // Spell the member path through the navigator (no re-derivation).
+            return enum_emit::enum_variant_field(model, enum_ty, untagged, idx);
+        }
+    }
+    None
+}
+
+/// Whether variant `v` of `shape` is fieldless (every payload field is ZST),
+/// so its construction writes only the tag.
+fn payload_all_zst(model: &RegseqModel, shape: &EnumShape, v: usize) -> bool {
+    match variant_layout(shape, v) {
+        Some(vl) => vl.fields.iter().all(|f| layout_emit::is_zst(model, f.ty)),
+        None => true,
+    }
+}
+
+/// The [`VariantLayout`] for variant index `v` of `shape`, or `None` when out
+/// of range (`Empty` has none; `Single` has only variant 0).
+fn variant_layout(shape: &EnumShape, v: usize) -> Option<&VariantLayout> {
+    match shape {
+        EnumShape::Empty => None,
+        EnumShape::Single { variant, .. } => (v == 0).then_some(variant),
+        EnumShape::Multiple { variants, .. } => variants.get(v),
+    }
+}
+
+/// Render an enum tag value of logical type `scalar_ty` (section 13 / 11.1).
+/// Every admitted `TagScalar.scalar_ty` is covered: `Int` / `Uint` via the d1
+/// signed / unsigned renderers; `Bool` / `Char` via their d1 const forms; a
+/// `Ptr` / `Ref` tag (the niche tag *is* the pointer, e.g. `Option<&T>`) as
+/// the integer bit pattern cast to the pointer's C type.
+fn render_tag_value(
+    model: &RegseqModel,
+    names: &NameTable,
+    scalar_ty: TyId,
+    value: u128,
+) -> Result<String, EmitError> {
+    match &model.types[scalar_ty] {
+        Ty::Bool => Ok(if value != 0 {
+            "1".to_string()
+        } else {
+            "0".to_string()
+        }),
+        Ty::Char => Ok(format!("(uint32_t){}U", value as u32)),
+        Ty::Int(kind) => Ok(render_int(*kind, value)),
+        Ty::Uint(kind) => Ok(render_uint(*kind, value)),
+        Ty::Ptr(_, _) | Ty::Ref(_, _) => {
+            let cty = types::c_type(model, names, scalar_ty);
+            Ok(format!("(({cty}){}ULL)", value as u64))
+        }
+        _ => Err(EmitError::Unsupported(
+            "enum tag scalar of an unsupported type",
+        )),
+    }
+}
+
+/// Render a `Discriminant` result value per the `result_ty` integer type
+/// (section 11.1 signed / unsigned literal emission).
+fn render_discriminant(
+    model: &RegseqModel,
+    result_ty: TyId,
+    value: u128,
+) -> Result<String, EmitError> {
+    match &model.types[result_ty] {
+        Ty::Int(kind) => Ok(render_int(*kind, value)),
+        Ty::Uint(kind) => Ok(render_uint(*kind, value)),
+        _ => Err(EmitError::Unsupported(
+            "Discriminant result of a non-integer type",
+        )),
     }
 }
 

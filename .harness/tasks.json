@@ -4820,7 +4820,7 @@
           "id": "regseq-backends-13",
           "name": "Generic-C enum tag-ops \u2014 \u00a713 union-of-views navigation (Phase-1 d2.1)",
           "spec": ".harness/tasks/regseq-backends/13-generic-c-enum-tag-ops.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-12"
           ],

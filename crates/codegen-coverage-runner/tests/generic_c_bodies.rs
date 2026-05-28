@@ -25,13 +25,14 @@ use std::path::{Path, PathBuf};
 use codegen_coverage_runner::toolchain;
 use regseq_backends::emit_generic_c;
 use regseq_model::{
-    AssertKind, BasicBlock, BinOp, BlockId, Body, CallCallee, CastKind, Const, CrateId, DefPath,
-    DefPathHash, Endian, FieldIdx, FieldLayout, FloatKind, FnAbi, FnSig, FnSigId,
-    FunctionInstanceData, FunctionInstanceFlavor, GenericArgs, Instance, InstanceId, InstanceKind,
-    Item, ItemId, ItemKind, Layout, LayoutKind, LocalDecl, LocalId, Mutability, Operand, Place,
-    PlaceElem, RegseqModel, Rvalue, Safety, ScalarLayouts, SizeAlign, SourceFileId, Span,
-    StableCrateId, Statement, StatementKind, SwitchTargets, TargetInfo, Terminator, TerminatorKind,
-    Ty, TyId, UintKind,
+    AggregateKind, AssertKind, BasicBlock, BinOp, BlockId, Body, CallCallee, CastKind, Const,
+    CrateId, DefPath, DefPathHash, Endian, EnumShape, FieldIdx, FieldLayout, FloatKind, FnAbi,
+    FnSig, FnSigId, FunctionInstanceData, FunctionInstanceFlavor, GenericArgs, Instance,
+    InstanceId, InstanceKind, Item, ItemId, ItemKind, Layout, LayoutKind, LocalDecl, LocalId,
+    Mutability, Operand, Place, PlaceElem, Provenance, RegseqModel, Rvalue, Safety, ScalarLayouts,
+    SizeAlign, SourceFileId, Span, StableCrateId, Statement, StatementKind, SwitchTargets,
+    TagEncoding, TagScalar, TargetInfo, Terminator, TerminatorKind, Ty, TyId, UintKind, VariantIdx,
+    VariantLayout, VariantRange, WrappingRange,
 };
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
 
@@ -763,6 +764,694 @@ fn with_overflow_result_computes_both_components_at_runtime() {
         run.exit_code,
         Some(0),
         "both (T, bool) components correct -> exit 0; stderr: {}",
+        run.stderr
+    );
+}
+
+// ---------------------------------------------------------------------------
+// Task d2.1: section 13 enum tag-ops (compile-AND-run). A `void regseq_main`
+// constructs + matches enum values and aborts (via a Foreign fail callback)
+// on a wrong discriminant / payload; a clean exit (code 0) proves the tag
+// read/write + payload access reproduced rustc's discriminant semantics, and
+// the section 13 `_Static_assert`s guard the layout at compile time. The
+// hand-built shapes (Niche, repr(int) explicit discriminants) the bridge
+// cannot easily surface follow the c1/d2 precedent; the bridged Direct
+// fixture exercises the full bridge -> emit -> run pipeline.
+// ---------------------------------------------------------------------------
+
+fn enum_layout(size: u64, align: u64, shape: EnumShape) -> Layout {
+    Layout {
+        size,
+        align,
+        pack: None,
+        uninhabited: false,
+        kind: LayoutKind::Enum { shape },
+    }
+}
+
+fn variant(
+    m: &mut RegseqModel,
+    name: &str,
+    fields: Vec<FieldLayout>,
+    discriminant: u128,
+    tag_value: Option<u128>,
+) -> VariantLayout {
+    VariantLayout {
+        name: m.strings.intern(name),
+        fields,
+        uninhabited: false,
+        discriminant,
+        tag_value,
+    }
+}
+
+fn fl(m: &mut RegseqModel, name: &str, ty: TyId, offset: u64) -> FieldLayout {
+    FieldLayout {
+        name: m.strings.intern(name),
+        ty,
+        offset,
+    }
+}
+
+fn push_enum_instance(m: &mut RegseqModel, rendered: &str, layout: Layout) -> TyId {
+    let it = mk_item(m, ItemKind::Enum, rendered);
+    let ty = m.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout,
+    });
+    let emission = m.strings.intern(rendered);
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Enum { layout: ty },
+    });
+    ty
+}
+
+/// A Foreign `regseq_test_fail()` callback instance (the abort hook),
+/// returning its `InstanceId` so a `Call` terminator can target it.
+fn push_fail_callback(m: &mut RegseqModel, unit: TyId) -> InstanceId {
+    let fail_sig = fnsig(m, vec![], unit, FnAbi::C);
+    let fail = fn_instance(m, "regseq_test_fail", fail_sig, None);
+    let fit = m.instances[fail].item;
+    m.items[fit].linkage = regseq_model::Linkage::Foreign;
+    fail
+}
+
+fn nomangle(m: &mut RegseqModel, id: InstanceId) {
+    let it = m.instances[id].item;
+    m.items[it].linkage = regseq_model::Linkage::NoMangle;
+}
+
+/// The Foreign fail callback as a real abort, appended to the emitted TU.
+fn with_fail_callback(tu: &str) -> String {
+    format!("{tu}\nvoid regseq_test_fail(void) {{ fprintf(stderr, \"wrong\\n\"); abort(); }}\n")
+}
+
+#[test]
+fn direct_enum_construct_match_runs_and_exits_zero() {
+    // `enum AB { A, B(u32) }`: construct `B(42)`, read its discriminant (the
+    // Direct ternary) -> 1, then its payload (Downcast+Field) -> 42; abort on
+    // a wrong result. A clean exit proves construction + Discriminant +
+    // Downcast/Field reproduced rustc's semantics.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let b0 = fl(&mut m, "0", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let ab = push_enum_instance(&mut m, "AB", enum_layout(8, 4, shape));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let fortytwo = m.consts.intern(Const::Uint(UintKind::U32, 42));
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 AB, _2 u8 (disc), _3 u32 (payload).
+    let body = build_body(
+        0,
+        vec![unit, ab, u8t, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(ab, VariantIdx::from_u32(1)),
+                            Box::new([Operand::Constant(fortytwo)]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(loc(2), Rvalue::Discriminant(loc(1)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(1, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Use(Operand::Copy(Place {
+                        local: LocalId::from_u32(1),
+                        projection: Box::new([
+                            PlaceElem::Downcast(VariantIdx::from_u32(1)),
+                            PlaceElem::Field(FieldIdx::from_u32(0), u32t),
+                        ]),
+                    })),
+                ))],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(3)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(42, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(2)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok for a d2.1 enum body");
+    assert!(
+        tu.contains("union {") && tu.contains("} _tag;"),
+        "the section 13 union-of-views surfaced:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "direct-enum");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "Direct construct/match runs; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn niche_enum_construct_match_runs_and_exits_zero() {
+    // `Option<&u32>`: construct `Some(&x)` + `None`, read each discriminant
+    // (the niche assign-site memcpy path) -> 1 / 0, read Some's payload
+    // (`*(Some.0)`) -> 7; abort on a wrong result. A clean exit proves the
+    // niche cell read/write + the untagged_variant fallback.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let some_field = fl(&mut m, "0", ref_ty, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(&mut m, "None", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    let opt = push_enum_instance(&mut m, "Opt", enum_layout(8, 8, shape));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let seven = m.consts.intern(Const::Uint(UintKind::U32, 7));
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 u32 x, _2 &u32 r, _3 Opt some, _4 Opt none, _5 u8 dS,
+    // _6 u8 dN, _7 &u32 ptr, _8 u32 val.
+    let body = build_body(
+        0,
+        vec![unit, u32t, ref_ty, opt, opt, u8t, u8t, ref_ty, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(seven)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Ref(Provenance::SharedBorrow, loc(1)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(3),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(opt, VariantIdx::from_u32(1)),
+                            Box::new([Operand::Copy(loc(2))]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(4),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(opt, VariantIdx::from_u32(0)),
+                            Box::new([]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(loc(5), Rvalue::Discriminant(loc(3)))),
+                    st(StatementKind::Assign(loc(6), Rvalue::Discriminant(loc(4)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(5)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(1, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(
+                vec![],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(6)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(7),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(3),
+                            projection: Box::new([
+                                PlaceElem::Downcast(VariantIdx::from_u32(1)),
+                                PlaceElem::Field(FieldIdx::from_u32(0), ref_ty),
+                            ]),
+                        })),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(8),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(7),
+                            projection: Box::new([PlaceElem::Deref]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(8)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(7, BlockId::from_u32(3))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(3)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok for a niche enum body");
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "niche-enum");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "niche construct/match runs; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn repr_int_enum_discriminant_maps_tag_to_explicit_value() {
+    // `enum E { A = 10, B = 20 }` (fieldless Direct, explicit discriminants !=
+    // storage index): construct `B`, read its discriminant -> 20 (NOT the
+    // storage index 1); abort if the ternary returned the raw cell / index.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 255 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 10, Some(10)),
+            variant(&mut m, "B", Vec::new(), 20, Some(20)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "E", enum_layout(1, 1, shape));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 E, _2 u8 (disc).
+    let body = build_body(
+        0,
+        vec![unit, e_ty, u8t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(e_ty, VariantIdx::from_u32(1)),
+                            Box::new([]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(loc(2), Rvalue::Discriminant(loc(1)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(20, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "repr-int-enum");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "discriminant maps tag 20 -> semantic 20, not index 1; stderr: {}",
+        run.stderr
+    );
+}
+
+/// A bridged Direct enum: `classify(&E)` matches `enum E { A, B(u32), C { x,
+/// y } }` and `regseq_main` constructs each variant and checks the result.
+fn enum_snippet(b_expected: u32) -> String {
+    format!(
+        r#"#![no_std]
+
+extern "C" {{
+    fn regseq_test_fail();
+}}
+
+pub enum E {{ A, B(u32), C {{ x: u8, y: u16 }} }}
+
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn classify(e: &E) -> u32 {{
+    match e {{
+        E::A => 0,
+        E::B(v) => *v,
+        E::C {{ x, y }} => (*x as u32) + (*y as u32),
+    }}
+}}
+
+#[no_mangle]
+pub extern "C" fn regseq_main() {{
+    let a = E::A;
+    if classify(&a) != 0 {{ unsafe {{ regseq_test_fail(); }} }}
+    let b = E::B({b_expected});
+    if classify(&b) != {b_expected} {{ unsafe {{ regseq_test_fail(); }} }}
+    let c = E::C {{ x: 3, y: 100 }};
+    if classify(&c) != 103 {{ unsafe {{ regseq_test_fail(); }} }}
+}}
+"#
+    )
+}
+
+#[test]
+fn bridged_direct_enum_body_runs_and_exits_zero() {
+    let snippet = TempSnippet::new("enum-ok", &enum_snippet(42));
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok for a bridged enum body");
+    let entry = fn_cname(&model, "regseq_main");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    let tu =
+        format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
+    let run =
+        toolchain::compile_and_run(&tu, &entry, cc()).expect("bridged enum TU must compile + run");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "correct enum construct/match lowering exits 0; stderr: {}",
+        run.stderr
+    );
+}
+
+/// A bridged Direct enum whose `regseq_main` builds `B(42)` but checks
+/// `classify(&b) != 999`, so the wrong-result branch always fires.
+fn enum_wrong_snippet() -> String {
+    r#"#![no_std]
+
+extern "C" {
+    fn regseq_test_fail();
+}
+
+pub enum E { A, B(u32), C { x: u8, y: u16 } }
+
+#[no_mangle]
+#[inline(never)]
+pub extern "C" fn classify(e: &E) -> u32 {
+    match e {
+        E::A => 0,
+        E::B(v) => *v,
+        E::C { x, y } => (*x as u32) + (*y as u32),
+    }
+}
+
+#[no_mangle]
+pub extern "C" fn regseq_main() {
+    let b = E::B(42);
+    if classify(&b) != 999 {
+        unsafe { regseq_test_fail(); }
+    }
+}
+"#
+    .to_string()
+}
+
+#[test]
+fn bridged_direct_enum_body_aborts_on_a_wrong_payload() {
+    // The constructed payload (42) differs from the expected check (999), so
+    // the wrong-result branch fires -- proving the enum construction +
+    // Downcast/Field payload read computes the real value at runtime.
+    let snippet = TempSnippet::new("enum-bad", &enum_wrong_snippet());
+    let model = match try_bridge_fixture_path(&snippet.path) {
+        BridgeOutcome::Ok(model) => model,
+        other => panic!("snippet must bridge to Ok, got {other:?}"),
+    };
+    let tu = emit_generic_c(&model).expect("emit must return Ok");
+    let entry = fn_cname(&model, "regseq_main");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    let tu =
+        format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
+    let run = toolchain::compile_and_run(&tu, &entry, cc()).expect("TU must compile + run");
+    assert_ne!(run.exit_code, Some(0), "a wrong payload must abort");
+    assert!(
+        run.stderr.contains("wrong result"),
+        "the abort path ran: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn single_scalar_none_enum_construct_read_runs_and_exits_zero() {
+    // `enum Wrap { W(u32) }` (Single { scalar: None }, collapsed inline to a
+    // single-field struct): construct `W(7)`, read its discriminant -> 0 (the
+    // constant) and its payload (Downcast+Field) -> 7; abort on a wrong result.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u32t = uint(&mut m, UintKind::U32);
+    let w0 = fl(&mut m, "0", u32t, 0);
+    let shape = EnumShape::Single {
+        variant: variant(&mut m, "W", vec![w0], 0, None),
+        scalar: None,
+    };
+    let wrap = push_enum_instance(&mut m, "Wrap", enum_layout(4, 4, shape));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let seven = m.consts.intern(Const::Uint(UintKind::U32, 7));
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 Wrap, _2 u32 (disc), _3 u32 (payload).
+    let body = build_body(
+        0,
+        vec![unit, wrap, u32t, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(wrap, VariantIdx::from_u32(0)),
+                            Box::new([Operand::Constant(seven)]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(loc(2), Rvalue::Discriminant(loc(1)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Use(Operand::Copy(Place {
+                        local: LocalId::from_u32(1),
+                        projection: Box::new([
+                            PlaceElem::Downcast(VariantIdx::from_u32(0)),
+                            PlaceElem::Field(FieldIdx::from_u32(0), u32t),
+                        ]),
+                    })),
+                ))],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(3)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(7, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(3),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(2)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "single-scalar-none");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "Single{{scalar:None}} construct/read runs; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn single_scalar_some_enum_discriminant_runs_and_exits_zero() {
+    // `enum Only { A = 5 }` (repr(u8), Single { scalar: Some }, inline tag-only
+    // struct): construct `A`, read its discriminant -> 5 (the explicit value,
+    // not the storage index 0); abort on a wrong result.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 5, end: 5 },
+    };
+    let shape = EnumShape::Single {
+        variant: variant(&mut m, "A", Vec::new(), 5, Some(5)),
+        scalar: Some(tag),
+    };
+    let only = push_enum_instance(&mut m, "Only", enum_layout(1, 1, shape));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 Only, _2 u8 (disc).
+    let body = build_body(
+        0,
+        vec![unit, only, u8t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Aggregate(
+                            AggregateKind::Enum(only, VariantIdx::from_u32(0)),
+                            Box::new([]),
+                        ),
+                    )),
+                    st(StatementKind::Assign(loc(2), Rvalue::Discriminant(loc(1)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(5, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "single-scalar-some");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "Single{{scalar:Some}} discriminant runs; stderr: {}",
         run.stderr
     );
 }
