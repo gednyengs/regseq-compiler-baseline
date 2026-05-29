@@ -5272,6 +5272,11 @@ enum DiagArg {
     /// A non-static `&str` place operand (a fresh `&str` body local) -- the
     /// section-8.3 stack-buffer path.
     StrPlace,
+    /// A `u32` numeric operand read from a body local whose `debug_name`
+    /// renders to the given C identifier -- exercises the numeric scratch
+    /// buffer's `fresh_temp_name` collision discipline (a local named `_n`
+    /// must not be shadowed by the `snprintf` buffer).
+    NumLocalNamed(&'static str),
 }
 
 /// Build a model whose `regseq_main` calls a `Log(Info)`-marked callee with a
@@ -5313,10 +5318,13 @@ fn emit_diag_call(
     let meta = m.consts.intern(Const::Uint(UintKind::Usize, n as u128));
     let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
 
-    // Build the value operands in-model. A `StrPlace` gets a fresh `&str` body
-    // local; `loc(0)` is the unit return place, so the first arg local is 1.
+    let u32t = uint(&mut m, UintKind::U32);
+    // Build the value operands in-model. A `StrPlace` / `NumLocalNamed` gets a
+    // fresh body local; `loc(0)` is the unit return place, so the first arg
+    // local is 1. `named` records `(local, debug_name)` to apply post-build.
     let mut args: Vec<Operand> = vec![Operand::Constant(carrier)];
     let mut locals = vec![unit];
+    let mut named: Vec<(u32, &'static str)> = Vec::new();
     for varg in value_args {
         match varg {
             DiagArg::ConstU32(v) => {
@@ -5328,11 +5336,17 @@ fn emit_diag_call(
                 locals.push(ref_str);
                 args.push(Operand::Copy(loc(idx)));
             }
+            DiagArg::NumLocalNamed(name) => {
+                let idx = locals.len() as u32;
+                locals.push(u32t);
+                named.push((idx, name));
+                args.push(Operand::Copy(loc(idx)));
+            }
         }
     }
 
     let main_sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
-    let body = build_body(
+    let mut body = build_body(
         0,
         locals,
         vec![
@@ -5348,6 +5362,10 @@ fn emit_diag_call(
             bb(vec![], tk(TerminatorKind::Return)),
         ],
     );
+    for (idx, name) in named {
+        let sid = m.strings.intern(name);
+        body.local_decls[LocalId::from_u32(idx)].debug_name = Some(sid);
+    }
     let main_id = fn_instance(&mut m, "regseq_main", main_sig, Some(body));
     let it = m.instances[main_id].item;
     m.items[it].linkage = Linkage::NoMangle;
@@ -5374,12 +5392,15 @@ fn diag_call_emits_tag_specifier_cast_and_goto() {
         "merged tag + leading literal fwrite:\n{tu}"
     );
     // The numeric snprintf+fwrite block: [24] buffer, reused specifier + cast.
+    // The scratch names come from `fresh_temp_name` -> `_n` / `_l` when no body
+    // local takes those bases (see `diag_call_numeric_scratch_avoids_local_name`
+    // for the collision case).
     assert!(
-        tu.contains("char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, \"%u\", (unsigned)("),
+        tu.contains("char _n[24]; int _l = snprintf(_n, sizeof _n, \"%u\", (unsigned)("),
         "snprintf block + specifier + cast:\n{tu}"
     );
     assert!(
-        tu.contains("fwrite(_n0, 1, _l0, stdout);"),
+        tu.contains("fwrite(_n, 1, _l, stdout);"),
         "numeric fwrite of the returned length:\n{tu}"
     );
     // The trailing `\n` merges into the final literal fwrite.
@@ -5393,6 +5414,39 @@ fn diag_call_emits_tag_specifier_cast_and_goto() {
     assert!(
         !tu.contains("[INFO] x=%u") && !tu.contains("_logstr"),
         "no residual printf format / stack-buffer in the diag path:\n{tu}"
+    );
+}
+
+#[test]
+fn diag_call_numeric_scratch_avoids_local_name() {
+    // Regression (soundness, mirrors the `Repeat` loop-var test): the numeric
+    // `snprintf` scratch buffer / length names come from `fresh_temp_name`, so
+    // they cannot collide with a body-local C name. A body local whose
+    // `debug_name` renders to `_n` (the scratch base) used as the numeric
+    // operand would, under hardcoded `_n`/`_l`, be shadowed by the block's
+    // `char _n[24]` -> `(unsigned)(_n)` would read the buffer pointer, not the
+    // value (a silent miscompute the green fixtures could not catch).
+    let tu = emit_diag_call(
+        "v={}",
+        vec![DiagArg::NumLocalNamed("_n")],
+        Some(BlockId::from_u32(1)),
+    )
+    .expect("named-local numeric diag call must emit");
+    // The operand local renders as `_n`; the scratch buffer must be bumped off
+    // it (`fresh_temp_name` -> `_n_1`), never declaring `char _n[`.
+    assert!(
+        !tu.contains("char _n[24]"),
+        "the snprintf buffer must not shadow the `_n` operand local:\n{tu}"
+    );
+    assert!(
+        tu.contains(
+            "char _n_1[24]; int _l = snprintf(_n_1, sizeof _n_1, \"%u\", (unsigned)(_n));"
+        ),
+        "bumped scratch buffer; the `_n` operand read un-shadowed:\n{tu}"
+    );
+    assert!(
+        tu.contains("fwrite(_n_1, 1, _l, stdout);"),
+        "fwrite of the bumped buffer + length:\n{tu}"
     );
 }
 

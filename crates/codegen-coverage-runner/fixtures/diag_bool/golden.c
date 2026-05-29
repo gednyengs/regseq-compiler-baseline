@@ -679,7 +679,7 @@ void input_regseq_main(void) {
         goto bb_2;
     }
     bb_2: {
-        fwrite("[INFO] t=", 1, 9, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%d", (int)(_3)); fwrite(_n0, 1, _l0, stdout); } fwrite(" f=", 1, 3, stdout); { char _n1[24]; int _l1 = snprintf(_n1, sizeof _n1, "%d", (int)(_5)); fwrite(_n1, 1, _l1, stdout); } fwrite("\n", 1, 1, stdout); goto bb_3;
+        fwrite("[INFO] t=", 1, 9, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_3)); fwrite(_n, 1, _l, stdout); } fwrite(" f=", 1, 3, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_5)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_3;
     }
     bb_3: {
         return;

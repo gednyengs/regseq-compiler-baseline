@@ -1999,14 +1999,19 @@ impl BodyEmit<'_> {
         // the template's literal text, the trailing `\n`) into `pending` and
         // flush each run as a single literal `fwrite`; render numerics via
         // `snprintf` into a fixed stack buffer then `fwrite`; `fwrite` each
-        // `&str` value's full byte range. `k` is the per-call numeric-block
-        // counter (independent `_n<k>` / `_l<k>` names).
+        // `&str` value's full byte range. The numeric scratch buffer / length
+        // names come from `fresh_temp_name`, so they cannot collide with (and
+        // thus shadow) a body-local C name -- e.g. a debug-named local `_n0`
+        // used as the operand (every other backend temp follows this same
+        // discipline). Each numeric block is its own `{ }` scope, so one
+        // `(nbuf, nlen)` pair is reused across all numeric placeholders.
+        let nbuf = self.fresh_temp_name("_n");
+        let nlen = self.fresh_temp_name("_l");
         let mut pending: Vec<u8> = Vec::new();
         pending.push(b'[');
         pending.extend_from_slice(level_tag(level).as_bytes());
         pending.extend_from_slice(b"] ");
         let mut stmts: Vec<String> = Vec::new();
-        let mut k = 0u32;
         let mut value_idx = 0usize;
 
         for seg in &segments {
@@ -2061,7 +2066,7 @@ impl BodyEmit<'_> {
                     // i64::MIN / `%llu` of u64::MAX; any hex form <= 18;
                     // Isize/Usize are non-admissible -- rejected by the whitelist
                     // -- so never reach here), so `snprintf` never truncates ->
-                    // `_l<k>` is the exact, non-negative length < 24 and `fwrite`
+                    // `{nlen}` is the exact, non-negative length < 24 and `fwrite`
                     // reads only in-bounds bytes (no clamp needed). The operand
                     // `Ty` comes from a place's decl or a scalar constant.
                     let ty = self
@@ -2070,9 +2075,8 @@ impl BodyEmit<'_> {
                     let (spec, cast) = diag_specifier_and_cast_for(*modifier, &ty)?;
                     let expr = self.operand_expr(op, None)?;
                     stmts.push(format!(
-                        "{{ char _n{k}[24]; int _l{k} = snprintf(_n{k}, sizeof _n{k}, \"{spec}\", {cast}({expr})); fwrite(_n{k}, 1, _l{k}, stdout); }}"
+                        "{{ char {nbuf}[24]; int {nlen} = snprintf({nbuf}, sizeof {nbuf}, \"{spec}\", {cast}({expr})); fwrite({nbuf}, 1, {nlen}, stdout); }}"
                     ));
-                    k += 1;
                 }
             }
         }

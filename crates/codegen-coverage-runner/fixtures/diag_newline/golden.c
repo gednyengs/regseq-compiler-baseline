@@ -672,7 +672,7 @@ void input_regseq_main(void) {
         goto bb_1;
     }
     bb_1: {
-        fwrite("[INFO] line1\nline2=", 1, 19, stdout); { char _n0[24]; int _l0 = snprintf(_n0, sizeof _n0, "%u", (unsigned)(_2)); fwrite(_n0, 1, _l0, stdout); } fwrite("\n", 1, 1, stdout); goto bb_2;
+        fwrite("[INFO] line1\nline2=", 1, 19, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_2)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_2;
     }
     bb_2: {
         return;

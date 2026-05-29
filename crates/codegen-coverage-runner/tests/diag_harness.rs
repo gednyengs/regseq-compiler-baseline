@@ -150,7 +150,7 @@ fn bless_writes_golden_c_from_emit_and_never_expected_stdout() {
     let golden = std::fs::read_to_string(&fixture.golden_c).unwrap();
     assert!(
         golden.contains("fwrite(\"[INFO] r=\", 1, 9, stdout);")
-            && golden.contains("snprintf(_n0, sizeof _n0, \"%d\", (int)("),
+            && golden.contains("snprintf(_n, sizeof _n, \"%d\", (int)("),
         "golden.c is the section-8 fwrite emit:\n{golden}"
     );
     // The honesty invariant: --bless NEVER writes expected.stdout.
