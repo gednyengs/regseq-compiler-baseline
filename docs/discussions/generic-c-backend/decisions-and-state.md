@@ -150,7 +150,8 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   M2-a niche-cell retype — deliberately deferred (perturbs the locked, Codex-hardened
   D9 representation for marginal coverage; every defer is sound). `-17` depends-on
   `-16` (the linear chain), phase 1b.
-- **task d2.3a (`regseq-backends-17`) IMPLEMENTED (2026-05-28).** Package B shipped:
+- **task d2.3a (`regseq-backends-17`) DONE + assessed + closed (2026-05-28, `82930d5`
+  + a post-assessment soundness fixup).** Package B shipped:
   Change A — the always-emitted byte-covering, collision-proof union `_raw` member
   (`layout_emit::union_raw_member` single source of truth; subsumes the union `_pad`
   filler; layout-neutral; gnu11 type-pun sound). Change B — `Const::Bytes` over
@@ -166,7 +167,30 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   D9 / d2.1-navigator / `enum_emit.rs` / bridge / model change. Gates: backend unit +
   runner compile-AND-RUN green (union-static + array-payload + niche-untagged-reloc B2
   fixtures run byte-exact); `emit_generic_c` byte-stable; ledger verdict unchanged
-  (`not-pass` — const sub-shapes are not distinct matrix rows).
+  (`not-pass` — const sub-shapes are not distinct matrix rows). **Assessment:** all
+  functional gates green (build/fmt/clippy clean; 172 backend unit + 40 runner
+  compile-AND-RUN + corpus/bless, 0 fails; Mode A 11/11 green, ledger byte-identical
+  to committed); diff confined to the Quality-Gate set. **The mandatory post-close
+  Codex soundness pass found the 7th latent catch** ([[assessment-soundness-pass]],
+  after d1/d2/d2.1/d2.2/e/`-16`): M1-lite (Change D) identified the niche-untagged
+  variant by the **proxy** `tag_value.is_none()` instead of the authoritative
+  `untagged_variant` certificate the rest of the backend reads — so a *malformed*
+  niche shape (a non-untagged variant carrying `tag_value: None`) would mis-route
+  through the typed view → an in-range payload with no niche tag, which the runtime
+  read mis-resolves to the untagged variant. **Not reachable from rustc** (the bridge
+  assigns `None` to exactly the untagged variant), so latent — weaker than the 6 prior
+  reachable catches, but a real proxy-vs-certificate discipline gap. **Architect
+  disposition (AskUserQuestion): fix-forward.** Fixed (a separate post-assessment
+  fixup, preserving the implementer's SHA): M1-lite now matches
+  `TagEncoding::Niche { untagged_variant, .. }` and fires only when
+  `v == untagged_variant.index()`; `serialize_multiview_enum_value`'s tag write became
+  a **required** `tag_value.ok_or(…)` (a tagless value reaching the `_raw` serializer —
+  now only a malformed non-untagged variant — fails loud instead of emitting a tagless
+  image); + a structural regression test
+  (`const_enum_value_multiview_niche_nonuntagged_tagless_fails_loud`). **Behaviorally
+  inert** for all bridge-producible input (173 backend unit (+1) + all gates green;
+  ledger byte-stable; the existing niche-untagged/niched-tagged tests unchanged).
+  **Focused re-soundness pass → SOUND** (7/7 streak).
 - **Phase-1 const limitations (recorded on the d2.3a close; sound `EmitError::Unsupported`,
   never a silent miscompile).** Three reachable const sub-shapes stay fail-loud as
   documented Phase-1 limitations (the matrix tracks constructs, not const sub-shapes,
@@ -298,7 +322,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+d2.2+e+**`-16`** DONE+assessed; **first GREEN ledger** — `DL-1/2/3/4/6/7`+`TM-2/3/5/8` green, verdict still `not-pass`, 11 fixtures; **only d2.3 left to draft**; banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + ALL non-scalar `Const`; **e** added the §8 diag-log → `printf` lowering + the harness bring-up + the first 10 fixtures; **`-16`** redesigned diag-log to **byte-faithful uniform `fwrite`** (fixing the interior-NUL `&str` silent truncation; §8.3 truncation contract removed; `+diag_nul` regression, `diag_str_truncation`→`diag_str_long`; in-close soundness fix = numeric scratch names via `fresh_temp_name`); five rare const shapes still deferred to d2.3) | `dad9a1e`+`3f2a172` (`-16`) | generic-C backend MVP + first-green codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+d2.2+e+`-16`+**`-17` (d2.3a)** DONE+assessed; **first GREEN ledger** — `DL-1/2/3/4/6/7`+`TM-2/3/5/8` green, verdict still `not-pass`, 11 fixtures; **all P1 const carve-outs resolved — only the optional d2.3b (Package A) + the §26.7-hex / DL-5 / d2.3-bridge-dedup minor follow-ups remain**; banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + ALL non-scalar `Const`; **e** added the §8 diag-log → `printf` lowering + the harness bring-up + the first 10 fixtures; **`-16`** redesigned diag-log to **byte-faithful uniform `fwrite`**; **`-17` (d2.3a, Package B)** added the union `_raw` member + the recursive `serialize_const_into` no-reloc enum-payload serializer + the M1-lite niche-untagged typed-view route (in-close 7th soundness fix = M1-lite keys on `untagged_variant`, not a `tag_value.is_none()` proxy); the **three rare reloc/inline-niche const shapes** stay sound fail-loud as documented Phase-1 limitations (optional d2.3b closes them) | `dad9a1e`+`3f2a172` (`-16`), `82930d5`+fixup (`-17`) | generic-C backend MVP + first-green codegen-coverage harness |
 
 ---
 
