@@ -5086,6 +5086,55 @@ fn const_enum_value_multiview_niched_tagged_still_uses_raw() {
 }
 
 #[test]
+fn const_enum_value_multiview_niche_nonuntagged_tagless_fails_loud() {
+    // d2.3a 7th-soundness-catch fix (Change D): M1-lite keys on the authoritative
+    // `untagged_variant` certificate, NOT a `tag_value.is_none()` proxy. A
+    // MALFORMED niche shape -- a non-untagged variant (index 1) carrying
+    // `tag_value: None` (the bridge would assign `Some(niche)`; this shape is not
+    // bridge-producible) -- must NOT slip into the typed-view route, which would
+    // emit an in-range payload with no niche tag that the runtime niche read
+    // mis-resolves to the untagged variant. It instead falls through to the
+    // `_raw` serializer and fails loud.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let a0 = fl(&mut m, "0", ref_ty, 0);
+    let b0 = fl(&mut m, "0", u32t, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(0),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(1),
+                end: VariantIdx::from_u32(1),
+            },
+            niche_start: 0,
+        },
+        // Variant 1 is a niched variant but MALFORMED: `tag_value: None`.
+        variants: vec![
+            variant(&mut m, "A", vec![a0], 0, None),
+            variant(&mut m, "B", vec![b0], 1, None),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "NUM", enum_layout(16, 8, shape));
+    let five = m.consts.intern(Const::Uint(UintKind::U32, 5));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![five],
+    });
+    push_static(&mut m, "EVNUM", e_ty, ev);
+    assert!(
+        unsupported_reason(&m).contains("tagless non-untagged variant"),
+        "a malformed non-untagged tagless niche variant fails loud, not mis-routed via M1-lite"
+    );
+}
+
+#[test]
 fn multiview_direct_zst_field_reloc_payload_fails_loud() {
     // d2.3a soundness (defensive, Change C/D): a multi-view Direct variant whose
     // only payload field is ZST takes the fieldless tag-init shortcut, but a

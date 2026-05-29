@@ -3121,22 +3121,31 @@ fn enum_value_expr(
             }
         }
         // M1-lite (d2.3a Change D): a multi-view niche **untagged** variant has
-        // no `tag_value` to co-write, so its whole value is its payload -- route
-        // it through the EXISTING `u._v<untagged>` typed view via
+        // no tag to co-write, so its whole value is its payload -- route it
+        // through the EXISTING `u._v<untagged>` typed view via
         // `lower_enum_payload`. A relocation payload then lands in a typed
         // pointer field (`.u._v<v>.<f> = &Y`) -- one union member, no
         // double-init, an address constant in a pointer slot (which `_raw`, a
-        // `char[]`, cannot hold). Fires ONLY for the niche untagged variant; a
-        // niched-tagged or `Direct` variant still serializes to `_raw` below.
-        if matches!(
-            enum_emit::enum_tag(model, shape),
-            enum_emit::EnumTag::Niche { .. }
-        ) {
-            if let Some(variant) = variant_layout(shape, v) {
-                if variant.tag_value.is_none() {
-                    let kept = lower_enum_payload(model, names, syms, enum_ty, v, payload)?;
-                    return Ok(enum_value_payload_literal(&agg, &kept));
-                }
+        // `char[]`, cannot hold). Keyed on the authoritative `untagged_variant`
+        // certificate -- the same field the runtime niche read (`discriminant`)
+        // and `inline_payload_variant` read -- NOT a `tag_value.is_none()` proxy:
+        // `is_none()` is equivalent only under the (validator-unenforced)
+        // invariant that exactly one variant is tagless, so a malformed niched
+        // variant carrying `tag_value: None` must not slip into the typed view
+        // (it would emit an in-range payload with no niche tag, which the runtime
+        // read mis-resolves to the untagged variant). A non-untagged tagless
+        // variant instead falls through and fails loud in
+        // `serialize_multiview_enum_value`.
+        if let EnumShape::Multiple {
+            encoding: TagEncoding::Niche {
+                untagged_variant, ..
+            },
+            ..
+        } = shape
+        {
+            if v == untagged_variant.index() {
+                let kept = lower_enum_payload(model, names, syms, enum_ty, v, payload)?;
+                return Ok(enum_value_payload_literal(&agg, &kept));
             }
         }
         // Every other multi-view value (a payload-bearing `Direct` variant, or a
@@ -3338,14 +3347,20 @@ fn serialize_multiview_enum_value(
     let mut image = vec![0u8; size];
     let endian = model.target.endian;
 
-    // Tag write: a `Direct` / niched variant carries a `tag_value`; the
-    // untagged niche variant has `None` (its payload is the tag).
-    if let Some(tv) = variant.tag_value {
-        let (offset, width) = enum_tag_location(model, shape).ok_or(EmitError::Unsupported(
-            "multi-view enum value without a tag cell location",
-        ))?;
-        write_bits_into(&mut image, offset, width, tv, endian)?;
-    }
+    // Tag write: every multi-view value reaching the `_raw` serializer carries a
+    // `tag_value`. A fieldless `Direct` variant is the tag-literal path; the
+    // niche **untagged** variant (the only tagless multi-view value) is routed to
+    // the typed view by M1-lite (keyed on `untagged_variant`). So a tagless value
+    // here is a malformed niche shape (a non-untagged variant with
+    // `tag_value: None`) -> fail loud, rather than emit a tagless `_raw` image
+    // that the runtime niche read would mis-resolve to the untagged variant.
+    let tv = variant.tag_value.ok_or(EmitError::Unsupported(
+        "multi-view enum _raw serialization for a tagless non-untagged variant (malformed niche shape)",
+    ))?;
+    let (offset, width) = enum_tag_location(model, shape).ok_or(EmitError::Unsupported(
+        "multi-view enum value without a tag cell location",
+    ))?;
+    write_bits_into(&mut image, offset, width, tv, endian)?;
 
     // Payload write: each field's value byte-serialized at its offset
     // (recursive: a no-reloc aggregate / array / Bytes / NullPtr / nested
