@@ -4564,6 +4564,180 @@ fn const_memory_static_retyped_to_nonchar_array_pointee() {
     );
 }
 
+// `enum EB { A(u8), B(&'static [u32; 4]) }` -- a multi-view `Direct` enum whose
+// B variant holds a reference to an anonymous `[u32; 4]` (a bridge
+// `ConstMemoryStatic`, typed `uint8_t[16]`). Returns `(e_ty, B's ref_arr ty,
+// the CMS instance)`. Shared by the two d2.3b CMS-re-typing regression tests.
+fn push_eb_reloc_enum(m: &mut RegseqModel) -> (TyId, InstanceId) {
+    let u8t = uint(m, UintKind::U8);
+    let u32t = uint(m, UintKind::U32);
+    let arr_u32 = m.types.intern(Ty::Array(u32t, 4));
+    let ref_arr = m.types.intern(Ty::Ref(arr_u32, Provenance::SharedBorrow));
+    let a0 = fl(m, "0", u8t, 8);
+    let b0 = fl(m, "0", ref_arr, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(m, "A", vec![a0], 0, Some(0)),
+            variant(m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let e_ty = push_enum_instance(m, "EB", enum_layout(16, 8, shape));
+    let mut bytes = le32(10);
+    bytes.extend(le32(20));
+    bytes.extend(le32(30));
+    bytes.extend(le32(40));
+    let cms_bytes = m.consts.intern(Const::Bytes(bytes));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 16));
+    let cms = push_static(m, "CMSE", arr_u8, cms_bytes);
+    (e_ty, cms)
+}
+
+#[test]
+fn const_enum_value_reloc_payload_retypes_the_cms() {
+    // d2.3b soundness (8th catch), the `const` / `Const::EnumValue` form: a
+    // multi-view `Direct` enum const whose payload is a reference to an anonymous
+    // `ConstMemoryStatic` (`EB::B(&[10,20,30,40])`) lowers via the `_c<idx>` typed
+    // view -> the emitted `(const uint32_t(*)[4])&CMSE` cast must read a CMS
+    // re-typed to its pointee `uint32_t[4]`, NOT the bridge's `uint8_t[16]` (a
+    // mismatched-type cast is strict-aliasing UB under the pinned -std=gnu11). The
+    // CMS scan's `Const::EnumValue` arm recovers the pointee through the variant
+    // field type.
+    let mut m = model();
+    let (e_ty, cms) = push_eb_reloc_enum(&mut m);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms)));
+    let meta = m.consts.intern(Const::Uint(UintKind::Usize, 0));
+    let carrier = m.consts.intern(Const::Aggregate(vec![reloc, meta]));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![carrier],
+    });
+    let sig = fnsig(&mut m, vec![], e_ty, FnAbi::Rust, false);
+    let body = build_body(
+        0,
+        vec![e_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Constant(ev)),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "kb", sig, Some(body));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMSE[4]"),
+        "enum-reloc const re-types the CMS to its pointee uint32_t[4]:\n{tu}"
+    );
+    assert!(
+        !tu.contains("uint8_t CMSE"),
+        "CMSE is not left as a byte array (would be a strict-aliasing UB cast):\n{tu}"
+    );
+    assert!(
+        tu.contains(".u._c1 = {"),
+        "the reloc routes through the _c1 typed view:\n{tu}"
+    );
+}
+
+#[test]
+fn enum_reloc_static_bytes_retypes_the_cms() {
+    // d2.3b soundness (8th catch), the `static` / `Const::Bytes` form: `static X:
+    // EB = EB::B(&[..])` arrives as `Const::Bytes` with a `Byte::Reloc`;
+    // `enum_from_bytes` lowers it via the `_c<idx>` typed view, so the CMS scan's
+    // multi-view `Direct` branch (`scan_bytes`, selecting the active variant via
+    // the shared `direct_enum_active_variant`) must re-type the CMS to
+    // `uint32_t[4]` -- else the emitted cast is strict-aliasing UB.
+    let mut m = model();
+    let (e_ty, cms) = push_eb_reloc_enum(&mut m);
+    // tag u8 `1` @0, then the &[u32;4] reloc (8-byte pointer) @8.
+    let mut img = vec![regseq_model::Byte::Value(1)];
+    img.extend(std::iter::repeat_n(regseq_model::Byte::Uninit, 7));
+    img.extend(std::iter::repeat_n(
+        regseq_model::Byte::Reloc(m.instance_ref_of(cms)),
+        8,
+    ));
+    let xinit = m.consts.intern(Const::Bytes(img));
+    push_static(&mut m, "XE", e_ty, xinit);
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t CMSE[4]"),
+        "enum-reloc static re-types the CMS to its pointee uint32_t[4]:\n{tu}"
+    );
+    assert!(
+        !tu.contains("uint8_t CMSE"),
+        "CMSE is not left as a byte array (would be a strict-aliasing UB cast):\n{tu}"
+    );
+    assert!(
+        tu.contains(".u._c1 = {"),
+        "the static reloc routes through the _c1 typed view:\n{tu}"
+    );
+}
+
+#[test]
+fn multiview_niche_untagged_static_reloc_lowers_via_typed_view() {
+    // d2.3b Fix #2 (workflow soundness catch): a MULTI-VIEW niche enum whose
+    // UNTAGGED variant holds a relocation, in the `static` / `Const::Bytes` form,
+    // was previously rejected unconditionally (NICHE_TAGGED_RELOC_MSG, even though
+    // the reloc is in the *untagged* variant). It now routes through the existing
+    // `u._v<untagged>` typed view (the bytes analog of the value-position M1-lite),
+    // and the CMS scan's niche branch re-types the pointee. `NM { Niched(u8),
+    // Untagged(&u32) }` -- 2 payload views (multi-view), niche-encoded, untagged
+    // variant 1 holds the &u32 reloc.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_u32 = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let v0f = fl(&mut m, "0", u8t, 0);
+    let v1f = fl(&mut m, "0", ref_u32, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_u32,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(&mut m, "Niched", vec![v0f], 0, Some(2)),
+            variant(&mut m, "Untagged", vec![v1f], 1, None),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "NM", enum_layout(8, 8, shape));
+    // the anonymous &u32 allocation: a bridge CMS typed uint8_t[4].
+    let cms_bytes = m.consts.intern(Const::Bytes(le32(7)));
+    let arr_u8 = m.types.intern(Ty::Array(u8t, 4));
+    let cms = push_static(&mut m, "CMSN", arr_u8, cms_bytes);
+    // static X: NM = NM::Untagged(&CMSN): an 8-byte pointer reloc @0.
+    let img: Vec<regseq_model::Byte> =
+        std::iter::repeat_n(regseq_model::Byte::Reloc(m.instance_ref_of(cms)), 8).collect();
+    let xinit = m.consts.intern(Const::Bytes(img));
+    push_static(&mut m, "XN", e_ty, xinit);
+    // Previously `emit_generic_c` returned Err here; Fix #2 lowers it.
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains(".u._v1._0 ="),
+        "niche untagged static reloc routes via the u._v<untagged> typed view:\n{tu}"
+    );
+    assert!(
+        tu.contains("uint32_t CMSN"),
+        "the niche-untagged reloc re-types the CMS to its uint32_t pointee:\n{tu}"
+    );
+}
+
 #[test]
 fn const_memory_static_char_retyped_to_uint32_array() {
     // Change F: a `&[char]` reference const declares the CMS as `uint32_t[n]`

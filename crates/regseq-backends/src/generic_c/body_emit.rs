@@ -2717,7 +2717,10 @@ const NICHE_TAGGED_RELOC_MSG: &str = "niche enum const with a relocation payload
 /// `<raw>`). A multi-view enum initializes the section 13 `_raw` member directly
 /// for a no-relocation image; a `Byte::Reloc`-bearing image of a tag-view
 /// (`Direct`) enum routes its tag + relocation through the `_c<idx>` typed full
-/// view (d2.3b Change D), while a relocation in a multi-view NICHE enum is the
+/// view (d2.3b Change D); a `Byte::Reloc`-bearing image of a multi-view NICHE
+/// enum routes the **untagged** variant's reloc through its `u._v<untagged>`
+/// typed view (d2.3b Fix #2, via `reconstruct_payload_variant_fields`), and only
+/// a reloc in a genuinely *niched* (non-untagged) variant's slot is the
 /// niche-tagged-reloc defensive guard.
 fn enum_from_bytes(
     model: &RegseqModel,
@@ -2757,10 +2760,15 @@ fn enum_from_bytes(
                 model, names, syms, bytes, enum_ty, shape,
             );
         }
-        // A multi-view NICHE enum carrying a relocation: the niche-tagged-reloc
-        // external-invariant defensive guard (rustc niche-fills only fieldless
-        // variants, so such a shape is not bridge-producible).
-        return Err(EmitError::Unsupported(NICHE_TAGGED_RELOC_MSG));
+        // A multi-view NICHE enum carrying a relocation (d2.3b Fix #2): route the
+        // UNTAGGED variant's reloc through its `u._v<untagged>` typed view -- the
+        // bytes analog of the value-position M1-lite (d2.3a). The single source of
+        // truth `reconstruct_payload_variant_fields` reconstructs the untagged
+        // variant's fields (a reloc lands in a typed pointer field) and its own
+        // `reject_uncovered_relocs` fails loud if the reloc instead lands in a
+        // *niched* (non-untagged) variant's slot -- the niche-tagged-reloc
+        // external-invariant residual (rustc niche-fills only fieldless variants).
+        return reconstruct_payload_variant_fields(model, names, syms, bytes, enum_ty, shape);
     }
     let raw = enum_emit::enum_raw_member(model, shape).ok_or(EmitError::Unsupported(
         "multi-view enum byte image without a _raw union member",
@@ -2793,32 +2801,26 @@ fn reconstruct_multiview_reloc_from_bytes(
     shape: &EnumShape,
 ) -> Result<String, EmitError> {
     let agg = names.agg_name(enum_ty);
-    let endian = model.target.endian;
-    let (toff, twidth) = enum_tag_location(model, shape).ok_or(EmitError::Unsupported(
-        "multi-view reloc byte image without a tag cell location",
+    // Determine the active variant the same way the CMS re-typing scan does
+    // (the shared [`direct_enum_active_variant`], so they cannot drift), then
+    // write the variant's `tag_value` CERTIFICATE (not the decoded bits) -- the
+    // same source `lower_direct_reloc_to_typed_view` (the value-position form)
+    // uses.
+    let v = direct_enum_active_variant(model, shape, bytes).ok_or(EmitError::Unsupported(
+        "multi-view reloc byte image: could not determine the active variant from the tag (malformed byte image)",
     ))?;
-    if toff + twidth > bytes.len() {
-        return Err(EmitError::Unsupported(
-            "multi-view enum tag slice exceeds the byte image",
-        ));
-    }
-    // The tag is a scalar; a relocation in its slice is malformed.
-    if bytes[toff..toff + twidth]
-        .iter()
-        .any(|b| matches!(b, Byte::Reloc(_)))
-    {
-        return Err(EmitError::Unsupported(
-            "relocation byte inside the enum tag slice (malformed byte image)",
-        ));
-    }
-    let tag_bits = decode_scalar_bits(&bytes[toff..toff + twidth], twidth, endian)?;
-    let v = match_variant_by_tag(shape, tag_bits, twidth).ok_or(EmitError::Unsupported(
-        "no variant tag value matches the decoded enum tag (malformed byte image)",
-    ))?;
+    let tv = variant_layout(shape, v)
+        .and_then(|vl| vl.tag_value)
+        .ok_or(EmitError::Unsupported(
+            "multi-view reloc byte image variant without a tag value",
+        ))?;
     let view = enum_emit::enum_variant_typed_view(model, enum_ty, v).ok_or(
         EmitError::Unsupported("multi-view reloc byte image variant without a typed full view"),
     )?;
-    let tvr = render_tag_value(model, names, view.tag_ty, tag_bits)?;
+    let tvr = render_tag_value(model, names, view.tag_ty, tv)?;
+    let (toff, twidth) = enum_tag_location(model, shape).ok_or(EmitError::Unsupported(
+        "multi-view reloc byte image without a tag cell location",
+    ))?;
     let mut inner = vec![format!(".{} = {tvr}", view.tag_name)];
     let mut covered = vec![(toff, toff + twidth)];
     for f in &view.fields {
@@ -2865,6 +2867,35 @@ fn match_variant_by_tag(shape: &EnumShape, tag_bits: u128, twidth: usize) -> Opt
     variants
         .iter()
         .position(|v| matches!(v.tag_value, Some(tv) if (tv & mask) == tag_bits))
+}
+
+/// The active variant index of a multi-view tag-view (`Direct`) enum byte image:
+/// decode the tag slice ([`enum_tag_location`], target-endian) and match it to a
+/// variant's `tag_value`. `None` if not a tag-view enum, the tag slice is
+/// reloc-bearing or shorter than the tag width, or no `tag_value` matches (a
+/// malformed image). The **single source of truth** both the bytes-form reloc
+/// emitter ([`reconstruct_multiview_reloc_from_bytes`]) and the `ConstMemoryStatic`
+/// re-typing scan (`mod.rs`'s `scan_bytes`) select the active variant through, so
+/// the scan re-types exactly the CMS the emission casts.
+pub(super) fn direct_enum_active_variant(
+    model: &RegseqModel,
+    shape: &EnumShape,
+    bytes: &[Byte],
+) -> Option<usize> {
+    let (toff, twidth) = enum_tag_location(model, shape)?;
+    if toff + twidth > bytes.len() {
+        return None;
+    }
+    // The tag is a scalar; a relocation in its slice is a malformed image.
+    if bytes[toff..toff + twidth]
+        .iter()
+        .any(|b| matches!(b, Byte::Reloc(_)))
+    {
+        return None;
+    }
+    let tag_bits =
+        decode_scalar_bits(&bytes[toff..toff + twidth], twidth, model.target.endian).ok()?;
+    match_variant_by_tag(shape, tag_bits, twidth)
 }
 
 /// Render a raw byte image as an `unsigned char[]` initializer (`{ b0, ..,
@@ -2950,16 +2981,22 @@ fn reconstruct_inline_enum_from_bytes(
             Ok(format!("(struct {agg}){{ .{member_path} = {recon} }}"))
         }
         enum_emit::EnumTag::Niche { .. } | enum_emit::EnumTag::None => {
-            reconstruct_inline_variant_fields(model, names, syms, bytes, enum_ty, shape)
+            reconstruct_payload_variant_fields(model, names, syms, bytes, enum_ty, shape)
         }
     }
 }
 
-/// Reconstruct the inline payload-bearing variant's non-ZST fields from a byte
-/// image (a `Single { scalar: None }` variant, or a niche untagged variant),
-/// designating by the navigator's member path. The byte image already encodes
-/// the active variant, so this is byte-faithful for niched variants too.
-fn reconstruct_inline_variant_fields(
+/// Reconstruct the payload-bearing untagged variant's non-ZST fields from a byte
+/// image (a `Single { scalar: None }` variant, or a niche **untagged** variant),
+/// designating by the navigator's member path -- `<field>` for an inline enum,
+/// `u._v<untagged>.<field>` for a **multi-view** niche enum (d2.3b Fix #2: the
+/// bytes analog of the value-position M1-lite). The byte image already encodes
+/// the active variant, so this is byte-faithful; a `Byte::Reloc` in an untagged
+/// field lands in that field's typed pointer slot, while a reloc OUTSIDE the
+/// untagged variant's field slices (a *niched* variant's slot, or padding) is
+/// rejected by the trailing `reject_uncovered_relocs` (the niche-tagged-reloc
+/// external-invariant residual: rustc niche-fills only fieldless variants).
+fn reconstruct_payload_variant_fields(
     model: &RegseqModel,
     names: &NameTable,
     syms: &InstanceSymbols,
@@ -2969,11 +3006,10 @@ fn reconstruct_inline_variant_fields(
 ) -> Result<String, EmitError> {
     let agg = names.agg_name(enum_ty);
     let v = inline_payload_variant(shape).ok_or(EmitError::Unsupported(
-        "inline enum byte image without a payload variant",
+        "enum byte image without an untagged payload variant",
     ))?;
-    let variant = variant_layout(shape, v).ok_or(EmitError::Unsupported(
-        "inline enum payload variant out of range",
-    ))?;
+    let variant = variant_layout(shape, v)
+        .ok_or(EmitError::Unsupported("enum payload variant out of range"))?;
     let mut parts = Vec::new();
     let mut covered = Vec::new();
     for (idx, f) in variant.fields.iter().enumerate() {
@@ -2981,7 +3017,7 @@ fn reconstruct_inline_variant_fields(
             continue;
         }
         let (member_path, fty) = enum_emit::enum_variant_field(model, enum_ty, v, idx).ok_or(
-            EmitError::Unsupported("inline enum field navigation failed in a byte image"),
+            EmitError::Unsupported("enum payload field navigation failed in a byte image"),
         )?;
         let fsize = model.size_align_of(fty).size as usize;
         let off = f.offset as usize;

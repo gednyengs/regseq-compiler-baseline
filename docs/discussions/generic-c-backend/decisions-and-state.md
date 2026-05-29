@@ -209,12 +209,13 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
     a `ConstMemoryStatic` deduped at incompatible pointee types (vanishingly rare; root
     cause = the bridge content-hash dedup; clean fix is a bridge type-aware key —
     task d2.3-bridge-dedup).
-- **task d2.3b (`regseq-backends-18`) DONE — the const exit gate is now GAP-FREE for
-  every reachable enum/union shape (2026-05-29).** Package A / full closure, implementing
-  the Codex-approved mechanism refinement (`phase-1/05-d2.3b-mechanism-refinement.md`,
-  which supersedes `04` §5.2's M2-a/M2-b) — a **lighter, lower-risk** mechanism than the
-  §04 sketch. The three documented Phase-1 const limitations (**#2-reloc / #3 / #4**) are
-  **closed**:
+- **task d2.3b (`regseq-backends-18`) DONE + assessed + post-assessment fixup
+  (2026-05-29) — the const exit gate is now gap-free for every reachable ENUM shape; the
+  one remaining reachable shape is a reference-holding union (a documented residual).**
+  Package A / full closure, implementing the Codex-approved mechanism refinement
+  (`phase-1/05-d2.3b-mechanism-refinement.md`, which supersedes `04` §5.2's M2-a/M2-b) —
+  a **lighter, lower-risk** mechanism than the §04 sketch. The three documented Phase-1
+  const limitations (**#2-reloc / #3 / #4**) are **closed**:
   - **Change A** — a **single-view inline** enum is wrapped in an **anonymous**
     `union { struct { <view> }; unsigned char <raw>[size]; }`; gnu11 **member promotion**
     keeps the runtime access path identical (`e.<field>`, the d2.1 navigator untouched,
@@ -249,14 +250,42 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   (the multi-view `LogArg` enum gained its `_c<idx>` views, +76 lines/fixture, pure
   additions — layout-neutral) + the §12/§13 doc delta + this record. **No** spec.md /
   bridge / model / matrix / ledger / `test-ir-fixtures` / harness / `types.rs` change.
-  Gates: build/fmt/clippy clean; 181 backend unit (+8) + 45 runner compile-AND-RUN (+5,
-  incl. both #2-reloc forms, #3, both #4 cases incl. nested `_Bool`) + corpus/bless
-  green; `emit_generic_c` byte-stable; Mode A ledger byte-identical to committed, verdict
-  unchanged (`not-pass` — const sub-shapes are not distinct matrix rows). **The only
-  residual fail-louds are external-rustc-invariant defensive guards** — the
-  niche-**tagged**-reloc sub-case (above) + the retained **#5** (union valtree) and **#6**
-  (CMS pointee collision, task d2.3-bridge-dedup) — not shipped gaps. See
-  [[assessment-soundness-pass]] for the mandatory post-close soundness result.
+  Gates: build/fmt/clippy clean; 185 backend unit + 45 runner compile-AND-RUN (incl. both
+  #2-reloc forms, #3, both #4 cases incl. nested `_Bool`) + corpus/bless green;
+  `emit_generic_c` byte-stable; Mode A ledger byte-identical to committed, verdict
+  unchanged (`not-pass`).
+  **Assessment + the mandatory soundness pass — dual (a 7-lens adversarial Claude
+  *workflow* + a cross-model *Codex* pass) — found the 8th catch + two sound gaps
+  ([[assessment-soundness-pass]]); architect disposition: fix-forward #1+#2, document #3.**
+  - **#1 (8th catch, silent miscompile — Codex; fixed in the same close).** d2.3b's new
+    `_c<idx>` reloc emission outran the d2.2 **`ConstMemoryStatic` re-typing pre-pass**:
+    `scan_const` had no `Const::EnumValue` arm and `scan_bytes`'s `Enum` arm only handled
+    *inline* enums, so a multi-view enum const referencing an anonymous CMS (`E::B(&[1,2,
+    3,4])`) emitted a `(const T*)&CMS` cast while the CMS stayed `uint8_t[N]` → strict-
+    aliasing UB. The green B2 fixtures missed it (they used `&Y` to a *named* static — no
+    CMS). **Fixed:** a `scan_const` `EnumValue` arm + a multi-view `scan_bytes` arm
+    (selecting the active variant via the shared `body_emit::direct_enum_active_variant`,
+    so scan + emit can't drift) + two compile-structural regression tests (provably fail
+    pre-fix). The workflow *missed* this (no lens covered the `mod.rs` pre-pass); the
+    holistic Codex pass caught it — the dual approach was load-bearing.
+  - **#2 (fail-loud gap — workflow; fixed).** A multi-view **niche** enum whose
+    **untagged** variant held a relocation, in the `static`/`Const::Bytes` form, was
+    rejected (the value-position M1-lite had no bytes analog). **Fixed:** the niche branch
+    of `enum_from_bytes` now routes through `reconstruct_payload_variant_fields` (the bytes
+    analog of M1-lite, via `u._v<untagged>`); the reject survives only for a genuinely
+    *niched*-variant reloc (now accurate) via `reject_uncovered_relocs`. + a regression test.
+  - **#3 (documented residual — me + Codex + workflow).** A **reference-holding union**
+    (`static S: U = U { p: &Y }`, a `Byte::Reloc` over `Ty::Union`) still fails loud — a
+    union has no `_c<idx>` typed-view analog (§14 Unions was scoped out), and the active
+    member is ambiguous from a byte image (the #5 problem). Sound, reachable, so it is now
+    a **documented residual**, not absorbed into a "gap-free" claim. Tracked as a follow-on
+    (a Change-C-style typed union member, analogous to `d2.3-bridge-dedup` for #6). The
+    canonical spec §12 `Bytes` row already states it.
+  **The residual fail-louds after the fixup:** (a) a **reference-holding union** (#3,
+  reachable, documented above); (b) **niche-tagged-reloc** in a genuinely niched
+  (non-untagged) variant — external-rustc-invariant (rustc niche-fills only fieldless
+  variants); (c) **#5** (`Const::Aggregate` over `Ty::Union` — no union valtree); (d) **#6**
+  (CMS pointee collision — `d2.3-bridge-dedup`). Re-soundness after the fixup: SOUND (8/8).
 - **task e (`regseq-backends-15`) DONE + assessed (2026-05-28, `567e6e3`); the
   FIRST GREEN coverage-ledger milestone, and it spawned a soundness follow-up
   task.** e implemented the §8 diag-log → `printf` lowering (call-site interception

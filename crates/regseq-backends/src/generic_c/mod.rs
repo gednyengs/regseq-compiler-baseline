@@ -1023,6 +1023,26 @@ fn scan_const(
             }
         }
         Const::Bytes(bytes) => scan_bytes(model, bytes, consumer_ty, map)?,
+        Const::EnumValue {
+            variant_idx,
+            payload,
+        } => {
+            // d2.3b: a `Const::EnumValue` reloc payload child can reference a
+            // `ConstMemoryStatic` through a typed pointer field -- the
+            // value-position M1-lite niche-untagged route, the Direct-reloc
+            // `_c<idx>` route (`lower_direct_reloc_to_typed_view`), and the inline
+            // untagged payload all lower each child via `const_expr` at its
+            // variant field type. Scan each child at exactly that type so the CMS
+            // is re-typed to its consumer pointee (else the emitted
+            // `(const T*)&CMS` cast is strict-aliasing UB). `enum_variant_field`
+            // returns `None` for a ZST field (which cannot carry a relocation).
+            let v = variant_idx.index();
+            for (i, child) in payload.iter().enumerate() {
+                if let Some((_, fty)) = enum_emit::enum_variant_field(model, consumer_ty, v, i) {
+                    scan_const(model, model.consts.resolve(*child), fty, map)?;
+                }
+            }
+        }
         _ => {}
     }
     Ok(())
@@ -1062,9 +1082,14 @@ fn scan_aggregate_children(
 /// `ConstMemoryStatic` (the nested-byte-reloc consumer), threading the field /
 /// element type the way [`body_emit`]'s walker does. Covers every shape the
 /// byte-image walker reconstructs into a pointer cast: Ref / Ptr, Struct /
-/// Tuple / Closure, Array, and an **inline** Enum's payload-variant fields
-/// (a multi-view enum byte image with a reloc defers to d2.3, so it emits no
-/// CMS cast and needs no scan).
+/// Tuple / Closure, Array, and an Enum's active payload-variant fields -- a
+/// **multi-view** `Direct` enum (d2.3b: `reconstruct_multiview_reloc_from_bytes`
+/// casts its `_c<idx>` payload fields) selects the active variant via the SAME
+/// [`body_emit::direct_enum_active_variant`] the emitter uses; a niche /
+/// `Single { scalar: None }` enum (inline, or the multi-view `u._v<untagged>`
+/// route of d2.3b Fix #2) scans the untagged payload variant. Without this the
+/// CMS would stay `uint8_t[N]` and the emitted `(const T*)&CMS` cast is
+/// strict-aliasing UB.
 fn scan_bytes(
     model: &RegseqModel,
     bytes: &[regseq_model::Byte],
@@ -1099,10 +1124,33 @@ fn scan_bytes(
         }
         Ty::Enum { .. } => {
             if let Some(shape) = enum_emit::enum_shape(model, consumer_ty) {
-                if enum_emit::enum_is_inline(model, shape) {
-                    if let Some(variant) = inline_payload_variant_layout(shape) {
-                        for f in &variant.fields {
-                            scan_byte_field(model, bytes, f.ty, f.offset, map)?;
+                match enum_emit::enum_tag(model, shape) {
+                    // A tag-view (`Direct`) enum: decode the active variant the
+                    // same way the bytes-form reloc emitter does, then scan its
+                    // payload fields -- so a multi-view `_c<idx>` reloc image is
+                    // re-typed. An inline fieldless `Direct` variant contributes
+                    // no typed view (nothing to scan).
+                    enum_emit::EnumTag::View { .. } => {
+                        if let Some(v) = body_emit::direct_enum_active_variant(model, shape, bytes)
+                        {
+                            if let Some(view) =
+                                enum_emit::enum_variant_typed_view(model, consumer_ty, v)
+                            {
+                                for f in &view.fields {
+                                    scan_byte_field(model, bytes, f.ty, f.offset, map)?;
+                                }
+                            }
+                        }
+                    }
+                    // A niche / `Single { scalar: None }` enum: scan the untagged
+                    // payload variant's fields -- the inline single view, or the
+                    // multi-view `u._v<untagged>` view a niche-untagged reloc image
+                    // routes through (d2.3b Fix #2).
+                    _ => {
+                        if let Some(variant) = inline_payload_variant_layout(shape) {
+                            for f in &variant.fields {
+                                scan_byte_field(model, bytes, f.ty, f.offset, map)?;
+                            }
                         }
                     }
                 }
