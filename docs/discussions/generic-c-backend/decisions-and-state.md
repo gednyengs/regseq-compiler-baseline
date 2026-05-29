@@ -155,17 +155,41 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   silently truncates the output (verified: `info!("pre\0post={}", 7u32)` →
   `printf("[INFO] pre\000post=%u\n", …)` → prints only `[INFO] pre`). e is correct
   for all NUL-free text (the milestone stands); the fix is the next task.
-- **task `&str`-NUL faithfulness (the fwrite redesign, NOT yet drafted; architect-chosen
-  disposition 2026-05-28).** The sound fix for the interior-NUL truncation is a **full
-  length-aware emission redesign**, as its **own task**: replace the single
-  `printf(fmt, args)` with **segmented emission** — `printf`/`snprintf` for the numeric
-  conversions, `fwrite(bytes, 1, n, stdout)` for every literal run AND every `&str`
-  value (static via its CMS bytes+len; non-static via the fat-pointer `.data`/`.len`) —
-  so all content incl. interior NUL is faithful. A deliberate **§8.1 spec delta**
-  ("single emitter (printf)" → printf-for-numerics + fwrite-for-bytes) + §8.3 (the
-  `&str` strategy moves off `%s`/stack-buffer to fwrite); re-bless all 10 golden.c + add
-  an interior-NUL fixture. ([[diag-log-str-nul-faithfulness]].) Until it lands the tree
-  carries this documented narrow silent-truncation (interior-NUL log text only).
+- **task `&str`-NUL faithfulness `regseq-backends-16` DONE + assessed (2026-05-28,
+  `dad9a1e`); the interior-NUL silent truncation is FIXED, and the assessment's mandatory
+  soundness pass spawned an in-close fix.** The architect-chosen **uniform `fwrite`
+  redesign** landed: `emit_diag_log` now lowers every diag-log call to a statement
+  sequence where every byte to stdout is written by `fwrite(ptr, 1, n, stdout)` with an
+  explicit count — literal runs (tag + template text + `\n`) and `&str` values directly
+  (static via CMS bytes+decoded len; non-static via the fat-pointer `.data`/`.len`, no
+  buffer/cap/truncation), numerics via `snprintf` into a fixed `[24]` stack buffer then
+  `fwrite` (the buffer provably > the 20-byte max admissible rendering, so no
+  over-read). The §8.3 256-cap/`min(len,cap-1)`/no-marker **truncation contract is
+  removed** (a `&str` of any length prints in full). Deliberate **canonical-doc delta**:
+  `generic-c-backend.md` §1/§7.1/§8.1–§8.5 (single-emitter→uniform-fwrite; §8.3 retitled
+  "byte-faithful emission"; §8.2 `Ref(Str)` row) + four narrow `spec.md` §26
+  generic-C-binding-prose corrections (§26.1/§26.8 D8 rationale/§26.9/§26.10 — the
+  `printf`/stack-buffer/NUL-termination restatements the redesign falsifies; §26.6/§26.7
+  + the Pipeline-A prohibition untouched). Re-blessed all goldens; `diag_str_truncation`
+  → `diag_str_long` (≥256 prints in full); added `diag_nul` (the interior-NUL regression:
+  template + static + non-static `&str`, `expected.stdout` carrying literal NUL bytes,
+  byte-exact via the NUL-valid-UTF-8 oracle). Spec Codex-reviewed (4 rounds → APPROVED;
+  each round closed one more falsified-prose cross-ref, converging on the 7+4 doc-delta
+  set). Gates: 162 backend unit + 37 runner compile-AND-RUN + 1 isolated corpus + 7
+  bless/entry; **Mode A 11/11 green, verdict still `not-pass`, ledger byte-stable**.
+  **The mandatory post-close Codex soundness pass (6th catch after d1/d2/d2.1/d2.2/e,
+  [[assessment-soundness-pass]]) found a real latent silent miscompile** — the numeric
+  `snprintf` scratch names were **hardcoded `_n<k>`/`_l<k>`**, which collide with (shadow)
+  a body-local C name derived from a source `debug_name` (e.g. a local `_n0`), so
+  `(unsigned)(_n0)` reads the buffer pointer, not the value. Verified against the
+  codebase's own invariant (`fresh_temp_name`'s doc: "cannot collide with any body-local
+  C name … even when a debug-named local sanitizes to the same base" — which `Repeat`/
+  `*WithOverflow` temps honor and the diag block bypassed). **Fixed in-close (`3f2a172`,
+  the assessment follow-up on the `dad9a1e` redesign):** route the scratch names through
+  `fresh_temp_name("_n")`/`("_l")` (the `k`
+  counter dropped; each numeric block is its own `{ }` scope so one pair is reused) + a
+  structural regression test (`diag_call_numeric_scratch_avoids_local_name`) + re-bless
+  (`_n0`→`_n`). Re-soundness pass: SOUND. ([[diag-log-str-nul-faithfulness]] now CLOSED.)
 - **Enum representation = the union-of-views form (§13/D9; FIXED 2026-05-27,
   `5d422fe`).** The c2 review showed the literal "tag field + payload `union` at
   a `union_start` (fields at `offset−union_start`)" form is **not C-placeable**
@@ -221,7 +245,7 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
 | L1 roadmap | phase sequence + deps + gates | done | `e74fbb3` | `roadmap.md` (Codex APPROVED) |
 | P1 plan docs | entry + 3 docs (surface+matrix / decisions / verification) | ALL FILLED (each Codex APPROVED) | `63b43cd` | `phase-1/01` 170-row matrix+gaps, `02` D1–D12, `03` codegen-coverage harness |
 | P1 spec delta | Doc-2 decisions → canonical `generic-c-backend.md` | done (Codex APPROVED) | `cb0b793` | gc §§10–17 + §7.1 terminators + §2/§5/§7 edits |
-| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+d2.2+**e** DONE+assessed; **first GREEN ledger** — `DL-1/2/3/4/6/7`+`TM-2/3/5/8` green, verdict still `not-pass`; **d2.3 + the `&str`-NUL fwrite-faithfulness task to draft**; banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + ALL non-scalar `Const`; **e** adds the §8 diag-log → `printf` lowering (interception, template parser, specifier+cast mapping, both `&str` strategies) + the codegen-coverage harness bring-up (`--bless`, entry-symbol resolution) + the first 10 on-disk fixtures; five rare const shapes deferred to d2.3, interior-NUL `&str` faithfulness deferred to the fwrite task) | `567e6e3` (e=`-15`) | generic-C backend MVP + first-green codegen-coverage harness |
+| P1 impl | Rust surface + diag-log → C, + verification harness | in progress (a+b+c1+07+c2+09+d1+d1.1+d2+d2.1+d2.2+e+**`-16`** DONE+assessed; **first GREEN ledger** — `DL-1/2/3/4/6/7`+`TM-2/3/5/8` green, verdict still `not-pass`, 11 fixtures; **only d2.3 left to draft**; banks 2-3 emit all sized aggregates incl. enums (+ the multi-view enum `_raw` member); banks 4-5 emit scalar/pointer/control-flow bodies + non-enum structured data + §13 enum tag-ops + ALL non-scalar `Const`; **e** added the §8 diag-log → `printf` lowering + the harness bring-up + the first 10 fixtures; **`-16`** redesigned diag-log to **byte-faithful uniform `fwrite`** (fixing the interior-NUL `&str` silent truncation; §8.3 truncation contract removed; `+diag_nul` regression, `diag_str_truncation`→`diag_str_long`; in-close soundness fix = numeric scratch names via `fresh_temp_name`); five rare const shapes still deferred to d2.3) | `dad9a1e`+`3f2a172` (`-16`) | generic-C backend MVP + first-green codegen-coverage harness |
 
 ---
 
