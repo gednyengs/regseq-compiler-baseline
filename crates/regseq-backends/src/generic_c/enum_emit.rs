@@ -30,7 +30,9 @@
 
 use regseq_model::{EnumShape, LayoutKind, RegseqModel, TagEncoding, TagScalar, Ty, TyId};
 
-use super::layout_emit::{align_attr, emit_offset_fields, is_zst, GuardDesignator, ViewField};
+use super::layout_emit::{
+    align_attr, emit_offset_fields, is_zst, reserved_member_name, GuardDesignator, ViewField,
+};
 use super::naming::sanitize;
 use super::NameTable;
 
@@ -72,6 +74,7 @@ pub(crate) fn emit_enum(
     };
 
     let views = build_views(model, shape);
+    let const_views = build_const_views(model, shape);
 
     let mut out = String::new();
     let mut guards = String::new();
@@ -82,27 +85,55 @@ pub(crate) fn emit_enum(
         // Zero views: a size-faithful struct (an `Empty` enum, or a
         // `Single { scalar: None }` whose sole variant is fieldless). A
         // size-0 uninhabited enum collapses to an empty `struct` (a
-        // gnu11 extension).
+        // gnu11 extension). No payload / niche const exists, so no `_raw`.
         if layout.size > 0 {
             out.push_str(&format!("    unsigned char _pad0[{}];\n", layout.size));
         }
+    } else if views.len() == 1 {
+        // Exactly one view (the section 9.8 tag-only / 9.9 single-field
+        // collapse). Change A (d2.3b): wrap the view in an ANONYMOUS
+        // `union { struct { ... }; unsigned char <raw>[size]; }` so the inline
+        // enum gains a byte-covering `<raw>` for the uniform const path while
+        // gnu11 member promotion keeps the runtime access path IDENTICAL
+        // (`e.<field>`) -- `member_prefix` stays `""`, the d2.1 navigator is
+        // untouched. The `<raw>` name is collision-proof against the promoted
+        // view field names (a Rust variant field named `_raw` would otherwise
+        // clash with the array member) and spelled solely through
+        // [`enum_raw_member`] / [`raw_member_for`].
+        out.push_str("    union {\n");
+        out.push_str("    struct {\n");
+        let prefix = member_prefix(&views, &views[0].member); // "" for one view
+        let guard = GuardDesignator {
+            type_operand: &type_operand,
+            label: enum_name,
+            member_prefix: &prefix,
+        };
+        emit_offset_fields(
+            model,
+            names,
+            &views[0].fields,
+            layout.size,
+            &guard,
+            &mut out,
+            &mut guards,
+        );
+        out.push_str("    };\n");
+        let raw = raw_member_for(&views, &const_views);
+        out.push_str(&format!("    unsigned char {raw}[{}];\n", layout.size));
+        out.push_str("    };\n");
+        // The promoted `<raw>` member is `offsetof`-addressable and starts at 0.
+        guards.push_str(&format!(
+            "_Static_assert(offsetof(struct {enum_name}, {raw}) == 0, \"{enum_name}.{raw} offset\");\n",
+        ));
     } else {
-        // One view collapses inline (no `union` wrapper, empty member
-        // prefix), so a fieldless `Direct` enum becomes a tag-only struct
-        // (section 9.8) and a niche `Option<&T>` a single-field struct
-        // (section 9.9); two or more views share a `union { ... } u;` with
-        // the nested `u.<member>.<field>` designator. The inline-vs-`union`
-        // collapse + member-prefix spelling is [`member_prefix`] -- the one
-        // source of truth shared with the body-side navigator (task d2.1),
-        // so the access path cannot drift from this definition.
-        let union_wrap = views.len() >= 2;
-        if union_wrap {
-            out.push_str("    union {\n");
-        }
+        // Two or more views share a `union { ... } u;` with the nested
+        // `u.<member>.<field>` designator. The inline-vs-`union` collapse +
+        // member-prefix spelling is [`member_prefix`] -- the one source of
+        // truth shared with the body-side navigator (task d2.1), so the
+        // access path cannot drift from this definition.
+        out.push_str("    union {\n");
         for view in &views {
-            if union_wrap {
-                out.push_str("    struct {\n");
-            }
+            out.push_str("    struct {\n");
             let prefix = member_prefix(&views, &view.member);
             let guard = GuardDesignator {
                 type_operand: &type_operand,
@@ -118,22 +149,49 @@ pub(crate) fn emit_enum(
                 &mut out,
                 &mut guards,
             );
-            if union_wrap {
-                out.push_str(&format!("    }} {};\n", view.member));
-            }
+            out.push_str(&format!("    }} {};\n", view.member));
         }
-        if union_wrap {
-            // Change A (d2.2): a full-object byte-image member so a
-            // value-position enum const can initialize the union through one
-            // expression (`.u._raw = { ... }`). A C designated initializer
-            // that names a second union member overrides the first, so the
-            // tag and payload cannot be set separately in a const; `_raw`
-            // carries the whole serialized value. Layout-neutral: the views
-            // are already full-object size, `_raw` is alignment 1, and the
-            // outer `aligned` + the size/align `_Static_assert`s still hold.
-            out.push_str(&format!("    unsigned char _raw[{}];\n", layout.size));
-            out.push_str("    } u;\n");
+        // Change C (d2.3b / M1): a CONST-INIT-ONLY typed full-object view
+        // `_c<idx>` per payload-bearing variant of a multi-view tag-view
+        // (`Direct`) enum -- `struct { <tag>; <payload fields...>; }` at
+        // ABSOLUTE offsets -- so a tagged enum const whose payload carries a
+        // relocation can route the tag + the reloc through ONE union
+        // designator (`_raw`, a `char[]`, cannot hold an address constant).
+        // The runtime `_tag` / `_v<idx>` views + navigator are unchanged
+        // (`_c<idx>` is written only by the const path). Layout-neutral:
+        // another full-object-sized union member.
+        for view in &const_views {
+            out.push_str("    struct {\n");
+            let prefix = member_prefix(&views, &view.member); // "u._c<idx>."
+            let guard = GuardDesignator {
+                type_operand: &type_operand,
+                label: enum_name,
+                member_prefix: &prefix,
+            };
+            emit_offset_fields(
+                model,
+                names,
+                &view.fields,
+                layout.size,
+                &guard,
+                &mut out,
+                &mut guards,
+            );
+            out.push_str(&format!("    }} {};\n", view.member));
         }
+        // Change A (d2.2): a full-object byte-image member so a value-position
+        // enum const can initialize the union through one expression
+        // (`.u._raw = { ... }`). A C designated initializer that names a second
+        // union member overrides the first, so the tag and payload cannot be
+        // set separately in a const; `_raw` carries the whole serialized value.
+        // Layout-neutral: the views are already full-object size, `_raw` is
+        // alignment 1, and the outer `aligned` + the size/align
+        // `_Static_assert`s still hold. The name is collision-proof against the
+        // generated `u` member names via [`raw_member_for`] (for uniformity --
+        // a fixed `_raw` is already safe among generated siblings).
+        let raw = raw_member_for(&views, &const_views);
+        out.push_str(&format!("    unsigned char {raw}[{}];\n", layout.size));
+        out.push_str("    } u;\n");
     }
 
     out.push_str(&format!("}} {};\n", align_attr(layout)));
@@ -175,6 +233,66 @@ fn build_views(model: &RegseqModel, shape: &EnumShape) -> Vec<View> {
         }
     }
     views
+}
+
+/// Build the `_c<idx>` const-init-only typed full-object views (Change C /
+/// M1): one per payload-bearing variant of a multi-view tag-view (`Direct` /
+/// `Single { scalar: Some }`) enum. Each view holds the tag field (its name
+/// collision-proofed against the payload field names -- typically `tag`,
+/// falling back to `tag0`/... on a clash) followed by the variant's payload
+/// fields (the SAME names / types / absolute offsets `_v<idx>` uses; ZST fields
+/// are kept so the body side can index it in parallel with the payload, and the
+/// section 14 emitter filters them). Empty for an enum with no tag view (a
+/// niche / `Single { scalar: None }` / `Empty` shape) -- a niche enum's reloc
+/// const is M1-lite (untagged, d2.3a) or the niche-tagged-reloc defensive guard.
+fn build_const_views(model: &RegseqModel, shape: &EnumShape) -> Vec<View> {
+    let Some(tag) = tag_view_scalar(shape) else {
+        return Vec::new();
+    };
+    let mut const_views = Vec::new();
+    for (idx, variant) in shape_variants(shape).iter().enumerate() {
+        let payload = variant_view_fields(model, &variant.fields);
+        if !payload.iter().any(|f| !is_zst(model, f.ty)) {
+            // A fieldless variant carries no payload, so no `_c<idx>` view (its
+            // const is the single tag-member init).
+            continue;
+        }
+        let tag_name = reserved_member_name("tag", payload.iter().map(|f| f.name.clone()));
+        let mut fields = vec![ViewField {
+            name: tag_name,
+            ty: tag.scalar_ty,
+            offset: tag.offset,
+        }];
+        fields.extend(payload);
+        const_views.push(View {
+            member: format!("_c{idx}"),
+            variant: Some(idx),
+            fields,
+        });
+    }
+    const_views
+}
+
+/// The bare `<raw>` byte-image member name for an enum whose `views` /
+/// `const_views` were produced by [`build_views`] / [`build_const_views`]
+/// (Change A). For a one-view inline enum the `<raw>` member is PROMOTED next
+/// to the view's field names, so the name is collision-proofed against those
+/// (a Rust variant field named `_raw` would otherwise clash); for a multi-view
+/// enum the `<raw>` sits among the generated `_tag` / `_v<idx>` / `_c<idx>`
+/// siblings (a fixed `_raw` is already safe, but the same reservation is used
+/// for uniformity + future-proofing). The single source of truth both
+/// [`emit_enum`] (the definition) and [`enum_raw_member`] (the body designator)
+/// spell the member through, so the two cannot drift.
+fn raw_member_for(views: &[View], const_views: &[View]) -> String {
+    if views.len() <= 1 {
+        reserved_member_name("_raw", views[0].fields.iter().map(|f| f.name.clone()))
+    } else {
+        let members = views
+            .iter()
+            .chain(const_views.iter())
+            .map(|v| v.member.clone());
+        reserved_member_name("_raw", members)
+    }
 }
 
 /// The tag scalar whose cell becomes a `_tag` view: present iff
@@ -303,14 +421,74 @@ pub(super) fn enum_is_inline(model: &RegseqModel, shape: &EnumShape) -> bool {
     build_views(model, shape).len() <= 1
 }
 
-/// The `u._raw` byte-image union member path for a value-position enum const
-/// (d2.2 Change A): `Some("u._raw")` for a multi-view enum (whose `union
-/// u` carries `unsigned char _raw[size]`), `None` for an inline / single-view
-/// / `Empty` enum (which has no union, so the const init takes the inline
-/// path or a d2.3 carve-out). The single source of truth for the `_raw`
-/// member path; the body side spells `.u._raw` only through this.
+/// The byte-image `<raw>` member designator for a value-position enum const,
+/// the NAME-COMPUTING single source of truth (Change A). `Some(u.<raw>)` for a
+/// multi-view enum (whose `union u` carries `unsigned char <raw>[size]`),
+/// `Some(<raw>)` for a one-view inline enum (whose ANONYMOUS union PROMOTES a
+/// byte-covering `<raw>` sibling -- access path unchanged), `None` for a
+/// zero-view (`Empty` / fieldless `Single { scalar: None }`) enum (no payload /
+/// niche const exists). The `<raw>` name is computed through the SAME
+/// [`raw_member_for`] call [`emit_enum`] spells the definition through (the same
+/// collision-proof seed), so the const designator and the emitted member cannot
+/// drift; the body side spells `.<raw>` only through this lookup.
 pub(super) fn enum_raw_member(model: &RegseqModel, shape: &EnumShape) -> Option<String> {
-    (!enum_is_inline(model, shape)).then(|| "u._raw".to_string())
+    let views = build_views(model, shape);
+    if views.is_empty() {
+        return None;
+    }
+    let const_views = build_const_views(model, shape);
+    let raw = raw_member_for(&views, &const_views);
+    if views.len() == 1 {
+        Some(raw)
+    } else {
+        Some(format!("u.{raw}"))
+    }
+}
+
+/// One emitted `_c<idx>` const-init-only typed full-object view (Change C /
+/// M1), as the body side accesses it. Read straight from [`build_const_views`]
+/// (the `tag` sub-field name, the payload field names / types / offsets are
+/// never re-derived).
+pub(super) struct TypedView {
+    /// The union member name, e.g. `_c1` (the const designator is
+    /// `.u._c1 = { ... }`).
+    pub(super) member: String,
+    /// The synthetic tag sub-field name (collision-proofed against the payload
+    /// field names).
+    pub(super) tag_name: String,
+    /// The tag scalar's logical type.
+    pub(super) tag_ty: TyId,
+    /// The variant's payload fields (the same names / types / absolute offsets
+    /// `_v<idx>` uses). ZST fields are kept so the body side can index them in
+    /// parallel with the const payload (it filters them when emitting
+    /// designators, matching the section 14 view emitter).
+    pub(super) fields: Vec<ViewField>,
+}
+
+/// The `_c<idx>` typed full-object view for variant `variant_idx` of enum
+/// `enum_ty` (Change C / M1), or `None` when the variant has no such view (not
+/// a tag-view enum, a fieldless variant, or out of range). The body side spells
+/// the const designator `.u._c<idx> = { .<tag> = .., .<field> = .. }` through
+/// this, never re-deriving the `_c<idx>` member / `tag` sub-field / payload
+/// field names.
+pub(super) fn enum_variant_typed_view(
+    model: &RegseqModel,
+    enum_ty: TyId,
+    variant_idx: usize,
+) -> Option<TypedView> {
+    let shape = enum_shape(model, enum_ty)?;
+    let cv = build_const_views(model, shape)
+        .into_iter()
+        .find(|v| v.variant == Some(variant_idx))?;
+    let mut fields = cv.fields;
+    // `build_const_views` puts the tag first, then the payload fields.
+    let tag = fields.remove(0);
+    Some(TypedView {
+        member: cv.member,
+        tag_name: tag.name,
+        tag_ty: tag.ty,
+        fields,
+    })
 }
 
 /// The C member-designator suffix + post-narrow type for variant `variant_idx`'s

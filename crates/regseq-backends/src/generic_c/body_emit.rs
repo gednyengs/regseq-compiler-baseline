@@ -24,13 +24,19 @@
 //! union byte image (the union `_raw` member), a no-relocation structured
 //! multi-view enum payload (the recursive `serialize_const_into`), and a
 //! multi-view niche-untagged relocation payload (the `u._v<untagged>` typed
-//! view). The remaining const carve-outs stay sound fail-loud via
-//! [`EmitError::Unsupported`] as documented Phase-1 limitations (a relocation
-//! enum payload, an inline bool-niche, an inline nested niche cell -- all task
-//! d2.3b) or defensive guards (a `Const::Aggregate` over a union, a
-//! `ConstMemoryStatic` deduped at incompatible pointee types); `dyn` / vtable
-//! construction is the vtable task. Diag-log call-site interception lowers to
-//! the section 8 `printf`.
+//! view). Task d2.3b closes the const exit gate for every reachable enum/union
+//! shape: an inline enum's anonymous-union `<raw>` serves the inline niche
+//! const uniformly (closing the bool-niche + nested-niche cases), and a typed
+//! full-object view `_c<idx>` routes a multi-view tag-view (`Direct`) enum
+//! const whose payload carries a relocation (both the `Const::EnumValue` and
+//! the `Const::Bytes`-with-`Byte::Reloc` forms). The remaining fail-louds are
+//! external-rustc-invariant defensive guards, not shipped gaps: a niche enum
+//! const with a relocation payload in a niched (non-untagged) variant (rustc
+//! niche-fills only fieldless variants), a `Const::Aggregate` over a union
+//! (rustc emits no union valtree), and a `ConstMemoryStatic` deduped at
+//! incompatible pointee types (a bridge content-hash dedup follow-up); `dyn` /
+//! vtable construction is the vtable task. Diag-log call-site interception
+//! lowers to the section 8 `printf`.
 
 use regseq_model::{
     AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const, ConstId, Endian,
@@ -2324,6 +2330,7 @@ pub(super) fn const_memory_static_initializer(
         StorageTy::Array { elem, count } => {
             let esize = model.size_align_of(*elem).size as usize;
             let mut parts = Vec::with_capacity(*count as usize);
+            let mut covered = Vec::with_capacity(*count as usize);
             for i in 0..*count as usize {
                 let lo = i * esize;
                 let hi = lo + esize;
@@ -2332,6 +2339,7 @@ pub(super) fn const_memory_static_initializer(
                         "ConstMemoryStatic byte image shorter than its element array",
                     ));
                 }
+                covered.push((lo, hi));
                 parts.push(bytes_to_typed_literal(
                     model,
                     names,
@@ -2341,6 +2349,10 @@ pub(super) fn const_memory_static_initializer(
                     true,
                 )?);
             }
+            // A relocation in a trailing byte beyond the `count * esize` element
+            // region (or anywhere when `elem` is ZST) would be silently dropped
+            // from the array initializer -> fail loud.
+            reject_uncovered_relocs(bytes, &covered)?;
             Ok(format!("{{ {} }}", parts.join(", ")))
         }
     }
@@ -2445,6 +2457,10 @@ pub(super) fn bytes_to_typed_literal(
 /// is expected is malformed).
 fn scalar_from_bytes(model: &RegseqModel, bytes: &[Byte], ty: TyId) -> Result<String, EmitError> {
     let size = model.size_align_of(ty).size as usize;
+    // `decode_scalar_bits` rejects a `Byte::Reloc` inside the `size`-byte prefix;
+    // a trailing reloc (an overlong image) would otherwise be ignored -> fail
+    // loud so no relocation is ever silently dropped (a scalar holds no address).
+    reject_uncovered_relocs(bytes, &[(0, size)])?;
     let bits = decode_scalar_bits(bytes, size, model.target.endian)?;
     match &model.types[ty] {
         Ty::Bool => Ok(if bits != 0 { "1" } else { "0" }.to_string()),
@@ -2504,6 +2520,10 @@ fn pointer_from_bytes(
             "byte image shorter than the pointer width",
         ));
     }
+    // The pointer occupies `bytes[..size]`; a `Byte::Reloc` in a trailing byte
+    // (an overlong image) would be ignored -> fail loud so no relocation is
+    // silently dropped (the relocation must be the single pointer-width run).
+    reject_uncovered_relocs(bytes, &[(0, size)])?;
     if let Byte::Reloc(r) = bytes[0] {
         if bytes[..size].iter().all(|b| *b == Byte::Reloc(r)) {
             return Ok(reloc_designator(model, names, syms, r, Some(ty)));
@@ -2540,6 +2560,7 @@ fn aggregate_from_bytes(
         "byte image over an unresolved aggregate",
     ))?;
     let mut parts = Vec::new();
+    let mut covered = Vec::new();
     for (idx, f) in fields.iter().enumerate() {
         if layout_emit::is_zst(model, f.ty) {
             continue;
@@ -2554,10 +2575,17 @@ fn aggregate_from_bytes(
                 "aggregate field slice exceeds the byte image",
             ));
         }
+        covered.push((off, off + fsize));
         let recon =
             bytes_to_typed_literal(model, names, syms, &bytes[off..off + fsize], fty, true)?;
         parts.push(format!(".{fname} = {recon}"));
     }
+    // A relocation in inter-field / trailing padding (or a ZST field) is outside
+    // every typed field slice -> it would be silently dropped from the
+    // reconstructed literal. A relocation occupies a pointer slot (never
+    // padding), so fail loud instead (soundness; a relocation in a covered slice
+    // is resolved by that field's recursion).
+    reject_uncovered_relocs(bytes, &covered)?;
     let agg = names.agg_name(ty);
     if parts.is_empty() {
         Ok(format!("(struct {agg}){{0}}"))
@@ -2611,6 +2639,7 @@ fn array_from_bytes(
 ) -> Result<String, EmitError> {
     let esize = model.size_align_of(elem).size as usize;
     let mut parts = Vec::with_capacity(n as usize);
+    let mut covered = Vec::with_capacity(n as usize);
     for i in 0..n as usize {
         let lo = i * esize;
         let hi = lo + esize;
@@ -2619,6 +2648,7 @@ fn array_from_bytes(
                 "array element slice exceeds the byte image",
             ));
         }
+        covered.push((lo, hi));
         parts.push(bytes_to_typed_literal(
             model,
             names,
@@ -2628,6 +2658,10 @@ fn array_from_bytes(
             true,
         )?);
     }
+    // A relocation in a byte beyond the `n * esize` element region (an overlong
+    // image), or anywhere when `elem` is ZST (no element slice covers a byte),
+    // would be silently dropped -> fail loud (a reloc must land in a typed slot).
+    reject_uncovered_relocs(bytes, &covered)?;
     let inner = if parts.is_empty() {
         "{0}".to_string()
     } else {
@@ -2667,10 +2701,24 @@ fn union_from_bytes(
     ))
 }
 
-/// Reconstruct an `Enum` consumer from its byte image: a multi-view enum
-/// initializes the section 13 `_raw` union member directly from the bytes
-/// (sound iff the bytes carry no `Byte::Reloc` -- a reloc cannot be written
-/// into `_raw`); an inline enum reconstructs its inline view fields.
+/// The niche-tagged-relocation residual message (d2.3b Change E): an
+/// external-rustc-invariant DEFENSIVE guard, not a shipped gap. rustc
+/// niche-fills only fieldless variants, so a niched (non-untagged) variant
+/// carries no payload, let alone a relocation; the validator does not enforce
+/// this (`layout_validator.rs:554`), so the byte-image serializer keeps a hard
+/// fail-loud rather than a silent miscompile. A multi-view tag-view (`Direct`)
+/// reloc uses the `_c<idx>` typed full view instead.
+const NICHE_TAGGED_RELOC_MSG: &str = "niche enum const with a relocation payload in a niched (non-untagged) variant: not expected (rustc niche-fills only fieldless variants); a Direct reloc uses the _c<idx> view";
+
+/// Reconstruct an `Enum` consumer from its byte image. An inline enum routes a
+/// NO-relocation image to its anonymous-union `<raw>` uniformly (d2.3b Change B;
+/// closes the inline bool-niche / nested-niche cases) and a `Byte::Reloc`-
+/// bearing image to the typed single-view reconstruction (a reloc cannot enter
+/// `<raw>`). A multi-view enum initializes the section 13 `_raw` member directly
+/// for a no-relocation image; a `Byte::Reloc`-bearing image of a tag-view
+/// (`Direct`) enum routes its tag + relocation through the `_c<idx>` typed full
+/// view (d2.3b Change D), while a relocation in a multi-view NICHE enum is the
+/// niche-tagged-reloc defensive guard.
 fn enum_from_bytes(
     model: &RegseqModel,
     names: &NameTable,
@@ -2681,13 +2729,38 @@ fn enum_from_bytes(
     let shape = enum_emit::enum_shape(model, enum_ty).ok_or(EmitError::Unsupported(
         "byte image over a non-enum consumer",
     ))?;
+    let has_reloc = bytes.iter().any(|b| matches!(b, Byte::Reloc(_)));
     if enum_emit::enum_is_inline(model, shape) {
+        // Inline: a no-relocation byte image initializes `<raw>` uniformly
+        // (Change B); a reloc-bearing image keeps the typed single-view
+        // reconstruction (the single view IS the whole object). A zero-view
+        // inline enum has no `<raw>` -> the typed path handles it.
+        if !has_reloc {
+            if let Some(raw) = enum_emit::enum_raw_member(model, shape) {
+                let agg = names.agg_name(enum_ty);
+                return Ok(format!(
+                    "(struct {agg}){{ .{raw} = {} }}",
+                    raw_byte_image(bytes)?
+                ));
+            }
+        }
         return reconstruct_inline_enum_from_bytes(model, names, syms, bytes, enum_ty, shape);
     }
-    if bytes.iter().any(|b| matches!(b, Byte::Reloc(_))) {
-        return Err(EmitError::Unsupported(
-            "Const enum value with a relocation payload: needs the typed full view (Phase-1 limitation; task d2.3b)",
-        ));
+    if has_reloc {
+        // Change D: a multi-view tag-view (`Direct`) reloc byte image routes its
+        // tag + relocation through the `_c<idx>` typed full view.
+        if matches!(
+            enum_emit::enum_tag(model, shape),
+            enum_emit::EnumTag::View { .. }
+        ) {
+            return reconstruct_multiview_reloc_from_bytes(
+                model, names, syms, bytes, enum_ty, shape,
+            );
+        }
+        // A multi-view NICHE enum carrying a relocation: the niche-tagged-reloc
+        // external-invariant defensive guard (rustc niche-fills only fieldless
+        // variants, so such a shape is not bridge-producible).
+        return Err(EmitError::Unsupported(NICHE_TAGGED_RELOC_MSG));
     }
     let raw = enum_emit::enum_raw_member(model, shape).ok_or(EmitError::Unsupported(
         "multi-view enum byte image without a _raw union member",
@@ -2699,32 +2772,152 @@ fn enum_from_bytes(
     ))
 }
 
+/// Reconstruct a multi-view tag-view (`Direct`) enum from a `Byte::Reloc`-
+/// bearing byte image (d2.3b Change D, the `static` form of #2-reloc). The
+/// active variant is determined by DECODING the `Direct` tag slice
+/// ([`enum_tag_location`]'s offset + width) with the target-endian scalar-byte
+/// decoder and matching it against each `variant.tag_value` -- a `Byte::Reloc`
+/// inside the tag slice, a slice shorter than the tag width, or no matching
+/// `tag_value` is a malformed image (fail loud, never a silent default). Each
+/// non-ZST payload field is reconstructed via [`bytes_to_typed_literal`] (a
+/// `Byte::Reloc` field -> the reference carrier -> `&Y`, landing in the typed
+/// pointer slot), spelled through the [`enum_emit::enum_variant_typed_view`]
+/// navigator: `(struct E){ .u._c<v> = { .<tag> = <tv>, .<field> = .. } }` --
+/// one union member, no double-init.
+fn reconstruct_multiview_reloc_from_bytes(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    bytes: &[Byte],
+    enum_ty: TyId,
+    shape: &EnumShape,
+) -> Result<String, EmitError> {
+    let agg = names.agg_name(enum_ty);
+    let endian = model.target.endian;
+    let (toff, twidth) = enum_tag_location(model, shape).ok_or(EmitError::Unsupported(
+        "multi-view reloc byte image without a tag cell location",
+    ))?;
+    if toff + twidth > bytes.len() {
+        return Err(EmitError::Unsupported(
+            "multi-view enum tag slice exceeds the byte image",
+        ));
+    }
+    // The tag is a scalar; a relocation in its slice is malformed.
+    if bytes[toff..toff + twidth]
+        .iter()
+        .any(|b| matches!(b, Byte::Reloc(_)))
+    {
+        return Err(EmitError::Unsupported(
+            "relocation byte inside the enum tag slice (malformed byte image)",
+        ));
+    }
+    let tag_bits = decode_scalar_bits(&bytes[toff..toff + twidth], twidth, endian)?;
+    let v = match_variant_by_tag(shape, tag_bits, twidth).ok_or(EmitError::Unsupported(
+        "no variant tag value matches the decoded enum tag (malformed byte image)",
+    ))?;
+    let view = enum_emit::enum_variant_typed_view(model, enum_ty, v).ok_or(
+        EmitError::Unsupported("multi-view reloc byte image variant without a typed full view"),
+    )?;
+    let tvr = render_tag_value(model, names, view.tag_ty, tag_bits)?;
+    let mut inner = vec![format!(".{} = {tvr}", view.tag_name)];
+    let mut covered = vec![(toff, toff + twidth)];
+    for f in &view.fields {
+        if layout_emit::is_zst(model, f.ty) {
+            continue;
+        }
+        let fsize = model.size_align_of(f.ty).size as usize;
+        let off = f.offset as usize;
+        if off + fsize > bytes.len() {
+            return Err(EmitError::Unsupported(
+                "multi-view enum payload field slice exceeds the byte image",
+            ));
+        }
+        covered.push((off, off + fsize));
+        let recon =
+            bytes_to_typed_literal(model, names, syms, &bytes[off..off + fsize], f.ty, true)?;
+        inner.push(format!(".{} = {recon}", f.name));
+    }
+    // A relocation in inter-field / trailing padding (or a ZST payload field) is
+    // outside every typed slice -> fail loud rather than silently drop it.
+    reject_uncovered_relocs(bytes, &covered)?;
+    Ok(format!(
+        "(struct {agg}){{ .u.{} = {{ {} }} }}",
+        view.member,
+        inner.join(", ")
+    ))
+}
+
+/// The variant index whose `tag_value` matches the decoded `Direct` tag bits
+/// (`tag_value mod 2^(8*twidth) == tag_bits`), for the Change-D bytes path.
+/// `None` for no match (a malformed byte image). The tag bits are already
+/// masked to the tag width by [`decode_scalar_bits`].
+fn match_variant_by_tag(shape: &EnumShape, tag_bits: u128, twidth: usize) -> Option<usize> {
+    let mask = if twidth >= 16 {
+        u128::MAX
+    } else {
+        (1u128 << (8 * twidth)) - 1
+    };
+    let variants: &[VariantLayout] = match shape {
+        EnumShape::Multiple { variants, .. } => variants,
+        EnumShape::Single { variant, .. } => std::slice::from_ref(variant),
+        EnumShape::Empty => return None,
+    };
+    variants
+        .iter()
+        .position(|v| matches!(v.tag_value, Some(tv) if (tv & mask) == tag_bits))
+}
+
 /// Render a raw byte image as an `unsigned char[]` initializer (`{ b0, ..,
 /// bN-1 }`, `Uninit` -> 0). Shared by the enum `_raw` and the union `_raw`
-/// (Change B) paths. A `Reloc` byte cannot be written into a `char[]` (it
-/// cannot hold an address constant) -> a Phase-1 limitation (#2-reloc).
+/// no-relocation paths. A `Reloc` byte cannot be written into a `char[]` (it
+/// cannot hold an address constant) -> fail loud. Reachable only via a union
+/// byte image holding a reference (a union has no typed full view to route a
+/// reloc through; the enum `_raw` callers pass only no-relocation images, an
+/// enum reloc using the `_c<idx>` typed view instead).
 fn raw_byte_image(bytes: &[Byte]) -> Result<String, EmitError> {
     let mut parts = Vec::with_capacity(bytes.len());
     for b in bytes {
         match b {
             Byte::Value(v) => parts.push(v.to_string()),
             Byte::Uninit => parts.push("0".to_string()),
-            Byte::Reloc(_) => {
-                return Err(EmitError::Unsupported(
-                    "Const enum value with a relocation payload: needs the typed full view (Phase-1 limitation; task d2.3b)",
-                ))
-            }
+            Byte::Reloc(_) => return Err(EmitError::Unsupported(
+                "relocation byte in a union byte image: a char[] cannot hold an address constant",
+            )),
         }
     }
     Ok(format!("{{ {} }}", parts.join(", ")))
 }
 
-/// Reconstruct an inline (<= 1 view, no `union`) enum from its byte image: a
-/// tag-only view decodes the tag cell; a niche / single-variant payload view
-/// reconstructs the untagged variant's inline fields (byte-faithful for both
-/// the untagged and niched variants, since the niche is encoded in the payload
-/// bytes). An inline bool-niche cannot round-trip a raw bit pattern through a
-/// `_Bool` field -> a Phase-1 limitation (#3; needs the niche-cell retype).
+/// Fail loud if any `Byte::Reloc` in `bytes` lies outside every `covered`
+/// `[start, end)` byte range -- the non-ZST field / payload slices a byte-image
+/// reconstruction emitted a typed designator for. A relocation occupies a
+/// pointer slot, so a `Byte::Reloc` in inter-field / trailing padding or a ZST
+/// region is never produced by a well-formed (rustc) image; left unchecked it
+/// would be SILENTLY DROPPED from the reconstructed initializer (a soundness
+/// hole). A relocation INSIDE a covered slice is resolved by that slice's
+/// recursive reconstruction (`pointer_from_bytes` consumes a complete
+/// pointer-width run; a scalar field rejects a stray reloc; a nested aggregate
+/// re-checks its own coverage), so this per-level guard composes into a complete
+/// "every reloc lands in a typed pointer slot, or fail loud" invariant.
+fn reject_uncovered_relocs(bytes: &[Byte], covered: &[(usize, usize)]) -> Result<(), EmitError> {
+    for (i, b) in bytes.iter().enumerate() {
+        if matches!(b, Byte::Reloc(_)) && !covered.iter().any(|&(lo, hi)| i >= lo && i < hi) {
+            return Err(EmitError::Unsupported(
+                "relocation byte outside every typed field slice in a byte image (padding / ZST region): a relocation must land in a typed pointer slot",
+            ));
+        }
+    }
+    Ok(())
+}
+
+/// Reconstruct an inline (<= 1 view, no `union`) enum from a byte image
+/// [`enum_from_bytes`] routed here -- a zero-view inline enum (no `<raw>`), or a
+/// `Byte::Reloc`-bearing inline image (a reloc cannot enter `<raw>`, so the
+/// typed single view carries it). A no-relocation inline image already
+/// initializes `<raw>` uniformly in [`enum_from_bytes`] (Change B). A tag-only
+/// view decodes the tag cell; a niche / single-variant payload view
+/// reconstructs the untagged variant's inline fields (a `Byte::Reloc` lands in
+/// the typed pointer field).
 fn reconstruct_inline_enum_from_bytes(
     model: &RegseqModel,
     names: &NameTable,
@@ -2748,18 +2941,15 @@ fn reconstruct_inline_enum_from_bytes(
                     "inline enum tag slice exceeds the byte image",
                 ));
             }
+            // A fieldless tag-view inline enum has no pointer field, so a
+            // `Byte::Reloc` anywhere outside the tag slice (padding / trailing)
+            // is malformed -> fail loud rather than silently drop it
+            // (`scalar_from_bytes` already rejects a reloc inside the tag slice).
+            reject_uncovered_relocs(bytes, &[(offset, offset + size)])?;
             let recon = scalar_from_bytes(model, &bytes[offset..offset + size], scalar_ty)?;
             Ok(format!("(struct {agg}){{ .{member_path} = {recon} }}"))
         }
-        enum_emit::EnumTag::Niche { scalar_ty, .. } => {
-            if matches!(model.types[scalar_ty], Ty::Bool) {
-                return Err(EmitError::Unsupported(
-                    "Const::EnumValue (inline bool-niche): needs niche-cell retype (Phase-1 limitation; task d2.3b)",
-                ));
-            }
-            reconstruct_inline_variant_fields(model, names, syms, bytes, enum_ty, shape)
-        }
-        enum_emit::EnumTag::None => {
+        enum_emit::EnumTag::Niche { .. } | enum_emit::EnumTag::None => {
             reconstruct_inline_variant_fields(model, names, syms, bytes, enum_ty, shape)
         }
     }
@@ -2785,6 +2975,7 @@ fn reconstruct_inline_variant_fields(
         "inline enum payload variant out of range",
     ))?;
     let mut parts = Vec::new();
+    let mut covered = Vec::new();
     for (idx, f) in variant.fields.iter().enumerate() {
         if layout_emit::is_zst(model, f.ty) {
             continue;
@@ -2799,10 +2990,14 @@ fn reconstruct_inline_variant_fields(
                 "inline enum field slice exceeds the byte image",
             ));
         }
+        covered.push((off, off + fsize));
         let recon =
             bytes_to_typed_literal(model, names, syms, &bytes[off..off + fsize], fty, true)?;
         parts.push(format!(".{member_path} = {recon}"));
     }
+    // A relocation in inter-field / trailing padding (or a ZST field) would be
+    // silently dropped -> fail loud (a reloc must land in a typed pointer slot).
+    reject_uncovered_relocs(bytes, &covered)?;
     if parts.is_empty() {
         Ok(format!("(struct {agg}){{0}}"))
     } else {
@@ -3010,29 +3205,31 @@ fn typed_valtree_aggregate(
 }
 
 /// `Const::EnumValue` (section 13 / 12): lower a value-position enum const to
-/// one C compound literal (d2.2 Change E completes the multi-member
-/// cases d2.1 handed off).
+/// one C compound literal (d2.2 Change E + d2.3a/d2.3b complete every reachable
+/// shape d2.1 handed off).
 ///
-/// - inline enum (<= 1 view, no `union`): a fieldless-collapsed `Direct` /
+/// - inline enum (<= 1 view): a fieldless-collapsed `Direct` /
 ///   `Single { scalar: Some }` tag view -> `(struct E){ .tag = <tag_value> }`;
 ///   a `Single { scalar: None }` / niche **untagged** payload -> the payload
-///   children (ZST omitted); a niche **niched** variant -> `(struct E){ .<F> =
-///   <tag_value> }` when its niche cell coincides with one inline scalar field
-///   `F`. An inline bool-niche (#3) / a niche cell inside a nested aggregate
-///   (#4) cannot round-trip a raw bit pattern through a const literal -> a
-///   Phase-1 limitation (task d2.3b).
-/// - multi-view enum (a `union u` with the Change-A `_raw` member): a
+///   children (ZST omitted; the typed single view, so a relocation lands in the
+///   typed field); a niche **niched** variant -> the anonymous-union `<raw>`
+///   byte image (`serialize_enum_value_to_raw`, d2.3b Change B), so a bool-niche
+///   `2` or a niche cell buried in a nested aggregate round-trips with no C-type
+///   normalization.
+/// - multi-view enum (a `union u` with the `_raw` + `_c<idx>` members): a
 ///   **fieldless** `Direct` variant stays the d2.1 single tag-member init
 ///   (`(struct E){ .u._tag.tag = <tv> }`); a multi-view niche **untagged**
 ///   variant (no `tag_value` to co-write) routes through the existing
-///   `u._v<untagged>` typed view (M1-lite, Change D), so even a relocation
-///   payload lowers to one typed designator; every other value (a
+///   `u._v<untagged>` typed view (M1-lite, d2.3a); a tag-view (`Direct`)
+///   payload-bearing variant whose payload carries a **relocation** routes the
+///   tag + reloc through the `_c<idx>` typed full view (d2.3b Change D,
+///   `lower_direct_reloc_to_typed_view`); every other value (a no-relocation
 ///   payload-bearing `Direct` variant, or a niched-tagged variant) serializes
 ///   the tag + a **no-relocation** payload (scalar / aggregate / array /
 ///   `Bytes` / `NullPtr` / nested `EnumValue`) to a `layout.size` byte image via
 ///   `serialize_const_into` and initializes the union via
-///   `(struct E){ .u._raw = { ... } }`. A relocation payload cannot be written
-///   into `_raw` -> a Phase-1 limitation (#2-reloc; task d2.3b).
+///   `(struct E){ .u._raw = { ... } }`. A relocation in a niched (non-untagged)
+///   variant fails loud (the niche-tagged-reloc defensive guard).
 fn enum_value_expr(
     model: &RegseqModel,
     names: &NameTable,
@@ -3066,31 +3263,24 @@ fn enum_value_expr(
             // Inline, no tag (Single { scalar: None }): the payload children.
             enum_emit::EnumTag::None => Ok(enum_value_payload_literal(&agg, &kept)),
             // Inline niche.
-            enum_emit::EnumTag::Niche { offset, scalar_ty } => {
+            enum_emit::EnumTag::Niche { .. } => {
                 let variant = variant_layout(shape, v).ok_or(EmitError::Unsupported(
                     "Const::EnumValue variant index out of range",
                 ))?;
                 match variant.tag_value {
-                    // A niched variant: write the niche cell, only when it
-                    // coincides exactly with one inline scalar field (an inline
-                    // enum has no `_raw` to write a byte image through).
-                    Some(tv) => {
-                        match niche_coinciding_field(model, enum_ty, shape, offset, scalar_ty) {
-                            Some((fname, _)) => {
-                                let tvr = render_tag_value(model, names, scalar_ty, tv)?;
-                                Ok(format!("(struct {agg}){{ .{fname} = {tvr} }}"))
-                            }
-                            None if matches!(model.types[scalar_ty], Ty::Bool) => {
-                                Err(EmitError::Unsupported(
-                                    "Const::EnumValue (inline bool-niche): needs niche-cell retype (Phase-1 limitation; task d2.3b)",
-                                ))
-                            }
-                            None => Err(EmitError::Unsupported(
-                                "Const::EnumValue (inline niche cell not a top-level field): needs nested designator (Phase-1 limitation; task d2.3b)",
-                            )),
-                        }
+                    // A niched variant serializes uniformly to the
+                    // anonymous-union `<raw>` byte image (Change B): the niche
+                    // value at the niche cell + any payload, written as raw
+                    // bytes -- so an arbitrary bit pattern (a bool-niche `2`, a
+                    // niche cell buried in a nested aggregate) round-trips with
+                    // no C-type normalization (`(_Bool){2}` could not). A
+                    // relocation in the payload still fails loud via
+                    // `serialize_const_into` (the niche-tagged-reloc guard).
+                    Some(_tv) => {
+                        serialize_enum_value_to_raw(model, &agg, enum_ty, shape, v, payload)
                     }
-                    // The untagged variant: the payload IS the value.
+                    // The untagged variant: the payload IS the value (the typed
+                    // single view; a relocation lands in the typed field).
                     None => Ok(enum_value_payload_literal(&agg, &kept)),
                 }
             }
@@ -3148,12 +3338,89 @@ fn enum_value_expr(
                 return Ok(enum_value_payload_literal(&agg, &kept));
             }
         }
-        // Every other multi-view value (a payload-bearing `Direct` variant, or a
-        // niched-tagged niche variant) serializes to the `_raw` byte image --
-        // the union cannot be const-initialized through separate `_tag` /
-        // `_v<v>` members (a second union designator overrides the first).
-        serialize_multiview_enum_value(model, &agg, enum_ty, shape, v, payload)
+        // Change D (d2.3b / M1): a multi-view tag-view (`Direct`) payload-bearing
+        // variant whose payload (transitively) carries a relocation routes the
+        // tag + the relocation through the typed full view `_c<v>` -- the reloc
+        // lands in a typed pointer slot (`_raw`, a `char[]`, cannot hold an
+        // address constant), in ONE union designator with no double-init. A
+        // fieldless variant with a reloc on a ZST field was already caught (and
+        // failed loud) by the tag-literal shortcut above. A no-relocation
+        // payload still serializes to `_raw` (the fall-through, d2.3a).
+        if matches!(
+            enum_emit::enum_tag(model, shape),
+            enum_emit::EnumTag::View { .. }
+        ) && payload
+            .iter()
+            .any(|id| const_carries_reloc(model, model.consts.resolve(*id)))
+        {
+            return lower_direct_reloc_to_typed_view(
+                model, names, syms, enum_ty, shape, v, payload,
+            );
+        }
+        // Every other multi-view value (a no-relocation payload-bearing
+        // `Direct` variant, or a niched-tagged niche variant) serializes to the
+        // `_raw` byte image -- the union cannot be const-initialized through
+        // separate `_tag` / `_v<v>` members (a second union designator
+        // overrides the first).
+        serialize_enum_value_to_raw(model, &agg, enum_ty, shape, v, payload)
     }
+}
+
+/// Lower a multi-view tag-view (`Direct`) enum const whose payload carries a
+/// relocation through the `_c<v>` typed full view (d2.3b Change D, the
+/// `Const::EnumValue` form of #2-reloc): `(struct E){ .u._c<v> = { .<tag> =
+/// <render_tag_value(tv)>, .<field> = <const_expr(child)> } }`. The tag + each
+/// non-ZST payload field are spelled through the
+/// [`enum_emit::enum_variant_typed_view`] navigator (never re-derived); a
+/// relocation child lowers via `const_expr`'s reference-carrier / reloc arm
+/// (-> `&Y` / the fat carrier), landing in the TYPED field -- nested relocs land
+/// via nested designators. A relocation wrongly attached to a ZST / omitted
+/// field is a layout certificate violation (fail loud, never silently dropped),
+/// matching [`lower_enum_payload`].
+fn lower_direct_reloc_to_typed_view(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    enum_ty: TyId,
+    shape: &EnumShape,
+    v: usize,
+    payload: &[ConstId],
+) -> Result<String, EmitError> {
+    let agg = names.agg_name(enum_ty);
+    let tv = variant_layout(shape, v)
+        .and_then(|vl| vl.tag_value)
+        .ok_or(EmitError::Unsupported(
+            "Direct reloc enum const for a variant without a tag value",
+        ))?;
+    let view = enum_emit::enum_variant_typed_view(model, enum_ty, v).ok_or(
+        EmitError::Unsupported("Direct reloc enum const for a variant without a typed full view"),
+    )?;
+    let tvr = render_tag_value(model, names, view.tag_ty, tv)?;
+    let mut inner = vec![format!(".{} = {tvr}", view.tag_name)];
+    for (i, child_id) in payload.iter().enumerate() {
+        let field = view.fields.get(i).ok_or(EmitError::Unsupported(
+            "Direct reloc enum const payload exceeds the variant field count",
+        ))?;
+        let child = model.consts.resolve(*child_id);
+        if layout_emit::is_zst(model, field.ty) {
+            // A relocation occupies a pointer slot, never a zero-sized field;
+            // fail loud rather than drop the address (matching lower_enum_payload).
+            if const_carries_reloc(model, child) {
+                return Err(EmitError::Unsupported(
+                    "relocation attached to a zero-sized enum payload field (layout certificate violation)",
+                ));
+            }
+            let _ = const_expr(model, names, syms, child, Some(field.ty), true)?;
+            continue;
+        }
+        let e = const_expr(model, names, syms, child, Some(field.ty), true)?;
+        inner.push(format!(".{} = {e}", field.name));
+    }
+    Ok(format!(
+        "(struct {agg}){{ .u.{} = {{ {} }} }}",
+        view.member,
+        inner.join(", ")
+    ))
 }
 
 /// Serialize a no-relocation `Const` of type `ty` into `image[offset..]` as its
@@ -3191,7 +3458,11 @@ fn serialize_const_into(
     endian: Endian,
 ) -> Result<(), EmitError> {
     match c {
-        Const::Bool(_) | Const::Char(_) | Const::Int(_, _) | Const::Uint(_, _) | Const::Float(_, _) => {
+        Const::Bool(_)
+        | Const::Char(_)
+        | Const::Int(_, _)
+        | Const::Uint(_, _)
+        | Const::Float(_, _) => {
             let bits = const_scalar_bits(c).ok_or(EmitError::Unsupported(
                 "scalar const without a bit pattern (serialize_const_into)",
             ))?;
@@ -3214,16 +3485,14 @@ fn serialize_const_into(
                 image[offset + i] = match b {
                     Byte::Value(v) => *v,
                     Byte::Uninit => 0,
-                    Byte::Reloc(_) => {
-                        return Err(EmitError::Unsupported(
-                            "Const enum value with a relocation payload: needs the typed full view (Phase-1 limitation; task d2.3b)",
-                        ))
-                    }
+                    Byte::Reloc(_) => return Err(EmitError::Unsupported(NICHE_TAGGED_RELOC_MSG)),
                 };
             }
             Ok(())
         }
-        Const::Aggregate(children) => serialize_aggregate_into(model, image, offset, children, ty, endian),
+        Const::Aggregate(children) => {
+            serialize_aggregate_into(model, image, offset, children, ty, endian)
+        }
         Const::EnumValue {
             variant_idx,
             payload,
@@ -3254,9 +3523,7 @@ fn serialize_const_into(
             }
             Ok(())
         }
-        Const::Reloc(_) => Err(EmitError::Unsupported(
-            "Const enum value with a relocation payload: needs the typed full view (Phase-1 limitation; task d2.3b)",
-        )),
+        Const::Reloc(_) => Err(EmitError::Unsupported(NICHE_TAGGED_RELOC_MSG)),
     }
 }
 
@@ -3264,8 +3531,10 @@ fn serialize_const_into(
 /// aggregate arm of [`serialize_const_into`]): a `Tuple` / `Struct` / `Closure`
 /// recurses each child at its `FieldLayout.offset` in source / MIR order; an
 /// `Array(elem, n)` recurses each child at `offset + i*size_of(elem)`. A
-/// `Ty::Ref` is a reference carrier (a relocation -> #2-reloc); a `Ty::Union`
-/// is the #5 defensive guard (a `Const::Aggregate` carries no active field).
+/// `Ty::Ref` is a reference carrier (a relocation a `char[]` cannot hold ->
+/// fail loud; a `Direct` reloc uses the `_c<idx>` typed view, so this is the
+/// niche-tagged-reloc defensive guard); a `Ty::Union` is the #5 defensive guard
+/// (a `Const::Aggregate` carries no active field).
 fn serialize_aggregate_into(
     model: &RegseqModel,
     image: &mut [u8],
@@ -3307,9 +3576,7 @@ fn serialize_aggregate_into(
             }
             Ok(())
         }
-        Ty::Ref(_, _) => Err(EmitError::Unsupported(
-            "Const enum value with a relocation payload: needs the typed full view (Phase-1 limitation; task d2.3b)",
-        )),
+        Ty::Ref(_, _) => Err(EmitError::Unsupported(NICHE_TAGGED_RELOC_MSG)),
         Ty::Union { .. } => Err(EmitError::Unsupported(
             "Const::Aggregate over a union: not expected (rustc emits no union valtree; unions arrive as Const::Bytes)",
         )),
@@ -3319,20 +3586,23 @@ fn serialize_aggregate_into(
     }
 }
 
-/// Serialize a fully-known multi-view enum value to a `layout.size` byte image
-/// and emit `(struct E){ .u._raw = { ... } }` (d2.2 Change E; d2.3a Change C).
-/// Mirrors `assign_enum`'s tag-then-payload write, but into bytes: the
-/// variant's `tag_value` (when present) at the tag cell over its raw storage
-/// width, then each payload child recursively byte-serialized at its
-/// `FieldLayout.offset` via [`serialize_const_into`] (a ZST field recurses with
-/// zero width; so a no-relocation
-/// aggregate / array / `Bytes` / `NullPtr` / nested `EnumValue` child also
-/// lands in `_raw`), endian per `model.target.endian`. Any relocation in the
-/// payload (a `Reloc` / reference carrier / `Byte::Reloc`, possibly nested)
-/// cannot be encoded into `_raw` -> a Phase-1 limitation (#2-reloc). `_raw` is
-/// written through the `enum_raw_member` navigator path (the single source of
-/// truth).
-fn serialize_multiview_enum_value(
+/// Serialize a fully-known enum value to a `layout.size` byte image and emit
+/// `(struct E){ .<raw> = { ... } }` (d2.2 Change E; d2.3a Change C; generalized
+/// d2.3b Change B to any enum with a `<raw>` member + a tag location -- a
+/// multi-view enum's `u._raw`, or a one-view inline enum's anonymous-union
+/// `<raw>`, e.g. an inline niched variant). Mirrors `assign_enum`'s
+/// tag-then-payload write, but into bytes: the variant's `tag_value` (when
+/// present) at the tag cell over its raw storage width, then each payload child
+/// recursively byte-serialized at its `FieldLayout.offset` via
+/// [`serialize_const_into`] (a ZST field recurses with zero width; so a
+/// no-relocation aggregate / array / `Bytes` / `NullPtr` / nested `EnumValue`
+/// child also lands in `<raw>`), endian per `model.target.endian`. Any
+/// relocation in the payload (a `Reloc` / reference carrier / `Byte::Reloc`,
+/// possibly nested) cannot be encoded into a `char[]` -> fail loud (the
+/// niche-tagged-reloc defensive guard; a multi-view `Direct` reloc uses the
+/// `_c<idx>` typed view instead). `<raw>` is written through the
+/// [`enum_emit::enum_raw_member`] navigator path (the single source of truth).
+fn serialize_enum_value_to_raw(
     model: &RegseqModel,
     agg: &str,
     enum_ty: TyId,
@@ -3504,7 +3774,7 @@ fn lower_enum_payload(
             None => {
                 if const_carries_reloc(model, child) {
                     return Err(EmitError::Unsupported(
-                        "Const enum value with a relocation payload: needs the typed full view (Phase-1 limitation; task d2.3b)",
+                        "relocation attached to a zero-sized enum payload field (layout certificate violation)",
                     ));
                 }
                 let _ = const_expr(model, names, syms, child, None, true)?;
@@ -3566,48 +3836,6 @@ fn enum_value_payload_literal(agg: &str, kept: &[String]) -> String {
     } else {
         format!("(struct {agg}){{ {} }}", kept.join(", "))
     }
-}
-
-/// The inline view field whose niche cell coincides exactly with the niche
-/// (`field.offset == TagScalar.offset` **and** `field.ty == scalar_ty`), as
-/// the member path the navigator spells, or `None` when no single inline
-/// scalar field coincides (the niche is a sub-byte of a nested aggregate
-/// field -> a Phase-1 limitation, #4; task d2.3b). The inline view is the
-/// niche untagged variant's payload.
-fn niche_coinciding_field(
-    model: &RegseqModel,
-    enum_ty: TyId,
-    shape: &EnumShape,
-    offset: u64,
-    scalar_ty: TyId,
-) -> Option<(String, TyId)> {
-    let (untagged, variants) = match shape {
-        EnumShape::Multiple {
-            encoding: TagEncoding::Niche {
-                untagged_variant, ..
-            },
-            variants,
-            ..
-        } => (untagged_variant.index(), variants),
-        _ => return None,
-    };
-    // A `Const::EnumValue` writes the niche cell through the field's logical C
-    // type (a const compound literal has no raw-byte/memcpy escape hatch). A
-    // type that normalizes a raw bit pattern -- `_Bool`, where `(_Bool){2}`
-    // stores 1 -- therefore cannot carry an arbitrary niche value as a const, so
-    // defer it to d2.2. (The runtime niche path uses raw-integer byte storage
-    // and is unaffected.)
-    if matches!(model.types[scalar_ty], Ty::Bool) {
-        return None;
-    }
-    let variant = variants.get(untagged)?;
-    for (idx, f) in variant.fields.iter().enumerate() {
-        if f.offset == offset && f.ty == scalar_ty {
-            // Spell the member path through the navigator (no re-derivation).
-            return enum_emit::enum_variant_field(model, enum_ty, untagged, idx);
-        }
-    }
-    None
 }
 
 /// Whether variant `v` of `shape` is fieldless (every payload field is ZST),

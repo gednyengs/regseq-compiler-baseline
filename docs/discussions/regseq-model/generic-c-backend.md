@@ -941,9 +941,9 @@ initializer.
 | `Uint(k, v)` | unsigned literal (`U` / `ULL`) |
 | `Float(k, bits)` | a **constant-expression** that is exact + bit-faithful (incl. NaN payloads): finite → C99 **hex-float literal**; ±∞ → `__builtin_inff()` / `__builtin_inf()`; NaN → `__builtin_nanf("0x<payload>")` (quiet) / `__builtin_nansf(...)` (signaling). These are GCC/Clang constant expressions (the primitives behind `<math.h>` `INFINITY` / `NAN`); a host-target assumption. **Not** a union member access (which is not a constant expression). `_Float16` / `_Float128` host-dependent. |
 | `ZST` | no bytes — value position: no-op / `(void)0`; aggregate field: omitted (§14) |
-| `Bytes(Vec<Byte>)` | reconstructed as a **typed** initializer for the consumer `Ty` (byte-image walker): scalars decode `size_of` bytes per `target.endian` into the matching literal (`Uninit`→`0`); `Tuple` / `Struct` / `Array` slice per `FieldLayout.offset` (source order, ZST omitted) and recurse; a complete pointer-width `Reloc(r)` run → `&<r>`; a multi-view enum value initializes the §13 `_raw` union member. A `ConstMemoryStatic` is declared as its consumer **pointee storage type** (re-typing, §13 note), so `&X` is the right type + naturally aligned (a flat `unsigned char[]` is the special case of a `[u8; N]` consumer). A `Ty::Union` byte image initializes the byte-covering `_raw` union member (§14 Unions), `(union U){ ._raw = { <bytes> } }`, type-punned by an in-place member read; a `Byte::Reloc` in a union image is a Phase-1 limitation (a `char[]` cannot hold an address constant). |
+| `Bytes(Vec<Byte>)` | reconstructed as a **typed** initializer for the consumer `Ty` (byte-image walker): scalars decode `size_of` bytes per `target.endian` into the matching literal (`Uninit`→`0`); `Tuple` / `Struct` / `Array` slice per `FieldLayout.offset` (source order, ZST omitted) and recurse; a complete pointer-width `Reloc(r)` run → `&<r>`; a **no-relocation** enum byte image initializes the §13 `_raw` member (the inline enum's promoted `_raw` or the multi-view `u._raw`), while a multi-view **tagged** (`Direct`) image carrying a `Reloc` routes the tag + relocation through the §13 `_c<idx>` typed full view (the reloc in a typed pointer slot). A `ConstMemoryStatic` is declared as its consumer **pointee storage type** (re-typing, §13 note), so `&X` is the right type + naturally aligned (a flat `unsigned char[]` is the special case of a `[u8; N]` consumer). A `Ty::Union` byte image initializes the byte-covering `_raw` union member (§14 Unions), `(union U){ ._raw = { <bytes> } }`, type-punned by an in-place member read; a `Byte::Reloc` in a union image is a Phase-1 limitation (a `char[]` cannot hold an address constant). |
 | `Aggregate(children)` | dual role: the `[Reloc, Uint(meta)]` **reference carrier** over `Ty::Ref` (a sized pointee → the reloc designator cast to the pointer type; `Ty::Str` / `Ty::Slice` → the §3.2 `rust_str` / `rust_slice_<T>` fat struct, `.data` via the mutability-correct slice-data pointer type, `.len = (size_t)<meta>`) vs the typed valtree aggregate over `Tuple` / `Struct` / non-`u8` `Array` in §14 field order (a `Ty::Union` valtree is unsupported — `Const::Aggregate` carries no active field) |
-| `EnumValue { variant_idx, payload }` | §13: a multi-view value serializes the tag + a **no-relocation** payload (scalar / aggregate / array / `Bytes` / `NullPtr` / nested `EnumValue`, recursively) to a `layout.size` byte image written into the `_raw` union member; a multi-view **niche-untagged** value (no tag to co-write) instead initializes the existing `u._v<untagged>` typed view (so a relocation payload lands in a typed pointer field); an inline value uses the inline fields / single tag member. A relocation payload of a multi-view **tagged** value, an inline bool-niche, and an inline nested niche cell are Phase-1 limitations |
+| `EnumValue { variant_idx, payload }` | §13: a multi-view value serializes the tag + a **no-relocation** payload (scalar / aggregate / array / `Bytes` / `NullPtr` / nested `EnumValue`, recursively) to a `layout.size` byte image written into the `_raw` union member; a multi-view **tagged** (`Direct`) value whose payload carries a **relocation** routes the tag + reloc through the `_c<idx>` typed full view (`(struct E){ .u._c<v> = { .tag = <tv>, .<f> = &Y } }`); a multi-view **niche-untagged** value (no tag to co-write) instead initializes the existing `u._v<untagged>` typed view (so a relocation payload lands in a typed pointer field); an inline value uses the typed single view (its untagged payload / single tag member), or — for a **niched** variant — the promoted `_raw` byte image (so a bool-niche or a niche cell buried in a nested aggregate round-trips with no C-type normalization). A relocation payload of a niche-**tagged** (non-untagged) variant remains an external-rustc-invariant defensive fail-loud (rustc niche-fills only fieldless variants) |
 | `NullPtr(ty)` | `(T*)0` |
 | `Reloc(InstanceRef)` | `&<emission_name>` of the referenced instance |
 
@@ -970,11 +970,16 @@ outer enum `struct` forced to `__attribute__((aligned(layout.align)))`:
   `TagScalar.offset`;
 - a **variant view** per variant with ≥ 1 non-ZST field (fieldless variants
   place no bytes → no view);
-- if exactly **one** view results, it is emitted **inline** (no `union`
-  wrapper) — collapsing the §9.8 fieldless `Direct` enum to a tag-only
-  `struct` and the §9.9 niche `Option<&T>` to a single-field `struct`;
-  **zero** views (an `Empty` enum, or a `Single{scalar:None}` whose sole
-  variant is fieldless) → a size-faithful (possibly empty) `struct`.
+- if exactly **one** view results, it is wrapped in an **anonymous**
+  `union { struct { <view fields> }; unsigned char _raw[size]; }` —
+  collapsing the §9.8 fieldless `Direct` enum to a tag-only struct and the
+  §9.9 niche `Option<&T>` to a single-field struct, while gnu11 **member
+  promotion** keeps the runtime access path bare (`e.<field>`, the access
+  path **unchanged** from a plain inline struct) and the byte-covering `_raw`
+  sibling serves the inline const path (below). The `_raw` name is
+  collision-proof against the promoted view field names; **zero** views (an
+  `Empty` enum, or a `Single{scalar:None}` whose sole variant is fieldless) →
+  a size-faithful (possibly empty) `struct` with no `_raw`.
 
 `_Static_assert(sizeof==size)`, `_Static_assert(_Alignof==align)`, and a
 per-field `_Static_assert(offsetof(E, <view>.<field>)==<absolute offset>)`
@@ -987,12 +992,22 @@ Every **multi-view** enum's shared `union u` also carries a full-object
 value-position enum const (§12 `EnumValue` / `Bytes`): a C designated
 initializer cannot set two members of the same `union` (`.u._tag` and
 `.u._v<v>` share offset 0 — a later union designator overrides the earlier),
-so a fully-known value is written as `(struct E){ .u._raw = { <bytes> } }`.
+so a fully-known **no-relocation** value is written as
+`(struct E){ .u._raw = { <bytes> } }`. A `char[]` `_raw` cannot hold an
+address constant, so a multi-view **tagged** (`Direct`) value whose payload
+carries a **relocation** instead uses a **const-init-only** typed full-object
+view `_c<idx>` — `struct { <tag>; <payload fields…>; }` at **absolute**
+offsets, one per payload-bearing `Direct` variant, with its synthetic `tag`
+sub-field name collision-proofed against the payload field names — so the tag
+and the relocation go through **one** union designator with the reloc in a
+typed pointer slot (`(struct E){ .u._c<v> = { .tag = <tv>, .<f> = &Y } }`).
 Runtime reads stay **in-place** typed-view accesses (`x.u._tag.tag`,
 `x.u._v<v>.<f>`) — gnu11 `union` type-punning, valid because the read never
 takes the address of an inactive member and dereferences a typed pointer
-later. `_raw` is layout-neutral: the views are already full-object size, it
-has alignment 1, and the size / align `_Static_assert`s are unchanged.
+later; the runtime navigator is **unchanged** (`_c<idx>` is written only by
+the const path). Both `_raw` and each `_c<idx>` are layout-neutral: the views
+are already full-object size, `_raw` has alignment 1, and the size / align
+`_Static_assert`s are unchanged.
 
 **Why not a single tag field + payload `union`?** A literal "tag field at
 `TagScalar.offset` + a payload `union` placed at some `union_start` (fields
@@ -1026,19 +1041,24 @@ placed at its absolute (naturally-aligned) offset within a view, and the
   their offsets + the tag write (as `SetDiscriminant(v)`), as sequential
   statements through the typed views.
 - `Const::EnumValue` (a value-position const) → an **inline** enum uses the
-  inline fields / single tag member; a **multi-view** enum cannot set the
-  `_tag` and `_v<v>` union members in one initializer, so a fully-known value
-  is **usually** serialized to a byte image and written into the `_raw` union
-  member (`(struct E){ .u._raw = { ... } }`) — the tag plus a **no-relocation**
-  payload (scalar / aggregate / array / `Bytes` / `NullPtr` / nested
-  `EnumValue`, serialized recursively). **Except** a multi-view **niche-untagged**
-  value (no `tag_value` to co-write): its whole value *is* its payload, so it
-  initializes the existing `u._v<untagged>` typed view instead
-  (`(struct E){ .u._v<untagged>.<f> = ... }`), which also lets a **relocation**
-  payload land in a typed pointer field. A multi-view **tagged** value with a
-  relocation payload remains a Phase-1 limitation (a `char[]` `_raw` cannot hold
-  an address constant; needs a typed full view). **The representation itself is
-  unchanged — no new union member is added.**
+  typed single view (its untagged payload / single tag member); a **niched**
+  inline variant serializes the niche value + any payload to the promoted
+  `_raw` byte image (so a bool-niche or a niche cell buried in a nested
+  aggregate round-trips with no C-type normalization). A **multi-view** enum
+  cannot set the `_tag` and `_v<v>` union members in one initializer, so a
+  fully-known value is **usually** serialized to a byte image and written into
+  the `_raw` union member (`(struct E){ .u._raw = { ... } }`) — the tag plus a
+  **no-relocation** payload (scalar / aggregate / array / `Bytes` / `NullPtr` /
+  nested `EnumValue`, serialized recursively). **Except**: a multi-view
+  **niche-untagged** value (no `tag_value` to co-write) initializes the
+  existing `u._v<untagged>` typed view (`(struct E){ .u._v<untagged>.<f> = ... }`),
+  letting a **relocation** payload land in a typed pointer field; and a
+  multi-view **tagged** (`Direct`) value whose payload carries a **relocation**
+  uses the `_c<idx>` typed full view (`(struct E){ .u._c<v> = { .tag = <tv>,
+  .<f> = &Y } }`). A relocation payload of a niche-**tagged** (non-untagged)
+  variant is an external-rustc-invariant defensive fail-loud (rustc niche-fills
+  only fieldless variants). **The runtime representation is unchanged — the
+  `_raw` / `_c<idx>` members are const-init-only.**
 
 A readability optimisation (a named `{ tag; union; }` when the layout is
 provably tag-prefix-compatible) is **deferred** — not Phase 1.

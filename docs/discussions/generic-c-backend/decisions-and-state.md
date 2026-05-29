@@ -209,6 +209,54 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
     a `ConstMemoryStatic` deduped at incompatible pointee types (vanishingly rare; root
     cause = the bridge content-hash dedup; clean fix is a bridge type-aware key —
     task d2.3-bridge-dedup).
+- **task d2.3b (`regseq-backends-18`) DONE — the const exit gate is now GAP-FREE for
+  every reachable enum/union shape (2026-05-29).** Package A / full closure, implementing
+  the Codex-approved mechanism refinement (`phase-1/05-d2.3b-mechanism-refinement.md`,
+  which supersedes `04` §5.2's M2-a/M2-b) — a **lighter, lower-risk** mechanism than the
+  §04 sketch. The three documented Phase-1 const limitations (**#2-reloc / #3 / #4**) are
+  **closed**:
+  - **Change A** — a **single-view inline** enum is wrapped in an **anonymous**
+    `union { struct { <view> }; unsigned char <raw>[size]; }`; gnu11 **member promotion**
+    keeps the runtime access path identical (`e.<field>`, the d2.1 navigator untouched,
+    `member_prefix` still `""`) while the byte-covering `<raw>` serves the inline const
+    path. The `<raw>` name is collision-proof against the promoted field names via the
+    shared `layout_emit::reserved_member_name`, spelled solely through `enum_raw_member`
+    (the name-computing single source of truth). **Subsumes M2-a entirely** (no niche-cell
+    retype, no nested-designator locator; `niche_coinciding_field` removed). Layout-neutral.
+  - **Change B** — the **uniform inline const path**: a niched inline variant serializes
+    the niche value + payload to `<raw>` via the generalized `serialize_enum_value_to_raw`
+    (renamed from `serialize_multiview_enum_value`) — closing **#3** (bool-niche `2`) and
+    **#4** (a niche cell buried in a nested aggregate, incl. the **nested `_Bool`** case
+    M2-a fundamentally could not express), since `<raw>` is just bytes (no C-type
+    normalization). The untagged / `Single` / fieldless / inline-reloc cases keep their
+    typed-designator paths.
+  - **Change C** — **M1**: a **const-init-only** typed full-object view `_c<idx>`
+    (`struct { <tag>; <payload fields…>; }` at **absolute** offsets) per payload-bearing
+    `Direct` variant of a multi-view enum; the synthetic `tag` sub-field name is
+    collision-proofed; a new read-only navigator `enum_variant_typed_view` spells it. The
+    runtime `_tag`/`_v<idx>` views + navigator are **unchanged**. Layout-neutral.
+  - **Change D** — a multi-view `Direct` reloc payload routes the tag + relocation through
+    `_c<idx>` (the reloc in a typed pointer slot, one union designator, no double-init) —
+    **both** the `Const::EnumValue` (const) and the `Const::Bytes`-with-`Byte::Reloc`
+    (static) forms (the bytes form decodes the `Direct` tag slice with the target-endian
+    decoder and matches `tag_value`, failing loud on a malformed image). A no-relocation
+    payload still serializes to `_raw` (d2.3a).
+  - **Change E** — the residual **niche-tagged-reloc** reject is sharpened to an
+    external-rustc-invariant defensive-guard message (rustc niche-fills only fieldless
+    variants; **no new code**); the bounded §12/§13 doc delta; this closure record.
+  Diff confined to `enum_emit.rs` + `layout_emit.rs` + `body_emit.rs` (+ in-crate
+  `mod_tests.rs`) + the runner behavioral test + the re-blessed corpus `golden.c`
+  (the multi-view `LogArg` enum gained its `_c<idx>` views, +76 lines/fixture, pure
+  additions — layout-neutral) + the §12/§13 doc delta + this record. **No** spec.md /
+  bridge / model / matrix / ledger / `test-ir-fixtures` / harness / `types.rs` change.
+  Gates: build/fmt/clippy clean; 181 backend unit (+8) + 45 runner compile-AND-RUN (+5,
+  incl. both #2-reloc forms, #3, both #4 cases incl. nested `_Bool`) + corpus/bless
+  green; `emit_generic_c` byte-stable; Mode A ledger byte-identical to committed, verdict
+  unchanged (`not-pass` — const sub-shapes are not distinct matrix rows). **The only
+  residual fail-louds are external-rustc-invariant defensive guards** — the
+  niche-**tagged**-reloc sub-case (above) + the retained **#5** (union valtree) and **#6**
+  (CMS pointee collision, task d2.3-bridge-dedup) — not shipped gaps. See
+  [[assessment-soundness-pass]] for the mandatory post-close soundness result.
 - **task e (`regseq-backends-15`) DONE + assessed (2026-05-28, `567e6e3`); the
   FIRST GREEN coverage-ledger milestone, and it spawned a soundness follow-up
   task.** e implemented the §8 diag-log → `printf` lowering (call-site interception

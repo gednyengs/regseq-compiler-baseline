@@ -4920,6 +4920,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-18",
+          "name": "Generic-C const full closure \u2014 inline anonymous-union _raw + M1 _c<idx> typed full view (Phase-1 d2.3b)",
+          "spec": ".harness/tasks/regseq-backends/18-generic-c-const-full-closure.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-backends-17"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-29T07:27:03Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

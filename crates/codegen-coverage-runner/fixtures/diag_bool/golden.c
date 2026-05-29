@@ -615,6 +615,62 @@ struct input_regseq_log_intrinsics_LogArg {
     unsigned char _pad0[8];
     struct rust_str _0;
     } _v9;
+    struct {
+    uint8_t tag;
+    uint8_t _0;
+    unsigned char _pad0[22];
+    } _c0;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[1];
+    uint16_t _0;
+    unsigned char _pad1[20];
+    } _c1;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[3];
+    uint32_t _0;
+    unsigned char _pad1[16];
+    } _c2;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[7];
+    uint64_t _0;
+    unsigned char _pad1[8];
+    } _c3;
+    struct {
+    uint8_t tag;
+    int8_t _0;
+    unsigned char _pad0[22];
+    } _c4;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[1];
+    int16_t _0;
+    unsigned char _pad1[20];
+    } _c5;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[3];
+    int32_t _0;
+    unsigned char _pad1[16];
+    } _c6;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[7];
+    int64_t _0;
+    unsigned char _pad1[8];
+    } _c7;
+    struct {
+    uint8_t tag;
+    _Bool _0;
+    unsigned char _pad0[22];
+    } _c8;
+    struct {
+    uint8_t tag;
+    unsigned char _pad0[7];
+    struct rust_str _0;
+    } _c9;
     unsigned char _raw[24];
     } u;
 } __attribute__((aligned(8)));
@@ -631,6 +687,26 @@ _Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v6._0) == 
 _Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v7._0) == 8, "input_regseq_log_intrinsics_LogArg.u._v7._0 offset");
 _Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v8._0) == 1, "input_regseq_log_intrinsics_LogArg.u._v8._0 offset");
 _Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._v9._0) == 8, "input_regseq_log_intrinsics_LogArg.u._v9._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c0.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c0.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c0._0) == 1, "input_regseq_log_intrinsics_LogArg.u._c0._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c1.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c1.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c1._0) == 2, "input_regseq_log_intrinsics_LogArg.u._c1._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c2.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c2.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c2._0) == 4, "input_regseq_log_intrinsics_LogArg.u._c2._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c3.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c3.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c3._0) == 8, "input_regseq_log_intrinsics_LogArg.u._c3._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c4.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c4.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c4._0) == 1, "input_regseq_log_intrinsics_LogArg.u._c4._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c5.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c5.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c5._0) == 2, "input_regseq_log_intrinsics_LogArg.u._c5._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c6.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c6.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c6._0) == 4, "input_regseq_log_intrinsics_LogArg.u._c6._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c7.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c7.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c7._0) == 8, "input_regseq_log_intrinsics_LogArg.u._c7._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c8.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c8.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c8._0) == 1, "input_regseq_log_intrinsics_LogArg.u._c8._0 offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c9.tag) == 0, "input_regseq_log_intrinsics_LogArg.u._c9.tag offset");
+_Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c9._0) == 8, "input_regseq_log_intrinsics_LogArg.u._c9._0 offset");
 struct tuple_cbf29ce484222325 {
 } __attribute__((aligned(1)));
 _Static_assert(sizeof(struct tuple_cbf29ce484222325) == 0, "tuple_cbf29ce484222325 size");

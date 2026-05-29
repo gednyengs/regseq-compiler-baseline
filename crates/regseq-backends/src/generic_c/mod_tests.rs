@@ -999,7 +999,9 @@ fn single_scalar_none_fieldless_emits_size_faithful_struct() {
 #[test]
 fn fieldless_direct_enum_collapses_to_tag_only_struct() {
     // Section 9.8: a `repr(u32)` fieldless `Direct` enum -> a single tag
-    // view -> collapsed `struct Status { uint32_t tag; }`.
+    // view. Change A (d2.3b): the one view is wrapped in an ANONYMOUS
+    // union+struct + a byte-covering `_raw[4]`; gnu11 member promotion keeps
+    // `e.tag` access (and `offsetof(struct Status, tag)`) unchanged.
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
     let tag = TagScalar {
@@ -1021,13 +1023,18 @@ fn fieldless_direct_enum_collapses_to_tag_only_struct() {
     push_enum_instance(&mut m, "Status", enum_layout(4, 4, shape));
 
     let tu = emit_generic_c(&m).unwrap();
-    assert!(tu.contains("uint32_t tag;"), "collapsed tag field:\n{tu}");
+    assert!(tu.contains("uint32_t tag;"), "promoted tag field:\n{tu}");
     assert!(
-        !tu.contains("union"),
-        "single view collapses, no union:\n{tu}"
+        tu.contains("unsigned char _raw[4];"),
+        "the anonymous-union byte-covering _raw member:\n{tu}"
     );
     assert!(
-        tu.contains("_Static_assert(offsetof(struct Status, tag) == 0, \"Status.tag offset\");")
+        tu.contains("_Static_assert(offsetof(struct Status, tag) == 0, \"Status.tag offset\");"),
+        "promoted tag stays offsetof-addressable at 0:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct Status, _raw) == 0, \"Status._raw offset\");"),
+        "the promoted _raw member is at offset 0:\n{tu}"
     );
     assert!(tu.contains("_Static_assert(sizeof(struct Status) == 4, \"Status size\");"));
     assert!(tu.contains("__attribute__((aligned(4)))"));
@@ -1036,8 +1043,9 @@ fn fieldless_direct_enum_collapses_to_tag_only_struct() {
 #[test]
 fn niche_enum_collapses_to_single_field_struct() {
     // Section 9.9: `Option<&u32>` is `Niche` (no tag view) with `None`
-    // fieldless + `Some` carrying the pointer at offset 0 -> a single view
-    // -> collapsed `struct Opt { const uint32_t *_0; }`.
+    // fieldless + `Some` carrying the pointer at offset 0 -> a single view.
+    // Change A (d2.3b): the one view is wrapped in an ANONYMOUS union+struct +
+    // a byte-covering `_raw[8]`; member promotion keeps `e._0` access unchanged.
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);
     let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
@@ -1067,11 +1075,15 @@ fn niche_enum_collapses_to_single_field_struct() {
     let tu = emit_generic_c(&m).unwrap();
     assert!(
         tu.contains("const uint32_t *_0;"),
-        "collapsed single pointer field:\n{tu}"
+        "promoted single pointer field:\n{tu}"
     );
-    assert!(!tu.contains("union"), "niche single view collapses:\n{tu}");
+    assert!(
+        tu.contains("unsigned char _raw[8];"),
+        "the anonymous-union byte-covering _raw member:\n{tu}"
+    );
     assert!(!tu.contains(" tag;"), "niche enum has no tag view:\n{tu}");
     assert!(tu.contains("_Static_assert(offsetof(struct Opt, _0) == 0, \"Opt._0 offset\");"));
+    assert!(tu.contains("_Static_assert(offsetof(struct Opt, _raw) == 0, \"Opt._raw offset\");"));
     assert!(tu.contains("_Static_assert(sizeof(struct Opt) == 8, \"Opt size\");"));
 }
 
@@ -4206,10 +4218,11 @@ fn const_enum_value_fieldless_direct_multiview_designates_the_tag() {
 }
 
 #[test]
-fn const_enum_value_inline_niche_none_designates_the_coinciding_cell() {
-    // A single-member `Const::EnumValue` for `Option<&u32>::None` (inline
-    // niche, the cell coincides with the inline pointer field) ->
-    // `(struct Opt){ ._0 = <tag_value as scalar_ty> }`.
+fn const_enum_value_inline_niche_none_serializes_to_raw() {
+    // Change B (d2.3b): a single-member `Const::EnumValue` for
+    // `Option<&u32>::None` (an inline niched variant, niche value 0 at the
+    // 8-byte pointer cell @0) serializes uniformly to the anonymous-union
+    // `_raw` byte image -> `(struct Opt){ ._raw = { 0, 0, 0, 0, 0, 0, 0, 0 } }`.
     let mut m = model();
     let (opt, _r) = push_opt_ref_enum(&mut m);
     let ev = m.consts.intern(Const::EnumValue {
@@ -4231,8 +4244,8 @@ fn const_enum_value_inline_niche_none_designates_the_coinciding_cell() {
     fn_instance(&mut m, "knone", sig, Some(body));
     let tu = emit_generic_c(&m).unwrap();
     assert!(
-        tu.contains("(struct Opt){ ._0 = ((const uint32_t *)0ULL) }"),
-        "inline niche None designates the coinciding cell field:\n{tu}"
+        tu.contains("(struct Opt){ ._raw = { 0, 0, 0, 0, 0, 0, 0, 0 } }"),
+        "inline niche None serializes the niche value into _raw:\n{tu}"
     );
 }
 
@@ -4270,11 +4283,12 @@ fn const_enum_value_payload_bearing_direct_multiview_uses_raw() {
 }
 
 #[test]
-fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_3() {
-    // An inline niche `Const::EnumValue` whose niche cell is a sub-byte of a
-    // nested aggregate field (no single coinciding inline scalar field) ->
-    // task d2.3 (an inline enum has no `_raw` union member to write a byte
-    // image through, Change E).
+fn const_enum_value_inline_nested_niche_cell_serializes_to_raw() {
+    // Change B (d2.3b, #4): an inline niche `Const::EnumValue` whose niche cell
+    // is a sub-byte of a NESTED aggregate field now serializes uniformly to the
+    // anonymous-union `_raw` byte image (the niche value 0 at offset 1; size 2)
+    // -> `(struct OptT){ ._raw = { 0, 0 } }`. M2-a could not have written a
+    // nested designator; `_raw` is just bytes.
     let mut m = model();
     let opt_t = push_opt_tuple_niche_enum(&mut m);
     let ev = m.consts.intern(Const::EnumValue {
@@ -4294,22 +4308,20 @@ fn const_enum_value_inline_niche_noncoinciding_cell_is_d2_3() {
         )],
     );
     fn_instance(&mut m, "knone_t", sig, Some(body));
-    let reason = unsupported_reason(&m);
+    let tu = emit_generic_c(&m).unwrap();
     assert!(
-        reason.contains("inline niche cell not a top-level field") && reason.contains("task d2.3b"),
-        "non-coinciding inline niche cell is a Phase-1 limitation (#4): {reason}"
+        tu.contains("(struct OptT){ ._raw = { 0, 0 } }"),
+        "a nested-niche-cell const serializes the niche value into _raw:\n{tu}"
     );
 }
 
 #[test]
-fn const_enum_value_inline_bool_niche_is_d2_3() {
-    // An *inline* niche `Const::EnumValue` whose niche cell IS a directly
-    // coinciding `_Bool` field defers to d2.3: a const compound literal writes
-    // through the field's logical C type, and `(_Bool){2}` normalizes to 1 --
-    // the raw niche bit pattern can't round-trip through a `_Bool` field, and
-    // an inline enum has no `_raw` member to write the byte image through. (A
-    // *multi-view* bool-niche const IS handled via `_raw`, Change E.) The
-    // runtime niche path uses raw-integer byte storage and is unaffected.
+fn const_enum_value_inline_bool_niche_serializes_to_raw() {
+    // Change B (d2.3b, #3): an inline niche `Const::EnumValue` whose niche cell
+    // IS a `_Bool` field now serializes uniformly to the anonymous-union `_raw`
+    // byte image. `Option<bool>::None` (niche value 2 @0, size 1) ->
+    // `(struct OptBool){ ._raw = { 2 } }`. `_raw` is just bytes, so byte 2
+    // round-trips where `(_Bool){2}` would have normalized to 1.
     let mut m = model();
     let opt = push_opt_bool_niche_enum(&mut m);
     let ev = m.consts.intern(Const::EnumValue {
@@ -4329,10 +4341,10 @@ fn const_enum_value_inline_bool_niche_is_d2_3() {
         )],
     );
     fn_instance(&mut m, "knone_bool", sig, Some(body));
-    let reason = unsupported_reason(&m);
+    let tu = emit_generic_c(&m).unwrap();
     assert!(
-        reason.contains("(inline bool-niche)") && reason.contains("task d2.3b"),
-        "inline bool-niche EnumValue normalization-lossy -> Phase-1 limitation (#3): {reason}"
+        tu.contains("(struct OptBool){ ._raw = { 2 } }"),
+        "inline bool-niche None serializes byte 2 into _raw (no normalization):\n{tu}"
     );
 }
 
@@ -4750,8 +4762,9 @@ fn bytes_over_union_with_a_reloc_is_a_phase1_limitation() {
     push_static(&mut m, "UR", union_ty, bytes);
     let reason = unsupported_reason(&m);
     assert!(
-        reason.contains("relocation payload") && reason.contains("task d2.3b"),
-        "a union byte image with a reloc is a Phase-1 limitation: {reason}"
+        reason.contains("relocation byte in a union byte image")
+            && reason.contains("char[] cannot hold an address constant"),
+        "a union byte image with a reloc fails loud (a char[] cannot hold an address): {reason}"
     );
 }
 
@@ -4835,14 +4848,16 @@ fn const_aggregate_carrier_to_dyn_is_vtable_task() {
 }
 
 #[test]
-fn multiview_enum_const_with_pointer_payload_is_d2_3() {
-    // Change E: a multi-view enum value with a pointer / reloc payload cannot
-    // be encoded into the _raw byte image -> task d2.3.
+fn multiview_enum_const_with_pointer_payload_uses_typed_view() {
+    // Change C/D (d2.3b, #2-reloc EnumValue form): a multi-view Direct enum
+    // const whose payload carries a relocation routes the tag + reloc through
+    // the `_c<idx>` typed full view -- the reloc lands in a TYPED pointer slot
+    // (`_raw`, a char[], cannot hold an address constant), one union member, no
+    // double-init. enum E { A, B(&u32) }: tag u8 @0, B.0 (&u32) @8, size 16.
     let mut m = model();
     let u8t = uint(&mut m, UintKind::U8);
     let u32t = uint(&mut m, UintKind::U32);
     let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
-    // enum E { A, B(&u32) }: tag u8 @0, B.0 (&u32) @8, size 16 align 8.
     let b0 = fl(&mut m, "0", ref_ty, 8);
     let tag = TagScalar {
         offset: 0,
@@ -4866,10 +4881,25 @@ fn multiview_enum_const_with_pointer_payload_is_d2_3() {
         payload: vec![reloc],
     });
     push_static(&mut m, "EV", e_ty, ev);
-    let reason = unsupported_reason(&m);
+    let tu = emit_generic_c(&m).unwrap();
+    // Only the payload-bearing variant B (index 1) gets a `_c1` view; the
+    // fieldless A (index 0) gets none.
     assert!(
-        reason.contains("relocation payload") && reason.contains("task d2.3b"),
-        "a multi-view enum const with a pointer payload is a Phase-1 limitation (#2-reloc): {reason}"
+        tu.contains(
+            "(struct EP){ .u._c1 = { .tag = ((uint8_t)(1U)), ._0 = ((const uint32_t *)&A) } }"
+        ),
+        "a Direct reloc const routes tag + reloc through the _c1 typed view:\n{tu}"
+    );
+    // The `_c1` typed full view is emitted at absolute offsets with its guards.
+    assert!(
+        tu.contains(
+            "_Static_assert(offsetof(struct EP, u._c1.tag) == 0, \"EP.u._c1.tag offset\");"
+        ),
+        "the _c1 tag sub-field sits at offset 0:\n{tu}"
+    );
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct EP, u._c1._0) == 8, \"EP.u._c1._0 offset\");"),
+        "the _c1 payload field sits at its absolute offset 8:\n{tu}"
     );
 }
 
@@ -5176,7 +5206,8 @@ fn multiview_direct_zst_field_reloc_payload_fails_loud() {
     push_static(&mut m, "EVZ", e_ty, ev);
     let reason = unsupported_reason(&m);
     assert!(
-        reason.contains("relocation payload") && reason.contains("task d2.3b"),
+        reason.contains("zero-sized enum payload field")
+            && reason.contains("certificate violation"),
         "a reloc on a ZST payload field fails loud (not silently dropped): {reason}"
     );
 }
@@ -5216,6 +5247,377 @@ fn zero_size_union_emits_raw_and_bytes_lowers() {
         tu.contains("(union Z){ ._raw = {  } }"),
         "a zero-size union byte image lowers via _raw (not fail-loud):\n{tu}"
     );
+}
+
+// ---------------------------------------------------------------------------
+// Task d2.3b (Changes A-E): the inline anonymous-union `_raw` + the `_c<idx>`
+// typed full view -- structural assertions + collision-proofing. The
+// compile-AND-RUN closures (#2-reloc both forms, #3, both #4 cases incl. nested
+// `_Bool`) live in the codegen-coverage-runner behavioral tests.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn inline_enum_raw_member_is_collision_proof() {
+    // Change A collision-proofing: a single-view inline enum whose PROMOTED view
+    // field is literally named `_raw` (a Rust variant field `_raw` sanitizes to
+    // `_raw`) gets a COLLISION-PROOF byte-covering member `_raw0` -- the array
+    // member cannot duplicate the promoted field (a `duplicate member` C error).
+    // `enum_raw_member` returns `_raw0`, so the niche const designates `_raw0`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    // A struct-style `Some` field literally named `_raw` (an inline niche enum).
+    let some_field = fl(&mut m, "_raw", ref_ty, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(&mut m, "None", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Some", vec![some_field], 1, None),
+        ],
+    };
+    let opt = push_enum_instance(&mut m, "OptR", enum_layout(8, 8, shape));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![],
+    });
+    push_static(&mut m, "ON", opt, ev);
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("const uint32_t *_raw;"),
+        "the real `_raw` view field is present (promoted):\n{tu}"
+    );
+    assert!(
+        tu.contains("unsigned char _raw0[8];"),
+        "the byte-covering member is collision-proofed to `_raw0`:\n{tu}"
+    );
+    assert!(
+        tu.contains("(struct OptR){ ._raw0 = { 0, 0, 0, 0, 0, 0, 0, 0 } }"),
+        "the niche const designates the collision-proof `_raw0`:\n{tu}"
+    );
+}
+
+#[test]
+fn multiview_direct_emits_c_views_per_payload_variant_at_absolute_offsets() {
+    // Change C: a multi-view Direct enum emits a `_c<idx>` typed full view per
+    // payload-bearing variant (`struct { <tag>; <fields>; }`) at ABSOLUTE
+    // offsets, with `offsetof` guards. `enum Shift { A(u8), B(u32) }` (tag u8 @0,
+    // A.0 @1, B.0 @4): both A and B are payload-bearing -> `_c0` and `_c1`.
+    let mut m = model();
+    let _ = push_shift_enum(&mut m);
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("    } _c0;\n"),
+        "variant A typed full view:\n{tu}"
+    );
+    assert!(
+        tu.contains("    } _c1;\n"),
+        "variant B typed full view:\n{tu}"
+    );
+    // _c0 = { tag u8 @0, A.0 u8 @1 }; _c1 = { tag u8 @0, B.0 u32 @4 }.
+    assert!(
+        tu.contains(
+            "_Static_assert(offsetof(struct Shift, u._c0.tag) == 0, \"Shift.u._c0.tag offset\");"
+        ),
+        "the _c0 tag sub-field @0:\n{tu}"
+    );
+    assert!(
+        tu.contains(
+            "_Static_assert(offsetof(struct Shift, u._c0._0) == 1, \"Shift.u._c0._0 offset\");"
+        ),
+        "the _c0 payload field at its absolute offset 1:\n{tu}"
+    );
+    assert!(
+        tu.contains(
+            "_Static_assert(offsetof(struct Shift, u._c1._0) == 4, \"Shift.u._c1._0 offset\");"
+        ),
+        "the _c1 payload field at its absolute offset 4:\n{tu}"
+    );
+    // Layout-neutral: the runtime size / align asserts are unchanged.
+    assert!(tu.contains("_Static_assert(sizeof(struct Shift) == 8, \"Shift size\");"));
+    assert!(tu.contains("_Static_assert(_Alignof(struct Shift) == 4, \"Shift align\");"));
+}
+
+#[test]
+fn c_view_tag_subfield_is_collision_proof() {
+    // Change C collision-proofing: a multi-view Direct variant whose payload
+    // field is literally named `tag` gets a COLLISION-PROOF `_c<idx>` tag
+    // sub-field `tag0` (the synthetic tag cannot duplicate the payload field).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    // enum ET { A, B { tag: u32 } }: outer tag u8 @0, B.tag (u32) @4, size 8.
+    let b_tag = fl(&mut m, "tag", u32t, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 0, Some(0)),
+            variant(&mut m, "B", vec![b_tag], 1, Some(1)),
+        ],
+    };
+    push_enum_instance(&mut m, "ET", enum_layout(8, 4, shape));
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains(
+            "_Static_assert(offsetof(struct ET, u._c1.tag0) == 0, \"ET.u._c1.tag0 offset\");"
+        ),
+        "the _c1 synthetic tag sub-field is collision-proofed to tag0 @0:\n{tu}"
+    );
+    assert!(
+        tu.contains(
+            "_Static_assert(offsetof(struct ET, u._c1.tag) == 4, \"ET.u._c1.tag offset\");"
+        ),
+        "the payload field named `tag` keeps its name at its offset 4:\n{tu}"
+    );
+}
+
+#[test]
+fn const_enum_value_inline_reloc_uses_typed_single_view() {
+    // Change B (d2.3b): an inline RELOCATION const keeps the typed single view
+    // (the single view IS the whole object; a reloc cannot enter `_raw`).
+    // `Option<&u32>::Some(&Y)` -> `(struct Opt){ ._0 = ((const uint32_t *)&Y) }`.
+    let mut m = model();
+    let (opt, _r) = push_opt_ref_enum(&mut m);
+    let u32t = uint(&mut m, UintKind::U32);
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let y = push_static(&mut m, "Y", u32t, one);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(y)));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![reloc],
+    });
+    push_static(&mut m, "OS", opt, ev);
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("(struct Opt){ ._0 = ((const uint32_t *)&Y) }"),
+        "an inline reloc const uses the typed single view, not _raw:\n{tu}"
+    );
+    assert!(
+        !tu.contains("(struct Opt){ ._raw"),
+        "an inline reloc const must NOT serialize into _raw (a char[] cannot hold a reloc):\n{tu}"
+    );
+}
+
+#[test]
+fn const_enum_value_multiview_direct_reloc_via_bytes_uses_typed_view() {
+    // Change D (d2.3b, #2-reloc Bytes form): a multi-view Direct enum `static`
+    // arrives as `Const::Bytes` with a `Byte::Reloc` in the pointer slot; the
+    // bytes path decodes the Direct tag slice (-> variant B), then routes the
+    // reloc through the `_c1` typed view. enum E { A, B(&u32) }: tag u8 @0,
+    // B.0 (&u32) @8, size 16. Bytes: tag 1 @0, reloc @8..16.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let b0 = fl(&mut m, "0", ref_ty, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "EPB", enum_layout(16, 8, shape));
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let y = push_static(&mut m, "Y", u32t, one);
+    let r = m.instance_ref_of(y);
+    // tag 1 @0, 7 padding bytes, an 8-byte reloc run @8.
+    let mut bytes = vec![regseq_model::Byte::Value(1)];
+    bytes.extend(std::iter::repeat_n(regseq_model::Byte::Value(0), 7));
+    bytes.extend(std::iter::repeat_n(regseq_model::Byte::Reloc(r), 8));
+    let img = m.consts.intern(Const::Bytes(bytes));
+    push_static(&mut m, "EVB", e_ty, img);
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains(
+            "(struct EPB){ .u._c1 = { .tag = ((uint8_t)(1U)), ._0 = ((const uint32_t *)&Y) } }"
+        ),
+        "the bytes-with-reloc form routes tag + reloc through the _c1 typed view:\n{tu}"
+    );
+}
+
+#[test]
+fn niche_tagged_reloc_is_an_external_invariant_defensive_guard() {
+    // Change E / B4: a niche enum whose NICHED (non-untagged) variant carries a
+    // relocation payload is an external-rustc-invariant non-case (rustc
+    // niche-fills only fieldless variants). Hand-built (not bridge-producible),
+    // it stays a fail-loud DEFENSIVE guard with the external-invariant message,
+    // NOT a silent miscompile. `enum E { A(&u32), B(&u32) }` niche, untagged A,
+    // niched B (tag_value Some(0)) carrying a reloc payload.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let a0 = fl(&mut m, "0", ref_ty, 0);
+    let b0 = fl(&mut m, "0", ref_ty, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(0),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(1),
+                end: VariantIdx::from_u32(1),
+            },
+            niche_start: 0,
+        },
+        // Variant 1 is niched (tag_value Some) but MALFORMED: it carries a
+        // reloc payload (rustc would make it fieldless).
+        variants: vec![
+            variant(&mut m, "A", vec![a0], 0, None),
+            variant(&mut m, "B", vec![b0], 1, Some(0)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "NTR", enum_layout(16, 8, shape));
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let y = push_static(&mut m, "Y", u32t, one);
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(y)));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![reloc],
+    });
+    push_static(&mut m, "NTRV", e_ty, ev);
+    let reason = unsupported_reason(&m);
+    assert!(
+        reason.contains("niched (non-untagged) variant")
+            && reason.contains("rustc niche-fills only fieldless variants"),
+        "a niche-tagged reloc is the external-invariant defensive guard: {reason}"
+    );
+}
+
+#[test]
+fn multiview_reloc_byte_image_with_a_padding_reloc_fails_loud() {
+    // d2.3b post-close soundness fix (Change D): a `Byte::Reloc` in a multi-view
+    // Direct enum byte image that lands OUTSIDE every typed payload field slice
+    // (here in the inter-field padding between the tag @0 and B.0 @8) is not
+    // producible by rustc (a relocation occupies a pointer slot, never padding);
+    // left unchecked, `reconstruct_multiview_reloc_from_bytes` would silently
+    // drop it. It must fail loud instead. enum E { A(u8), B(&u32) } size 16.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let a0 = fl(&mut m, "0", u8t, 1);
+    let b0 = fl(&mut m, "0", ref_ty, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", vec![a0], 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "EPP", enum_layout(16, 8, shape));
+    let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+    let y = push_static(&mut m, "Y", u32t, one);
+    let r = m.instance_ref_of(y);
+    // tag 1 @0; a stray reloc at byte 1 (padding, NOT the B.0 pointer @8); the
+    // pointer slot @8..16 is all-zero.
+    let mut bytes = vec![regseq_model::Byte::Value(1), regseq_model::Byte::Reloc(r)];
+    bytes.extend(std::iter::repeat_n(regseq_model::Byte::Value(0), 14));
+    let img = m.consts.intern(Const::Bytes(bytes));
+    push_static(&mut m, "EPPV", e_ty, img);
+    let reason = unsupported_reason(&m);
+    assert!(
+        reason.contains("outside every typed field slice")
+            && reason.contains("must land in a typed pointer slot"),
+        "a reloc in enum padding fails loud, not silently dropped: {reason}"
+    );
+}
+
+#[test]
+fn no_task_d2_3b_limitation_label_remains_in_backend() {
+    // d2.3b B4 / acceptance 6: the three Phase-1 const limitations (#2-reloc,
+    // #3, #4) are now lowered, so no `task d2.3b` limitation label may remain in
+    // the const seam (the residual niche-tagged-reloc reject names the external
+    // rustc invariant instead).
+    for (name, src) in [
+        ("body_emit.rs", include_str!("body_emit.rs")),
+        ("enum_emit.rs", include_str!("enum_emit.rs")),
+    ] {
+        assert!(
+            !src.contains("task d2.3b"),
+            "no task d2.3b limitation label may remain in {name}"
+        );
+    }
+}
+
+#[test]
+fn d2_3b_const_emit_is_byte_identical_across_two_calls() {
+    // B5 determinism: a model exercising the inline anonymous-union `_raw`
+    // (incl. the collision-proof name), the `_c<idx>` reloc const, and an
+    // inline niche const emits byte-identically across two calls.
+    let build = || {
+        let mut m = model();
+        let u32t = uint(&mut m, UintKind::U32);
+        let u8t = uint(&mut m, UintKind::U8);
+        // inline bool-niche const -> `_raw`.
+        let optb = push_opt_bool_niche_enum(&mut m);
+        let none = m.consts.intern(Const::EnumValue {
+            variant_idx: VariantIdx::from_u32(0),
+            payload: vec![],
+        });
+        push_static(&mut m, "NB", optb, none);
+        // multi-view Direct reloc const -> `_c1`.
+        let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+        let b0 = fl(&mut m, "0", ref_ty, 8);
+        let tag = TagScalar {
+            offset: 0,
+            scalar_ty: u8t,
+            valid_range: WrappingRange { start: 0, end: 1 },
+        };
+        let shape = EnumShape::Multiple {
+            tag,
+            encoding: TagEncoding::Direct,
+            variants: vec![
+                variant(&mut m, "A", Vec::new(), 0, Some(0)),
+                variant(&mut m, "B", vec![b0], 1, Some(1)),
+            ],
+        };
+        let e_ty = push_enum_instance(&mut m, "EPR", enum_layout(16, 8, shape));
+        let one = m.consts.intern(Const::Uint(UintKind::U32, 1));
+        let y = push_static(&mut m, "Y", u32t, one);
+        let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(y)));
+        let ev = m.consts.intern(Const::EnumValue {
+            variant_idx: VariantIdx::from_u32(1),
+            payload: vec![reloc],
+        });
+        push_static(&mut m, "EVR", e_ty, ev);
+        emit_generic_c(&m).unwrap()
+    };
+    assert_eq!(build(), build());
 }
 
 #[test]

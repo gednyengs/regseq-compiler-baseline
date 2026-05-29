@@ -49,27 +49,39 @@ impl PadNamer {
     }
 }
 
-/// The first `_raw` / `_raw<n>` member name not colliding with a real
+/// The first `<base>` / `<base><n>` member name not colliding with a real
 /// (sanitized) member name, mirroring [`PadNamer`]'s reservation discipline
-/// (a union field literally named `_raw` is a legal sanitized name, so the
-/// seed set guards against it). The single primitive both the union body
-/// emitter and the body-side [`union_raw_member`] lookup spell their `_raw`
-/// member through, so the const init designator can never drift from the
-/// emitted member. Deterministic (the member-name set + a fixed `_raw` seed
-/// order: bare `_raw`, then `_raw0`, `_raw1`, ...).
-fn raw_member_name<I: IntoIterator<Item = String>>(members: I) -> String {
+/// (a field literally named `<base>` is a legal sanitized name, so the seed set
+/// guards against it). The single collision-proofing primitive the synthetic
+/// member namers spell through (`_raw` union / inline-enum byte images via
+/// [`raw_member_name`]; the enum `_c<idx>` `tag` sub-field), so a generated
+/// designator can never drift from the emitted member. Deterministic (the
+/// member-name set + a fixed seed order: bare `<base>`, then `<base>0`,
+/// `<base>1`, ...).
+pub(super) fn reserved_member_name<I: IntoIterator<Item = String>>(
+    base: &str,
+    members: I,
+) -> String {
     let used: HashSet<String> = members.into_iter().collect();
-    if !used.contains("_raw") {
-        return "_raw".to_string();
+    if !used.contains(base) {
+        return base.to_string();
     }
     let mut n = 0usize;
     loop {
-        let candidate = format!("_raw{n}");
+        let candidate = format!("{base}{n}");
         if !used.contains(&candidate) {
             return candidate;
         }
         n += 1;
     }
+}
+
+/// The first `_raw` / `_raw<n>` member name not colliding with a real
+/// (sanitized) member name (a [`reserved_member_name`] seeded with `"_raw"`).
+/// The primitive both the union body emitter and the body-side
+/// [`union_raw_member`] lookup spell their `_raw` member through.
+fn raw_member_name<I: IntoIterator<Item = String>>(members: I) -> String {
+    reserved_member_name("_raw", members)
 }
 
 /// The byte-covering `_raw` union member name for union `ty` (d2.3a Change A),
