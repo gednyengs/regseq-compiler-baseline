@@ -941,9 +941,9 @@ initializer.
 | `Uint(k, v)` | unsigned literal (`U` / `ULL`) |
 | `Float(k, bits)` | a **constant-expression** that is exact + bit-faithful (incl. NaN payloads): finite → C99 **hex-float literal**; ±∞ → `__builtin_inff()` / `__builtin_inf()`; NaN → `__builtin_nanf("0x<payload>")` (quiet) / `__builtin_nansf(...)` (signaling). These are GCC/Clang constant expressions (the primitives behind `<math.h>` `INFINITY` / `NAN`); a host-target assumption. **Not** a union member access (which is not a constant expression). `_Float16` / `_Float128` host-dependent. |
 | `ZST` | no bytes — value position: no-op / `(void)0`; aggregate field: omitted (§14) |
-| `Bytes(Vec<Byte>)` | reconstructed as a **typed** initializer for the consumer `Ty` (byte-image walker): scalars decode `size_of` bytes per `target.endian` into the matching literal (`Uninit`→`0`); `Tuple` / `Struct` / `Array` slice per `FieldLayout.offset` (source order, ZST omitted) and recurse; a complete pointer-width `Reloc(r)` run → `&<r>`; a multi-view enum value initializes the §13 `_raw` union member. A `ConstMemoryStatic` is declared as its consumer **pointee storage type** (re-typing, §13 note), so `&X` is the right type + naturally aligned (a flat `unsigned char[]` is the special case of a `[u8; N]` consumer). A `Ty::Union` byte image is unsupported (a padded spanning member is not byte-preserving — needs a byte-covering union member). |
+| `Bytes(Vec<Byte>)` | reconstructed as a **typed** initializer for the consumer `Ty` (byte-image walker): scalars decode `size_of` bytes per `target.endian` into the matching literal (`Uninit`→`0`); `Tuple` / `Struct` / `Array` slice per `FieldLayout.offset` (source order, ZST omitted) and recurse; a complete pointer-width `Reloc(r)` run → `&<r>`; a multi-view enum value initializes the §13 `_raw` union member. A `ConstMemoryStatic` is declared as its consumer **pointee storage type** (re-typing, §13 note), so `&X` is the right type + naturally aligned (a flat `unsigned char[]` is the special case of a `[u8; N]` consumer). A `Ty::Union` byte image initializes the byte-covering `_raw` union member (§14 Unions), `(union U){ ._raw = { <bytes> } }`, type-punned by an in-place member read; a `Byte::Reloc` in a union image is a Phase-1 limitation (a `char[]` cannot hold an address constant). |
 | `Aggregate(children)` | dual role: the `[Reloc, Uint(meta)]` **reference carrier** over `Ty::Ref` (a sized pointee → the reloc designator cast to the pointer type; `Ty::Str` / `Ty::Slice` → the §3.2 `rust_str` / `rust_slice_<T>` fat struct, `.data` via the mutability-correct slice-data pointer type, `.len = (size_t)<meta>`) vs the typed valtree aggregate over `Tuple` / `Struct` / non-`u8` `Array` in §14 field order (a `Ty::Union` valtree is unsupported — `Const::Aggregate` carries no active field) |
-| `EnumValue { variant_idx, payload }` | §13: a multi-view value serializes the tag + payload to a `layout.size` byte image written into the `_raw` union member; an inline value uses the inline fields / single tag member |
+| `EnumValue { variant_idx, payload }` | §13: a multi-view value serializes the tag + a **no-relocation** payload (scalar / aggregate / array / `Bytes` / `NullPtr` / nested `EnumValue`, recursively) to a `layout.size` byte image written into the `_raw` union member; a multi-view **niche-untagged** value (no tag to co-write) instead initializes the existing `u._v<untagged>` typed view (so a relocation payload lands in a typed pointer field); an inline value uses the inline fields / single tag member. A relocation payload of a multi-view **tagged** value, an inline bool-niche, and an inline nested niche cell are Phase-1 limitations |
 | `NullPtr(ty)` | `(T*)0` |
 | `Reloc(InstanceRef)` | `&<emission_name>` of the referenced instance |
 
@@ -1028,8 +1028,17 @@ placed at its absolute (naturally-aligned) offset within a view, and the
 - `Const::EnumValue` (a value-position const) → an **inline** enum uses the
   inline fields / single tag member; a **multi-view** enum cannot set the
   `_tag` and `_v<v>` union members in one initializer, so a fully-known value
-  is serialized to a byte image and written into the `_raw` union member
-  (`(struct E){ .u._raw = { ... } }`).
+  is **usually** serialized to a byte image and written into the `_raw` union
+  member (`(struct E){ .u._raw = { ... } }`) — the tag plus a **no-relocation**
+  payload (scalar / aggregate / array / `Bytes` / `NullPtr` / nested
+  `EnumValue`, serialized recursively). **Except** a multi-view **niche-untagged**
+  value (no `tag_value` to co-write): its whole value *is* its payload, so it
+  initializes the existing `u._v<untagged>` typed view instead
+  (`(struct E){ .u._v<untagged>.<f> = ... }`), which also lets a **relocation**
+  payload land in a typed pointer field. A multi-view **tagged** value with a
+  relocation payload remains a Phase-1 limitation (a `char[]` `_raw` cannot hold
+  an address constant; needs a typed full view). **The representation itself is
+  unchanged — no new union member is added.**
 
 A readability optimisation (a named `{ tag; union; }` when the layout is
 provably tag-prefix-compatible) is **deferred** — not Phase 1.
@@ -1060,7 +1069,18 @@ by:
    true type alignment is `min(max_field_align, n) = layout.align`, which can
    be `< n`; the step-6 `_Alignof` guard asserts it.
 5. **Unions** (`LayoutKind::Union`): all field offsets are 0 → a C `union`
-   of the fields, trailing pad to `size`.
+   of the fields, plus an always-emitted byte-covering
+   `unsigned char <raw>[size]` member (mirroring the §13 enum `_raw`). The
+   `_raw` member spans `layout.size` (so it pins `sizeof`, subsuming the old
+   conditional trailing `_pad` filler) and is const-init-addressable, so a
+   `Const::Bytes` over the union initializes every byte through one designator
+   (`(union U){ ._raw = { ... } }`, §12). Its name is **collision-proof**
+   against the union's real (sanitized) field names (a field literally named
+   `_raw` yields `_raw0` / ...); the body side spells the init designator only
+   through the same source-of-truth lookup. Layout-neutral: `_raw` is
+   alignment 1 and full-object size, so the union's `aligned` + size / align
+   `_Static_assert`s are unchanged. Runtime reads stay in-place typed-member
+   accesses (gnu11 `union` type-punning).
 6. Emit `_Static_assert(sizeof(T)==size)`,
    `_Static_assert(_Alignof(T)==align)`, and per-field
    `_Static_assert(offsetof(T,f)==offset)` guards.

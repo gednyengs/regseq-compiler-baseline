@@ -2117,6 +2117,377 @@ fn tuple_static_byte_image_compiles_and_runs() {
     assert_eq!(run.exit_code, Some(0));
 }
 
+// ---- task d2.3a const carve-outs: compile-AND-run (B2) -----------------------
+
+/// Push a `static <name>: <ty> = <init>;` instance, returning its `InstanceId`
+/// (so a `Const::Reloc` can target it).
+fn push_static(m: &mut RegseqModel, name: &str, ty: TyId, init: Const) -> InstanceId {
+    let it = mk_item(
+        m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        name,
+    );
+    let init = m.consts.intern(init);
+    let em = m.strings.intern(name);
+    m.instances.push(Instance {
+        item: it,
+        generic_args: GenericArgs::new(),
+        emission_name: em,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty,
+            init: Some(init),
+        },
+    })
+}
+
+#[test]
+fn union_static_member_read_runs_and_exits_zero() {
+    // #1 (Changes A + B): `#[repr(align(8))] union U { x: u32 }` (size 8, align 8
+    // -- the largest member u32 spans 4 < 8, so the old code emitted a `_pad`
+    // filler; the new `_raw[8]` pins sizeof). `static U: U = { x: 0xAB }`; read
+    // `(*&U).x` -> 0xAB and abort on a wrong value. Proves the union `_raw` byte
+    // image + the in-place member type-pun agree under the pinned gnu11 flags.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u32t = uint(&mut m, UintKind::U32);
+    let x = fl(&mut m, "x", u32t, 0);
+    let uit = mk_item(&mut m, ItemKind::Union, "U");
+    let union_ty = m.types.intern(Ty::Union {
+        item: uit,
+        args: GenericArgs::new(),
+        layout: Layout {
+            size: 8,
+            align: 8,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Union { fields: vec![x] },
+        },
+    });
+    m.instances.push(Instance {
+        item: uit,
+        generic_args: GenericArgs::new(),
+        emission_name: m.strings.intern("U"),
+        span: span(),
+        kind: InstanceKind::Union { layout: union_ty },
+    });
+    let ref_union = m.types.intern(Ty::Ref(union_ty, Provenance::SharedBorrow));
+    // static U: 8 bytes, x = 0xAB @0, padding 0.
+    let mut bytes = vec![regseq_model::Byte::Value(0xAB)];
+    bytes.extend(std::iter::repeat_n(regseq_model::Byte::Value(0), 7));
+    let u_static = push_static(&mut m, "U", union_ty, Const::Bytes(bytes));
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(u_static)));
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 &U, _2 u32 (the read member).
+    let body = build_body(
+        0,
+        vec![unit, ref_union, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(reloc)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(1),
+                            projection: Box::new([
+                                PlaceElem::Deref,
+                                PlaceElem::Field(FieldIdx::from_u32(0), u32t),
+                            ]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(0xAB, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains("unsigned char _raw[8];"),
+        "the union carries a byte-covering _raw member:\n{tu}"
+    );
+    assert!(
+        tu.contains("(union U){ ._raw = {"),
+        "the union static initializes via the _raw byte image:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "union-static");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "U.x == 0xAB type-punned through _raw; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn multiview_enum_const_array_payload_runs_and_exits_zero() {
+    // #2-noreloc (Change C): `enum E { A, B([u32; 2]) }`, `const X = E::B([10, 20])`;
+    // the no-relocation array payload serializes into `_raw` recursively.
+    // `regseq_main` reads the discriminant -> 1, then both elements
+    // `(X as B).0[0]` -> 10 and `[1]` -> 20, aborting on a wrong tag / element.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u8t = uint(&mut m, UintKind::U8);
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr = m.types.intern(Ty::Array(u32t, 2));
+    let b0 = fl(&mut m, "0", arr, 4);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "A", Vec::new(), 0, Some(0)),
+            variant(&mut m, "B", vec![b0], 1, Some(1)),
+        ],
+    };
+    let e_ty = push_enum_instance(&mut m, "EArr", enum_layout(12, 4, shape));
+    let ten = m.consts.intern(Const::Uint(UintKind::U32, 10));
+    let twenty = m.consts.intern(Const::Uint(UintKind::U32, 20));
+    let arr_const = m.consts.intern(Const::Aggregate(vec![ten, twenty]));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(1),
+        payload: vec![arr_const],
+    });
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    let elem = |offset: u64| Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Downcast(VariantIdx::from_u32(1)),
+            PlaceElem::Field(FieldIdx::from_u32(0), arr),
+            PlaceElem::ConstantIndex {
+                offset,
+                min_length: 2,
+                from_end: false,
+            },
+        ]),
+    };
+    // _0 unit, _1 EArr (the const), _2 u8 (disc), _3 u32 (elem read).
+    let body = build_body(
+        0,
+        vec![unit, e_ty, u8t, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(ev)),
+                    )),
+                    st(StatementKind::Assign(loc(2), Rvalue::Discriminant(loc(1)))),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(1, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Use(Operand::Copy(elem(0))),
+                ))],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(3)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(10, BlockId::from_u32(2))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(
+                vec![st(StatementKind::Assign(
+                    loc(3),
+                    Rvalue::Use(Operand::Copy(elem(1))),
+                ))],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(3)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(20, BlockId::from_u32(3))]),
+                        otherwise: BlockId::from_u32(4),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(3)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains(".u._raw = { 1, 0, 0, 0, 10, 0, 0, 0, 20, 0, 0, 0 }"),
+        "the array payload serializes into _raw at the right offsets:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "multiview-array-const");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "B([10, 20]) tag + both elements read back; stderr: {}",
+        run.stderr
+    );
+}
+
+#[test]
+fn multiview_niche_untagged_reloc_const_runs_and_exits_zero() {
+    // M1-lite (Change D): a multi-view niche enum `enum NU { A(&u32), B(u32) }`
+    // (A untagged, B niched with its own non-overlapping u32 @8), `const X =
+    // NU::A(&Y)`. The relocation payload routes through the existing
+    // `u._v0._0` typed view (no `_raw`, no double-init). `regseq_main` reads the
+    // pointee `*((X as A).0)` -> 7 and aborts on a wrong value.
+    let mut m = target_model();
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: regseq_model::UNIT_LAYOUT,
+    });
+    let u32t = uint(&mut m, UintKind::U32);
+    let ref_ty = m.types.intern(Ty::Ref(u32t, Provenance::SharedBorrow));
+    let a0 = fl(&mut m, "0", ref_ty, 0);
+    let b0 = fl(&mut m, "0", u32t, 8);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: ref_ty,
+        valid_range: WrappingRange { start: 1, end: 0 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(0),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(1),
+                end: VariantIdx::from_u32(1),
+            },
+            niche_start: 0,
+        },
+        variants: vec![
+            variant(&mut m, "A", vec![a0], 0, None),
+            variant(&mut m, "B", vec![b0], 1, Some(0)),
+        ],
+    };
+    let nu = push_enum_instance(&mut m, "NU", enum_layout(16, 8, shape));
+    let y = push_static(&mut m, "Y", u32t, Const::Uint(UintKind::U32, 7));
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(y)));
+    let ev = m.consts.intern(Const::EnumValue {
+        variant_idx: VariantIdx::from_u32(0),
+        payload: vec![reloc],
+    });
+
+    let fail_id = push_fail_callback(&mut m, unit);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C);
+    // _0 unit, _1 NU (the const), _2 u32 (the read pointee).
+    let body = build_body(
+        0,
+        vec![unit, nu, u32t],
+        vec![
+            bb(
+                vec![
+                    st(StatementKind::Assign(
+                        loc(1),
+                        Rvalue::Use(Operand::Constant(ev)),
+                    )),
+                    st(StatementKind::Assign(
+                        loc(2),
+                        Rvalue::Use(Operand::Copy(Place {
+                            local: LocalId::from_u32(1),
+                            projection: Box::new([
+                                PlaceElem::Downcast(VariantIdx::from_u32(0)),
+                                PlaceElem::Field(FieldIdx::from_u32(0), ref_ty),
+                                PlaceElem::Deref,
+                            ]),
+                        })),
+                    )),
+                ],
+                tk(TerminatorKind::SwitchInt {
+                    discr: Operand::Copy(loc(2)),
+                    targets: SwitchTargets {
+                        cases: Box::new([(7, BlockId::from_u32(1))]),
+                        otherwise: BlockId::from_u32(2),
+                    },
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(fail_id),
+                    args: Box::new([]),
+                    destination: loc(0),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+        ],
+    );
+    let id = fn_instance(&mut m, "regseq_main", sig, Some(body));
+    nomangle(&mut m, id);
+
+    let tu = emit_generic_c(&m).expect("emit must return Ok");
+    assert!(
+        tu.contains(".u._v0._0 = "),
+        "the niche-untagged reloc routes through the typed view _v0._0:\n{tu}"
+    );
+    assert!(
+        !tu.contains("(struct NU){ .u._raw"),
+        "no _raw byte image for the niche-untagged route:\n{tu}"
+    );
+    let tu = with_fail_callback(&tu);
+    let run = assert_runs(&tu, "regseq_main", "niche-untagged-reloc-const");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "*((X as A).0) == 7 via the typed view; stderr: {}",
+        run.stderr
+    );
+}
+
 // ---- section 8 diagnostic-logging -> stdio (fwrite): compile-AND-run (B2) ----
 
 /// The self-contained diag-log prelude shared by the B2 fixtures: the

@@ -4899,6 +4899,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-17",
+          "name": "Generic-C non-scalar-const carve-outs d2.3a: union _raw, no-reloc enum-payload serializer, niche-untagged typed-view route",
+          "spec": ".harness/tasks/regseq-backends/17-generic-c-const-carve-outs.md",
+          "status": "done",
+          "depends_on": [
+            "regseq-backends-16"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-29T02:05:39Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

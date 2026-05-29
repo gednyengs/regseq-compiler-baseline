@@ -545,8 +545,10 @@ fn nested_const_ref_compiles() {
 
 #[test]
 fn pad_filler_collisions_compile() {
-    // Fix C: a struct with a real `_pad0` field + a gap, and a union with a
-    // real `_pad` member, both get distinct fillers and compile clean.
+    // Fix C: a struct with a real `_pad0` field + a gap gets a distinct `_pad1`
+    // filler; a union with a real `_pad` member gets the always-emitted
+    // byte-covering `_raw` member (d2.3a Change A subsumes the union `_pad`
+    // filler; `_pad` != `_raw`, so no collision). Both compile clean.
     let mut m = target_model();
     let u8t = m.types.intern(Ty::Uint(UintKind::U8));
     let u32t = m.types.intern(Ty::Uint(UintKind::U32));
@@ -579,7 +581,7 @@ fn pad_filler_collisions_compile() {
 
     let tu = emit_generic_c(&m).expect("pad-collision model emits Ok");
     assert!(tu.contains("uint8_t _pad0;") && tu.contains("unsigned char _pad1["));
-    assert!(tu.contains("uint8_t _pad;") && tu.contains("unsigned char _pad0["));
+    assert!(tu.contains("uint8_t _pad;") && tu.contains("unsigned char _raw[4];"));
     assert_compiles(&tu, "pad-filler collisions");
 }
 

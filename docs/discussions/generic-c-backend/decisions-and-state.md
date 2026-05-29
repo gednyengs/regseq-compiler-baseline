@@ -124,14 +124,67 @@ Converged with the architect (2026-05-26). Recorded so they're not relitigated.
   of truth `place_walk` mirrors) consumed by the scan, + a compile-AND-RUN regression
   (a `&[u32;4]` CMS carrier through a `ConstantIndex` place; fails the structural
   assert without the fix). Gates: 142 backend unit + 22 runner compile-AND-RUN.
-- **task d2.3 (the d2.2 carve-outs, NOT yet drafted).** Five distinct fail-loud
-  labels d2.2 left: a relocation-payload enum/aggregate const; an **inline**
-  bool-niche enum const; a `ConstMemoryStatic` at incompatible pointee types
-  (content-dedup collision); a `Bytes`-over-`Ty::Union` byte image (size equality
-  isn't byte-preserving for a padded spanning member — needs a union `_raw` member);
-  a typed-valtree `Const::Aggregate` over `Ty::Union` (`Const::Aggregate` carries no
-  active `FieldIdx`; `pretty.rs:714-718` already rejects it). All rare. **e took
-  priority over d2.3 and is now DONE (`567e6e3`); d2.3 still NOT drafted.**
+- **task d2.3 — DESIGN RESOLVED + DRAFTED as d2.3a (2026-05-28; `regseq-backends-17`
+  filed, NOT yet implemented).** A **plan-first design doc**
+  (`phase-1/04-const-carve-out-resolution.md`, Codex-approved over 3 rounds) resolved
+  the representation fork. Two corrections to the prior record: (1) it is **six**
+  carve-outs, not five — the omitted one is **`inline niche cell not a top-level
+  field`** (`body_emit.rs:3047`); (2) the "relocation-payload" label actually fires
+  for **any non-scalar enum payload child** (`const_scalar_bits` is scalar-only), so
+  #2 splits on **reloc presence** — a no-reloc structured payload IS `_raw`-
+  serializable. **Reachability triage:** `Const::Aggregate`-over-`Ty::Union` (#5) is
+  **unreachable** (a union const arrives as `Const::Bytes`, never a valtree
+  `Aggregate` — external rustc invariant; keep the defensive guard); the CMS pointee
+  collision (#6) is **vanishingly rare** (root cause = the bridge content-hash dedup;
+  clean fix is a bridge type-aware key, a separate optional task).
+  **Architect chose Package B** (two AskUserQuestion forks): ship the **cheap,
+  no-D9-representation-change** wins as **d2.3a** = the **union `_raw` member**
+  (#1; mirrors the d2.2 enum `_raw`, collision-proof name) + a **recursive no-reloc
+  enum-payload serializer** (`serialize_const_into`, #2-noreloc) + the **M1-lite**
+  niche-untagged typed-view route + the #5/#6 relabels + a bounded §12/§13/§14 doc
+  delta. The **three rare representation-change shapes stay fail-loud as documented
+  Phase-1 limitations** (recorded on close): **#2-reloc** (multi-view tagged enum
+  const with a relocation payload — needs the `_c<idx>` typed full view), **#3**
+  inline bool-niche, **#4** inline nested-niche (both need the niche-cell retype). A
+  follow-on **d2.3b** (Package A) would close the three via the `_c<idx>` full view +
+  M2-a niche-cell retype — deliberately deferred (perturbs the locked, Codex-hardened
+  D9 representation for marginal coverage; every defer is sound). `-17` depends-on
+  `-16` (the linear chain), phase 1b.
+- **task d2.3a (`regseq-backends-17`) IMPLEMENTED (2026-05-28).** Package B shipped:
+  Change A — the always-emitted byte-covering, collision-proof union `_raw` member
+  (`layout_emit::union_raw_member` single source of truth; subsumes the union `_pad`
+  filler; layout-neutral; gnu11 type-pun sound). Change B — `Const::Bytes` over
+  `Ty::Union` → `(union U){ ._raw = { bytes } }`. Change C — the recursive
+  `serialize_const_into` (const → byte image: scalar / `NullPtr` / `ZST` / `Bytes` /
+  `Aggregate`-over-`Tuple`/`Struct`/`Array` by `FieldLayout.offset` source-order /
+  element-stride / nested `EnumValue` tag+payload; every reloc → fail loud), replacing
+  the scalar-only multi-view payload write so a **no-reloc** structured enum const
+  payload serializes into `_raw`. Change D — the M1-lite niche-untagged typed-view
+  route (`u._v<untagged>` via `lower_enum_payload`, so even a relocation payload lowers
+  to one typed designator). Change E — relabels + the §12/§13/§14 doc delta. Diff
+  confined to `body_emit.rs` + `layout_emit.rs` + `mod.rs` + tests + the doc delta; no
+  D9 / d2.1-navigator / `enum_emit.rs` / bridge / model change. Gates: backend unit +
+  runner compile-AND-RUN green (union-static + array-payload + niche-untagged-reloc B2
+  fixtures run byte-exact); `emit_generic_c` byte-stable; ledger verdict unchanged
+  (`not-pass` — const sub-shapes are not distinct matrix rows).
+- **Phase-1 const limitations (recorded on the d2.3a close; sound `EmitError::Unsupported`,
+  never a silent miscompile).** Three reachable const sub-shapes stay fail-loud as
+  documented Phase-1 limitations (the matrix tracks constructs, not const sub-shapes,
+  so this is the honest gap record); a follow-on **d2.3b** (Package A) closes them:
+  - **#2-reloc** — a multi-view **tagged** enum const (a `Direct` payload variant, or a
+    niched variant) whose payload carries a **relocation** (`Reloc` / reference carrier /
+    `Byte::Reloc`, possibly nested); a `Byte::Reloc` in a union byte image is the same
+    limitation. `_raw` (a `char[]`) cannot hold an address constant → needs the `_c<idx>`
+    typed full view.
+  - **#3** — an **inline bool-niche** (`const X: Option<bool> = None;`): an inline enum
+    has no `_raw`, and `(_Bool){2}` normalizes 2 → 1 → needs the niche-cell retype.
+  - **#4** — an **inline niche cell buried in a nested aggregate field** (no single
+    top-level designator writes it) → needs the nested-designator locator + retype.
+  - Plus two retained guards: **#5** `Const::Aggregate` over `Ty::Union` (unreachable —
+    rustc emits no union valtree; unions arrive as `Const::Bytes`; defensive) and **#6**
+    a `ConstMemoryStatic` deduped at incompatible pointee types (vanishingly rare; root
+    cause = the bridge content-hash dedup; clean fix is a bridge type-aware key —
+    task d2.3-bridge-dedup).
 - **task e (`regseq-backends-15`) DONE + assessed (2026-05-28, `567e6e3`); the
   FIRST GREEN coverage-ledger milestone, and it spawned a soundness follow-up
   task.** e implemented the §8 diag-log → `printf` lowering (call-site interception

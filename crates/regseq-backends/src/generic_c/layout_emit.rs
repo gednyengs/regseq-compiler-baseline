@@ -49,6 +49,45 @@ impl PadNamer {
     }
 }
 
+/// The first `_raw` / `_raw<n>` member name not colliding with a real
+/// (sanitized) member name, mirroring [`PadNamer`]'s reservation discipline
+/// (a union field literally named `_raw` is a legal sanitized name, so the
+/// seed set guards against it). The single primitive both the union body
+/// emitter and the body-side [`union_raw_member`] lookup spell their `_raw`
+/// member through, so the const init designator can never drift from the
+/// emitted member. Deterministic (the member-name set + a fixed `_raw` seed
+/// order: bare `_raw`, then `_raw0`, `_raw1`, ...).
+fn raw_member_name<I: IntoIterator<Item = String>>(members: I) -> String {
+    let used: HashSet<String> = members.into_iter().collect();
+    if !used.contains("_raw") {
+        return "_raw".to_string();
+    }
+    let mut n = 0usize;
+    loop {
+        let candidate = format!("_raw{n}");
+        if !used.contains(&candidate) {
+            return candidate;
+        }
+        n += 1;
+    }
+}
+
+/// The byte-covering `_raw` union member name for union `ty` (d2.3a Change A),
+/// the single source of truth mirroring [`super::enum_emit::enum_raw_member`].
+/// `Some(name)` for any `Ty::Union` (whose body always carries
+/// `unsigned char <name>[size]`, byte-covering -- a zero-size union yields a
+/// `[0]` zero-length array, a GNU extension valid under the pinned gnu11
+/// flags); `None` for a non-union. The name is collision-proof against the
+/// union's real (sanitized) field names via [`raw_member_name`]; the body side
+/// spells the union byte-image designator only through this lookup.
+pub(super) fn union_raw_member(model: &RegseqModel, ty: TyId) -> Option<String> {
+    let view = resolve_view(model, ty)?;
+    if !view.is_union {
+        return None;
+    }
+    Some(raw_member_name(view.fields.iter().map(|f| f.name.clone())))
+}
+
 /// One emittable (non-ZST accounted) field, normalized across the
 /// struct / tuple / union / closure shapes (and, for task c2, an enum
 /// tag / variant-payload view).
@@ -272,9 +311,19 @@ pub(super) fn emit_offset_fields(
     }
 }
 
-/// Emit a union body: every non-ZST field at offset 0 (offsetof guards
-/// all assert `0`), plus a trailing `unsigned char _pad[size]` member
-/// when no real member already spans `layout.size` (pins `sizeof`).
+/// Emit a union body: every non-ZST field at offset 0 (offsetof guards all
+/// assert `0`), plus an always-emitted byte-covering `unsigned char <raw>[size]`
+/// member (d2.3a Change A). The `_raw` member spans `layout.size` (so it pins
+/// `sizeof`, subsuming the old conditional `_pad` filler) and is
+/// const-init-addressable, so a `Const::Bytes` over the union can initialize
+/// all bytes through one designator (`(union U){ .<raw> = { ... } }`). Its name
+/// is collision-proof against the real (sanitized) field names via
+/// [`raw_member_name`] -- the same lookup [`union_raw_member`] returns -- since
+/// a union field literally named `_raw` would otherwise misdirect the init.
+/// Layout-neutral: `_raw` is alignment 1 and full-object size, so the union's
+/// `aligned` + sizeof/`_Alignof` `_Static_assert`s are unchanged. A zero-size
+/// union yields `_raw[0]` (a GNU zero-length array, valid under the pinned
+/// gnu11 flags).
 fn emit_union_body(
     model: &RegseqModel,
     names: &NameTable,
@@ -288,23 +337,16 @@ fn emit_union_body(
         .iter()
         .filter(|f| !is_zst(model, f.ty))
         .collect();
-    let mut largest: u64 = 0;
     for f in &emittable {
         out.push_str(&format!("    {};\n", declare(model, names, f.ty, &f.name)));
         guards.push_str(&format!(
             "_Static_assert(offsetof(union {agg_name}, {fname}) == 0, \"{agg_name}.{fname} offset\");\n",
             fname = f.name,
         ));
-        largest = largest.max(model.size_align_of(f.ty).size);
     }
-    if largest < view.layout.size {
-        // Collision-proof the trailing filler against a real union member
-        // literally named `_pad` (Fix #1).
-        let mut padder = PadNamer::new(emittable.iter().map(|f| f.name.clone()).collect());
-        out.push_str(&format!(
-            "    unsigned char {}[{}];\n",
-            padder.fresh(),
-            view.layout.size
-        ));
-    }
+    let raw = raw_member_name(view.fields.iter().map(|f| f.name.clone()));
+    out.push_str(&format!("    unsigned char {raw}[{}];\n", view.layout.size));
+    guards.push_str(&format!(
+        "_Static_assert(offsetof(union {agg_name}, {raw}) == 0, \"{agg_name}.{raw} offset\");\n",
+    ));
 }

@@ -964,8 +964,9 @@ fn declare_storage(
 /// from instances (static inits, const values, function-body operand
 /// constants), threading the consumer type the way `const_expr` does. A
 /// content-dedup collision (one CMS referenced at two incompatible pointee
-/// types, `const_.rs:145-152`) fails the whole emit loud (task d2.3). No
-/// model interning, no new aggregate type, no discovery / topo edge.
+/// types, `const_.rs:145-152`) fails the whole emit loud (a sound fail-loud;
+/// the clean fix is a bridge type-aware dedup key -- task d2.3-bridge-dedup).
+/// No model interning, no new aggregate type, no discovery / topo edge.
 fn const_memory_static_storage(
     model: &RegseqModel,
 ) -> Result<HashMap<InstanceId, StorageTy>, EmitError> {
@@ -1404,9 +1405,11 @@ fn record_sized(
 
 /// Record `storage` for `target`, but only for a `ConstMemoryStatic`-shaped
 /// `Static` (declared `Array(u8, _)` by the bridge). A conflicting prior
-/// record (the content-dedup collision) fails the whole emit loud (task
-/// d2.3). Re-typing an `Array(u8, _)` static is idempotent when the consumer
-/// matches its real type, so a user `[u8; N]` static is unaffected.
+/// record (the content-dedup collision) fails the whole emit loud (a sound
+/// fail-loud; the clean fix is a bridge type-aware dedup key -- task
+/// d2.3-bridge-dedup). Re-typing an `Array(u8, _)` static is idempotent when
+/// the consumer matches its real type, so a user `[u8; N]` static is
+/// unaffected.
 fn record(
     model: &RegseqModel,
     target: InstanceRef,
@@ -1425,7 +1428,7 @@ fn record(
     }
     match map.get(&id) {
         Some(existing) if *existing != storage => Err(EmitError::Unsupported(
-            "ConstMemoryStatic at incompatible pointee types: task d2.3",
+            "ConstMemoryStatic deduped at incompatible pointee types (bridge content-hash dedup; sound fail-loud - see task d2.3-bridge-dedup)",
         )),
         _ => {
             map.insert(id, storage);
