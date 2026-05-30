@@ -9,8 +9,17 @@ callee, the call legitimately has `args.len() >= inputs.len()` (the fixed inputs
 plus the variadic tail), so a valid variadic call is rejected at validation
 (Acquire stage), making `c_variadic` unconstructible end-to-end.
 
-Surfaced by the §06 push (b7_fn_sigs). Blocks **FS-5** (`FnSig.c_variadic` → C
-`...`).
+Surfaced by the §06 push (b7_fn_sigs). This is the **model-side** half of **FS-5**.
+
+> **Pilot finding (necessary-but-not-sufficient).** Implementing this fix revealed a
+> SECOND, duplicate B-4 arity check in the **bridge** (`regseq-driver`
+> `bridge/body/materialise.rs:589`, no `c_variadic` exception) that rejects a variadic
+> call *before* this model validator runs — plus the in-fixture variadic body trips
+> `DslRejection { CVoid }` and the `extern`-variadic alternative hits the foreign-symbol
+> rename (the IN-3 / `regseq-driver-84` bug). So FS-5 greens end-to-end only after
+> **`regseq-driver-86`** (the bridge B-4 `c_variadic` exception + a constructible
+> variadic-fixture path). This task delivers the model-side validator fix; FS-5 is
+> deferred to that follow-up. (The backend `...` emission already works — confirmed.)
 
 ## Input Context
 
@@ -66,9 +75,11 @@ ledger byte-stable (if a fixture lands).
 
 ## Acceptance Criteria
 
-1. A `c_variadic` callee with extra (variadic) args passes the Call-arity validator;
-   non-variadic arity mismatches still rejected.
-2. Validator unit test covering the variadic + non-variadic cases passes.
-3. FS-5 green via a fixture, OR an explicit recorded follow-up for the backend
-   `...` emission if that is the remaining blocker.
-4. fmt + clippy (scoped) clean; scoped tests green.
+1. A `c_variadic` callee with extra (variadic) args passes the model Call-arity
+   validator; non-variadic arity mismatches still rejected.
+2. Validator unit tests covering the variadic + non-variadic cases pass.
+3. fmt + scoped tests green; scoped clippy introduces no NEW warnings (the pre-existing
+   regseq-model test-target drift, [[clippy-all-targets-test-drift]], is not gated).
+4. FS-5 is DEFERRED to `regseq-driver-86` (the remaining blocker is the bridge B-4
+   validator + the variadic-fixture path, NOT this model fix) — recorded, not faked.
+   This task's deliverable is criteria 1-3 (the model-side validator).

@@ -2241,6 +2241,28 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-86",
+          "name": "Bridge c_variadic arity exception + variadic-fixture path (FS-5)",
+          "spec": ".harness/tasks/regseq-driver/86-bridge-cvariadic-arity-and-fixture.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-97",
+            "regseq-driver-84"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T05:21:26Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -4393,7 +4415,7 @@
           "id": "regseq-model-97",
           "name": "c_variadic Call-arity validator exception",
           "spec": ".harness/tasks/regseq-model/97-cvariadic-call-arity-validator.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-model-96"
           ],
@@ -4401,7 +4423,7 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 2,
+          "spec_version": 3,
           "history": [
             {
               "ts": "2026-05-30T02:10:33Z",
@@ -4413,6 +4435,12 @@
               "event": "spec_edited",
               "spec_version": 2,
               "reason": "revised per Codex spec review"
+            },
+            {
+              "ts": "2026-05-30T05:21:26Z",
+              "event": "spec_edited",
+              "spec_version": 3,
+              "reason": "record the bridge-validator dependency; FS-5 deferred to regseq-driver-86 (pilot finding)"
             }
           ]
         }

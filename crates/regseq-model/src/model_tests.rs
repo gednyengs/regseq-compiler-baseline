@@ -2694,6 +2694,35 @@ mod validate_log_intrinsic_call {
         sig
     }
 
+    /// Intern a `c_variadic` FnSig (`abi == C`, trailing `...`). The
+    /// caller supplies the fixed inputs; the variadic tail carries no
+    /// declared inputs.
+    fn intern_variadic_sig(m: &mut RegseqModel, inputs: Vec<TyId>, output: TyId) -> FnSigId {
+        let sig = m.sigs.intern(FnSig {
+            inputs,
+            output,
+            abi: FnAbi::C,
+            c_variadic: true,
+            safety: Safety::Safe,
+        });
+        m.sig_c_abi_lowerings.push(None);
+        sig
+    }
+
+    /// Install a non-Log `c_variadic` Function callee with the given
+    /// fixed inputs and output.
+    fn install_variadic_callee(
+        m: &mut RegseqModel,
+        leaf: &str,
+        hash: u64,
+        inputs: Vec<TyId>,
+        output: TyId,
+    ) -> InstanceId {
+        let sig = intern_variadic_sig(m, inputs, output);
+        let item = push_named_item(m, leaf, hash);
+        push_function(m, item, sig)
+    }
+
     /// Construct a caller body whose `_0` is the unit destination
     /// and remaining locals carry the supplied `arg_tys`. Returns
     /// the body and a parallel `Vec<LocalId>` for `_1..` so callers
@@ -3111,6 +3140,84 @@ mod validate_log_intrinsic_call {
                 "Ty index {idx} ({:?}) must be admissible",
                 m.types.resolve(ty)
             );
+        }
+    }
+
+    // -------- regseq-model-97: c_variadic Call-arity exception --------
+
+    /// A `c_variadic` callee with more args than fixed inputs (the
+    /// fixed prefix plus a variadic tail) passes the B-4 arity check.
+    #[test]
+    fn variadic_callee_accepts_extra_tail_args() {
+        let mut m = fresh_model();
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let unit = unit_ty(&mut m);
+        // One fixed input; the call passes one fixed arg plus two
+        // variadic tail args.
+        let variadic_callee =
+            install_variadic_callee(&mut m, "printf_like", 0x10, vec![u32_ty], unit);
+        let caller_item = push_named_item(&mut m, "caller_v_a", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(variadic_callee),
+            &[u32_ty, u32_ty, u32_ty],
+            None,
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        assert_eq!(run_validate(&m, caller, &body), Ok(()));
+    }
+
+    /// A non-variadic callee with an arity mismatch (more args than
+    /// inputs) is still rejected: the relaxation is variadic-only.
+    #[test]
+    fn non_variadic_callee_still_rejects_arity_mismatch() {
+        let mut m = fresh_model();
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let unit = unit_ty(&mut m);
+        let plain_callee = install_plain_callee(&mut m, "plain_v", 0x10, vec![u32_ty], unit);
+        let caller_item = push_named_item(&mut m, "caller_v_b", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(
+            &mut m,
+            CallCallee::Direct(plain_callee),
+            &[u32_ty, u32_ty, u32_ty],
+            None,
+        );
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::CallArgsArityMismatch {
+                expected, actual, ..
+            }) => {
+                assert_eq!(expected, 1);
+                assert_eq!(actual, 3);
+            }
+            other => panic!("expected CallArgsArityMismatch, got {other:?}"),
+        }
+    }
+
+    /// A `c_variadic` callee with fewer args than its fixed inputs is
+    /// still rejected: the fixed prefix must be present positionally.
+    #[test]
+    fn variadic_callee_rejects_too_few_args() {
+        let mut m = fresh_model();
+        let u32_ty = m.types.intern(Ty::Uint(UintKind::U32));
+        let unit = unit_ty(&mut m);
+        // Two fixed inputs; the call passes only one arg.
+        let variadic_callee =
+            install_variadic_callee(&mut m, "printf_like2", 0x10, vec![u32_ty, u32_ty], unit);
+        let caller_item = push_named_item(&mut m, "caller_v_c", 0x20);
+        let caller_sig = intern_sig(&mut m, vec![], unit);
+        let body = build_caller_body(&mut m, CallCallee::Direct(variadic_callee), &[u32_ty], None);
+        let caller = push_function(&mut m, caller_item, caller_sig);
+        match run_validate(&m, caller, &body) {
+            Err(InvariantViolation::CallArgsArityMismatch {
+                expected, actual, ..
+            }) => {
+                assert_eq!(expected, 2);
+                assert_eq!(actual, 1);
+            }
+            other => panic!("expected CallArgsArityMismatch, got {other:?}"),
         }
     }
 }

@@ -2935,7 +2935,12 @@ impl RegseqModel {
         destination: &crate::place::Place,
         target: Option<BlockId>,
     ) -> Result<(), InvariantViolation> {
-        let resolved_sig: Option<(Vec<TyId>, TyId)> = match callee {
+        // The `bool` element is the callee FnSig's `c_variadic` flag,
+        // threaded here so the B-4 arity check below can relax to
+        // `args.len() >= inputs.len()` for a variadic callee (the
+        // fixed inputs match positionally; the tail is the variadic
+        // args) per task regseq-model-97.
+        let resolved_sig: Option<(Vec<TyId>, TyId, bool)> = match callee {
             CallCallee::Direct(id) => {
                 if id.index() >= self.instances.len() {
                     // Bounds owned by `validate_body_direct_callees`;
@@ -2972,7 +2977,7 @@ impl RegseqModel {
                             return Ok(());
                         }
                         let sig = self.sigs.resolve(data.fn_sig);
-                        Some((sig.inputs.clone(), sig.output))
+                        Some((sig.inputs.clone(), sig.output, sig.c_variadic))
                     }
                     _ => {
                         return Err(InvariantViolation::CallDirectCalleeNotFunction {
@@ -2990,7 +2995,7 @@ impl RegseqModel {
                             return Ok(());
                         }
                         let sig = self.sigs.resolve(*sig_id);
-                        Some((sig.inputs.clone(), sig.output))
+                        Some((sig.inputs.clone(), sig.output, sig.c_variadic))
                     }
                     _ => {
                         return Err(InvariantViolation::CallIndirectCalleeNotFnPtr {
@@ -3020,7 +3025,7 @@ impl RegseqModel {
             },
         };
 
-        let Some((inputs, output)) = resolved_sig else {
+        let Some((inputs, output, c_variadic)) = resolved_sig else {
             return Ok(());
         };
 
@@ -3050,8 +3055,17 @@ impl RegseqModel {
         if is_log_intrinsic {
             self.validate_log_intrinsic_call(owner, block, body, args)?;
         } else {
-            // B-4: arity match.
-            if args.len() != inputs.len() {
+            // B-4: arity match. A `c_variadic` callee legitimately
+            // takes a variadic tail beyond its fixed inputs, so the
+            // arity relaxes to `args.len() >= inputs.len()` (the fixed
+            // inputs must still be present positionally); a
+            // non-variadic callee keeps exact equality (regseq-model-97).
+            let arity_ok = if c_variadic {
+                args.len() >= inputs.len()
+            } else {
+                args.len() == inputs.len()
+            };
+            if !arity_ok {
                 return Err(InvariantViolation::CallArgsArityMismatch {
                     owner,
                     block,
@@ -3060,10 +3074,15 @@ impl RegseqModel {
                 });
             }
 
-            // B-6: per-arg type match. NotApplicable arms are skipped
-            // per the spec narrowing (operand-context typing for
-            // constants is upstream's responsibility).
-            for (i, arg) in args.iter().enumerate() {
+            // B-6: per-arg type match, bounded to the fixed-input
+            // prefix. For a `c_variadic` callee the variadic tail args
+            // (indices `>= inputs.len()`) have no declared `inputs[i]`
+            // to type against, so the loop only covers the fixed
+            // prefix and never indexes `inputs` out of range
+            // (regseq-model-97). NotApplicable arms are skipped per the
+            // spec narrowing (operand-context typing for constants is
+            // upstream's responsibility).
+            for (i, arg) in args.iter().enumerate().take(inputs.len()) {
                 match operand_ty(self, body, arg) {
                     TypeRecovery::Recovered(ty) => {
                         if ty != inputs[i] {
