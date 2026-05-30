@@ -10,9 +10,9 @@ entry  = "regseq_main"
 # turns them into the model BinOp in the fixture's own MIR — core *methods* don't
 # inline at mir_opt_level=0 and would be undefined refs at link).
 #
-# DEFERRED: BO-25 (Cmp). It lowers fine but hits a BACKEND BUG (Cmp result emitted
-# as int8_t but assigned to the Ordering enum-struct destination). Needs a backend
-# fix; tracked separately. (Not a fixture-recipe gap.)
+# BO-25 (Cmp): core::intrinsics::three_way_compare lowers to BinOp::Cmp, whose
+# result is a core::cmp::Ordering (repr(i8)); the backend writes the three-way
+# scalar into the Ordering tag cell (regseq-backends-19). `as i8` reads it back.
 covers = [
   # envelope — function/body/signature frame, operands, plain assign
   "IT-1", "IT-7", "IN-1", "IN-2", "IN-4",
@@ -22,7 +22,7 @@ covers = [
   # scalars + consts
   "TY-1", "TY-2", "TY-3", "TY-4", "CO-1", "CO-2", "CO-3", "CO-4",
   # binary ops (range IDs verbatim) + unops
-  "BO-1..5", "BO-6..8", "BO-9..11", "BO-12..14", "BO-15..18", "BO-19..24",
+  "BO-1..5", "BO-6..8", "BO-9..11", "BO-12..14", "BO-15..18", "BO-19..24", "BO-25",
   "UN-1", "UN-2",
 ]
 expect = "pass"

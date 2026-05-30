@@ -553,6 +553,7 @@ struct rust_slice_input_regseq_log_intrinsics_LogArg;
 struct input_regseq_log_intrinsics_LogArg;
 struct tuple_cbf29ce484222325;
 struct tuple_299d3d74250e90bd;
+struct core_cmp_Ordering;
 
 /* ---------------------------------------------------------------------------
  * Bank 3 (section 15): aggregate definitions + section 14 layout guards.
@@ -720,6 +721,18 @@ _Static_assert(sizeof(struct tuple_299d3d74250e90bd) == 2, "tuple_299d3d74250e90
 _Static_assert(_Alignof(struct tuple_299d3d74250e90bd) == 1, "tuple_299d3d74250e90bd align");
 _Static_assert(offsetof(struct tuple_299d3d74250e90bd, _0) == 0, "tuple_299d3d74250e90bd._0 offset");
 _Static_assert(offsetof(struct tuple_299d3d74250e90bd, _1) == 1, "tuple_299d3d74250e90bd._1 offset");
+struct core_cmp_Ordering {
+    union {
+    struct {
+    int8_t tag;
+    };
+    unsigned char _raw[1];
+    };
+} __attribute__((aligned(1)));
+_Static_assert(sizeof(struct core_cmp_Ordering) == 1, "core_cmp_Ordering size");
+_Static_assert(_Alignof(struct core_cmp_Ordering) == 1, "core_cmp_Ordering align");
+_Static_assert(offsetof(struct core_cmp_Ordering, tag) == 0, "core_cmp_Ordering.tag offset");
+_Static_assert(offsetof(struct core_cmp_Ordering, _raw) == 0, "core_cmp_Ordering._raw offset");
 
 /* ---------------------------------------------------------------------------
  * Bank 4 (section 15): prototypes + extern statics.
@@ -738,6 +751,7 @@ extern const uint8_t input__regseq_synth__const_memory_static_09f589b09f8e282e2a
 extern const uint8_t input__regseq_synth__const_memory_static_0c2d87e556dfd3449bb4fe8118451708[6];
 extern const uint8_t input__regseq_synth__const_memory_static_142333c60860539cc2453ac84c2b9314[6];
 extern const uint8_t input__regseq_synth__const_memory_static_21543c6dd444e5a91910b1029e6874a8[7];
+extern const uint8_t input__regseq_synth__const_memory_static_27c3247e3f13f1631a2dc14ed089443e[8];
 extern const uint8_t input__regseq_synth__const_memory_static_289a17933a81de4321b5c9569936ca55[7];
 extern const uint8_t input__regseq_synth__const_memory_static_40c6ac168f757de60b66029c5791fe7a[6];
 extern const uint8_t input__regseq_synth__const_memory_static_428d700e3bac08feee2759b950f5b729[7];
@@ -758,9 +772,11 @@ extern const uint8_t input__regseq_synth__const_memory_static_941c4bad0e9dd9166a
 extern const uint8_t input__regseq_synth__const_memory_static_a38c772e2ad84eb6ceb930a71c9173a0[7];
 extern const uint8_t input__regseq_synth__const_memory_static_ac70c7a8dc37ee656719e7beb52c5b23[14];
 extern const uint8_t input__regseq_synth__const_memory_static_ad7b98ed0691cbeeccd13228c7883787[9];
+extern const uint8_t input__regseq_synth__const_memory_static_ae9dcdc7a736afb61d4e2e7a42298989[8];
 extern const uint8_t input__regseq_synth__const_memory_static_b08c0ac34252856b9de2c9c86169fd00[6];
 extern const uint8_t input__regseq_synth__const_memory_static_bc8f375971b482337a8ec782f3a2109f[5];
 extern const uint8_t input__regseq_synth__const_memory_static_d4f842a088db707ad40fd50ee8860777[14];
+extern const uint8_t input__regseq_synth__const_memory_static_db91b2e7de79585728f971b945c86956[8];
 extern const uint8_t input__regseq_synth__const_memory_static_ecd7ceb097b611bea9a8f95ec59c7f66[6];
 extern const uint8_t input__regseq_synth__const_memory_static_f0df92fc56866e349175e48e1312e83f[6];
 
@@ -862,46 +878,55 @@ void input_regseq_main(void) {
     _Bool _173;
     uint8_t _174;
     _Bool _176;
-    int32_t _183;
-    int32_t _184;
-    _Bool _185;
-    int32_t _187;
-    int32_t _188;
-    _Bool _189;
-    int32_t _191;
-    int32_t _192;
-    _Bool _193;
-    int32_t _195;
-    int32_t _196;
-    _Bool _197;
-    int32_t _199;
-    int32_t _200;
-    _Bool _201;
-    int32_t _203;
-    int32_t _204;
-    _Bool _205;
-    uint8_t _212;
-    _Bool _219;
-    uint32_t _232;
-    int8_t _239;
-    int16_t _246;
-    int64_t _253;
-    intptr_t _260;
-    intptr_t _261;
-    intptr_t _262;
-    int64_t _263;
-    size_t _270;
-    size_t _271;
-    size_t _272;
-    uint64_t _273;
-    __uint128_t _280;
-    __uint128_t _281;
-    _Bool _282;
-    uint8_t _283;
-    __int128 _290;
-    __int128 _291;
-    _Bool _292;
-    uint8_t _293;
+    struct core_cmp_Ordering _183;
+    int8_t _184;
+    int8_t _185;
+    struct core_cmp_Ordering _192;
+    int8_t _193;
+    int8_t _194;
+    struct core_cmp_Ordering _201;
+    int8_t _202;
+    int8_t _203;
+    int32_t _210;
+    int32_t _211;
+    _Bool _212;
+    int32_t _214;
+    int32_t _215;
+    _Bool _216;
+    int32_t _218;
+    int32_t _219;
+    _Bool _220;
+    int32_t _222;
+    int32_t _223;
+    _Bool _224;
+    int32_t _226;
+    int32_t _227;
+    _Bool _228;
+    int32_t _230;
+    int32_t _231;
+    _Bool _232;
+    uint8_t _239;
+    _Bool _246;
+    uint32_t _259;
+    int8_t _266;
+    int16_t _273;
+    int64_t _280;
+    intptr_t _287;
+    intptr_t _288;
+    intptr_t _289;
+    int64_t _290;
+    size_t _297;
+    size_t _298;
+    size_t _299;
+    uint64_t _300;
+    __uint128_t _307;
+    __uint128_t _308;
+    _Bool _309;
+    uint8_t _310;
+    __int128 _317;
+    __int128 _318;
+    _Bool _319;
+    uint8_t _320;
     bb_0: {
         _1 = input_add_i32(((int32_t)(7U)), ((int32_t)(3U))); goto bb_1;
     }
@@ -1107,139 +1132,166 @@ void input_regseq_main(void) {
         fwrite("[INFO] ovm=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_174)); fwrite(_n, 1, _l, stdout); } fwrite(" ovmo=", 1, 6, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_176)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_49;
     }
     bb_49: {
-        _183 = _15;
-        _184 = _16;
-        _185 = ((_183) == (_184));
+        _183.tag = (int8_t)(((((int32_t)(7U))) > (((int32_t)(3U)))) - ((((int32_t)(7U))) < (((int32_t)(3U)))));
+        _184 = (_183.tag == ((int8_t)(255U)) ? ((int8_t)(255U)) : (_183.tag == ((int8_t)(0U)) ? ((int8_t)(0U)) : ((int8_t)(1U))));
+        _185 = ((int8_t)(_184));
         goto bb_50;
     }
     bb_50: {
-        _187 = _15;
-        _188 = _16;
-        _189 = ((_187) < (_188));
-        goto bb_51;
+        fwrite("[INFO] cmpgt=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_185)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_51;
     }
     bb_51: {
-        _191 = _15;
-        _192 = _16;
-        _193 = ((_191) <= (_192));
+        _192.tag = (int8_t)(((((int32_t)(5U))) > (((int32_t)(5U)))) - ((((int32_t)(5U))) < (((int32_t)(5U)))));
+        _193 = (_192.tag == ((int8_t)(255U)) ? ((int8_t)(255U)) : (_192.tag == ((int8_t)(0U)) ? ((int8_t)(0U)) : ((int8_t)(1U))));
+        _194 = ((int8_t)(_193));
         goto bb_52;
     }
     bb_52: {
-        _195 = _15;
-        _196 = _16;
-        _197 = ((_195) != (_196));
-        goto bb_53;
+        fwrite("[INFO] cmpeq=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_194)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_53;
     }
     bb_53: {
-        _199 = _15;
-        _200 = _16;
-        _201 = ((_199) >= (_200));
+        _201.tag = (int8_t)(((((int32_t)(3U))) > (((int32_t)(7U)))) - ((((int32_t)(3U))) < (((int32_t)(7U)))));
+        _202 = (_201.tag == ((int8_t)(255U)) ? ((int8_t)(255U)) : (_201.tag == ((int8_t)(0U)) ? ((int8_t)(0U)) : ((int8_t)(1U))));
+        _203 = ((int8_t)(_202));
         goto bb_54;
     }
     bb_54: {
-        _203 = _15;
-        _204 = _16;
-        _205 = ((_203) > (_204));
-        goto bb_55;
+        fwrite("[INFO] cmplt=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_203)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_55;
     }
     bb_55: {
-        fwrite("[INFO] eq=", 1, 10, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_185)); fwrite(_n, 1, _l, stdout); } fwrite(" lt=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_189)); fwrite(_n, 1, _l, stdout); } fwrite(" le=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_193)); fwrite(_n, 1, _l, stdout); } fwrite(" ne=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_197)); fwrite(_n, 1, _l, stdout); } fwrite(" ge=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_201)); fwrite(_n, 1, _l, stdout); } fwrite(" gt=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_205)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_56;
+        _210 = _15;
+        _211 = _16;
+        _212 = ((_210) == (_211));
+        goto bb_56;
     }
     bb_56: {
-        _212 = (~(((uint8_t)(0U))));
+        _214 = _15;
+        _215 = _16;
+        _216 = ((_214) < (_215));
         goto bb_57;
     }
     bb_57: {
-        fwrite("[INFO] not_u=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_212)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_58;
+        _218 = _15;
+        _219 = _16;
+        _220 = ((_218) <= (_219));
+        goto bb_58;
     }
     bb_58: {
-        _219 = (!(1));
+        _222 = _15;
+        _223 = _16;
+        _224 = ((_222) != (_223));
         goto bb_59;
     }
     bb_59: {
-        fwrite("[INFO] not_b=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_219)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_60;
+        _226 = _15;
+        _227 = _16;
+        _228 = ((_226) >= (_227));
+        goto bb_60;
     }
     bb_60: {
+        _230 = _15;
+        _231 = _16;
+        _232 = ((_230) > (_231));
         goto bb_61;
     }
     bb_61: {
-        fwrite("[INFO] boolt=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(1)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_62;
+        fwrite("[INFO] eq=", 1, 10, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_212)); fwrite(_n, 1, _l, stdout); } fwrite(" lt=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_216)); fwrite(_n, 1, _l, stdout); } fwrite(" le=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_220)); fwrite(_n, 1, _l, stdout); } fwrite(" ne=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_224)); fwrite(_n, 1, _l, stdout); } fwrite(" ge=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_228)); fwrite(_n, 1, _l, stdout); } fwrite(" gt=", 1, 4, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_232)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_62;
     }
     bb_62: {
-        _232 = ((uint32_t)((uint32_t)65U));
+        _239 = (~(((uint8_t)(0U))));
         goto bb_63;
     }
     bb_63: {
-        fwrite("[INFO] char=", 1, 12, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_232)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_64;
+        fwrite("[INFO] not_u=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_239)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_64;
     }
     bb_64: {
-        _239 = ((((int8_t)(5U))) + (((int8_t)(3U))));
+        _246 = (!(1));
         goto bb_65;
     }
     bb_65: {
-        fwrite("[INFO] i8=", 1, 10, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_239)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_66;
+        fwrite("[INFO] not_b=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_246)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_66;
     }
     bb_66: {
-        _246 = ((((int16_t)(300U))) + (((int16_t)(100U))));
         goto bb_67;
     }
     bb_67: {
-        fwrite("[INFO] i16=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_246)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_68;
+        fwrite("[INFO] boolt=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(1)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_68;
     }
     bb_68: {
-        _253 = ((((int64_t)(1000000000000ULL))) + (((int64_t)(1ULL))));
+        _259 = ((uint32_t)((uint32_t)65U));
         goto bb_69;
     }
     bb_69: {
-        fwrite("[INFO] i64=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%lld", (long long)(_253)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_70;
+        fwrite("[INFO] char=", 1, 12, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_259)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_70;
     }
     bb_70: {
-        _260 = ((intptr_t)(18446744073709551609ULL));
-        _261 = _260;
-        _262 = ((_261) * (((intptr_t)(6ULL))));
-        _263 = ((int64_t)(_262));
+        _266 = ((((int8_t)(5U))) + (((int8_t)(3U))));
         goto bb_71;
     }
     bb_71: {
-        fwrite("[INFO] isz=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%lld", (long long)(_263)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_72;
+        fwrite("[INFO] i8=", 1, 10, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_266)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_72;
     }
     bb_72: {
-        _270 = ((size_t)(7ULL));
-        _271 = _270;
-        _272 = ((_271) * (((size_t)(6ULL))));
-        _273 = ((uint64_t)(_272));
+        _273 = ((((int16_t)(300U))) + (((int16_t)(100U))));
         goto bb_73;
     }
     bb_73: {
-        fwrite("[INFO] usz=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%llu", (unsigned long long)(_273)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_74;
+        fwrite("[INFO] i16=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%d", (int)(_273)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_74;
     }
     bb_74: {
-        _280 = ((((__uint128_t)(__uint128_t)10000000000ULL)) * (((__uint128_t)(__uint128_t)10000000000ULL)));
-        _281 = _280;
-        _282 = ((_281) == (((__uint128_t)(((__uint128_t)5ULL << 64) | (__uint128_t)7766279631452241920ULL))));
-        _283 = ((uint8_t)(_282));
+        _280 = ((((int64_t)(1000000000000ULL))) + (((int64_t)(1ULL))));
         goto bb_75;
     }
     bb_75: {
-        fwrite("[INFO] u128ck=", 1, 14, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_283)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_76;
+        fwrite("[INFO] i64=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%lld", (long long)(_280)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_76;
     }
     bb_76: {
-        _290 = ((((__int128)(((__uint128_t)18446744073709551615ULL << 64) | (__uint128_t)18446744063709551616ULL))) * (((__int128)(__uint128_t)10000000000ULL)));
-        _291 = _290;
-        _292 = ((_291) == (((__int128)(((__uint128_t)18446744073709551610ULL << 64) | (__uint128_t)10680464442257309696ULL))));
-        _293 = ((uint8_t)(_292));
+        _287 = ((intptr_t)(18446744073709551609ULL));
+        _288 = _287;
+        _289 = ((_288) * (((intptr_t)(6ULL))));
+        _290 = ((int64_t)(_289));
         goto bb_77;
     }
     bb_77: {
-        fwrite("[INFO] i128ck=", 1, 14, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_293)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_78;
+        fwrite("[INFO] isz=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%lld", (long long)(_290)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_78;
     }
     bb_78: {
+        _297 = ((size_t)(7ULL));
+        _298 = _297;
+        _299 = ((_298) * (((size_t)(6ULL))));
+        _300 = ((uint64_t)(_299));
         goto bb_79;
     }
     bb_79: {
-        fwrite("[INFO] cuint=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(((uint32_t)(42U)))); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_80;
+        fwrite("[INFO] usz=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%llu", (unsigned long long)(_300)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_80;
     }
     bb_80: {
+        _307 = ((((__uint128_t)(__uint128_t)10000000000ULL)) * (((__uint128_t)(__uint128_t)10000000000ULL)));
+        _308 = _307;
+        _309 = ((_308) == (((__uint128_t)(((__uint128_t)5ULL << 64) | (__uint128_t)7766279631452241920ULL))));
+        _310 = ((uint8_t)(_309));
+        goto bb_81;
+    }
+    bb_81: {
+        fwrite("[INFO] u128ck=", 1, 14, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_310)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_82;
+    }
+    bb_82: {
+        _317 = ((((__int128)(((__uint128_t)18446744073709551615ULL << 64) | (__uint128_t)18446744063709551616ULL))) * (((__int128)(__uint128_t)10000000000ULL)));
+        _318 = _317;
+        _319 = ((_318) == (((__int128)(((__uint128_t)18446744073709551610ULL << 64) | (__uint128_t)10680464442257309696ULL))));
+        _320 = ((uint8_t)(_319));
+        goto bb_83;
+    }
+    bb_83: {
+        fwrite("[INFO] i128ck=", 1, 14, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_320)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_84;
+    }
+    bb_84: {
+        goto bb_85;
+    }
+    bb_85: {
+        fwrite("[INFO] cuint=", 1, 13, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(((uint32_t)(42U)))); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_86;
+    }
+    bb_86: {
         return;
     }
 }
@@ -1251,6 +1303,7 @@ const uint8_t input__regseq_synth__const_memory_static_09f589b09f8e282e2a034e0d5
 const uint8_t input__regseq_synth__const_memory_static_0c2d87e556dfd3449bb4fe8118451708[6] = { ((uint8_t)(97U)), ((uint8_t)(100U)), ((uint8_t)(100U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_142333c60860539cc2453ac84c2b9314[6] = { ((uint8_t)(115U)), ((uint8_t)(117U)), ((uint8_t)(98U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_21543c6dd444e5a91910b1029e6874a8[7] = { ((uint8_t)(98U)), ((uint8_t)(120U)), ((uint8_t)(111U)), ((uint8_t)(114U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_27c3247e3f13f1631a2dc14ed089443e[8] = { ((uint8_t)(99U)), ((uint8_t)(109U)), ((uint8_t)(112U)), ((uint8_t)(103U)), ((uint8_t)(116U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_289a17933a81de4321b5c9569936ca55[7] = { ((uint8_t)(99U)), ((uint8_t)(104U)), ((uint8_t)(97U)), ((uint8_t)(114U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_40c6ac168f757de60b66029c5791fe7a[6] = { ((uint8_t)(115U)), ((uint8_t)(104U)), ((uint8_t)(114U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_428d700e3bac08feee2759b950f5b729[7] = { ((uint8_t)(98U)), ((uint8_t)(97U)), ((uint8_t)(110U)), ((uint8_t)(100U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
@@ -1271,8 +1324,10 @@ const uint8_t input__regseq_synth__const_memory_static_941c4bad0e9dd9166a160105e
 const uint8_t input__regseq_synth__const_memory_static_a38c772e2ad84eb6ceb930a71c9173a0[7] = { ((uint8_t)(117U)), ((uint8_t)(115U)), ((uint8_t)(104U)), ((uint8_t)(114U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_ac70c7a8dc37ee656719e7beb52c5b23[14] = { ((uint8_t)(111U)), ((uint8_t)(118U)), ((uint8_t)(109U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)), ((uint8_t)(32U)), ((uint8_t)(111U)), ((uint8_t)(118U)), ((uint8_t)(109U)), ((uint8_t)(111U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_ad7b98ed0691cbeeccd13228c7883787[9] = { ((uint8_t)(105U)), ((uint8_t)(49U)), ((uint8_t)(50U)), ((uint8_t)(56U)), ((uint8_t)(99U)), ((uint8_t)(107U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_ae9dcdc7a736afb61d4e2e7a42298989[8] = { ((uint8_t)(99U)), ((uint8_t)(109U)), ((uint8_t)(112U)), ((uint8_t)(101U)), ((uint8_t)(113U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_b08c0ac34252856b9de2c9c86169fd00[6] = { ((uint8_t)(105U)), ((uint8_t)(54U)), ((uint8_t)(52U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_bc8f375971b482337a8ec782f3a2109f[5] = { ((uint8_t)(105U)), ((uint8_t)(56U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_d4f842a088db707ad40fd50ee8860777[14] = { ((uint8_t)(111U)), ((uint8_t)(118U)), ((uint8_t)(115U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)), ((uint8_t)(32U)), ((uint8_t)(111U)), ((uint8_t)(118U)), ((uint8_t)(115U)), ((uint8_t)(111U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_db91b2e7de79585728f971b945c86956[8] = { ((uint8_t)(99U)), ((uint8_t)(109U)), ((uint8_t)(112U)), ((uint8_t)(108U)), ((uint8_t)(116U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_ecd7ceb097b611bea9a8f95ec59c7f66[6] = { ((uint8_t)(110U)), ((uint8_t)(101U)), ((uint8_t)(103U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_f0df92fc56866e349175e48e1312e83f[6] = { ((uint8_t)(117U)), ((uint8_t)(99U)), ((uint8_t)(115U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };

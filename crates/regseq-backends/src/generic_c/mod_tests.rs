@@ -2310,6 +2310,72 @@ fn with_overflow_writes_both_tuple_fields_via_the_helper() {
 }
 
 #[test]
+fn cmp_materializes_into_the_ordering_tag_cell() {
+    // `BinOp::Cmp` (BO-25): `_0: Ordering = Cmp(_1, _2)`. `Ordering` is a
+    // `repr(i8)` fieldless `Direct` enum (Less = -1, Equal = 0, Greater = 1),
+    // lowered to `struct core_cmp_Ordering` with an `i8` tag cell. The three-way
+    // scalar `(x > y) - (x < y)` (an i8 in {-1, 0, 1}) is exactly the variant
+    // discriminant == tag value, so it is written into the tag cell at the
+    // assign site (mirroring `assign_with_overflow`), NOT emitted as a bare
+    // `int8_t` rvalue assigned straight to the enum-struct place.
+    let mut m = model();
+    let i8t = m.types.intern(Ty::Int(IntKind::I8));
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: i8t,
+        valid_range: WrappingRange {
+            start: (-1i8) as u8 as u128,
+            end: 1,
+        },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(
+                &mut m,
+                "Less",
+                Vec::new(),
+                (-1i8) as u8 as u128,
+                Some((-1i8) as u8 as u128),
+            ),
+            variant(&mut m, "Equal", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Greater", Vec::new(), 1, Some(1)),
+        ],
+    };
+    let ord = push_enum_instance(&mut m, "core_cmp_Ordering", enum_layout(1, 1, shape));
+    let sig = fnsig(&mut m, vec![i32t, i32t], ord, FnAbi::Rust, false);
+    // _0 Ordering (ret), _1 i32 (arg), _2 i32 (arg).
+    let body = build_body(
+        2,
+        vec![ord, i32t, i32t],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::BinaryOp(BinOp::Cmp, Operand::Copy(loc(1)), Operand::Copy(loc(2))),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "cmp", sig, Some(body));
+
+    let tu = emit_generic_c(&m).unwrap();
+    // The three-way scalar is written into the tag cell, cast to the i8 tag
+    // type -- the same `<enum>.tag = ...;` form `emit_set_discriminant` uses.
+    assert!(
+        tu.contains("_0.tag = (int8_t)(((_1) > (_2)) - ((_1) < (_2)));"),
+        "Cmp writes the three-way scalar into the Ordering tag cell:\n{tu}"
+    );
+    // The bare-int8_t nested-rvalue spelling must NOT be assigned straight to
+    // the enum-struct place (the bug under fix).
+    assert!(
+        !tu.contains("_0 = ((int8_t)"),
+        "no bare int8_t assigned to the Ordering struct place:\n{tu}"
+    );
+}
+
+#[test]
 fn wide_switch_int_compares_128bit_halves() {
     let mut m = model();
     let u128t = uint(&mut m, UintKind::U128);

@@ -18,6 +18,9 @@
 [INFO] ova=4 ovo=1
 [INFO] ovs=251 ovso=1
 [INFO] ovm=144 ovmo=1
+[INFO] cmpgt=1
+[INFO] cmpeq=0
+[INFO] cmplt=-1
 [INFO] eq=0 lt=0 le=0 ne=1 ge=1 gt=1
 [INFO] not_u=255
 [INFO] not_b=0

@@ -400,6 +400,9 @@ impl BodyEmit<'_> {
             ) => {
                 return self.assign_with_overflow(&dst, op, a, b, zst);
             }
+            Rvalue::BinaryOp(BinOp::Cmp, a, b) => {
+                return self.assign_cmp(&dst, dst_ty, a, b, zst);
+            }
             _ => {}
         }
 
@@ -617,6 +620,56 @@ impl BodyEmit<'_> {
         Ok(Some(format!(
             "{{ struct regseq_overflow_{ct} {tmp} = regseq_{helper}_{ct}(({x}), ({y})); \
              {dst}._0 = {tmp}.v; {dst}._1 = {tmp}.overflow; }}"
+        )))
+    }
+
+    /// `BinOp::Cmp` at the assign site (section 10.1, matrix row BO-25): the
+    /// three-way compare's MIR result type is always `core::cmp::Ordering`, a
+    /// `repr(i8)` fieldless enum (`Less = -1`, `Equal = 0`, `Greater = 1`) the
+    /// backend lowers to `struct core_cmp_Ordering`. The scalar
+    /// `(x > y) - (x < y)` is an i8 in `{-1, 0, 1}` -- exactly the matched
+    /// variant's discriminant, which for a `Direct`-encoded fieldless enum is
+    /// its tag value -- so it is written into the destination's tag cell using
+    /// the same construction the backend already uses for a fieldless-enum
+    /// discriminant write ([`Self::emit_set_discriminant`]'s `_tag` view), not
+    /// emitted as a bare `int8_t` rvalue (which would mismatch the enum-struct
+    /// place). A non-`Ordering` (non-`Direct`-tag-view) destination is rejected;
+    /// `Cmp` is always assign-site (like `*WithOverflow`), so the nested-rvalue
+    /// arm ([`Self::binary_op`]) is defensive `Unsupported`.
+    fn assign_cmp(
+        &self,
+        dst: &str,
+        dst_ty: TyId,
+        a: &Operand,
+        b: &Operand,
+        zst: bool,
+    ) -> Result<Option<String>, EmitError> {
+        let x = self.operand_expr(a, None)?;
+        let y = self.operand_expr(b, None)?;
+        let shape = enum_emit::enum_shape(self.model, dst_ty).ok_or(EmitError::Unsupported(
+            "Cmp into a non-enum destination (result is core::cmp::Ordering)",
+        ))?;
+        let (member_path, scalar_ty) = match enum_emit::enum_tag(self.model, shape) {
+            enum_emit::EnumTag::View {
+                member_path,
+                scalar_ty,
+            } => (member_path, scalar_ty),
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "Cmp into an enum without a Direct tag view (not core::cmp::Ordering)",
+                ))
+            }
+        };
+        // `Ordering` is never zero-sized; the guard is defensive (and validates
+        // the operands above so a ZST destination still fails loud on a bad op).
+        if zst {
+            return Ok(None);
+        }
+        // The tag value is the i8 three-way scalar; cast it to the tag's C type
+        // so the write matches `emit_set_discriminant`'s `<enum>.tag = ...;`.
+        let tag_cty = types::c_type(self.model, self.names, scalar_ty);
+        Ok(Some(format!(
+            "{dst}.{member_path} = ({tag_cty})((({x}) > ({y})) - (({x}) < ({y})));"
         )))
     }
 
@@ -1540,7 +1593,16 @@ impl BodyEmit<'_> {
             BinOp::Ge => Ok(simple(">=")),
             BinOp::Gt => Ok(simple(">")),
             BinOp::Offset => Ok(simple("+")),
-            BinOp::Cmp => Ok(format!("((int8_t)((({x}) > ({y})) - (({x}) < ({y}))))")),
+            BinOp::Cmp => {
+                // The three-way result type is always `core::cmp::Ordering` (a
+                // fieldless enum -> `struct core_cmp_Ordering`), a multi-field
+                // place written at the assign site ([`Self::assign_cmp`], matrix
+                // row BO-25); a bare `int8_t` nested rvalue would mismatch the
+                // enum-struct destination, so reaching here is defensive.
+                Err(EmitError::Unsupported(
+                    "Cmp as a nested rvalue (assign-site only; result is core::cmp::Ordering)",
+                ))
+            }
             BinOp::AddWithOverflow | BinOp::SubWithOverflow | BinOp::MulWithOverflow => {
                 // The `(T, bool)` result is a multi-field write built at the
                 // assign site ([`Self::assign_with_overflow`], Change G); a

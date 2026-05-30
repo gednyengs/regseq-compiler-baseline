@@ -107,10 +107,12 @@ pub extern "C" fn regseq_main() {
     let (ovm, ovmo) = core::intrinsics::mul_with_overflow(200u8, 2u8);  // (144, true)
     regseq::log::info!("ovm={} ovmo={}", ovm, ovmo);  // 144 1 proves: BO-9..11 (MulWithOverflow)
 
-    // NOTE: BO-25 (Cmp / three_way_compare) is DEFERRED — it lowers fine but hits
-    // a backend type bug: the Cmp result is emitted as int8_t yet assigned to the
-    // Ordering enum-struct destination ("incompatible types ... struct
-    // core_cmp_Ordering from signed char"). Needs a backend fix, not a recipe change.
+    // --- three-way compare (BO-25): core::intrinsics::three_way_compare lowers to
+    // BinOp::Cmp, whose result is a core::cmp::Ordering (repr(i8): Less=-1, Equal=0,
+    // Greater=1). `as i8` reads the discriminant into the i8 carrier. ---
+    regseq::log::info!("cmpgt={}", core::intrinsics::three_way_compare(7i32, 3i32) as i8); // 1  proves: BO-25 (Cmp, Greater)
+    regseq::log::info!("cmpeq={}", core::intrinsics::three_way_compare(5i32, 5i32) as i8); // 0  proves: BO-25 (Cmp, Equal)
+    regseq::log::info!("cmplt={}", core::intrinsics::three_way_compare(3i32, 7i32) as i8); // -1 proves: BO-25 (Cmp, Less)
 
     // --- comparisons i32 (BO-19..24) → bool (TY-1) ---
     regseq::log::info!("eq={} lt={} le={} ne={} ge={} gt={}",

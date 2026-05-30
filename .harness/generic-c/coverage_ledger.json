@@ -216,8 +216,10 @@
     {
       "id": "BO-25",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-26",
@@ -1367,7 +1369,6 @@
       "AK-6",
       "AK-7",
       "AK-8",
-      "BO-25",
       "CK-11",
       "CK-9",
       "CO-12",
