@@ -83,13 +83,17 @@ pub(super) fn emit_body(
         .kind
         .as_function()
         .expect("emit_body called on a non-function instance");
-    let output_ty = model.sigs.resolve(data.fn_sig).output;
+    let fn_sig = model.sigs.resolve(data.fn_sig);
+    let output_ty = fn_sig.output;
+    let lowering = super::c_abi_lowering(model, data.fn_sig);
     let emitter = BodyEmit {
         model,
         names,
         syms,
         body,
         output_ty,
+        fn_sig,
+        lowering,
     };
 
     let mut out = String::from(" {\n");
@@ -101,8 +105,30 @@ pub(super) fn emit_body(
             types::declare(model, names, output_ty, "_0")
         ));
     }
-    // Inner locals (arg_count+1..); a ZST local declares nothing. Argument
-    // locals are the C formal parameters, declared by the caller.
+    // C-ABI `Substituted` argument locals: the C formal parameter carries the
+    // ABI (`emit_as`) type under a distinct `<local>__abi` name, so the
+    // original-typed body local must be declared HERE and filled from the ABI
+    // formal by a representation-identical copy (the prologue marshalling). A
+    // `Direct` argument's formal *is* the body local (declared by the caller),
+    // so it is skipped.
+    let prologue = emitter.input_marshalling()?;
+    for local in body.arg_locals() {
+        let i = local.as_u32() as usize - 1;
+        if !super::input_is_substituted(fn_sig, lowering, i) {
+            continue;
+        }
+        let decl = &body.local_decls[local];
+        if emitter.is_zst(decl.ty) {
+            continue;
+        }
+        let name = local_c_name(model, body, local);
+        out.push_str(&format!(
+            "    {};\n",
+            types::declare(model, names, decl.ty, &name)
+        ));
+    }
+    // Inner locals (arg_count+1..); a ZST local declares nothing. Direct
+    // argument locals are the C formal parameters, declared by the caller.
     for local in body.inner_locals() {
         let decl = &body.local_decls[local];
         if emitter.is_zst(decl.ty) {
@@ -113,6 +139,11 @@ pub(super) fn emit_body(
             "    {};\n",
             types::declare(model, names, decl.ty, &name)
         ));
+    }
+    // The prologue marshalling statements (copying each ABI formal into its
+    // original-typed body local) run before the first basic block.
+    for stmt in prologue {
+        out.push_str(&format!("    {stmt}\n"));
     }
 
     // Basic blocks in RPO storage order.
@@ -153,6 +184,13 @@ struct BodyEmit<'a> {
     syms: &'a InstanceSymbols,
     body: &'a regseq_model::Body,
     output_ty: TyId,
+    /// The owning function's signature: needed for the C-ABI `Substituted`
+    /// return-position marshalling (the body's `_0` keeps `output_ty`; the
+    /// `return` marshals it to the ABI `emit_as`).
+    fn_sig: &'a regseq_model::FnSig,
+    /// The owning function's C-ABI lowering side-table entry, when present.
+    /// Drives the `Substituted` input prologue + return marshalling.
+    lowering: Option<&'a regseq_model::CAbiLowering>,
 }
 
 /// The result of walking a place's projection chain ([`BodyEmit::place_walk`]):
@@ -445,6 +483,44 @@ impl BodyEmit<'_> {
             }
             n += 1;
         }
+    }
+
+    /// The C-ABI `Substituted`-input prologue: for each substituted argument
+    /// position, a representation-identical `memcpy` copying the ABI formal
+    /// (`<local>__abi`, the `emit_as` type) into the original-typed body local
+    /// (`<local>`). A `repr(transparent)` chain is layout-identical, so the
+    /// `memcpy` is a reinterpret with no value change. A ZST argument carries
+    /// no bytes and is skipped (it has no formal parameter). Runs before the
+    /// first basic block so the body's first read of `<local>` sees the value.
+    fn input_marshalling(&self) -> Result<Vec<String>, EmitError> {
+        let mut out = Vec::new();
+        for local in self.body.arg_locals() {
+            let i = local.as_u32() as usize - 1;
+            if !super::input_is_substituted(self.fn_sig, self.lowering, i) {
+                continue;
+            }
+            let body_ty = self.body.local_decls[local].ty;
+            if self.is_zst(body_ty) {
+                continue;
+            }
+            let name = local_c_name(self.model, self.body, local);
+            out.push(format!("memcpy(&{name}, &{name}__abi, sizeof({name}));"));
+        }
+        Ok(out)
+    }
+
+    /// A representation-identical reinterpret of `src` (an addressable lvalue
+    /// of the body value's original type) to `to_ty`, as a GNU
+    /// statement-expression: a fresh temp of `to_ty` filled by `memcpy` from
+    /// `src`. Used at C-ABI `Substituted`
+    /// call-argument positions, where the body value is the original type but
+    /// the prototype expects `emit_as` (a `repr(transparent)` chain is
+    /// layout-identical, so the copy changes no bytes). The temp lives in its
+    /// own block scope ([`Self::fresh_temp_name`]).
+    fn reinterpret_to(&self, src: &str, to_ty: TyId) -> String {
+        let tmp = self.fresh_temp_name("_ab");
+        let tmp_cty = types::c_type(self.model, self.names, to_ty);
+        format!("({{ {tmp_cty} {tmp}; memcpy(&{tmp}, &({src}), sizeof({tmp})); {tmp}; }})")
     }
 
     /// Whether any non-ZST operand is an array value (a place of `Ty::Array`).
@@ -1801,6 +1877,18 @@ impl BodyEmit<'_> {
             TerminatorKind::Return => {
                 if self.is_zst(self.output_ty) {
                     Ok("return;".to_string())
+                } else if super::output_is_substituted(self.fn_sig, self.lowering) {
+                    // The body's `_0` keeps `output_ty`, but the C return type is
+                    // the ABI `emit_as`. Marshal `_0` back to the ABI type by a
+                    // representation-identical copy into a fresh temp, then
+                    // return the temp (a `repr(transparent)` chain changes no
+                    // bytes).
+                    let abi_ty = super::effective_output_ty(self.fn_sig, self.lowering);
+                    let tmp = self.fresh_temp_name("_ar");
+                    let tmp_cty = types::c_type(self.model, self.names, abi_ty);
+                    Ok(format!(
+                        "{{ {tmp_cty} {tmp}; memcpy(&{tmp}, &_0, sizeof({tmp})); return {tmp}; }}"
+                    ))
                 } else {
                     Ok("return _0;".to_string())
                 }
@@ -1884,12 +1972,21 @@ impl BodyEmit<'_> {
 
         // The callee's parameter types, threaded as the per-argument consumer
         // type so a non-scalar / reference const argument lowers against the
-        // parameter type (a scalar argument ignores it). The recovery is the
-        // single helper the Change-F pre-pass also uses, so emission + scan
-        // cannot disagree on which arguments carry a known consumer type; an
-        // unrecoverable signature lowers arguments at `None` (a non-scalar
+        // parameter type (a scalar argument ignores it). For a C-ABI
+        // `Substituted` position these are the `emit_as` ABI types. The recovery
+        // is the single helper the Change-F pre-pass also uses, so emission +
+        // scan cannot disagree on which arguments carry a known consumer type;
+        // an unrecoverable signature lowers arguments at `None` (a non-scalar
         // const argument then fails loud).
         let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        // The callee's C-ABI lowering, used to reinterpret a `Substituted`
+        // argument from the body value's original type to the ABI `emit_as` the
+        // prototype expects (and to marshal a `Substituted` return back into the
+        // original-typed destination below). `None` when the signature is not
+        // recoverable -- then no position is substituted and no marshalling runs.
+        let callee_sig_id = super::callee_fn_sig_id(self.model, self.body, callee);
+        let callee_fn_sig = callee_sig_id.map(|s| self.model.sigs.resolve(s));
+        let callee_lowering = callee_sig_id.and_then(|s| super::c_abi_lowering(self.model, s));
 
         let mut arg_strs = Vec::new();
         for (i, arg) in args.iter().enumerate() {
@@ -1897,7 +1994,7 @@ impl BodyEmit<'_> {
             // projection reached through an argument fails loud, then drop the
             // ZST arguments from the C call (a ZST value carries no bytes and
             // is omitted from the prototype's parameter list, section 15).
-            let expr = self.operand_expr(arg, param_tys.get(i).copied())?;
+            let mut expr = self.operand_expr(arg, param_tys.get(i).copied())?;
             if self.is_zst_operand(arg) {
                 continue;
             }
@@ -1912,6 +2009,18 @@ impl BodyEmit<'_> {
                     "by-value array call argument (C array decay)",
                 ));
             }
+            // A C-ABI `Substituted` position: a body *place* value is the
+            // original type, but the prototype expects `emit_as`, so reinterpret
+            // it to the ABI type (a `repr(transparent)` chain is
+            // layout-identical). A constant argument is already lowered at the
+            // `emit_as` consumer type by `operand_expr`, so it needs no copy.
+            if matches!(arg, Operand::Copy(_) | Operand::Move(_)) {
+                if let (Some(fs), Some(eff)) = (callee_fn_sig, param_tys.get(i).copied()) {
+                    if super::input_is_substituted(fs, callee_lowering, i) {
+                        expr = self.reinterpret_to(&expr, eff);
+                    }
+                }
+            }
             arg_strs.push(expr);
         }
         let call = format!("{callee_expr}({})", arg_strs.join(", "));
@@ -1922,6 +2031,23 @@ impl BodyEmit<'_> {
                 let dst = self.place_lvalue(destination)?;
                 let assign = if self.is_zst(self.place_ty(destination)) {
                     format!("{call};")
+                } else if callee_fn_sig
+                    .is_some_and(|fs| super::output_is_substituted(fs, callee_lowering))
+                {
+                    // The call yields the ABI `emit_as`, but `destination` is the
+                    // original type. Hold the (single-evaluated) ABI result in a
+                    // fresh temp, then marshal it back into the destination by a
+                    // representation-identical copy (a `repr(transparent)` chain
+                    // changes no bytes).
+                    let abi_ty = super::effective_output_ty(
+                        callee_fn_sig.expect("checked output_is_substituted"),
+                        callee_lowering,
+                    );
+                    let tmp = self.fresh_temp_name("_ac");
+                    let tmp_cty = types::c_type(self.model, self.names, abi_ty);
+                    format!(
+                        "{{ {tmp_cty} {tmp} = {call}; memcpy(&{dst}, &{tmp}, sizeof({dst})); }}"
+                    )
                 } else {
                     format!("{dst} = {call};")
                 };

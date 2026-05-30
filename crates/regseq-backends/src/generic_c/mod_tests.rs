@@ -1566,6 +1566,98 @@ fn c_abi_substituted_parameter_uses_emit_as_type() {
 }
 
 #[test]
+fn c_abi_substituted_input_and_output_marshal_through_body() {
+    // `#[repr(transparent)] struct W(u32);` and `extern "C" fn id_w(w: W) -> W`
+    // with the input AND output C-ABI-substituted to the inner u32. The
+    // prototype/definition declare the ABI type (`uint32_t`), the body keeps
+    // using the original `W` local, and the boundary is bridged by marshalling:
+    // an input copy at the prologue, a return copy back to the ABI type, and a
+    // reinterpret of the argument at the call site.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    // W { _0: u32 } -- a single-field repr-identical newtype.
+    let w_field = fl(&mut m, "0", u32t, 0);
+    let w_ty = push_struct_instance(&mut m, "W", struct_layout(4, 4, None, vec![w_field]));
+
+    // id_w: extern "C" fn(W) -> W, both positions substituted to u32.
+    let sig = fnsig(&mut m, vec![w_ty], w_ty, FnAbi::C, false);
+    while m.sig_c_abi_lowerings.len() <= sig.as_u32() as usize {
+        m.sig_c_abi_lowerings.push(None);
+    }
+    m.sig_c_abi_lowerings[sig] = Some(CAbiLowering {
+        inputs: vec![CAbiShape::Substituted {
+            emit_as: u32t,
+            reason: SubstReason::TransparentChain,
+        }],
+        output: CAbiShape::Substituted {
+            emit_as: u32t,
+            reason: SubstReason::TransparentChain,
+        },
+    });
+    // Body: `_0 = _1; return _0;` (copy the W arg to the W return place).
+    let id_body = build_body(
+        1,
+        vec![w_ty, w_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Use(Operand::Copy(loc(1))),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    let id_w = fn_instance(&mut m, "id_w", sig, Some(id_body));
+
+    // Caller: `regseq_main() { let r = id_w(w); }` -- a W-typed arg local.
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: UNIT_LAYOUT,
+    });
+    let main_sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    let main_body = build_body(
+        0,
+        // _0: unit, _1: W (the argument value), _2: W (the call result)
+        vec![unit, w_ty, w_ty],
+        vec![
+            bb(
+                vec![],
+                tk(TerminatorKind::Call {
+                    callee: CallCallee::Direct(id_w),
+                    args: Box::new([Operand::Copy(loc(1))]),
+                    destination: loc(2),
+                    target: Some(BlockId::from_u32(1)),
+                }),
+            ),
+            bb(vec![], tk(TerminatorKind::Return)),
+        ],
+    );
+    fn_instance(&mut m, "regseq_main", main_sig, Some(main_body));
+
+    let tu = emit_generic_c(&m).unwrap();
+
+    // Prototype + definition spell the ABI type for both positions.
+    assert!(
+        tu.contains("uint32_t id_w(uint32_t"),
+        "ABI-typed prototype/definition:\n{tu}"
+    );
+    // The body keeps the original W local (return place + arg local) and bridges
+    // via a representation-identical memcpy at the prologue.
+    assert!(
+        tu.contains("struct W _0;"),
+        "body keeps original-typed return place:\n{tu}"
+    );
+    assert!(
+        tu.contains("memcpy(") && tu.contains("__abi"),
+        "input marshalling copies the ABI param into the body local:\n{tu}"
+    );
+    // The call site reinterprets the W argument to the ABI type.
+    assert!(
+        tu.contains("id_w(") && tu.matches("memcpy(").count() >= 3,
+        "input prologue + return + call-site marshalling all present:\n{tu}"
+    );
+}
+
+#[test]
 fn c_variadic_appends_ellipsis() {
     let mut m = model();
     let u32t = uint(&mut m, UintKind::U32);

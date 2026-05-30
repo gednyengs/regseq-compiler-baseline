@@ -1,0 +1,20 @@
+name   = "b7_repr_transparent"
+kind   = "rust"
+entry  = "regseq_main"
+# B7 (cont., regseq-backends-23): the C-ABI `Substituted` transparent-newtype
+# boundary. A `#[repr(transparent)] struct W(u32)` across `extern "C"` computes
+# `CAbiShape::Substituted { emit_as: u32, reason: TransparentChain }` (FS-8 +
+# FS-9). The backend emits the inner u32 (`emit_as`) at every C position --
+# prototype, definition param/return, call-site argument -- and bridges to the
+# original-typed W body local by a representation-identical copy (marshalling)
+# at the prologue (input), each return (output), and the call site (argument +
+# destination). `id_w` exercises the Substituted INPUT path; `make_w` the
+# Substituted OUTPUT path. The logged 7 / 9 prove the marshalled values
+# round-trip through the boundary.
+#
+# FS-9 (SubstReason) is diagnostic-only: the backend ignores `reason` and emits
+# `emit_as`, so it rides on FS-8's fixture (no separate construct).
+covers = [
+  "FS-8", "FS-9",
+]
+expect = "pass"

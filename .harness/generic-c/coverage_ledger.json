@@ -575,14 +575,18 @@
     {
       "id": "FS-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b7_repr_transparent"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b7_repr_transparent"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-1",
@@ -1378,8 +1382,6 @@
       "CK-11",
       "CO-12",
       "DL-5",
-      "FS-8",
-      "FS-9",
       "IN-6",
       "IT-14",
       "PC-3",

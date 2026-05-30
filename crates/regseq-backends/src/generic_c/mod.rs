@@ -746,7 +746,7 @@ fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node])
 /// built models may intern signatures without a parallel
 /// `sig_c_abi_lowerings` slot, so this bounds-checks rather than indexing
 /// (an absent entry means "use the raw `FnSig` types").
-fn c_abi_lowering(model: &RegseqModel, sig: FnSigId) -> Option<&CAbiLowering> {
+pub(super) fn c_abi_lowering(model: &RegseqModel, sig: FnSigId) -> Option<&CAbiLowering> {
     let idx = sig.as_u32() as usize;
     if idx < model.sig_c_abi_lowerings.len() {
         model.sig_c_abi_lowerings[sig].as_ref()
@@ -777,6 +777,52 @@ fn effective_output_ty(fn_sig: &FnSig, lowering: Option<&CAbiLowering>) -> TyId 
             CAbiShape::Direct => fn_sig.output,
         },
         _ => fn_sig.output,
+    }
+}
+
+/// Whether input position `i` of a `C`-ABI signature is C-ABI `Substituted`
+/// (its boundary type differs from the body-local type, requiring prologue /
+/// call-site marshalling). A `Direct` position -- or any non-`C` signature --
+/// is not substituted: the formal parameter *is* the body local.
+pub(super) fn input_is_substituted(
+    fn_sig: &FnSig,
+    lowering: Option<&CAbiLowering>,
+    i: usize,
+) -> bool {
+    matches!(
+        lowering,
+        Some(l) if fn_sig.abi == FnAbi::C && matches!(l.inputs[i], CAbiShape::Substituted { .. })
+    )
+}
+
+/// Whether the return position of a `C`-ABI signature is C-ABI `Substituted`
+/// (so the body's original-typed `_0` is marshalled back to `emit_as` at each
+/// `return`). Mirrors [`input_is_substituted`].
+pub(super) fn output_is_substituted(fn_sig: &FnSig, lowering: Option<&CAbiLowering>) -> bool {
+    matches!(
+        lowering,
+        Some(l) if fn_sig.abi == FnAbi::C && matches!(l.output, CAbiShape::Substituted { .. })
+    )
+}
+
+/// The C formal-parameter name for input position `i`. A `Direct` position
+/// shares the body-local name (the formal *is* the body local). A
+/// `Substituted` position takes a distinct `<local>__abi` name: its formal is
+/// the ABI (`emit_as`) type, while the original-typed body local is declared
+/// and filled by the prologue marshalling ([`body_emit::emit_body`]), so the
+/// two cannot collide.
+pub(super) fn abi_param_name(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    fn_sig: &FnSig,
+    lowering: Option<&CAbiLowering>,
+    i: usize,
+) -> String {
+    let local = body_emit::local_c_name(model, body, regseq_model::LocalId::from_u32(i as u32 + 1));
+    if input_is_substituted(fn_sig, lowering, i) {
+        format!("{local}__abi")
+    } else {
+        local
     }
 }
 
@@ -846,15 +892,12 @@ fn fn_signature(
             continue;
         }
         let pname = if named {
-            // Argument locals are `local_decls[1..=arg_count]`.
+            // Argument locals are `local_decls[1..=arg_count]`. A C-ABI
+            // `Substituted` position takes a distinct `<local>__abi` formal name
+            // (the body local of the original type is declared + marshalled by
+            // the prologue), so the formal and the body local cannot collide.
             data.body()
-                .map(|body| {
-                    body_emit::local_c_name(
-                        model,
-                        body,
-                        regseq_model::LocalId::from_u32(i as u32 + 1),
-                    )
-                })
+                .map(|body| abi_param_name(model, body, fn_sig, lowering, i))
                 .unwrap_or_default()
         } else {
             String::new()
@@ -1270,23 +1313,45 @@ pub(super) fn callee_param_tys(
     body: &regseq_model::Body,
     callee: &regseq_model::CallCallee,
 ) -> Vec<TyId> {
+    let Some(sig_id) = callee_fn_sig_id(model, body, callee) else {
+        return Vec::new();
+    };
+    let fn_sig = model.sigs.resolve(sig_id);
+    let lowering = c_abi_lowering(model, sig_id);
+    // The effective ABI input types: a `Substituted` C-ABI position contributes
+    // its `emit_as` (so a const argument lowers against the boundary type and
+    // the call site reinterprets to it), a `Direct` position its own `FnSig`
+    // type. The call site uses [`input_is_substituted`] to decide where to
+    // emit the reinterpret.
+    (0..fn_sig.inputs.len())
+        .map(|i| effective_input_ty(fn_sig, lowering, i))
+        .collect()
+}
+
+/// The callee's interned [`FnSigId`], when recoverable: a `Direct` instance's
+/// own `fn_sig`, or an `Indirect` callee's `FnPtr` signature (from a bare-local
+/// / trailing-`Field` callee operand's type). `None` when the signature is not
+/// recoverable (a more deeply projected `FnPtr` callee, or a constant callee
+/// operand). The single source of truth for [`callee_param_tys`] and the
+/// call-site C-ABI marshalling, so the per-position effective types and the
+/// per-position `Substituted` decision cannot drift.
+pub(super) fn callee_fn_sig_id(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    callee: &regseq_model::CallCallee,
+) -> Option<FnSigId> {
     use regseq_model::{CallCallee, Operand};
     match callee {
-        CallCallee::Direct(id) => model.instances[*id]
-            .kind
-            .as_function()
-            .map(|d| model.sigs.resolve(d.fn_sig).inputs.clone())
-            .unwrap_or_default(),
+        CallCallee::Direct(id) => model.instances[*id].kind.as_function().map(|d| d.fn_sig),
         CallCallee::Indirect(op) => {
             let ty = match op {
                 Operand::Copy(p) | Operand::Move(p) => body_emit::place_ty(model, body, p).ok(),
                 Operand::Constant(_) => None,
             };
             ty.and_then(|t| match &model.types[t] {
-                Ty::FnPtr(sig) => Some(model.sigs.resolve(*sig).inputs.clone()),
+                Ty::FnPtr(sig) => Some(*sig),
                 _ => None,
             })
-            .unwrap_or_default()
         }
     }
 }

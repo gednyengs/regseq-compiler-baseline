@@ -5177,7 +5177,7 @@
           "id": "regseq-backends-23",
           "name": "Generic-C CAbiShape::Substituted transparent-newtype boundary",
           "spec": ".harness/tasks/regseq-backends/23-generic-c-cabi-substituted.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-backends-19"
           ],
