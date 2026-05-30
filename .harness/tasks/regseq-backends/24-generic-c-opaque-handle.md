@@ -1,5 +1,15 @@
 # regseq-backends-24: Generic-C opaque-handle emission (`opaque_handle_eligible`, IT-14)
 
+> **REDESIGN (2026-05-30).** A first implementation (auto-classify *every* struct with
+> no by-value use → opaque handle; commit `bf37c1d`) was **reverted** (`bdef425`): the
+> automatic, codebase-wide criterion was too broad — it reclassified pointer-only structs
+> across all real specs/tests and broke 2 cross-crate snapshot/smoke targets
+> (`regseq-model::e2e_trait_method_resolution`, `bridge-coverage-runner::smoke`). The
+> opaque-handle pattern must be **OPT-IN** (a deliberate marker on specific handle types),
+> NOT an automatic property of every pointer-only struct. This task is reset to design that
+> opt-in surface first. (Prior auto-classifier code for reference: `bf37c1d`
+> `bridge/opaque_handle.rs`.)
+
 ## Description
 
 `Item.opaque_handle_eligible` drives the opaque-handle pattern: an aggregate used

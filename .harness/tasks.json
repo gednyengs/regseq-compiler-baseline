@@ -5212,12 +5212,18 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:44:04Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T15:27:37Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "reverted auto-classifier (too broad, broke 2 cross-crate tests); redesign as opt-in marker"
             }
           ]
         }
