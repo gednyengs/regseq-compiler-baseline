@@ -210,6 +210,11 @@ rows now carry their **concrete harness dependency** rather than an authoring ha
 
 ## 5. Fixture roster + decisions to settle (architect)
 
+> **Settled (2026-05-29, architect):** **1.** broad granularity (~17 fixtures). **2.**
+> multi-agent **workflow** vehicle (independent batches, one agent each + a final
+> ledger-reconciliation pass). **4.** `AK-6/7/8` → **reclassify out-of-scope** (option b),
+> alongside `DL-5`. (Decision 3 sequencing stands as written.)
+
 **Roster: ~17 fixtures** — B1, B2, B3, B4, B5, B7, B8 (7 broad) + B6 ×10 (one per abort
 path). B3 is the largest (50 rows); B1 (envelope + scalars) and B4 (enums) are next. Split
 candidates if a single `input.rs` proves unwieldy: **B3 → B3a** (structs/tuples/arrays/unions
