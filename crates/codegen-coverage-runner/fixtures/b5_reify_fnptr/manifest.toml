@@ -1,0 +1,19 @@
+name   = "b5_reify_fnptr"
+kind   = "rust"
+entry  = "regseq_main"
+# B5-reify (regseq-backends-20): a DIRECT fn-item -> fn-pointer reify plus the
+# FnPtrToPtr cast of the reified pointer.
+#
+# PC-1 (ReifyFnPointer): `let f: fn(i32)->i32 = dbl;` lowers to
+# `Cast(PointerCoercion(ReifyFnPointer), Const::ZST FnDef, FnPtr)`. The bridge
+# recovers the FnDef identity at the cast site and lowers the operand to a
+# `Const::Reloc`, which the backend's `reify_fn_pointer` Reloc path already
+# emits as `&dbl`. (A backend-only fix is impossible — `Const::ZST` carries no
+# FnDef identity, and the dest FnPtr type is only the ambiguous signature.)
+#
+# CK-9 (FnPtrToPtr): `f as *const ()` is a `CastKind::FnPtrToPtr` over the
+# reified pointer; observed relationally (non-null) for a byte-exact oracle.
+covers = [
+  "PC-1", "CK-9",
+]
+expect = "pass"

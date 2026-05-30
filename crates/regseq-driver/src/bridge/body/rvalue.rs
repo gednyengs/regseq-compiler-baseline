@@ -46,11 +46,16 @@ pub fn translate_rvalue<'tcx>(
             translate_raw_ptr_kind(kind),
             translate_place(cx, body_cx, place)?,
         )),
-        mir::Rvalue::Cast(kind, operand, ty) => Ok(Rvalue::Cast(
-            translate_cast_kind(kind)?,
-            translate_operand(cx, body_cx, operand)?,
-            translate_ty(cx, ty)?,
-        )),
+        mir::Rvalue::Cast(kind, operand, ty) => {
+            let cast_kind = translate_cast_kind(kind)?;
+            let model_operand = reify_fn_def_operand(cx, &cast_kind, &operand)?
+                .map_or_else(|| translate_operand(cx, body_cx, operand), Ok)?;
+            Ok(Rvalue::Cast(
+                cast_kind,
+                model_operand,
+                translate_ty(cx, ty)?,
+            ))
+        }
         mir::Rvalue::BinaryOp(op, operands) => Ok(Rvalue::BinaryOp(
             translate_bin_op(op)?,
             translate_operand(cx, body_cx, operands.0)?,
@@ -81,6 +86,56 @@ pub fn translate_rvalue<'tcx>(
         | mir::Rvalue::ShallowInitBox(_, _)
         | mir::Rvalue::WrapUnsafeBinder(_, _) => rejected_rvalue("unsupported rvalue"),
     }
+}
+
+/// A `ReifyFnPointer` cast (`let f: fn(..) -> .. = some_fn;`) lowers in
+/// rustc MIR to `Cast(PointerCoercion(ReifyFnPointer), Const::ZST, FnPtr)`:
+/// the operand is the zero-sized `FnDef` constant. Lowered naively that
+/// constant becomes a bare model `Const::ZST`, which discards the `FnDef`
+/// identity (the model `Const::ZST` is a single canonical representative for
+/// all zero-sized types) — leaving the backend's `reify_fn_pointer` unable to
+/// name the target function. So at this site (where the rustc operand type is
+/// still available) we recover the `FnDef` identity, materialise its Function
+/// instance, and lower the operand to `Const::Reloc`, the same provenance shape
+/// a function-pointer baked into a `const`/`static` already uses (see
+/// [`crate::bridge::const_::instance_ref_for_function_provenance`]).
+///
+/// Returns `Ok(None)` for any cast that is not a `ReifyFnPointer` over a
+/// `FnDef`-typed constant, so the caller falls back to the generic operand
+/// translation.
+fn reify_fn_def_operand<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    cast_kind: &CastKind,
+    operand: &mir::Operand<'tcx>,
+) -> Result<Option<regseq_model::Operand>, BridgeError> {
+    if *cast_kind != CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer) {
+        return Ok(None);
+    }
+    let mir::Operand::Constant(constant) = operand else {
+        return Ok(None);
+    };
+    let ty::TyKind::FnDef(def_id, generic_args) = constant.const_.ty().kind() else {
+        return Ok(None);
+    };
+    let instance = ty::Instance::try_resolve(
+        cx.input.tcx,
+        ty::TypingEnv::fully_monomorphized(),
+        *def_id,
+        generic_args,
+    )
+    .map_err(|err| {
+        BridgeError::Phase4(format!(
+            "ReifyFnPointer Instance::try_resolve failed for {def_id:?} with args {generic_args:?}: {err:?}"
+        ))
+    })?
+    .ok_or_else(|| {
+        BridgeError::Phase4(format!(
+            "ReifyFnPointer could not resolve a monomorphic instance for {def_id:?} with args {generic_args:?}"
+        ))
+    })?;
+    let reloc = crate::bridge::const_::instance_ref_for_function_provenance(cx, instance)?;
+    let const_id = cx.model.consts.intern(regseq_model::Const::Reloc(reloc));
+    Ok(Some(regseq_model::Operand::Constant(const_id)))
 }
 
 fn translate_raw_ptr_kind(kind: mir::RawPtrKind) -> Mutability {

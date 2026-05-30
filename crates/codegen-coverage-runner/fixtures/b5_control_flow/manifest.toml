@@ -12,13 +12,14 @@ entry  = "regseq_main"
 # flavor — so IN-5 is genuinely exercised here (the row is any reachable shim flavor,
 # not specifically ReifyShim; confirmed by Codex review of the bug specs).
 #
-# DEFERRED — two rows hit genuine backend bugs (not recipe gaps), now filed as tasks:
-#  * PC-1 (ReifyFnPointer) — regseq-backends-20. A fn-item -> fn-pointer reify bridges as
-#    `Cast(PointerCoercion(ReifyFnPointer), Const::ZST, FnPtr)`: the operand is the
-#    zero-sized FnDef *constant*, which the backend's `reify_fn_pointer`
-#    (generic_c/body_emit.rs:1637) cannot resolve (only `Const::Reloc` or an `FnDef`
-#    *place*) -> `ReifyFnPointer of an unresolved function (task d2)`. The static-fn-ptr
-#    route used here keeps TM-9/TY-13/PC-2/CK-3 constructible.
+# PC-1 (ReifyFnPointer) — a fn-item -> fn-pointer reify bridges as
+# `Cast(PointerCoercion(ReifyFnPointer), Const::ZST, FnPtr)`. The bridge
+# (regseq-backends-20) now recovers the FnDef identity at the cast site and
+# lowers the operand to a `Const::Reloc`, so PC-1 is covered by the dedicated
+# `b5_reify_fnptr` fixture. This fixture keeps the static-fn-ptr route for
+# TM-9/TY-13/PC-2/CK-3.
+#
+# DEFERRED — one row hits a genuine backend bug (not a recipe gap), filed as a task:
 #  * IT-13 (ManuallyDrop) — regseq-backends-22. `core::mem::ManuallyDrop<T>` is a TUPLE
 #    struct; the backend emits its field with the raw rustc index name (invalid C), so
 #    any use fails to compile. (This fixture uses a NAMED-field `struct D { v: u32 }`

@@ -586,7 +586,7 @@ fn allocation_bytes<'tcx>(
 /// reference is read back from the materialized instance via
 /// `RegseqModel::instance_ref_of`, so it cannot drift from the
 /// reference set the validator accepts in `check_instance_ref`.
-fn instance_ref_for_function_provenance<'tcx>(
+pub(crate) fn instance_ref_for_function_provenance<'tcx>(
     cx: &mut BridgeCtxt<'tcx>,
     instance: ty::Instance<'tcx>,
 ) -> Result<InstanceRef, BridgeError> {

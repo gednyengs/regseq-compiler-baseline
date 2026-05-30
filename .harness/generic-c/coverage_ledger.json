@@ -326,8 +326,10 @@
     {
       "id": "CK-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_reify_fnptr"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-1",
@@ -921,8 +923,10 @@
     {
       "id": "PC-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_reify_fnptr"
+      ],
+      "result": "pass"
     },
     {
       "id": "PC-2",
@@ -1372,14 +1376,12 @@
       "AK-7",
       "AK-8",
       "CK-11",
-      "CK-9",
       "CO-12",
       "DL-5",
       "FS-8",
       "FS-9",
       "IN-6",
       "IT-14",
-      "PC-1",
       "PC-3",
       "TM-4",
       "TM-6",

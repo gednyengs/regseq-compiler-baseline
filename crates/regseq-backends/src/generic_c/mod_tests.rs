@@ -2821,6 +2821,61 @@ fn reify_fn_pointer_to_generic_instance_matches_definition_symbol() {
 }
 
 #[test]
+fn reify_fn_pointer_from_reloc_constant_operand_matches_definition_symbol() {
+    // regseq-backends-20: the rustc-shaped ReifyFnPointer operand. A direct
+    // fn-item -> fn-pointer coercion (`let f: fn(i32)->i32 = k;`) bridges as
+    // `Cast(PointerCoercion(ReifyFnPointer), Operand::Constant(_), FnPtr)` whose
+    // constant is the zero-sized FnDef value. The bridge (regseq-backends-20)
+    // recovers the FnDef identity at the cast site and lowers that operand to a
+    // `Const::Reloc` to the resolved function instance -- the shape the backend
+    // actually receives -- which `reify_fn_pointer` resolves through its Reloc
+    // path. (The bare `Const::ZST` is NOT used: the model `Const::ZST` carries
+    // no FnDef item/args, so it cannot name a target; resolution lives in the
+    // bridge where the FnDef type is still available.)
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let k_item = item(&mut m, ItemKind::Function, "k");
+    let args = vec![regseq_model::GenericArg::Type(u32t)];
+    let k_sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    let k_id = push_fn_mono(
+        &mut m,
+        k_item,
+        "k",
+        args.clone(),
+        k_sig,
+        Some(identity_body(u32t)),
+    );
+
+    let fnptr_ty = m.types.intern(Ty::FnPtr(k_sig));
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(k_id)));
+    let csig = fnsig(&mut m, vec![], fnptr_ty, FnAbi::Rust, false);
+    // _0: fnptr (return). The reify operand is the Const::Reloc constant.
+    let cbody = build_body(
+        0,
+        vec![fnptr_ty],
+        vec![bb(
+            vec![st(StatementKind::Assign(
+                loc(0),
+                Rvalue::Cast(
+                    CastKind::PointerCoercion(regseq_model::PointerCoercion::ReifyFnPointer),
+                    Operand::Constant(reloc),
+                    fnptr_ty,
+                ),
+            ))],
+            tk(TerminatorKind::Return),
+        )],
+    );
+    fn_instance(&mut m, "reifier_const", csig, Some(cbody));
+
+    let tu = emit_generic_c(&m).unwrap();
+    let sym = internal_symbol(&m, "k", &args);
+    assert!(
+        tu.contains(&format!("_0 = (&{sym});")),
+        "ReifyFnPointer of a Const::Reloc operand spells the suffixed symbol:\n{tu}"
+    );
+}
+
+#[test]
 fn internal_symbol_colliding_with_prelude_helper_is_clash_renamed() {
     // A Default instance whose emission_name is exactly a prelude helper
     // (`regseq_panic`) must be `_clash_1`-renamed, never shadow the helper.

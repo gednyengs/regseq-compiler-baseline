@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (147 with a green fixture)
+- **Covered rows:** 169 (149 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -16,14 +16,12 @@
 - `AK-7`
 - `AK-8`
 - `CK-11`
-- `CK-9`
 - `CO-12`
 - `DL-5`
 - `FS-8`
 - `FS-9`
 - `IN-6`
 - `IT-14`
-- `PC-1`
 - `PC-3`
 - `TM-4`
 - `TM-6`
@@ -77,7 +75,7 @@
 | CK-6 | Covered | Pass | b2_floats_casts |
 | CK-7 | Covered | Pass | b2_floats_casts |
 | CK-8 | Covered | Pass | b2_floats_casts |
-| CK-9 | Covered | Fail | - |
+| CK-9 | Covered | Pass | b5_reify_fnptr |
 | CO-1 | Covered | Pass | b1_int_scalars |
 | CO-10 | Covered | Pass | b3_refs_slices |
 | CO-11 | Covered | Pass | b3_refs_slices |
@@ -153,7 +151,7 @@
 | OP-1 | Covered | Pass | b1_int_scalars |
 | OP-2 | Covered | Pass | b1_int_scalars |
 | OP-3 | Covered | Pass | b1_int_scalars |
-| PC-1 | Covered | Fail | - |
+| PC-1 | Covered | Pass | b5_reify_fnptr |
 | PC-2 | Covered | Pass | b5_control_flow |
 | PC-3 | Covered | Fail | - |
 | PC-4 | Covered | Pass | b3_refs_slices |

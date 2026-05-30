@@ -7,12 +7,10 @@ entry  = "regseq_main"
 # (see its per-line `proves:` map). Floats are observed via boolean-checksum
 # (== is a BinOp) or bit-exact transmute→int; pointers RELATIONALLY (never log
 # a raw address — the stdout oracle is byte-exact).
-# DEFERRED: CK-9 (FnPtrToPtr) — depends on first reifying a fn item; the natural
-# `kind=rust` ReifyFnPointer surface lowers to a Cast whose operand is a bare
-# `Const::ZST` FnDef value, unsupported by the backend ("ReifyFnPointer of an
-# unresolved function (task d2)"). CK-11 (Subtype) — representation-identical
-# variance no-op, not forceable from a `kind=rust` fixture. Both reported as
-# deferred (not declared here).
+# CK-9 (FnPtrToPtr) needs a reified fn pointer first, so it is covered by the
+# dedicated `b5_reify_fnptr` fixture (regseq-backends-20), not here.
+# DEFERRED: CK-11 (Subtype) — representation-identical variance no-op, not
+# forceable from a `kind=rust` fixture. Reported as deferred (not declared here).
 covers = [
   "TY-5", "CO-5", "RV-5",
   "CK-1", "CK-2", "CK-4", "CK-5", "CK-6", "CK-7", "CK-8", "CK-10",
