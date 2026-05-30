@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (138 with a green fixture)
+- **Covered rows:** 169 (137 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -19,6 +19,7 @@
 - `BO-25`
 - `CK-11`
 - `CK-9`
+- `CO-12`
 - `DL-5`
 - `FS-5`
 - `FS-8`
@@ -90,7 +91,7 @@
 | CO-1 | Covered | Pass | b1_int_scalars |
 | CO-10 | Covered | Pass | b3_refs_slices |
 | CO-11 | Covered | Pass | b3_refs_slices |
-| CO-12 | Covered | Pass | b3_refs_slices |
+| CO-12 | Covered | Fail | - |
 | CO-13 | Covered | Pass | b3_refs_slices |
 | CO-14 | Covered | Pass | b3_refs_slices |
 | CO-2 | Covered | Pass | b1_int_scalars |

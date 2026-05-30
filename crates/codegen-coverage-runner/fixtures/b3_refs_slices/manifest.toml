@@ -17,7 +17,10 @@ covers = [
   # the `tail @ ..` subslice.
   "PL-2", "PL-5", "PL-6", "PL-7",
   "RV-3", "RV-4",
-  "CO-10", "CO-11", "CO-12", "CO-13", "CO-14",
+  # CO-12 (Byte::Uninit) deferred: the unwritten union byte emits as an
+  # indistinguishable 0 and is not uniquely observable here (Codex soundness
+  # pass) — needs a golden-level oracle that exposes uninit distinctly.
+  "CO-10", "CO-11", "CO-13", "CO-14",
   "UN-3", "PC-4", "ST-3", "ST-4", "BO-26",
 ]
 expect = "pass"

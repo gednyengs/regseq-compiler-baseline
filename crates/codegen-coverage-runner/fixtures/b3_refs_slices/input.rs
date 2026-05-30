@@ -64,13 +64,15 @@ static TARGET: u32 = 0xABCD;          // proves: CO-11 target
 // genuine Byte::Reloc in a Const::Bytes image.
 static REF_ARR: [&u32; 1] = [&TARGET]; // proves: CO-14 (Byte::Reloc in a Const::Bytes image)
 
-// A union static whose byte image carries a Byte::Uninit. The union is size 4
-// (the u32 view), but we initialize the 3-byte array view — leaving the 4th
-// byte (offset 3) uninitialized. The backend serializes a union const through
-// its byte image (union_from_bytes → raw_byte_image), so that 4th byte is a
-// genuine Byte::Uninit (CO-12). Referenced from regseq_main so it is emitted.
+// A union static whose byte image has an unwritten 4th byte (the u32 view is 4
+// bytes; only the 3-byte array view is initialized). NOTE: this does NOT prove
+// CO-12 (Byte::Uninit) — the backend emits the unwritten byte as an
+// indistinguishable 0, so a green run cannot tell genuine uninit handling from
+// Byte::Value(0) (Codex soundness pass). CO-12 is deferred until a golden-level
+// oracle exposes uninit distinctly. The union read below still exercises the
+// union-place + byte-image const path for the rows that ARE claimed.
 union UPad { w: u32, b3: [u8; 3] }
-static UPAD: UPad = UPad { b3: [0x77, 0x88, 0x99] }; // proves: CO-12 (Byte::Uninit, 4th byte)
+static UPAD: UPad = UPad { b3: [0x77, 0x88, 0x99] };
 
 // A `const` null pointer: const-eval folds `0 as *const i32` to a scalar-0 with
 // pointer type, which the bridge translates to Const::NullPtr (const_.rs:509) —
@@ -192,8 +194,8 @@ pub extern "C" fn regseq_main() {
     // logged line above — observed structurally (the strings print correctly). ---
     regseq::log::info!("co13_marker={}", 1u8);       // 1   proves: CO-13 (Byte::Value &str bytes)
 
-    // --- CO-12 (Byte::Uninit): read the union static's 3-byte view; its emitted
-    // byte image carries a Byte::Uninit for the unwritten 4th byte. ---
+    // --- union-static byte-image read (the unwritten 4th byte is NOT a CO-12
+    // proof — see the UPAD definition note; CO-12 deferred). ---
     let u0 = unsafe { UPAD.b3[0] };
     let u1 = unsafe { UPAD.b3[1] };
     let u2 = unsafe { UPAD.b3[2] };

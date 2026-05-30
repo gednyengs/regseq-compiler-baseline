@@ -352,10 +352,8 @@
     {
       "id": "CO-12",
       "status": "covered",
-      "fixtures": [
-        "b3_refs_slices"
-      ],
-      "result": "pass"
+      "fixtures": [],
+      "result": "fail"
     },
     {
       "id": "CO-13",
@@ -1357,6 +1355,7 @@
       "BO-25",
       "CK-11",
       "CK-9",
+      "CO-12",
       "DL-5",
       "FS-5",
       "FS-8",
