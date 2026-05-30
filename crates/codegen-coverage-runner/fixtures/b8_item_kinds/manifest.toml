@@ -1,0 +1,47 @@
+name   = "b8_item_kinds"
+kind   = "rust"
+entry  = "regseq_main"
+# B8 (plan §3): item kinds — the constructs a plain fn fixture does NOT contain.
+# This fixture greens the four item-kind rows that survive the bridge as observable
+# runtime behavior: a Static item (read) + a `static mut` (read under unsafe) drive
+# IT-2/IN-7; a named `const` used in a computation drives IT-3/IN-8. Each row is
+# driven by a logged computation in input.rs (see its `proves:` map).
+#
+# The remaining four assigned rows are DEFERRED — each because the BRIDGE drops or
+# never-sets the construct, so it NEVER reaches the backend emitter. These are
+# bridge gaps, not fixture-recipe gaps (Codex-confirmed 2026-05-29):
+#
+# DEFERRED — IN-3 (foreign fn body:None): `extern "C" { fn abs(i:i32)->i32; }` +
+#   `abs(-5)` lowers fine, but the bridge mints the foreign fn's `emission_name`
+#   from its rendered DefPath (regseq-driver/src/bridge/mod.rs:1892 →
+#   `def_path.rendered`), never from the foreign block's real link name. The backend
+#   `naming::instance_symbol_base` (regseq-backends/src/generic_c/naming.rs:144-147)
+#   then sanitizes that DefPath and uses it VERBATIM as the external symbol, so it
+#   emits `extern int32_t input__extern_0__abs(int32_t);` + a call to
+#   `input__extern_0__abs(...)`. libc exports `abs`, not that, so the LINK fails:
+#   `undefined reference to 'input__extern_0__abs'`. Fix = use the bare ABI link
+#   name (rustc `tcx.item_name`/`#[link_name]`), not `sanitize(rendered_def_path)`.
+#
+# DEFERRED — IT-8 (link_section) and IT-9 (inline_hint): the model `Item` HAS
+#   `link_section`/`inline_hint` fields and the backend correctly emits
+#   `__attribute__((section(...)))` / `always_inline` / `noinline` from them
+#   (regseq-backends/src/generic_c/mod.rs:802-813), BUT the bridge NEVER reads
+#   rustc's codegen_fn_attrs: every `link_section:`/`inline_hint:` in src/bridge/*
+#   is hardcoded `None`/`InlineHint::None` (base Item literal at
+#   regseq-driver/src/bridge/ty.rs:667-668), and the source-item path
+#   `intern_eager_hir_item` (ty.rs:702-738) only overwrites `linkage`+`bridge_flags`,
+#   never these two. Verified in the emitted golden.c: a `#[link_section]` static
+#   emits as a plain `const uint32_t X = ...;` (no `section(`) and `#[inline(...)]`
+#   fns carry no `always_inline`/`noinline`. The construct-under-test (attr →
+#   backend) is never exercised, so greening would be dishonest.
+#
+# DEFERRED — IT-14 (opaque_handle): a bridge-classified Item flag
+#   (`Item.opaque_handle_eligible`) HARDCODED to `false` at every ADT-item
+#   construction site (regseq-driver/src/bridge/ty.rs:673; every other
+#   `opaque_handle_eligible:` in src/bridge/* is also `false`); NO code path sets it
+#   `true`. Structurally unreachable from any `kind=rust` fixture.
+covers = [
+  "IT-2", "IT-3",
+  "IN-7", "IN-8",
+]
+expect = "pass"

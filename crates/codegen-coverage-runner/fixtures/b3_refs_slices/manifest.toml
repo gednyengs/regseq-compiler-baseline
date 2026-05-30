@@ -1,0 +1,23 @@
+name   = "b3_refs_slices"
+kind   = "rust"
+entry  = "regseq_main"
+# B3b (plan §3): references / raw pointers / slices / str + the pointer-flavoured
+# intrinsics. Each row is driven by a logged computation in input.rs (see its
+# per-line `proves:` map). Pointers are observed relationally / by deref (never as
+# raw addresses — the stdout oracle is byte-exact). Operator-less pointer ops use
+# direct core::intrinsics (ptr_metadata → PtrMetadata, offset → BinOp::Offset,
+# assume, copy_nonoverlapping), which LowerIntrinsics turns into the model op in
+# this fixture's own MIR.
+covers = [
+  "TY-6", "TY-9", "TY-10", "TY-11",
+  "AG-7",
+  # PL-5 (ConstantIndex from_end:false) = the slice-pattern `first` binding,
+  # emitted as a direct `.data[0]` (NOT the bounds-checked Index(local) a literal
+  # `arr[0]` produces — that op is PL-4). PL-6 = `last` (.data[len-1]); PL-7 =
+  # the `tail @ ..` subslice.
+  "PL-2", "PL-5", "PL-6", "PL-7",
+  "RV-3", "RV-4",
+  "CO-10", "CO-11", "CO-12", "CO-13", "CO-14",
+  "UN-3", "PC-4", "ST-3", "ST-4", "BO-26",
+]
+expect = "pass"

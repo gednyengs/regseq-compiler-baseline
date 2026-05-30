@@ -1,0 +1,27 @@
+name   = "b7_fn_sigs"
+kind   = "rust"
+entry  = "regseq_main"
+# B7 (plan §3): function signatures across the C ABI. add_c is an `extern "C"`
+# boundary with scalar i32 args/return — FS-4 (FnAbi::C), FS-7 (CAbiShape::Direct
+# per position), FS-10 (the per-position CAbiLowering side-table read at the C
+# boundary). The logged 42 proves the call lowered + ran through the boundary.
+#
+# DEFERRED (NOT covered here — backend/model blockers, honest residual):
+#   FS-8/FS-9 (CAbiShape::Substituted + SubstReason::TransparentChain) — a
+#     `#[repr(transparent)] struct W(u32)` across `extern "C"` lowers the param's
+#     C-ABI shape to its inner u32, and the backend applies that `emit_as` to the
+#     SIGNATURE spelling (`uint32_t input_id_w(uint32_t _1)`) but NOT to the
+#     function body (still `_0 = _1.<field>` on a struct local) nor the call-site
+#     argument (still constructs `struct input_W` and passes it) → cc rejects
+#     "request for member in something not a structure or union" + "incompatible
+#     type for argument 1 ... expected uint32_t but argument is of type struct
+#     input_W". A genuine backend bug in the Substituted lowering path.
+#   FS-5 (c_variadic) — the model's B-4 Call-arity joint validator
+#     (model.rs:3053 `args.len() != inputs.len()`) has no variadic exception, so
+#     any real variadic call site (fixed args + ≥1 variadic arg) is Rejected at
+#     Phase5 joint validation before the backend runs (e.g. "callee expects 3
+#     args, got 4"). Not constructible from a kind=rust fixture today.
+covers = [
+  "FS-4", "FS-7", "FS-10",
+]
+expect = "pass"

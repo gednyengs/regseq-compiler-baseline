@@ -1,0 +1,20 @@
+name   = "b2_floats_casts"
+kind   = "rust"
+entry  = "regseq_main"
+# B2 (plan §3): floats + casts. Float type/const (TY-5/CO-5), the `as` Cast
+# rvalue (RV-5) across every constructible CastKind, plus the Transmute
+# intrinsic (CK-10). Each row is driven by a logged computation in input.rs
+# (see its per-line `proves:` map). Floats are observed via boolean-checksum
+# (== is a BinOp) or bit-exact transmute→int; pointers RELATIONALLY (never log
+# a raw address — the stdout oracle is byte-exact).
+# DEFERRED: CK-9 (FnPtrToPtr) — depends on first reifying a fn item; the natural
+# `kind=rust` ReifyFnPointer surface lowers to a Cast whose operand is a bare
+# `Const::ZST` FnDef value, unsupported by the backend ("ReifyFnPointer of an
+# unresolved function (task d2)"). CK-11 (Subtype) — representation-identical
+# variance no-op, not forceable from a `kind=rust` fixture. Both reported as
+# deferred (not declared here).
+covers = [
+  "TY-5", "CO-5", "RV-5",
+  "CK-1", "CK-2", "CK-4", "CK-5", "CK-6", "CK-7", "CK-8", "CK-10",
+]
+expect = "pass"

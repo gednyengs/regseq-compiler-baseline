@@ -1,0 +1,13 @@
+[INFO] f64ck=1
+[INFO] f32ck=1
+[INFO] f64bits=4609434218613702656
+[INFO] transmute=1
+[INFO] transmute_raw=1069547520
+[INFO] inttoint=44
+[INFO] floattoint=3
+[INFO] floattoint_sat=2147483647
+[INFO] floattofloat=1
+[INFO] inttofloat=1
+[INFO] ptrtoptr=65
+[INFO] expose=1
+[INFO] withexposed=1

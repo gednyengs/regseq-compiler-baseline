@@ -1,0 +1,19 @@
+[INFO] deref_r=314
+[INFO] p_nonnull=1
+[INFO] p_deref_eq=1
+[INFO] s0=10
+[INFO] s_last=50
+[INFO] s_len=5
+[INFO] st_len=5
+[INFO] fat_len=3
+[INFO] first=10 last=50
+[INFO] tail_len=4 tail0=20
+[INFO] offset2=30
+[INFO] assume_ok=20
+[INFO] copied=7 8 9
+[INFO] is_null=1
+[INFO] target=43981
+[INFO] target_nonnull=1
+[INFO] ref_reloc=43981
+[INFO] co13_marker=1
+[INFO] upad=119 136 153

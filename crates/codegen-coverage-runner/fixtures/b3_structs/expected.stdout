@@ -1,0 +1,13 @@
+[INFO] pc.a=9 pc.b=100 pc.c=7
+[INFO] pr.a=5 pr.b=6 pr.c=8
+[INFO] bits.u_lo=1
+[INFO] cell=77
+[INFO] phantom.val=88
+[INFO] arr[2]=3
+[INFO] arr[0]=1
+[INFO] rep[3]=7
+[INFO] tup.0=1 tup.1=2 tup.2=3
+[INFO] zst_ok=1
+[INFO] bytes[1]=20
+[INFO] apoint.b=2
+[INFO] words1=200

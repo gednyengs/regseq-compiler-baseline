@@ -1,0 +1,36 @@
+name   = "b3_structs"
+kind   = "rust"
+entry  = "regseq_main"
+# B3a (plan §3): aggregates / places / layout / struct+union consts. Each row is
+# driven by a logged computation in input.rs (see its per-line `proves:` map), or
+# — for the LAYOUT rows (LY-1/2/3/4/6) — by COMPILATION: the backend emits a
+# sizeof/_Alignof/offsetof _Static_assert per emitted aggregate, so containing the
+# type is enough for cc to enforce the certified offsets. CO-6 (ZST) is reached by
+# constructing `()` + a unit struct (no value to print). Range/opaque IDs matched
+# verbatim.
+covers = [
+  # aggregate item-kinds + types + instances
+  "IT-4", "IT-6", "IT-11", "IT-12",
+  # TY-15 (Closure) DEFERRED — see AG-6 below (same backend call_once bug).
+  "TY-8", "TY-16", "TY-17", "TY-19",
+  "IN-9", "IN-11",
+  # layout (proven by _Static_assert at cc time). LY-2 (pack) DEFERRED — bridge
+  # nominal_layout hardcodes pack:None (ty.rs:1600) → #[repr(packed)] is rejected
+  # by the layout validator ("FieldLayout offset is not aligned").
+  "LY-1", "LY-3", "LY-4", "LY-6",
+  # aggregate rvalues + places. AG-6 (Closure) DEFERRED — bridge synthesizes the
+  # closure's Fn-family shims (closure.rs:133) and the backend emits the
+  # call_once-by-value shim as `(*_1)._0` (receiver-as-pointer) → cc rejects
+  # "invalid type argument of unary '*'". Triggered even without calling.
+  "AG-1", "AG-2", "AG-3", "AG-5",
+  # PL-5 (ConstantIndex from_end:false) is NOT here: a literal `arr[0]` lowers to
+  # a bounds-checked Index(local) (same op as PL-4), not ConstantIndex. PL-5 is
+  # owned by b3_refs_slices (the slice-pattern `first` binding → `.data[0]`).
+  "PL-1", "PL-3", "PL-4",
+  "RV-2", "RV-9",
+  # consts. CO-7 = a [u8;4] static AND the PointC struct static (the static-init
+  # path serializes every non-scalar static to Const::Bytes, const_.rs:307).
+  # CO-8 = an inline `const (u16,u16,u16)` whose tuple valtree → Const::Aggregate.
+  "CO-6", "CO-7", "CO-8",
+]
+expect = "pass"

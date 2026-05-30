@@ -4,32 +4,42 @@
     {
       "id": "AG-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "AG-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "AG-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "AG-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "AG-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "AG-6",
@@ -40,8 +50,10 @@
     {
       "id": "AG-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "AK-1",
@@ -208,8 +220,10 @@
     {
       "id": "BO-26",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-6..8",
@@ -230,14 +244,18 @@
     {
       "id": "CK-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-11",
@@ -248,44 +266,58 @@
     {
       "id": "CK-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-9",
@@ -304,32 +336,42 @@
     {
       "id": "CO-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-12",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-13",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-14",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-2",
@@ -358,32 +400,42 @@
     {
       "id": "CO-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "DL-1",
@@ -459,8 +511,10 @@
     {
       "id": "FS-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b7_fn_sigs"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-11",
@@ -487,8 +541,10 @@
     {
       "id": "FS-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b7_fn_sigs"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-5",
@@ -505,8 +561,10 @@
     {
       "id": "FS-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b7_fn_sigs"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-8",
@@ -531,14 +589,18 @@
     {
       "id": "IN-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-2",
@@ -583,20 +645,26 @@
     {
       "id": "IN-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-1",
@@ -615,14 +683,18 @@
     {
       "id": "IT-11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-12",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-13",
@@ -639,32 +711,42 @@
     {
       "id": "IT-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-7",
@@ -689,38 +771,50 @@
     {
       "id": "LY-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-12",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-13",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-14",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-2",
@@ -731,44 +825,58 @@
     {
       "id": "LY-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "OP-1",
@@ -803,8 +911,10 @@
     {
       "id": "PC-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "PC-3",
@@ -815,56 +925,74 @@
     {
       "id": "PC-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "PL-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-1",
@@ -877,26 +1005,34 @@
     {
       "id": "RV-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-6",
@@ -917,14 +1053,18 @@
     {
       "id": "RV-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "ST-1",
@@ -937,32 +1077,42 @@
     {
       "id": "ST-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "ST-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "ST-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-2",
@@ -1003,8 +1153,10 @@
     {
       "id": "TM-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-8",
@@ -1017,8 +1169,10 @@
     {
       "id": "TM-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-1",
@@ -1031,14 +1185,18 @@
     {
       "id": "TY-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-12",
@@ -1049,8 +1207,10 @@
     {
       "id": "TY-13",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-14",
@@ -1067,26 +1227,34 @@
     {
       "id": "TY-16",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-17",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-18",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b4_enums"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-19",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-2",
@@ -1115,14 +1283,18 @@
     {
       "id": "TY-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b2_floats_casts"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-7",
@@ -1133,14 +1305,18 @@
     {
       "id": "TY-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     },
     {
       "id": "UN-1",
@@ -1161,19 +1337,15 @@
     {
       "id": "UN-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_refs_slices"
+      ],
+      "result": "pass"
     }
   ],
   "drift": {
     "covered_without_green": [
-      "AG-1",
-      "AG-2",
-      "AG-3",
-      "AG-4",
-      "AG-5",
       "AG-6",
-      "AG-7",
       "AK-1",
       "AK-2",
       "AK-3",
@@ -1183,110 +1355,27 @@
       "AK-7",
       "AK-8",
       "BO-25",
-      "BO-26",
-      "CK-1",
-      "CK-10",
       "CK-11",
-      "CK-2",
-      "CK-3",
-      "CK-4",
-      "CK-5",
-      "CK-6",
-      "CK-7",
-      "CK-8",
       "CK-9",
-      "CO-10",
-      "CO-11",
-      "CO-12",
-      "CO-13",
-      "CO-14",
-      "CO-5",
-      "CO-6",
-      "CO-7",
-      "CO-8",
-      "CO-9",
       "DL-5",
-      "FS-10",
-      "FS-4",
       "FS-5",
-      "FS-7",
       "FS-8",
       "FS-9",
-      "IN-10",
-      "IN-11",
       "IN-3",
       "IN-5",
       "IN-6",
-      "IN-7",
-      "IN-8",
-      "IN-9",
-      "IT-11",
-      "IT-12",
       "IT-13",
       "IT-14",
-      "IT-2",
-      "IT-3",
-      "IT-4",
-      "IT-5",
-      "IT-6",
       "IT-8",
       "IT-9",
-      "LY-1",
-      "LY-10",
-      "LY-11",
-      "LY-12",
-      "LY-13",
-      "LY-14",
       "LY-2",
-      "LY-3",
-      "LY-4",
-      "LY-5",
-      "LY-6",
-      "LY-7",
-      "LY-8",
-      "LY-9",
       "PC-1",
-      "PC-2",
       "PC-3",
-      "PC-4",
-      "PL-1",
-      "PL-2",
-      "PL-3",
-      "PL-4",
-      "PL-5",
-      "PL-6",
-      "PL-7",
-      "PL-8",
-      "RV-2",
-      "RV-3",
-      "RV-4",
-      "RV-5",
-      "RV-8",
-      "RV-9",
-      "ST-2",
-      "ST-3",
-      "ST-4",
-      "TM-1",
-      "TM-10",
       "TM-4",
       "TM-6",
-      "TM-7",
-      "TM-9",
-      "TY-10",
-      "TY-11",
-      "TY-13",
       "TY-14",
       "TY-15",
-      "TY-16",
-      "TY-17",
-      "TY-18",
-      "TY-19",
-      "TY-5",
-      "TY-6",
-      "TY-7",
-      "TY-8",
-      "TY-9",
-      "UN-3"
+      "TY-7"
     ],
     "green_without_covered": []
   },

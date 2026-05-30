@@ -1,0 +1,25 @@
+name   = "b4_enums"
+kind   = "rust"
+entry  = "regseq_main"
+# B4 (plan §3): enums (runtime). Four enums cover every D9 layout shape —
+# single-variant (One → LY-8 Single), fieldless multi-variant (Color → LY-9
+# Multiple + LY-10 TagScalar + LY-11 Direct), multi-variant payload (E → LY-13
+# VariantLayout + LY-14 VariantRange + TY-18), Option-like niche (N → LY-12
+# Niche), and an empty enum behind a `*const Void` field (Void → LY-7 Empty,
+# structural). Variants are constructed (AG-4 Enum aggregate / IN-10 Enum
+# inst), matched (PL-8 Downcast + RV-8 Discriminant read), a discriminant is
+# reassigned (ST-2 SetDiscriminant), and an EnumValue const is referenced
+# (CO-9). LY-5 (enum LayoutKind) + LY-7/8/9/10/11/12/13/14 are proven by
+# COMPILATION (the backend emits `_Static_assert(sizeof/_Alignof/offsetof)`
+# guards per emitted enum); the op rows are proven by the logged values.
+covers = [
+  # enum item / type / instance
+  "TY-18", "IT-5", "IN-10",
+  # layout shapes (proven by the emitted enum static-asserts)
+  "LY-5", "LY-7", "LY-8", "LY-9", "LY-10", "LY-11", "LY-12", "LY-13", "LY-14",
+  # enum operations
+  "PL-8", "RV-8", "ST-2", "AG-4",
+  # enum-value const
+  "CO-9",
+]
+expect = "pass"

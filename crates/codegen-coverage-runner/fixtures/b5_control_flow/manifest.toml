@@ -1,0 +1,32 @@
+name   = "b5_control_flow"
+kind   = "rust"
+entry  = "regseq_main"
+# B5 (plan §3): control flow + calls. Goto back-edge (TM-1), match->SwitchTargets
+# (TM-7), an indirect call through a fn-pointer value loaded from a static (TM-9),
+# the FnPtr type (TY-13), the UnsafeFnPointer pointer-coercion (PC-2 / CK-3), and Drop
+# glue run at scope exit (TM-10). Each row is driven by a logged computation in
+# input.rs (see its per-line `proves:` map).
+#
+# DEFERRED — three rows hit genuine backend bugs (not recipe gaps):
+#  * PC-1 (ReifyFnPointer) + IN-5 (ReifyShim). A fn-item -> fn-pointer reify bridges as
+#    `Cast(PointerCoercion(ReifyFnPointer), Const::ZST, FnPtr)`: the operand is the
+#    zero-sized FnDef *constant*, which carries no function identity in the model. The
+#    backend's `reify_fn_pointer` (generic_c/body_emit.rs:1637) recovers the target only
+#    from a `Const::Reloc` operand or an `FnDef`-typed *place*, never from a ZST
+#    constant, so it errors `ReifyFnPointer of an unresolved function (task d2)`. No
+#    kind=rust construction avoids this — routing the FnDef through a local keeps it a
+#    ZST constant (the value is zero-sized). IN-5 (ReifyShim instance) is never even
+#    materialized by the bridge for a plain fn reify (only DropGlue is synthesized).
+#    The static-fn-ptr route used here keeps TM-9/TY-13/PC-2/CK-3 constructible.
+#  * IT-13 (ManuallyDrop). `core::mem::ManuallyDrop<T>` (and its inner `MaybeDangling`)
+#    are TUPLE structs; the backend emits a tuple field with its raw rustc index name
+#    (`offsetof(struct ..., 0)` / `struct ... { uint32_t 0; }`) — invalid C. Any use of
+#    ManuallyDrop forces emission of that tuple-struct definition, so the TU fails to
+#    compile. (The same tuple-field bug bites any user `struct D(u32)`; this fixture
+#    uses a NAMED-field `struct D { v: u32 }` for its Drop type to keep TM-10 green.)
+covers = [
+  "TM-1", "TM-7", "TM-9", "TM-10",
+  "TY-13",
+  "PC-2", "CK-3",
+]
+expect = "pass"
