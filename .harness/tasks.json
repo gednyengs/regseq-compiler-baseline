@@ -4941,6 +4941,27 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-backends-19",
+          "name": "Generic-C BinOp::Cmp -> Ordering destination type fix",
+          "spec": ".harness/tasks/regseq-backends/19-generic-c-cmp-ordering.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-18"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T01:14:45Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
