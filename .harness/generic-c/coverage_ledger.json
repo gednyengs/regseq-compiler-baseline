@@ -94,26 +94,34 @@
     {
       "id": "BD-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-10",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-4",
@@ -124,8 +132,10 @@
     {
       "id": "BD-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-6",
@@ -136,44 +146,58 @@
     {
       "id": "BD-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BD-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-1..5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-12..14",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-15..18",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-19..24",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-25",
@@ -190,14 +214,18 @@
     {
       "id": "BO-6..8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "BO-9..11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-1",
@@ -268,8 +296,10 @@
     {
       "id": "CO-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-10",
@@ -304,20 +334,26 @@
     {
       "id": "CO-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "CO-5",
@@ -415,8 +451,10 @@
     {
       "id": "FS-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-10",
@@ -433,14 +471,18 @@
     {
       "id": "FS-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-4",
@@ -481,8 +523,10 @@
     {
       "id": "IN-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-10",
@@ -499,8 +543,10 @@
     {
       "id": "IN-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-3",
@@ -511,8 +557,10 @@
     {
       "id": "IN-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-5",
@@ -553,8 +601,10 @@
     {
       "id": "IT-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-10",
@@ -619,8 +669,10 @@
     {
       "id": "IT-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-8",
@@ -721,20 +773,26 @@
     {
       "id": "OP-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "OP-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "OP-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "PC-1",
@@ -811,8 +869,10 @@
     {
       "id": "RV-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-2",
@@ -841,14 +901,18 @@
     {
       "id": "RV-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "RV-8",
@@ -865,8 +929,10 @@
     {
       "id": "ST-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "ST-2",
@@ -957,8 +1023,10 @@
     {
       "id": "TY-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-10",
@@ -1023,20 +1091,26 @@
     {
       "id": "TY-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-5",
@@ -1071,14 +1145,18 @@
     {
       "id": "UN-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "UN-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b1_int_scalars"
+      ],
+      "result": "pass"
     },
     {
       "id": "UN-3",
@@ -1104,22 +1182,8 @@
       "AK-6",
       "AK-7",
       "AK-8",
-      "BD-1",
-      "BD-10",
-      "BD-2",
-      "BD-3",
-      "BD-5",
-      "BD-7",
-      "BD-8",
-      "BD-9",
-      "BO-1..5",
-      "BO-12..14",
-      "BO-15..18",
-      "BO-19..24",
       "BO-25",
       "BO-26",
-      "BO-6..8",
-      "BO-9..11",
       "CK-1",
       "CK-10",
       "CK-11",
@@ -1131,42 +1195,31 @@
       "CK-7",
       "CK-8",
       "CK-9",
-      "CO-1",
       "CO-10",
       "CO-11",
       "CO-12",
       "CO-13",
       "CO-14",
-      "CO-2",
-      "CO-3",
-      "CO-4",
       "CO-5",
       "CO-6",
       "CO-7",
       "CO-8",
       "CO-9",
       "DL-5",
-      "FS-1",
       "FS-10",
-      "FS-2",
-      "FS-3",
       "FS-4",
       "FS-5",
       "FS-7",
       "FS-8",
       "FS-9",
-      "IN-1",
       "IN-10",
       "IN-11",
-      "IN-2",
       "IN-3",
-      "IN-4",
       "IN-5",
       "IN-6",
       "IN-7",
       "IN-8",
       "IN-9",
-      "IT-1",
       "IT-11",
       "IT-12",
       "IT-13",
@@ -1176,7 +1229,6 @@
       "IT-4",
       "IT-5",
       "IT-6",
-      "IT-7",
       "IT-8",
       "IT-9",
       "LY-1",
@@ -1193,9 +1245,6 @@
       "LY-7",
       "LY-8",
       "LY-9",
-      "OP-1",
-      "OP-2",
-      "OP-3",
       "PC-1",
       "PC-2",
       "PC-3",
@@ -1208,16 +1257,12 @@
       "PL-6",
       "PL-7",
       "PL-8",
-      "RV-1",
       "RV-2",
       "RV-3",
       "RV-4",
       "RV-5",
-      "RV-6",
-      "RV-7",
       "RV-8",
       "RV-9",
-      "ST-1",
       "ST-2",
       "ST-3",
       "ST-4",
@@ -1227,7 +1272,6 @@
       "TM-6",
       "TM-7",
       "TM-9",
-      "TY-1",
       "TY-10",
       "TY-11",
       "TY-13",
@@ -1237,16 +1281,11 @@
       "TY-17",
       "TY-18",
       "TY-19",
-      "TY-2",
-      "TY-3",
-      "TY-4",
       "TY-5",
       "TY-6",
       "TY-7",
       "TY-8",
       "TY-9",
-      "UN-1",
-      "UN-2",
       "UN-3"
     ],
     "green_without_covered": []

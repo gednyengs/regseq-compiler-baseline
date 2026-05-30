@@ -1,0 +1,28 @@
+name   = "b1_int_scalars"
+kind   = "rust"
+entry  = "regseq_main"
+# B1 (plan §3): the function/body/signature ENVELOPE + integer/bool/char scalars
+# (arithmetic, unchecked, with-overflow, bitwise, shift, compare, unops). 39 rows,
+# each driven by a logged computation in input.rs (see its per-line `proves:` map).
+# Range IDs (e.g. "BO-1..5") are matched verbatim by the matrix/ledger — one ID, no
+# expansion. Operator-less BinOps (BO-6..8 unchecked, BO-9..11 with-overflow, and
+# the unchecked half of BO-15..18) use direct `core::intrinsics::*` (LowerIntrinsics
+# turns them into the model BinOp in the fixture's own MIR — core *methods* don't
+# inline at mir_opt_level=0 and would be undefined refs at link).
+#
+# DEFERRED: BO-25 (Cmp). It lowers fine but hits a BACKEND BUG (Cmp result emitted
+# as int8_t but assigned to the Ordering enum-struct destination). Needs a backend
+# fix; tracked separately. (Not a fixture-recipe gap.)
+covers = [
+  # envelope — function/body/signature frame, operands, plain assign
+  "IT-1", "IT-7", "IN-1", "IN-2", "IN-4",
+  "BD-1", "BD-2", "BD-3", "BD-5", "BD-7", "BD-8", "BD-9", "BD-10",
+  "FS-1", "FS-2", "FS-3",
+  "OP-1", "OP-2", "OP-3", "ST-1", "RV-1", "RV-6", "RV-7",
+  # scalars + consts
+  "TY-1", "TY-2", "TY-3", "TY-4", "CO-1", "CO-2", "CO-3", "CO-4",
+  # binary ops (range IDs verbatim) + unops
+  "BO-1..5", "BO-6..8", "BO-9..11", "BO-12..14", "BO-15..18", "BO-19..24",
+  "UN-1", "UN-2",
+]
+expect = "pass"

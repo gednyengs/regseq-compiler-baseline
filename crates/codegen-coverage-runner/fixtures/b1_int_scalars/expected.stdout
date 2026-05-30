@@ -1,0 +1,33 @@
+[INFO] add=10
+[INFO] neg=-7
+[INFO] sub=4
+[INFO] mul=21
+[INFO] div=2
+[INFO] rem=1
+[INFO] use=7
+[INFO] band=8
+[INFO] bor=14
+[INFO] bxor=6
+[INFO] shl=8
+[INFO] shr=60
+[INFO] ushl=8
+[INFO] ushr=60
+[INFO] uca=10
+[INFO] ucs=4
+[INFO] ucm=21
+[INFO] ova=4 ovo=1
+[INFO] ovs=251 ovso=1
+[INFO] ovm=144 ovmo=1
+[INFO] eq=0 lt=0 le=0 ne=1 ge=1 gt=1
+[INFO] not_u=255
+[INFO] not_b=0
+[INFO] boolt=1
+[INFO] char=65
+[INFO] i8=8
+[INFO] i16=400
+[INFO] i64=1000000000001
+[INFO] isz=-42
+[INFO] usz=42
+[INFO] u128ck=1
+[INFO] i128ck=1
+[INFO] cuint=42

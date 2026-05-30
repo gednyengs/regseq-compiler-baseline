@@ -182,6 +182,16 @@ waits on the vtable task. *(Note: `UN-3` `PtrMetadata` and `PC-4` `Unsize` are N
 their **slice** uses are greened by B3; only the **dyn** uses are vtable-gated, and a row
 greens on any one fixture.)*
 
+### 4b-bis. Backend-bug-blocked — `BO-25` (Cmp) *(found by the B1 pilot)*
+
+`BO-25` (`BinOp::Cmp`) is `covered` and constructible (`core::intrinsics::three_way_compare`
+lowers to it), but the backend emits the Cmp result as a bare `int8_t` and assigns it to the
+`Ordering` enum-struct destination → `cc` rejects *"incompatible types … struct
+core_cmp_Ordering from signed char"*. A genuine backend defect (treat `Ordering` as a scalar,
+or wrap the Cmp result in the enum repr). Like the vtable rows, `BO-25` goes green only after a
+**backend fix** (filed as `regseq-backends-19`) — not a recipe change. (The B1 fixture
+`b1_int_scalars` greens the other 39 B1 rows; `BO-25` is its sole deferral.)
+
 ### 4c. `DL-5` — reclassify (matrix edit, not a fixture)
 
 `DL-5` (`max_str_args_per_call = 8`) is a **bridge-side** D8 validation reject, not a backend
@@ -203,10 +213,11 @@ field emits its form into `golden.c` → snapshot oracle. Both are owned in §3 
 ### The path to a genuine `pass`
 
 B1–B8 push (155 rows green) **+** the **overflow-checks runner plumbing** (unblocks `AK-2`/
-`AK-3`) **+** the **`AK-6/7/8` disposition** (§5.4) **+** vtable task (`TY-14, PC-3, IN-6`
-green) **+** `DL-5` reclassify (leaves the covered set) **→** every `covered` row green, no
-drift, no FAIL → `pass`. The residual is fully accounted, never bookkeeping — and the panic
-rows now carry their **concrete harness dependency** rather than an authoring hand-wave.
+`AK-3`) **+** the **`AK-6/7/8` disposition** (§5.4) **+** the **`BO-25` Cmp backend fix**
+(`regseq-backends-19`, §4b-bis) **+** vtable task (`TY-14, PC-3, IN-6` green) **+** `DL-5`
+reclassify (leaves the covered set) **→** every `covered` row green, no drift, no FAIL →
+`pass`. The residual is fully accounted, never bookkeeping — and the panic rows now carry
+their **concrete harness dependency** rather than an authoring hand-wave.
 
 ## 5. Fixture roster + decisions to settle (architect)
 
