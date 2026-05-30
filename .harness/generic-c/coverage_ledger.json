@@ -44,8 +44,10 @@
     {
       "id": "AG-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b9_closures"
+      ],
+      "result": "pass"
     },
     {
       "id": "AG-7",
@@ -1229,8 +1231,10 @@
     {
       "id": "TY-15",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b9_closures"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-16",
@@ -1353,7 +1357,6 @@
   ],
   "drift": {
     "covered_without_green": [
-      "AG-6",
       "AK-1",
       "AK-2",
       "AK-3",
@@ -1378,7 +1381,6 @@
       "TM-4",
       "TM-6",
       "TY-14",
-      "TY-15",
       "TY-7"
     ],
     "green_without_covered": []

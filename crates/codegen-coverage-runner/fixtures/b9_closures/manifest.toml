@@ -1,0 +1,21 @@
+name   = "b9_closures"
+kind   = "rust"
+entry  = "regseq_main"
+# B9 (plan §3): closures. A capturing closure that is CALLED. Driven by a logged
+# computation in input.rs (see its per-line `proves:` map).
+#
+# AG-6 + TY-15 were DEFERRED by b3_structs on the regseq-driver-85 bug: the bridge
+# synthesizes the closure's three Fn-family shims (closure.rs:133), and rustc reuses
+# the closure's BY-REFERENCE body for all three call kinds — so the `call_once`
+# shim's by-VALUE receiver (spec §13.1) disagreed with its body, which projected
+# `_1` through a leading `Deref`. The backend faithfully emitted `(*_1)._0`, deref'ing
+# a by-value struct local → cc rejected "invalid type argument of unary '*'". This
+# fired at compile time even when the closure was never called (all three shims are
+# reachable from the closure type). regseq-driver-85 reconciles the call_once
+# receiver decl with its body projection (materialise.rs): the receiver local is
+# retyped to the by-value captures struct and the leading `Deref` is stripped
+# (`_1._0`), so all three shims type-check. `call` / `call_mut` are untouched.
+covers = [
+  "TY-15", "AG-6",
+]
+expect = "pass"

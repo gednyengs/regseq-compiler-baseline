@@ -2225,7 +2225,7 @@
           "id": "regseq-driver-85",
           "name": "Closure call_once shim by-value receiver vs Deref mismatch",
           "spec": ".harness/tasks/regseq-driver/85-closure-callonce-shim-receiver.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-driver-82"
           ],

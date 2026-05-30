@@ -1,9 +1,10 @@
 //! Phase-5 function body materialisation.
 
 use regseq_model::{
-    validate_body_places, AttrData, Body, BodyValidationError, CallCallee, FunctionInstanceFlavor,
-    GenericArg, InstanceId, InstanceKind, IntrinsicKind, LocalDecl, Mutability, SyntheticItemKind,
-    Terminator, TerminatorKind, TyId, Visitor,
+    validate_body_places, AssertKind, AttrData, Body, BodyValidationError, CallCallee,
+    ClosureCallKind, FunctionInstanceFlavor, GenericArg, InstanceId, InstanceKind, IntrinsicKind,
+    LocalDecl, LocalId, Mutability, NonDivergingIntrinsic, Operand, Place, PlaceElem, Rvalue,
+    StatementKind, SyntheticItemKind, Terminator, TerminatorKind, Ty, TyId, Visitor,
 };
 use rustc_hir::def_id::LocalDefId;
 use rustc_middle::ty::{self, GenericArgs, Instance, TyCtxt};
@@ -340,7 +341,228 @@ fn materialise_function_body_inner<'tcx>(
         body.basic_blocks.push(translated);
     }
 
+    // Per regseq-driver-85: reconcile the `call_once` shim's by-value
+    // receiver decl with its body projection. Rustc reuses the closure's
+    // own by-reference MIR body for all three `Fn`-family call kinds, so
+    // even the `call_once` shim arrives with receiver local `_1` typed
+    // `&Captures` and projected through a leading `Deref`. The shim's
+    // type-system `FnSig` receiver is by value (spec section 13.1), so
+    // the prototype declares `_1` as a by-value struct -- the body's
+    // `(*_1)...` then dereferences a non-pointer and `cc` rejects it.
+    // Retype `_1` to the by-value receiver and strip the now-spurious
+    // leading `Deref`, leaving `call` / `call_mut` (genuine reference
+    // receivers) untouched.
+    reconcile_call_once_receiver(cx, instance_handle, &synthetic_kind, &mut body);
+
     Ok(Ok(body))
+}
+
+/// Reconcile the `call_once` closure-call shim's by-value receiver
+/// declaration with its body projection (regseq-driver-85).
+///
+/// Rustc materialises the same by-reference closure body for `call`,
+/// `call_mut`, and `call_once`, so the `call_once` shim's body receiver
+/// local `_1` arrives typed as a reference (`&Captures` / `&Closure`)
+/// and every use projects it through a leading `PlaceElem::Deref`. The
+/// shim's `FnSig` receiver is by value (the captures struct) per spec
+/// section 13.1, which the backend uses for the C prototype parameter --
+/// so the body's `(*_1)` dereferences a by-value struct and the emitted
+/// C fails to type-check.
+///
+/// When the instance is a `CallOnce` shim whose `FnSig` receiver is by
+/// value (not a `Ty::Ref`) but whose materialised body receiver `_1` is
+/// a reference, this retypes `_1` to the `FnSig` receiver type and
+/// removes the leading `Deref` from every place rooted at `_1`. The
+/// `call` / `call_mut` shims (whose `FnSig` receiver IS a reference)
+/// already agree with the body and are left untouched.
+fn reconcile_call_once_receiver(
+    cx: &BridgeCtxt<'_>,
+    instance_handle: InstanceHandle,
+    synthetic_kind: &SyntheticItemKind,
+    body: &mut Body,
+) {
+    if !matches!(
+        synthetic_kind,
+        SyntheticItemKind::ClosureCall {
+            call_kind: ClosureCallKind::CallOnce,
+            ..
+        }
+    ) {
+        return;
+    }
+
+    // The receiver is positional argument local `_1`. A shim with no
+    // arguments has no receiver to reconcile.
+    if body.arg_count == 0 {
+        return;
+    }
+    let receiver = LocalId::from_u32(1);
+
+    // Read the shim's type-system `FnSig` receiver (its first input).
+    let InstanceKind::Function(function_data) = &cx.model.instances[instance_handle].kind else {
+        return;
+    };
+    let sig = cx.model.sigs.resolve(function_data.fn_sig);
+    let Some(receiver_sig_ty) = sig.inputs.first().copied() else {
+        return;
+    };
+
+    // Only reconcile when the FnSig receiver is by value (not a
+    // reference) but the materialised body still declares `_1` as a
+    // reference. A genuine by-value rustc body already agrees and needs
+    // nothing; a reference FnSig receiver (`call` / `call_mut`) is a
+    // different call kind and is excluded by the CallOnce guard above.
+    if matches!(cx.model.types.resolve(receiver_sig_ty), Ty::Ref(..)) {
+        return;
+    }
+    if !matches!(
+        cx.model.types.resolve(body.local_decls[receiver].ty),
+        Ty::Ref(..)
+    ) {
+        return;
+    }
+
+    // Retype `_1` to the by-value receiver so the prototype parameter and
+    // the body local agree.
+    body.local_decls[receiver].ty = receiver_sig_ty;
+
+    // Strip the now-spurious leading `Deref` from every place rooted at
+    // `_1` so the body accesses the by-value struct directly (`_1._0`).
+    rewrite_receiver_places_in_body(body, receiver);
+}
+
+/// Remove a leading `PlaceElem::Deref` from every place in `body` whose
+/// head local is `receiver` (regseq-driver-85). Places rooted at other
+/// locals are untouched.
+fn rewrite_receiver_places_in_body(body: &mut Body, receiver: LocalId) {
+    for block in body.basic_blocks.iter_mut() {
+        for stmt in block.statements.iter_mut() {
+            rewrite_receiver_places_in_statement(&mut stmt.kind, receiver);
+        }
+        rewrite_receiver_places_in_terminator(&mut block.terminator.kind, receiver);
+    }
+}
+
+/// Strip a leading `Deref` from `place` iff it is rooted at `receiver`.
+fn strip_leading_deref_if_receiver(place: &mut Place, receiver: LocalId) {
+    if place.local == receiver && matches!(place.projection.first(), Some(PlaceElem::Deref)) {
+        let mut elems = std::mem::take(&mut place.projection).into_vec();
+        elems.remove(0);
+        place.projection = elems.into_boxed_slice();
+    }
+}
+
+/// Apply [`strip_leading_deref_if_receiver`] to every place reachable
+/// from a statement.
+fn rewrite_receiver_places_in_statement(kind: &mut StatementKind, receiver: LocalId) {
+    match kind {
+        StatementKind::Assign(place, rvalue) => {
+            strip_leading_deref_if_receiver(place, receiver);
+            rewrite_receiver_places_in_rvalue(rvalue, receiver);
+        }
+        StatementKind::SetDiscriminant(place, _) => {
+            strip_leading_deref_if_receiver(place, receiver)
+        }
+        StatementKind::Intrinsic(intrinsic) => match intrinsic {
+            NonDivergingIntrinsic::Assume(operand) => {
+                rewrite_receiver_places_in_operand(operand, receiver)
+            }
+            NonDivergingIntrinsic::CopyNonOverlapping(payload) => {
+                rewrite_receiver_places_in_operand(&mut payload.src, receiver);
+                rewrite_receiver_places_in_operand(&mut payload.dst, receiver);
+                rewrite_receiver_places_in_operand(&mut payload.count, receiver);
+            }
+        },
+    }
+}
+
+/// Apply [`strip_leading_deref_if_receiver`] to every place reachable
+/// from a terminator.
+fn rewrite_receiver_places_in_terminator(kind: &mut TerminatorKind, receiver: LocalId) {
+    match kind {
+        TerminatorKind::Goto(_) | TerminatorKind::Return | TerminatorKind::Unreachable => {}
+        TerminatorKind::SwitchInt { discr, .. } => {
+            rewrite_receiver_places_in_operand(discr, receiver)
+        }
+        TerminatorKind::Call {
+            callee,
+            args,
+            destination,
+            ..
+        } => {
+            if let CallCallee::Indirect(operand) = callee {
+                rewrite_receiver_places_in_operand(operand, receiver);
+            }
+            for arg in args.iter_mut() {
+                rewrite_receiver_places_in_operand(arg, receiver);
+            }
+            strip_leading_deref_if_receiver(destination, receiver);
+        }
+        TerminatorKind::Assert { cond, msg, .. } => {
+            rewrite_receiver_places_in_operand(cond, receiver);
+            rewrite_receiver_places_in_assert_kind(msg, receiver);
+        }
+    }
+}
+
+/// Apply [`strip_leading_deref_if_receiver`] to every place reachable
+/// from an `AssertKind`.
+fn rewrite_receiver_places_in_assert_kind(kind: &mut AssertKind, receiver: LocalId) {
+    match kind {
+        AssertKind::BoundsCheck { len, index } => {
+            rewrite_receiver_places_in_operand(len, receiver);
+            rewrite_receiver_places_in_operand(index, receiver);
+        }
+        AssertKind::Overflow(_, left, right) => {
+            rewrite_receiver_places_in_operand(left, receiver);
+            rewrite_receiver_places_in_operand(right, receiver);
+        }
+        AssertKind::OverflowNeg(operand)
+        | AssertKind::DivisionByZero(operand)
+        | AssertKind::RemainderByZero(operand)
+        | AssertKind::InvalidEnumConstruction(operand) => {
+            rewrite_receiver_places_in_operand(operand, receiver)
+        }
+        AssertKind::MisalignedPointerDereference { required, found } => {
+            rewrite_receiver_places_in_operand(required, receiver);
+            rewrite_receiver_places_in_operand(found, receiver);
+        }
+        AssertKind::NullPointerDereference => {}
+    }
+}
+
+/// Apply [`strip_leading_deref_if_receiver`] to every place reachable
+/// from an `Rvalue`.
+fn rewrite_receiver_places_in_rvalue(rvalue: &mut Rvalue, receiver: LocalId) {
+    match rvalue {
+        Rvalue::Use(operand) | Rvalue::Repeat(operand, _) | Rvalue::UnaryOp(_, operand) => {
+            rewrite_receiver_places_in_operand(operand, receiver)
+        }
+        Rvalue::Ref(_, place) | Rvalue::RawPtr(_, place) | Rvalue::Discriminant(place) => {
+            strip_leading_deref_if_receiver(place, receiver)
+        }
+        Rvalue::Cast(_, operand, _) => rewrite_receiver_places_in_operand(operand, receiver),
+        Rvalue::BinaryOp(_, left, right) => {
+            rewrite_receiver_places_in_operand(left, receiver);
+            rewrite_receiver_places_in_operand(right, receiver);
+        }
+        Rvalue::Aggregate(_, operands) => {
+            for operand in operands.iter_mut() {
+                rewrite_receiver_places_in_operand(operand, receiver);
+            }
+        }
+    }
+}
+
+/// Apply [`strip_leading_deref_if_receiver`] to the place inside an
+/// `Operand`, if any.
+fn rewrite_receiver_places_in_operand(operand: &mut Operand, receiver: LocalId) {
+    match operand {
+        Operand::Copy(place) | Operand::Move(place) => {
+            strip_leading_deref_if_receiver(place, receiver)
+        }
+        Operand::Constant(_) => {}
+    }
 }
 
 /// Phase-5 driver: materialise every Function body, run

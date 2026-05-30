@@ -3,11 +3,10 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (142 with a green fixture)
+- **Covered rows:** 169 (144 with a green fixture)
 
 ## Drift: covered-without-green
 
-- `AG-6`
 - `AK-1`
 - `AK-2`
 - `AK-3`
@@ -32,7 +31,6 @@
 - `TM-4`
 - `TM-6`
 - `TY-14`
-- `TY-15`
 - `TY-7`
 
 ## Rows
@@ -44,7 +42,7 @@
 | AG-3 | Covered | Pass | b3_structs |
 | AG-4 | Covered | Pass | b4_enums |
 | AG-5 | Covered | Pass | b3_structs |
-| AG-6 | Covered | Fail | - |
+| AG-6 | Covered | Pass | b9_closures |
 | AG-7 | Covered | Pass | b3_refs_slices |
 | AK-1 | Covered | Fail | - |
 | AK-2 | Covered | Fail | - |
@@ -199,7 +197,7 @@
 | TY-12 | OutOfScope | NotApplicable | - |
 | TY-13 | Covered | Pass | b5_control_flow |
 | TY-14 | Covered | Fail | - |
-| TY-15 | Covered | Fail | - |
+| TY-15 | Covered | Pass | b9_closures |
 | TY-16 | Covered | Pass | b3_structs |
 | TY-17 | Covered | Pass | b3_structs |
 | TY-18 | Covered | Pass | b4_enums |
