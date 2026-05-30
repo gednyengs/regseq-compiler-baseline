@@ -5150,7 +5150,7 @@
           "id": "regseq-backends-22",
           "name": "Generic-C tuple-struct field naming (ManuallyDrop)",
           "spec": ".harness/tasks/regseq-backends/22-generic-c-tuple-struct-field-name.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-backends-19"
           ],

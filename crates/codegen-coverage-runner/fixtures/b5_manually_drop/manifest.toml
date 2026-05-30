@@ -1,0 +1,22 @@
+name   = "b5_manually_drop"
+kind   = "rust"
+entry  = "regseq_main"
+# IT-13 (is_manually_drop): a `core::mem::ManuallyDrop<D>` field is NOT dropped by
+# the containing type's drop glue. This fixture OBSERVES the suppression rather than
+# merely compiling ManuallyDrop (per the Codex spec review of regseq-backends-22):
+#   * suppressed=255 — Hold { md: ManuallyDrop::new(D{v:0xAA}) } is dropped, yet
+#     D::drop does NOT run for the md field (SUPPRESSED stays at its 0xFF sentinel).
+#   * control=123 — a plain D{v:0x7B} in a sibling scope DOES drop (CONTROL=0x7B),
+#     proving the Drop impl is live and the suppression above is real.
+# The drop suppression already lives in rustc's drop-elaborated MIR (the bridge
+# materialises Hold's drop glue with the md-field drop omitted); the backend needs
+# no `is_manually_drop` consumption — confirmed end-to-end by this fixture.
+#
+# COMPILE PREREQUISITE (gap 1): `MaybeDangling<D>` (ManuallyDrop's inner type) is a
+# TUPLE STRUCT, whose field the bridge names with rustc's raw numeric index `0`.
+# The backend emits it as `_0` (regseq-backends-22) in the member declaration, the
+# `.field` projection, and the offsetof `_Static_assert` guard, so the TU compiles.
+covers = [
+  "IT-13",
+]
+expect = "pass"

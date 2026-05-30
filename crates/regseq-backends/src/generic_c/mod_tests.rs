@@ -314,6 +314,38 @@ fn tuple_field_emits_tuple_struct_with_indexed_fields() {
 }
 
 #[test]
+fn tuple_struct_field_emits_indexed_c_name() {
+    // A tuple struct `struct TS(u32)` — the bridge interns its single field
+    // with rustc's raw numeric index name "0", which is NOT a valid C
+    // identifier. The backend must emit it as `_0` (the same spelling
+    // tuples use) in the member declaration AND the offsetof guard, so the
+    // TU compiles. The raw `0` must NOT appear as a member designator.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let f0 = fl(&mut m, "0", u32t, 0);
+    push_struct_instance(&mut m, "TS", struct_layout(4, 4, None, vec![f0]));
+
+    let tu = emit_generic_c(&m).unwrap();
+    // Member declaration uses the valid-C `_0` name.
+    assert!(tu.contains("uint32_t _0;"), "tuple-struct field _0:\n{tu}");
+    // The offsetof guard uses the same `_0` name (single source of truth).
+    assert!(
+        tu.contains("_Static_assert(offsetof(struct TS, _0) == 0, \"TS._0 offset\");"),
+        "offsetof guard must use _0:\n{tu}"
+    );
+    // The raw numeric name `0` is never spelled as a member declarator or
+    // designator (would be invalid C).
+    assert!(
+        !tu.contains("uint32_t 0;"),
+        "raw numeric member name must not be emitted:\n{tu}"
+    );
+    assert!(
+        !tu.contains("offsetof(struct TS, 0)"),
+        "raw numeric designator must not be emitted:\n{tu}"
+    );
+}
+
+#[test]
 fn slice_field_emits_rust_slice_fat_struct() {
     // struct WithSlice { s: &[u8] }, s @0 size 16, struct size 16 align 8.
     let mut m = model();

@@ -707,8 +707,10 @@
     {
       "id": "IT-13",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_manually_drop"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-14",
@@ -1376,7 +1378,6 @@
       "FS-8",
       "FS-9",
       "IN-6",
-      "IT-13",
       "IT-14",
       "PC-1",
       "PC-3",

@@ -137,6 +137,24 @@ struct AggView<'a> {
     is_union: bool,
 }
 
+/// The C member name for source field `idx` of a non-tuple aggregate
+/// (`Ty::Struct` / `Ty::Union` / closure capture). A *tuple struct* (e.g.
+/// `core::mem::MaybeDangling<P>(P)`, the inner type of `ManuallyDrop`) carries
+/// rustc's raw numeric field name (`"0"`, `"1"`, ...), which is not a valid C
+/// identifier; those fields take the same `_<idx>` spelling tuples use, so the
+/// member declaration, `.field` projection, and `offsetof` guard all agree
+/// (Implementation Note 1: one source of truth, no tuple/tuple-struct fork).
+/// A named-field struct keeps `sanitize(name)` unchanged -- a Rust identifier
+/// never begins with a digit, so the leading-digit test fires only on a
+/// tuple-struct field.
+fn struct_field_c_name(name: &str, idx: usize) -> String {
+    if name.starts_with(|c: char| c.is_ascii_digit()) {
+        format!("_{idx}")
+    } else {
+        sanitize(name)
+    }
+}
+
 /// Resolve the layout + field list for an aggregate `ty`. Returns `None`
 /// for an enum (its body is the task-c2 hook) or a non-aggregate.
 fn resolve_view<'a>(model: &'a RegseqModel, ty: TyId) -> Option<AggView<'a>> {
@@ -172,7 +190,7 @@ fn resolve_view<'a>(model: &'a RegseqModel, ty: TyId) -> Option<AggView<'a>> {
             name: if is_tuple {
                 format!("_{idx}")
             } else {
-                sanitize(model.strings.resolve(f.name))
+                struct_field_c_name(model.strings.resolve(f.name), idx)
             },
             ty: f.ty,
             offset: f.offset,
