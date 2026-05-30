@@ -721,10 +721,8 @@
     {
       "id": "IT-14",
       "status": "covered",
-      "fixtures": [
-        "b8_opaque_handle"
-      ],
-      "result": "pass"
+      "fixtures": [],
+      "result": "fail"
     },
     {
       "id": "IT-2",
@@ -1385,6 +1383,7 @@
       "CO-12",
       "DL-5",
       "IN-6",
+      "IT-14",
       "PC-3",
       "TM-4",
       "TM-6",

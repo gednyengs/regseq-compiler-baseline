@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (152 with a green fixture)
+- **Covered rows:** 169 (151 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -19,6 +19,7 @@
 - `CO-12`
 - `DL-5`
 - `IN-6`
+- `IT-14`
 - `PC-3`
 - `TM-4`
 - `TM-6`
@@ -122,7 +123,7 @@
 | IT-11 | Covered | Pass | b3_structs |
 | IT-12 | Covered | Pass | b3_structs |
 | IT-13 | Covered | Pass | b5_manually_drop |
-| IT-14 | Covered | Pass | b8_opaque_handle |
+| IT-14 | Covered | Fail | - |
 | IT-2 | Covered | Pass | b8_item_kinds |
 | IT-3 | Covered | Pass | b8_item_kinds |
 | IT-4 | Covered | Pass | b3_structs |

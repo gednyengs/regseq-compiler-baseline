@@ -5204,7 +5204,7 @@
           "id": "regseq-backends-24",
           "name": "Generic-C opaque-handle emission (opaque_handle_eligible)",
           "spec": ".harness/tasks/regseq-backends/24-generic-c-opaque-handle.md",
-          "status": "in_progress",
+          "status": "pending",
           "depends_on": [
             "regseq-backends-19"
           ],
