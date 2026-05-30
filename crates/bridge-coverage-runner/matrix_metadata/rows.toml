@@ -700,7 +700,7 @@ inspect = { kind = "ConstVariant", arg = "Int" }
 [[row]]
 id = "OP-003-F"
 section = "1.3"
-construct = "Const::ZST (zero-sized FnDef coercion to fn pointer)"
+construct = "Const::ZST (zero-sized unit value as a call operand)"
 expectation = "positive"
 status = "covered"
 cluster_key = "OP-003"

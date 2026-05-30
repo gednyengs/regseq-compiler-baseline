@@ -1,9 +1,12 @@
 #![no_std]
-// OP-003-F: `Const::ZST`. Coercing a zero-sized `FnDef` to a `fn()`
-// pointer interns the ZST `FnDef` value as the single canonical
-// `Const::ZST`. (A bare unit value would intern no const; the ZST const
-// arises from a zero-sized `FnDef` operand.)
-fn g() {}
+// Const::ZST coverage: the unit value `()` passed as a CALL OPERAND lowers to
+// `Operand::Constant(Const::ZST)` (bridge const_.rs `ConstValue::ZeroSized ->
+// Const::ZST`). Unlike a bare `let _u = ()` (elided by the RemoveZsts pass), a
+// ZST call argument survives as a real const operand. Previously this row used a
+// fn-item -> fn-pointer coercion, but that operand now carries function
+// provenance as Const::Reloc (regseq-backends-20); the zero-sized-value variant
+// is exercised here instead.
+fn take(_z: ()) {}
 pub fn f() {
-    let _p: fn() = g;
+    take(());
 }
