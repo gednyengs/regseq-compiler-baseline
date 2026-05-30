@@ -2166,6 +2166,48 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-83",
+          "name": "Bridge propagates dropped Item/layout fields (pack/link_section/inline_hint/opaque_handle)",
+          "spec": ".harness/tasks/regseq-driver/83-bridge-item-field-propagation.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-82"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:33Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-84",
+          "name": "Foreign-fn ABI symbol (emission_name for body:None)",
+          "spec": ".harness/tasks/regseq-driver/84-foreign-fn-abi-symbol.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-82"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:33Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -4313,6 +4355,27 @@
               "reason": "Codex round-1 amendments: name the existing domain_attrs_field_attrs_key_is_remapped test at model_tests.rs:1597-1619 (drop the conditional grep); add doc-comment update requirement at model.rs:1132-1135 (HashMap -> BTreeMap wording)"
             }
           ]
+        },
+        {
+          "id": "regseq-model-97",
+          "name": "c_variadic Call-arity validator exception",
+          "spec": ".harness/tasks/regseq-model/97-cvariadic-call-arity-validator.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-96"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:33Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -4958,6 +5021,90 @@
           "history": [
             {
               "ts": "2026-05-30T01:14:45Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-20",
+          "name": "Generic-C ReifyFnPointer from a ZST FnDef constant",
+          "spec": ".harness/tasks/regseq-backends/20-generic-c-reify-fnptr-zst.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:32Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-21",
+          "name": "Generic-C closure call_once by-value shim deref",
+          "spec": ".harness/tasks/regseq-backends/21-generic-c-closure-callonce-shim.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:32Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-22",
+          "name": "Generic-C tuple-struct field naming (ManuallyDrop)",
+          "spec": ".harness/tasks/regseq-backends/22-generic-c-tuple-struct-field-name.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:32Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-23",
+          "name": "Generic-C CAbiShape::Substituted transparent-newtype boundary",
+          "spec": ".harness/tasks/regseq-backends/23-generic-c-cabi-substituted.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:10:33Z",
               "event": "added",
               "spec_version": 1
             }
