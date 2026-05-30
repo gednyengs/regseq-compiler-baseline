@@ -730,7 +730,10 @@ struct JointValidationVisitor<'m> {
     missing_direct_callee: Option<InstanceId>,
     /// Captured `(callee_id, expected_arity, actual_arity)` for the
     /// first Call terminator whose arg count disagrees with its
-    /// callee's `FnSig.inputs.len()` per spec section 23.6 B-4.
+    /// callee's `FnSig.inputs.len()` per spec section 23.6 B-4. A
+    /// `c_variadic` callee admits any `actual >= expected` (the
+    /// variadic tail), mirroring regseq-model-97; a non-variadic
+    /// callee requires exact equality.
     call_arity_mismatch: Option<(InstanceId, usize, usize)>,
     /// First Direct callee whose `InstanceKind` is not
     /// `InstanceKind::Function(_)` per spec section 23.6 B-5.
@@ -808,7 +811,20 @@ impl<'m> Visitor for JointValidationVisitor<'m> {
                     && !self.callee_is_log_intrinsic(*callee_id)
                 {
                     if let Some(sig) = self.model.instance_fn_sig(*callee_id) {
-                        if sig.inputs.len() != args.len() {
+                        // B-4 arity. A `c_variadic` callee legitimately
+                        // takes a variadic tail beyond its fixed inputs, so
+                        // the arity relaxes to `args.len() >= inputs.len()`
+                        // (the fixed inputs must still be present
+                        // positionally); a non-variadic callee keeps exact
+                        // equality. This mirrors the model-side B-4
+                        // relaxation (regseq-model-97) so the two validators
+                        // agree (regseq-driver-86).
+                        let arity_ok = if sig.c_variadic {
+                            args.len() >= sig.inputs.len()
+                        } else {
+                            args.len() == sig.inputs.len()
+                        };
+                        if !arity_ok {
                             self.call_arity_mismatch =
                                 Some((*callee_id, sig.inputs.len(), args.len()));
                         }
@@ -1016,6 +1032,63 @@ mod tests {
         })
     }
 
+    /// Build a callee function instance with `fixed_inputs` fixed `unit`
+    /// parameters and the given `c_variadic` flag, so the B-4 arity check
+    /// in `joint_validation_walk` can be exercised against a variadic vs.
+    /// non-variadic callee (regseq-driver-86).
+    fn make_callee_with_sig(
+        model: &mut RegseqModel,
+        name: &str,
+        fixed_inputs: usize,
+        c_variadic: bool,
+    ) -> InstanceId {
+        let item = make_function_item(model, name);
+        let unit = make_synthetic_unit(model);
+        let fn_sig = model.sigs.intern(FnSig {
+            inputs: vec![unit; fixed_inputs],
+            output: unit,
+            abi: if c_variadic { FnAbi::C } else { FnAbi::Rust },
+            c_variadic,
+            safety: Safety::Safe,
+        });
+        model.sig_c_abi_lowerings.push(None);
+        model.instances.push(Instance {
+            item,
+            generic_args: Vec::new(),
+            emission_name: model.items[item].def_path.rendered,
+            span: Span::dummy(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        })
+    }
+
+    /// Replace `body`'s START_BLOCK terminator with a `Call` to `callee`
+    /// carrying `arg_count` constant args, so the B-4 arity check sees a
+    /// specific (callee-arity, call-arity) pair (regseq-driver-86).
+    fn set_call_terminator(
+        model: &mut RegseqModel,
+        body: &mut Body,
+        callee: InstanceId,
+        arg_count: usize,
+    ) {
+        use regseq_model::BlockId;
+        let zst = model.consts.intern(regseq_model::Const::ZST);
+        let args: Vec<Operand> = (0..arg_count).map(|_| Operand::Constant(zst)).collect();
+        body.basic_blocks[BlockId::START_BLOCK].terminator = Terminator {
+            kind: TerminatorKind::Call {
+                callee: CallCallee::Direct(callee),
+                args: args.into_boxed_slice(),
+                destination: Place::from(LocalId::RETURN_PLACE),
+                target: Some(BlockId::START_BLOCK),
+            },
+            span: Span::dummy(),
+        };
+    }
+
     fn make_dummy_local(ty: TyId) -> LocalDecl {
         LocalDecl {
             ty,
@@ -1105,5 +1178,58 @@ mod tests {
 
         let err = joint_validation_walk(&model, instance, &body).unwrap_err();
         assert!(format!("{err}").contains("direct-callee closure"));
+    }
+
+    #[test]
+    fn b4_admits_c_variadic_callee_with_extra_args() {
+        // A `c_variadic` callee with 1 fixed input, called with 3 args
+        // (1 fixed + 2 variadic-tail) must pass the bridge B-4 arity
+        // check (regseq-driver-86, mirroring regseq-model-97).
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let owner_item = make_function_item(&mut model, "owner_fn");
+        let owner = make_function_instance(&mut model, owner_item);
+        let callee = make_callee_with_sig(&mut model, "variadic_callee", 1, true);
+        let mut body = make_dummy_body(&mut model);
+        set_call_terminator(&mut model, &mut body, callee, 3);
+
+        joint_validation_walk(&model, owner, &body)
+            .expect("variadic callee with extra args must pass B-4");
+    }
+
+    #[test]
+    fn b4_rejects_non_variadic_arity_mismatch() {
+        // A non-variadic callee with 1 fixed input, called with 2 args,
+        // must still be rejected (the exception is variadic-only).
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let owner_item = make_function_item(&mut model, "owner_fn");
+        let owner = make_function_instance(&mut model, owner_item);
+        let callee = make_callee_with_sig(&mut model, "fixed_callee", 1, false);
+        let mut body = make_dummy_body(&mut model);
+        set_call_terminator(&mut model, &mut body, callee, 2);
+
+        let err = joint_validation_walk(&model, owner, &body).unwrap_err();
+        assert!(
+            format!("{err}").contains("Call arity"),
+            "expected B-4 arity rejection, got `{err}`"
+        );
+    }
+
+    #[test]
+    fn b4_rejects_c_variadic_callee_below_fixed_arity() {
+        // A `c_variadic` callee with 2 fixed inputs, called with only 1
+        // arg (fewer than its fixed params), must still be rejected: the
+        // relaxation is `args.len() >= inputs.len()`, not unconditional.
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let owner_item = make_function_item(&mut model, "owner_fn");
+        let owner = make_function_instance(&mut model, owner_item);
+        let callee = make_callee_with_sig(&mut model, "variadic_callee2", 2, true);
+        let mut body = make_dummy_body(&mut model);
+        set_call_terminator(&mut model, &mut body, callee, 1);
+
+        let err = joint_validation_walk(&model, owner, &body).unwrap_err();
+        assert!(
+            format!("{err}").contains("Call arity"),
+            "expected B-4 arity rejection, got `{err}`"
+        );
     }
 }

@@ -2246,7 +2246,7 @@
           "id": "regseq-driver-86",
           "name": "Bridge c_variadic arity exception + variadic-fixture path (FS-5)",
           "spec": ".harness/tasks/regseq-driver/86-bridge-cvariadic-arity-and-fixture.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-model-97",
             "regseq-driver-84"

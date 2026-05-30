@@ -1,0 +1,47 @@
+name   = "b7_variadic"
+kind   = "rust"
+entry  = "regseq_main"
+# B7-variadic (plan §3): the C `...` boundary. This fixture greens FS-5
+# (FnSig.c_variadic -> trailing C `...`), the last residual of the b7_fn_sigs
+# function-signature family.
+#
+# A `c_variadic` callee is NOT constructible from an in-fixture Rust variadic body
+# (`extern "C" fn f(a, mut _rest: ...)` trips `DslRejection { CVoid }` — the
+# `...`/VaListImpl drags in core::ffi::c_void, which bridge type-translation
+# rejects). The constructible surface is therefore a libc variadic foreign
+# DECLARATION, the same shape as b8_item_kinds's `abs` but with a trailing `...`.
+#
+# snprintf (the FS-5 spec's first suggestion) is NOT usable: the backend's runtime
+# prelude `#include <stdio.h>` and its BoundsCheck panic-message code both rely on
+# libc's real `snprintf(char *, ...)`, so a Rust `*mut u8` redeclaration emits
+# `extern int32_t snprintf(uint8_t *, ...)` -> a hard C "conflicting types for
+# snprintf" error. The spec (§Implementation-Notes-2: "find another that does not
+# trip the c_void rejection") explicitly permits a different surface, so this
+# fixture uses `open(2)` from libc: a genuinely variadic symbol NOT declared by any
+# header the prelude includes (no conflict) and NOT used by the backend runtime.
+# It greens end-to-end only with all three prerequisite fixes landed:
+#   - regseq-driver-84: the bridge mints the foreign fn's `emission_name` from its
+#     real ABI link name (`open`), so the emitted `extern int32_t open(...)` + call
+#     link against libc instead of an undefined `input__extern_0__open`.
+#   - regseq-model-97: the model B-4 Call-arity validator admits `args.len() >=
+#     inputs.len()` for a `c_variadic` callee (the variadic tail), so the variadic
+#     call is not Rejected at Phase5 joint validation.
+#   - regseq-driver-86 (this task): the duplicate BRIDGE B-4 arity check
+#     (materialise.rs JointValidationVisitor) gets the same `c_variadic` exception,
+#     so the call survives the bridge-side validator that runs BEFORE the model one.
+# The backend `...` emission already worked (generic_c/mod.rs functions +
+# generic_c/types.rs fn pointers) — confirmed by regseq-model-97's pilot.
+#
+# `open` is prototyped `fn open(path: *const u8, flags: i32, ...) -> i32`. The
+# fixture calls it twice on a path whose PARENT directory does not exist, so each
+# returns -1 (ENOENT) *deterministically* with zero filesystem side effects: once
+# WITH a trailing variadic `mode` arg (O_CREAT, the 3-arg form) and once with NONE
+# (O_RDONLY, the 2-arg form). The fixture logs the deterministic -1 from each, so
+# the dual oracle proves the C `...` prototype compiled, linked against libc, and
+# was called with varying variadic-arg counts. Raw pointer addresses are never
+# logged (LogArg rule); only the i32 returns. The golden.c carries the `...`
+# prototype + both variadic call sites.
+covers = [
+  "FS-5",
+]
+expect = "pass"

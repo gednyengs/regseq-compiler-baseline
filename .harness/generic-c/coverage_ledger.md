@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (144 with a green fixture)
+- **Covered rows:** 169 (145 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -20,7 +20,6 @@
 - `CK-9`
 - `CO-12`
 - `DL-5`
-- `FS-5`
 - `FS-8`
 - `FS-9`
 - `IN-6`
@@ -108,7 +107,7 @@
 | FS-2 | Covered | Pass | b1_int_scalars |
 | FS-3 | Covered | Pass | b1_int_scalars |
 | FS-4 | Covered | Pass | b7_fn_sigs |
-| FS-5 | Covered | Fail | - |
+| FS-5 | Covered | Pass | b7_variadic |
 | FS-6 | OutOfScope | NotApplicable | - |
 | FS-7 | Covered | Pass | b7_fn_sigs |
 | FS-8 | Covered | Fail | - |

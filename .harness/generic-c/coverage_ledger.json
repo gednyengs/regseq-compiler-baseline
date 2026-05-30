@@ -549,8 +549,10 @@
     {
       "id": "FS-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b7_variadic"
+      ],
+      "result": "pass"
     },
     {
       "id": "FS-6",
@@ -1370,7 +1372,6 @@
       "CK-9",
       "CO-12",
       "DL-5",
-      "FS-5",
       "FS-8",
       "FS-9",
       "IN-6",
