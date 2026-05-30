@@ -7,26 +7,26 @@ entry  = "regseq_main"
 # glue run at scope exit (TM-10). Each row is driven by a logged computation in
 # input.rs (see its per-line `proves:` map).
 #
-# DEFERRED — three rows hit genuine backend bugs (not recipe gaps):
-#  * PC-1 (ReifyFnPointer) + IN-5 (ReifyShim). A fn-item -> fn-pointer reify bridges as
+# IN-5 (FunctionInstanceFlavor): the TM-10 drop glue synthesizes a DropGlue-flavor
+# instance (emitted as input__regseq_synth__drop_glue_*), which IS a non-Item shim
+# flavor — so IN-5 is genuinely exercised here (the row is any reachable shim flavor,
+# not specifically ReifyShim; confirmed by Codex review of the bug specs).
+#
+# DEFERRED — two rows hit genuine backend bugs (not recipe gaps), now filed as tasks:
+#  * PC-1 (ReifyFnPointer) — regseq-backends-20. A fn-item -> fn-pointer reify bridges as
 #    `Cast(PointerCoercion(ReifyFnPointer), Const::ZST, FnPtr)`: the operand is the
-#    zero-sized FnDef *constant*, which carries no function identity in the model. The
-#    backend's `reify_fn_pointer` (generic_c/body_emit.rs:1637) recovers the target only
-#    from a `Const::Reloc` operand or an `FnDef`-typed *place*, never from a ZST
-#    constant, so it errors `ReifyFnPointer of an unresolved function (task d2)`. No
-#    kind=rust construction avoids this — routing the FnDef through a local keeps it a
-#    ZST constant (the value is zero-sized). IN-5 (ReifyShim instance) is never even
-#    materialized by the bridge for a plain fn reify (only DropGlue is synthesized).
-#    The static-fn-ptr route used here keeps TM-9/TY-13/PC-2/CK-3 constructible.
-#  * IT-13 (ManuallyDrop). `core::mem::ManuallyDrop<T>` (and its inner `MaybeDangling`)
-#    are TUPLE structs; the backend emits a tuple field with its raw rustc index name
-#    (`offsetof(struct ..., 0)` / `struct ... { uint32_t 0; }`) — invalid C. Any use of
-#    ManuallyDrop forces emission of that tuple-struct definition, so the TU fails to
-#    compile. (The same tuple-field bug bites any user `struct D(u32)`; this fixture
-#    uses a NAMED-field `struct D { v: u32 }` for its Drop type to keep TM-10 green.)
+#    zero-sized FnDef *constant*, which the backend's `reify_fn_pointer`
+#    (generic_c/body_emit.rs:1637) cannot resolve (only `Const::Reloc` or an `FnDef`
+#    *place*) -> `ReifyFnPointer of an unresolved function (task d2)`. The static-fn-ptr
+#    route used here keeps TM-9/TY-13/PC-2/CK-3 constructible.
+#  * IT-13 (ManuallyDrop) — regseq-backends-22. `core::mem::ManuallyDrop<T>` is a TUPLE
+#    struct; the backend emits its field with the raw rustc index name (invalid C), so
+#    any use fails to compile. (This fixture uses a NAMED-field `struct D { v: u32 }`
+#    for its Drop type to keep TM-10 green.) Proving IT-13 also needs is_manually_drop
+#    drop-suppression handling (per the Codex spec review).
 covers = [
   "TM-1", "TM-7", "TM-9", "TM-10",
-  "TY-13",
+  "TY-13", "IN-5",
   "PC-2", "CK-3",
 ]
 expect = "pass"

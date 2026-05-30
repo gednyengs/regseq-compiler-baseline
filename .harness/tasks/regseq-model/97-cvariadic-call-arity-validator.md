@@ -14,19 +14,27 @@ Surfaced by the §06 push (b7_fn_sigs). Blocks **FS-5** (`FnSig.c_variadic` → 
 
 ## Input Context
 
-### Code anchors (confirm at HEAD — per workflow diagnosis)
+### Code anchors (confirm at HEAD — per workflow + Codex review)
 
-- `crates/regseq-model/src/model.rs:~3053` — the Call-arity joint validator
-  `if args.len() != inputs.len()` (no `c_variadic` branch). The callee `FnSig`
-  carries `c_variadic: bool` (`fn_sig.rs:~27`, which also requires `abi == C` + ≥1
-  fixed input).
+- `crates/regseq-model/src/model.rs:~3053-3061` — the Call-arity joint validator
+  `if args.len() != inputs.len()` (no `c_variadic` branch).
+- `crates/regseq-model/src/model.rs:~3063-3070` — the per-arg type check that indexes
+  `inputs[i]`; for a variadic call this MUST only run over the fixed-input prefix
+  (else it indexes out of range / mistypes the variadic tail args) — Codex review.
+- The callee `FnSig` carries `c_variadic: bool` (`fn_sig.rs:~27`, which also requires
+  `abi == C` + ≥1 fixed input).
 - Matrix FS-5 (`trailing C ...`), FS-1 (`FnSig { ..., c_variadic, ... }`).
+- Backend `...` emission already exists (`generic_c/mod.rs:~824-871` for functions,
+  `generic_c/types.rs:~284-285` for fn pointers) — Codex confirmed the validator is
+  the ONLY blocker; no backend follow-up needed for FS-5.
 
 ## Implementation Notes
 
 When the callee `FnSig` is `c_variadic`, relax the arity check to
 `args.len() >= inputs.len()` (the fixed inputs must match positionally; the tail is
-the variadic args). Keep the exact-equality check for non-variadic callees. Confirm
+the variadic args), AND bound the per-arg type check to the fixed-input prefix
+(`inputs[0..inputs.len()]`) so it never indexes `inputs[i]` for a variadic tail arg.
+Keep the exact-equality check + full per-arg typing for non-variadic callees. Confirm
 the callee's `c_variadic` flag is reachable at the Call validation site (via the
 callee `FnSigId`); if the joint validator only sees arities, thread the flag.
 

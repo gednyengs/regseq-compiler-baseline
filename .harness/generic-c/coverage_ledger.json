@@ -625,8 +625,10 @@
     {
       "id": "IN-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b5_control_flow"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-5b",
@@ -1361,7 +1363,6 @@
       "FS-8",
       "FS-9",
       "IN-3",
-      "IN-5",
       "IN-6",
       "IT-13",
       "IT-14",

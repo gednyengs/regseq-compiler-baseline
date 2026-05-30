@@ -13,16 +13,18 @@ extern prototype) and the `IT-7` Foreign-linkage end-to-end path.
 
 ## Input Context
 
-### Code anchors (confirm at HEAD — per workflow diagnosis)
+### Code anchors (confirmed at HEAD — Codex review)
 
-- The bridge's `emission_name` minting for `InstanceKind::Function` — a `body: None`
-  foreign instance (and any `#[no_mangle]`/explicit-link-name item) must take its
-  **link name** (`tcx.symbol_name` / the foreign item's identifier), not the
-  mangled internal name. Grep the instance/emission-name minting in
-  `crates/regseq-driver/src/bridge/` (the `Instance.emission_name` source —
-  `instance.rs:139` is the field; find the minting site).
-- Matrix IN-3 (`C prototype / extern declaration only`), IT-7 (linkage:
-  Foreign → `extern` decl, no def).
+- `crates/regseq-driver/src/bridge/mod.rs:~1878-1900` — the bridge sets a foreign
+  function's `emission_name` to `def_path.rendered` (the mangled-looking
+  `input__extern_0__abs`), NOT the ABI link name. This is the fix site: a `body: None`
+  foreign function must take its **link name** (`tcx.symbol_name` / the foreign item's
+  identifier, `abs`).
+- `crates/regseq-backends/src/generic_c/naming.rs:~119-145` — the backend sanitizes
+  whatever `emission_name` contains (it is NOT the bug; it faithfully emits the bridge
+  name). So the fix belongs in the driver.
+- Matrix IN-3 (`C prototype / extern declaration only`), IT-7 (linkage: Foreign →
+  `extern` decl, no def).
 
 ## Implementation Notes
 

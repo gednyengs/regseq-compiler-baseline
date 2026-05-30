@@ -12,8 +12,12 @@ branch is unreachable for a constant operand, and it falls through to the error.
 
 Surfaced by the §06 codegen-coverage push (b2_floats_casts, b5_control_flow).
 Blocks matrix rows **CK-9** (FnPtrToPtr — needs a reified fn-ptr first), **CK-11**
-(Subtype — same reify prerequisite), **PC-1** (ReifyFnPointer), and **IN-5**
-(ReifyShim flavor — see Non-Goals).
+(Subtype — same reify prerequisite), and **PC-1** (ReifyFnPointer).
+
+(`IN-5`, the FunctionInstanceFlavor row, is NOT part of this task — Codex review
+confirmed a plain fn-item reify never materializes a ReifyShim instance, and IN-5
+is any non-Item shim flavor, already genuinely exercised by `b5_control_flow`'s
+synthesized DropGlue shim. IN-5 was greened by adding it to that fixture's covers.)
 
 ## Input Context
 
@@ -42,11 +46,7 @@ hand-built `Operand::Copy` test) so the rustc-emitted constant operand is covere
 
 ## Non-Goals
 
-- `IN-5` (ReifyShim `FunctionInstanceFlavor`) may need the *bridge* to materialize a
-  ReifyShim instance for a plain fn-item reify (the workflow found none is created),
-  OR it may already be greenable via another shim flavor (DropGlue/ClosureOnce).
-  Confirm at implementation: if IN-5 needs bridge work, split it out; this task owns
-  the backend emission. CK-9/CK-11/PC-1 are the committed deliverable.
+- `IN-5` is out of scope (greened separately via the DropGlue shim, see Description).
 - Not the closure→fn-ptr coercion (`ClosureFnPointer`, PC-3 — vtable task).
 
 ## Test Plan
@@ -70,5 +70,5 @@ hand-built `Operand::Copy` test) so the rustc-emitted constant operand is covere
 1. A `kind=rust` fixture reifying a fn item to a fn pointer + calling it indirectly
    compiles-and-runs; PC-1 (and CK-9) green in the ledger.
 2. Backend unit test covering the `Const::ZST` FnDef reify operand passes.
-3. Disposition recorded for CK-11 and IN-5 (green, or split with a reason).
+3. Disposition recorded for CK-11 (green, or deferred with a reason).
 4. fmt + clippy (scoped) clean; scoped tests green; ledger byte-stable.

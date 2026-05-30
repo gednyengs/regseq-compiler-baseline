@@ -2179,12 +2179,18 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:10:33Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "revised per Codex spec review"
             }
           ]
         },
@@ -2200,10 +2206,37 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:10:33Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "revised per Codex spec review"
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-85",
+          "name": "Closure call_once shim by-value receiver vs Deref mismatch",
+          "spec": ".harness/tasks/regseq-driver/85-closure-callonce-shim-receiver.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-82"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:44:04Z",
               "event": "added",
               "spec_version": 1
             }
@@ -4368,12 +4401,18 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:10:33Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "revised per Codex spec review"
             }
           ]
         }
@@ -5038,12 +5077,18 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:10:32Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "revised per Codex spec review"
             }
           ]
         },
@@ -5051,13 +5096,13 @@
           "id": "regseq-backends-21",
           "name": "Generic-C closure call_once by-value shim deref",
           "spec": ".harness/tasks/regseq-backends/21-generic-c-closure-callonce-shim.md",
-          "status": "pending",
+          "status": "archived",
           "depends_on": [
             "regseq-backends-19"
           ],
           "artifacts": [],
           "fail_reason": null,
-          "phase": "1b",
+          "phase": "archived",
           "spec_refs": [],
           "spec_version": 1,
           "history": [
@@ -5065,6 +5110,11 @@
               "ts": "2026-05-30T02:10:32Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "archived",
+              "reason": "re-scoped to the bridge call_once-shim synthesis per Codex review; re-filed as regseq-driver-85"
             }
           ]
         },
@@ -5080,12 +5130,18 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:10:32Z",
               "event": "added",
               "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "revised per Codex spec review"
             }
           ]
         },
@@ -5101,10 +5157,37 @@
           "fail_reason": null,
           "phase": "1b",
           "spec_refs": [],
-          "spec_version": 1,
+          "spec_version": 2,
           "history": [
             {
               "ts": "2026-05-30T02:10:33Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-05-30T02:44:04Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "revised per Codex spec review"
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-24",
+          "name": "Generic-C opaque-handle emission (opaque_handle_eligible)",
+          "spec": ".harness/tasks/regseq-backends/24-generic-c-opaque-handle.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-19"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-30T02:44:04Z",
               "event": "added",
               "spec_version": 1
             }
