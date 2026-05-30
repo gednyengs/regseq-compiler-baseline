@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (141 with a green fixture)
+- **Covered rows:** 169 (142 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -24,7 +24,6 @@
 - `FS-5`
 - `FS-8`
 - `FS-9`
-- `IN-3`
 - `IN-6`
 - `IT-13`
 - `IT-14`
@@ -120,7 +119,7 @@
 | IN-10 | Covered | Pass | b4_enums |
 | IN-11 | Covered | Pass | b3_structs |
 | IN-2 | Covered | Pass | b1_int_scalars |
-| IN-3 | Covered | Fail | - |
+| IN-3 | Covered | Pass | b8_item_kinds |
 | IN-4 | Covered | Pass | b1_int_scalars |
 | IN-5 | Covered | Pass | b5_control_flow |
 | IN-5b | OutOfScope | NotApplicable | - |

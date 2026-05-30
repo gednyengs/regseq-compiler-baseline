@@ -148,3 +148,44 @@ fn empty_crate_returns_empty_instances() {
 
     assert!(model.instances.is_empty());
 }
+
+#[test]
+fn foreign_fn_emission_name_is_unmangled_abi_symbol() {
+    // regseq-driver-84: a `body: None` foreign function (`extern "C" {
+    // fn abs(i: i32) -> i32; }`) must carry its real ABI link name
+    // (`abs`) as its `emission_name`, NOT the rendered DefPath
+    // (`..._extern_0__abs`). The latter compiles but fails at link
+    // because libc exports `abs`, not the mangled name.
+    let source = r#"#![no_std]
+
+extern "C" {
+    fn abs(i: i32) -> i32;
+}
+
+#[no_mangle]
+pub extern "C" fn caller() -> i32 {
+    unsafe { abs(-5) }
+}
+"#;
+
+    let (_discovered, model) = compile_with_bridge("foreign_abs_bridge", source);
+
+    // Find the foreign `body: None` Function instance.
+    let foreign = model
+        .instances
+        .iter()
+        .find(|inst| {
+            model.items[inst.item].linkage == regseq_model::Linkage::Foreign
+                && inst
+                    .kind
+                    .as_function()
+                    .is_some_and(|data| data.body.is_none())
+        })
+        .expect("a foreign `body: None` Function instance for `abs`");
+
+    assert_eq!(
+        model.strings.resolve(foreign.emission_name),
+        "abs",
+        "foreign fn emission_name must be the unmangled ABI link name"
+    );
+}

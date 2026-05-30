@@ -611,8 +611,10 @@
     {
       "id": "IN-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-4",
@@ -1368,7 +1370,6 @@
       "FS-5",
       "FS-8",
       "FS-9",
-      "IN-3",
       "IN-6",
       "IT-13",
       "IT-14",

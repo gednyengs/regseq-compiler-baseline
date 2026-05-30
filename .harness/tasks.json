@@ -2198,7 +2198,7 @@
           "id": "regseq-driver-84",
           "name": "Foreign-fn ABI symbol (emission_name for body:None)",
           "spec": ".harness/tasks/regseq-driver/84-foreign-fn-abi-symbol.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-driver-82"
           ],

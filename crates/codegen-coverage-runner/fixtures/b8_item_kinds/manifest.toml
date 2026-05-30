@@ -17,20 +17,18 @@ entry  = "regseq_main"
 # `__attribute__((noinline))` — all visible in golden.c and exercised through
 # regseq_main.
 #
-# The remaining two assigned rows stay DEFERRED — each because the BRIDGE drops or
-# never-sets the construct, so it NEVER reaches the backend emitter. These are
-# bridge gaps, not fixture-recipe gaps (Codex-confirmed 2026-05-29):
+# IN-3 (foreign fn body:None) is now GREENED here — regseq-driver-84 made the
+# bridge mint the foreign fn's `emission_name` from its real ABI link name
+# (rustc `tcx.item_name` / `#[link_name]`, regseq-driver/src/bridge/mod.rs) rather
+# than its rendered DefPath. The backend's `naming::instance_symbol_base`
+# (regseq-backends/src/generic_c/naming.rs:144-147) sanitizes that verbatim, so an
+# `extern "C" { fn abs(i:i32)->i32; }` now emits `extern int32_t abs(int32_t);` +
+# a call to `abs(...)`; libc exports `abs`, so the LINK resolves and `abs(-5)`
+# runs to 5, logged through regseq_main.
 #
-# DEFERRED — IN-3 (foreign fn body:None): `extern "C" { fn abs(i:i32)->i32; }` +
-#   `abs(-5)` lowers fine, but the bridge mints the foreign fn's `emission_name`
-#   from its rendered DefPath (regseq-driver/src/bridge/mod.rs:1892 →
-#   `def_path.rendered`), never from the foreign block's real link name. The backend
-#   `naming::instance_symbol_base` (regseq-backends/src/generic_c/naming.rs:144-147)
-#   then sanitizes that DefPath and uses it VERBATIM as the external symbol, so it
-#   emits `extern int32_t input__extern_0__abs(int32_t);` + a call to
-#   `input__extern_0__abs(...)`. libc exports `abs`, not that, so the LINK fails:
-#   `undefined reference to 'input__extern_0__abs'`. Fix = use the bare ABI link
-#   name (rustc `tcx.item_name`/`#[link_name]`), not `sanitize(rendered_def_path)`.
+# The remaining assigned row stays DEFERRED — the BRIDGE never-sets the construct,
+# so it NEVER reaches the backend emitter. This is a bridge gap, not a
+# fixture-recipe gap (Codex-confirmed 2026-05-29):
 #
 # DEFERRED — IT-14 (opaque_handle): a bridge-classified Item flag
 #   (`Item.opaque_handle_eligible`) HARDCODED to `false` at every ADT-item
@@ -39,6 +37,6 @@ entry  = "regseq_main"
 #   `true`. Structurally unreachable from any `kind=rust` fixture.
 covers = [
   "IT-2", "IT-3", "IT-8", "IT-9",
-  "IN-7", "IN-8",
+  "IN-3", "IN-7", "IN-8",
 ]
 expect = "pass"

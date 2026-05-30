@@ -14,9 +14,11 @@
 // IT-8 (link_section function) and IT-9 (inline_hint) are now driven here:
 // regseq-driver-83 made the bridge read rustc's codegen_fn_attrs, so the
 // link_section / inline classification reaches the backend's fn_qualifiers.
-// IN-3 (foreign fn body:None) and IT-14 (opaque_handle) stay DEFERRED (BRIDGE
-// drops/never-sets the construct — not a recipe gap). The manifest's DEFERRED
-// block carries the exact repro + file:line for each.
+// IN-3 (foreign fn body:None) is now driven here too: regseq-driver-84 made the
+// bridge mint the foreign fn's emission_name from its real ABI link name, so the
+// emitted `extern int32_t abs(int32_t);` + call link against libc. IT-14
+// (opaque_handle) stays DEFERRED (BRIDGE never-sets the construct — not a recipe
+// gap). The manifest's DEFERRED block carries the exact repro + file:line.
 
 pub mod regseq {
     pub mod log {
@@ -97,10 +99,18 @@ fn never_cold(x: u32) -> u32 {    // proves: IT-9 (inline(never) -> noinline)
     x - 1
 }
 
-// NOTE: IN-3 (foreign fn body:None) and IT-14 (opaque_handle) are NOT driven
-// here — each is dropped/never-set by the BRIDGE (not the backend), so the
-// construct never reaches the emitter. See the manifest's DEFERRED block for the
-// exact repro + file:line for each.
+// --- IN-3 (foreign fn body:None): a libc foreign function. The bridge mints
+// the foreign fn's `emission_name` from its real ABI link name (`abs`), NOT the
+// rendered DefPath (regseq-driver-84 fixed regseq-driver/src/bridge/mod.rs). The
+// backend emits `extern int32_t abs(int32_t);` + a call to `abs(...)`; libc
+// exports `abs`, so the link resolves and the call runs. ---
+extern "C" {
+    fn abs(i: i32) -> i32;        // proves: IN-3 (foreign fn body:None -> extern decl)
+}
+
+// NOTE: IT-14 (opaque_handle) is NOT driven here — it is never-set by the BRIDGE
+// (not the backend), so the construct never reaches the emitter. See the
+// manifest's DEFERRED block for the exact repro + file:line.
 
 #[no_mangle]
 pub extern "C" fn regseq_main() {
@@ -119,4 +129,8 @@ pub extern "C" fn regseq_main() {
     // appear on their definitions in golden.c) ---
     regseq::log::info!("hot={}", always_hot(21));     // 42  proves: IT-9 (always)
     regseq::log::info!("cold={}", never_cold(10));    // 9   proves: IT-9 (never)
+
+    // --- IN-3: call the foreign libc `abs`. The instance is `body: None`, so the
+    // backend emits an `extern` prototype only; the link binds it to libc's `abs`. ---
+    regseq::log::info!("absval={}", unsafe { abs(-5) }); // 5  proves: IN-3
 }

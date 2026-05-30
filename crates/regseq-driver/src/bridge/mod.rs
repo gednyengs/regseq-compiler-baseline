@@ -1889,7 +1889,14 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             // (UnsupportedCAbiType, UnsupportedAbi, etc.) rather
             // than a silent skip.
             let fn_sig = fnsig::translate_fn_sig(ctxt, poly_fn_sig)?;
-            let emission_name = ctxt.model.items[item_id].def_path.rendered;
+            // Per regseq-driver-84: a foreign `body: None` function is an
+            // ABI import. Its `emission_name` must be the real link name
+            // rustc would call it by (`abs`), NOT the rendered DefPath
+            // (`input::{extern#0}::abs`); the latter compiles but fails at
+            // link because libc exports `abs`. `foreign_fn_abi_symbol`
+            // mirrors rustc's `compute_symbol_name` for foreign items.
+            let abi_symbol = foreign_fn_abi_symbol(ctxt.input.tcx, def_id);
+            let emission_name = ctxt.model.strings.intern(&abi_symbol);
             let span = ctxt.model.items[item_id].span;
             let flavor = FunctionInstanceFlavor::Item;
             let args_key =
@@ -2903,6 +2910,23 @@ fn foreign_item_def_id(tcx: TyCtxt<'_>, wanted: DefPathHash) -> Option<DefId> {
         }
     }
     None
+}
+
+/// Per regseq-driver-84: the unmangled ABI link name a foreign
+/// function (`extern "C" { fn abs(...); }`) is imported under, used as
+/// its `emission_name` so the backend's `extern` prototype + call site
+/// reference the symbol the linker actually resolves (`abs`, exported
+/// by libc) rather than the rendered DefPath.
+///
+/// Mirrors rustc's `compute_symbol_name` for foreign items: an explicit
+/// `#[link_name = "..."]` (surfaced as `codegen_fn_attrs.symbol_name`)
+/// wins; otherwise the bare item identifier (`tcx.item_name`). Foreign
+/// items are implicitly no-mangle, so the identifier IS the link name.
+fn foreign_fn_abi_symbol(tcx: TyCtxt<'_>, def_id: DefId) -> String {
+    if let Some(symbol_name) = tcx.codegen_fn_attrs(def_id).symbol_name {
+        return symbol_name.to_string();
+    }
+    tcx.item_name(def_id).to_string()
 }
 
 fn is_rustc_function(tcx: TyCtxt<'_>, def_id: DefId) -> bool {
