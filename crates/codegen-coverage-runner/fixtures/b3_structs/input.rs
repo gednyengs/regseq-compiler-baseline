@@ -60,17 +60,26 @@ pub mod regseq {
 // _Static_assert guards). Mixed field sizes so the repr(Rust) struct gets
 // rustc-reordered offsets (LY-3); a #[repr(C)] struct with declared order
 // (LY-1/LY-6); a union (IT-6/TY-19/LY-4); a struct holding UnsafeCell<u32>
-// (IT-11) and one holding PhantomData<u32> (IT-12). NOTE: LY-2 (pack) is
-// DEFERRED — the bridge's nominal_layout hardcodes `pack: None` (ty.rs:1600),
-// so a #[repr(packed)] struct loses its pack flag and the layout validator
-// rejects it ("FieldLayout offset is not aligned"). A bridge bug, not a recipe
-// gap. ---
+// (IT-11) and one holding PhantomData<u32> (IT-12); a #[repr(packed)] struct
+// (LY-2). ---
 
 #[repr(C)]
 struct PointC {            // proves: IT-4, TY-17, IN-9, LY-1, LY-6 (declared order, no reorder)
     a: u8,
     b: u64,
     c: u16,
+}
+
+// --- #[repr(packed)] struct (LY-2). With repr(C) + packed, the fields keep
+// declared order but every field is packed to alignment 1, so `b` sits at
+// offset 1 (not 8 as in PointC). The bridge propagates `Layout.pack = Some(1)`
+// from rustc's repr; the validator then accepts the unaligned offset and the
+// backend emits `__attribute__((packed, aligned(1)))` + offsetof asserts that
+// cc enforces at compile time. ---
+#[repr(C, packed)]
+struct PackedRegs {        // proves: LY-2 (pack = Some(1): packed offsets enforced by cc)
+    tag: u8,
+    word: u32,
 }
 
 struct PointRust {         // proves: LY-3 (repr(Rust): rustc reorders u8,u64,u16 → backend by-offset)
@@ -118,6 +127,14 @@ pub extern "C" fn regseq_main() {
 
     let pr = PointRust { a: 5, b: 6, c: 8 };          // proves: LY-3 (reordered offsets enforced by cc)
     regseq::log::info!("pr.a={} pr.b={} pr.c={}", pr.a, pr.b, pr.c); // 5 6 8
+
+    // --- #[repr(packed)] struct (LY-2): construct and read both fields by copy
+    // (a packed field cannot be borrowed). The packed offset of `word` (1, not
+    // 4) is enforced by the backend's offsetof _Static_assert. ---
+    let pk = PackedRegs { tag: 0xAB, word: 0x11223344 }; // proves: LY-2
+    let pk_tag = pk.tag;                                  // copy out (no borrow of packed field)
+    let pk_word = pk.word;
+    regseq::log::info!("pk.tag={} pk.word={}", pk_tag, pk_word); // 171 287454020
 
     // --- union: write one field, read another (AG-5 / IN-11 / TY-19 / LY-4) ---
     let bits = Bits { u: 0x04030201 };                // proves: AG-5, TY-19, IN-11

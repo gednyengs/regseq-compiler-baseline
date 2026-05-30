@@ -715,10 +715,10 @@ _Static_assert(_Alignof(struct tuple_cbf29ce484222325) == 1, "tuple_cbf29ce48422
 /* ---------------------------------------------------------------------------
  * Bank 4 (section 15): prototypes + extern statics.
  * --------------------------------------------------------------------------- */
-void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-struct rust_str input_id(struct rust_str);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) struct rust_str input_id(struct rust_str);
 void input_regseq_main(void);
 extern const uint8_t input__regseq_synth__const_memory_static_ab35b42ebaf56ad3be2e74002d05f5e9[7];
 extern const uint8_t input__regseq_synth__const_memory_static_f3c9c75e8a6b2a8234c848a1e2b774d3[9];
@@ -726,22 +726,22 @@ extern const uint8_t input__regseq_synth__const_memory_static_f3c9c75e8a6b2a8234
 /* ---------------------------------------------------------------------------
  * Bank 5 (section 15): function bodies + static initializers.
  * --------------------------------------------------------------------------- */
-void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-struct rust_str input_id(struct rust_str _1) {
+__attribute__((noinline)) struct rust_str input_id(struct rust_str _1) {
     struct rust_str _0;
     bb_0: {
         _0 = _1;

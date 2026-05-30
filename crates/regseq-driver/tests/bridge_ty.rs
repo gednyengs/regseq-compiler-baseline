@@ -361,6 +361,123 @@ pub fn f(
 }
 
 #[test]
+fn propagates_dropped_item_and_layout_fields_from_rustc() {
+    // regseq-driver-83: the real source-item construction site must
+    // populate `Layout.pack` (from the ADT repr), `Item.link_section`
+    // and `Item.inline_hint` (from `tcx.codegen_fn_attrs`). Synthesized
+    // / non-function items keep their `None` defaults.
+    let source = r#"
+#[repr(packed)]
+pub struct Packed1 { a: u8, b: u32 }
+
+#[repr(packed(2))]
+pub struct Packed2 { a: u8, b: u32 }
+
+pub struct Plain { a: u8, b: u32 }
+
+#[unsafe(link_section = ".driver_data")]
+pub fn sectioned() {}
+
+#[inline(always)]
+pub fn always_inlined() -> u32 { 7 }
+
+#[inline(never)]
+pub fn never_inlined() -> u32 { 9 }
+
+pub fn plain_fn() {}
+
+pub fn anchor(
+    _p1: Packed1,
+    _p2: Packed2,
+    _pl: Plain,
+) {}
+"#;
+
+    with_bridge("bridge_ty_field_propagation", source, |tcx, cx| {
+        // --- Layout.pack from repr(packed) / repr(packed(n)) ---
+        let p1 = translate_ty(cx, param_ty(tcx, "anchor", 0)).unwrap();
+        let p2 = translate_ty(cx, param_ty(tcx, "anchor", 1)).unwrap();
+        let plain = translate_ty(cx, param_ty(tcx, "anchor", 2)).unwrap();
+
+        let Ty::Struct { layout: l1, .. } = cx.model.types.resolve(p1) else {
+            panic!("Packed1 should translate as a struct");
+        };
+        assert_eq!(l1.pack, Some(1), "repr(packed) -> pack = Some(1)");
+        let Ty::Struct { layout: l2, .. } = cx.model.types.resolve(p2) else {
+            panic!("Packed2 should translate as a struct");
+        };
+        assert_eq!(l2.pack, Some(2), "repr(packed(2)) -> pack = Some(2)");
+        let Ty::Struct { layout: lp, .. } = cx.model.types.resolve(plain) else {
+            panic!("Plain should translate as a struct");
+        };
+        assert_eq!(lp.pack, None, "unpacked struct keeps pack = None");
+
+        // --- Item.link_section / Item.inline_hint from codegen_fn_attrs ---
+        // Intern the FnDef Tys during Phase 2 (their embedded ItemIds
+        // are placeholders until the Phase-4/5 flush + patch below).
+        let mut fndef_ty = |name: &str| -> regseq_model::TyId {
+            let def_id = find_fn_def_id(tcx, name).to_def_id();
+            let fn_def_ty = tcx.type_of(def_id).instantiate_identity();
+            translate_ty(cx, fn_def_ty).unwrap()
+        };
+        let sectioned_ty = fndef_ty("sectioned");
+        let always_ty = fndef_ty("always_inlined");
+        let never_ty = fndef_ty("never_inlined");
+        let plain_fn_ty = fndef_ty("plain_fn");
+
+        // Bind the source-item handles to real ItemIds before reading;
+        // this also patches the placeholder ItemIds embedded in the Tys.
+        regseq_driver::bridge::flush_pending_items_for_tests(cx).unwrap();
+        regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
+
+        let item_of_fndef =
+            |cx: &BridgeCtxt<'_>, ty_id: regseq_model::TyId| -> regseq_model::ItemId {
+                match cx.model.types.resolve(ty_id) {
+                    Ty::FnDef(item, _) => *item,
+                    other => panic!("expected FnDef, got {other:?}"),
+                }
+            };
+        let sectioned = item_of_fndef(cx, sectioned_ty);
+        let always = item_of_fndef(cx, always_ty);
+        let never = item_of_fndef(cx, never_ty);
+        let plain_fn = item_of_fndef(cx, plain_fn_ty);
+
+        let section = cx.model.items[sectioned]
+            .link_section
+            .expect("link_section function should carry a section");
+        assert_eq!(cx.model.strings.resolve(section), ".driver_data");
+        assert_eq!(
+            cx.model.items[always].inline_hint,
+            regseq_model::InlineHint::Always
+        );
+        assert_eq!(
+            cx.model.items[never].inline_hint,
+            regseq_model::InlineHint::Never
+        );
+        assert_eq!(cx.model.items[plain_fn].link_section, None);
+        assert_eq!(
+            cx.model.items[plain_fn].inline_hint,
+            regseq_model::InlineHint::None
+        );
+
+        // Struct (non-codegen-attr DefKind) items keep their defaults
+        // and do not panic the codegen_fn_attrs query.
+        let Ty::Struct {
+            item: plain_item, ..
+        } = cx.model.types.resolve(plain)
+        else {
+            panic!("Plain should translate as a struct");
+        };
+        let plain_item = *plain_item;
+        assert_eq!(cx.model.items[plain_item].link_section, None);
+        assert_eq!(
+            cx.model.items[plain_item].inline_hint,
+            regseq_model::InlineHint::None
+        );
+    });
+}
+
+#[test]
 fn rejects_box_atomic_and_c_void_adts() {
     let source = r#"
 pub fn boxed(_: Box<u32>) {}

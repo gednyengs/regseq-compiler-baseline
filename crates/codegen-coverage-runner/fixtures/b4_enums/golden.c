@@ -818,13 +818,13 @@ _Static_assert(offsetof(struct input_VoidRef, p) == 0, "input_VoidRef.p offset")
 /* ---------------------------------------------------------------------------
  * Bank 4 (section 15): prototypes + extern statics.
  * --------------------------------------------------------------------------- */
-void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-uint8_t input_color_tag(const struct input_Color *);
-struct tuple_69bd35421fcc2557 input_e_tag_and_payload(const struct input_E *);
-struct tuple_69bd35421fcc2557 input_n_probe(const struct input_N *);
-uint16_t input_one_payload(const struct input_One *);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) uint8_t input_color_tag(const struct input_Color *);
+__attribute__((noinline)) struct tuple_69bd35421fcc2557 input_e_tag_and_payload(const struct input_E *);
+__attribute__((noinline)) struct tuple_69bd35421fcc2557 input_n_probe(const struct input_N *);
+__attribute__((noinline)) uint16_t input_one_payload(const struct input_One *);
 void input_regseq_main(void);
 extern const uint8_t input__regseq_synth__const_memory_static_29c8998c295344767bde5abeb21497ee[16];
 extern const uint8_t input__regseq_synth__const_memory_static_31cdc13149637fc6e1442dae5cd1bbd2[6];
@@ -842,22 +842,22 @@ extern const uint32_t input_GUARD;
 /* ---------------------------------------------------------------------------
  * Bank 5 (section 15): function bodies + static initializers.
  * --------------------------------------------------------------------------- */
-void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-uint8_t input_color_tag(const struct input_Color *_1) {
+__attribute__((noinline)) uint8_t input_color_tag(const struct input_Color *_1) {
     uint8_t _0;
     intptr_t _2;
     bb_0: {
@@ -883,7 +883,7 @@ uint8_t input_color_tag(const struct input_Color *_1) {
         return _0;
     }
 }
-struct tuple_69bd35421fcc2557 input_e_tag_and_payload(const struct input_E *_1) {
+__attribute__((noinline)) struct tuple_69bd35421fcc2557 input_e_tag_and_payload(const struct input_E *_1) {
     struct tuple_69bd35421fcc2557 _0;
     intptr_t _2;
     const uint32_t *_3;
@@ -929,7 +929,7 @@ struct tuple_69bd35421fcc2557 input_e_tag_and_payload(const struct input_E *_1) 
         return _0;
     }
 }
-struct tuple_69bd35421fcc2557 input_n_probe(const struct input_N *_1) {
+__attribute__((noinline)) struct tuple_69bd35421fcc2557 input_n_probe(const struct input_N *_1) {
     struct tuple_69bd35421fcc2557 _0;
     intptr_t _2;
     const uint32_t *const *_3;
@@ -957,7 +957,7 @@ struct tuple_69bd35421fcc2557 input_n_probe(const struct input_N *_1) {
         return _0;
     }
 }
-uint16_t input_one_payload(const struct input_One *_1) {
+__attribute__((noinline)) uint16_t input_one_payload(const struct input_One *_1) {
     uint16_t _0;
     const uint16_t *_2;
     bb_0: {

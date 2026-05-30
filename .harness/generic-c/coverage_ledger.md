@@ -3,7 +3,7 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (138 with a green fixture)
+- **Covered rows:** 169 (141 with a green fixture)
 
 ## Drift: covered-without-green
 
@@ -28,9 +28,6 @@
 - `IN-6`
 - `IT-13`
 - `IT-14`
-- `IT-8`
-- `IT-9`
-- `LY-2`
 - `PC-1`
 - `PC-3`
 - `TM-4`
@@ -143,15 +140,15 @@
 | IT-5 | Covered | Pass | b4_enums |
 | IT-6 | Covered | Pass | b3_structs |
 | IT-7 | Covered | Pass | b1_int_scalars |
-| IT-8 | Covered | Fail | - |
-| IT-9 | Covered | Fail | - |
+| IT-8 | Covered | Pass | b8_item_kinds |
+| IT-9 | Covered | Pass | b8_item_kinds |
 | LY-1 | Covered | Pass | b3_structs |
 | LY-10 | Covered | Pass | b4_enums |
 | LY-11 | Covered | Pass | b4_enums |
 | LY-12 | Covered | Pass | b4_enums |
 | LY-13 | Covered | Pass | b4_enums |
 | LY-14 | Covered | Pass | b4_enums |
-| LY-2 | Covered | Fail | - |
+| LY-2 | Covered | Pass | b3_structs |
 | LY-3 | Covered | Pass | b3_structs |
 | LY-4 | Covered | Pass | b3_structs |
 | LY-5 | Covered | Pass | b4_enums |

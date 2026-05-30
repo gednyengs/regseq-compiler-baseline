@@ -1,3 +1,6 @@
 [INFO] stat=42
 [INFO] statmut=7
 [INFO] constc=10
+[INFO] sect=41
+[INFO] hot=42
+[INFO] cold=9

@@ -1,19 +1,23 @@
 ---
 source: crates/regseq-driver/tests/bridge_diag_log_dead_item_elim.rs
-assertion_line: 318
 expression: rendered
 ---
+#[inline(never)]
 fn core::panicking::panic(_1: &str) -> !;
 
+#[inline(never)]
 #[rseq::intrinsic("log-debug")]
 fn diag_logging::regseq::log::intrinsics::log_debug(_1: &str) -> ();
 
+#[inline(never)]
 #[rseq::intrinsic("log-error")]
 fn diag_logging::regseq::log::intrinsics::log_error(_1: &str) -> ();
 
+#[inline(never)]
 #[rseq::intrinsic("log-info")]
 fn diag_logging::regseq::log::intrinsics::log_info(_1: &str) -> ();
 
+#[inline(never)]
 #[rseq::intrinsic("log-warn")]
 fn diag_logging::regseq::log::intrinsics::log_warn(_1: &str) -> ();
 

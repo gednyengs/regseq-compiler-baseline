@@ -655,6 +655,14 @@ fn intern_source_item_handle(
     let rendered = render_def_path(&intermediate_path, &cx.model.crates, &cx.model.strings);
     let rendered_id = cx.model.strings.intern(&rendered);
 
+    // Propagate the `#[link_section = "..."]` / `#[inline(...)]`
+    // attributes carried by rustc's per-DefId `CodegenFnAttrs` onto
+    // the source-derived Item. Only DefKinds that carry codegen attrs
+    // (functions, closures, statics) are queried; ADT (struct / enum /
+    // union) DefIds would trip the debug-assert inside the query, so
+    // they leave both fields at their Item defaults.
+    let (link_section, inline_hint) = source_item_codegen_attrs(cx, def_id);
+
     let item = Item {
         def_path: DefPath {
             crate_id,
@@ -664,8 +672,8 @@ fn intern_source_item_handle(
         kind,
         span: Span::dummy(),
         linkage: Linkage::Default,
-        link_section: None,
-        inline_hint: InlineHint::None,
+        link_section,
+        inline_hint,
         is_unsafe: false,
         is_phantom_data: matches!(special, SpecialAdt::PhantomData),
         is_unsafe_cell: matches!(special, SpecialAdt::UnsafeCell),
@@ -680,6 +688,40 @@ fn intern_source_item_handle(
         bridge_flags: regseq_model::BridgeItemFlags::default(),
     });
     handle
+}
+
+/// Read the `link_section` / `inline` fields of rustc's per-DefId
+/// `CodegenFnAttrs` for a source-derived Item and translate them into
+/// the model's `Item.link_section` / `Item.inline_hint` shapes.
+///
+/// The `codegen_fn_attrs` query is only defined for DefKinds that
+/// carry codegen attributes (functions, closures, statics); querying
+/// an ADT (struct / enum / union) DefId would trip the query's
+/// internal debug-assert. ADT and any other non-codegen-attr DefId
+/// therefore short-circuit to `(None, InlineHint::None)`, matching the
+/// Item defaults. The `link_section` symbol is interned into the model
+/// string table. `InlineAttr::Force` (rustc's `#[rustc_force_inline]`)
+/// maps to `InlineHint::Always`, the closest C emission (no separate
+/// model variant exists).
+fn source_item_codegen_attrs(
+    cx: &mut BridgeCtxt<'_>,
+    def_id: DefId,
+) -> (Option<regseq_model::StringId>, InlineHint) {
+    if !cx.input.tcx.def_kind(def_id).has_codegen_attrs() {
+        return (None, InlineHint::None);
+    }
+    let attrs = cx.input.tcx.codegen_fn_attrs(def_id);
+    let link_section = attrs
+        .link_section
+        .map(|sym| cx.model.strings.intern(sym.as_str()));
+    let inline_hint = match attrs.inline {
+        rustc_hir::attrs::InlineAttr::None => InlineHint::None,
+        rustc_hir::attrs::InlineAttr::Hint => InlineHint::Hint,
+        rustc_hir::attrs::InlineAttr::Always => InlineHint::Always,
+        rustc_hir::attrs::InlineAttr::Never => InlineHint::Never,
+        rustc_hir::attrs::InlineAttr::Force { .. } => InlineHint::Always,
+    };
+    (link_section, inline_hint)
 }
 
 /// Eager-HIR-walk variant of [`intern_item`] (per regseq-driver-58
@@ -1594,10 +1636,19 @@ fn nominal_layout<'tcx>(
             fields: field_layouts,
         },
     };
+    // Propagate `#[repr(packed)]` / `#[repr(packed(n))]` from the ADT's
+    // repr so the layout validator stops rejecting packed field offsets
+    // and the backend can emit the packed/aligned attribute. rustc
+    // stores the pack as an `Align`; `repr(packed)` -> 1 byte,
+    // `repr(packed(n))` -> n bytes. Non-ADT layouts have no repr pack.
+    let pack = match ty.kind() {
+        TyKind::Adt(adt, _) => adt.repr().pack.map(|align| align.bytes() as u32),
+        _ => None,
+    };
     Ok(Layout {
         size: rustc_layout.size.bytes(),
         align: rustc_layout.align.abi.bytes(),
-        pack: None,
+        pack,
         uninhabited: rustc_layout.uninhabited,
         kind,
     })

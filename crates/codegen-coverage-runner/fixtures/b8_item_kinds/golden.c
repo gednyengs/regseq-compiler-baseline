@@ -715,32 +715,56 @@ _Static_assert(_Alignof(struct tuple_cbf29ce484222325) == 1, "tuple_cbf29ce48422
 /* ---------------------------------------------------------------------------
  * Bank 4 (section 15): prototypes + extern statics.
  * --------------------------------------------------------------------------- */
-void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+inline __attribute__((always_inline)) uint32_t input_always_hot(uint32_t);
+__attribute__((noinline)) uint32_t input_never_cold(uint32_t);
 void input_regseq_main(void);
+__attribute__((noinline)) __attribute__((section(".driver_data"))) uint32_t input_sectioned(uint32_t);
+extern const uint8_t input__regseq_synth__const_memory_static_4d9cc4713701eaef444947c4a9be974a[7];
 extern const uint8_t input__regseq_synth__const_memory_static_6039dbac26340ba4d06f1b75a9333286[10];
 extern const uint8_t input__regseq_synth__const_memory_static_88287fa69d56e8a2d64c6c9420bd9cf3[9];
 extern const uint8_t input__regseq_synth__const_memory_static_ac1641ddf1810a7d0643ee8b49d2f4d6[7];
+extern const uint8_t input__regseq_synth__const_memory_static_e4819c9c3a2b79e11f1028fad387e235[7];
+extern const uint8_t input__regseq_synth__const_memory_static_e9760ffad3e3df8e9633747d8e15e401[6];
 extern uint32_t input_M;
 extern const uint32_t input_S;
 
 /* ---------------------------------------------------------------------------
  * Bank 5 (section 15): function bodies + static initializers.
  * --------------------------------------------------------------------------- */
-void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
+    }
+}
+inline __attribute__((always_inline)) uint32_t input_always_hot(uint32_t _1) {
+    uint32_t _0;
+    uint32_t _2;
+    bb_0: {
+        _2 = _1;
+        _0 = ((_2) * (((uint32_t)(2U))));
+        return _0;
+    }
+}
+__attribute__((noinline)) uint32_t input_never_cold(uint32_t _1) {
+    uint32_t _0;
+    uint32_t _2;
+    bb_0: {
+        _2 = _1;
+        _0 = ((_2) - (((uint32_t)(1U))));
+        return _0;
     }
 }
 void input_regseq_main(void) {
@@ -749,6 +773,9 @@ void input_regseq_main(void) {
     uint32_t *_9;
     uint32_t _10;
     uint32_t _17;
+    uint32_t _24;
+    uint32_t _31;
+    uint32_t _38;
     bb_0: {
         _1 = ((const uint32_t *)&input_S);
         _2 = (*_1);
@@ -773,11 +800,50 @@ void input_regseq_main(void) {
         fwrite("[INFO] constc=", 1, 14, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_17)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_6;
     }
     bb_6: {
+        _24 = input_sectioned(((uint32_t)(40U))); goto bb_7;
+    }
+    bb_7: {
+        goto bb_8;
+    }
+    bb_8: {
+        fwrite("[INFO] sect=", 1, 12, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_24)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_9;
+    }
+    bb_9: {
+        _31 = input_always_hot(((uint32_t)(21U))); goto bb_10;
+    }
+    bb_10: {
+        goto bb_11;
+    }
+    bb_11: {
+        fwrite("[INFO] hot=", 1, 11, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_31)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_12;
+    }
+    bb_12: {
+        _38 = input_never_cold(((uint32_t)(10U))); goto bb_13;
+    }
+    bb_13: {
+        goto bb_14;
+    }
+    bb_14: {
+        fwrite("[INFO] cold=", 1, 12, stdout); { char _n[24]; int _l = snprintf(_n, sizeof _n, "%u", (unsigned)(_38)); fwrite(_n, 1, _l, stdout); } fwrite("\n", 1, 1, stdout); goto bb_15;
+    }
+    bb_15: {
         return;
     }
 }
+__attribute__((noinline)) __attribute__((section(".driver_data"))) uint32_t input_sectioned(uint32_t _1) {
+    uint32_t _0;
+    uint32_t _2;
+    bb_0: {
+        _2 = _1;
+        _0 = ((_2) + (((uint32_t)(1U))));
+        return _0;
+    }
+}
+const uint8_t input__regseq_synth__const_memory_static_4d9cc4713701eaef444947c4a9be974a[7] = { ((uint8_t)(99U)), ((uint8_t)(111U)), ((uint8_t)(108U)), ((uint8_t)(100U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_6039dbac26340ba4d06f1b75a9333286[10] = { ((uint8_t)(115U)), ((uint8_t)(116U)), ((uint8_t)(97U)), ((uint8_t)(116U)), ((uint8_t)(109U)), ((uint8_t)(117U)), ((uint8_t)(116U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_88287fa69d56e8a2d64c6c9420bd9cf3[9] = { ((uint8_t)(99U)), ((uint8_t)(111U)), ((uint8_t)(110U)), ((uint8_t)(115U)), ((uint8_t)(116U)), ((uint8_t)(99U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 const uint8_t input__regseq_synth__const_memory_static_ac1641ddf1810a7d0643ee8b49d2f4d6[7] = { ((uint8_t)(115U)), ((uint8_t)(116U)), ((uint8_t)(97U)), ((uint8_t)(116U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_e4819c9c3a2b79e11f1028fad387e235[7] = { ((uint8_t)(115U)), ((uint8_t)(101U)), ((uint8_t)(99U)), ((uint8_t)(116U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
+const uint8_t input__regseq_synth__const_memory_static_e9760ffad3e3df8e9633747d8e15e401[6] = { ((uint8_t)(104U)), ((uint8_t)(111U)), ((uint8_t)(116U)), ((uint8_t)(61U)), ((uint8_t)(123U)), ((uint8_t)(125U)) };
 uint32_t input_M = ((uint32_t)(7U));
 const uint32_t input_S = ((uint32_t)(42U));

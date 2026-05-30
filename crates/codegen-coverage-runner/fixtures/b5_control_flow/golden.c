@@ -724,10 +724,10 @@ _Static_assert(offsetof(struct input_regseq_log_intrinsics_LogArg, u._c9._0) == 
  * --------------------------------------------------------------------------- */
 void input__impl_0__drop(struct input_D *);
 void input__regseq_synth__drop_glue_a2ccf9a27036e808d1063c365206a1ba__a2ccf9a27036e808d1063c365206a1ba(struct input_D *);
-void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
-int32_t input_dbl(int32_t);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str, struct rust_slice_input_regseq_log_intrinsics_LogArg);
+__attribute__((noinline)) int32_t input_dbl(int32_t);
 void input_regseq_main(void);
 extern const uint8_t input__regseq_synth__const_memory_static_17c0c12b1540688ab64bbeec9b114ba9[12];
 extern const uint8_t input__regseq_synth__const_memory_static_4a8a4da5b16debe56e88578e1ca2ff7f[10];
@@ -760,22 +760,22 @@ void input__regseq_synth__drop_glue_a2ccf9a27036e808d1063c365206a1ba__a2ccf9a270
         return;
     }
 }
-void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_debug(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_error(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
+__attribute__((noinline)) void input_regseq_log_intrinsics_log_warn(struct rust_str _1, struct rust_slice_input_regseq_log_intrinsics_LogArg _2) {
     bb_0: {
         return;
     }
 }
-int32_t input_dbl(int32_t _1) {
+__attribute__((noinline)) int32_t input_dbl(int32_t _1) {
     int32_t _0;
     int32_t _2;
     bb_0: {

@@ -2171,7 +2171,7 @@
           "id": "regseq-driver-83",
           "name": "Bridge propagates dropped Item/layout fields (pack/link_section/inline_hint/opaque_handle)",
           "spec": ".harness/tasks/regseq-driver/83-bridge-item-field-propagation.md",
-          "status": "pending",
+          "status": "in_progress",
           "depends_on": [
             "regseq-driver-82"
           ],

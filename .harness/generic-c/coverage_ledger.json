@@ -759,14 +759,18 @@
     {
       "id": "IT-8",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-9",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b8_item_kinds"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-1",
@@ -819,8 +823,10 @@
     {
       "id": "LY-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b3_structs"
+      ],
+      "result": "pass"
     },
     {
       "id": "LY-3",
@@ -1366,9 +1372,6 @@
       "IN-6",
       "IT-13",
       "IT-14",
-      "IT-8",
-      "IT-9",
-      "LY-2",
       "PC-1",
       "PC-3",
       "TM-4",

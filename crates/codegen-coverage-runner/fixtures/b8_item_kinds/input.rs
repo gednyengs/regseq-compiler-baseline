@@ -11,9 +11,11 @@
 // "compiled the item kind + printed the right value"); the `// proves:` comment
 // maps each line to the Doc-1 matrix row(s) it drives.
 //
-// The other four assigned rows are DEFERRED (BRIDGE drops/never-sets the
-// construct — not a recipe gap): IT-8 (link_section), IT-9 (inline_hint),
-// IN-3 (foreign fn body:None), IT-14 (opaque_handle). The manifest's DEFERRED
+// IT-8 (link_section function) and IT-9 (inline_hint) are now driven here:
+// regseq-driver-83 made the bridge read rustc's codegen_fn_attrs, so the
+// link_section / inline classification reaches the backend's fn_qualifiers.
+// IN-3 (foreign fn body:None) and IT-14 (opaque_handle) stay DEFERRED (BRIDGE
+// drops/never-sets the construct — not a recipe gap). The manifest's DEFERRED
 // block carries the exact repro + file:line for each.
 
 pub mod regseq {
@@ -67,11 +69,38 @@ static mut M: u32 = 7;       // proves: IT-2 (Static item), IN-7 (Static inst)
 // --- Const item: a named `const`, materialised at its use site (Const inst). ---
 const C: u32 = 9;            // proves: IT-3 (Const item), IN-8 (Const inst)
 
-// NOTE: IT-8 (link_section), IT-9 (inline_hint), IN-3 (foreign fn body:None) and
-// IT-14 (opaque_handle) are NOT driven here — each is dropped/never-set by the
-// BRIDGE (not the backend), so the construct never reaches the emitter. See the
-// manifest's DEFERRED block for the exact repro + file:line for each. This fixture
-// drives only the four item-kind rows that survive the bridge as runtime behavior.
+// --- IT-8 (link_section FUNCTION): the bridge reads rustc's codegen_fn_attrs
+// link_section and the backend emits `__attribute__((section(".driver_data")))`
+// on the function prototype + definition. Called from regseq_main so the
+// instance is emitted. (Static link_section is a separate backend follow-up,
+// regseq-backends-24; not driven here.) ---
+#[inline(never)]
+#[link_section = ".driver_data"]
+fn sectioned(x: u32) -> u32 {     // proves: IT-8 (link_section attr emitted)
+    x + 1                          // plain operator (no core method -> no undefined ref)
+}
+
+// --- IT-9 (inline_hint): #[inline(always)] -> `inline __attribute__((always_inline))`
+// and #[inline(never)] -> `__attribute__((noinline))`. The bridge reads the
+// codegen_fn_attrs inline classification; the backend's fn_qualifiers spells it.
+// At mir_opt_level=0 these are NOT actually inlined, so both functions survive as
+// real C definitions carrying their attribute. Bodies use plain operators only
+// (a core method like wrapping_* would be an undefined ref AND, under
+// always_inline, cc would reject the missing body). ---
+#[inline(always)]
+fn always_hot(x: u32) -> u32 {    // proves: IT-9 (inline(always) -> always_inline)
+    x * 2
+}
+
+#[inline(never)]
+fn never_cold(x: u32) -> u32 {    // proves: IT-9 (inline(never) -> noinline)
+    x - 1
+}
+
+// NOTE: IN-3 (foreign fn body:None) and IT-14 (opaque_handle) are NOT driven
+// here — each is dropped/never-set by the BRIDGE (not the backend), so the
+// construct never reaches the emitter. See the manifest's DEFERRED block for the
+// exact repro + file:line for each.
 
 #[no_mangle]
 pub extern "C" fn regseq_main() {
@@ -81,4 +110,13 @@ pub extern "C" fn regseq_main() {
 
     // --- IT-3 / IN-8: use the const item in a computation (Const materialises at use) ---
     regseq::log::info!("constc={}", C + 1);           // 10  proves: IT-3, IN-8
+
+    // --- IT-8: call the #[link_section] function (its definition carries the
+    // section attr in golden.c; the call also forces it to be emitted) ---
+    regseq::log::info!("sect={}", sectioned(40));     // 41  proves: IT-8
+
+    // --- IT-9: call the inline-hinted functions (always_inline / noinline attrs
+    // appear on their definitions in golden.c) ---
+    regseq::log::info!("hot={}", always_hot(21));     // 42  proves: IT-9 (always)
+    regseq::log::info!("cold={}", never_cold(10));    // 9   proves: IT-9 (never)
 }
