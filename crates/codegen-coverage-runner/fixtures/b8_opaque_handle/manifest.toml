@@ -1,0 +1,21 @@
+name   = "b8_opaque_handle"
+kind   = "rust"
+entry  = "regseq_main"
+# B8 opaque-handle (regseq-backends-24): the ONLY row that exercises
+# `Item.opaque_handle_eligible` end-to-end. A ZST struct `Handle` used solely
+# behind a `*const Handle` pointer is classified `opaque_handle_eligible` by the
+# bridge post-pass (regseq-driver/src/bridge/opaque_handle.rs, model invariant 19)
+# and emitted FORWARD-DECL-ONLY by the generic-C backend
+# (regseq-backends/src/generic_c/mod.rs `is_opaque_handle` / `bank3_type_definitions`):
+# golden.c contains `struct Handle;` (+ `struct Handle *` use sites) but NO
+# `struct Handle { ... }` definition and NO `"Handle size"` / `"Handle align"`
+# layout asserts. The behavioral round-trip (the handle's address equals the
+# anchor's, taken the same way) proves the pointer is carried faithfully.
+#
+# Before this task IT-14 was DEFERRED: the bridge hardcoded the flag `false` at
+# every ADT-item site and the backend defined every aggregate, so the construct
+# was structurally unreachable from any kind=rust fixture (see b8_item_kinds).
+covers = [
+  "IT-14",
+]
+expect = "pass"

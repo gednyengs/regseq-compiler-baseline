@@ -698,10 +698,34 @@ fn bank2_type_forward_decls(model: &RegseqModel, names: &NameTable, discovered: 
     out
 }
 
+/// Whether `node` is an opaque-handle-eligible aggregate (IT-14): a
+/// `Node::Agg` whose `Ty::Struct` item carries `opaque_handle_eligible`.
+///
+/// The bridge classifier sets the flag only for a non-generic ZST struct
+/// reachable exclusively behind a `Ref` / `Ptr` (model invariant 19,
+/// enforced by `validate_opaque_handle_eligibility`). Such an aggregate is
+/// emitted **forward-decl-only** (bank 2) -- bank 3 skips its body and its
+/// layout `_Static_assert`s, which would require a complete type. Only the
+/// nominal `Ty::Struct` form can be flagged; tuples / closures / unions /
+/// enums and the synthesized fat structs are never opaque handles.
+fn is_opaque_handle(model: &RegseqModel, node: &Node) -> bool {
+    match node {
+        Node::Agg(ty) => match &model.types[*ty] {
+            Ty::Struct { item, .. } => model.items[*item].opaque_handle_eligible,
+            _ => false,
+        },
+        Node::Slice { .. } | Node::TraitObj { .. } => false,
+    }
+}
+
 /// Bank 3 (section 15): full `struct` / `union` bodies, topologically
 /// sorted by by-value containment. Non-enum aggregates go through the
 /// section 14 emitter; enums go through the section 13 / D9 union-of-views
 /// emitter ([`enum_emit`]); fat structs emit their section 3.2 shape.
+///
+/// An opaque-handle-eligible aggregate ([`is_opaque_handle`], IT-14) is
+/// skipped here entirely: its bank-2 forward decl is the whole emission, so
+/// no definition and no layout guards are produced.
 fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node]) -> String {
     let mut out = String::new();
     if topo.is_empty() {
@@ -713,6 +737,9 @@ fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node])
          \x20* --------------------------------------------------------------------------- */\n",
     );
     for node in topo {
+        if is_opaque_handle(model, node) {
+            continue;
+        }
         let name = names.name(node);
         match node {
             Node::Agg(ty) => {
