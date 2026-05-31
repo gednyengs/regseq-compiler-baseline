@@ -2171,7 +2171,7 @@
           "id": "regseq-driver-83",
           "name": "Bridge propagates dropped Item/layout fields (pack/link_section/inline_hint/opaque_handle)",
           "spec": ".harness/tasks/regseq-driver/83-bridge-item-field-propagation.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-driver-82"
           ],
@@ -2198,7 +2198,7 @@
           "id": "regseq-driver-84",
           "name": "Foreign-fn ABI symbol (emission_name for body:None)",
           "spec": ".harness/tasks/regseq-driver/84-foreign-fn-abi-symbol.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-driver-82"
           ],
@@ -2225,7 +2225,7 @@
           "id": "regseq-driver-85",
           "name": "Closure call_once shim by-value receiver vs Deref mismatch",
           "spec": ".harness/tasks/regseq-driver/85-closure-callonce-shim-receiver.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-driver-82"
           ],
@@ -2246,7 +2246,7 @@
           "id": "regseq-driver-86",
           "name": "Bridge c_variadic arity exception + variadic-fixture path (FS-5)",
           "spec": ".harness/tasks/regseq-driver/86-bridge-cvariadic-arity-and-fixture.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-model-97",
             "regseq-driver-84"
@@ -4415,7 +4415,7 @@
           "id": "regseq-model-97",
           "name": "c_variadic Call-arity validator exception",
           "spec": ".harness/tasks/regseq-model/97-cvariadic-call-arity-validator.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-model-96"
           ],
@@ -5097,7 +5097,7 @@
           "id": "regseq-backends-20",
           "name": "Generic-C ReifyFnPointer from a ZST FnDef constant",
           "spec": ".harness/tasks/regseq-backends/20-generic-c-reify-fnptr-zst.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-backends-19"
           ],
@@ -5150,7 +5150,7 @@
           "id": "regseq-backends-22",
           "name": "Generic-C tuple-struct field naming (ManuallyDrop)",
           "spec": ".harness/tasks/regseq-backends/22-generic-c-tuple-struct-field-name.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-backends-19"
           ],
@@ -5177,7 +5177,7 @@
           "id": "regseq-backends-23",
           "name": "Generic-C CAbiShape::Substituted transparent-newtype boundary",
           "spec": ".harness/tasks/regseq-backends/23-generic-c-cabi-substituted.md",
-          "status": "in_progress",
+          "status": "done",
           "depends_on": [
             "regseq-backends-19"
           ],
@@ -5204,7 +5204,7 @@
           "id": "regseq-backends-24",
           "name": "Generic-C opaque-handle emission (opaque_handle_eligible)",
           "spec": ".harness/tasks/regseq-backends/24-generic-c-opaque-handle.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-19"
           ],
