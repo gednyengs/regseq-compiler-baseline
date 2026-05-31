@@ -2282,6 +2282,25 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-88",
+          "name": "--emit bin: link the generic-C TU into a runnable binary",
+          "spec": ".harness/tasks/regseq-driver/88-emit-bin-runnable-binary.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-31T20:07:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
