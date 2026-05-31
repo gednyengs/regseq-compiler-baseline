@@ -102,6 +102,42 @@ fn emit_parses_json_with_path() {
 }
 
 #[test]
+fn emit_parses_generic_c_without_path() {
+    assert_eq!(
+        EmitSpec::from_str("generic-c").unwrap(),
+        EmitSpec::GenericC { path: None }
+    );
+}
+
+#[test]
+fn emit_parses_generic_c_with_path() {
+    assert_eq!(
+        EmitSpec::from_str("generic-c=out/driver.c").unwrap(),
+        EmitSpec::GenericC {
+            path: Some(PathBuf::from("out/driver.c"))
+        }
+    );
+}
+
+#[test]
+fn emit_parse_generic_c_rejects_subtype() {
+    // `generic-c` has no subtypes; `generic-c.foo` MUST fail rather
+    // than silently dropping the subtype.
+    let result = EmitSpec::from_str("generic-c.foo");
+    assert!(matches!(result, Err(EmitParseError::UnknownType(_))));
+}
+
+#[test]
+fn emit_unknown_type_message_lists_generic_c() {
+    let err = EmitSpec::from_str("nonsense").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("generic-c"),
+        "UnknownType message must list 'generic-c': {message}"
+    );
+}
+
+#[test]
 fn emit_parse_json_rejects_subtype() {
     // The `json` spec has no subtypes; `json.foo` MUST fail rather
     // than silently dropping the subtype (which would be a footgun).
@@ -150,6 +186,8 @@ fn emit_display_round_trip_for_supported_forms() {
         "model=out/pl011.model.json",
         "json",
         "json=out/pl011.model.json",
+        "generic-c",
+        "generic-c=out/pl011.c",
     ];
 
     for input in cases {

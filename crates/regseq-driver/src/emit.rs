@@ -2,9 +2,11 @@
 //! their corresponding `RegseqModel` emission paths:
 //! pretty-printed text via
 //! `regseq_model::PrettyPrinter::new(&model).render()` per
-//! `pretty-printer.md` section 10.3, or JSON via
+//! `pretty-printer.md` section 10.3, JSON via
 //! `serde_json::to_writer_pretty` over `RegseqModel`'s
-//! `Serialize` derive at `crates/regseq-model/src/model.rs:53`.
+//! `Serialize` derive at `crates/regseq-model/src/model.rs:53`, or
+//! the generic-C translation unit via
+//! `regseq_backends::emit_generic_c(&model)`.
 //!
 //! Per `pipeline-refactor.md:879`, the `Driver` and `Analysis`
 //! variants are accepted at the CLI surface but not implemented
@@ -45,6 +47,13 @@ pub fn emit_one(model: &RegseqModel, spec: &EmitSpec, output_dir: &Path) -> std:
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             file.write_all(b"\n")
         }
+        EmitSpec::GenericC { path } => {
+            let dest = resolve(path, output_dir, "generic.c");
+            ensure_parent(&dest)?;
+            let code = regseq_backends::emit_generic_c(model)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            fs::write(dest, code)
+        }
         EmitSpec::Driver { .. } | EmitSpec::Analysis { .. } => {
             // Phase-1b territory per `pipeline-refactor.md:879`.
             // The dispatcher returns `Ok(())` silently; the
@@ -71,7 +80,7 @@ pub fn collect_unsupported_warnings(specs: &[EmitSpec]) -> Vec<String> {
             EmitSpec::Driver { .. } | EmitSpec::Analysis { .. } => Some(format!(
                 "regseq-driver: --emit {spec} is documented but not yet implemented (phase-1b); skipping",
             )),
-            EmitSpec::Model { .. } | EmitSpec::Json { .. } => None,
+            EmitSpec::Model { .. } | EmitSpec::Json { .. } | EmitSpec::GenericC { .. } => None,
         })
         .collect()
 }
@@ -149,6 +158,43 @@ mod tests {
         assert!(explicit.exists(), "explicit path must be created");
         assert!(
             !dir.join("ignored").join("model.txt").exists(),
+            "default path must not be used when an explicit path is set"
+        );
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn emit_one_generic_c_default_path_writes_to_output_dir() {
+        let model = small_model();
+        let dir = fresh_dir("generic-c-default");
+        emit_one(&model, &EmitSpec::GenericC { path: None }, &dir)
+            .expect("generic-c emit must succeed");
+        let dest = dir.join("generic.c");
+        let contents = fs::read_to_string(&dest).expect("generic.c must exist");
+        let expected = regseq_backends::emit_generic_c(&model).expect("backend emit");
+        assert_eq!(contents, expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn emit_one_generic_c_explicit_path_writes_to_that_path() {
+        let model = small_model();
+        let dir = fresh_dir("generic-c-explicit");
+        fs::create_dir_all(&dir).expect("mkdir");
+        let explicit = dir.join("driver.c");
+        emit_one(
+            &model,
+            &EmitSpec::GenericC {
+                path: Some(explicit.clone()),
+            },
+            // output_dir is intentionally a different directory; the
+            // explicit per-spec path must take precedence.
+            &dir.join("ignored"),
+        )
+        .expect("emit must succeed");
+        assert!(explicit.exists(), "explicit path must be created");
+        assert!(
+            !dir.join("ignored").join("generic.c").exists(),
             "default path must not be used when an explicit path is set"
         );
         let _ = fs::remove_dir_all(&dir);

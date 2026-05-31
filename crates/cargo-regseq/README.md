@@ -7,8 +7,8 @@ Cargo subcommand that orchestrates the Regseq compilation flow.
 - Parse CLI arguments: `cargo regseq --target-os <linux|zephyr> --platform-file <path> [OPTIONS]`
 - Select what to emit with `--emit <SPEC>`; when omitted, the default is
   `--emit model`, which writes RegseqModel JSON.
-- Accept emit specs `model[=PATH]`, `driver[=MATCH_ID]`, and
-  `analysis[.NAME][=PATH]`.
+- Accept emit specs `model[=PATH]`, `json[=PATH]`, `generic-c[=PATH]`,
+  `driver[=MATCH_ID]`, and `analysis[.NAME][=PATH]`.
 - Detect the pinned nightly toolchain and locate the `regseq-driver` binary
 - Set `RUSTC_WRAPPER=regseq-driver` and invoke `cargo check` with proper environment
 - Separate Regseq-specific arguments from pass-through cargo arguments

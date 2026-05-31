@@ -145,11 +145,41 @@ fn parses_emit_json_with_and_without_path() {
 }
 
 #[test]
+fn parses_emit_generic_c_with_and_without_path() {
+    {
+        let (_platform, mut args) = base_args();
+        args.extend(["--emit".to_string(), "generic-c".to_string()]);
+        let cli = parse_ok(args);
+        assert_eq!(cli.emit, vec![EmitSpec::GenericC { path: None }]);
+    }
+    {
+        let (_platform, mut args) = base_args();
+        args.extend(["--emit".to_string(), "generic-c=driver.c".to_string()]);
+        let cli = parse_ok(args);
+        assert_eq!(
+            cli.emit,
+            vec![EmitSpec::GenericC {
+                path: Some(PathBuf::from("driver.c"))
+            }]
+        );
+    }
+}
+
+#[test]
 fn help_lists_json_emit_spec() {
     let help = Cli::command().render_help().to_string();
     assert!(
         help.contains("json[=PATH]"),
         "help must document the json emit spec spelling:\n{help}"
+    );
+}
+
+#[test]
+fn help_lists_generic_c_emit_spec() {
+    let help = Cli::command().render_help().to_string();
+    assert!(
+        help.contains("generic-c[=PATH]"),
+        "help must document the generic-c emit spec spelling:\n{help}"
     );
 }
 

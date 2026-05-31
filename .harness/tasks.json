@@ -2263,6 +2263,25 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-87",
+          "name": "Wire generic-C backend into the emit pipeline (--emit generic-c)",
+          "spec": ".harness/tasks/regseq-driver/87-generic-c-emit-pipeline-hook.md",
+          "status": "done",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-31T18:54:09Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

@@ -7,6 +7,7 @@ edition = "2021"
 rustc_private = true
 
 [dependencies]
+regseq-backends = { path = "../regseq-backends" }
 regseq-config = { path = "../regseq-config" }
 regseq-model = { path = "../regseq-model" }
 serde = { version = "1", features = ["derive"] }

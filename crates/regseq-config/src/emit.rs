@@ -9,7 +9,9 @@ use thiserror::Error;
 #[derive(Debug, Error, Clone, PartialEq, Eq)]
 pub enum EmitParseError {
     /// Unsupported emit type prefix.
-    #[error("unknown emit type '{0}'; expected 'driver', 'analysis', 'model', or 'json'")]
+    #[error(
+        "unknown emit type '{0}'; expected 'driver', 'analysis', 'model', 'json', or 'generic-c'"
+    )]
     UnknownType(String),
 }
 
@@ -50,6 +52,16 @@ pub enum EmitSpec {
         /// Output path, or None for default location under `output_dir`.
         path: Option<PathBuf>,
     },
+    /// Emit the generic-C translation unit via
+    /// `regseq_backends::emit_generic_c(&model)`.
+    ///
+    /// The compiler builds a `RegseqModel` from rustc HIR/MIR and
+    /// lowers it to a single host-compilable C translation unit. The
+    /// serde tag is `"generic-c"` (kebab-case of the variant name).
+    GenericC {
+        /// Output path, or None for default location under `output_dir`.
+        path: Option<PathBuf>,
+    },
 }
 
 impl FromStr for EmitSpec {
@@ -85,6 +97,13 @@ impl FromStr for EmitSpec {
                 path: value.map(PathBuf::from),
             }),
             "json" => Err(EmitParseError::UnknownType(type_spec.to_string())),
+            // Like `json`, `generic-c` has no subtypes; reject
+            // `generic-c.<anything>` explicitly so a typo does not
+            // silently succeed.
+            "generic-c" if subtype.is_none() => Ok(Self::GenericC {
+                path: value.map(PathBuf::from),
+            }),
+            "generic-c" => Err(EmitParseError::UnknownType(type_spec.to_string())),
             _ => Err(EmitParseError::UnknownType(base_type.to_string())),
         }
     }
@@ -117,6 +136,10 @@ impl fmt::Display for EmitSpec {
             Self::Model { path: Some(path) } => write!(f, "model={}", path.to_string_lossy()),
             Self::Json { path: None } => f.write_str("json"),
             Self::Json { path: Some(path) } => write!(f, "json={}", path.to_string_lossy()),
+            Self::GenericC { path: None } => f.write_str("generic-c"),
+            Self::GenericC { path: Some(path) } => {
+                write!(f, "generic-c={}", path.to_string_lossy())
+            }
         }
     }
 }
