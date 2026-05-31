@@ -354,6 +354,16 @@ fn materialise_function_body_inner<'tcx>(
     // receivers) untouched.
     reconcile_call_once_receiver(cx, instance_handle, &synthetic_kind, &mut body);
 
+    // Reconcile the vtable method shim's receiver level (vtable task). Rustc's
+    // `VtableShim` for a reference receiver (`&self` / `&mut self`) wraps it in
+    // an extra `*mut`: the body local `_1` arrives typed `*mut &Self` and the
+    // forwarding call derefs it once (`read_byte((*_1))`). The trait-object
+    // dispatch passes the data pointer (= `&Self`) by value -- one level less --
+    // so without this the shim derefs the object pointer and reads garbage.
+    // Retype `_1` to its pointee (the method's reference receiver) and strip the
+    // leading `Deref`, so the shim forwards the data pointer directly.
+    reconcile_vtable_shim_receiver(cx, &synthetic_kind, &mut body);
+
     Ok(Ok(body))
 }
 
@@ -428,6 +438,49 @@ fn reconcile_call_once_receiver(
 
     // Strip the now-spurious leading `Deref` from every place rooted at
     // `_1` so the body accesses the by-value struct directly (`_1._0`).
+    rewrite_receiver_places_in_body(body, receiver);
+}
+
+/// Reconcile a vtable method shim's receiver level with the trait-object
+/// dispatch convention (vtable task).
+///
+/// Rustc materialises `InstanceKind::VTableShim` for a reference receiver
+/// (`&self` / `&mut self`) with the body receiver local `_1` typed `*mut &Self`
+/// -- an extra pointer level -- and every use deref's it once before forwarding
+/// to the concrete method (`read_byte(move (*_1))`). The bridge's trait-object
+/// dispatch (`vtable_indirect.rs`) passes the fat pointer's `data` slot, which
+/// is the receiver reference itself (`&Self`), by value -- one level less. So
+/// the shim, declared with the erased `*mut ()` ABI receiver but using `_1` as
+/// `*mut &Self`, would dereference the object pointer and read past it.
+///
+/// When the shim's body receiver `_1` is `*mut <ref>` (a pointer to a reference
+/// receiver), this retypes `_1` to that reference pointee and strips the leading
+/// `Deref` from every place rooted at `_1`, so the shim forwards the data
+/// pointer directly. By-value / `Box<Self>`-style receivers (a non-reference
+/// pointee) have a different shim shape and are left untouched.
+fn reconcile_vtable_shim_receiver(
+    cx: &BridgeCtxt<'_>,
+    synthetic_kind: &SyntheticItemKind,
+    body: &mut Body,
+) {
+    if !matches!(synthetic_kind, SyntheticItemKind::VTableMethodShim { .. }) {
+        return;
+    }
+    if body.arg_count == 0 {
+        return;
+    }
+    let receiver = LocalId::from_u32(1);
+    let pointee = match cx.model.types.resolve(body.local_decls[receiver].ty) {
+        Ty::Ptr(pointee, _) => *pointee,
+        _ => return,
+    };
+    // Only a reference receiver (`&self` / `&mut self`): the pointee is itself a
+    // reference / pointer. A by-value or `Box<Self>` receiver has a distinct
+    // shim shape this reconciliation does not model.
+    if !matches!(cx.model.types.resolve(pointee), Ty::Ref(..) | Ty::Ptr(..)) {
+        return;
+    }
+    body.local_decls[receiver].ty = pointee;
     rewrite_receiver_places_in_body(body, receiver);
 }
 

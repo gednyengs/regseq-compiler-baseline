@@ -687,10 +687,11 @@ fn bank2_type_forward_decls(model: &RegseqModel, names: &NameTable, discovered: 
                 out.push_str(&format!("struct {name};\n"));
             }
             Node::TraitObj { dynamic } => {
-                out.push_str(&format!(
-                    "struct {}_VTable;\n",
-                    trait_label(model, *dynamic)
-                ));
+                // The vtable type is the bridge-synthesised `vtable_ty` struct,
+                // emitted under its own (discovered) name; forward-decl it by
+                // that name so the trait-object struct's `vtable` field points at
+                // the real definition (a duplicate tag forward-decl is legal C).
+                out.push_str(&format!("struct {};\n", trait_label(model, *dynamic)));
                 out.push_str(&format!("struct {name};\n"));
             }
         }
@@ -734,7 +735,10 @@ fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node])
                 ));
             }
             Node::TraitObj { dynamic } => {
-                let vtable = format!("{}_VTable", trait_label(model, *dynamic));
+                // The `vtable` field points at the real bridge-synthesised
+                // `vtable_ty` struct (emitted under its own discovered name), not
+                // an invented `_VTable` alias.
+                let vtable = trait_label(model, *dynamic);
                 out.push_str(&types::emit_trait_obj_struct(name, &vtable));
             }
         }
@@ -805,12 +809,39 @@ pub(super) fn output_is_substituted(fn_sig: &FnSig, lowering: Option<&CAbiLoweri
     )
 }
 
-/// The C formal-parameter name for input position `i`. A `Direct` position
-/// shares the body-local name (the formal *is* the body local). A
-/// `Substituted` position takes a distinct `<local>__abi` name: its formal is
-/// the ABI (`emit_as`) type, while the original-typed body local is declared
-/// and filled by the prologue marshalling ([`body_emit::emit_body`]), so the
-/// two cannot collide.
+/// Whether input position `i` needs a distinct `<local>__abi` C formal that is
+/// marshalled into the body local: either a C-ABI `Substituted` position
+/// ([`input_is_substituted`], a `repr(transparent)` boundary), OR the body's
+/// arg local type differs from the effective (boundary) input type. The latter
+/// is the vtable method-shim receiver erasure: the shim's `FnSig` input is
+/// erased to `*mut ()` (so every impl's vtable slot has the uniform fn-pointer
+/// type), while the body local keeps rustc's concrete shim receiver
+/// (`*mut &Self`). Both are thin pointers, so the marshalling is a
+/// representation-identical copy. A position whose body local matches the
+/// boundary type (the normal `Direct` case) shares the formal with the body
+/// local and needs no marshalling.
+pub(super) fn input_needs_abi_formal(
+    model: &RegseqModel,
+    body: &regseq_model::Body,
+    fn_sig: &FnSig,
+    lowering: Option<&CAbiLowering>,
+    i: usize,
+) -> bool {
+    if input_is_substituted(fn_sig, lowering, i) {
+        return true;
+    }
+    let local = regseq_model::LocalId::from_u32(i as u32 + 1);
+    let body_ty = body.local_decls[local].ty;
+    let eff = effective_input_ty(fn_sig, lowering, i);
+    body_ty != eff && !is_zst(model, body_ty) && !is_zst(model, eff)
+}
+
+/// The C formal-parameter name for input position `i`. A position whose formal
+/// *is* the body local shares the body-local name; a position needing an ABI
+/// formal ([`input_needs_abi_formal`]) takes a distinct `<local>__abi` name:
+/// its formal is the boundary (`emit_as` / erased) type, while the body local
+/// is declared and filled by the prologue marshalling ([`body_emit::emit_body`]),
+/// so the two cannot collide.
 pub(super) fn abi_param_name(
     model: &RegseqModel,
     body: &regseq_model::Body,
@@ -819,7 +850,7 @@ pub(super) fn abi_param_name(
     i: usize,
 ) -> String {
     let local = body_emit::local_c_name(model, body, regseq_model::LocalId::from_u32(i as u32 + 1));
-    if input_is_substituted(fn_sig, lowering, i) {
+    if input_needs_abi_formal(model, body, fn_sig, lowering, i) {
         format!("{local}__abi")
     } else {
         local

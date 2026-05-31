@@ -39,11 +39,12 @@
 //! lowers to the section 8 `printf`.
 
 use regseq_model::{
-    AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const, ConstId, Endian,
-    EnumShape, FloatKind, InstanceId, InstanceKind, InstanceRef, IntKind, IntrinsicKind, LocalId,
-    LogLevel, NonDivergingIntrinsic, Operand, Place, PlaceElem, PointerCoercion, RegseqModel,
-    Rvalue, StatementKind, SwitchTargets, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp,
-    VariantIdx, VariantLayout,
+    args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
+    ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
+    IntKind, IntrinsicKind, ItemId, LocalId, LogLevel, NonDivergingIntrinsic, Operand, Place,
+    PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
+    SyntheticItemKind, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
+    VariantLayout,
 };
 
 use super::{
@@ -114,7 +115,7 @@ pub(super) fn emit_body(
     let prologue = emitter.input_marshalling()?;
     for local in body.arg_locals() {
         let i = local.as_u32() as usize - 1;
-        if !super::input_is_substituted(fn_sig, lowering, i) {
+        if !super::input_needs_abi_formal(model, body, fn_sig, lowering, i) {
             continue;
         }
         let decl = &body.local_decls[local];
@@ -240,6 +241,16 @@ impl BodyEmit<'_> {
         match op {
             Operand::Copy(p) | Operand::Move(p) => Some(self.place_ty(p)),
             Operand::Constant(_) => None,
+        }
+    }
+
+    /// The pointee type of an operand of `Ref`/`Ptr` type, when statically
+    /// known. Used to detect a fat source pointer (an unsized pointee) at a
+    /// `PtrToPtr` cast.
+    fn operand_pointee(&self, op: &Operand) -> Option<TyId> {
+        match &self.model.types[self.operand_ty(op)?] {
+            Ty::Ref(p, _) | Ty::Ptr(p, _) => Some(*p),
+            _ => None,
         }
     }
 
@@ -496,7 +507,8 @@ impl BodyEmit<'_> {
         let mut out = Vec::new();
         for local in self.body.arg_locals() {
             let i = local.as_u32() as usize - 1;
-            if !super::input_is_substituted(self.fn_sig, self.lowering, i) {
+            if !super::input_needs_abi_formal(self.model, self.body, self.fn_sig, self.lowering, i)
+            {
                 continue;
             }
             let body_ty = self.body.local_decls[local].ty;
@@ -1103,15 +1115,13 @@ impl BodyEmit<'_> {
                         }
                     };
                     match &self.model.types[pointee] {
-                        Ty::Slice(_) | Ty::Str => {
-                            // Fat pointer: the data slot; remember the base.
+                        Ty::Slice(_) | Ty::Str | Ty::Dynamic { .. } => {
+                            // Fat pointer (slice/str `{data,len}` or dyn
+                            // `{data,vtable}`): the data slot; remember the base
+                            // so a trailing `.len`/`.vtable` metadata read or a
+                            // whole-place re-borrow can recover the fat pointer.
                             fat_base = Some(lv.clone());
                             lv = format!("{lv}.data");
-                        }
-                        Ty::Dynamic { .. } => {
-                            return Err(EmitError::Unsupported(
-                                "Deref of a dyn pointer (vtable task)",
-                            ));
                         }
                         _ => {
                             // Thin pointer.
@@ -1378,12 +1388,11 @@ impl BodyEmit<'_> {
     }
 
     /// A re-borrow of a whole unsized place (`&(*p)` where `p` is a fat
-    /// pointer): the existing fat pointer copied (`{ .data, .len }` identity),
-    /// i.e. the fat base itself. A `dyn` pointee is the vtable task.
-    fn fat_reborrow(&self, place: &Place, pointee_ty: TyId) -> Result<String, EmitError> {
-        if matches!(self.model.types[pointee_ty], Ty::Dynamic { .. }) {
-            return Err(EmitError::Unsupported("Ref of a dyn deref (vtable task)"));
-        }
+    /// pointer): the existing fat pointer copied -- the fat base itself
+    /// (`{ .data, .len }` for slice/str, `{ .data, .vtable }` for dyn; both are
+    /// recovered by `place_walk`'s shared fat-base tracking). `pointee_ty` is
+    /// unused now that dyn flows through the same fat-base path.
+    fn fat_reborrow(&self, place: &Place, _pointee_ty: TyId) -> Result<String, EmitError> {
         let walk = self.place_walk(place)?;
         walk.fat_base.ok_or(EmitError::Unsupported(
             "re-borrow of an unsized place without a fat base (task d2)",
@@ -1638,9 +1647,7 @@ impl BodyEmit<'_> {
                 });
                 match pointee.map(|p| &self.model.types[p]) {
                     Some(Ty::Slice(_) | Ty::Str) => Ok(format!("({e}).len")),
-                    Some(Ty::Dynamic { .. }) => Err(EmitError::Unsupported(
-                        "PtrMetadata of a dyn pointer (vtable task)",
-                    )),
+                    Some(Ty::Dynamic { .. }) => Ok(format!("({e}).vtable")),
                     _ => Ok(String::new()),
                 }
             }
@@ -1747,7 +1754,19 @@ impl BodyEmit<'_> {
                 };
                 Ok(format!("regseq_{prefix}_to_{dest}({e})"))
             }
-            CastKind::PtrToPtr | CastKind::FnPtrToPtr | CastKind::PointerWithExposedProvenance => {
+            CastKind::PtrToPtr => {
+                // A fat source pointer (dyn `{data,vtable}` / slice/str
+                // `{data,len}`) cast to a thin pointer takes the `data` slot --
+                // casting the whole fat struct would be a C type error. The
+                // bridged dyn-dispatch lowering emits `data = Cast(PtrToPtr,
+                // &dyn, *mut ())` (the erased receiver), which hits this.
+                if self.operand_pointee(op).is_some_and(|p| self.is_unsized(p)) {
+                    Ok(format!("(({dest})(({e}).data))"))
+                } else {
+                    Ok(format!("(({dest})({e}))"))
+                }
+            }
+            CastKind::FnPtrToPtr | CastKind::PointerWithExposedProvenance => {
                 Ok(format!("(({dest})({e}))"))
             }
             CastKind::PointerExposeProvenance => Ok(format!("((uintptr_t)({e}))")),
@@ -1755,9 +1774,14 @@ impl BodyEmit<'_> {
             CastKind::PointerCoercion(PointerCoercion::UnsafeFnPointer) => Ok(e),
             CastKind::PointerCoercion(PointerCoercion::ReifyFnPointer) => self.reify_fn_pointer(op),
             CastKind::PointerCoercion(PointerCoercion::Unsize) => self.unsize_cast(op, dest_ty),
-            CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer) => Err(
-                EmitError::Unsupported("PointerCoercion::ClosureFnPointer (vtable task)"),
-            ),
+            // `ClosureFnPointer` (`let f: fn(..) = |..| ..;`): the bridge
+            // recovers the non-capturing closure's `CallOnce` shim at the cast
+            // site and lowers the operand to a `Const::Reloc` (the closure value
+            // is otherwise a type-erased `Const::ZST`), so this shares the
+            // `ReifyFnPointer` `&<fn>` designator path.
+            CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer) => {
+                self.reify_fn_pointer(op)
+            }
             CastKind::Transmute => {
                 // Reached only if a Transmute appears outside the Assign
                 // special case; bridged MIR always has it as a top-level
@@ -1820,9 +1844,30 @@ impl BodyEmit<'_> {
         // source (a slice/str re-unsize -> identity copy).
         let src_len = self.unsize_source_len(op);
         match &self.model.types[pointee] {
-            Ty::Dynamic { .. } => Err(EmitError::Unsupported(
-                "Unsize to a dyn pointer (vtable task)",
-            )),
+            Ty::Dynamic { .. } => {
+                let src_pointee = self.operand_pointee(op).ok_or(EmitError::Unsupported(
+                    "Unsize to dyn from a non-pointer source (vtable task)",
+                ))?;
+                if matches!(self.model.types[src_pointee], Ty::Dynamic { .. }) {
+                    // An already-fat source (`&dyn -> &dyn` re-unsize / identity):
+                    // copy the existing fat pointer; the vtable is unchanged.
+                    return Ok(op_expr);
+                }
+                // `&T as &dyn Tr` (07 plan D4): the destination is a `Ty::Ref`
+                // fat pointer `{ void *data; const VTable *vtable }`. Build it
+                // directly (NOT a `RawPtr` aggregate, which is `Ty::Ptr`). The
+                // `data` slot is the thin concrete source erased to `void *`; the
+                // `vtable` slot is the address of the concrete impl's
+                // `VTableInstance` static, resolved from the source pointee.
+                let fat = types::unsized_pointee_struct_name(self.model, self.names, dest_ty)
+                    .ok_or(EmitError::Unsupported(
+                        "Unsize to a dyn with no trait-object struct destination (vtable task)",
+                    ))?;
+                let vtable = self.dyn_vtable_designator(pointee, src_pointee)?;
+                Ok(format!(
+                    "(struct {fat}){{ .data = (void *)({op_expr}), .vtable = {vtable} }}"
+                ))
+            }
             Ty::Slice(elem) => match src_len {
                 Some(n) => {
                     let fat = types::unsized_pointee_struct_name(self.model, self.names, dest_ty)
@@ -1851,6 +1896,68 @@ impl BodyEmit<'_> {
                 "Unsize to a sized pointee (task d2)",
             )),
         }
+    }
+
+    /// The `&<VTableInstance>` designator for the `.vtable` slot of an
+    /// `&T as &dyn Tr` unsize (07 plan D4, Option A: the backend resolves the
+    /// concrete impl's vtable static). `dyn_ty` is the `Ty::Dynamic` pointee;
+    /// `src_pointee` is the concrete `Self` type. The instance is identified by
+    /// `(principal, self_ty)`: the principal is recovered from the dyn's
+    /// `vtable_ty` struct item via `RegseqModel.vtables`, and `self_ty` is the
+    /// canonical args key of `[Type(src_pointee)]` -- the same key the bridge
+    /// minted for the `VTableInstance` synthetic item.
+    fn dyn_vtable_designator(&self, dyn_ty: TyId, src_pointee: TyId) -> Result<String, EmitError> {
+        let Ty::Dynamic { vtable_ty, .. } = &self.model.types[dyn_ty] else {
+            return Err(EmitError::Unsupported(
+                "dyn vtable designator on a non-dyn type",
+            ));
+        };
+        let Ty::Struct {
+            item: vtable_type_item,
+            ..
+        } = &self.model.types[*vtable_ty]
+        else {
+            return Err(EmitError::Unsupported(
+                "dyn vtable_ty is not a struct (vtable task)",
+            ));
+        };
+        let principal = self
+            .model
+            .vtables
+            .iter()
+            .find(|(_, mapped)| *mapped == vtable_type_item)
+            .map(|(p, _)| p)
+            .ok_or(EmitError::Unsupported(
+                "dyn vtable type item absent from RegseqModel.vtables (vtable task)",
+            ))?;
+        let self_ty = args_key_for_generic_args(self.model, &vec![GenericArg::Type(src_pointee)]);
+        // The `VTableInstance` synthetic item for this (principal, self_ty).
+        let instance_item = self
+            .model
+            .item_synthetic_kinds
+            .iter()
+            .position(|kind| {
+                matches!(
+                    kind,
+                    SyntheticItemKind::VTableInstance { principal: p, self_ty: s }
+                        if p == principal && *s == self_ty
+                )
+            })
+            .map(|idx| ItemId::from_u32(idx as u32))
+            .ok_or(EmitError::Unsupported(
+                "no VTableInstance for the unsized concrete type (vtable task)",
+            ))?;
+        // The static instance backing that item; its symbol is the C global.
+        let id = (0..self.model.instances.len())
+            .map(|i| InstanceId::from_u32(i as u32))
+            .find(|id| {
+                self.model.instances[*id].item == instance_item
+                    && matches!(self.model.instances[*id].kind, InstanceKind::Static { .. })
+            })
+            .ok_or(EmitError::Unsupported(
+                "VTableInstance item has no static instance (vtable task)",
+            ))?;
+        Ok(format!("(&{})", self.syms.symbol(id)))
     }
 
     /// The source array length for an `Unsize`: the `n` of a thin pointer to

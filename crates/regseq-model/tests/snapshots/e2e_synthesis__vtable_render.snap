@@ -15,7 +15,7 @@ extern "C" fn trait_object::<regseq_synth>::vtable_method_shim::d6efa320a07404dd
     let mut _0: u8;
 
     bb0: {
-        _0 = trait_object::{impl#0}::read_byte(move (*_1)) -> [return: bb1];
+        _0 = trait_object::{impl#0}::read_byte(move _1) -> [return: bb1];
     }
 
     bb1: {

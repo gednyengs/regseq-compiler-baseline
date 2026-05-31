@@ -459,10 +459,12 @@ fn dyn_field_emits_trait_obj_shape_and_vtable_forward_decl() {
     push_struct_instance(&mut m, "Holder", struct_layout(16, 8, None, vec![f]));
 
     let tu = emit_generic_c(&m).unwrap();
-    assert!(tu.contains("struct Reader_VTable;"), "VTable forward-decl");
+    // The vtable field points at the real vtable_ty struct (here named "Reader"),
+    // forward-declared by that name -- not an invented `_VTable` alias (vtable task).
+    assert!(tu.contains("struct Reader;"), "vtable struct forward-decl");
     assert!(tu.contains("struct trait_obj_Reader {"));
     assert!(tu.contains("void *data;"));
-    assert!(tu.contains("const struct Reader_VTable *vtable;"));
+    assert!(tu.contains("const struct Reader *vtable;"));
     assert!(tu.contains("struct trait_obj_Reader r;"));
 }
 
@@ -3663,7 +3665,9 @@ fn closure_fn_pointer_cast_is_unsupported_vtable() {
 }
 
 #[test]
-fn ptr_metadata_of_dyn_is_unsupported_vtable() {
+fn ptr_metadata_of_dyn_emits_vtable_slot() {
+    // PtrMetadata of a `&dyn` reads the fat pointer's second slot, `.vtable`
+    // (mirroring slice/str `.len`) -- the vtable task implemented this.
     let mut m = model();
     let usize_t = uint(&mut m, UintKind::Usize);
     let dref = dyn_ref(&mut m);
@@ -3680,11 +3684,18 @@ fn ptr_metadata_of_dyn_is_unsupported_vtable() {
         )],
     );
     fn_instance(&mut m, "dyn_meta", sig, Some(body));
-    assert_unsupported(&m);
+    let tu = emit_generic_c(&m).expect("PtrMetadata of a dyn pointer emits the vtable slot");
+    assert!(
+        tu.contains(").vtable"),
+        "PtrMetadata of dyn reads the vtable slot"
+    );
 }
 
 #[test]
-fn ref_of_dyn_deref_is_unsupported_vtable() {
+fn ref_of_dyn_deref_emits_fat_reborrow() {
+    // A re-borrow of a whole dyn place (`&(*p)`) copies the fat pointer (its
+    // `{ data, vtable }` identity) -- the fat base, mirroring the slice/str
+    // re-borrow. The vtable task implemented this (no longer fail-loud).
     let mut m = model();
     let dref = dyn_ref(&mut m);
     let sig = fnsig(&mut m, vec![dref], dref, FnAbi::Rust, false);
@@ -3704,7 +3715,8 @@ fn ref_of_dyn_deref_is_unsupported_vtable() {
         )],
     );
     fn_instance(&mut m, "ref_dyn", sig, Some(body));
-    assert_unsupported(&m);
+    let tu = emit_generic_c(&m).expect("re-borrow of a dyn deref copies the fat pointer");
+    assert!(tu.contains("_0 = _1;"), "dyn re-borrow copies the fat base");
 }
 
 #[test]

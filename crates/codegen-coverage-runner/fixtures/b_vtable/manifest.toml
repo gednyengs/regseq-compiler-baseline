@@ -1,0 +1,13 @@
+name   = "b_vtable"
+kind   = "rust"
+entry  = "regseq_main"
+# Vtable task (07 plan): dyn trait-object dispatch. `&StaticByte as &dyn Reader`
+# is an Unsize coercion to the section-3.2 fat pointer (TY-14 = Ty::Dynamic), and
+# `drive(&dyn Reader)` dispatches through the vtable slot (IN-6 = the Virtual
+# method shim's virtual_idx). The bridge synthesises the vtable type/instance/shim
+# and rewrites the virtual call to CallCallee::Indirect; the backend emits the fat
+# pointer, the vtable struct + instance static, and the indirect dispatch. The
+# returned byte (0x42 = 66) is logged -> the dual oracle (golden.c snapshot +
+# stdout) proves it compiled, dispatched, and returned the right value.
+covers = ["TY-14", "IN-6"]
+expect = "pass"

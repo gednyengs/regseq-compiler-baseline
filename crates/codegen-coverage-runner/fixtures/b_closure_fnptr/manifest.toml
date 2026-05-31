@@ -1,0 +1,10 @@
+name   = "b_closure_fnptr"
+kind   = "rust"
+entry  = "regseq_main"
+# Vtable task (07 plan §D7): PC-3 (PointerCoercion::ClosureFnPointer). A
+# non-capturing closure coerced to a `fn(...)` pointer (`let f: fn(i32)->i32 =
+# |x| x+1;`) lowers to `Cast(ClosureFnPointer, <closure>, fn(i32)->i32)`; the
+# backend emits `&<closure call shim>`. `f(41)` then dispatches through the fn
+# pointer, returning 42 -- logged for the dual oracle.
+covers = ["PC-3"]
+expect = "pass"

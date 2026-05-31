@@ -48,8 +48,13 @@ pub fn translate_rvalue<'tcx>(
         )),
         mir::Rvalue::Cast(kind, operand, ty) => {
             let cast_kind = translate_cast_kind(kind)?;
-            let model_operand = reify_fn_def_operand(cx, &cast_kind, &operand)?
-                .map_or_else(|| translate_operand(cx, body_cx, operand), Ok)?;
+            let model_operand = match reify_fn_def_operand(cx, &cast_kind, &operand)? {
+                Some(reified) => reified,
+                None => match closure_fn_pointer_operand(cx, &cast_kind, &operand)? {
+                    Some(shim) => shim,
+                    None => translate_operand(cx, body_cx, operand)?,
+                },
+            };
             Ok(Rvalue::Cast(
                 cast_kind,
                 model_operand,
@@ -134,6 +139,93 @@ fn reify_fn_def_operand<'tcx>(
         ))
     })?;
     let reloc = crate::bridge::const_::instance_ref_for_function_provenance(cx, instance)?;
+    let const_id = cx.model.consts.intern(regseq_model::Const::Reloc(reloc));
+    Ok(Some(regseq_model::Operand::Constant(const_id)))
+}
+
+/// A `ClosureFnPointer` cast (`let f: fn(..) -> .. = |..| ..;`) lowers in rustc
+/// MIR to `Cast(PointerCoercion(ClosureFnPointer), <closure>, FnPtr)`. The
+/// non-capturing closure operand is a zero-sized constant, which lowers to a
+/// bare model `Const::ZST` -- discarding the closure identity (the model
+/// `Const::ZST` is one canonical representative for all zero-sized types), so
+/// the backend cannot name the closure's call shim. So at this site (where the
+/// rustc closure type is still available) we recover the closure, take its
+/// `CallOnce` shim (the by-value, zero-sized-receiver call method -- its
+/// boundary signature is the bare `fn(..) -> ..` after the elided ZST receiver),
+/// and lower the operand to `Const::Reloc`, the same provenance shape the
+/// `ReifyFnPointer` recovery uses. The backend's `reify_fn_pointer` then emits
+/// the `&<shim>` designator.
+///
+/// Returns `Ok(None)` for any cast that is not a `ClosureFnPointer` over a
+/// closure-typed constant, so the caller falls back to the generic operand
+/// translation.
+fn closure_fn_pointer_operand<'tcx>(
+    cx: &mut BridgeCtxt<'tcx>,
+    cast_kind: &CastKind,
+    operand: &mir::Operand<'tcx>,
+) -> Result<Option<regseq_model::Operand>, BridgeError> {
+    if *cast_kind != CastKind::PointerCoercion(PointerCoercion::ClosureFnPointer) {
+        return Ok(None);
+    }
+    let mir::Operand::Constant(constant) = operand else {
+        return Ok(None);
+    };
+    let ty::TyKind::Closure(closure_def_id, closure_args) = constant.const_.ty().kind() else {
+        return Ok(None);
+    };
+    // Synthesise (cached) the closure's call shims, then pick the `CallOnce`
+    // shim Item -- the fn-pointer target.
+    let handles = crate::bridge::synth::closure::synthesise_closure_for_def_id(
+        cx,
+        *closure_def_id,
+        closure_args.as_closure(),
+    )?;
+    let call_once_item = handles.calls.iter().copied().find_map(|handle| {
+        let item_id = cx
+            .handles
+            .resolve(handle)
+            .unwrap_or_else(|| crate::bridge::placeholder_item_id_for_handle(handle));
+        match cx.lookup_item_synthetic_kind(item_id) {
+            Some(regseq_model::SyntheticItemKind::ClosureCall {
+                call_kind: regseq_model::ClosureCallKind::CallOnce,
+                ..
+            }) => Some(item_id),
+            _ => None,
+        }
+    });
+    let Some(call_once_item) = call_once_item else {
+        return Ok(None);
+    };
+    // The closure's translated identity args -- the `CallOnce` instance's
+    // `generic_args` are these (`construct_closure_call_instances` keys on
+    // `Ty::Closure(_, args)`, `bridge/mod.rs`), so matching on them
+    // disambiguates monomorphisations of a generic closure (same Item,
+    // distinct generic args).
+    let closure_model_ty = translate_ty(cx, constant.const_.ty())?;
+    let closure_model_args = match cx.model.types.resolve(closure_model_ty) {
+        regseq_model::Ty::Closure(_, args) => args.clone(),
+        _ => return Ok(None),
+    };
+    // Reference the materialised `CallOnce` Function instance for this exact
+    // monomorphisation by its canonical `InstanceRef` (avoids reconstructing
+    // the synthetic instance key by hand). A missing instance falls through to
+    // the generic operand translation (a `Const::ZST` the backend fails loud
+    // on), never a wrong reloc.
+    let instance_id = cx
+        .model
+        .instances
+        .iter()
+        .enumerate()
+        .find_map(|(idx, inst)| {
+            (inst.item == call_once_item
+                && matches!(inst.kind, regseq_model::InstanceKind::Function(_))
+                && inst.generic_args == closure_model_args)
+                .then(|| regseq_model::InstanceId::from_u32(idx as u32))
+        });
+    let Some(instance_id) = instance_id else {
+        return Ok(None);
+    };
+    let reloc = cx.model.instance_ref_of(instance_id);
     let const_id = cx.model.consts.intern(regseq_model::Const::Reloc(reloc));
     Ok(Some(regseq_model::Operand::Constant(const_id)))
 }

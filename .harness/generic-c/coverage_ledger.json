@@ -663,8 +663,10 @@
     {
       "id": "IN-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b_vtable"
+      ],
+      "result": "pass"
     },
     {
       "id": "IN-7",
@@ -953,8 +955,10 @@
     {
       "id": "PC-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b_closure_fnptr"
+      ],
+      "result": "pass"
     },
     {
       "id": "PC-4",
@@ -1253,8 +1257,10 @@
     {
       "id": "TY-14",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b_vtable"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-15",
@@ -1390,10 +1396,7 @@
       "CK-11",
       "CO-12",
       "DL-5",
-      "IN-6",
-      "IT-14",
-      "PC-3",
-      "TY-14"
+      "IT-14"
     ],
     "green_without_covered": []
   },

@@ -657,9 +657,9 @@ fn process(d: &dyn Driver) -> u32 { d.read() }
    the source borrow flavor -- see the trait-object dispatch carve-out
    in `spec.md` §17.2.3 for the UnsafeCell soundness rationale. */
 typedef struct Driver_VTable {
-    void (*drop_in_place)(void *self);
-    size_t size;
-    size_t align;
+    void (*__drop_in_place)(void *self);
+    size_t __size;
+    size_t __align;
     uint32_t (*read)(void *self);
 } Driver_VTable_t;
 
@@ -685,16 +685,40 @@ static void Driver__drop_shim_PL011(void *self) {
 /* Vtable instance: both drop slot and method slot use shims. */
 extern const Driver_VTable_t __vtable_PL011_for_Driver;
 const Driver_VTable_t __vtable_PL011_for_Driver = {
-    .drop_in_place = Driver__drop_shim_PL011,
-    .size          = sizeof(PL011_t),
-    .align         = _Alignof(PL011_t),
-    .read          = Driver_read__shim_PL011,
+    .__drop_in_place = Driver__drop_shim_PL011,
+    .__size          = sizeof(PL011_t),
+    .__align         = _Alignof(PL011_t),
+    .read            = Driver_read__shim_PL011,
 };
 
 uint32_t process(trait_obj_Driver_t d) {
     return d.vtable->read(d.data);
 }
 ```
+
+**General rule (the vtable task generalised this worked example).** The vtable
+*type* is the bridge-synthesised `vtable_ty` `Ty::Struct` itself -- emitted under
+its own (discovered) name via the ordinary struct path; the trait-object fat
+pointer's `vtable` field points at it **by that name** (not a separate `_VTable`
+alias). Its fields follow rustc's `vtable_entries` order with bridge-derived
+names: `__drop_in_place` (a `*mut ()`, null when the impl type needs no drop),
+`__size` / `__align` (`size_t`), then one fn-pointer field per method by slot
+index (the field name is the method name; a `<method>#<idx>` suffix breaks a
+collision), then any supertrait-vptr / vacant slots (a vacant slot holds an
+**uninit** cell, per rustc's `vtable_allocation_provider`). The `VTableInstance`
+**static** is the ordinary `Const::Aggregate` of those slots (a `Const::Reloc`
+to each shim, `sizeof` / `_Alignof`, null / uninit). Each method/drop **shim**
+is an ordinary emitted function whose receiver is erased to `*mut ()` at the C
+boundary (so every impl's vtable shares the layout); rustc's `VtableShim` body
+forwards the (reinterpreted) erased receiver to the concrete method (the §15
+`__abi` prologue marshalling reconciles the erased boundary receiver with the
+concrete body receiver). A virtual call decomposes to `d.vtable->m(d.data, ..)`
+(the bridge rewrites it to a `CallCallee::Indirect` through the loaded slot).
+
+An `&T as &dyn Tr` **unsize** builds the §3.2 fat pointer `{ .data = (void *)src,
+.vtable = &<the VTableInstance static> }` directly (a `Ty::Ref` value -- not a
+`RawPtr` aggregate); the backend resolves the concrete impl's `VTableInstance`
+from the dyn principal (recovered from `vtable_ty`) plus the source `Self` type.
 
 ### 9.7 Closure lowering
 
@@ -917,11 +941,21 @@ IR-side definition: `spec.md` §21.3.3.
 `PointerCoercion`:
 
 - `Unsize` → build the §3.2 fat pointer: slice / array → `{ data, len }`;
-  `str` → `{ data, len }`; `dyn` → `{ data, vtable = &VT }`.
+  `str` → `{ data, len }`; `dyn` → `{ data, vtable = &<VTableInstance> }` (§9.6;
+  the concrete impl's vtable static, resolved from the dyn principal + source
+  `Self`). An already-fat `&dyn → &dyn` source is an identity copy.
 - `ReifyFnPointer` → `&<fn>` (function designator → fn pointer).
-- `ClosureFnPointer` → `&<synthesised call shim>` for the non-capturing
-  closure.
+- `ClosureFnPointer` → `&<the closure's `CallOnce` shim>` for the non-capturing
+  closure. The bridge recovers the closure at the cast site and lowers the
+  (otherwise type-erased `Const::ZST`) operand to a `Const::Reloc` to the
+  `CallOnce` `ClosureCall` shim, whose by-value zero-sized receiver is elided at
+  the C boundary so its signature is the bare `fn(..) -> ..`; this then shares
+  the `ReifyFnPointer` `&<fn>` designator path.
 - `UnsafeFnPointer` → no-op (safe→unsafe fn-ptr is C-identical).
+
+`PtrMetadata` of a fat pointer reads its second slot: `.len` for slice / str,
+`.vtable` for `dyn`. A `PtrToPtr` cast of a fat (`dyn`) source to a thin pointer
+takes the `.data` slot (not the whole fat struct).
 
 ---
 

@@ -748,11 +748,13 @@ extern const uint8_t input__regseq_synth__const_memory_static_99821795ae16df11c2
 /* ---------------------------------------------------------------------------
  * Bank 5 (section 15): function bodies + static initializers.
  * --------------------------------------------------------------------------- */
-uint32_t input__regseq_synth__closure_9cc26f6b083d1c3b039c418cccba59b1_call__42f53870100f99a7d3b7a12469202c88(const struct input_regseq_main__closure_0___42f53870100f99a7d3b7a12469202c88 *_1, uint32_t _2) {
+uint32_t input__regseq_synth__closure_9cc26f6b083d1c3b039c418cccba59b1_call__42f53870100f99a7d3b7a12469202c88(const struct input_regseq_main__closure_0___42f53870100f99a7d3b7a12469202c88 *_1__abi, uint32_t _2) {
     uint32_t _0;
+    const struct input_regseq_main__closure_0___42f53870100f99a7d3b7a12469202c88_clash_1 *_1;
     uint32_t _3;
     const uint32_t *_4;
     uint32_t _5;
+    memcpy(&_1, &_1__abi, sizeof(_1));
     bb_0: {
         _3 = _2;
         _4 = (*_1)._0;
@@ -761,11 +763,13 @@ uint32_t input__regseq_synth__closure_9cc26f6b083d1c3b039c418cccba59b1_call__42f
         return _0;
     }
 }
-uint32_t input__regseq_synth__closure_9cc26f6b083d1c3b039c418cccba59b1_call_mut__42f53870100f99a7d3b7a12469202c88(struct input_regseq_main__closure_0___42f53870100f99a7d3b7a12469202c88 *_1, uint32_t _2) {
+uint32_t input__regseq_synth__closure_9cc26f6b083d1c3b039c418cccba59b1_call_mut__42f53870100f99a7d3b7a12469202c88(struct input_regseq_main__closure_0___42f53870100f99a7d3b7a12469202c88 *_1__abi, uint32_t _2) {
     uint32_t _0;
+    const struct input_regseq_main__closure_0___42f53870100f99a7d3b7a12469202c88_clash_1 *_1;
     uint32_t _3;
     const uint32_t *_4;
     uint32_t _5;
+    memcpy(&_1, &_1__abi, sizeof(_1));
     bb_0: {
         _3 = _2;
         _4 = (*_1)._0;
