@@ -1,0 +1,15 @@
+name   = "b6_overflow_add"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a): AK-2 (AssertKind::Overflow). An arithmetic-overflow
+# `Assert` exists in the bridged MIR ONLY when `-C overflow-checks` is on, so this
+# fixture sets `overflow_checks = true` (threaded to the bridge via
+# BuildOverrides::overflow_checks -- the F68-authorized override). Under it,
+# `a + b` lowers to `AddWithOverflow` + `Assert { Overflow(Add, ..) }`. With one
+# addend read from a `static` (a runtime value, so no const-fold /
+# `unconditional_panic` lint), the sum overflows i32 at runtime -> regseq_panic
+# (the "add" verb fills the section-16 template) -> abort. `expect = "panic"`:
+# non-zero exit + rendered stderr are the behavioral oracle; golden.c the snapshot.
+covers = ["AK-2"]
+expect = "panic"
+overflow_checks = true

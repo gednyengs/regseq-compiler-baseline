@@ -1,0 +1,11 @@
+name   = "b6_rem_zero"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a): AK-5 (AssertKind::RemainderByZero). The remainder
+# operator with a zero divisor sourced from a `static` (a runtime value, so no
+# const-fold / `unconditional_panic` lint) inserts the always-on
+# `Assert { RemainderByZero }`. At runtime the divisor is 0 -> regseq_panic
+# (section-16 message) -> abort. `expect = "panic"`: non-zero exit + the rendered
+# stderr are the behavioral oracle; golden.c is the snapshot oracle.
+covers = ["AK-5"]
+expect = "panic"

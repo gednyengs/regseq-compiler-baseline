@@ -1,0 +1,12 @@
+name   = "b6_div_zero"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a): AK-4 (AssertKind::DivisionByZero). Dividing by a
+# zero divisor sourced from a `static` (a runtime value, so rustc neither
+# const-folds the quotient nor fires the `unconditional_panic` lint) inserts the
+# always-on `Assert { DivisionByZero }` -- present regardless of debug-assertions.
+# At runtime the divisor is 0, so the assert fails -> regseq_panic(section-16
+# message) -> abort. `expect = "panic"`: non-zero exit + the rendered stderr
+# (expected.stderr) are the behavioral oracle; golden.c is the snapshot oracle.
+covers = ["AK-4"]
+expect = "panic"

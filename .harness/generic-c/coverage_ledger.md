@@ -3,28 +3,17 @@
 - **Verdict:** `not-pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 169 (151 with a green fixture)
+- **Covered rows:** 166 (159 with a green fixture)
 
 ## Drift: covered-without-green
 
-- `AK-1`
-- `AK-2`
-- `AK-3`
-- `AK-4`
-- `AK-5`
-- `AK-6`
-- `AK-7`
-- `AK-8`
 - `CK-11`
 - `CO-12`
 - `DL-5`
 - `IN-6`
 - `IT-14`
 - `PC-3`
-- `TM-4`
-- `TM-6`
 - `TY-14`
-- `TY-7`
 
 ## Rows
 
@@ -37,14 +26,14 @@
 | AG-5 | Covered | Pass | b3_structs |
 | AG-6 | Covered | Pass | b9_closures |
 | AG-7 | Covered | Pass | b3_refs_slices |
-| AK-1 | Covered | Fail | - |
-| AK-2 | Covered | Fail | - |
-| AK-3 | Covered | Fail | - |
-| AK-4 | Covered | Fail | - |
-| AK-5 | Covered | Fail | - |
-| AK-6 | Covered | Fail | - |
-| AK-7 | Covered | Fail | - |
-| AK-8 | Covered | Fail | - |
+| AK-1 | Covered | Pass | b6_bounds |
+| AK-2 | Covered | Pass | b6_overflow_add |
+| AK-3 | Covered | Pass | b6_overflow_neg |
+| AK-4 | Covered | Pass | b6_div_zero |
+| AK-5 | Covered | Pass | b6_rem_zero |
+| AK-6 | OutOfScope | NotApplicable | - |
+| AK-7 | OutOfScope | NotApplicable | - |
+| AK-8 | OutOfScope | NotApplicable | - |
 | BD-1 | Covered | Pass | b1_int_scalars |
 | BD-10 | Covered | Pass | b1_int_scalars |
 | BD-2 | Covered | Pass | b1_int_scalars |
@@ -178,9 +167,9 @@
 | TM-10 | Covered | Pass | b5_control_flow |
 | TM-2 | Covered | Pass | diag_levels |
 | TM-3 | Covered | Pass | diag_levels |
-| TM-4 | Covered | Fail | - |
+| TM-4 | Covered | Pass | b6_unreachable |
 | TM-5 | Covered | Pass | diag_levels |
-| TM-6 | Covered | Fail | - |
+| TM-6 | Covered | Pass | b6_bounds |
 | TM-7 | Covered | Pass | b5_control_flow |
 | TM-8 | Covered | Pass | diag_levels |
 | TM-9 | Covered | Pass | b5_control_flow |
@@ -200,7 +189,7 @@
 | TY-4 | Covered | Pass | b1_int_scalars |
 | TY-5 | Covered | Pass | b2_floats_casts |
 | TY-6 | Covered | Pass | b3_refs_slices |
-| TY-7 | Covered | Fail | - |
+| TY-7 | Covered | Pass | b6_never |
 | TY-8 | Covered | Pass | b3_structs |
 | TY-9 | Covered | Pass | b3_refs_slices |
 | UN-1 | Covered | Pass | b1_int_scalars |

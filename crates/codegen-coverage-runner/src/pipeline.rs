@@ -13,10 +13,20 @@
 
 use std::path::Path;
 
-use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
+use test_ir_fixtures::{try_bridge_fixture_path_with_overrides, BridgeOutcome, BuildOverrides};
 
 use crate::manifest::{Expect, Fixture, FixtureKind};
 use crate::{oracle, toolchain};
+
+/// Build the bridge `BuildOverrides` for a fixture from its manifest. Only
+/// `overflow_checks` is exposed (absent -> `None` -> the helper's hard-wired
+/// `false`, so a fixture that omits it bridges bit-for-bit as before).
+fn bridge_overrides(fixture: &Fixture) -> BuildOverrides {
+    BuildOverrides {
+        overflow_checks: fixture.manifest.overflow_checks,
+        ..BuildOverrides::default()
+    }
+}
 
 /// The pipeline stage a fixture failure is attributed to.
 #[derive(Debug, PartialEq, Eq, Clone, Copy)]
@@ -101,21 +111,24 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
                 reason: "kind=ir unsupported in Phase-1 task a".to_string(),
             };
         }
-        FixtureKind::Rust => match try_bridge_fixture_path(&fixture.input) {
-            BridgeOutcome::Ok(model) => model,
-            BridgeOutcome::ValidatorFailed { violation, .. } => {
-                return fail(Stage::Acquire, format!("validator failed: {violation:?}"));
+        FixtureKind::Rust => {
+            match try_bridge_fixture_path_with_overrides(&fixture.input, &bridge_overrides(fixture))
+            {
+                BridgeOutcome::Ok(model) => model,
+                BridgeOutcome::ValidatorFailed { violation, .. } => {
+                    return fail(Stage::Acquire, format!("validator failed: {violation:?}"));
+                }
+                BridgeOutcome::Rejected(err) => {
+                    return fail(Stage::Acquire, format!("bridge rejected: {err}"));
+                }
+                BridgeOutcome::RustcRejected { stderr } => {
+                    return fail(
+                        Stage::Acquire,
+                        format!("rustc rejected before after_analysis: {stderr}"),
+                    );
+                }
             }
-            BridgeOutcome::Rejected(err) => {
-                return fail(Stage::Acquire, format!("bridge rejected: {err}"));
-            }
-            BridgeOutcome::RustcRejected { stderr } => {
-                return fail(
-                    Stage::Acquire,
-                    format!("rustc rejected before after_analysis: {stderr}"),
-                );
-            }
-        },
+        }
     };
 
     // Stage 2: Emit.
@@ -270,17 +283,20 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
                 ok: false,
             };
         }
-        FixtureKind::Rust => match try_bridge_fixture_path(&fixture.input) {
-            BridgeOutcome::Ok(model) => model,
-            other => {
-                return BlessOutcome {
-                    name,
-                    blessed_bytes: None,
-                    report: format!("acquire failed: {other:?}"),
-                    ok: false,
-                };
+        FixtureKind::Rust => {
+            match try_bridge_fixture_path_with_overrides(&fixture.input, &bridge_overrides(fixture))
+            {
+                BridgeOutcome::Ok(model) => model,
+                other => {
+                    return BlessOutcome {
+                        name,
+                        blessed_bytes: None,
+                        report: format!("acquire failed: {other:?}"),
+                        ok: false,
+                    };
+                }
             }
-        },
+        }
     };
 
     // Stage 2: Emit.

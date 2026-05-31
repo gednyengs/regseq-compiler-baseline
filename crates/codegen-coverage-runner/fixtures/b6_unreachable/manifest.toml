@@ -1,0 +1,12 @@
+name   = "b6_unreachable"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a): TM-4 (TerminatorKind::Unreachable). The
+# `core::intrinsics::unreachable()` intrinsic lowers to a MIR `Unreachable`
+# terminator (it is not a Call -- the intrinsic is lowered in place). The Phase-1
+# host policy traps it loudly via `regseq_unreachable()` (not a silent
+# `__builtin_unreachable`), so reaching it aborts with the section-16 message.
+# `expect = "panic"`: non-zero exit + the rendered stderr are the behavioral
+# oracle; golden.c is the snapshot oracle.
+covers = ["TM-4"]
+expect = "panic"

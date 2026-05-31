@@ -49,9 +49,11 @@ Doc-2 decisions D1–D12 → new spec sections §7.1 terminators, §10 Rvalue,
 §11 casts, §12 Const, §13 enum, §14 field-offset, §15 declaration order,
 §16 panic, §17 symbols). So every former `deferred`/`unspecced` row is now
 spec-pinned. The status column was therefore **reconciled in one pass**:
-all `deferred` (19) + `unspecced` (83) rows → **`covered`** (now 169
-covered, 7 out-of-scope). This is honest on the legend above ("covered =
-`generic-c-backend.md` pins this lowering").
+all `deferred` (19) + `unspecced` (83) rows → **`covered`** (169 covered,
+7 out-of-scope at that pass; **166 covered, 10 out-of-scope** after the
+2026-05-30 `AK-6`/`AK-7`/`AK-8` reclassification, §06 plan §5.4 — see those
+rows). This is honest on the legend above ("covered = `generic-c-backend.md`
+pins this lowering").
 
 **Two axes, two homes.** The `status` column here is the **scope / spec
 axis** (is the lowering pinned + in Phase-1 scope). The **coverage axis**
@@ -382,9 +384,9 @@ pinned in Doc 2 and written into the spec delta.
 | AK-3 | `AssertKind::OverflowNeg(Operand)` | negation-overflow panic | covered | gc §7 | |
 | AK-4 | `AssertKind::DivisionByZero(Operand)` | div-by-zero panic | covered | gc §7 | |
 | AK-5 | `AssertKind::RemainderByZero(Operand)` | rem-by-zero panic | covered | gc §7 | |
-| AK-6 | `AssertKind::MisalignedPointerDereference { required, found }` | misaligned-ptr panic | covered | gc §7 | |
-| AK-7 | `AssertKind::NullPointerDereference` | null-deref panic | covered | gc §7 | |
-| AK-8 | `AssertKind::InvalidEnumConstruction(Operand)` | invalid-discriminant panic | covered | gc §7 | |
+| AK-6 | `AssertKind::MisalignedPointerDereference { required, found }` | misaligned-ptr panic | out-of-scope | gc §7 | reclassified (§06 plan §5.4): `CheckAlignment` MIR pass disabled (`regseq-driver/src/callbacks.rs`) + debug-assertions off by design (F68), so not constructible from `kind=rust` fixtures; message catalog is spec-pinned (`prelude.rs`) but unreachable in the bridged model |
+| AK-7 | `AssertKind::NullPointerDereference` | null-deref panic | out-of-scope | gc §7 | reclassified (§06 plan §5.4): `CheckNull` MIR pass disabled (`regseq-driver/src/callbacks.rs`) + debug-assertions off by design (F68), so not constructible from `kind=rust` fixtures; message catalog is spec-pinned (`prelude.rs`) but unreachable in the bridged model |
+| AK-8 | `AssertKind::InvalidEnumConstruction(Operand)` | invalid-discriminant panic | out-of-scope | gc §7 | reclassified (§06 plan §5.4): `CheckEnums` MIR pass disabled (`regseq-driver/src/callbacks.rs`) + debug-assertions off by design (F68), so not constructible from `kind=rust` fixtures; message catalog is spec-pinned (`prelude.rs`) but unreachable in the bridged model |
 
 > Body CFG structure (`BasicBlock`, RPO storage, `BlockId::START_BLOCK`
 > entry) is itemized in §2A (BD-*) and covered by the §7 envelope

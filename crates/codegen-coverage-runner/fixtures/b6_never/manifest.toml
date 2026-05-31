@@ -1,0 +1,17 @@
+name   = "b6_never"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a / §4d): TY-7 (the `Never` type). A diverging `-> !`
+# function's Never return type lowers to the `_Noreturn void` C return spelling --
+# visible in golden.c (the snapshot oracle proves the spelling). The body diverges
+# via `core::intrinsics::unreachable()`, so calling it actually traps at runtime
+# (the host policy aborts with the section-16 unreachable message), proving the
+# divergence rather than just the spelling. `expect = "panic"`: non-zero exit + the
+# rendered stderr are the behavioral oracle.
+#
+# (The `-> !` body also contains an Unreachable terminator, so this fixture
+# incidentally exercises TM-4 as well, but TM-4 is owned by `b6_unreachable`; per
+# the covers-integrity convention this fixture declares only the row it primarily
+# proves -- TY-7.)
+covers = ["TY-7"]
+expect = "panic"

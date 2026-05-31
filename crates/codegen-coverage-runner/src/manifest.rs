@@ -31,6 +31,14 @@ pub struct Manifest {
     pub covers: Vec<String>,
     /// Whether the fixture is expected to run cleanly or to panic.
     pub expect: Expect,
+    /// Optional `-C overflow-checks` override threaded to the bridge
+    /// (`BuildOverrides::overflow_checks`). Absent (the default) preserves
+    /// the helper's hard-wired `overflow_checks = false`; `Some(true)` is
+    /// the documented requirement for the arithmetic-overflow panic rows
+    /// (AK-2 `Overflow`, AK-3 `OverflowNeg`), whose `Assert`s exist in the
+    /// bridged MIR only when overflow checks are on.
+    #[serde(default)]
+    pub overflow_checks: Option<bool>,
 }
 
 /// Fixture input source kind.

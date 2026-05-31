@@ -1,0 +1,15 @@
+name   = "b6_overflow_neg"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a): AK-3 (AssertKind::OverflowNeg). The negation-overflow
+# `Assert` exists in the bridged MIR ONLY when `-C overflow-checks` is on, so this
+# fixture sets `overflow_checks = true` (threaded to the bridge via
+# BuildOverrides::overflow_checks -- the F68-authorized override; the documented
+# requirement for OverflowNeg per the lib.rs override docs). Under it, `-x` lowers
+# to `Assert { OverflowNeg(x) }`. With `x = i32::MIN` read from a `static` (runtime,
+# so no const-fold lint), negating it overflows i32 at runtime -> regseq_panic
+# (fixed section-16 message) -> abort. `expect = "panic"`: non-zero exit + the
+# rendered stderr are the behavioral oracle; golden.c is the snapshot oracle.
+covers = ["AK-3"]
+expect = "panic"
+overflow_checks = true

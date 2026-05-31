@@ -1,0 +1,14 @@
+name   = "b6_bounds"
+kind   = "rust"
+entry  = "regseq_main"
+# B6 panic (plan §3 / §4a): AK-1 (AssertKind::BoundsCheck) + TM-6 (the Assert
+# terminator). Indexing a fixed `[u8; 3]` with a runtime index sourced from a
+# `static` (so rustc cannot prove it in-bounds and the `unconditional_panic` lint
+# does not fire) inserts an `Assert { BoundsCheck { len, index } }` -- the bounds
+# check is always on, independent of debug-assertions. The `Assert` terminator is
+# TM-6; its failure path renders the section-16 bounds message (AK-1) and aborts.
+# This is the first fixture to drive the backend's `Assert` lowering end-to-end.
+# `expect = "panic"`: non-zero exit + the rendered stderr are the behavioral
+# oracle; golden.c is the snapshot oracle.
+covers = ["AK-1", "TM-6"]
+expect = "panic"

@@ -60,50 +60,60 @@
     {
       "id": "AK-1",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_bounds"
+      ],
+      "result": "pass"
     },
     {
       "id": "AK-2",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_overflow_add"
+      ],
+      "result": "pass"
     },
     {
       "id": "AK-3",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_overflow_neg"
+      ],
+      "result": "pass"
     },
     {
       "id": "AK-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_div_zero"
+      ],
+      "result": "pass"
     },
     {
       "id": "AK-5",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_rem_zero"
+      ],
+      "result": "pass"
     },
     {
       "id": "AK-6",
-      "status": "covered",
+      "status": "out-of-scope",
       "fixtures": [],
-      "result": "fail"
+      "result": "n/a"
     },
     {
       "id": "AK-7",
-      "status": "covered",
+      "status": "out-of-scope",
       "fixtures": [],
-      "result": "fail"
+      "result": "n/a"
     },
     {
       "id": "AK-8",
-      "status": "covered",
+      "status": "out-of-scope",
       "fixtures": [],
-      "result": "fail"
+      "result": "n/a"
     },
     {
       "id": "BD-1",
@@ -1157,8 +1167,10 @@
     {
       "id": "TM-4",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_unreachable"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-5",
@@ -1171,8 +1183,10 @@
     {
       "id": "TM-6",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_bounds"
+      ],
+      "result": "pass"
     },
     {
       "id": "TM-7",
@@ -1325,8 +1339,10 @@
     {
       "id": "TY-7",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b6_never"
+      ],
+      "result": "pass"
     },
     {
       "id": "TY-8",
@@ -1371,24 +1387,13 @@
   ],
   "drift": {
     "covered_without_green": [
-      "AK-1",
-      "AK-2",
-      "AK-3",
-      "AK-4",
-      "AK-5",
-      "AK-6",
-      "AK-7",
-      "AK-8",
       "CK-11",
       "CO-12",
       "DL-5",
       "IN-6",
       "IT-14",
       "PC-3",
-      "TM-4",
-      "TM-6",
-      "TY-14",
-      "TY-7"
+      "TY-14"
     ],
     "green_without_covered": []
   },

@@ -124,6 +124,7 @@ fn fixture_in(dir: &TempFixtureDir, input: PathBuf) -> Fixture {
             entry: "regseq_main".to_string(),
             covers: vec!["DL-2".to_string()],
             expect: Expect::Pass,
+            overflow_checks: None,
         },
         dir: dir.dir.clone(),
         input,
