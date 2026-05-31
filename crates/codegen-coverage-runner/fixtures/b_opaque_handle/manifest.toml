@@ -1,0 +1,12 @@
+name   = "b_opaque_handle"
+kind   = "rust"
+entry  = "regseq_main"
+# IT-14 (Item.opaque_handle_eligible, gc section 2 opaque-handle pattern): a
+# `#[repr(C)] struct OpaqueCtx { _private: [u8; 0] }` -- a non-generic ZST struct
+# with the `[u8; 0]` opt-in marker, used only behind `*const OpaqueCtx` (never by
+# value). The bridge classifies it opaque-handle-eligible; the backend emits it
+# forward-declaration-only (`struct OpaqueCtx;`, no body, no layout asserts), with
+# `struct OpaqueCtx *` at use sites. Two handles off the same backing address
+# compare equal -> 1 (golden.c snapshot proves the forward-decl-only emission).
+covers = ["IT-14"]
+expect = "pass"

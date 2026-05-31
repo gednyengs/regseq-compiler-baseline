@@ -1,5 +1,5 @@
 {
-  "verdict": "not-pass",
+  "verdict": "pass",
   "rows": [
     {
       "id": "AG-1",
@@ -274,8 +274,10 @@
     {
       "id": "CK-11",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b_subtype"
+      ],
+      "result": "pass"
     },
     {
       "id": "CK-2",
@@ -367,9 +369,9 @@
     },
     {
       "id": "CO-12",
-      "status": "covered",
+      "status": "out-of-scope",
       "fixtures": [],
-      "result": "fail"
+      "result": "n/a"
     },
     {
       "id": "CO-13",
@@ -494,9 +496,9 @@
     },
     {
       "id": "DL-5",
-      "status": "covered",
+      "status": "out-of-scope",
       "fixtures": [],
-      "result": "fail"
+      "result": "n/a"
     },
     {
       "id": "DL-6",
@@ -733,8 +735,10 @@
     {
       "id": "IT-14",
       "status": "covered",
-      "fixtures": [],
-      "result": "fail"
+      "fixtures": [
+        "b_opaque_handle"
+      ],
+      "result": "pass"
     },
     {
       "id": "IT-2",
@@ -1392,12 +1396,7 @@
     }
   ],
   "drift": {
-    "covered_without_green": [
-      "CK-11",
-      "CO-12",
-      "DL-5",
-      "IT-14"
-    ],
+    "covered_without_green": [],
     "green_without_covered": []
   },
   "toolchain": {

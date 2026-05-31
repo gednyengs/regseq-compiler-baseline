@@ -50,10 +50,14 @@ Doc-2 decisions D1–D12 → new spec sections §7.1 terminators, §10 Rvalue,
 §16 panic, §17 symbols). So every former `deferred`/`unspecced` row is now
 spec-pinned. The status column was therefore **reconciled in one pass**:
 all `deferred` (19) + `unspecced` (83) rows → **`covered`** (169 covered,
-7 out-of-scope at that pass; **166 covered, 10 out-of-scope** after the
-2026-05-30 `AK-6`/`AK-7`/`AK-8` reclassification, §06 plan §5.4 — see those
-rows). This is honest on the legend above ("covered = `generic-c-backend.md`
-pins this lowering").
+7 out-of-scope at that pass; **164 covered, 12 out-of-scope** after the
+2026-05-30 `AK-6`/`AK-7`/`AK-8` and 2026-05-31 `DL-5`/`CO-12`
+reclassifications — see those rows + §06 plan §4c/§5.4). Each reclassified row
+carries a spec-pinned lowering that is **not exercisable / not uniquely
+observable** by a `kind=rust` codegen fixture (a bridge-side validation, a
+MIR-pass-stripped assert, or an indistinguishable uninit byte), so it leaves the
+codegen-gated set without faking it. This is honest on the legend above
+("covered = `generic-c-backend.md` pins this lowering").
 
 **Two axes, two homes.** The `status` column here is the **scope / spec
 axis** (is the lowering pinned + in Phase-1 scope). The **coverage axis**
@@ -253,7 +257,7 @@ is a priority gap block.
 | CO-9 | `Const::EnumValue { variant_idx, payload }` | tagged/niche enum compound literal | covered | gc §5 | depends on enum C shape (TY-18) |
 | CO-10 | `Const::NullPtr(TyId)` | `(T*)0` / `NULL` | covered | gc §5 | |
 | CO-11 | `Const::Reloc(InstanceRef)` | address-of the referenced instance (`&sym` / `sym`) | covered | gc §5 | symbol resolved via `InstanceRef`; address-of form not pinned |
-| CO-12 | `Byte::Uninit` | uninitialized byte (padding) | covered | gc §5 | |
+| CO-12 | `Byte::Uninit` | uninitialized byte (padding) | out-of-scope | gc §5 | reclassified: an uninit byte emits as an indistinguishable `0` (gc §12 walker: `Uninit -> 0`), so neither the byte-exact golden.c snapshot nor the behavioral stdout oracle can prove the `Byte::Uninit` path **distinctly** from a literal `0` (Codex soundness pass on the B3 over-declaration); the lowering is spec-pinned but not uniquely observable by a `kind=rust` codegen fixture |
 | CO-13 | `Byte::Value(u8)` | literal byte | covered | gc §5 | static `&str` literal example (§9.2) is the only concrete byte-init shown |
 | CO-14 | `Byte::Reloc(InstanceRef)` | pointer-slot relocation (address bytes) | covered | gc §5 | |
 
@@ -433,7 +437,7 @@ the terminator spec delta.
 | DL-2 | `LogLevel::{Error,Warn,Info,Debug}` | `printf("[LEVEL] " <fmt> "\n", <args>…)` | covered | gc §8.1 | single emitter, stdout, bracketed tag, explicit `\n` |
 | DL-3 | per-arg specifier (from peeled operand `Ty`) | `%d`/`%u`/`%llu`/`%lld`/`%s` per width; modifiers compose | covered | gc §8.2 | |
 | DL-4 | `&str` argument NUL-termination | static literal → direct C string; non-static → per-`%s` stack buffer, truncate at `cap-1`, always NUL, cap ≥ 256 | covered | gc §8.3 | normative overflow contract pinned |
-| DL-5 | `max_str_args_per_call = 8` | bridge-side validation (D8); >8 `&str` rejected | covered | gc §8.4 | counted across `args[1..]` |
+| DL-5 | `max_str_args_per_call = 8` | bridge-side validation (D8); >8 `&str` rejected | out-of-scope | gc §8.4 | reclassified (§06 plan §4c): a **bridge-side** D8 validation reject, not a backend emission -- not exercisable by a `kind=rust` codegen fixture; covered by bridge-coverage. Counted across `args[1..]` |
 | DL-6 | Pipeline A flat-arg consumption | read post-DiagLogPeel flat args; MUST NOT reconstruct `LogArg` slice | covered | gc §8.5 | args arrive already peeled flat |
 | DL-7 | call-site interception mechanics | recognize `Call{callee:Direct(inst)}` where `model.instances[inst].item` carries the Log attr; emit `printf` instead of a call | covered | gc §8, HANDOFF | the interception **rule** is pinned; it executes inside the `Call` terminator (TM-5, deferred), so end-to-end diag-log lowering inherits that dependency (see Cross-dependencies) |
 

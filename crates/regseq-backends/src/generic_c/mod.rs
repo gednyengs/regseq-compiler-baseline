@@ -699,6 +699,17 @@ fn bank2_type_forward_decls(model: &RegseqModel, names: &NameTable, discovered: 
     out
 }
 
+/// Whether `ty` is an `opaque_handle_eligible` struct (IT-14): a nominal
+/// `Ty::Struct` whose owning `Item` carries the bridge-computed opaque-handle
+/// flag. Such a struct is emitted forward-declaration-only (no body, no layout
+/// asserts) and used only behind `struct X *`.
+fn is_opaque_handle_struct(model: &RegseqModel, ty: TyId) -> bool {
+    matches!(
+        &model.types[ty],
+        Ty::Struct { item, .. } if model.items[*item].opaque_handle_eligible
+    )
+}
+
 /// Bank 3 (section 15): full `struct` / `union` bodies, topologically
 /// sorted by by-value containment. Non-enum aggregates go through the
 /// section 14 emitter; enums go through the section 13 / D9 union-of-views
@@ -721,6 +732,12 @@ fn bank3_type_definitions(model: &RegseqModel, names: &NameTable, topo: &[Node])
                     // Section 13 / D9: the offset-faithful union-of-views
                     // enum body, reusing the section 14 primitive.
                     out.push_str(&enum_emit::emit_enum(model, names, *ty, name));
+                } else if is_opaque_handle_struct(model, *ty) {
+                    // IT-14 (gc section 2, opaque-handle pattern): an
+                    // `opaque_handle_eligible` struct is emitted forward-decl-only
+                    // (the bank-2 `struct X;`); its definition + layout
+                    // `_Static_assert`s are suppressed (the type is incomplete by
+                    // design, used only behind `struct X *`).
                 } else if let Some(def) = layout_emit::emit_aggregate(model, names, *ty, name) {
                     out.push_str(&def);
                 }

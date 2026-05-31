@@ -1,16 +1,9 @@
 # Codegen-coverage ledger
 
-- **Verdict:** `not-pass`
+- **Verdict:** `pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
 - **Matrix rows:** 176
-- **Covered rows:** 166 (162 with a green fixture)
-
-## Drift: covered-without-green
-
-- `CK-11`
-- `CO-12`
-- `DL-5`
-- `IT-14`
+- **Covered rows:** 164 (164 with a green fixture)
 
 ## Rows
 
@@ -51,7 +44,7 @@
 | BO-9..11 | Covered | Pass | b1_int_scalars |
 | CK-1 | Covered | Pass | b2_floats_casts |
 | CK-10 | Covered | Pass | b2_floats_casts |
-| CK-11 | Covered | Fail | - |
+| CK-11 | Covered | Pass | b_subtype |
 | CK-2 | Covered | Pass | b2_floats_casts |
 | CK-3 | Covered | Pass | b5_control_flow |
 | CK-4 | Covered | Pass | b2_floats_casts |
@@ -63,7 +56,7 @@
 | CO-1 | Covered | Pass | b1_int_scalars |
 | CO-10 | Covered | Pass | b3_refs_slices |
 | CO-11 | Covered | Pass | b3_refs_slices |
-| CO-12 | Covered | Fail | - |
+| CO-12 | OutOfScope | NotApplicable | - |
 | CO-13 | Covered | Pass | b3_refs_slices |
 | CO-14 | Covered | Pass | b3_refs_slices |
 | CO-2 | Covered | Pass | b1_int_scalars |
@@ -78,7 +71,7 @@
 | DL-2 | Covered | Pass | diag_empty, diag_levels, diag_newline |
 | DL-3 | Covered | Pass | diag_bool, diag_escapes, diag_hex, diag_nul, diag_numeric_widths |
 | DL-4 | Covered | Pass | diag_nul, diag_str_long, diag_str_nonstatic, diag_str_static |
-| DL-5 | Covered | Fail | - |
+| DL-5 | OutOfScope | NotApplicable | - |
 | DL-6 | Covered | Pass | diag_levels |
 | DL-7 | Covered | Pass | diag_levels |
 | FS-1 | Covered | Pass | b1_int_scalars |
@@ -109,7 +102,7 @@
 | IT-11 | Covered | Pass | b3_structs |
 | IT-12 | Covered | Pass | b3_structs |
 | IT-13 | Covered | Pass | b5_manually_drop |
-| IT-14 | Covered | Fail | - |
+| IT-14 | Covered | Pass | b_opaque_handle |
 | IT-2 | Covered | Pass | b8_item_kinds |
 | IT-3 | Covered | Pass | b8_item_kinds |
 | IT-4 | Covered | Pass | b3_structs |

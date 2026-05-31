@@ -22,6 +22,7 @@ pub mod diag_log;
 mod discovery;
 pub mod fnsig;
 mod handles;
+mod opaque_handle;
 mod sort;
 pub mod synth;
 pub mod ty;
@@ -745,6 +746,15 @@ pub fn run_bridge<'tcx>(input: BridgeInput<'tcx>) -> Result<RegseqModel, BridgeE
     // its flag and zero-Instance status both stand -- the carve-out
     // (and the `SignatureNonRigid` coverage predicate) is preserved.
     reconcile_revealed_signature_flags(&mut ctxt);
+
+    // Per regseq-backends-24 (IT-14): classify opaque-handle eligibility now that
+    // the whole-model use graph (every `Ty`, signature, instance, const) is final.
+    // `Item.opaque_handle_eligible` is constructed `false` at every ADT-item site;
+    // this post-pass sets it `true` for a non-generic ZST `#[repr(C)]` struct that
+    // carries the `[u8; 0]` opaque-handle marker (gc section 2) and is reachable
+    // exclusively behind a pointer. The backend then emits such a struct
+    // forward-decl-only (no definition / layout asserts).
+    opaque_handle::classify_opaque_handle_eligibility(&mut ctxt.model);
 
     // Per regseq-driver-55 Change G (spec.md section 3.4 Phase 5 +
     // section 8.1 `ItemKind` mirrors `InstanceKind`): after the final

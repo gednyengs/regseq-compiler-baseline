@@ -1,0 +1,11 @@
+name   = "b_subtype"
+kind   = "rust"
+entry  = "regseq_main"
+# CK-11 (CastKind::Subtype): a representation-identical subtype no-op. Coercing a
+# higher-ranked `for<'a> fn(&'a u32)` to a fixed-lifetime `fn(&'static u32)` is a
+# `Cast(Subtype, g, fn(&'static u32))` (the witness shape from bridge-coverage
+# RV-005-N). The backend lowers Subtype to the operand unchanged; the coerced
+# fn pointer is then called, logging the pointee (42) -> the dual oracle proves
+# the cast compiled + the value flowed through it.
+covers = ["CK-11"]
+expect = "pass"
