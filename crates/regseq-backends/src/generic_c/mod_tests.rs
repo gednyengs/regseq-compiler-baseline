@@ -878,6 +878,68 @@ fn fn_ptr_returning_pointer_to_array_recurses_the_declarator() {
 }
 
 // ---------------------------------------------------------------------------
+// backends-25: a *function* whose RETURN type is a fn pointer / pointer-to-array
+// wraps the function declarator (`R (*name(params))(...)`) instead of the
+// malformed bare-type concatenation `R (*)(...) name(params)`. `fn_signature`
+// routes the return type through `types::declare`, the same declarator machinery
+// the params (and the field-context tests above) already use.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn fn_returning_fn_ptr_wraps_the_declarator() {
+    // `coerce() -> fn() -> i32` -> `int32_t (*coerce(void))(void);`, NOT the
+    // pre-fix malformed `int32_t (*)(void) coerce(void);`.
+    let mut m = model();
+    let i32t = m.types.intern(Ty::Int(IntKind::I32));
+    let ret_fnptr = fn_ptr_returning(&mut m, i32t);
+    let sig = fnsig(&mut m, vec![], ret_fnptr, FnAbi::Rust, false);
+    fn_instance(&mut m, "coerce", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("int32_t (*coerce(void))(void);"),
+        "fn-ptr return must wrap the declarator:\n{tu}"
+    );
+    assert!(
+        !tu.contains("(*)(void) coerce"),
+        "the malformed bare-type concatenation must be gone:\n{tu}"
+    );
+}
+
+#[test]
+fn fn_returning_pointer_to_array_wraps_the_declarator() {
+    // `dims() -> &[u32; 4]` -> `const uint32_t (*dims(void))[4];`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let arr = m.types.intern(Ty::Array(u32t, 4));
+    let aref = m.types.intern(Ty::Ref(arr, Provenance::SharedBorrow));
+    let sig = fnsig(&mut m, vec![], aref, FnAbi::Rust, false);
+    fn_instance(&mut m, "dims", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("const uint32_t (*dims(void))[4];"),
+        "pointer-to-array return must wrap the declarator:\n{tu}"
+    );
+}
+
+#[test]
+fn fn_returning_scalar_is_unchanged() {
+    // Regression guard: a non-fn-ptr return stays byte-identical to the
+    // pre-fix `<type> <name>(<params>)` spelling.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], u32t, FnAbi::Rust, false);
+    fn_instance(&mut m, "ident", sig, None);
+
+    let tu = emit_generic_c(&m).unwrap();
+    assert!(
+        tu.contains("uint32_t ident(uint32_t);"),
+        "scalar return prototype must be unchanged:\n{tu}"
+    );
+}
+
+// ---------------------------------------------------------------------------
 // Task 09 (07 follow-up #3): a Ref / Ptr to a fn-pointer pointee places
 // `const` on the fn-pointer VALUE (`int32_t (*const (*p))(void)`), not on the
 // function's return type.

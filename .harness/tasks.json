@@ -5231,7 +5231,7 @@
           "id": "regseq-backends-25",
           "name": "Generic-C fn-pointer-return declarator (fn_signature)",
           "spec": ".harness/tasks/regseq-backends/25-generic-c-fnptr-return-declarator.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,

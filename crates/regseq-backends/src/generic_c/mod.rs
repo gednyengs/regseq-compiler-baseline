@@ -963,10 +963,17 @@ fn fn_signature(
     }
 
     let out_ty = effective_output_ty(fn_sig, lowering);
-    let ret = if is_zst(model, out_ty) {
-        "void".to_string()
+    // The function header `<ret> <name>(<params>)` is itself a C declarator:
+    // route `name(params)` through the declarator-aware [`types::declare`] so a
+    // return type that is a function pointer (or pointer-to-array) wraps the
+    // declarator correctly (`R (*name(params))(...)`) instead of the invalid
+    // bare-type concatenation `R (*)(...) name(params)`. A ZST return is forced
+    // to `void` (the actual ZST type is not spelled), matching the prior shape.
+    let declarator = format!("{emission}({params_str})");
+    let signature = if is_zst(model, out_ty) {
+        format!("void {declarator}")
     } else {
-        types::c_type(model, names, out_ty)
+        types::declare(model, names, out_ty, &declarator)
     };
 
     let quals = fn_qualifiers(model, instance.item);
@@ -975,7 +982,7 @@ fn fn_signature(
     } else {
         ""
     };
-    format!("{quals}{noreturn}{ret} {emission}({params_str})")
+    format!("{quals}{noreturn}{signature}")
 }
 
 /// The final C symbol for instance `id`, looked up in the task-11
