@@ -11,6 +11,9 @@ workstream (which closed the *front-end* feature-complete gate — see
 
 - **Roadmap (Level 1)** — the phase sequence + per-phase exit gates +
   cross-track (front-end ↔ backend) dependencies.
+- **`running.md`** — operational how-to-run guide: emitting C from a real
+  crate via `cargo regseq --emit generic-c`, plus the codegen-coverage
+  runner. The practical companion to the design docs here.
 - **Per-phase plan-first design docs (Level 2)** — one pre-spec design
   doc per phase (the shape of the bridge workstream's
   `.harness/audits/2026-05-25-feature-complete-gate-plan.md`):
