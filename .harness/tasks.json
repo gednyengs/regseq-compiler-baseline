@@ -5226,6 +5226,25 @@
               "reason": "reverted auto-classifier (too broad, broke 2 cross-crate tests); redesign as opt-in marker"
             }
           ]
+        },
+        {
+          "id": "regseq-backends-25",
+          "name": "Generic-C fn-pointer-return declarator (fn_signature)",
+          "spec": ".harness/tasks/regseq-backends/25-generic-c-fnptr-return-declarator.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "1b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-05-31T17:49:04Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
