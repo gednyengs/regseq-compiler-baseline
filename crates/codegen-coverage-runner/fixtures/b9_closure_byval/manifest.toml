@@ -1,0 +1,26 @@
+name   = "b9_closure_byval"
+kind   = "rust"
+entry  = "regseq_main"
+# B9 (plan §3) regression: a NON-capturing closure passed BY VALUE to a generic
+# `fn apply<F: Fn(u32)->u32>(f: F, ..)` that CALLS it. The sibling `b9_closures`
+# fixture exercises a CAPTURING closure CALLED DIRECTLY -- there the closure
+# value is non-ZST (it holds `&cap`), so its arg/locals are never elided. This
+# fixture is the complementary case the backend previously miscompiled:
+#
+#   A non-capturing closure is a ZERO-SIZED type. Passing it by value gives
+#   `apply` a ZST argument `f: F`, which `fn_signature` correctly ELIDES from
+#   the C parameter list (mod.rs:939). But `f(x)` lowers to `<F as Fn>::call(&f, ..)`
+#   -- a BARE BORROW `&f` of that ZST arg. The backend's three local-declaration
+#   phases also skip ZST locals (body_emit.rs), so `f` was declared NOWHERE and
+#   the emitted `_3 = &(_2);` named an undeclared local -> `cc` error
+#   "'_2' undeclared". See plan 09 (docs/.../phase-1/09-zst-address-storage-plan.md):
+#   a ZST local whose own storage is bare-borrowed is now given real (zero-sized
+#   under gnu11) storage so `&` has a valid, never-dereferenced target.
+#
+# Drives the same construct rows as b9 (the closure type + its construction);
+# the point of THIS fixture is the by-value/ZST-borrow lowering, proven by the
+# dual oracle (compiles + logs the computed value 42).
+covers = [
+  "TY-15", "AG-6",
+]
+expect = "pass"

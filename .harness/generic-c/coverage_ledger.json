@@ -45,6 +45,7 @@
       "id": "AG-6",
       "status": "covered",
       "fixtures": [
+        "b9_closure_byval",
         "b9_closures"
       ],
       "result": "pass"
@@ -1270,6 +1271,7 @@
       "id": "TY-15",
       "status": "covered",
       "fixtures": [
+        "b9_closure_byval",
         "b9_closures"
       ],
       "result": "pass"

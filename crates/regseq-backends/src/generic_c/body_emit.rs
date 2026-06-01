@@ -99,8 +99,14 @@ pub(super) fn emit_body(
 
     let mut out = String::from(" {\n");
 
-    // Return place `_0`: declared iff the output is non-ZST (section 7).
-    if !emitter.is_zst(output_ty) {
+    // Locals whose own storage is bare-borrowed (`&local`): a ZST in this set
+    // needs real zero-sized storage to point at, overriding the ZST
+    // declare-nothing rule applied in each phase below.
+    let bare_zst = emitter.bare_borrowed_zst_locals();
+
+    // Return place `_0`: declared iff the output is non-ZST (section 7), or a
+    // ZST `_0` whose address is bare-borrowed.
+    if !emitter.is_zst(output_ty) || bare_zst.contains(&LocalId::RETURN_PLACE) {
         out.push_str(&format!(
             "    {};\n",
             types::declare(model, names, output_ty, "_0")
@@ -115,11 +121,23 @@ pub(super) fn emit_body(
     let prologue = emitter.input_marshalling()?;
     for local in body.arg_locals() {
         let i = local.as_u32() as usize - 1;
-        if !super::input_needs_abi_formal(model, body, fn_sig, lowering, i) {
-            continue;
-        }
         let decl = &body.local_decls[local];
         if emitter.is_zst(decl.ty) {
+            // A ZST argument is never a C formal (elided from the signature,
+            // `mod.rs:fn_signature`) and normally declares nothing. Give it
+            // real storage only if its address is bare-borrowed; this adds a
+            // declaration alone -- no prologue marshalling (a ZST carries no
+            // bytes, so `input_marshalling` already skips it).
+            if bare_zst.contains(&local) {
+                let name = local_c_name(model, body, local);
+                out.push_str(&format!(
+                    "    {};\n",
+                    types::declare(model, names, decl.ty, &name)
+                ));
+            }
+            continue;
+        }
+        if !super::input_needs_abi_formal(model, body, fn_sig, lowering, i) {
             continue;
         }
         let name = local_c_name(model, body, local);
@@ -128,11 +146,19 @@ pub(super) fn emit_body(
             types::declare(model, names, decl.ty, &name)
         ));
     }
-    // Inner locals (arg_count+1..); a ZST local declares nothing. Direct
-    // argument locals are the C formal parameters, declared by the caller.
+    // Inner locals (arg_count+1..); a ZST local declares nothing (unless its
+    // address is bare-borrowed). Direct argument locals are the C formal
+    // parameters, declared by the caller.
     for local in body.inner_locals() {
         let decl = &body.local_decls[local];
         if emitter.is_zst(decl.ty) {
+            if bare_zst.contains(&local) {
+                let name = local_c_name(model, body, local);
+                out.push_str(&format!(
+                    "    {};\n",
+                    types::declare(model, names, decl.ty, &name)
+                ));
+            }
             continue;
         }
         let name = local_c_name(model, body, local);
@@ -219,6 +245,37 @@ impl BodyEmit<'_> {
             Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. } => false,
             _ => self.model.size_align_of(ty).size == 0,
         }
+    }
+
+    /// ZST locals whose own storage is borrowed by a **bare-local** `&local`
+    /// (a `Ref` / `RawPtr` with an empty projection). A ZST normally declares
+    /// no C object (a ZST read/write is a no-op), but `&local` needs a real,
+    /// zero-sized object to point at -- otherwise the emitted `&(_n)` names a
+    /// local that was never declared (and, for a ZST argument, also elided from
+    /// the C signature, `mod.rs:fn_signature`). The borrowed empty struct is
+    /// zero-sized under gnu11, so the resulting pointer is valid and (matching
+    /// Rust's `&zst`) never dereferenced for data.
+    ///
+    /// Bare-projection scope is deliberate: a borrow through a `Deref` is
+    /// re-rooted at a (declared, non-ZST) pointee, and a borrow of a *projected*
+    /// ZST place (`&local.zst_field`) is a separate, pre-existing concern
+    /// (a ZST field is omitted from the emitted aggregate) that declaring the
+    /// base local would not fix. `Ref` / `RawPtr` only appear in `Assign`
+    /// rvalues, so statements are the complete scan surface.
+    fn bare_borrowed_zst_locals(&self) -> std::collections::HashSet<LocalId> {
+        let mut set = std::collections::HashSet::new();
+        for bb in self.body.basic_blocks.iter() {
+            for stmt in bb.statements.iter() {
+                if let StatementKind::Assign(_, Rvalue::Ref(_, p) | Rvalue::RawPtr(_, p)) =
+                    &stmt.kind
+                {
+                    if p.projection.is_empty() && self.is_zst(self.body.local_decls[p.local].ty) {
+                        set.insert(p.local);
+                    }
+                }
+            }
+        }
+        set
     }
 
     /// The resolved type of a place: the head local's type narrowed through

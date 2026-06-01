@@ -14,7 +14,7 @@
 | AG-3 | Covered | Pass | b3_structs |
 | AG-4 | Covered | Pass | b4_enums |
 | AG-5 | Covered | Pass | b3_structs |
-| AG-6 | Covered | Pass | b9_closures |
+| AG-6 | Covered | Pass | b9_closure_byval, b9_closures |
 | AG-7 | Covered | Pass | b3_refs_slices |
 | AK-1 | Covered | Pass | b6_bounds |
 | AK-2 | Covered | Pass | b6_overflow_add |
@@ -169,7 +169,7 @@
 | TY-12 | OutOfScope | NotApplicable | - |
 | TY-13 | Covered | Pass | b5_control_flow |
 | TY-14 | Covered | Pass | b_vtable |
-| TY-15 | Covered | Pass | b9_closures |
+| TY-15 | Covered | Pass | b9_closure_byval, b9_closures |
 | TY-16 | Covered | Pass | b3_structs |
 | TY-17 | Covered | Pass | b3_structs |
 | TY-18 | Covered | Pass | b4_enums |
