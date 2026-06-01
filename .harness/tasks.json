@@ -2287,7 +2287,7 @@
           "id": "regseq-driver-88",
           "name": "--emit bin: link the generic-C TU into a runnable binary",
           "spec": ".harness/tasks/regseq-driver/88-emit-bin-runnable-binary.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,

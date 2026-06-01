@@ -138,6 +138,63 @@ fn emit_unknown_type_message_lists_generic_c() {
 }
 
 #[test]
+fn emit_parses_bin_without_name() {
+    assert_eq!(
+        EmitSpec::from_str("bin").unwrap(),
+        EmitSpec::Bin { name: None }
+    );
+}
+
+#[test]
+fn emit_parses_bin_with_name() {
+    // `bin`'s value is a binary NAME, not a path.
+    assert_eq!(
+        EmitSpec::from_str("bin=myprog").unwrap(),
+        EmitSpec::Bin {
+            name: Some("myprog".to_string())
+        }
+    );
+}
+
+#[test]
+fn emit_parse_bin_rejects_subtype() {
+    let result = EmitSpec::from_str("bin.foo");
+    assert!(matches!(result, Err(EmitParseError::UnknownType(_))));
+}
+
+#[test]
+fn emit_parse_bin_rejects_path_and_empty_names() {
+    // `bin=NAME` is a bare filename; path-bearing or empty values are
+    // rejected so the linker output cannot escape `output_dir`.
+    for bad in [
+        "bin=",
+        "bin=a/b",
+        "bin=../evil",
+        "bin=.",
+        "bin=..",
+        "bin=dir\\x",
+    ] {
+        assert!(
+            matches!(
+                EmitSpec::from_str(bad),
+                Err(EmitParseError::InvalidBinName(_))
+            ),
+            "`{bad}` must be rejected as an invalid bin name"
+        );
+    }
+}
+
+#[test]
+fn emit_unknown_type_message_lists_bin() {
+    let err = EmitSpec::from_str("nonsense").unwrap_err();
+    let message = err.to_string();
+    assert!(
+        message.contains("bin"),
+        "UnknownType message must list 'bin': {message}"
+    );
+}
+
+#[test]
 fn emit_parse_json_rejects_subtype() {
     // The `json` spec has no subtypes; `json.foo` MUST fail rather
     // than silently dropping the subtype (which would be a footgun).
@@ -188,6 +245,8 @@ fn emit_display_round_trip_for_supported_forms() {
         "json=out/pl011.model.json",
         "generic-c",
         "generic-c=out/pl011.c",
+        "bin",
+        "bin=myprog",
     ];
 
     for input in cases {

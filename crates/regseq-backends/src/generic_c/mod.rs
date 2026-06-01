@@ -38,7 +38,7 @@ mod layout_emit;
 mod naming;
 mod types;
 
-pub use naming::{entry_c_symbol, EntrySymbol};
+pub use naming::{entry_c_symbol, generate_main_c, EntrySymbol};
 
 /// A node in the section 15 by-value-containment graph: an aggregate to
 /// emit (a definition or, for enums, a forward-decl only) or a synthesized

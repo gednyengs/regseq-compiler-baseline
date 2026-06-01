@@ -54,6 +54,39 @@ pub fn emit_one(model: &RegseqModel, spec: &EmitSpec, output_dir: &Path) -> std:
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             fs::write(dest, code)
         }
+        EmitSpec::Bin { name: _ } => {
+            // The driver produces the *source half* of the binary: the library
+            // TU `generic.c` plus the entry shim `generic_main.c`, both at the
+            // default location. `cargo-regseq` links them after `cargo check`
+            // (the `name` is the linker's output name, not used here). The
+            // backend is the only place that can resolve the crate-qualified
+            // entry symbol from the model, so the shim is written here.
+            let tu_dest = output_dir.join("generic.c");
+            ensure_parent(&tu_dest)?;
+            let code = regseq_backends::emit_generic_c(model)
+                .map_err(|e| std::io::Error::other(e.to_string()))?;
+            fs::write(&tu_dest, code)?;
+
+            let entry = match regseq_backends::entry_c_symbol(model, "regseq_main") {
+                regseq_backends::EntrySymbol::Resolved(sym) => sym,
+                regseq_backends::EntrySymbol::NotFound => {
+                    return Err(std::io::Error::other(
+                        "--emit bin: no entry function found (expected a function whose \
+                         emission name ends with `regseq_main`)",
+                    ));
+                }
+                regseq_backends::EntrySymbol::Ambiguous(syms) => {
+                    return Err(std::io::Error::other(format!(
+                        "--emit bin: ambiguous entry -- {} functions match the `regseq_main` \
+                         suffix ({})",
+                        syms.len(),
+                        syms.join(", ")
+                    )));
+                }
+            };
+            let main_dest = output_dir.join("generic_main.c");
+            fs::write(main_dest, regseq_backends::generate_main_c(&entry))
+        }
         EmitSpec::Driver { .. } | EmitSpec::Analysis { .. } => {
             // Phase-1b territory per `pipeline-refactor.md:879`.
             // The dispatcher returns `Ok(())` silently; the
@@ -80,7 +113,10 @@ pub fn collect_unsupported_warnings(specs: &[EmitSpec]) -> Vec<String> {
             EmitSpec::Driver { .. } | EmitSpec::Analysis { .. } => Some(format!(
                 "regseq-driver: --emit {spec} is documented but not yet implemented (phase-1b); skipping",
             )),
-            EmitSpec::Model { .. } | EmitSpec::Json { .. } | EmitSpec::GenericC { .. } => None,
+            EmitSpec::Model { .. }
+            | EmitSpec::Json { .. }
+            | EmitSpec::GenericC { .. }
+            | EmitSpec::Bin { .. } => None,
         })
         .collect()
 }
@@ -173,6 +209,31 @@ mod tests {
         let contents = fs::read_to_string(&dest).expect("generic.c must exist");
         let expected = regseq_backends::emit_generic_c(&model).expect("backend emit");
         assert_eq!(contents, expected);
+        let _ = fs::remove_dir_all(&dir);
+    }
+
+    #[test]
+    fn emit_one_bin_without_entry_writes_tu_then_errors() {
+        // `small_model` has no functions, so entry resolution finds no
+        // `regseq_main` -> `emit_one(Bin)` writes `generic.c` (the library
+        // TU half) but then errors before the shim, surfacing as a fatal
+        // driver diagnostic at the call site. (The resolved happy path is
+        // covered end-to-end in `tests/generic_c_emit.rs`'s `--emit bin`
+        // sibling, where a real crate defines `regseq_main`.)
+        let model = small_model();
+        let dir = fresh_dir("bin-no-entry");
+        let err = emit_one(&model, &EmitSpec::Bin { name: None }, &dir)
+            .expect_err("bin emit must fail when there is no entry");
+        assert!(
+            err.to_string().contains("no entry function"),
+            "error must explain the missing entry: {err}"
+        );
+        // The TU half was still written; only the shim is missing.
+        assert!(dir.join("generic.c").exists(), "generic.c must be written");
+        assert!(
+            !dir.join("generic_main.c").exists(),
+            "no shim when the entry is unresolved"
+        );
         let _ = fs::remove_dir_all(&dir);
     }
 

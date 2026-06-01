@@ -19,6 +19,7 @@ path = "src/main.rs"
 test-ir-fixtures = { path = "../test-ir-fixtures" }
 regseq-model = { path = "../regseq-model" }
 regseq-backends = { path = "../regseq-backends" }
+regseq-config = { path = "../regseq-config" }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"

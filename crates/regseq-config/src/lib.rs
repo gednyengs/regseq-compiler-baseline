@@ -6,9 +6,11 @@
 pub mod emit;
 pub mod options;
 pub mod param;
+pub mod toolchain;
 pub mod types;
 
 pub use emit::{EmitParseError, EmitSpec};
 pub use options::CompilerOptions;
 pub use param::{validate_dotted_ident, ParamParseError, ParamScope, RegseqParam};
+pub use toolchain::CC_FLAGS;
 pub use types::{ColorChoice, DumpStage, LogLevel, ParseEnumError, TargetOs};

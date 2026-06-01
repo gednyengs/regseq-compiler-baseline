@@ -289,3 +289,72 @@ fn cargo_regseq_emit_generic_c_compiles_and_runs() {
          got stdout={run_stdout:?}",
     );
 }
+
+/// `--emit bin`: cargo-regseq itself emits the TU + shim AND links them into
+/// a runnable binary (the productized path — no manual wrapper `main`/`cc`).
+/// Gated on a host `cc` because the link step needs one; skips cleanly
+/// otherwise.
+#[test]
+fn cargo_regseq_emit_bin_links_and_runs() {
+    if host_cc().is_none() {
+        eprintln!("note: no host `cc` found; skipping the `--emit bin` link smoke");
+        return;
+    }
+    ensure_driver_built();
+    let temp = TempDir::new().expect("mkdir temp");
+    let dir = temp.path();
+    write_playground(dir);
+
+    let output = Command::new(cargo_regseq_bin())
+        .arg("regseq")
+        .arg("--target-os")
+        .arg("linux")
+        .arg("--platform-file")
+        .arg("platform.toml")
+        .arg("--emit")
+        .arg("bin=smoke")
+        .env("REGSEQ_DRIVER", regseq_driver_bin())
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn cargo-regseq");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "cargo-regseq --emit bin exited with {}: stdout={stdout} stderr={stderr}",
+        output.status,
+    );
+
+    // The driver wrote the link inputs; cargo-regseq linked them.
+    let out_dir = dir.join("regseq-out");
+    assert!(
+        out_dir.join("generic.c").exists(),
+        "generic.c (TU) missing: stderr={stderr}",
+    );
+    assert!(
+        out_dir.join("generic_main.c").exists(),
+        "generic_main.c (entry shim) missing: stderr={stderr}",
+    );
+
+    // The linked executable runs and logs the computed value.
+    let bin = out_dir.join("smoke");
+    assert!(
+        bin.exists(),
+        "linked binary `smoke` was not produced: stdout={stdout} stderr={stderr}",
+    );
+    let run = Command::new(&bin)
+        .output()
+        .expect("failed to run the linked binary");
+    assert!(
+        run.status.success(),
+        "the linked binary exited non-zero ({}): stderr={}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr),
+    );
+    let run_stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run_stdout.contains("[INFO] smoke=42"),
+        "the linked binary did not log the expected value; got stdout={run_stdout:?}",
+    );
+}

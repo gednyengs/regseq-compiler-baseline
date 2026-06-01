@@ -1,9 +1,9 @@
 use std::process::{Command, Stdio};
 
 use cargo_metadata::{Metadata, MetadataCommand};
-use regseq_config::{ColorChoice, CompilerOptions};
+use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, CC_FLAGS};
 
-use crate::toolchain::ToolchainInfo;
+use crate::toolchain::{detect_cc, ToolchainInfo};
 use crate::Error;
 
 /// Build the `cargo check` command used to run Regseq compilation.
@@ -60,13 +60,70 @@ pub fn invoke_cargo(
         .status()
         .map_err(|error| Error::Invoke(format!("failed to launch cargo: {error}")))?;
 
-    if status.success() {
-        Ok(())
-    } else {
-        Err(Error::Invoke(format!(
+    if !status.success() {
+        return Err(Error::Invoke(format!(
             "cargo check failed with status {status}"
-        )))
+        )));
     }
+
+    // `--emit bin`: the driver wrote `generic.c` + `generic_main.c` during
+    // the check; now link them into a runnable host binary.
+    if let Some(bin_name) = bin_emit_name(&options.emit) {
+        link_bin(&options.output_dir, bin_name)?;
+    }
+
+    Ok(())
+}
+
+/// The output binary name for the first `EmitSpec::Bin` in `emit`, or `None`
+/// if no `bin` emit was requested. A bare `--emit bin` (no name) defaults to
+/// `generic`.
+fn bin_emit_name(emit: &[EmitSpec]) -> Option<&str> {
+    emit.iter().find_map(|spec| match spec {
+        EmitSpec::Bin { name } => Some(name.as_deref().unwrap_or("generic")),
+        _ => None,
+    })
+}
+
+/// Link the driver-emitted `generic.c` + `generic_main.c` (under
+/// `output_dir`) into `output_dir/<bin_name>` using the host `cc` and the
+/// pinned [`CC_FLAGS`]. A missing compiler or a non-zero `cc` exit is a
+/// clear error.
+fn link_bin(output_dir: &std::path::Path, bin_name: &str) -> Result<(), Error> {
+    let tu = output_dir.join("generic.c");
+    let main = output_dir.join("generic_main.c");
+    let bin = output_dir.join(bin_name);
+
+    for input in [&tu, &main] {
+        if !input.exists() {
+            return Err(Error::Invoke(format!(
+                "--emit bin: expected `{}` to exist after `cargo check`, but it was not \
+                 produced (did the crate define a `regseq_main` entry?)",
+                input.display()
+            )));
+        }
+    }
+
+    let cc = detect_cc()?;
+    let output = Command::new(&cc)
+        .args(CC_FLAGS)
+        .arg("-o")
+        .arg(&bin)
+        .arg(&tu)
+        .arg(&main)
+        .output()
+        .map_err(|error| Error::Invoke(format!("failed to launch `{}`: {error}", cc.display())))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        return Err(Error::Invoke(format!(
+            "--emit bin: `cc` failed to link the binary (status {}):\n{stderr}",
+            output.status
+        )));
+    }
+
+    eprintln!("regseq: linked binary {}", bin.display());
+    Ok(())
 }
 
 /// Run `cargo metadata` for the workspace at `manifest_path` (or the

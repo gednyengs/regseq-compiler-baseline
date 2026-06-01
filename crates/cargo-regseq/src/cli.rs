@@ -33,7 +33,7 @@ pub struct Cli {
     pub output_dir: PathBuf,
 
     /// What to emit (repeatable; default: model). Supported specs:
-    /// model[=PATH], json[=PATH], generic-c[=PATH],
+    /// model[=PATH], json[=PATH], generic-c[=PATH], bin[=NAME],
     /// driver[=MATCH_ID], analysis[.NAME][=PATH].
     #[arg(long = "emit", value_name = "SPEC")]
     pub emit: Vec<EmitSpec>,

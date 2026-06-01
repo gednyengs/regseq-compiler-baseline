@@ -8,4 +8,4 @@
 
 mod generic_c;
 
-pub use generic_c::{emit_generic_c, entry_c_symbol, EmitError, EntrySymbol};
+pub use generic_c::{emit_generic_c, entry_c_symbol, generate_main_c, EmitError, EntrySymbol};

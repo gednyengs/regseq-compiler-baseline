@@ -166,11 +166,41 @@ fn parses_emit_generic_c_with_and_without_path() {
 }
 
 #[test]
+fn parses_emit_bin_with_and_without_name() {
+    {
+        let (_platform, mut args) = base_args();
+        args.extend(["--emit".to_string(), "bin".to_string()]);
+        let cli = parse_ok(args);
+        assert_eq!(cli.emit, vec![EmitSpec::Bin { name: None }]);
+    }
+    {
+        let (_platform, mut args) = base_args();
+        args.extend(["--emit".to_string(), "bin=myprog".to_string()]);
+        let cli = parse_ok(args);
+        assert_eq!(
+            cli.emit,
+            vec![EmitSpec::Bin {
+                name: Some("myprog".to_string())
+            }]
+        );
+    }
+}
+
+#[test]
 fn help_lists_json_emit_spec() {
     let help = Cli::command().render_help().to_string();
     assert!(
         help.contains("json[=PATH]"),
         "help must document the json emit spec spelling:\n{help}"
+    );
+}
+
+#[test]
+fn help_lists_bin_emit_spec() {
+    let help = Cli::command().render_help().to_string();
+    assert!(
+        help.contains("bin[=NAME]"),
+        "help must document the bin emit spec spelling:\n{help}"
     );
 }
 

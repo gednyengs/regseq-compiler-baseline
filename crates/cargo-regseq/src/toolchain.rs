@@ -16,6 +16,34 @@ pub struct ToolchainInfo {
     pub host: String,
 }
 
+/// Locate a host C compiler for the `--emit bin` link step: `$CC` if set,
+/// else `cc` on `$PATH`. Returns a clear error pointing at the requirement
+/// when neither is available, so a missing compiler is a clean failure
+/// rather than an opaque spawn error at link time.
+pub fn detect_cc() -> Result<PathBuf, Error> {
+    if let Some(cc) = std::env::var_os("CC") {
+        let candidate = PathBuf::from(cc);
+        if !candidate.as_os_str().is_empty() {
+            return Ok(candidate);
+        }
+    }
+    let output = Command::new("which")
+        .arg("cc")
+        .output()
+        .map_err(|error| Error::Toolchain(format!("failed to execute `which cc`: {error}")))?;
+    if output.status.success() {
+        let path = String::from_utf8_lossy(&output.stdout).trim().to_string();
+        if !path.is_empty() {
+            return Ok(PathBuf::from(path));
+        }
+    }
+    Err(Error::Toolchain(
+        "could not find a host C compiler for `--emit bin`: set $CC or put `cc` on $PATH \
+         (for example, install gcc or clang)"
+            .to_string(),
+    ))
+}
+
 impl ToolchainInfo {
     /// Detect toolchain paths required by `cargo-regseq`.
     pub fn detect() -> Result<ToolchainInfo, Error> {

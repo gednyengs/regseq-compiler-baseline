@@ -89,6 +89,8 @@ Emit targets (repeatable):
 ```
 --emit generic-c            # → <output-dir>/generic.c
 --emit generic-c=PATH       # → PATH (verbatim; relative paths resolve against CWD)
+--emit bin                  # → <output-dir>/generic     (linked executable; see below)
+--emit bin=NAME             # → <output-dir>/NAME        (NAME is a bare filename)
 ```
 
 `--output-dir` defaults to `./regseq-out/`. Other emit specs (`model`, `json`,
@@ -162,7 +164,31 @@ REGSEQ_DRIVER="/path/to/workspace/target/debug/regseq-driver" \
 On success `cargo check` finishes and `regseq-out/generic.c` is written — a full
 translation unit (prelude `#include <stdint.h>` … + the lowered functions).
 
-### Compiling and running the emitted C
+### The shortcut: `--emit bin` (build a runnable binary)
+
+If all you want is a runnable executable, skip the manual steps below and let the
+tool do them:
+
+```sh
+cargo regseq --target-os linux --platform-file platform.toml --emit bin
+#   → regseq-out/generic.c        (the library TU)
+#   → regseq-out/generic_main.c   (the entry shim, calling the resolved entry)
+#   → regseq-out/generic          (the linked executable)
+
+./regseq-out/generic
+# → [INFO] smoke=42
+
+cargo regseq ... --emit bin=myprog     # custom binary name -> regseq-out/myprog
+```
+
+`--emit bin` emits the TU **+** an entry shim (the driver resolves the
+crate-qualified entry symbol) **+** links them with the host `cc`
+(`$CC` or `cc` on `$PATH`; build-only — it does not run the binary for you). It is
+the productized form of the manual walkthrough that follows; the rest of this
+section explains what it does under the hood (and how to do it by hand if you need
+to, e.g. to pass custom compiler flags).
+
+### Compiling and running the emitted C by hand
 
 Two things to know before you `cc` it:
 
