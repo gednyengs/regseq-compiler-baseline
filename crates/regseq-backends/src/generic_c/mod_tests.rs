@@ -40,9 +40,12 @@ fn tu_starts_with_the_includes() {
     assert!(tu.contains("#include <stdlib.h>"));
     assert!(tu.contains("#include <string.h>"));
     assert!(tu.contains("#include <math.h>"));
+    // The helper block is now demand-driven (plan 10), so a no-arithmetic model
+    // emits no `regseq_{add,..}_<T>` wrapper. Anchor the ordering check on
+    // `regseq_panic`, emitted by the static `PRELUDE` after the includes.
     let inc = tu.find("#include <stdint.h>").unwrap();
-    let helpers = tu.find("regseq_add_int8_t").unwrap();
-    assert!(inc < helpers);
+    let after_includes = tu.find("regseq_panic").unwrap();
+    assert!(inc < after_includes);
 }
 
 #[test]
@@ -2495,6 +2498,52 @@ fn with_overflow_writes_both_tuple_fields_via_the_helper() {
         tu.contains("_0._0 = _ov.v;") && tu.contains("_0._1 = _ov.overflow;"),
         "both (T, bool) fields written:\n{tu}"
     );
+    // Plan 10 (fine-grained demand): only the used helper + its result struct
+    // are defined. The other ops for u32, the same op for other types, and the
+    // whole saturating-cast family must be absent.
+    assert!(
+        tu.contains("struct regseq_overflow_uint32_t {"),
+        "the used result struct is defined:\n{tu}"
+    );
+    assert!(
+        !tu.contains("regseq_sub_uint32_t") && !tu.contains("regseq_mul_uint32_t"),
+        "unused ops for the same type are NOT defined:\n{tu}"
+    );
+    assert!(
+        !tu.contains("regseq_add_int8_t") && !tu.contains("struct regseq_overflow_int8_t"),
+        "the same op for an unused type is NOT defined:\n{tu}"
+    );
+    // The section-11 gated comment + any cast helper are absent (the always-on
+    // block header mentions "section 11", so key on the gated comment instead).
+    assert!(
+        !tu.contains("saturating FloatToInt") && !tu.contains("regseq_f64_to_"),
+        "the unused saturating-cast family is NOT defined:\n{tu}"
+    );
+}
+
+#[test]
+fn helper_block_is_empty_for_a_no_arithmetic_model() {
+    // Plan 10 (de-clobber): a model that uses no `*WithOverflow` and no
+    // `FloatToInt` emits NONE of the ~96 helper definitions -- no wrappers, no
+    // result structs, no saturating casts, and neither section comment.
+    // Markers below are the gated section comments + helper tokens; the
+    // always-on block header mentions "section 10.1 + section 11", so those
+    // bare strings are NOT used as absence markers.
+    let tu = emit_generic_c(&trivial_model()).unwrap();
+    for tok in [
+        "regseq_add_",
+        "regseq_sub_",
+        "regseq_mul_",
+        "struct regseq_overflow_",
+        "regseq_f64_to_",
+        "{add,sub,mul}WithOverflow",
+        "saturating FloatToInt",
+    ] {
+        assert!(
+            !tu.contains(tok),
+            "no-arithmetic TU must not define helper `{tok}`:\n{tu}"
+        );
+    }
 }
 
 #[test]
@@ -3107,9 +3156,15 @@ fn generic_instance_model_is_byte_identical_across_two_calls() {
 #[test]
 fn prelude_ordinary_idents_all_defined_in_prelude() {
     // The reserved-identifier mirror in `prelude_ordinary_idents` must stay in
-    // sync with the actually-emitted prelude + helper block (Change B step 1):
-    // every reserved name appears as a function definition in the prelude text.
-    let prelude_text = format!("{}{}", prelude::PRELUDE, prelude::helper_block());
+    // sync with the *emittable* helper superset (Change B step 1 / plan 10):
+    // every reserved name is defined when the full library is requested.
+    // `helper_block` is now demand-driven, so feed it `HelperUsage::all()`; the
+    // reservation stays full even though any one TU emits only a subset.
+    let prelude_text = format!(
+        "{}{}",
+        prelude::PRELUDE,
+        prelude::helper_block(&prelude::HelperUsage::all())
+    );
     for ident in prelude_ordinary_idents() {
         assert!(
             prelude_text.contains(&format!("{ident}(")),

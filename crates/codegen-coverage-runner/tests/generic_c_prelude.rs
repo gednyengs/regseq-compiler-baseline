@@ -19,19 +19,20 @@ use std::process::Command;
 
 use codegen_coverage_runner::oracle;
 use codegen_coverage_runner::toolchain;
-use regseq_backends::emit_generic_c;
-use regseq_model::{RegseqModel, StableCrateId};
+use regseq_backends::full_helper_prelude;
 
 /// The host `cc`, matching the runner's default.
 fn cc() -> &'static Path {
     Path::new("cc")
 }
 
-/// A trivial empty model -- bank 1 (prelude + helpers) is model-independent,
-/// banks 2-5 are empty hooks, so the emitted TU is exactly the prelude block.
+/// The full bank-1 helper library (static prelude + every arithmetic / cast
+/// helper). `emit_generic_c` is now demand-driven (plan 10) and would emit no
+/// helpers for an empty model, so these tests -- which verify each helper
+/// *definition* compiles warning-free and behaves -- exercise the complete
+/// library via `full_helper_prelude`.
 fn prelude_tu() -> String {
-    emit_generic_c(&RegseqModel::with_primary("probe", StableCrateId(1)))
-        .expect("emit must return Ok")
+    full_helper_prelude()
 }
 
 /// B3: the emitted prelude + helper block compiles warning-free standalone

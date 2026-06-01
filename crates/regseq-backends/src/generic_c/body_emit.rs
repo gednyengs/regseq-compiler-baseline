@@ -38,6 +38,8 @@
 //! vtable construction is the vtable task. Diag-log call-site interception
 //! lowers to the section 8 `printf`.
 
+use std::cell::RefCell;
+
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
     ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
@@ -47,6 +49,7 @@ use regseq_model::{
     VariantLayout,
 };
 
+use super::prelude::HelperUsage;
 use super::{
     enum_emit, layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable,
     StorageTy,
@@ -79,6 +82,7 @@ pub(super) fn emit_body(
     syms: &InstanceSymbols,
     instance: &regseq_model::Instance,
     body: &regseq_model::Body,
+    helper_use: &RefCell<HelperUsage>,
 ) -> Result<String, EmitError> {
     let data = instance
         .kind
@@ -95,6 +99,7 @@ pub(super) fn emit_body(
         output_ty,
         fn_sig,
         lowering,
+        helper_use,
     };
 
     let mut out = String::from(" {\n");
@@ -218,6 +223,10 @@ struct BodyEmit<'a> {
     /// The owning function's C-ABI lowering side-table entry, when present.
     /// Drives the `Substituted` input prologue + return marshalling.
     lowering: Option<&'a regseq_model::CAbiLowering>,
+    /// Demand-driven helper accounting (plan 10): the `*WithOverflow` /
+    /// `FloatToInt` sites record the exact helper name they emit here, so
+    /// `helper_block` emits only the helpers this TU's bodies use.
+    helper_use: &'a RefCell<HelperUsage>,
 }
 
 /// The result of walking a place's projection chain ([`BodyEmit::place_walk`]):
@@ -761,6 +770,12 @@ impl BodyEmit<'_> {
             _ => unreachable!("assign_with_overflow on a non-overflow BinOp"),
         };
         let ct = info.ctype;
+        // Demand-driven helper accounting (plan 10): record the exact wrapper
+        // name this site emits so `helper_block` defines it (and its result
+        // struct `regseq_overflow_<ct>`).
+        self.helper_use
+            .borrow_mut()
+            .record_wrapper(format!("regseq_{helper}_{ct}"));
         let tmp = self.fresh_temp_name("_ov");
         Ok(Some(format!(
             "{{ struct regseq_overflow_{ct} {tmp} = regseq_{helper}_{ct}(({x}), ({y})); \
@@ -1809,6 +1824,11 @@ impl BodyEmit<'_> {
                         ))
                     }
                 };
+                // Demand-driven helper accounting (plan 10): record the exact
+                // saturating-cast name this site emits.
+                self.helper_use
+                    .borrow_mut()
+                    .record_cast(format!("regseq_{prefix}_to_{dest}"));
                 Ok(format!("regseq_{prefix}_to_{dest}({e})"))
             }
             CastKind::PtrToPtr => {

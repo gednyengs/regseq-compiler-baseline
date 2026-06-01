@@ -23,6 +23,7 @@
 //! downcast access, aggregate rvalues, enum tag-ops) are deferred to d2,
 //! each failing loud via [`EmitError::Unsupported`].
 
+use std::cell::RefCell;
 use std::collections::{HashMap, HashSet};
 
 use regseq_model::{
@@ -157,14 +158,39 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     // (sound + naturally aligned) instead of the bridge's `Array(u8, len)`.
     let cms_storage = const_memory_static_storage(model)?;
 
+    // Build banks 2-5 first so the helper block can be emitted demand-driven:
+    // bank 5 records every `*WithOverflow` / `FloatToInt` helper its bodies
+    // emit (the only sites that call one), then `helper_block` emits just those
+    // (plan 10). Output order is unchanged (prelude -> helpers -> banks); only
+    // the computation order is.
+    let helper_use = RefCell::new(prelude::HelperUsage::default());
+    let bank2 = bank2_type_forward_decls(model, &names, &discovered);
+    let bank3 = bank3_type_definitions(model, &names, &topo);
+    let bank4 = bank4_declarations(model, &names, &syms, &cms_storage)?;
+    let bank5 = bank5_definitions(model, &names, &syms, &cms_storage, &helper_use)?;
+
     let mut out = String::new();
     out.push_str(prelude::PRELUDE);
-    out.push_str(&prelude::helper_block());
-    out.push_str(&bank2_type_forward_decls(model, &names, &discovered));
-    out.push_str(&bank3_type_definitions(model, &names, &topo));
-    out.push_str(&bank4_declarations(model, &names, &syms, &cms_storage)?);
-    out.push_str(&bank5_definitions(model, &names, &syms, &cms_storage)?);
+    out.push_str(&prelude::helper_block(&helper_use.borrow()));
+    out.push_str(&bank2);
+    out.push_str(&bank3);
+    out.push_str(&bank4);
+    out.push_str(&bank5);
     Ok(out)
+}
+
+/// The complete bank-1 helper library (static prelude + every arithmetic / cast
+/// helper over the fixed type tables), as a standalone-compilable TU prefix.
+///
+/// Production [`emit_generic_c`] emits only the helpers a model uses; this
+/// exposes the full library so the host-`cc` warning-free / behavioral tests can
+/// exercise every helper definition independent of any one model's demand.
+pub fn full_helper_prelude() -> String {
+    format!(
+        "{}{}",
+        prelude::PRELUDE,
+        prelude::helper_block(&prelude::HelperUsage::all())
+    )
 }
 
 /// The by-value field / array-element edges out of an aggregate `ty` (the
@@ -1698,6 +1724,7 @@ fn bank5_definitions(
     names: &NameTable,
     syms: &InstanceSymbols,
     cms_storage: &HashMap<InstanceId, StorageTy>,
+    helper_use: &RefCell<prelude::HelperUsage>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     let mut wrote_header = false;
@@ -1726,7 +1753,7 @@ fn bank5_definitions(
                 };
                 header(&mut out, &mut wrote_header);
                 let sig = fn_signature(model, names, syms, id, instance, true);
-                let block = body_emit::emit_body(model, names, syms, instance, body)?;
+                let block = body_emit::emit_body(model, names, syms, instance, body, helper_use)?;
                 out.push_str(&format!("{sig}{block}"));
             }
             InstanceKind::Static {

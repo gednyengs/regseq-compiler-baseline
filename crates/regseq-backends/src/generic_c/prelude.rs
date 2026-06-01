@@ -15,6 +15,8 @@
 //! whereas a plain `static` routine would warn "defined but not used" when a
 //! TU has no call site (e.g. the standalone-prelude compile test).
 
+use std::collections::BTreeSet;
+
 /// The static prelude: includes, the section 3.2 `struct rust_str`, the
 /// section 16 panic infrastructure, and the section 16 `AssertKind` message
 /// catalog. Emitted verbatim as bank 1's leading, model-independent text.
@@ -106,28 +108,95 @@ const FLOAT_TYPES: &[(&str, &str, &str)] = &[
     ("f128", "_Float128", "__FLT128_MANT_DIG__"),
 ];
 
-/// Emit the fixed arithmetic / cast helper block (section 10.1
-/// `*WithOverflow` + section 11 saturating `FloatToInt`).
+/// The arithmetic / cast helpers a translation unit actually references.
+/// `emit_generic_c` fills this while emitting bank-5 bodies — each
+/// `*WithOverflow` / `FloatToInt` site records the exact helper name it emits —
+/// then [`helper_block`] emits only the recorded helpers (demand-driven; plan
+/// 10). This replaces the former fixed superset, which clobbered every TU with
+/// ~96 `static inline` definitions whether used or not.
+#[derive(Default)]
+pub struct HelperUsage {
+    /// Overflow wrapper function names emitted, e.g. `regseq_add_int32_t`.
+    wrappers: BTreeSet<String>,
+    /// Saturating-cast function names emitted, e.g. `regseq_f64_to_int8_t`.
+    casts: BTreeSet<String>,
+}
+
+impl HelperUsage {
+    /// Record an overflow wrapper call by its emitted function name.
+    pub fn record_wrapper(&mut self, name: String) {
+        self.wrappers.insert(name);
+    }
+
+    /// Record a saturating-cast call by its emitted function name.
+    pub fn record_cast(&mut self, name: String) {
+        self.casts.insert(name);
+    }
+
+    /// Every helper over the fixed `INT_TYPES` / `FLOAT_TYPES` tables (the
+    /// complete superset). Used by the reserved-identifier pin and the
+    /// standalone helper-library test, which verify the full library
+    /// independent of any one model's demand.
+    pub fn all() -> Self {
+        let mut u = Self::default();
+        for (ty, _, _) in INT_TYPES {
+            for op in ["add", "sub", "mul"] {
+                u.wrappers.insert(format!("regseq_{op}_{ty}"));
+            }
+        }
+        for (prefix, _, _) in FLOAT_TYPES {
+            for (ity, _, _) in INT_TYPES {
+                u.casts.insert(format!("regseq_{prefix}_to_{ity}"));
+            }
+        }
+        u
+    }
+
+    /// Whether the named overflow wrapper was recorded.
+    fn wrapper_used(&self, name: &str) -> bool {
+        self.wrappers.contains(name)
+    }
+
+    /// Whether the named saturating cast was recorded.
+    fn cast_used(&self, name: &str) -> bool {
+        self.casts.contains(name)
+    }
+
+    /// Whether type `ty` needs its `struct regseq_overflow_<ty>` — true iff any
+    /// `add`/`sub`/`mul` wrapper for `ty` was recorded. The struct is the
+    /// wrapper return type and is referenced nowhere else (plan 10), so it is
+    /// co-emitted with its wrappers.
+    fn struct_used(&self, ty: &str) -> bool {
+        ["add", "sub", "mul"]
+            .iter()
+            .any(|op| self.wrappers.contains(&format!("regseq_{op}_{ty}")))
+    }
+}
+
+/// Emit the arithmetic / cast helper block (section 10.1 `*WithOverflow` +
+/// section 11 saturating `FloatToInt`), demand-driven over `usage` (plan 10).
 ///
-/// A fixed superset over the primitive type set (scope decision 2): the
-/// helpers are *defined* here, *used* at task-d `BinaryOp` / `Cast` sites.
-/// All helpers are `static inline`, so the unused ones are warning-free under
-/// `-Wall`. Naming scheme (collision-free + stable across hosts):
+/// Only recorded helpers are emitted: a `regseq_{add,sub,mul}_<T>` wrapper iff
+/// its name is in `usage`, a `struct regseq_overflow_<T>` iff any wrapper for
+/// `T` is, and a `regseq_<f-prefix>_to_<T>` cast iff its name is. Rows are
+/// walked in the fixed `INT_TYPES` / `FLOAT_TYPES` order (not the recorded set),
+/// so the emitted block is byte-stable. The block header and 128-bit bound
+/// macros are emitted unconditionally (harmless `#define`s). Naming scheme
+/// (collision-free + stable across hosts):
 ///
 /// - result struct: `struct regseq_overflow_<T>` (`{ <T> v; _Bool overflow; }`)
 /// - overflow wrapper: `regseq_{add,sub,mul}_<T>(<T> a, <T> b)`
 /// - saturating cast: `regseq_<f-prefix>_to_<T>(<F> x)`
 ///
 /// where `<T>` is the integer C type spelling and `<f-prefix>` is
-/// `f32`/`f64`/`f16`/`f128`. Output is a pure function of the fixed
-/// `INT_TYPES` / `FLOAT_TYPES` tables, hence byte-stable.
-pub fn helper_block() -> String {
+/// `f32`/`f64`/`f16`/`f128`.
+pub fn helper_block(usage: &HelperUsage) -> String {
     let mut out = String::new();
 
     out.push_str(
         "\n\
 /* ---------------------------------------------------------------------------\n\
- * Arithmetic / cast helper block (section 10.1 + section 11), fixed superset.\n\
+ * Arithmetic / cast helper block (section 10.1 + section 11), demand-driven.\n\
  * --------------------------------------------------------------------------- */\n\
 \n\
 /* 128-bit bounds: no standard *_MIN / *_MAX macro exists for __int128 /\n\
@@ -138,13 +207,21 @@ pub fn helper_block() -> String {
 \n",
     );
 
-    // section 10.1: the `*WithOverflow` result structs + builtin wrappers.
-    out.push_str("/* section 10.1: {add,sub,mul}WithOverflow -> (T, bool). */\n");
+    // section 10.1: the `*WithOverflow` result structs + builtin wrappers,
+    // emitted only for the (op, T) pairs the bodies actually use.
+    if !usage.wrappers.is_empty() {
+        out.push_str("/* section 10.1: {add,sub,mul}WithOverflow -> (T, bool). */\n");
+    }
     for (ty, _min, _max) in INT_TYPES {
-        out.push_str(&format!(
-            "struct regseq_overflow_{ty} {{ {ty} v; _Bool overflow; }};\n"
-        ));
+        if usage.struct_used(ty) {
+            out.push_str(&format!(
+                "struct regseq_overflow_{ty} {{ {ty} v; _Bool overflow; }};\n"
+            ));
+        }
         for op in ["add", "sub", "mul"] {
+            if !usage.wrapper_used(&format!("regseq_{op}_{ty}")) {
+                continue;
+            }
             out.push_str(&format!(
                 "static inline struct regseq_overflow_{ty} regseq_{op}_{ty}({ty} a, {ty} b) {{\n\
                  \x20\x20\x20\x20struct regseq_overflow_{ty} r;\n\
@@ -156,14 +233,24 @@ pub fn helper_block() -> String {
     }
 
     // section 11: saturating FloatToInt (bounds checked *before* the cast;
-    // NaN -> 0; +/-inf handled by the comparisons).
-    out.push_str("\n/* section 11: saturating FloatToInt (NaN -> 0; bounds before cast). */\n");
+    // NaN -> 0; +/-inf handled by the comparisons), emitted only for the
+    // (prefix, T) casts the bodies actually use.
+    if !usage.casts.is_empty() {
+        out.push_str("\n/* section 11: saturating FloatToInt (NaN -> 0; bounds before cast). */\n");
+    }
     for (prefix, fty, avail_macro) in FLOAT_TYPES {
+        let used: Vec<&(&str, &str, &str)> = INT_TYPES
+            .iter()
+            .filter(|(ity, _, _)| usage.cast_used(&format!("regseq_{prefix}_to_{ity}")))
+            .collect();
+        if used.is_empty() {
+            continue;
+        }
         let gated = !avail_macro.is_empty();
         if gated {
             out.push_str(&format!("#if defined({avail_macro})\n"));
         }
-        for (ity, min, max) in INT_TYPES {
+        for (ity, min, max) in used {
             out.push_str(&format!(
                 "static inline {ity} regseq_{prefix}_to_{ity}({fty} x) {{\n\
                  \x20\x20\x20\x20if (isnan(x)) return 0;\n\
