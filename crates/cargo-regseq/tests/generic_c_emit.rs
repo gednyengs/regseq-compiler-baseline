@@ -161,6 +161,100 @@ pub extern "C" fn regseq_main() {
     .expect("write src/lib.rs");
 }
 
+/// Write a standalone crate whose entry calls a generic
+/// `consume::<u32>(7)`. The polymorphic MIR of `consume<T>` drops
+/// `_1: T`, so on a `panic=unwind` host the call/return retains an
+/// unwind cleanup block -- exactly the shape the production
+/// `panic=abort` config must prune before the bridge (which rejects
+/// any surviving `is_cleanup` block) consumes it. The `u32`
+/// instantiation keeps the emitted C trivially compilable, so this
+/// isolates the `panic=abort` contract from any ZST-handle codegen.
+fn write_cleanup_playground(dir: &Path) {
+    fs::create_dir_all(dir.join("src")).expect("mkdir src");
+
+    fs::write(
+        dir.join("Cargo.toml"),
+        r#"[package]
+name = "regseq-gc-cleanup"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+"#,
+    )
+    .expect("write Cargo.toml");
+
+    fs::write(
+        dir.join("platform.toml"),
+        r#"[platform]
+name = "playground"
+"#,
+    )
+    .expect("write platform.toml");
+
+    fs::copy(
+        workspace_root().join("rust-toolchain.toml"),
+        dir.join("rust-toolchain.toml"),
+    )
+    .expect("copy rust-toolchain.toml");
+
+    fs::write(
+        dir.join("src/lib.rs"),
+        r#"#![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+pub mod regseq {
+    pub mod log {
+        pub mod intrinsics {
+            pub enum LogArg<'a> {
+                U32(u32),
+                Str(&'a str),
+            }
+            impl From<u32> for LogArg<'_> {
+                fn from(v: u32) -> Self {
+                    LogArg::U32(v)
+                }
+            }
+            impl<'a> From<&'a str> for LogArg<'a> {
+                fn from(v: &'a str) -> Self {
+                    LogArg::Str(v)
+                }
+            }
+            #[inline(never)]
+            #[rseq::intrinsic("log-info")]
+            pub fn log_info(_fmt: &'static str, _args: &[LogArg<'_>]) {}
+        }
+        macro_rules! info {
+            ($fmt:literal $(, $arg:expr)* $(,)?) => {
+                $crate::regseq::log::intrinsics::log_info(
+                    $fmt,
+                    &[$($crate::regseq::log::intrinsics::LogArg::from($arg)),*],
+                )
+            };
+        }
+        pub(crate) use info;
+    }
+}
+
+// Generic-by-value: the polymorphic body of `consume<T>` drops
+// `_1: T`, producing an unwind cleanup block under panic=unwind.
+#[inline(never)]
+fn consume<T>(_x: T) -> u32 {
+    42
+}
+
+#[no_mangle]
+pub extern "C" fn regseq_main() {
+    let r = consume::<u32>(7);
+    regseq::log::info!("consume returned {}", r);
+}
+"#,
+    )
+    .expect("write src/lib.rs");
+}
+
 /// Locate a host C compiler (`$CC` or `cc` on PATH). Returns `None`
 /// when none is available, so the compile/run leg degrades to a
 /// skip rather than a spurious failure on a host without a `cc`.
@@ -355,6 +449,80 @@ fn cargo_regseq_emit_bin_links_and_runs() {
     let run_stdout = String::from_utf8_lossy(&run.stdout);
     assert!(
         run_stdout.contains("[INFO] smoke=42"),
+        "the linked binary did not log the expected value; got stdout={run_stdout:?}",
+    );
+}
+
+/// Regression for the production `panic=abort` MIR-shape contract.
+///
+/// The bridge's body translator categorically rejects MIR cleanup
+/// blocks (`crates/regseq-driver/src/bridge/body/basic_block.rs`),
+/// *assuming* `panic=abort` has pruned them. So the production
+/// callbacks (`RegseqCallbacks::config`) must force `panic=abort`;
+/// without it, on a `panic=unwind` host any function whose MIR drops
+/// an owned value across a call retains unwind cleanup blocks and the
+/// bridge aborts with "is_cleanup=true block survived panic=abort
+/// cleanup-block pruning". A generic `consume::<u32>(7)` is the
+/// minimal trigger (its polymorphic body drops `_1: T`).
+///
+/// This MUST exercise the real CLI path (cargo-regseq -> production
+/// `RegseqCallbacks`): the codegen-coverage fixtures run under a
+/// harness that sets `-C panic=abort` itself
+/// (`crates/test-ir-fixtures/src/lib.rs`), so they cannot catch a
+/// missing panic strategy in the production callbacks. Gated on a
+/// host `cc` because `--emit bin` links; skips cleanly otherwise.
+#[test]
+fn cargo_regseq_emit_bin_prunes_drop_cleanup_blocks() {
+    if host_cc().is_none() {
+        eprintln!("note: no host `cc` found; skipping the panic=abort cleanup-block regression");
+        return;
+    }
+    ensure_driver_built();
+    let temp = TempDir::new().expect("mkdir temp");
+    let dir = temp.path();
+    write_cleanup_playground(dir);
+
+    let output = Command::new(cargo_regseq_bin())
+        .arg("regseq")
+        .arg("--target-os")
+        .arg("linux")
+        .arg("--platform-file")
+        .arg("platform.toml")
+        .arg("--emit")
+        .arg("bin=consume")
+        .env("REGSEQ_DRIVER", regseq_driver_bin())
+        .current_dir(dir)
+        .output()
+        .expect("failed to spawn cargo-regseq");
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    let stderr = String::from_utf8_lossy(&output.stderr);
+    assert!(
+        output.status.success(),
+        "cargo-regseq --emit bin exited with {}: stdout={stdout} stderr={stderr}",
+        output.status,
+    );
+
+    // The linked executable runs and logs the value returned through
+    // the generic-by-value call (whose drop produced the cleanup block
+    // the production panic=abort config must prune).
+    let bin = dir.join("regseq-out").join("consume");
+    assert!(
+        bin.exists(),
+        "linked binary `consume` was not produced: stdout={stdout} stderr={stderr}",
+    );
+    let run = Command::new(&bin)
+        .output()
+        .expect("failed to run the linked binary");
+    assert!(
+        run.status.success(),
+        "the linked binary exited non-zero ({}): stderr={}",
+        run.status,
+        String::from_utf8_lossy(&run.stderr),
+    );
+    let run_stdout = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        run_stdout.contains("[INFO] consume returned 42"),
         "the linked binary did not log the expected value; got stdout={run_stdout:?}",
     );
 }

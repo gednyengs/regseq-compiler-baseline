@@ -64,6 +64,14 @@ impl rustc_driver::Callbacks for RegseqAwareCallbacks {
         config.opts.unstable_opts.mir_opt_level = Some(0);
         config.opts.unstable_opts.always_encode_mir = true;
         config.opts.unstable_opts.mir_enable_passes = regseq_mir_passes();
+        // panic=abort so MIR drop/closure-call sites have their unwind
+        // cleanup blocks pruned before the bridge consumes them; the body
+        // translator rejects any surviving `is_cleanup` block (see
+        // `bridge/body/basic_block.rs`). Part of the shared MIR-shape
+        // contract: this MUST match `RegseqCallbacks::config` (and the
+        // `-C panic=abort` flag in the test-ir-fixtures harness), or
+        // cross-crate MIR consumed by the bridge would drift in shape.
+        config.opts.cg.panic = Some(rustc_target::spec::PanicStrategy::Abort);
         config.opts.cg.overflow_checks = Some(false);
         config.opts.cg.debug_assertions = Some(false);
         config.opts.debug_assertions = false;
@@ -106,6 +114,12 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
         config.opts.unstable_opts.mir_opt_level = Some(0);
         config.opts.unstable_opts.always_encode_mir = true;
         config.opts.unstable_opts.mir_enable_passes = regseq_mir_passes();
+        // panic=abort so MIR drop/closure-call sites have their unwind
+        // cleanup blocks pruned before the bridge consumes them; the body
+        // translator rejects any surviving `is_cleanup` block (see
+        // `bridge/body/basic_block.rs`). MUST match `RegseqAwareCallbacks`
+        // and the `-C panic=abort` flag in the test-ir-fixtures harness.
+        config.opts.cg.panic = Some(rustc_target::spec::PanicStrategy::Abort);
         config.opts.cg.overflow_checks = Some(false);
         config.opts.cg.debug_assertions = Some(false);
         config.opts.debug_assertions = false;
