@@ -161,26 +161,34 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
         Err(toolchain::ToolchainError::CompileFailed { stderr }) => {
             return fail(Stage::Compile, stderr);
         }
-        Err(toolchain::ToolchainError::Io(err)) => {
-            return fail(Stage::Compile, format!("toolchain I/O error: {err}"));
+        // `compile_and_run` only ever yields `CompileFailed` or `Io`; the `Io`
+        // Display is "toolchain I/O error: ...", identical to the prior arm.
+        Err(err) => {
+            return fail(Stage::Compile, err.to_string());
         }
     };
 
     // Stage 6: Behavioral oracle.
     match fixture.manifest.expect {
         Expect::Pass => {
-            // Stage 5 boundary for a pass fixture: clean exit, no panic.
-            if run.exit_code != Some(0) {
-                return fail(
-                    Stage::Run,
-                    format!("expected clean exit 0, got exit_code {:?}", run.exit_code),
-                );
-            }
-            if !run.stderr.is_empty() {
-                return fail(
-                    Stage::Run,
-                    format!("expected empty stderr, got {:?}", run.stderr),
-                );
+            // Stage 5 boundary for a pass fixture: the process must exit with
+            // the resolved `expected.exit` (default 0) AND with empty stderr.
+            // The symbol is resolved on the SAME cc/libc that ran the fixture,
+            // so no numeric lives in the manifest (contract C04); an absent or
+            // "0" field resolves to 0 with no probe, preserving exit-0
+            // semantics for existing fixtures (invariant I02).
+            let exit_symbol = fixture.manifest.expected.exit.as_deref().unwrap_or("0");
+            let expected_exit = match toolchain::resolve_errno(exit_symbol, cc) {
+                Ok(code) => code,
+                Err(err) => {
+                    return fail(
+                        Stage::Run,
+                        format!("cannot resolve expected.exit {exit_symbol:?}: {err}"),
+                    );
+                }
+            };
+            if let Err(mismatch) = oracle::behavioral_exit(&run, expected_exit) {
+                return fail(Stage::Run, mismatch.summary);
             }
             let golden_stdout = match std::fs::read_to_string(&fixture.expected_stdout) {
                 Ok(text) => text,

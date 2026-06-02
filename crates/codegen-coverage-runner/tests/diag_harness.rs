@@ -125,6 +125,7 @@ fn fixture_in(dir: &TempFixtureDir, input: PathBuf) -> Fixture {
             covers: vec!["DL-2".to_string()],
             expect: Expect::Pass,
             overflow_checks: None,
+            expected: Default::default(),
         },
         dir: dir.dir.clone(),
         input,

@@ -39,6 +39,26 @@ pub struct Manifest {
     /// bridged MIR only when overflow checks are on.
     #[serde(default)]
     pub overflow_checks: Option<bool>,
+    /// Expected-outcome configuration beyond the sibling `expected.*` files
+    /// (the symbolic `expected.exit` oracle). Absent (the default) preserves
+    /// the historical exit-0 pass semantics, so existing fixtures parse and
+    /// run unchanged.
+    #[serde(default)]
+    pub expected: Expected,
+}
+
+/// The `[expected]` manifest table: expected-outcome configuration resolved
+/// at run time rather than from a sibling file. Currently just the symbolic
+/// process exit oracle.
+#[derive(Debug, Deserialize, PartialEq, Eq, Clone, Default)]
+pub struct Expected {
+    /// Symbolic expected process exit code: an errno identifier
+    /// (e.g. `"ETIMEDOUT"`) or the literal `"0"`. Absent (the default)
+    /// preserves exit-0 semantics. The identifier is resolved to a numeric
+    /// on the fixture's own `cc`/libc at run time (contract C04); no numeric
+    /// is ever stored here (invariant I03).
+    #[serde(default)]
+    pub exit: Option<String>,
 }
 
 /// Fixture input source kind.

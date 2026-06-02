@@ -53,6 +53,57 @@ expect = "panic"
 }
 
 #[test]
+fn parses_symbolic_expected_exit_and_defaults_to_absent() {
+    // The `[expected]` table carries the symbolic errno identifier; no numeric
+    // is ever stored (contract C04).
+    let with_exit = r#"
+name = "errno_return"
+kind = "rust"
+covers = ["RE-1"]
+expect = "pass"
+[expected]
+exit = "ETIMEDOUT"
+"#;
+    let m = parse_manifest(with_exit).expect("manifest with [expected].exit must parse");
+    assert_eq!(m.expected.exit.as_deref(), Some("ETIMEDOUT"));
+
+    // The literal "0" is accepted (exit-0 semantics, made explicit).
+    let zero = r#"
+name = "ok_return"
+kind = "rust"
+covers = ["RE-2"]
+expect = "pass"
+[expected]
+exit = "0"
+"#;
+    assert_eq!(
+        parse_manifest(zero)
+            .expect("explicit exit = \"0\" must parse")
+            .expected
+            .exit
+            .as_deref(),
+        Some("0")
+    );
+
+    // Absent `[expected]` defaults to no symbolic exit -- existing fixtures
+    // parse unchanged with exit-0 semantics (invariant I02).
+    let absent = r#"
+name = "legacy"
+kind = "rust"
+covers = ["RE-3"]
+expect = "pass"
+"#;
+    assert_eq!(
+        parse_manifest(absent)
+            .expect("manifest without [expected] must parse")
+            .expected
+            .exit,
+        None,
+        "absent expected.exit must default to None (exit-0 semantics)"
+    );
+}
+
+#[test]
 fn rejects_manifest_missing_required_field() {
     // `kind` is required and absent.
     let text = r#"

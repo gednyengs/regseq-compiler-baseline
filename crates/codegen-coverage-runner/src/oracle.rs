@@ -28,6 +28,35 @@ pub fn behavioral_stdout(captured: &str, golden: &str) -> Result<(), OracleMisma
     compare_exact("stdout", captured, golden)
 }
 
+/// Stage 5/6 (expect = pass): assert the process exited with exactly
+/// `expected_exit` AND that stderr is empty.
+///
+/// `expected_exit` is the numeric resolved from the manifest's symbolic
+/// `expected.exit` (default `0`). The empty-stderr guard is what stops a
+/// `panic = abort` SIGABRT -- which dies with a non-zero status WITH a panic
+/// message on stderr -- from masquerading as a clean non-zero errno return
+/// (requirement R11). Stdout is byte-compared separately by
+/// [`behavioral_stdout`] (stage 6).
+pub fn behavioral_exit(run: &RunOutput, expected_exit: i32) -> Result<(), OracleMismatch> {
+    if run.exit_code != Some(expected_exit) {
+        return Err(OracleMismatch {
+            summary: format!(
+                "expected process exit {expected_exit}, got exit_code {:?}",
+                run.exit_code
+            ),
+        });
+    }
+    if !run.stderr.is_empty() {
+        return Err(OracleMismatch {
+            summary: format!(
+                "expected empty stderr for an exit-{expected_exit} pass, got {:?}",
+                run.stderr
+            ),
+        });
+    }
+    Ok(())
+}
+
 /// Stage 5/6 (expect = panic): assert the process did NOT exit 0 and its
 /// stderr matches the golden stderr byte-for-byte. A `None` exit code (a
 /// signal death, e.g. `abort()`) counts as non-zero.

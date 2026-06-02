@@ -5431,7 +5431,7 @@
           "id": "regseq-backends-29",
           "name": "Harness symbolic expected.exit oracle",
           "spec": ".harness/tasks/regseq-backends/29-expected-exit-oracle.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-28"
           ],

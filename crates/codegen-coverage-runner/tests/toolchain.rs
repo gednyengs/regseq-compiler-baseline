@@ -14,7 +14,7 @@ extern crate rustc_driver;
 use std::path::Path;
 
 use codegen_coverage_runner::oracle;
-use codegen_coverage_runner::toolchain::{self, EntryShim, ToolchainError};
+use codegen_coverage_runner::toolchain::{self, EntryShim, RunOutput, ToolchainError};
 
 /// The host `cc`, matching the runner's default.
 fn cc() -> &'static Path {
@@ -79,6 +79,100 @@ fn malformed_tu_is_a_compile_failure() {
         }
         other => panic!("expected CompileFailed, got {other:?}"),
     }
+}
+
+/// The symbolic `expected.exit` oracle (`behavioral_exit`), string/value in,
+/// verdict out: a matching exit with empty stderr passes; a mismatched exit
+/// fails; and a nonzero exit WITH stderr fails -- so a `panic=abort` SIGABRT
+/// (nonzero + a panic message on stderr) cannot masquerade as a clean errno
+/// return.
+#[test]
+fn behavioral_exit_matches_resolves_and_guards_stderr() {
+    let clean_zero = RunOutput {
+        stdout: "[INFO] ok\n".to_string(),
+        stderr: String::new(),
+        exit_code: Some(0),
+    };
+    oracle::behavioral_exit(&clean_zero, 0).expect("exit 0 with empty stderr must match");
+
+    let clean_errno = RunOutput {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: Some(110),
+    };
+    oracle::behavioral_exit(&clean_errno, 110)
+        .expect("a matching nonzero exit with empty stderr must match");
+
+    // Mismatched exit code fails.
+    assert!(
+        oracle::behavioral_exit(&clean_errno, 22).is_err(),
+        "exit 110 must not satisfy an expected 22"
+    );
+    assert!(
+        oracle::behavioral_exit(&clean_zero, 110).is_err(),
+        "exit 0 must not satisfy an expected nonzero errno"
+    );
+
+    // Nonzero exit WITH stderr fails the empty-stderr guard (the SIGABRT
+    // masquerade defense, requirement R11).
+    let aborted = RunOutput {
+        stdout: String::new(),
+        stderr: "[PANIC] assertion failed\n".to_string(),
+        exit_code: Some(134),
+    };
+    assert!(
+        oracle::behavioral_exit(&aborted, 134).is_err(),
+        "a nonzero exit with stderr must fail even when the code matches"
+    );
+
+    // A signal death (None exit) never satisfies a numeric expectation.
+    let signal = RunOutput {
+        stdout: String::new(),
+        stderr: String::new(),
+        exit_code: None,
+    };
+    assert!(
+        oracle::behavioral_exit(&signal, 0).is_err(),
+        "a signal-killed process (None exit) must not satisfy any numeric exit"
+    );
+}
+
+/// `resolve_errno` resolves a real errno identifier on the fixture's own
+/// `cc`/libc to a sane numeric (no host numeric is hard-coded; we only assert
+/// it lands in the 8-bit exit range), and short-circuits `"0"` to 0 with no
+/// probe.
+#[test]
+fn resolve_errno_resolves_a_symbol_and_short_circuits_zero() {
+    assert_eq!(
+        toolchain::resolve_errno("0", cc()).expect("\"0\" must resolve"),
+        0,
+        "the literal \"0\" must resolve to 0 without a probe"
+    );
+
+    let n =
+        toolchain::resolve_errno("ETIMEDOUT", cc()).expect("ETIMEDOUT must resolve on this libc");
+    assert!(
+        n > 0 && n < 256,
+        "ETIMEDOUT must resolve to a sane 8-bit-fitting positive numeric, got {n}"
+    );
+
+    // An identifier the libc does not define fails the probe compile loudly.
+    assert!(
+        toolchain::resolve_errno("ENOSUCHERRNO_REGSEQ", cc()).is_err(),
+        "an undefined errno identifier must fail to resolve, not return garbage"
+    );
+
+    // A raw numeric or a C expression is NOT a symbolic identifier: it is
+    // rejected up front (never resolved to its own value), so no host-libc
+    // numeric can be smuggled into a manifest (C04/R10/I03).
+    assert!(
+        toolchain::resolve_errno("110", cc()).is_err(),
+        "a raw numeric must be rejected, not resolved to itself"
+    );
+    assert!(
+        toolchain::resolve_errno("EINVAL + 1", cc()).is_err(),
+        "a C expression must be rejected, not interpolated into the probe"
+    );
 }
 
 /// `generate_main_c` emits the Doc-2 D3 unit-`void` entry shim for the

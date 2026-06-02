@@ -36,6 +36,15 @@ pub enum ToolchainError {
         /// Captured `cc` stderr.
         stderr: String,
     },
+    /// A symbolic `expected.exit` identifier could not be resolved to a
+    /// numeric on the fixture's libc: the probe compiled and ran but did not
+    /// print a parseable integer.
+    SymbolResolution {
+        /// The errno identifier that failed to resolve.
+        symbol: String,
+        /// Why resolution failed.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for ToolchainError {
@@ -44,6 +53,12 @@ impl std::fmt::Display for ToolchainError {
             ToolchainError::Io(err) => write!(f, "toolchain I/O error: {err}"),
             ToolchainError::CompileFailed { stderr } => {
                 write!(f, "cc failed to compile the translation unit:\n{stderr}")
+            }
+            ToolchainError::SymbolResolution { symbol, detail } => {
+                write!(
+                    f,
+                    "could not resolve symbol {symbol:?} on the fixture libc: {detail}"
+                )
             }
         }
     }
@@ -104,6 +119,83 @@ pub fn compile_and_run(
         stderr: String::from_utf8_lossy(&run.stderr).into_owned(),
         exit_code: run.status.code(),
     })
+}
+
+/// Resolve a symbolic `expected.exit` identifier to its numeric value on the
+/// SAME `cc`/libc that compiles and runs the fixture, by compiling and running
+/// a tiny probe translation unit that prints the constant.
+///
+/// The literal `"0"` short-circuits to `0` with no probe (the exit-0 default,
+/// so an absent or `"0"` field costs nothing). Any other `symbol` must be a
+/// bare errno identifier (a C identifier); it is spelled into a
+/// `printf("%d", <symbol>)` probe over `<errno.h>`, and a symbol the libc does
+/// not define fails the probe compile and surfaces as
+/// [`ToolchainError::CompileFailed`]. A non-identifier -- in particular a raw
+/// numeric like `"110"` or a C expression -- is rejected up front as a
+/// [`ToolchainError::SymbolResolution`], so no host-libc numeric is ever stored
+/// in a manifest and no arbitrary C is interpolated (contract C04, requirement
+/// R10, invariant I03). The temp dir is removed on every return path.
+pub fn resolve_errno(symbol: &str, cc: &Path) -> Result<i32, ToolchainError> {
+    if symbol == "0" {
+        return Ok(0);
+    }
+    if !is_errno_identifier(symbol) {
+        return Err(ToolchainError::SymbolResolution {
+            symbol: symbol.to_string(),
+            detail: "expected an errno identifier (a C identifier) or the literal \"0\"; \
+                     a raw numeric or expression is not allowed -- no numeric is stored in a \
+                     manifest (C04/R10/I03)"
+                .to_string(),
+        });
+    }
+    let scratch = ScratchDir::new()?;
+    let dir = scratch.path();
+
+    let probe_path = dir.join("probe.c");
+    let bin_path = dir.join("probe_bin");
+    let probe = format!(
+        "#include <errno.h>\n\
+         #include <stdio.h>\n\
+         int main(void) {{ printf(\"%d\\n\", {symbol}); return 0; }}\n"
+    );
+    std::fs::write(&probe_path, probe)?;
+
+    let compile = Command::new(cc)
+        .args(CC_FLAGS)
+        .arg("-o")
+        .arg(&bin_path)
+        .arg(&probe_path)
+        .output()?;
+    if !compile.status.success() {
+        return Err(ToolchainError::CompileFailed {
+            stderr: String::from_utf8_lossy(&compile.stderr).into_owned(),
+        });
+    }
+
+    let run = Command::new(&bin_path).output()?;
+    let printed = String::from_utf8_lossy(&run.stdout);
+    printed
+        .trim()
+        .parse::<i32>()
+        .map_err(|err| ToolchainError::SymbolResolution {
+            symbol: symbol.to_string(),
+            detail: format!("probe printed {printed:?}, not an integer ({err})"),
+        })
+}
+
+/// Whether `s` has the shape of a C identifier (the shape an errno macro
+/// takes): a non-empty string whose first character is an ASCII letter or
+/// underscore, with the rest ASCII letters, digits, or underscores. This is
+/// the guard that keeps a raw numeric (e.g. `"110"`) or a C expression out of
+/// `expected.exit`, so only a symbolic identifier (or the special `"0"`) is
+/// ever resolved (contract C04, invariant I03).
+fn is_errno_identifier(s: &str) -> bool {
+    let mut chars = s.chars();
+    match chars.next() {
+        Some(c) if c.is_ascii_alphabetic() || c == '_' => {}
+        _ => return false,
+    }
+    chars.all(|c| c.is_ascii_alphanumeric() || c == '_')
 }
 
 /// A process-unique scratch directory removed on drop.

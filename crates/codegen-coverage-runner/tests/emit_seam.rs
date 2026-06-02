@@ -75,6 +75,7 @@ fn pipeline_advances_past_emit_now_that_the_seam_is_live() {
             covers: vec![],
             expect: Expect::Pass,
             overflow_checks: None,
+            expected: Default::default(),
         },
         dir: snippet.dir.clone(),
         input: snippet.dir.join("input.rs"),
