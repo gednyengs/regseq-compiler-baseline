@@ -2301,6 +2301,49 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-89",
+          "name": "Bridge framework_type recognition + materialization",
+          "spec": ".harness/tasks/regseq-driver/89-bridge-framework-type-recognition.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-98"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-driver-90",
+          "name": "cargo-regseq --emit bin exit-adapter parity",
+          "spec": ".harness/tasks/regseq-driver/90-emit-bin-exit-adapter-parity.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-28",
+            "regseq-backends-29"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -4481,6 +4524,31 @@
               "reason": "record the bridge-validator dependency; FS-5 deferred to regseq-driver-86 (pilot finding)"
             }
           ]
+        },
+        {
+          "id": "regseq-model-98",
+          "name": "Model AttrData::FrameworkType",
+          "spec": ".harness/tasks/regseq-model/98-framework-type-attrdata.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 2,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-06-02T18:27:10Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review: clarify AttrData::FrameworkType tag-byte test (non-blocking #2)"
+            }
+          ]
         }
       ]
     },
@@ -5279,6 +5347,168 @@
           "history": [
             {
               "ts": "2026-05-31T17:49:04Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-26",
+          "name": "Generic-C RegseqError errno table (C02) + exhaustive test",
+          "spec": ".harness/tasks/regseq-backends/26-regseq-error-errno-table.md",
+          "status": "pending",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 2,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-06-02T18:27:10Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review: C absorbs T05 + pure-table half of T10 only (blocking #1)"
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-27",
+          "name": "Generic-C entry-aware emit API + return-shape classifier",
+          "spec": ".harness/tasks/regseq-backends/27-entry-aware-emit-api.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-model-98",
+            "regseq-driver-89"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-28",
+          "name": "Generic-C RegseqError exit adapter + symbolic switch + int shim",
+          "spec": ".harness/tasks/regseq-backends/28-regseq-error-exit-adapter.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-26",
+            "regseq-backends-27"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 2,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-06-02T18:27:10Z",
+              "event": "spec_edited",
+              "spec_version": 2,
+              "reason": "Codex review: fold adapter-switch half of T10 into E (blocking #1)"
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-29",
+          "name": "Harness symbolic expected.exit oracle",
+          "spec": ".harness/tasks/regseq-backends/29-expected-exit-oracle.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-28"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-30",
+          "name": "RegseqError e2e fixtures (Ok/EINVAL/reclassify)",
+          "spec": ".harness/tasks/regseq-backends/30-regseq-error-e2e-fixtures.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-28",
+            "regseq-backends-29"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-31",
+          "name": "RegseqError fail-loud negatives",
+          "spec": ".harness/tasks/regseq-backends/31-regseq-error-negatives.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-27",
+            "regseq-backends-28"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-32",
+          "name": "RegseqError coverage-ledger / matrix rows + docs note",
+          "spec": ".harness/tasks/regseq-backends/32-regseq-error-ledger-matrix.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-backends-30",
+            "regseq-backends-31"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T18:21:14Z",
               "event": "added",
               "spec_version": 1
             }
