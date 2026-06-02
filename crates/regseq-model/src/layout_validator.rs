@@ -904,6 +904,9 @@ fn validate_attr_data_payload(
 ) -> Result<(), InvariantViolation> {
     match entry {
         AttrData::Intrinsic(_) => Ok(()),
+        // The framework-type marker carries a closed enum with no nested
+        // model IDs, so there is nothing to range-check here.
+        AttrData::FrameworkType(_) => Ok(()),
     }
 }
 

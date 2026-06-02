@@ -4529,7 +4529,7 @@
           "id": "regseq-model-98",
           "name": "Model AttrData::FrameworkType",
           "spec": ".harness/tasks/regseq-model/98-framework-type-attrdata.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,

@@ -370,8 +370,11 @@ fn run_bridge_phase5_peels_all_four_severities() {
             let mut seen: Vec<LogLevel> = Vec::new();
             for attrs in model.domain_attrs.item_attrs.iter() {
                 for attr in attrs.iter() {
-                    let AttrData::Intrinsic(IntrinsicKind::Log(level)) = attr;
-                    seen.push(level.clone());
+                    match attr {
+                        AttrData::Intrinsic(IntrinsicKind::Log(level)) => seen.push(level.clone()),
+                        // Not a log level; this fixture produces none, so skip.
+                        AttrData::FrameworkType(_) => {}
+                    }
                 }
             }
             seen

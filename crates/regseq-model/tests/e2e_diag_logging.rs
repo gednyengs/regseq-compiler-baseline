@@ -146,24 +146,31 @@ fn diag_logging_post_peel_shape_and_attrs() {
 
     // E12: no spurious AttrData variants on the four callee Items.
     //
-    // The irrefutable `let` pattern below is intentional and
-    // load-bearing AS A COMPILE-TIME GUARD. Today AttrData has only
-    // the Intrinsic variant and IntrinsicKind has only the Log
-    // variant, so the pattern is irrefutable and the loop body is a
-    // no-op at runtime. When future variants land per spec.md
+    // The exhaustive `match` below is intentional and load-bearing AS A
+    // COMPILE-TIME GUARD: it enumerates every AttrData variant rather
+    // than using a catch-all, so when future variants land per spec.md
     // §1474-1489 (anticipated additions to AttrData / IntrinsicKind),
-    // the `let` becomes refutable and this file stops compiling --
-    // forcing the variant to be handled explicitly here. The correct
-    // response to that future compile failure is to decide whether
-    // the new variant is permitted on a log callee Item and either
-    // (a) extend the pattern with explicit handling, or (b) panic
-    // with a "spurious AttrData on log callee" message. Do NOT relax
-    // the pattern (e.g. `let _ = attr;` or `if let ... = attr {}`)
-    // because that silently admits the new variant.
+    // this file stops compiling -- forcing each new variant to be
+    // handled explicitly here. The correct response to that compile
+    // failure is to decide whether the new variant is permitted on a log
+    // callee Item and either (a) accept it with an explicit no-op arm, or
+    // (b) panic with a "spurious AttrData on log callee" message (as done
+    // for FrameworkType below). Do NOT add a catch-all `_ =>` arm because
+    // that silently admits new variants.
     for call in &calls {
         let attrs = &model.domain_attrs.item_attrs[call.callee_item];
         for attr in attrs.iter() {
-            let AttrData::Intrinsic(IntrinsicKind::Log(_)) = attr;
+            // Explicit handling per the guard contract above: a log callee
+            // Item may only carry the Intrinsic(Log) attribute. Any other
+            // AttrData variant (such as the framework-type marker) is
+            // spurious here and fails the test loudly rather than being
+            // silently admitted.
+            match attr {
+                AttrData::Intrinsic(IntrinsicKind::Log(_)) => {}
+                AttrData::FrameworkType(_) => {
+                    panic!("spurious AttrData on log callee: FrameworkType")
+                }
+            }
         }
     }
 
@@ -289,7 +296,12 @@ fn collect_log_levels(model: &RegseqModel, calls: &[LogCall<'_>]) -> HashSet<Log
             1,
             "callee Item must carry exactly one IntrinsicKind::Log(_) attr"
         );
-        let AttrData::Intrinsic(IntrinsicKind::Log(level)) = log_attrs[0];
+        // `log_attrs` was filtered to Intrinsic(Log) entries above, so any
+        // other AttrData variant (such as the framework-type marker) cannot
+        // appear here.
+        let AttrData::Intrinsic(IntrinsicKind::Log(level)) = log_attrs[0] else {
+            unreachable!("log_attrs holds only Intrinsic(Log) entries")
+        };
         out.insert(level.clone());
     }
     out

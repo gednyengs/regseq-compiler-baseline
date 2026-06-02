@@ -65,7 +65,9 @@ pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
-pub use domain_attr::{AttrData, DomainAttrTables, FieldPath, IntrinsicKind, LogLevel};
+pub use domain_attr::{
+    AttrData, DomainAttrTables, FieldPath, FrameworkType, IntrinsicKind, LogLevel,
+};
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
 pub use ids::{

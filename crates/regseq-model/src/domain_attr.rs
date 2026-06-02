@@ -62,6 +62,21 @@ pub struct FieldPath {
 pub enum AttrData {
     /// Diagnostic intrinsic marker stored in `DomainAttrTables.item_attrs`.
     Intrinsic(IntrinsicKind) = 0,
+    /// Framework-type marker identifying an Item as a recognized Regseq
+    /// framework type (such as the RegseqError error type). The bridge
+    /// records this variant; the backend reads it. Fixed at discriminant 1.
+    FrameworkType(FrameworkType) = 1,
+}
+
+/// Closed, append-only framework-type taxonomy.
+///
+/// `RegseqError` is fixed at discriminant 0. Future framework types append
+/// variants at the end, preserving existing serialized discriminants.
+#[repr(u8)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum FrameworkType {
+    /// The RegseqError framework error type.
+    RegseqError = 0,
 }
 
 /// Closed, append-only intrinsic-family taxonomy.
@@ -473,6 +488,81 @@ mod tests {
         let mut b = DomainAttrTables::default();
         for (k, v) in entries.iter().rev() {
             b.span_attrs.insert(*k, v.clone());
+        }
+
+        let json_a = serde_json::to_string(&a).unwrap();
+        let json_b = serde_json::to_string(&b).unwrap();
+        assert_eq!(
+            json_a, json_b,
+            "JSON output must be byte-identical regardless of insertion order"
+        );
+    }
+
+    #[test]
+    fn framework_type_json_round_trips() {
+        assert_json_round_trip(FrameworkType::RegseqError);
+    }
+
+    #[test]
+    fn attr_data_framework_type_json_round_trips() {
+        assert_json_round_trip(AttrData::FrameworkType(FrameworkType::RegseqError));
+    }
+
+    #[test]
+    fn attr_data_framework_type_discriminant_is_stable() {
+        // The FrameworkType variant is pinned at discriminant 1...
+        assert_eq!(
+            attr_data_tag(&AttrData::FrameworkType(FrameworkType::RegseqError)),
+            1
+        );
+        // ...and adding it must not shift Intrinsic off discriminant 0.
+        assert_eq!(attr_data_tag(&attr(LogLevel::Debug)), 0);
+    }
+
+    #[test]
+    fn framework_type_inner_discriminant_is_stable() {
+        // SAFETY-free cast: `FrameworkType` is a fieldless `repr(u8)` enum,
+        // so the `as u8` cast yields its pinned discriminant.
+        assert_eq!(FrameworkType::RegseqError as u8, 0);
+    }
+
+    #[test]
+    fn framework_type_attrs_json_is_deterministic_across_insert_order() {
+        let entries = [
+            (
+                FieldPath {
+                    item: ItemId::from_u32(5),
+                    variant: VariantIdx::ZERO,
+                    field: FieldIdx::from_u32(2),
+                },
+                vec![AttrData::FrameworkType(FrameworkType::RegseqError)],
+            ),
+            (
+                FieldPath {
+                    item: ItemId::from_u32(2),
+                    variant: VariantIdx::ZERO,
+                    field: FieldIdx::from_u32(7),
+                },
+                vec![AttrData::FrameworkType(FrameworkType::RegseqError)],
+            ),
+            (
+                FieldPath {
+                    item: ItemId::from_u32(9),
+                    variant: VariantIdx::ZERO,
+                    field: FieldIdx::from_u32(0),
+                },
+                vec![AttrData::FrameworkType(FrameworkType::RegseqError)],
+            ),
+        ];
+
+        let mut a = DomainAttrTables::default();
+        for (k, v) in entries.iter() {
+            a.field_attrs.insert(k.clone(), v.clone());
+        }
+
+        let mut b = DomainAttrTables::default();
+        for (k, v) in entries.iter().rev() {
+            b.field_attrs.insert(k.clone(), v.clone());
         }
 
         let json_a = serde_json::to_string(&a).unwrap();
