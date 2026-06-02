@@ -133,6 +133,24 @@ Those compiler-generated failure paths use target-native status/errno
  mechanisms directly rather than flowing through authored semantic
  `RegseqError`.
 
+> **Addendum (2026-06-01, design debate — guardrail G01).** A Claude/Codex
+> debate (Axis A: "portable semantic enum vs native passthrough") converged
+> on a sharper rule than the prose above. The authored/native boundary is a
+> *provenance* property, not a syntactic one: a fallible **wrapper** can
+> *look* authored while fronting a native operation. Therefore — **native-backed
+> operational failures in wrappers or intrinsics must default to native/opaque
+> propagation, or to construct-local error types that explicitly map upward,
+> and must not be collapsed directly into `RegseqError` unless the failure is
+> an authored semantic condition.** `RegseqError`'s portability value is a
+> common authored *vocabulary* + a uniform boundary *contract* + common
+> *diagnostics* — not identical runtime behavior across OSes. This does not
+> require resolving the §9 local-error / wrapper-provenance mechanism before
+> *any* `RegseqError` ships (the entry-only generic-C phase is fine), but it
+> **must** be resolved before native-backed wrappers/intrinsics may expose
+> `Result<_, RegseqError>` as their default authored surface. Tracked in
+> `.claude/specs/regseq-error/` (G01) and `generic-c-backend/roadmap.md`
+> (Phase 3+).
+
 ## 7. Current Phase-B Error Strategy
 
 To optimize for progress, the active implementation baseline is:

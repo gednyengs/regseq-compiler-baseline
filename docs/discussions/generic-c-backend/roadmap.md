@@ -118,6 +118,20 @@ of these are not bridged yet (MMIO/interrupt/atomic = stages 16/17/18), so
 each will typically need a front-end phase to land it in `RegseqModel`
 before its backend phase — which is part of what "immediate need" weighs.
 
+**RegseqError guardrail (applies the moment a native-backed fallible
+construct is bridged).** From the Phase-2 RegseqError design debate
+(`.claude/specs/regseq-error/`, decision **G01**): native-backed
+operational failures in wrappers or intrinsics (`Clock::enable`,
+`ResetLine::*`, `Completion::wait`, `poll::until`, DMA ops,
+`PinCtrl::apply`, …) must default to **native/opaque propagation**, or to
+**construct-local error types that explicitly map upward**, and must
+**not** be collapsed directly into `RegseqError` unless the failure is an
+authored *semantic* condition. Phase 2 (entry-only) does not trigger this;
+it binds the first Phase-3+ phase that bridges a native-backed fallible
+wrapper/intrinsic. The wrapper/intrinsic provenance question must be
+resolved before such a construct may expose `Result<_, RegseqError>` as
+its default authored surface.
+
 **Host-validatability caveat (applies per domain).** Some domains
 simulate *faithfully* on a host (diag-log → `printf`; register access →
 backing byte array) — the host validates real behavior. Others are partly
