@@ -5356,7 +5356,7 @@
           "id": "regseq-backends-26",
           "name": "Generic-C RegseqError errno table (C02) + exhaustive test",
           "spec": ".harness/tasks/regseq-backends/26-regseq-error-errno-table.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [],
           "artifacts": [],
           "fail_reason": null,

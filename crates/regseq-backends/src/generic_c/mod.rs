@@ -35,6 +35,7 @@ pub mod prelude;
 
 mod body_emit;
 mod enum_emit;
+mod errno;
 mod layout_emit;
 mod naming;
 mod types;
