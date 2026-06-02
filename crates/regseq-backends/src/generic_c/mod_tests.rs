@@ -7023,12 +7023,33 @@ fn error_enum(m: &mut RegseqModel, rendered: &str, marked: bool) -> TyId {
     ty
 }
 
-/// A niche-encoded two-variant `Result<ok_field, err_field>`: Ok = variant 0
-/// (niched), Err = variant 1 (untagged, carrying the niche-bearing payload),
-/// mirroring rustc's variant order.
-fn result_enum(m: &mut RegseqModel, ok_field_ty: TyId, err_field_ty: TyId) -> TyId {
+/// Set an item's compiler-certified `Result` identity flag (regseq-driver-91
+/// records this from rustc's `Result` diagnostic item).
+fn mark_result(m: &mut RegseqModel, it: regseq_model::ItemId) {
+    m.items[it].is_result = true;
+}
+
+/// A niche-encoded two-variant `Result`-SHAPED enum: variant 0 (niched) carries
+/// `ok_field_ty`, variant 1 (untagged) carries `err_field_ty`, mirroring rustc's
+/// variant order. `rendered` is the item's display path, `ok_name`/`err_name`
+/// the variant names, and `is_result` toggles the certified `Item.is_result`
+/// identity flag. Used by the negatives to mint look-alikes that render or shape
+/// like `core::result::Result` without its certified identity.
+#[allow(clippy::too_many_arguments)]
+fn result_shaped_enum(
+    m: &mut RegseqModel,
+    rendered: &str,
+    ok_name: &str,
+    err_name: &str,
+    ok_field_ty: TyId,
+    err_field_ty: TyId,
+    is_result: bool,
+) -> TyId {
     let u8t = uint(m, UintKind::U8);
-    let it = item(m, ItemKind::Enum, "core::result::Result");
+    let it = item(m, ItemKind::Enum, rendered);
+    if is_result {
+        mark_result(m, it);
+    }
     let ok_field = fl(m, "0", ok_field_ty, 0);
     let err_field = fl(m, "0", err_field_ty, 0);
     let tag = TagScalar {
@@ -7047,8 +7068,8 @@ fn result_enum(m: &mut RegseqModel, ok_field_ty: TyId, err_field_ty: TyId) -> Ty
             niche_start: 9,
         },
         variants: vec![
-            variant(m, "Ok", vec![ok_field], 0, Some(9)),
-            variant(m, "Err", vec![err_field], 1, None),
+            variant(m, ok_name, vec![ok_field], 0, Some(9)),
+            variant(m, err_name, vec![err_field], 1, None),
         ],
     };
     m.types.intern(Ty::Enum {
@@ -7056,6 +7077,21 @@ fn result_enum(m: &mut RegseqModel, ok_field_ty: TyId, err_field_ty: TyId) -> Ty
         args: GenericArgs::new(),
         layout: enum_layout(1, 1, shape),
     })
+}
+
+/// A genuine `core::result::Result<ok_field, err_field>`: certified
+/// `is_result == true`, variants named `Ok`/`Err`, Ok = variant 0 (niched),
+/// Err = variant 1 (untagged, carrying the niche-bearing payload).
+fn result_enum(m: &mut RegseqModel, ok_field_ty: TyId, err_field_ty: TyId) -> TyId {
+    result_shaped_enum(
+        m,
+        "core::result::Result",
+        "Ok",
+        "Err",
+        ok_field_ty,
+        err_field_ty,
+        true,
+    )
 }
 
 #[test]
@@ -7151,6 +7187,9 @@ fn classify_multi_field_err_is_rejected() {
     let err_enum = error_enum(&mut m, "crate::RegseqError", true);
     let u8t = uint(&mut m, UintKind::U8);
     let it = item(&mut m, ItemKind::Enum, "core::result::Result");
+    // A genuine, certified Result so the classifier reaches the Err-payload
+    // structural check (a multi-field Err) rather than the identity gate.
+    mark_result(&mut m, it);
     let ok_field = fl(&mut m, "0", unit, 0);
     let err_field0 = fl(&mut m, "0", err_enum, 0);
     let err_field1 = fl(&mut m, "1", u8t, 1);
@@ -7200,6 +7239,94 @@ fn classify_scalar_return_rejects_naming_the_expected_shapes() {
         ),
         other => panic!("expected Reject, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// regseq-backends-34: certified `core::result::Result` identity (D08/C03/R09).
+// The classifier now gates on the compiler-certified `Item.is_result` flag
+// (regseq-driver-91), NOT a rendered def-path string, with an `Ok`/`Err`
+// variant-name guard so the `Ok = variants[0]` / `Err = variants[1]` adapter
+// binding is sound by construction.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn classify_result_look_alike_without_is_result_is_rejected() {
+    // Test Plan 1 (the key case): an item that *renders* as `core::result::Result`
+    // with variants `Ok`/`Err`, a unit Ok payload, and a marked-enum Err payload --
+    // structurally identical to a genuine Result -- but with `is_result == false`.
+    // Identity is certified by the compiler flag, not the display string, so this
+    // look-alike must be rejected (D08/C03/R09).
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let look_alike = result_shaped_enum(
+        &mut m,
+        "core::result::Result",
+        "Ok",
+        "Err",
+        unit,
+        err,
+        false,
+    );
+    match classify_entry_return(&m, look_alike) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("is_result == false") && reason.contains("core::result::Result"),
+            "reject names the failed identity certification, not the display string: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_custom_result_carrier_is_rejected() {
+    // Test Plan 2: a custom carrier shaped like a niche `Result` but with
+    // `is_result == false` (`enum MyResult { Good, Bad(RegseqError) }`) is never the
+    // certified `core::result::Result` and must be rejected (D08).
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let carrier = result_shaped_enum(&mut m, "crate::MyResult", "Good", "Bad", unit, err, false);
+    match classify_entry_return(&m, carrier) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("is_result == false"),
+            "the custom carrier fails the identity certification: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_certified_result_with_wrong_variant_names_is_rejected() {
+    // Test Plan 3 (defensive): a certified Result (`is_result == true`) whose
+    // variants are NOT named `Ok`/`Err` is rejected, keeping the `variants[0]` = Ok
+    // / `variants[1]` = Err adapter binding sound by construction.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_shaped_enum(&mut m, "core::result::Result", "Yes", "No", unit, err, true);
+    match classify_entry_return(&m, result) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("not named") && reason.contains("Ok") && reason.contains("Err"),
+            "reject names the wrong-variant-name shape: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_certified_result_unit_marked_err_is_err_result() {
+    // Test Plan 4 (positive regression): a genuine `Result<(), RegseqError>` --
+    // certified `is_result == true`, variants `Ok`/`Err`, unit Ok, marked-enum Err
+    // -- is the ErrResult path; `()` stays the unit-void path.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, unit, err);
+    assert_eq!(
+        classify_entry_return(&m, result),
+        EntryReturnShape::ErrResult { err_enum_ty: err }
+    );
+    assert_eq!(classify_entry_return(&m, unit), EntryReturnShape::UnitVoid);
 }
 
 #[test]

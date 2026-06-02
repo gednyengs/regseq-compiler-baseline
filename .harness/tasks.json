@@ -5563,7 +5563,7 @@
           "id": "regseq-backends-34",
           "name": "Tighten entry classifier to certified core::result::Result identity",
           "spec": ".harness/tasks/regseq-backends/34-entry-classifier-certified-result.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-91",
             "regseq-backends-27"

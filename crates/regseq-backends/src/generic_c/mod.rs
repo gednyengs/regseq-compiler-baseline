@@ -393,9 +393,11 @@ enum EntryReturnShape {
 }
 
 /// Classify an entry's return type `output` (PLAN T07, risk A4): match the
-/// niche two-variant `Result<(), E>` layout structurally (a `()` Ok payload + a
-/// single-enum Err payload), then the `FrameworkType` attr check -- never by
-/// name. `()` is the unit-void path; everything else is a named rejection.
+/// niche two-variant `Result<(), E>` layout, certify the enum's identity is
+/// `core::result::Result` via the compiler-certified `is_result` flag
+/// (regseq-driver-91) with a defensive `Ok`/`Err` variant-name guard, then
+/// check the `()` Ok payload and the `FrameworkType`-marked single-enum Err
+/// payload. `()` is the unit-void path; everything else is a named rejection.
 fn classify_entry_return(model: &RegseqModel, output: TyId) -> EntryReturnShape {
     use regseq_model::{EnumShape, LayoutKind, TagEncoding};
 
@@ -403,10 +405,12 @@ fn classify_entry_return(model: &RegseqModel, output: TyId) -> EntryReturnShape 
         return EntryReturnShape::UnitVoid;
     }
 
-    // A `Result<(), E>` is a niche-encoded two-variant enum. Match that shape;
-    // rustc orders the variants Ok = 0, Err = 1 (structural, not by name).
-    let variants = match &model.types[output] {
+    // A `Result<(), E>` is a niche-encoded two-variant enum. Match that shape
+    // and bind the output enum's `item` so its identity can be certified below;
+    // rustc orders the variants Ok = 0, Err = 1.
+    let (item, variants) = match &model.types[output] {
         Ty::Enum {
+            item,
             layout:
                 regseq_model::Layout {
                     kind:
@@ -421,7 +425,7 @@ fn classify_entry_return(model: &RegseqModel, output: TyId) -> EntryReturnShape 
                     ..
                 },
             ..
-        } if variants.len() == 2 => variants,
+        } if variants.len() == 2 => (*item, variants),
         _ => {
             return EntryReturnShape::Reject(
                 "expected `()` or `Result<(), RegseqError>`".to_string(),
@@ -429,8 +433,32 @@ fn classify_entry_return(model: &RegseqModel, output: TyId) -> EntryReturnShape 
         }
     };
 
+    // Certify the return enum's identity is `core::result::Result` via the
+    // compiler-certified `is_result` flag (regseq-driver-91), NOT a rendered
+    // def-path string: a look-alike enum that merely renders as
+    // `core::result::Result` has `is_result == false` and must fail loud (D08).
+    // This makes the `Ok = variants[0]` / `Err = variants[1]` adapter assumption
+    // sound by construction.
+    if !model.items[item].is_result {
+        return EntryReturnShape::Reject(
+            "the return enum is not the certified `core::result::Result` (is_result == false)"
+                .to_string(),
+        );
+    }
+
     let ok_variant = &variants[0];
     let err_variant = &variants[1];
+
+    // Defensive guard: rustc orders a certified Result's variants Ok = 0,
+    // Err = 1; confirm the names so binding `variants[0]` as Ok / `variants[1]`
+    // as Err is sound by construction.
+    if model.strings.resolve(ok_variant.name) != "Ok"
+        || model.strings.resolve(err_variant.name) != "Err"
+    {
+        return EntryReturnShape::Reject(
+            "the certified Result's variants are not named `Ok`/`Err`".to_string(),
+        );
+    }
 
     // The Ok payload must be exactly `()`: every field is unit (NOT merely
     // zero-sized -- a non-`()` ZST Ok payload, e.g. `[u8; 0]` or an empty
