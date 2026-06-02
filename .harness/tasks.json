@@ -2327,7 +2327,7 @@
           "id": "regseq-driver-90",
           "name": "cargo-regseq --emit bin exit-adapter parity",
           "spec": ".harness/tasks/regseq-driver/90-emit-bin-exit-adapter-parity.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-28",
             "regseq-backends-29"
