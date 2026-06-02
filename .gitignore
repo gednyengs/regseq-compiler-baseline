@@ -15,7 +15,9 @@ __pycache__/
 .idea/
 .vscode/
 .codex/
-.claude/
+.claude/*
+# …but keep the grill-to-plan design records (GRILL/PRD/PLAN) version-controlled
+!.claude/specs/
 
 # Tool config
 .mcp.json
