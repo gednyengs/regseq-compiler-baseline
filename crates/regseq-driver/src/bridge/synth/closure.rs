@@ -212,6 +212,7 @@ fn source_item(cx: &mut BridgeCtxt<'_>, def_id: DefId, kind: ItemKind) -> Item {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     }
 }
 

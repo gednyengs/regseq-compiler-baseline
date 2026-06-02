@@ -2344,6 +2344,25 @@
               "spec_version": 1
             }
           ]
+        },
+        {
+          "id": "regseq-driver-91",
+          "name": "Bridge: certify core::result::Result identity (SpecialAdt::Result)",
+          "spec": ".harness/tasks/regseq-driver/91-bridge-result-identity.md",
+          "status": "done",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T22:12:29Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },
@@ -5509,6 +5528,54 @@
           "history": [
             {
               "ts": "2026-06-02T18:21:14Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-33",
+          "name": "Tighten entry classifier to exactly core::result::Result",
+          "spec": ".harness/tasks/regseq-backends/33-entry-classifier-result-identity.md",
+          "status": "archived",
+          "depends_on": [
+            "regseq-backends-27"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "archived",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T22:02:12Z",
+              "event": "added",
+              "spec_version": 1
+            },
+            {
+              "ts": "2026-06-02T22:11:26Z",
+              "event": "archived",
+              "reason": "Codex review: fix needs a compiler-certified Result identity (bridge primitive), not a rendered-string match; restructured into regseq-driver-91 (record identity) + regseq-backends-34 (consume it)."
+            }
+          ]
+        },
+        {
+          "id": "regseq-backends-34",
+          "name": "Tighten entry classifier to certified core::result::Result identity",
+          "spec": ".harness/tasks/regseq-backends/34-entry-classifier-certified-result.md",
+          "status": "pending",
+          "depends_on": [
+            "regseq-driver-91",
+            "regseq-backends-27"
+          ],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2a",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-02T22:12:29Z",
               "event": "added",
               "spec_version": 1
             }

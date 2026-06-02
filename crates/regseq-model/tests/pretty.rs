@@ -52,6 +52,7 @@ fn push_item(model: &mut RegseqModel, kind: ItemKind, rendered_text: &str) -> It
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     };
     model.items.push(item)
 }

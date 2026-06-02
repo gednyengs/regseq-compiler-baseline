@@ -88,6 +88,17 @@ pub struct Item {
     /// the model-checkable subset belongs to the validator task.
     /// Generic opaque-handle candidates are rejected by the bridge.
     pub opaque_handle_eligible: bool,
+
+    /// Whether this ADT is `core::result::Result`.
+    ///
+    /// The bridge recognizes it via rustc's `Result` diagnostic item
+    /// (`tcx.get_diagnostic_item(sym::Result)`), a compiler-certified
+    /// identity rather than a rendered def-path string. This is a
+    /// generic identity primitive (not `RegseqError`-specific); the
+    /// generic-C entry classifier consumes it to certify
+    /// `Result<(), RegseqError>`. Appended last so existing field
+    /// serialization order is unperturbed; defaults `false`.
+    pub is_result: bool,
 }
 
 /// Closed source-level item kind.
@@ -340,6 +351,7 @@ mod tests {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         }
     }
 
@@ -544,6 +556,7 @@ mod tests {
                 is_unsafe_cell: _,
                 is_manually_drop: _,
                 opaque_handle_eligible: _,
+                is_result: _,
             } = item;
         }
         _exhaustiveness_check(&item(ItemKind::Struct));
@@ -647,5 +660,18 @@ mod tests {
 
         assert_eq!(back.kind, ItemKind::Struct);
         assert!(back.opaque_handle_eligible);
+    }
+
+    #[test]
+    fn is_result_defaults_false_and_round_trips_through_serde() {
+        let default = item(ItemKind::Enum);
+        assert!(!default.is_result);
+
+        let mut flagged = item(ItemKind::Enum);
+        flagged.is_result = true;
+        let json = serde_json::to_string(&flagged).unwrap();
+        let back: Item = serde_json::from_str(&json).unwrap();
+        assert!(back.is_result);
+        assert_eq!(flagged, back);
     }
 }

@@ -184,6 +184,7 @@ pub fn synthesise_const_memory_static<'tcx>(
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     };
     cx.pending_items.push(PendingItem {
         handle,

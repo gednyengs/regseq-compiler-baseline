@@ -67,6 +67,7 @@ fn item(model: &mut RegseqModel, name: &str, kind: ItemKind) -> Item {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     }
 }
 
@@ -117,6 +118,7 @@ fn push_item_with_data_in_crate(
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     };
     let id = model.items.push(item);
     model.item_def_paths.push(hash(local_hash));

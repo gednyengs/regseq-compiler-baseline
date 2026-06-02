@@ -336,6 +336,7 @@ fn mk_item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> ItemId {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     });
     model.item_def_paths.push(DefPathHash {
         stable_crate_id: StableCrateId(1),

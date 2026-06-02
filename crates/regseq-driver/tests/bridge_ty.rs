@@ -361,6 +361,42 @@ pub fn f(
 }
 
 #[test]
+fn certifies_result_adt_with_is_result_flag() {
+    let source = r#"
+pub enum MyResult { Good, Bad }
+
+pub fn f(
+    a_result: core::result::Result<u32, u32>,
+    a_custom: MyResult,
+) {}
+"#;
+
+    with_bridge("bridge_ty_result", source, |tcx, cx| {
+        let ids = (0..2)
+            .map(|idx| translate_ty(cx, param_ty(tcx, "f", idx)).unwrap())
+            .collect::<Vec<_>>();
+        regseq_driver::bridge::flush_pending_items_for_tests(cx).unwrap();
+        regseq_driver::bridge::synth::rekey_synthesis_in_phase5(cx).unwrap();
+        let items = ids
+            .iter()
+            .map(|id| match cx.model.types.resolve(*id) {
+                Ty::Enum { item, .. } => *item,
+                other => panic!("expected enum, got {other:?}"),
+            })
+            .collect::<Vec<_>>();
+
+        // `core::result::Result` is certified via its diagnostic item.
+        assert!(cx.model.items[items[0]].is_result);
+        // A custom two-variant enum is not `Result`.
+        assert!(!cx.model.items[items[1]].is_result);
+        // The Result classification does not alias any sibling flag.
+        assert!(!cx.model.items[items[0]].is_phantom_data);
+        assert!(!cx.model.items[items[0]].is_unsafe_cell);
+        assert!(!cx.model.items[items[0]].is_manually_drop);
+    });
+}
+
+#[test]
 fn propagates_dropped_item_and_layout_fields_from_rustc() {
     // regseq-driver-83: the real source-item construction site must
     // populate `Layout.pack` (from the ADT repr), `Item.link_section`

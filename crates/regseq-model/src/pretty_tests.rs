@@ -247,6 +247,7 @@ mod render_top_level_tests {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         })
     }
 
@@ -444,6 +445,7 @@ fn unit_item(model: &mut RegseqModel, kind: ItemKind, rendered: StringId) -> Ite
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     };
     model.items.push(item)
 }

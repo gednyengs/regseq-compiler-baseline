@@ -118,6 +118,7 @@ fn item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> regseq_model
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     });
     // Keep the `item_def_paths` side table parallel + globally unique so
     // `instance_ref_of` (used by `Const::Reloc` resolution, task d1) works on

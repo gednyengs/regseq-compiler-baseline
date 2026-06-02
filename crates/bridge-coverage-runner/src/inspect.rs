@@ -1690,6 +1690,7 @@ mod tests {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         });
         model.item_def_paths.push(regseq_model::DefPathHash {
             stable_crate_id: StableCrateId(1),

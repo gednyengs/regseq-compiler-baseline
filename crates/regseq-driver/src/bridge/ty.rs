@@ -6,6 +6,7 @@ use rustc_middle::ty::{
     TypeVisitable, TypeVisitableExt,
 };
 use rustc_span::def_id::DefId;
+use rustc_span::sym;
 
 use regseq_model::{
     render_def_path, AutoTrait, CrateId, CrateInfo, DefPath, DefPathHash, DefPathSegment,
@@ -499,6 +500,14 @@ fn translate_adt<'tcx>(
         SpecialAdt::UnsafeCell
     } else if adt.is_manually_drop() {
         SpecialAdt::ManuallyDrop
+    } else if cx.input.tcx.get_diagnostic_item(sym::Result) == Some(adt.did()) {
+        // Certified `core::result::Result` identity via rustc's
+        // `Result` diagnostic item, gated the same way as the `CVoid`
+        // arm below (a `tcx` query, not a rendered def-path string).
+        // Unlike the rejection arms, this is a classification: it sets
+        // the `Item.is_result` nominal flag and the enum lowers
+        // normally.
+        SpecialAdt::Result
     } else if adt.is_box() || is_box_adt(cx.input.tcx, adt.did()) {
         return Err(BridgeError::DslRejection {
             kind: DslRejectionKind::Box,
@@ -566,7 +575,8 @@ fn translate_adt<'tcx>(
 
 /// Source-derived ADT classification used by `intern_item`. The
 /// nominal-flag fields on `Item` (`is_phantom_data`, `is_unsafe_cell`,
-/// `is_manually_drop`) are populated from this tag at intern time.
+/// `is_manually_drop`, `is_result`) are populated from this tag at
+/// intern time.
 #[derive(Clone, Copy)]
 pub(crate) enum SpecialAdt {
     /// No special-ADT classification (the common case for ordinary
@@ -578,6 +588,9 @@ pub(crate) enum SpecialAdt {
     UnsafeCell,
     /// The ADT is `core::mem::ManuallyDrop`.
     ManuallyDrop,
+    /// The ADT is `core::result::Result`, recognized via rustc's
+    /// `Result` diagnostic item.
+    Result,
 }
 
 /// Allocate (or recover) the Phase-2 handle for a source-derived
@@ -679,6 +692,7 @@ fn intern_source_item_handle(
         is_unsafe_cell: matches!(special, SpecialAdt::UnsafeCell),
         is_manually_drop: matches!(special, SpecialAdt::ManuallyDrop),
         opaque_handle_eligible: false,
+        is_result: matches!(special, SpecialAdt::Result),
     };
     cx.pending_items.push(PendingItem {
         handle,

@@ -61,6 +61,7 @@ fn fixture_item(model: &mut RegseqModel) -> Item {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     }
 }
 
@@ -1328,6 +1329,7 @@ mod sort_items_by_f4 {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         }
     }
 
@@ -1722,6 +1724,7 @@ mod dead_item_elim_helpers {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         };
         let id = model.items.push(item);
         model.item_def_paths.push(DefPathHash {
@@ -2640,6 +2643,7 @@ mod validate_log_intrinsic_call {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         };
         let id = m.items.push(item);
         m.item_def_paths.push(crate::DefPathHash {

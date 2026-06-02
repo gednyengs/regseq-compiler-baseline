@@ -725,6 +725,7 @@ fn final_sort_orders_function_before_static_instances() {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     });
     let item_static = model.items.push(regseq_model::Item {
         def_path: regseq_model::DefPath {
@@ -747,6 +748,7 @@ fn final_sort_orders_function_before_static_instances() {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     });
     model.item_def_paths.push(regseq_model::DefPathHash {
         stable_crate_id: regseq_model::StableCrateId(1),

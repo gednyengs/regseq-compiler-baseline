@@ -62,6 +62,7 @@ impl Fixture {
             is_unsafe_cell: false,
             is_manually_drop: false,
             opaque_handle_eligible: false,
+            is_result: false,
         };
         let id = self.model.items.push(item);
         self.model.item_def_paths.push(DefPathHash {

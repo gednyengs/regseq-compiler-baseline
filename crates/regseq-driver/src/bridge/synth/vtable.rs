@@ -706,6 +706,7 @@ pub(crate) fn push_pending_synthetic_item(
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     };
     cx.pending_items.push(PendingItem {
         handle,

@@ -110,6 +110,7 @@ fn push_item(
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     };
     let id = model.items.push(item);
     model.item_def_paths.push(hash(local_hash));

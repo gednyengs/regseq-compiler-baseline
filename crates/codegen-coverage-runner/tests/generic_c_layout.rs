@@ -257,6 +257,7 @@ fn push_struct(model: &mut RegseqModel, rendered: &str, layout: Layout) {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     });
     let ty = model.types.intern(Ty::Struct {
         item,
@@ -340,6 +341,7 @@ fn wrong_offset_fails_the_compile_on_the_static_assert() {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     });
     let u32t = model.types.intern(Ty::Uint(UintKind::U32));
     // A single `uint32_t` field CLAIMED at offset 1 -- impossible in a
@@ -419,6 +421,7 @@ fn mk_item(model: &mut RegseqModel, kind: ItemKind, rendered: &str) -> ItemId {
         is_unsafe_cell: false,
         is_manually_drop: false,
         opaque_handle_eligible: false,
+        is_result: false,
     })
 }
 
