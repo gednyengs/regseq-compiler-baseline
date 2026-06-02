@@ -120,6 +120,12 @@ pub struct HelperUsage {
     wrappers: BTreeSet<String>,
     /// Saturating-cast function names emitted, e.g. `regseq_f64_to_int8_t`.
     casts: BTreeSet<String>,
+    /// Whether the `RegseqError` -> errno boundary adapter (regseq-backends-28,
+    /// regseq-error C02 / C03) is emitted, requiring a demand-driven
+    /// `#include <errno.h>` (routed through this machinery per open item O4, so
+    /// the include lands in bank 1 with the other includes rather than adjacent
+    /// to the adapter at the end of the TU).
+    errno_h: bool,
 }
 
 impl HelperUsage {
@@ -131,6 +137,12 @@ impl HelperUsage {
     /// Record a saturating-cast call by its emitted function name.
     pub fn record_cast(&mut self, name: String) {
         self.casts.insert(name);
+    }
+
+    /// Record that the errno boundary adapter is emitted, so [`helper_block`]
+    /// emits a demand-driven `#include <errno.h>` (regseq-backends-28).
+    pub fn record_errno_include(&mut self) {
+        self.errno_h = true;
     }
 
     /// Every helper over the fixed `INT_TYPES` / `FLOAT_TYPES` tables (the
@@ -192,6 +204,18 @@ impl HelperUsage {
 /// `f32`/`f64`/`f16`/`f128`.
 pub fn helper_block(usage: &HelperUsage) -> String {
     let mut out = String::new();
+
+    // regseq-backends-28 (regseq-error C02 / C03): the demand-driven errno
+    // include for the boundary adapter. Emitted here (open item O4) so it sits in
+    // bank 1 alongside the prelude includes, keeping the emitted `.c` byte-stable;
+    // omitted entirely when no adapter is emitted (so existing unit-void / b4_enums
+    // goldens are unchanged, invariant I02).
+    if usage.errno_h {
+        out.push_str(
+            "\n/* regseq-error C02 / C03: the RegseqError -> errno boundary adapter, demand-driven. */\n\
+             #include <errno.h>\n",
+        );
+    }
 
     out.push_str(
         "\n\

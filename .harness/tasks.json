@@ -5403,7 +5403,7 @@
           "id": "regseq-backends-28",
           "name": "Generic-C RegseqError exit adapter + symbolic switch + int shim",
           "spec": ".harness/tasks/regseq-backends/28-regseq-error-exit-adapter.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-26",
             "regseq-backends-27"

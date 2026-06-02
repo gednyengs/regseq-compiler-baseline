@@ -28,11 +28,10 @@
 ///
 /// The returned symbol is always a bare `<errno.h>` identifier with no host
 /// numeric, preserving the deterministic-`.c` invariant (I03).
-// The sole non-test consumer is the adapter in regseq-backends-28 (the errno
-// `<errno.h>` plumbing). Until that lands, the pure table is exercised only by
-// the exhaustive test below; `expect` (not `allow`) so the attribute self-warns
-// for removal once the adapter wires up a real caller.
-#[expect(dead_code, reason = "consumed by the regseq-backends-28 errno adapter")]
+// Consumed by the regseq-backends-28 errno adapter
+// ([`super::body_emit::emit_exit_adapter`]), which turns a `None` into a
+// fail-loud [`super::EmitError::ErrnoMapping`] and emits each `Some` symbol as a
+// `return <SYMBOL>;` switch arm.
 pub(crate) fn errno_symbol(variant_name: &str) -> Option<&'static str> {
     Some(match variant_name {
         "InvalidParameter" => "EINVAL",

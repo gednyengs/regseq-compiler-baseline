@@ -155,6 +155,35 @@ fn slice_data_const(model: &RegseqModel, ref_ty: TyId) -> bool {
 /// static-init construct outside the task-d1 scalar / pointer / control-flow
 /// subset is reached; otherwise `Ok`.
 pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
+    emit_generic_c_inner(model, None)
+}
+
+/// What the regseq-backends-28 hand-emitted `RegseqError` -> errno boundary
+/// adapter needs, built when the entry classifies as
+/// [`EntryReturnShape::ErrResult`]. The adapter ([`body_emit::emit_exit_adapter`])
+/// is appended to the translation unit so it shares the bank `NameTable` (it
+/// spells the `Result` / `RegseqError` C types identically) and so its
+/// `<errno.h>` include routes through the demand-driven helper machinery.
+struct AdapterSpec {
+    /// The adapter C symbol (`<entry>__regseq_exit`).
+    adapter: String,
+    /// The entry C symbol the adapter calls (`sanitize(emission_name)`).
+    entry: String,
+    /// The entry's return type: the `Result<(), RegseqError>` niche enum.
+    result_ty: TyId,
+    /// The `FrameworkType`-marked `RegseqError` enum type.
+    err_enum_ty: TyId,
+}
+
+/// Lower a post-mono [`RegseqModel`] to the section 15 five-bank translation
+/// unit, optionally appending the regseq-backends-28 errno boundary `adapter`
+/// (and its demand-driven `<errno.h>`) when the entry classifies as an error
+/// return. With `adapter == None` the output is byte-identical to the historical
+/// unit-void emission (invariant I02 / R05).
+fn emit_generic_c_inner(
+    model: &RegseqModel,
+    adapter: Option<&AdapterSpec>,
+) -> Result<String, EmitError> {
     let discovered = discover(model);
     let names = build_name_table(model, &discovered);
     let syms = build_instance_symbols(model);
@@ -175,6 +204,26 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     let bank4 = bank4_declarations(model, &names, &syms, &cms_storage)?;
     let bank5 = bank5_definitions(model, &names, &syms, &cms_storage, &helper_use)?;
 
+    // regseq-backends-28: the hand-emitted RegseqError -> errno boundary adapter,
+    // built with the same `NameTable` as the banks (so it spells the `Result` /
+    // `RegseqError` C types identically) and recording the `<errno.h>` include as
+    // demand-driven (open item O4) before the helper block is rendered.
+    let adapter_c = match adapter {
+        Some(spec) => {
+            let c = body_emit::emit_exit_adapter(
+                model,
+                &names,
+                &spec.adapter,
+                &spec.entry,
+                spec.result_ty,
+                spec.err_enum_ty,
+            )?;
+            helper_use.borrow_mut().record_errno_include();
+            Some(c)
+        }
+        None => None,
+    };
+
     let mut out = String::new();
     out.push_str(prelude::PRELUDE);
     out.push_str(&prelude::helper_block(&helper_use.borrow()));
@@ -182,6 +231,9 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     out.push_str(&bank3);
     out.push_str(&bank4);
     out.push_str(&bank5);
+    if let Some(c) = adapter_c {
+        out.push_str(&c);
+    }
     Ok(out)
 }
 
@@ -220,15 +272,30 @@ pub fn emit_generic_c_for_entry(
     model: &RegseqModel,
     entry_suffix: &str,
 ) -> Result<EntryEmit, EmitError> {
-    let shim = resolve_entry_shim(model, entry_suffix)?;
-    let tu = emit_generic_c(model)?;
+    let (shim, adapter) = resolve_entry(model, entry_suffix)?;
+    let tu = emit_generic_c_inner(model, adapter.as_ref())?;
     Ok(EntryEmit { tu, shim })
 }
 
-/// Resolve `entry_suffix` to a single function instance, classify its return
-/// shape, and produce the [`EntryShim`] -- or a fail-loud [`EmitError`] naming
-/// the rejected shape. The shim-shape decision point shared by both consumers.
+/// Resolve `entry_suffix` to a single function instance and classify its return
+/// shape into the [`EntryShim`] -- or a fail-loud [`EmitError`] naming the
+/// rejected shape. A thin wrapper over [`resolve_entry`] that drops the adapter
+/// spec, so the shim-shape decision can be asserted directly by the classifier
+/// tests; production code goes through [`resolve_entry`] (it needs the spec).
+#[cfg(test)]
 fn resolve_entry_shim(model: &RegseqModel, entry_suffix: &str) -> Result<EntryShim, EmitError> {
+    Ok(resolve_entry(model, entry_suffix)?.0)
+}
+
+/// Resolve `entry_suffix` to a single function instance, classify its return
+/// shape, and produce the [`EntryShim`] plus -- on the error path -- the
+/// [`AdapterSpec`] the regseq-backends-28 errno adapter is built from. A fail-loud
+/// [`EmitError`] names any rejected shape. The shim-shape decision point shared by
+/// both consumers (contract C04).
+fn resolve_entry(
+    model: &RegseqModel,
+    entry_suffix: &str,
+) -> Result<(EntryShim, Option<AdapterSpec>), EmitError> {
     // Resolve the entry instance (the `entry_c_symbol` suffix logic, but we keep
     // the matched instance so we can read its signature, not just the symbol).
     let mut matches = model.instances.iter().filter(|inst| {
@@ -281,8 +348,8 @@ fn resolve_entry_shim(model: &RegseqModel, entry_suffix: &str) -> Result<EntrySh
     }
 
     match classify_entry_return(model, fn_sig.output) {
-        EntryReturnShape::UnitVoid => Ok(EntryShim::UnitVoid { entry }),
-        EntryReturnShape::ErrResult { .. } => {
+        EntryReturnShape::UnitVoid => Ok((EntryShim::UnitVoid { entry }, None)),
+        EntryReturnShape::ErrResult { err_enum_ty } => {
             // A manifest-custom entry combined with an error-returning signature
             // is deferred this phase (D09): only the default suffix may return an
             // error.
@@ -293,9 +360,14 @@ fn resolve_entry_shim(model: &RegseqModel, entry_suffix: &str) -> Result<EntrySh
                      entry may return Result<(), RegseqError>)"
                 )));
             }
-            Ok(EntryShim::ErrResult {
-                adapter: format!("{entry}__regseq_exit"),
-            })
+            let adapter = format!("{entry}__regseq_exit");
+            let spec = AdapterSpec {
+                adapter: adapter.clone(),
+                entry,
+                result_ty: fn_sig.output,
+                err_enum_ty,
+            };
+            Ok((EntryShim::ErrResult { adapter }, Some(spec)))
         }
         EntryReturnShape::Reject(reason) => Err(EmitError::EntryShape(format!(
             "entry {entry:?} return shape is unsupported: {reason}"
@@ -2058,6 +2130,14 @@ pub enum EmitError {
     /// manifest-custom error-returning entry. Both consumers surface it
     /// identically (the backend is the single enforcement point).
     EntryShape(String),
+    /// A `#[rseq::framework_type("regseq-error")]`-marked `RegseqError` variant
+    /// has no entry in the C02 host error-mapping table (regseq-backends-28).
+    /// The `String` names the offending variant. The errno boundary adapter
+    /// fails loud here rather than silently mapping the unknown variant to a
+    /// generic code (R08 / I05) -- `default: EIO` in the emitted switch is
+    /// corrupt-discriminant defense only, never a fallback for a known-but-
+    /// unmapped variant.
+    ErrnoMapping(String),
 }
 
 impl std::fmt::Display for EmitError {
@@ -2080,6 +2160,14 @@ impl std::fmt::Display for EmitError {
                 write!(
                     f,
                     "generic-C emission: unsupported entry shim shape: {what}"
+                )
+            }
+            EmitError::ErrnoMapping(variant) => {
+                write!(
+                    f,
+                    "generic-C emission: RegseqError variant {variant:?} has no errno mapping \
+                     (regseq-error C02); a marked variant absent from the host error-mapping \
+                     table fails emit rather than mapping to a generic code"
                 )
             }
         }

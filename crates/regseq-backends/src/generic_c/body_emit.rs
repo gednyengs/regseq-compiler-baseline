@@ -49,6 +49,7 @@ use regseq_model::{
     VariantLayout,
 };
 
+use super::errno::errno_symbol;
 use super::prelude::HelperUsage;
 use super::{
     enum_emit, layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable,
@@ -939,63 +940,15 @@ impl BodyEmit<'_> {
         zst: bool,
     ) -> Result<Option<String>, EmitError> {
         let ty = self.place_ty(enum_place);
-        let shape = enum_emit::enum_shape(self.model, ty).ok_or(EmitError::Unsupported(
-            "niche Discriminant on a non-enum place",
-        ))?;
-        let (untagged, variants) = match shape {
-            EnumShape::Multiple {
-                encoding:
-                    TagEncoding::Niche {
-                        untagged_variant, ..
-                    },
-                variants,
-                ..
-            } => (untagged_variant.index(), variants.as_slice()),
-            _ => {
-                return Err(EmitError::Unsupported(
-                    "assign_niche_discriminant on a non-niche enum",
-                ))
-            }
-        };
-        let (offset, scalar_ty) = match enum_emit::enum_tag(self.model, shape) {
-            enum_emit::EnumTag::Niche { offset, scalar_ty } => (offset, scalar_ty),
-            _ => {
-                return Err(EmitError::Unsupported(
-                    "niche enum without a niche cell (malformed layout)",
-                ))
-            }
-        };
         let enum_lv = self.place_lvalue(enum_place)?;
         // The discriminant result is an integer, never ZST; defensive guard.
         if zst {
             return Ok(None);
         }
-        let untagged_disc = variants
-            .get(untagged)
-            .ok_or(EmitError::Unsupported(
-                "niche untagged variant index out of range",
-            ))?
-            .discriminant;
-        // The niche cell is a raw bit pattern; read it as the scalar's raw
-        // storage unsigned integer (not the logical C type, which may normalize
-        // -- `_Bool` -- or constrain the value), so an invalid-bit-pattern niche
-        // tag (e.g. `Option<bool>`'s `None == 2`) round-trips and compares
-        // correctly against `tag_value` (also a raw bit pattern, mod 2^width).
-        let storage_kind = niche_storage_kind(self.model, scalar_ty)?;
-        let mut expr = render_discriminant(self.model, dst_ty, untagged_disc)?;
         let tmp = self.fresh_temp_name("_nd");
-        for v in variants.iter().rev() {
-            if let Some(tv) = v.tag_value {
-                let tvr = render_uint(storage_kind, tv);
-                let d = render_discriminant(self.model, dst_ty, v.discriminant)?;
-                expr = format!("({tmp} == {tvr} ? {d} : {expr})");
-            }
-        }
-        let tmp_cty = uint_ctype(storage_kind);
-        Ok(Some(format!(
-            "{{ {tmp_cty} {tmp}; memcpy(&{tmp}, (const unsigned char *)&({enum_lv}) + {offset}, \
-             sizeof({tmp})); {dst} = {expr}; }}"
-        )))
+        Ok(Some(niche_discriminant_read_block(
+            self.model, ty, &enum_lv, dst, dst_ty, &tmp,
+        )?))
     }
 
     /// `SetDiscriminant(place, v)` (section 13): resolve the enum lvalue, then
@@ -4265,6 +4218,195 @@ fn variant_layout(shape: &EnumShape, v: usize) -> Option<&VariantLayout> {
     }
 }
 
+/// Emit the section 13 / 14.7 niche-`Discriminant` read of the enum at C lvalue
+/// `enum_lv` (logical type `enum_ty`) into `dst` (a C lvalue of type `dst_ty`),
+/// using `tmp` as the raw-storage scratch name. Returns the brace-delimited
+/// statement block `{ <tmp_cty> <tmp>; memcpy(...); <dst> = <ternary>; }`.
+///
+/// The single source of truth for the niche read, shared by the assign-site
+/// `Discriminant` lowering ([`BodyEmit::assign_niche_discriminant`]) and the
+/// regseq-backends-28 errno boundary adapter ([`emit_exit_adapter`], which reads
+/// the `Result<(), RegseqError>` discriminant here). The niche cell is read by a
+/// memcpy into a raw unsigned temp (so an invalid-bit-pattern niche tag such as
+/// `Option<bool>`'s `None == 2` round-trips and compares correctly against
+/// `tag_value`, also a raw bit pattern mod `2^width`), then a ternary over the
+/// niched variants falls through to the untagged variant's `discriminant`.
+pub(super) fn niche_discriminant_read_block(
+    model: &RegseqModel,
+    enum_ty: TyId,
+    enum_lv: &str,
+    dst: &str,
+    dst_ty: TyId,
+    tmp: &str,
+) -> Result<String, EmitError> {
+    let shape = enum_emit::enum_shape(model, enum_ty).ok_or(EmitError::Unsupported(
+        "niche Discriminant on a non-enum place",
+    ))?;
+    let (untagged, variants) = match shape {
+        EnumShape::Multiple {
+            encoding: TagEncoding::Niche {
+                untagged_variant, ..
+            },
+            variants,
+            ..
+        } => (untagged_variant.index(), variants.as_slice()),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "assign_niche_discriminant on a non-niche enum",
+            ))
+        }
+    };
+    let (offset, scalar_ty) = match enum_emit::enum_tag(model, shape) {
+        enum_emit::EnumTag::Niche { offset, scalar_ty } => (offset, scalar_ty),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "niche enum without a niche cell (malformed layout)",
+            ))
+        }
+    };
+    let untagged_disc = variants
+        .get(untagged)
+        .ok_or(EmitError::Unsupported(
+            "niche untagged variant index out of range",
+        ))?
+        .discriminant;
+    let storage_kind = niche_storage_kind(model, scalar_ty)?;
+    let mut expr = render_discriminant(model, dst_ty, untagged_disc)?;
+    for v in variants.iter().rev() {
+        if let Some(tv) = v.tag_value {
+            let tvr = render_uint(storage_kind, tv);
+            let d = render_discriminant(model, dst_ty, v.discriminant)?;
+            expr = format!("({tmp} == {tvr} ? {d} : {expr})");
+        }
+    }
+    let tmp_cty = uint_ctype(storage_kind);
+    Ok(format!(
+        "{{ {tmp_cty} {tmp}; memcpy(&{tmp}, (const unsigned char *)&({enum_lv}) + {offset}, \
+         sizeof({tmp})); {dst} = {expr}; }}"
+    ))
+}
+
+/// Emit the hand-authored `RegseqError` -> libc errno boundary adapter
+/// (regseq-error contract C03), reusing the section 13 discriminant-extraction
+/// machinery for both reads. This is the regseq-backends-28 mechanism resolved
+/// by the open-item O3 spike: the symbolic errno `switch` is hand-emitted C
+/// (model constants are numeric / relocs, with no symbolic-macro form, and
+/// lowered body returns emit `_0` / `return;`, so a synthesized model-level
+/// adapter body could not emit `return EINVAL;`), while the two discriminant
+/// reads route through the shared section 13 helpers.
+///
+/// The emitted adapter `<adapter>(void)`:
+/// 1. calls the faithfully-emitted entry, capturing the section 13
+///    `Result<(), RegseqError>` C struct in `__r`;
+/// 2. reads the `Result` niche discriminant ([`niche_discriminant_read_block`])
+///    and, on the `Ok` discriminant, `return 0;` (R04);
+/// 3. otherwise reads the inner `RegseqError` Direct tag (the section 13 tag
+///    view) and `switch`es it, emitting `return <SYMBOL>;` for every variant
+///    keyed by `VariantLayout.name` through the C02 table ([`errno_symbol`]),
+///    with `default: return EIO;` as corrupt-discriminant defense only (I05).
+///
+/// A marked variant absent from the C02 table fails loud with
+/// [`EmitError::ErrnoMapping`] (never a silent `EIO`, R08 / I05). Emitted codes
+/// are symbolic (`return EINVAL;`); the `<errno.h>` include is recorded as
+/// demand-driven by the caller ([`super::emit_generic_c`]).
+pub(super) fn emit_exit_adapter(
+    model: &RegseqModel,
+    names: &NameTable,
+    adapter: &str,
+    entry: &str,
+    result_ty: TyId,
+    err_enum_ty: TyId,
+) -> Result<String, EmitError> {
+    // The `Result<(), RegseqError>` niche enum: the niche cell scalar (for the
+    // discriminant temp's C type + the `Ok` test) and the `Ok` variant (index 0,
+    // rustc's `Result` order) discriminant.
+    let result_shape = enum_emit::enum_shape(model, result_ty).ok_or(EmitError::Unsupported(
+        "errno adapter: the entry return type is not an enum",
+    ))?;
+    let niche_scalar_ty = match enum_emit::enum_tag(model, result_shape) {
+        enum_emit::EnumTag::Niche { scalar_ty, .. } => scalar_ty,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "errno adapter: the Result entry return is not niche-encoded",
+            ))
+        }
+    };
+    let ok_disc = match result_shape {
+        EnumShape::Multiple { variants, .. } if !variants.is_empty() => variants[0].discriminant,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "errno adapter: the Result return is not a multi-variant enum",
+            ))
+        }
+    };
+
+    // The Err payload (variant index 1, rustc's `Result` order) -> the inner
+    // RegseqError lvalue, then its Direct tag view (section 13).
+    let (err_member, _err_field_ty) = enum_emit::enum_variant_field(model, result_ty, 1, 0).ok_or(
+        EmitError::Unsupported("errno adapter: the Result Err payload field was not found"),
+    )?;
+    let err_shape = enum_emit::enum_shape(model, err_enum_ty).ok_or(EmitError::Unsupported(
+        "errno adapter: RegseqError is not an enum",
+    ))?;
+    let (tag_member, tag_scalar_ty) = match enum_emit::enum_tag(model, err_shape) {
+        enum_emit::EnumTag::View {
+            member_path,
+            scalar_ty,
+        } => (member_path, scalar_ty),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "errno adapter: RegseqError is not a Direct (tag-view) enum",
+            ))
+        }
+    };
+    let err_variants = match err_shape {
+        EnumShape::Multiple { variants, .. } => variants.as_slice(),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "errno adapter: RegseqError is not a multi-variant enum",
+            ))
+        }
+    };
+
+    let result_decl = types::declare(model, names, result_ty, "__r");
+    let disc_cty = types::c_type(model, names, niche_scalar_ty);
+    let niche_block =
+        niche_discriminant_read_block(model, result_ty, "__r", "__disc", niche_scalar_ty, "__nd")?;
+    let ok_disc_render = render_discriminant(model, niche_scalar_ty, ok_disc)?;
+    let tag_read = format!("__r.{err_member}.{tag_member}");
+
+    // One `case <tag_value>: return <SYMBOL>;` per RegseqError variant, in variant
+    // order (deterministic). An unknown marked variant fails loud (R08 / I05).
+    let mut cases = String::new();
+    for v in err_variants {
+        let tv = v.tag_value.ok_or(EmitError::Unsupported(
+            "errno adapter: RegseqError variant without a tag_value (malformed Direct layout)",
+        ))?;
+        let case_lit = render_tag_value(model, names, tag_scalar_ty, tv)?;
+        let name = model.strings.resolve(v.name);
+        let symbol = errno_symbol(name).ok_or_else(|| EmitError::ErrnoMapping(name.to_string()))?;
+        cases.push_str(&format!("    case {case_lit}: return {symbol};\n"));
+    }
+
+    Ok(format!(
+        "\n/* ---------------------------------------------------------------------------\n\
+         \x20* RegseqError -> errno boundary adapter (regseq-error C02 / C03).\n\
+         \x20* --------------------------------------------------------------------------- */\n\
+         int {adapter}(void) {{\n\
+         \x20\x20\x20\x20{result_decl} = {entry}();\n\
+         \x20\x20\x20\x20{disc_cty} __disc;\n\
+         \x20\x20\x20\x20{niche_block}\n\
+         \x20\x20\x20\x20if (__disc == {ok_disc_render}) {{\n\
+         \x20\x20\x20\x20\x20\x20\x20\x20return 0;\n\
+         \x20\x20\x20\x20}}\n\
+         \x20\x20\x20\x20switch ({tag_read}) {{\n\
+         {cases}\
+         \x20\x20\x20\x20default: return EIO;\n\
+         \x20\x20\x20\x20}}\n\
+         }}\n"
+    ))
+}
+
 /// The raw storage unsigned-integer [`UintKind`] for a niche tag cell of
 /// logical type `scalar_ty`. A niche tag is a raw bit pattern (`tag_value mod
 /// 2^scalar_width`), so the cell is read / written / compared as an unsigned
@@ -4292,7 +4434,7 @@ fn niche_storage_kind(model: &RegseqModel, scalar_ty: TyId) -> Result<UintKind, 
 /// `Ptr` / `Ref` tag (the niche tag *is* the pointer, e.g. `Option<&T>`) as
 /// the integer bit pattern cast to the pointer's C type. (The runtime niche
 /// cell path uses [`niche_storage_kind`] + `render_uint` for raw bit patterns.)
-fn render_tag_value(
+pub(super) fn render_tag_value(
     model: &RegseqModel,
     names: &NameTable,
     scalar_ty: TyId,
@@ -4319,7 +4461,7 @@ fn render_tag_value(
 
 /// Render a `Discriminant` result value per the `result_ty` integer type
 /// (section 11.1 signed / unsigned literal emission).
-fn render_discriminant(
+pub(super) fn render_discriminant(
     model: &RegseqModel,
     result_ty: TyId,
     value: u128,

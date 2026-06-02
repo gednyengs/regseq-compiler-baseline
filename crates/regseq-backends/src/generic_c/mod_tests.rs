@@ -7382,3 +7382,228 @@ fn entry_shim_unit_void_constructor_matches_struct_form() {
         }
     );
 }
+
+// ---------------------------------------------------------------------------
+// regseq-backends-28: the hand-emitted RegseqError -> errno boundary adapter +
+// symbolic switch + demand-driven <errno.h> (PLAN T06/T08 + the adapter-switch
+// half of T10). The adapter is emitted into the TU by `emit_generic_c_for_entry`
+// when the entry classifies as `ErrResult`; the unit-void path stays unchanged.
+// ---------------------------------------------------------------------------
+
+/// The nine C02 rows as `(VariantLayout.name, tag_value, errno symbol)`. The tag
+/// value doubles as the variant discriminant (a `#[repr]`-default fieldless enum
+/// numbers its variants 0..). `GenericFailure` / `HardwareError` deliberately
+/// share `EIO` (D04).
+const C02_ROWS: &[(&str, u128, &str)] = &[
+    ("InvalidParameter", 0, "EINVAL"),
+    ("OutOfMemory", 1, "ENOMEM"),
+    ("HardwareError", 2, "EIO"),
+    ("Timeout", 3, "ETIMEDOUT"),
+    ("Unsupported", 4, "EOPNOTSUPP"),
+    ("DeviceBusy", 5, "EBUSY"),
+    ("PermissionDenied", 6, "EPERM"),
+    ("DeviceNotFound", 7, "ENODEV"),
+    ("GenericFailure", 8, "EIO"),
+];
+
+/// A full nine-variant `RegseqError` (the C02 table), a fieldless Direct enum
+/// (the `input_Color` shape). `marked` toggles the `FrameworkType` attr so the
+/// entry classifier recognizes it.
+fn regseq_error_enum_full(m: &mut RegseqModel, rendered: &str, marked: bool) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let it = item(m, ItemKind::Enum, rendered);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 8 },
+    };
+    let mut variants = Vec::new();
+    for (idx, (name, tv, _sym)) in C02_ROWS.iter().enumerate() {
+        variants.push(variant(m, name, Vec::new(), idx as u128, Some(*tv)));
+    }
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants,
+    };
+    let ty = m.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout: enum_layout(1, 1, shape),
+    });
+    if marked {
+        mark_framework_error(m, it);
+    }
+    ty
+}
+
+/// Build a model whose `regseq_main` entry returns `Result<(), RegseqError>` for
+/// a `RegseqError` carrying `variants` (each `(name, tag_value)`), `marked` per
+/// the framework attr. Returns the emitted TU (the adapter is appended).
+fn emit_err_result_entry(m: &mut RegseqModel, err_ty: TyId) -> String {
+    let unit = unit_ty(m);
+    let result = result_enum(m, unit, err_ty);
+    let sig = fnsig(m, vec![], result, FnAbi::Rust, false);
+    fn_instance(m, "regseq_main", sig, None);
+    let emit = emit_generic_c_for_entry(m, "regseq_main").expect("ErrResult entry must emit");
+    assert_eq!(
+        emit.shim,
+        EntryShim::ErrResult {
+            adapter: "regseq_main__regseq_exit".to_string()
+        }
+    );
+    emit.tu
+}
+
+#[test]
+fn err_result_entry_emits_adapter_and_calls_the_faithful_entry() {
+    // C03 / R01-R04: the ErrResult entry emits an in-TU adapter that calls the
+    // faithfully-emitted entry, reads the Result discriminant (section 13 niche
+    // read), returns 0 on Ok, and reads + switches the RegseqError tag on Err.
+    let mut m = model();
+    let err = regseq_error_enum_full(&mut m, "crate::RegseqError", true);
+    let tu = emit_err_result_entry(&mut m, err);
+
+    assert!(
+        tu.contains("int regseq_main__regseq_exit(void) {"),
+        "the adapter is hand-emitted in the TU:\n{tu}"
+    );
+    assert!(
+        tu.contains("struct core_result_Result __r = regseq_main();"),
+        "the adapter calls the faithful entry, capturing the Result struct:\n{tu}"
+    );
+    // Section 13 niche read of the Result discriminant (memcpy into a raw temp),
+    // then `return 0;` on the Ok discriminant (R04).
+    assert!(
+        tu.contains("memcpy(&__nd, (const unsigned char *)&(__r) + 0, sizeof(__nd));"),
+        "the Result discriminant is read via the section 13 niche memcpy:\n{tu}"
+    );
+    assert!(
+        tu.contains("__disc = (__nd == ((uint8_t)(9U)) ? ((uint8_t)(0U)) : ((uint8_t)(1U)));"),
+        "the niche read ternary maps the cell to Ok=0 / Err=1:\n{tu}"
+    );
+    assert!(
+        tu.contains("if (__disc == ((uint8_t)(0U))) {\n        return 0;\n    }"),
+        "Ok returns 0 (R04):\n{tu}"
+    );
+    // Section 13 Direct tag read of the inner RegseqError, then the switch.
+    assert!(
+        tu.contains("switch (__r._0.tag) {"),
+        "the RegseqError variant is read via its section 13 Direct tag view:\n{tu}"
+    );
+}
+
+#[test]
+fn adapter_switch_is_exhaustive_over_all_nine_c02_rows_plus_ok() {
+    // The adapter-switch half of T10 (D07): every C02 row plus the Ok->0 arm is
+    // verified through the adapter, reusing the regseq-backends-26 table.
+    let mut m = model();
+    let err = regseq_error_enum_full(&mut m, "crate::RegseqError", true);
+    let tu = emit_err_result_entry(&mut m, err);
+
+    for (name, tv, sym) in C02_ROWS {
+        // Reuse the C02 table (regseq-backends-26): the adapter symbol must agree.
+        assert_eq!(
+            super::errno::errno_symbol(name),
+            Some(*sym),
+            "C02 row {name} maps to {sym}"
+        );
+        let arm = format!("    case ((uint8_t)({tv}U)): return {sym};\n");
+        assert!(
+            tu.contains(&arm),
+            "the adapter switch has the {name} -> {sym} arm ({arm:?}):\n{tu}"
+        );
+    }
+    // The Ok -> 0 arm and the corrupt-discriminant defense.
+    assert!(tu.contains("return 0;"), "the Ok arm returns 0:\n{tu}");
+    assert!(
+        tu.contains("    default: return EIO;\n"),
+        "default: EIO is the corrupt-discriminant defense:\n{tu}"
+    );
+}
+
+#[test]
+fn adapter_codes_are_symbolic_and_errno_h_is_demand_driven() {
+    // I03 / R07 / C02: emitted codes are symbolic errno identifiers and the
+    // `<errno.h>` include is emitted only when the adapter is.
+    let mut m = model();
+    let err = regseq_error_enum_full(&mut m, "crate::RegseqError", true);
+    let tu = emit_err_result_entry(&mut m, err);
+
+    assert!(
+        tu.contains("#include <errno.h>"),
+        "the adapter TU pulls in <errno.h> on demand:\n{tu}"
+    );
+    assert!(
+        tu.contains("return EINVAL;"),
+        "symbolic errno emission:\n{tu}"
+    );
+    assert!(
+        tu.contains("return ETIMEDOUT;"),
+        "symbolic errno emission:\n{tu}"
+    );
+
+    // A unit-void TU must NOT pull in <errno.h> (demand-driven, I02).
+    let mut mv = model();
+    let unit = unit_ty(&mut mv);
+    let sig = fnsig(&mut mv, vec![], unit, FnAbi::C, false);
+    fn_instance(&mut mv, "regseq_main", sig, None);
+    let void_tu = emit_generic_c_for_entry(&mv, "regseq_main").unwrap().tu;
+    assert!(
+        !void_tu.contains("errno.h"),
+        "the unit-void TU has no demand-driven <errno.h>:\n{void_tu}"
+    );
+}
+
+#[test]
+fn unknown_marked_variant_fails_emit_never_eio() {
+    // R08 / I05: a marked RegseqError variant absent from the C02 table fails
+    // emit (naming the variant), never silently mapping to EIO.
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let it = item(&mut m, ItemKind::Enum, "crate::RegseqError");
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(&mut m, "InvalidParameter", Vec::new(), 0, Some(0)),
+            variant(&mut m, "Frobnicate", Vec::new(), 1, Some(1)),
+        ],
+    };
+    let err = m.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout: enum_layout(1, 1, shape),
+    });
+    mark_framework_error(&mut m, it);
+    let unit = unit_ty(&mut m);
+    let result = result_enum(&mut m, unit, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+
+    match emit_generic_c_for_entry(&m, "regseq_main") {
+        Err(EmitError::ErrnoMapping(name)) => assert_eq!(name, "Frobnicate"),
+        other => panic!("expected ErrnoMapping naming Frobnicate, got {other:?}"),
+    }
+}
+
+#[test]
+fn adapter_emission_is_byte_identical_across_two_calls() {
+    // I02 / ledger byte-stability: the adapter path is a pure function of the
+    // model, so two emits agree byte-for-byte.
+    let mut m = model();
+    let err = regseq_error_enum_full(&mut m, "crate::RegseqError", true);
+    let unit = unit_ty(&mut m);
+    let result = result_enum(&mut m, unit, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+
+    let a = emit_generic_c_for_entry(&m, "regseq_main").unwrap().tu;
+    let b = emit_generic_c_for_entry(&m, "regseq_main").unwrap().tu;
+    assert_eq!(a, b);
+}
