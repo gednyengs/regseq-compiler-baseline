@@ -7607,3 +7607,90 @@ fn adapter_emission_is_byte_identical_across_two_calls() {
     let b = emit_generic_c_for_entry(&m, "regseq_main").unwrap().tu;
     assert_eq!(a, b);
 }
+
+// ---------------------------------------------------------------------------
+// regseq-backends-31: fail-loud negatives through the PUBLIC emit seam (T13/T14).
+// `unknown_marked_variant_fails_emit_never_eio` (regseq-backends-28, above) is
+// the T13 backend unit through `emit_generic_c_for_entry`. These pin every
+// D08/D09-rejected entry shape at that same public seam -- the single
+// enforcement point both consumers call -- so the reject is proven at emit, not
+// only at the test-only `resolve_entry_shim` resolver (regseq-backends-27).
+// The harness-integration half lives in
+// `codegen-coverage-runner/tests/regseq_error_negatives.rs`.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn emit_for_entry_rejects_non_unit_ok_at_emit() {
+    // D08: `Result<u32, RegseqError>` -- a non-unit Ok payload.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, u32t, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    match emit_generic_c_for_entry(&m, "regseq_main") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("non-unit Ok"),
+            "the public emit seam names the non-unit-Ok shape: {msg}"
+        ),
+        other => panic!("expected EntryShape from emit, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_for_entry_rejects_unmarked_err_enum_at_emit() {
+    // D08: `Result<(), PlainErr>` where the Err enum is NOT marked regseq-error.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::PlainErr", false);
+    let result = result_enum(&mut m, unit, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    match emit_generic_c_for_entry(&m, "regseq_main") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("not marked") && msg.contains("regseq-error"),
+            "the public emit seam names the unmarked-Err shape: {msg}"
+        ),
+        other => panic!("expected EntryShape from emit, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_for_entry_rejects_entry_with_arguments_at_emit() {
+    // D08: an entry taking arguments is unsupported.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], unit, FnAbi::C, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    match emit_generic_c_for_entry(&m, "regseq_main") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("argument"),
+            "the public emit seam names the arguments shape: {msg}"
+        ),
+        other => panic!("expected EntryShape from emit, got {other:?}"),
+    }
+}
+
+#[test]
+fn emit_for_entry_rejects_custom_entry_with_error_return_at_emit() {
+    // D09: a manifest-custom entry (non-default suffix) combined with an
+    // error-returning signature is deferred this phase. The reject fires in
+    // `resolve_entry` before the adapter is built, so a valid (marked) enum still
+    // yields the entry-shape error, not an errno-mapping miss.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, unit, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "my_custom_entry", sig, None);
+    match emit_generic_c_for_entry(&m, "my_custom_entry") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("manifest-custom entry")
+                && msg.contains("my_custom_entry")
+                && msg.contains("error-returning"),
+            "the public emit seam names both halves of the custom-entry+error shape: {msg}"
+        ),
+        other => panic!("expected EntryShape from emit, got {other:?}"),
+    }
+}

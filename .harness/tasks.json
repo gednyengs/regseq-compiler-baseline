@@ -5452,13 +5452,13 @@
           "id": "regseq-backends-30",
           "name": "RegseqError e2e fixtures (Ok/EINVAL/reclassify)",
           "spec": ".harness/tasks/regseq-backends/30-regseq-error-e2e-fixtures.md",
-          "status": "pending",
+          "status": "failed",
           "depends_on": [
             "regseq-backends-28",
             "regseq-backends-29"
           ],
           "artifacts": [],
-          "fail_reason": null,
+          "fail_reason": "Fixture 3 (the spec's '?' + match/reclassify -> ETIMEDOUT, AC1) cannot be authored without an out-of-scope regseq-driver bridge change. The bridge runs rustc at a hard-wired mir_opt_level=0 with a fixed pass whitelist (no inliner; callbacks.rs:25-35, test-ir-fixtures/src/lib.rs:423-426), so the '?' desugaring is never normalized: it introduces a local typed '<Result<(),RegseqError> as core::ops::Try>::Residual' (an associated-type projection). The bridge type translator only normalizes an allowlist of TWO projection families -- Pointee::Metadata and Fn::Output (bridge/ty.rs:207-226) -- and hard-rejects every other TyKind::Alias as NonRigidTy (bridge/ty.rs:483). Observed at stage 1 (acquire): BridgeOutcome::Rejected(NonRigidTy{kind:Alias, ty_repr:'<core::result::Result<(), RegseqError> as core::ops::Try>::Residual'}). Confirmed repo-wide: no '?' operator appears in any bridged fixture; finding validated by Codex (gpt-5.5). Fixtures 1 (Ok->0) and 2 (EINVAL, the M1 slice) DO bridge+emit+cc+run correctly (EINVAL exits 22 on glibc), authored as plain 'fn regseq_main() -> Result<(), RegseqError>' mirroring crates/regseq-driver/tests/emit_bin_exit.rs::err_entry_source. RESOLUTION OPTIONS for a human: (a) file a regseq-driver task to authorize Try::Residual normalization (mirroring the regseq-driver-70/82 precedent that added Pointee::Metadata + Fn::Output to is_authorized_projection), then re-run T12; or (b) re-scope T12 to drop the literal '?' (match/reclassify alone still proves AC2's authored-internal-unmapped property). Either way, T11 (Ok->0) + the M1 EINVAL slice are ready to land if split from T12. Substitution within this task was rejected as a spec deviation (AC1/AC2 require the literal '?' path; PLAN T12 risk note: an unsupported construct 'would block the fixture').",
           "phase": "2a",
           "spec_refs": [],
           "spec_version": 1,
@@ -5474,7 +5474,7 @@
           "id": "regseq-backends-31",
           "name": "RegseqError fail-loud negatives",
           "spec": ".harness/tasks/regseq-backends/31-regseq-error-negatives.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-27",
             "regseq-backends-28"
