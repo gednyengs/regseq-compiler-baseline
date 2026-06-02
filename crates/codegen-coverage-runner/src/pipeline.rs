@@ -3,10 +3,11 @@
 //! so a snapshot drift is distinguishable from a behavioral miscompute,
 //! a compile error, or an acquire failure.
 //!
-//! Stages: 1 Acquire (bridge -> validated `RegseqModel`), 2 Emit
-//! (`regseq_backends::emit_generic_c`), 3 Snapshot (byte-exact vs
-//! golden), 4 Compile + 5 Run (host `cc`), 6 Behavioral (stdout for a
-//! pass fixture, stderr + non-zero exit for a panic fixture).
+//! Stages: 1 Acquire (bridge -> validated `RegseqModel`), 2 Emit +
+//! entry-shim classification (`regseq_backends::emit_generic_c_for_entry`),
+//! 3 Snapshot (byte-exact vs golden), 4 Compile + 5 Run (host `cc`),
+//! 6 Behavioral (stdout for a pass fixture, stderr + non-zero exit for a
+//! panic fixture).
 //!
 //! Until tasks b-e implement emit, every `kind = rust` fixture stops at
 //! stage 2 with `Fail { Emit, .. }` -- the honest Phase-1 baseline.
@@ -131,11 +132,14 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
         }
     };
 
-    // Stage 2: Emit.
-    let emitted = match regseq_backends::emit_generic_c(&model) {
-        Ok(c) => c,
-        Err(err) => return fail(Stage::Emit, err.to_string()),
-    };
+    // Stage 2: Emit + entry-shim classification (the backend is the single
+    // source of truth for the shim shape, contract C04; an unresolved /
+    // ambiguous / unsupported entry shape fails loud here at emit, D08/D09).
+    let (emitted, shim) =
+        match regseq_backends::emit_generic_c_for_entry(&model, &fixture.manifest.entry) {
+            Ok(emit) => (emit.tu, emit.shim),
+            Err(err) => return fail(Stage::Emit, err.to_string()),
+        };
 
     // Stage 3: Snapshot oracle (emitted C vs golden C).
     let golden_c = match std::fs::read_to_string(&fixture.golden_c) {
@@ -151,17 +155,8 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
         return fail(Stage::Snapshot, mismatch.summary);
     }
 
-    // Stage 4 prep: resolve the entry symbol the backend actually emits
-    // (Change F). The manifest's `entry` is a rendered-path suffix (default
-    // `regseq_main`); the backend emits `sanitize(emission_name)`, so passing
-    // the suffix verbatim would be an undefined symbol at link.
-    let entry = match resolve_entry(&model, &fixture.manifest.entry) {
-        Ok(sym) => sym,
-        Err(detail) => return fail(Stage::Compile, detail),
-    };
-
-    // Stages 4-5: Compile + Run.
-    let run = match toolchain::compile_and_run(&emitted, &entry, cc) {
+    // Stages 4-5: Compile + Run (the backend-resolved shim shape, not re-derived).
+    let run = match toolchain::compile_and_run(&emitted, &shim, cc) {
         Ok(run) => run,
         Err(toolchain::ToolchainError::CompileFailed { stderr }) => {
             return fail(Stage::Compile, stderr);
@@ -228,24 +223,6 @@ fn fail(stage: Stage, detail: String) -> FixtureVerdict {
     FixtureVerdict::Fail { stage, detail }
 }
 
-/// Resolve the manifest `entry` (a rendered-path suffix) to the C symbol the
-/// backend emits (Change F), via the backend's single-source-of-truth
-/// `entry_c_symbol`. A missing or ambiguous suffix is a clear stage-4 error
-/// string (the caller tags it `Stage::Compile`).
-fn resolve_entry(model: &regseq_model::RegseqModel, entry: &str) -> Result<String, String> {
-    match regseq_backends::entry_c_symbol(model, entry) {
-        regseq_backends::EntrySymbol::Resolved(sym) => Ok(sym),
-        regseq_backends::EntrySymbol::NotFound => Err(format!(
-            "no function instance whose emission_name ends with entry suffix {entry:?}"
-        )),
-        regseq_backends::EntrySymbol::Ambiguous(syms) => Err(format!(
-            "ambiguous entry suffix {entry:?}: matches {} function instances ({})",
-            syms.len(),
-            syms.join(", ")
-        )),
-    }
-}
-
 /// The outcome of blessing one fixture (Change E): the emitted C was written
 /// to `golden.c` (always, when stages 1-2 succeed), plus a report of whether
 /// the freshly-blessed emit compiled, ran, and matched the hand-authored
@@ -299,18 +276,20 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
         }
     };
 
-    // Stage 2: Emit.
-    let emitted = match regseq_backends::emit_generic_c(&model) {
-        Ok(c) => c,
-        Err(err) => {
-            return BlessOutcome {
-                name,
-                blessed_bytes: None,
-                report: format!("emit failed: {err}"),
-                ok: false,
-            };
-        }
-    };
+    // Stage 2: Emit + entry-shim classification (the backend's single
+    // source of truth for the shim shape, contract C04).
+    let (emitted, shim) =
+        match regseq_backends::emit_generic_c_for_entry(&model, &fixture.manifest.entry) {
+            Ok(emit) => (emit.tu, emit.shim),
+            Err(err) => {
+                return BlessOutcome {
+                    name,
+                    blessed_bytes: None,
+                    report: format!("emit failed: {err}"),
+                    ok: false,
+                };
+            }
+        };
 
     // Write golden.c (the ONLY file --bless ever writes). Stage 3 is skipped.
     if let Err(err) = std::fs::write(&fixture.golden_c, &emitted) {
@@ -325,21 +304,7 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
 
     // Stages 4-6 in REPORT mode. A compile/run miss is reported, never fatal;
     // golden.c is already written for diff review.
-    let entry = match resolve_entry(&model, &fixture.manifest.entry) {
-        Ok(sym) => sym,
-        Err(detail) => {
-            return BlessOutcome {
-                name,
-                blessed_bytes,
-                report: format!(
-                    "blessed golden.c ({} bytes); entry unresolved: {detail}",
-                    emitted.len()
-                ),
-                ok: false,
-            };
-        }
-    };
-    let run = match toolchain::compile_and_run(&emitted, &entry, cc) {
+    let run = match toolchain::compile_and_run(&emitted, &shim, cc) {
         Ok(run) => run,
         Err(err) => {
             return BlessOutcome {

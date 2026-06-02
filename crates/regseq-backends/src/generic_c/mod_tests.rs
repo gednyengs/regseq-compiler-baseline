@@ -6964,3 +6964,421 @@ fn diag_call_none_target_fails_loud() {
         Err(EmitError::Unsupported(msg)) if msg.contains("no target")
     ));
 }
+
+// ---------------------------------------------------------------------------
+// regseq-backends-27: entry-aware emit API + return-shape classifier (T07/T01).
+// The classifier (`classify_entry_return`) + shim resolution (`resolve_entry_shim`)
+// are exercised directly over hand-built models; `emit_generic_c_for_entry` is
+// exercised for the byte-identical unit-void path; `generate_main_c` for both
+// shim shapes.
+// ---------------------------------------------------------------------------
+
+/// Rust unit `()`.
+fn unit_ty(m: &mut RegseqModel) -> TyId {
+    m.types.intern(Ty::Tuple {
+        fields: Vec::new(),
+        layout: UNIT_LAYOUT,
+    })
+}
+
+/// Mark an item's source with the `FrameworkType(RegseqError)` attr (the bridge
+/// records this in regseq-driver-89); grows `item_attrs` to reach `item`.
+fn mark_framework_error(m: &mut RegseqModel, it: regseq_model::ItemId) {
+    let need = it.as_u32() as usize + 1;
+    while m.domain_attrs.item_attrs.len() < need {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+    m.domain_attrs.item_attrs[it].push(AttrData::FrameworkType(
+        regseq_model::FrameworkType::RegseqError,
+    ));
+}
+
+/// A fieldless multi-variant enum like `RegseqError`; `marked` toggles the
+/// `FrameworkType` attr on its item.
+fn error_enum(m: &mut RegseqModel, rendered: &str, marked: bool) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let it = item(m, ItemKind::Enum, rendered);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 8 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Direct,
+        variants: vec![
+            variant(m, "InvalidParameter", Vec::new(), 0, Some(0)),
+            variant(m, "OutOfMemory", Vec::new(), 1, Some(1)),
+        ],
+    };
+    let ty = m.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout: enum_layout(1, 1, shape),
+    });
+    if marked {
+        mark_framework_error(m, it);
+    }
+    ty
+}
+
+/// A niche-encoded two-variant `Result<ok_field, err_field>`: Ok = variant 0
+/// (niched), Err = variant 1 (untagged, carrying the niche-bearing payload),
+/// mirroring rustc's variant order.
+fn result_enum(m: &mut RegseqModel, ok_field_ty: TyId, err_field_ty: TyId) -> TyId {
+    let u8t = uint(m, UintKind::U8);
+    let it = item(m, ItemKind::Enum, "core::result::Result");
+    let ok_field = fl(m, "0", ok_field_ty, 0);
+    let err_field = fl(m, "0", err_field_ty, 0);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 9,
+        },
+        variants: vec![
+            variant(m, "Ok", vec![ok_field], 0, Some(9)),
+            variant(m, "Err", vec![err_field], 1, None),
+        ],
+    };
+    m.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout: enum_layout(1, 1, shape),
+    })
+}
+
+#[test]
+fn classify_unit_return_is_unit_void() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    assert_eq!(classify_entry_return(&m, unit), EntryReturnShape::UnitVoid);
+}
+
+#[test]
+fn classify_result_unit_marked_err_is_err_result() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, unit, err);
+    assert_eq!(
+        classify_entry_return(&m, result),
+        EntryReturnShape::ErrResult { err_enum_ty: err }
+    );
+}
+
+#[test]
+fn classify_result_unmarked_err_enum_rejects_naming_the_shape() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::PlainErr", false);
+    let result = result_enum(&mut m, unit, err);
+    match classify_entry_return(&m, result) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("not marked") && reason.contains("regseq-error"),
+            "reject names the unmarked-enum shape: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_non_unit_ok_rejects_naming_the_shape() {
+    // Result<u32, RegseqError>: a non-unit Ok payload.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, u32t, err);
+    match classify_entry_return(&m, result) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("non-unit Ok"),
+            "reject names the non-unit-Ok shape: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_result_non_enum_err_rejects() {
+    // Result<(), u32>: the Err payload is not an enum at all.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let u32t = uint(&mut m, UintKind::U32);
+    let result = result_enum(&mut m, unit, u32t);
+    match classify_entry_return(&m, result) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("not a regseq-error-marked enum"),
+            "reject names the non-enum-Err shape: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_non_unit_zst_ok_is_still_rejected() {
+    // Result<[u8; 0], RegseqError>: the Ok payload is zero-sized but is NOT
+    // `()`, so it must still be rejected (the check is exact-unit, not any-ZST).
+    let mut m = model();
+    let u8t = uint(&mut m, UintKind::U8);
+    let zst_arr = m.types.intern(Ty::Array(u8t, 0));
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, zst_arr, err);
+    match classify_entry_return(&m, result) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("non-unit Ok"),
+            "a non-`()` ZST Ok payload is still non-unit: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_multi_field_err_is_rejected() {
+    // A two-variant niche enum whose Err variant carries TWO fields is not the
+    // `Result<(), E>` shape, even if one field is a marked enum.
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err_enum = error_enum(&mut m, "crate::RegseqError", true);
+    let u8t = uint(&mut m, UintKind::U8);
+    let it = item(&mut m, ItemKind::Enum, "core::result::Result");
+    let ok_field = fl(&mut m, "0", unit, 0);
+    let err_field0 = fl(&mut m, "0", err_enum, 0);
+    let err_field1 = fl(&mut m, "1", u8t, 1);
+    let tag = TagScalar {
+        offset: 0,
+        scalar_ty: u8t,
+        valid_range: WrappingRange { start: 0, end: 1 },
+    };
+    let shape = EnumShape::Multiple {
+        tag,
+        encoding: TagEncoding::Niche {
+            untagged_variant: VariantIdx::from_u32(1),
+            niche_variants: VariantRange {
+                start: VariantIdx::from_u32(0),
+                end: VariantIdx::from_u32(0),
+            },
+            niche_start: 9,
+        },
+        variants: vec![
+            variant(&mut m, "Ok", vec![ok_field], 0, Some(9)),
+            variant(&mut m, "Err", vec![err_field0, err_field1], 1, None),
+        ],
+    };
+    let result = m.types.intern(Ty::Enum {
+        item: it,
+        args: GenericArgs::new(),
+        layout: enum_layout(2, 1, shape),
+    });
+    match classify_entry_return(&m, result) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("single regseq-error-marked enum"),
+            "a multi-field Err is rejected: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn classify_scalar_return_rejects_naming_the_expected_shapes() {
+    // A bare `u32` return is neither `()` nor `Result<(), _>`.
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    match classify_entry_return(&m, u32t) {
+        EntryReturnShape::Reject(reason) => assert!(
+            reason.contains("Result<(), RegseqError>"),
+            "reject names the expected shapes: {reason}"
+        ),
+        other => panic!("expected Reject, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_shim_unit_void_returns_void_shim_with_sanitized_symbol() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    assert_eq!(
+        resolve_entry_shim(&m, "regseq_main").unwrap(),
+        EntryShim::UnitVoid {
+            entry: "regseq_main".to_string()
+        }
+    );
+}
+
+#[test]
+fn resolve_shim_default_entry_err_result_returns_adapter_symbol() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, unit, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    assert_eq!(
+        resolve_entry_shim(&m, "regseq_main").unwrap(),
+        EntryShim::ErrResult {
+            adapter: "regseq_main__regseq_exit".to_string()
+        }
+    );
+}
+
+#[test]
+fn resolve_shim_absent_entry_fails_loud() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    fn_instance(&mut m, "other_fn", sig, None);
+    match resolve_entry_shim(&m, "regseq_main") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("no function instance") && msg.contains("regseq_main"),
+            "names the missing entry: {msg}"
+        ),
+        other => panic!("expected EntryShape error, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_shim_ambiguous_entry_fails_loud() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    fn_instance(&mut m, "a_helper", sig, None);
+    fn_instance(&mut m, "b_helper", sig, None);
+    match resolve_entry_shim(&m, "helper") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("ambiguous") && msg.contains("2"),
+            "names the ambiguous matches: {msg}"
+        ),
+        other => panic!("expected EntryShape error, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_shim_entry_with_arguments_fails_loud() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![u32t], unit, FnAbi::C, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    match resolve_entry_shim(&m, "regseq_main") {
+        Err(EmitError::EntryShape(msg)) => {
+            assert!(msg.contains("argument"), "names the arguments shape: {msg}")
+        }
+        other => panic!("expected EntryShape error, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_shim_custom_entry_with_error_return_is_rejected_d09() {
+    // A manifest-custom entry (non-default suffix) returning an error is deferred
+    // this phase (D09).
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let err = error_enum(&mut m, "crate::RegseqError", true);
+    let result = result_enum(&mut m, unit, err);
+    let sig = fnsig(&mut m, vec![], result, FnAbi::Rust, false);
+    fn_instance(&mut m, "my_custom_entry", sig, None);
+    match resolve_entry_shim(&m, "my_custom_entry") {
+        Err(EmitError::EntryShape(msg)) => assert!(
+            msg.contains("manifest-custom entry") && msg.contains("error-returning"),
+            "names the custom-entry+error shape: {msg}"
+        ),
+        other => panic!("expected EntryShape error, got {other:?}"),
+    }
+}
+
+#[test]
+fn resolve_shim_custom_entry_unit_void_is_allowed() {
+    // A custom suffix returning unit is fine (only error-returning custom entries
+    // are rejected, D09).
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    fn_instance(&mut m, "my_custom_entry", sig, None);
+    assert_eq!(
+        resolve_entry_shim(&m, "my_custom_entry").unwrap(),
+        EntryShim::UnitVoid {
+            entry: "my_custom_entry".to_string()
+        }
+    );
+}
+
+#[test]
+fn emit_for_entry_unit_void_tu_is_identical_to_emit_generic_c() {
+    let mut m = model();
+    let unit = unit_ty(&mut m);
+    let sig = fnsig(&mut m, vec![], unit, FnAbi::C, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+
+    let emit = emit_generic_c_for_entry(&m, "regseq_main").expect("unit-void entry must emit");
+    assert_eq!(
+        emit.shim,
+        EntryShim::UnitVoid {
+            entry: "regseq_main".to_string()
+        }
+    );
+    // I02/R05: the unit-void TU is byte-identical to the plain emit.
+    assert_eq!(emit.tu, emit_generic_c(&m).unwrap());
+}
+
+#[test]
+fn emit_for_entry_propagates_reject_as_a_loud_emit_error() {
+    let mut m = model();
+    let u32t = uint(&mut m, UintKind::U32);
+    let sig = fnsig(&mut m, vec![], u32t, FnAbi::C, false);
+    fn_instance(&mut m, "regseq_main", sig, None);
+    assert!(matches!(
+        emit_generic_c_for_entry(&m, "regseq_main"),
+        Err(EmitError::EntryShape(_))
+    ));
+}
+
+#[test]
+fn generate_main_c_unit_void_is_byte_identical_to_the_historical_void_shim() {
+    // I02/R05: the void shim bytes must not change. This pins the exact string
+    // the prior `generate_main_c(entry: &str)` produced.
+    let expected = "/* Generated by codegen-coverage-runner (Doc 2 D3 harness entry). */\n\
+                    extern void regseq_main(void);\n\
+                    \n\
+                    int main(void) {\n\
+                    \x20\x20\x20\x20regseq_main();\n\
+                    \x20\x20\x20\x20return 0;\n\
+                    }\n";
+    assert_eq!(
+        generate_main_c(&EntryShim::unit_void("regseq_main")),
+        expected
+    );
+}
+
+#[test]
+fn generate_main_c_err_result_emits_int_shim_calling_the_adapter() {
+    let main_c = generate_main_c(&EntryShim::ErrResult {
+        adapter: "regseq_main__regseq_exit".to_string(),
+    });
+    assert!(main_c.contains("extern int regseq_main__regseq_exit(void);"));
+    assert!(main_c.contains("return regseq_main__regseq_exit();"));
+    assert!(main_c.contains("int main(void)"));
+    assert!(
+        !main_c.contains("return 0;"),
+        "the int shim returns the adapter, not 0"
+    );
+}
+
+#[test]
+fn entry_shim_unit_void_constructor_matches_struct_form() {
+    assert_eq!(
+        EntryShim::unit_void("foo"),
+        EntryShim::UnitVoid {
+            entry: "foo".to_string()
+        }
+    );
+}

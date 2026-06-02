@@ -60,7 +60,13 @@ fn emit_seam_returns_a_real_tu_on_a_real_model() {
 
 #[test]
 fn pipeline_advances_past_emit_now_that_the_seam_is_live() {
-    let snippet = TempFixtureDir::new("pipeline", "#![no_std]\npub fn no_op() {}\n");
+    // The emit stage is now entry-aware (regseq-backends-27): it resolves +
+    // classifies the entry alongside the TU, so the probe fixture carries a
+    // unit-void `regseq_main` for emit to resolve.
+    let snippet = TempFixtureDir::new(
+        "pipeline",
+        "#![no_std]\n#[no_mangle]\npub extern \"C\" fn regseq_main() {}\n",
+    );
     let fixture = Fixture {
         manifest: Manifest {
             name: "seam_probe".to_string(),
@@ -79,9 +85,9 @@ fn pipeline_advances_past_emit_now_that_the_seam_is_live() {
 
     let result = pipeline::run_fixture(&fixture, Path::new("cc"));
     assert_eq!(result.name, "seam_probe");
-    // Stage 1 (acquire) and stage 2 (emit) now both pass; with no committed
-    // golden.c the fixture stops at stage 3 (snapshot) -- proving emit no
-    // longer short-circuits the pipeline at Stage::Emit.
+    // Stage 1 (acquire) and stage 2 (emit + entry-shim classification) now both
+    // pass; with no committed golden.c the fixture stops at stage 3 (snapshot)
+    // -- proving emit no longer short-circuits the pipeline at Stage::Emit.
     match result.verdict {
         FixtureVerdict::Fail { stage, detail } => {
             assert_ne!(stage, Stage::Acquire, "stage-1 acquire must pass");

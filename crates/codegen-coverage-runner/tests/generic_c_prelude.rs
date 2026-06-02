@@ -18,7 +18,7 @@ use std::path::Path;
 use std::process::Command;
 
 use codegen_coverage_runner::oracle;
-use codegen_coverage_runner::toolchain;
+use codegen_coverage_runner::toolchain::{self, EntryShim};
 use regseq_backends::full_helper_prelude;
 
 /// The host `cc`, matching the runner's default.
@@ -79,7 +79,7 @@ fn prelude_compiles_with_no_warnings() {
 #[test]
 fn prelude_with_empty_entry_exits_zero() {
     let tu = format!("{}\nvoid regseq_main(void) {{}}\n", prelude_tu());
-    let run = toolchain::compile_and_run(&tu, "regseq_main", cc())
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect("prelude + empty main must build/run");
     assert_eq!(run.exit_code, Some(0), "empty entry must exit 0");
     assert_eq!(run.stderr, "", "empty entry must have clean stderr");
@@ -93,8 +93,8 @@ fn regseq_panic_writes_stderr_and_aborts() {
         "{}\nvoid regseq_main(void) {{ regseq_panic(\"boom\"); }}\n",
         prelude_tu()
     );
-    let run =
-        toolchain::compile_and_run(&tu, "regseq_main", cc()).expect("panic TU must build/run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
+        .expect("panic TU must build/run");
     assert_ne!(run.exit_code, Some(0), "regseq_panic must not exit 0");
     assert_eq!(run.stdout, "", "panic must not pollute stdout");
     assert_eq!(run.stderr, "panic: boom\n");
@@ -115,8 +115,8 @@ fn saturating_f64_to_int32_saturates_and_nan_is_zero() {
          }}\n",
         prelude_tu()
     );
-    let run =
-        toolchain::compile_and_run(&tu, "regseq_main", cc()).expect("saturating TU must build/run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
+        .expect("saturating TU must build/run");
     assert_eq!(run.exit_code, Some(0), "must exit 0: {}", run.stderr);
     // INT32_MAX, 0, INT32_MIN.
     assert_eq!(run.stdout, "2147483647 0 -2147483648\n");
@@ -137,8 +137,8 @@ fn with_overflow_reports_flag_and_value() {
          }}\n",
         prelude_tu()
     );
-    let run =
-        toolchain::compile_and_run(&tu, "regseq_main", cc()).expect("overflow TU must build/run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
+        .expect("overflow TU must build/run");
     assert_eq!(run.exit_code, Some(0), "must exit 0: {}", run.stderr);
     // v=5, no-overflow flag 0, overflow flag 1.
     assert_eq!(run.stdout, "5 0 1\n");

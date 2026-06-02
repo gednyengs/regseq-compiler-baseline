@@ -57,20 +57,25 @@ impl From<std::io::Error> for ToolchainError {
     }
 }
 
-/// The Doc-2 D3 entry shim generator, re-exported from the backend (the
-/// single source of truth shared with `cargo-regseq`'s `--emit bin`).
-pub use regseq_backends::generate_main_c;
+/// The Doc-2 D3 entry shim generator + shim shape, re-exported from the backend
+/// (the single source of truth shared with `cargo-regseq`'s `--emit bin`).
+pub use regseq_backends::{generate_main_c, EntryShim};
 /// The pinned host-`cc` flags, re-exported from `regseq-config` (shared with
 /// `cargo-regseq`'s linker).
 pub use regseq_config::CC_FLAGS;
 
-/// Compile `tu_c` together with a generated `main.c` for `entry` using
-/// the pinned flags, run the linked binary in a hermetic temp dir, and
-/// capture stdout / stderr / exit code.
+/// Compile `tu_c` together with the generated `main.c` for the backend-resolved
+/// `shim` using the pinned flags, run the linked binary in a hermetic temp dir,
+/// and capture stdout / stderr / exit code.
 ///
-/// A non-zero `cc` exit surfaces as [`ToolchainError::CompileFailed`]
-/// (stage-4 failure). The temp dir is removed on every return path.
-pub fn compile_and_run(tu_c: &str, entry: &str, cc: &Path) -> Result<RunOutput, ToolchainError> {
+/// The `shim` shape comes from the backend (no re-derivation, contract C04). A
+/// non-zero `cc` exit surfaces as [`ToolchainError::CompileFailed`] (stage-4
+/// failure). The temp dir is removed on every return path.
+pub fn compile_and_run(
+    tu_c: &str,
+    shim: &EntryShim,
+    cc: &Path,
+) -> Result<RunOutput, ToolchainError> {
     let scratch = ScratchDir::new()?;
     let dir = scratch.path();
 
@@ -78,7 +83,7 @@ pub fn compile_and_run(tu_c: &str, entry: &str, cc: &Path) -> Result<RunOutput, 
     let main_path = dir.join("main.c");
     let bin_path = dir.join("fixture_bin");
     std::fs::write(&tu_path, tu_c)?;
-    std::fs::write(&main_path, generate_main_c(entry))?;
+    std::fs::write(&main_path, generate_main_c(shim))?;
 
     let compile = Command::new(cc)
         .args(CC_FLAGS)

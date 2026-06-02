@@ -22,7 +22,7 @@ extern crate rustc_driver;
 
 use std::path::{Path, PathBuf};
 
-use codegen_coverage_runner::toolchain;
+use codegen_coverage_runner::toolchain::{self, EntryShim};
 use regseq_backends::emit_generic_c;
 use regseq_model::{
     AggregateKind, AssertKind, BasicBlock, BinOp, BlockId, Body, CallCallee, CastKind, Const,
@@ -145,8 +145,8 @@ fn bridged_scalar_body_runs_and_exits_zero_on_a_correct_result() {
 
     let tu =
         format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
-    let run =
-        toolchain::compile_and_run(&tu, &entry, cc()).expect("scalar-body TU must compile + run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
+        .expect("scalar-body TU must compile + run");
     assert_eq!(
         run.exit_code,
         Some(0),
@@ -169,8 +169,8 @@ fn bridged_scalar_body_aborts_on_a_wrong_result() {
     let fail = fn_cname(&model, "regseq_test_fail");
     let tu =
         format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
-    let run =
-        toolchain::compile_and_run(&tu, &entry, cc()).expect("wrong-result TU must compile + run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
+        .expect("wrong-result TU must compile + run");
     assert_ne!(
         run.exit_code,
         Some(0),
@@ -247,7 +247,7 @@ fn bridged_structured_data_body_runs_and_exits_zero() {
     let fail = fn_cname(&model, "regseq_test_fail");
     let tu =
         format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
-    let run = toolchain::compile_and_run(&tu, &entry, cc())
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
         .expect("structured-data TU must compile + run");
     assert_eq!(
         run.exit_code,
@@ -271,8 +271,8 @@ fn bridged_structured_data_body_aborts_on_a_wrong_field_result() {
     let fail = fn_cname(&model, "regseq_test_fail");
     let tu =
         format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
-    let run =
-        toolchain::compile_and_run(&tu, &entry, cc()).expect("wrong-result TU must compile + run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
+        .expect("wrong-result TU must compile + run");
     assert_ne!(run.exit_code, Some(0), "a wrong field result must abort");
     assert!(
         run.stderr.contains("wrong result"),
@@ -425,7 +425,7 @@ fn fn_instance(
 /// Compile + run the TU with a trivial entry (or the named entry), asserting
 /// the exit code.
 fn assert_runs(tu: &str, entry: &str, what: &str) -> toolchain::RunOutput {
-    toolchain::compile_and_run(tu, entry, cc())
+    toolchain::compile_and_run(tu, &EntryShim::unit_void(entry), cc())
         .unwrap_or_else(|e| panic!("{what} must compile: {e}"))
 }
 
@@ -1365,8 +1365,8 @@ fn bridged_direct_enum_body_runs_and_exits_zero() {
     let fail = fn_cname(&model, "regseq_test_fail");
     let tu =
         format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
-    let run =
-        toolchain::compile_and_run(&tu, &entry, cc()).expect("bridged enum TU must compile + run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
+        .expect("bridged enum TU must compile + run");
     assert_eq!(
         run.exit_code,
         Some(0),
@@ -1422,7 +1422,8 @@ fn bridged_direct_enum_body_aborts_on_a_wrong_payload() {
     let fail = fn_cname(&model, "regseq_test_fail");
     let tu =
         format!("{tu}\nvoid {fail}(void) {{ fprintf(stderr, \"wrong result\\n\"); abort(); }}\n");
-    let run = toolchain::compile_and_run(&tu, &entry, cc()).expect("TU must compile + run");
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
+        .expect("TU must compile + run");
     assert_ne!(run.exit_code, Some(0), "a wrong payload must abort");
     assert!(
         run.stderr.contains("wrong result"),
@@ -3256,7 +3257,7 @@ fn run_diag(label: &str, extra_items: &str, body: &str) -> String {
     };
     let tu = emit_generic_c(&model).expect("emit must return Ok for a diag-log body");
     let entry = fn_cname(&model, "regseq_main");
-    let run = toolchain::compile_and_run(&tu, &entry, cc())
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
         .unwrap_or_else(|e| panic!("diag-log TU {label:?} must compile + run: {e}"));
     assert_eq!(
         run.exit_code,

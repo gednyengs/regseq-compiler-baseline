@@ -21,7 +21,7 @@ extern crate rustc_driver;
 
 use std::path::{Path, PathBuf};
 
-use codegen_coverage_runner::toolchain::{self, ToolchainError};
+use codegen_coverage_runner::toolchain::{self, EntryShim, ToolchainError};
 use regseq_backends::emit_generic_c;
 use regseq_model::{
     CrateId, DefPath, Endian, EnumShape, FieldLayout, FnAbi, FnSig, GenericArgs, Instance,
@@ -165,7 +165,7 @@ fn bridged_enums_emit_a_tu_that_compiles_clean() {
     // proof that the emitted offsets reproduce rustc's enum layout for all
     // four shapes (Direct fieldless, Niche, multi-field payload, shifted).
     let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
-    let run = toolchain::compile_and_run(&tu, "regseq_main", cc())
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect("enum TU must compile (layout guards hold) + run");
     assert_eq!(run.exit_code, Some(0), "must exit 0: {}", run.stderr);
     assert_eq!(run.stderr, "", "clean stderr");
@@ -198,7 +198,7 @@ fn bridged_aggregates_emit_a_tu_that_compiles_clean() {
     // Compile the TU + a trivial entry. The layout guards passing IS the
     // proof that the emitted offsets reproduce rustc's layout.
     let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
-    let run = toolchain::compile_and_run(&tu, "regseq_main", cc())
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect("aggregate TU must compile (layout guards hold) + run");
     assert_eq!(run.exit_code, Some(0), "must exit 0: {}", run.stderr);
     assert_eq!(run.stderr, "", "clean stderr");
@@ -311,7 +311,7 @@ fn hand_built_packed_struct_emits_a_tu_that_compiles_clean() {
     let tu = emit_generic_c(&model).expect("emit must return Ok");
     assert!(tu.contains("__attribute__((packed, aligned(1)))"));
     let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
-    let run = toolchain::compile_and_run(&tu, "regseq_main", cc())
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect("packed TU must compile (guards hold) + run");
     assert_eq!(run.exit_code, Some(0), "must exit 0: {}", run.stderr);
 }
@@ -380,7 +380,7 @@ fn wrong_offset_fails_the_compile_on_the_static_assert() {
     assert!(tu.contains("_Static_assert(offsetof(struct Bad, v) == 1"));
 
     let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
-    let err = toolchain::compile_and_run(&tu, "regseq_main", cc())
+    let err = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect_err("a wrong offset must fail the compile on the _Static_assert");
     assert!(
         matches!(err, ToolchainError::CompileFailed { .. }),
@@ -485,7 +485,7 @@ fn fn_ptr_returning(model: &mut RegseqModel, output: TyId) -> TyId {
 /// a clean exit (so all type definitions / declarators are valid C).
 fn assert_compiles(tu: &str, what: &str) {
     let full = format!("{tu}\nvoid regseq_main(void) {{}}\n");
-    let run = toolchain::compile_and_run(&full, "regseq_main", cc())
+    let run = toolchain::compile_and_run(&full, &EntryShim::unit_void("regseq_main"), cc())
         .unwrap_or_else(|e| panic!("{what} must compile: {e}"));
     assert_eq!(
         run.exit_code,
@@ -784,7 +784,7 @@ fn wrong_enum_field_offset_fails_the_compile_on_the_static_assert() {
     );
 
     let tu = format!("{tu}\nvoid regseq_main(void) {{}}\n");
-    let err = toolchain::compile_and_run(&tu, "regseq_main", cc())
+    let err = toolchain::compile_and_run(&tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect_err("a wrong enum field offset must fail the compile on the _Static_assert");
     assert!(
         matches!(err, ToolchainError::CompileFailed { .. }),

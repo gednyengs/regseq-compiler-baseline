@@ -9,5 +9,6 @@
 mod generic_c;
 
 pub use generic_c::{
-    emit_generic_c, entry_c_symbol, full_helper_prelude, generate_main_c, EmitError, EntrySymbol,
+    emit_generic_c, emit_generic_c_for_entry, entry_c_symbol, full_helper_prelude, generate_main_c,
+    EmitError, EntryEmit, EntryShim, EntrySymbol,
 };

@@ -40,7 +40,12 @@ mod layout_emit;
 mod naming;
 mod types;
 
-pub use naming::{entry_c_symbol, generate_main_c, EntrySymbol};
+pub use naming::{entry_c_symbol, generate_main_c, EntryShim, EntrySymbol};
+
+/// The default Doc-2 D3 entry suffix both consumers pass on the error path
+/// (D09). A *manifest-custom* entry (any other suffix) combined with an
+/// error-returning signature is rejected this phase ([`emit_generic_c_for_entry`]).
+const DEFAULT_ENTRY_SUFFIX: &str = "regseq_main";
 
 /// A node in the section 15 by-value-containment graph: an aggregate to
 /// emit (a definition or, for enums, a forward-decl only) or a synthesized
@@ -178,6 +183,235 @@ pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
     out.push_str(&bank4);
     out.push_str(&bank5);
     Ok(out)
+}
+
+/// An entry-aware generic-C emit: the translation unit plus the
+/// backend-determined entry shim shape, returned together so neither consumer
+/// re-derives the shape (contract C04).
+#[derive(Debug, Clone)]
+pub struct EntryEmit {
+    /// The generic-C translation unit (identical to [`emit_generic_c`] for the
+    /// unit-void path).
+    pub tu: String,
+    /// The shim shape the consumer feeds to [`generate_main_c`].
+    pub shim: EntryShim,
+}
+
+/// Lower a post-mono [`RegseqModel`] to a generic-C translation unit *and*
+/// classify the named entry into its shim shape (PLAN tasks T07/T01).
+///
+/// `entry_suffix` is a rendered-`emission_name` suffix (the manifest `entry`;
+/// both consumers pass the default `regseq_main` on the error path). The backend
+/// is the single source of truth (C04): it resolves the entry, classifies its
+/// return type, and returns the [`EntryShim`] alongside the TU so the
+/// codegen-coverage runner and `cargo-regseq --emit bin` consume one decision.
+///
+/// Classification (PLAN D08/D09, R03/R09):
+/// - `() ` return -> [`EntryShim::UnitVoid`] (emission byte-identical to
+///   [`emit_generic_c`] -- the void path does not change, invariant I02/R05).
+/// - `Result<(), E>` with `E` an enum carrying the `FrameworkType` attr ->
+///   [`EntryShim::ErrResult`] (the adapter `<entry>__regseq_exit` is hand-emitted
+///   into the TU in regseq-backends-28).
+/// - every other shape *fails loud* with [`EmitError::EntryShape`] naming it: a
+///   non-unit `Ok` (`Result<T, _>`, `T != ()`), an unmarked `Err` enum, an entry
+///   taking arguments, an absent / ambiguous entry suffix, and a manifest-custom
+///   entry combined with an error-returning signature (deferred this phase, D09).
+pub fn emit_generic_c_for_entry(
+    model: &RegseqModel,
+    entry_suffix: &str,
+) -> Result<EntryEmit, EmitError> {
+    let shim = resolve_entry_shim(model, entry_suffix)?;
+    let tu = emit_generic_c(model)?;
+    Ok(EntryEmit { tu, shim })
+}
+
+/// Resolve `entry_suffix` to a single function instance, classify its return
+/// shape, and produce the [`EntryShim`] -- or a fail-loud [`EmitError`] naming
+/// the rejected shape. The shim-shape decision point shared by both consumers.
+fn resolve_entry_shim(model: &RegseqModel, entry_suffix: &str) -> Result<EntryShim, EmitError> {
+    // Resolve the entry instance (the `entry_c_symbol` suffix logic, but we keep
+    // the matched instance so we can read its signature, not just the symbol).
+    let mut matches = model.instances.iter().filter(|inst| {
+        matches!(inst.kind, InstanceKind::Function(_))
+            && model
+                .strings
+                .resolve(inst.emission_name)
+                .ends_with(entry_suffix)
+    });
+    let entry_inst = match (matches.next(), matches.next()) {
+        (None, _) => {
+            return Err(EmitError::EntryShape(format!(
+                "no function instance whose emission_name ends with entry suffix {entry_suffix:?}"
+            )));
+        }
+        (Some(_), Some(_)) => {
+            let all: Vec<String> = model
+                .instances
+                .iter()
+                .filter(|inst| matches!(inst.kind, InstanceKind::Function(_)))
+                .filter_map(|inst| {
+                    let rendered = model.strings.resolve(inst.emission_name);
+                    rendered
+                        .ends_with(entry_suffix)
+                        .then(|| naming::sanitize(rendered))
+                })
+                .collect();
+            return Err(EmitError::EntryShape(format!(
+                "ambiguous entry suffix {entry_suffix:?}: matches {} function instances ({})",
+                all.len(),
+                all.join(", ")
+            )));
+        }
+        (Some(inst), None) => inst,
+    };
+
+    let data = entry_inst
+        .kind
+        .as_function()
+        .expect("entry instance filtered to Function");
+    let fn_sig = model.sigs.resolve(data.fn_sig);
+    let entry = naming::sanitize(model.strings.resolve(entry_inst.emission_name));
+
+    // An entry taking arguments is unsupported (D08).
+    if !fn_sig.inputs.is_empty() {
+        return Err(EmitError::EntryShape(format!(
+            "entry {entry:?} takes {} argument(s); the entry shim requires a no-argument entry",
+            fn_sig.inputs.len()
+        )));
+    }
+
+    match classify_entry_return(model, fn_sig.output) {
+        EntryReturnShape::UnitVoid => Ok(EntryShim::UnitVoid { entry }),
+        EntryReturnShape::ErrResult { .. } => {
+            // A manifest-custom entry combined with an error-returning signature
+            // is deferred this phase (D09): only the default suffix may return an
+            // error.
+            if entry_suffix != DEFAULT_ENTRY_SUFFIX {
+                return Err(EmitError::EntryShape(format!(
+                    "manifest-custom entry {entry_suffix:?} combined with an error-returning \
+                     signature is not supported this phase (only the default {DEFAULT_ENTRY_SUFFIX:?} \
+                     entry may return Result<(), RegseqError>)"
+                )));
+            }
+            Ok(EntryShim::ErrResult {
+                adapter: format!("{entry}__regseq_exit"),
+            })
+        }
+        EntryReturnShape::Reject(reason) => Err(EmitError::EntryShape(format!(
+            "entry {entry:?} return shape is unsupported: {reason}"
+        ))),
+    }
+}
+
+/// The classification of an entry's return type (PLAN T07): the void path, the
+/// supported error path, or a fail-loud rejection naming the shape.
+#[derive(Debug, Clone, PartialEq, Eq)]
+enum EntryReturnShape {
+    /// `()` -- the unit-void shim path.
+    UnitVoid,
+    /// `Result<(), E>` with `E` a `FrameworkType`-marked enum; carries the Err
+    /// enum's `TyId` for the regseq-backends-28 adapter.
+    ErrResult {
+        /// The marked `Err` enum type.
+        err_enum_ty: TyId,
+    },
+    /// An unsupported return shape; the `String` names it for a fail-loud
+    /// diagnostic.
+    Reject(String),
+}
+
+/// Classify an entry's return type `output` (PLAN T07, risk A4): match the
+/// niche two-variant `Result<(), E>` layout structurally (a `()` Ok payload + a
+/// single-enum Err payload), then the `FrameworkType` attr check -- never by
+/// name. `()` is the unit-void path; everything else is a named rejection.
+fn classify_entry_return(model: &RegseqModel, output: TyId) -> EntryReturnShape {
+    use regseq_model::{EnumShape, LayoutKind, TagEncoding};
+
+    if is_unit(model, output) {
+        return EntryReturnShape::UnitVoid;
+    }
+
+    // A `Result<(), E>` is a niche-encoded two-variant enum. Match that shape;
+    // rustc orders the variants Ok = 0, Err = 1 (structural, not by name).
+    let variants = match &model.types[output] {
+        Ty::Enum {
+            layout:
+                regseq_model::Layout {
+                    kind:
+                        LayoutKind::Enum {
+                            shape:
+                                EnumShape::Multiple {
+                                    encoding: TagEncoding::Niche { .. },
+                                    variants,
+                                    ..
+                                },
+                        },
+                    ..
+                },
+            ..
+        } if variants.len() == 2 => variants,
+        _ => {
+            return EntryReturnShape::Reject(
+                "expected `()` or `Result<(), RegseqError>`".to_string(),
+            );
+        }
+    };
+
+    let ok_variant = &variants[0];
+    let err_variant = &variants[1];
+
+    // The Ok payload must be exactly `()`: every field is unit (NOT merely
+    // zero-sized -- a non-`()` ZST Ok payload, e.g. `[u8; 0]` or an empty
+    // struct, is still not `Result<(), _>`).
+    if !ok_variant.fields.iter().all(|f| is_unit(model, f.ty)) {
+        return EntryReturnShape::Reject(
+            "non-unit Ok payload (only Result<(), RegseqError> is supported, not Result<T, _>)"
+                .to_string(),
+        );
+    }
+
+    // The Err payload must be exactly one field, a `FrameworkType`-marked enum
+    // (a multi-field Err is not the `Result<(), E>` shape).
+    let err_ty = match err_variant.fields.as_slice() {
+        [field] => field.ty,
+        _ => {
+            return EntryReturnShape::Reject(
+                "the Err payload is not a single regseq-error-marked enum".to_string(),
+            );
+        }
+    };
+    match &model.types[err_ty] {
+        Ty::Enum { item, .. } if is_framework_error_enum(model, *item) => {
+            EntryReturnShape::ErrResult {
+                err_enum_ty: err_ty,
+            }
+        }
+        Ty::Enum { .. } => EntryReturnShape::Reject(
+            "the Err enum is not marked #[rseq::framework_type(\"regseq-error\")]".to_string(),
+        ),
+        _ => EntryReturnShape::Reject(
+            "the Err payload is not a regseq-error-marked enum".to_string(),
+        ),
+    }
+}
+
+/// Whether `ty` is Rust unit `()` (the empty tuple).
+fn is_unit(model: &RegseqModel, ty: TyId) -> bool {
+    matches!(&model.types[ty], Ty::Tuple { fields, .. } if fields.is_empty())
+}
+
+/// Whether an item's source carries the `FrameworkType(RegseqError)` attr,
+/// recorded by the bridge (regseq-driver-89). Reads `model.domain_attrs.item_attrs`
+/// exactly as [`is_diag_log_instance`] reads the `Intrinsic` attr.
+fn is_framework_error_enum(model: &RegseqModel, item: regseq_model::ItemId) -> bool {
+    use regseq_model::{AttrData, FrameworkType};
+    let attrs = &model.domain_attrs.item_attrs;
+    if item.as_u32() as usize >= attrs.len() {
+        return false;
+    }
+    attrs[item]
+        .iter()
+        .any(|a| matches!(a, AttrData::FrameworkType(FrameworkType::RegseqError)))
 }
 
 /// The complete bank-1 helper library (static prelude + every arithmetic / cast
@@ -1817,6 +2051,13 @@ pub enum EmitError {
     /// Task d2 replaces each such site with the real lowering; until then
     /// the backend fails loud rather than mis-emitting.
     Unsupported(&'static str),
+    /// The entry-aware emit API ([`emit_generic_c_for_entry`]) rejected the
+    /// resolved entry's shape (PLAN D08/D09, R09). The `String` names the
+    /// rejected shape for a fail-loud diagnostic: a non-unit `Ok`, an unmarked
+    /// `Err` enum, an entry taking arguments, an absent / ambiguous entry, or a
+    /// manifest-custom error-returning entry. Both consumers surface it
+    /// identically (the backend is the single enforcement point).
+    EntryShape(String),
 }
 
 impl std::fmt::Display for EmitError {
@@ -1833,6 +2074,12 @@ impl std::fmt::Display for EmitError {
                 write!(
                     f,
                     "generic-C emission: unsupported construct: {what} (task d2)"
+                )
+            }
+            EmitError::EntryShape(what) => {
+                write!(
+                    f,
+                    "generic-C emission: unsupported entry shim shape: {what}"
                 )
             }
         }

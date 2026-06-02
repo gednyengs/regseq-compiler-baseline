@@ -58,34 +58,24 @@ pub fn emit_one(model: &RegseqModel, spec: &EmitSpec, output_dir: &Path) -> std:
             // The driver produces the *source half* of the binary: the library
             // TU `generic.c` plus the entry shim `generic_main.c`, both at the
             // default location. `cargo-regseq` links them after `cargo check`
-            // (the `name` is the linker's output name, not used here). The
-            // backend is the only place that can resolve the crate-qualified
-            // entry symbol from the model, so the shim is written here.
+            // (the `name` is the linker's output name, not used here).
+            //
+            // The backend's entry-aware emit API is the single source of truth
+            // (contract C04): it resolves + classifies the default `regseq_main`
+            // entry and returns the TU together with the shim shape, so this
+            // consumer does NOT re-derive it. An unresolved / ambiguous /
+            // unsupported entry fails loud at emit (no partial output). The
+            // unit-void path is wired here; an error-returning entry's runnable
+            // binary lands once the in-TU adapter exists (regseq-backends-28 /
+            // regseq-driver-90).
+            let emit = regseq_backends::emit_generic_c_for_entry(model, "regseq_main")
+                .map_err(|e| std::io::Error::other(format!("--emit bin: {e}")))?;
             let tu_dest = output_dir.join("generic.c");
             ensure_parent(&tu_dest)?;
-            let code = regseq_backends::emit_generic_c(model)
-                .map_err(|e| std::io::Error::other(e.to_string()))?;
-            fs::write(&tu_dest, code)?;
+            fs::write(&tu_dest, &emit.tu)?;
 
-            let entry = match regseq_backends::entry_c_symbol(model, "regseq_main") {
-                regseq_backends::EntrySymbol::Resolved(sym) => sym,
-                regseq_backends::EntrySymbol::NotFound => {
-                    return Err(std::io::Error::other(
-                        "--emit bin: no entry function found (expected a function whose \
-                         emission name ends with `regseq_main`)",
-                    ));
-                }
-                regseq_backends::EntrySymbol::Ambiguous(syms) => {
-                    return Err(std::io::Error::other(format!(
-                        "--emit bin: ambiguous entry -- {} functions match the `regseq_main` \
-                         suffix ({})",
-                        syms.len(),
-                        syms.join(", ")
-                    )));
-                }
-            };
             let main_dest = output_dir.join("generic_main.c");
-            fs::write(main_dest, regseq_backends::generate_main_c(&entry))
+            fs::write(main_dest, regseq_backends::generate_main_c(&emit.shim))
         }
         EmitSpec::Driver { .. } | EmitSpec::Analysis { .. } => {
             // Phase-1b territory per `pipeline-refactor.md:879`.
@@ -213,23 +203,26 @@ mod tests {
     }
 
     #[test]
-    fn emit_one_bin_without_entry_writes_tu_then_errors() {
-        // `small_model` has no functions, so entry resolution finds no
-        // `regseq_main` -> `emit_one(Bin)` writes `generic.c` (the library
-        // TU half) but then errors before the shim, surfacing as a fatal
-        // driver diagnostic at the call site. (The resolved happy path is
-        // covered end-to-end in `tests/generic_c_emit.rs`'s `--emit bin`
-        // sibling, where a real crate defines `regseq_main`.)
+    fn emit_one_bin_without_entry_fails_loud_at_emit() {
+        // `small_model` has no functions, so the backend's entry-aware emit API
+        // finds no `regseq_main` and fails loud at emit (the single source of
+        // truth for the shim shape, contract C04). No partial output is written.
+        // (The resolved happy path is covered end-to-end in
+        // `tests/generic_c_emit.rs`'s `--emit bin` sibling, where a real crate
+        // defines `regseq_main`.)
         let model = small_model();
         let dir = fresh_dir("bin-no-entry");
         let err = emit_one(&model, &EmitSpec::Bin { name: None }, &dir)
             .expect_err("bin emit must fail when there is no entry");
         assert!(
-            err.to_string().contains("no entry function"),
-            "error must explain the missing entry: {err}"
+            err.to_string().contains("--emit bin") && err.to_string().contains("regseq_main"),
+            "error must name the missing entry: {err}"
         );
-        // The TU half was still written; only the shim is missing.
-        assert!(dir.join("generic.c").exists(), "generic.c must be written");
+        // Fail-loud emit writes neither half.
+        assert!(
+            !dir.join("generic.c").exists(),
+            "no TU when the entry-aware emit fails loud"
+        );
         assert!(
             !dir.join("generic_main.c").exists(),
             "no shim when the entry is unresolved"

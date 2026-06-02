@@ -5381,7 +5381,7 @@
           "id": "regseq-backends-27",
           "name": "Generic-C entry-aware emit API + return-shape classifier",
           "spec": ".harness/tasks/regseq-backends/27-entry-aware-emit-api.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-98",
             "regseq-driver-89"

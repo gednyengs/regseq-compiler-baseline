@@ -14,7 +14,7 @@ extern crate rustc_driver;
 use std::path::Path;
 
 use codegen_coverage_runner::oracle;
-use codegen_coverage_runner::toolchain::{self, ToolchainError};
+use codegen_coverage_runner::toolchain::{self, EntryShim, ToolchainError};
 
 /// The host `cc`, matching the runner's default.
 fn cc() -> &'static Path {
@@ -30,7 +30,8 @@ fn pass_tu_compiles_runs_and_stdout_matches() {
               \x20\x20\x20\x20int result = 21 + 21;\n\
               \x20\x20\x20\x20printf(\"[INFO] result=%d\\n\", result);\n\
               }\n";
-    let run = toolchain::compile_and_run(tu, "regseq_main", cc()).expect("pass TU must build/run");
+    let run = toolchain::compile_and_run(tu, &EntryShim::unit_void("regseq_main"), cc())
+        .expect("pass TU must build/run");
 
     assert_eq!(run.exit_code, Some(0), "pass TU must exit 0");
     assert_eq!(run.stderr, "", "pass TU stderr must be clean");
@@ -53,7 +54,8 @@ fn panic_tu_aborts_with_stderr_and_nonzero_exit() {
               \x20\x20\x20\x20fprintf(stderr, \"[PANIC] assertion failed\\n\");\n\
               \x20\x20\x20\x20abort();\n\
               }\n";
-    let run = toolchain::compile_and_run(tu, "regseq_main", cc()).expect("panic TU must build/run");
+    let run = toolchain::compile_and_run(tu, &EntryShim::unit_void("regseq_main"), cc())
+        .expect("panic TU must build/run");
 
     assert_ne!(run.exit_code, Some(0), "panic TU must not exit 0");
     assert_eq!(run.stderr, "[PANIC] assertion failed\n");
@@ -69,7 +71,7 @@ fn panic_tu_aborts_with_stderr_and_nonzero_exit() {
 #[test]
 fn malformed_tu_is_a_compile_failure() {
     let tu = "void regseq_main(void) { this is not valid c }\n";
-    let err = toolchain::compile_and_run(tu, "regseq_main", cc())
+    let err = toolchain::compile_and_run(tu, &EntryShim::unit_void("regseq_main"), cc())
         .expect_err("malformed TU must fail to compile");
     match err {
         ToolchainError::CompileFailed { stderr } => {
@@ -83,7 +85,7 @@ fn malformed_tu_is_a_compile_failure() {
 /// designated entry name.
 #[test]
 fn generate_main_c_calls_the_entry() {
-    let main_c = toolchain::generate_main_c("regseq_main");
+    let main_c = toolchain::generate_main_c(&EntryShim::unit_void("regseq_main"));
     assert!(main_c.contains("extern void regseq_main(void);"));
     assert!(main_c.contains("regseq_main();"));
     assert!(main_c.contains("int main(void)"));
