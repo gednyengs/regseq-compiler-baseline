@@ -1,6 +1,6 @@
 //! Phase 4 final `ItemId` assignment and side-table population.
 
-use super::{diag_log, BridgeCtxt, BridgeError};
+use super::{diag_log, framework_type, BridgeCtxt, BridgeError};
 
 /// Assigns dense `ItemId`s and populates item side tables in lock-step.
 pub(crate) fn assign_item_ids_and_populate_sidetables(
@@ -8,6 +8,7 @@ pub(crate) fn assign_item_ids_and_populate_sidetables(
 ) -> Result<(), BridgeError> {
     assign_pending_items(&mut ctxt.model, &mut ctxt.handles, &mut ctxt.pending_items);
     diag_log::materialise_log_intrinsics(ctxt);
+    framework_type::materialise_framework_types(ctxt);
     Ok(())
 }
 

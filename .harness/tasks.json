@@ -2306,7 +2306,7 @@
           "id": "regseq-driver-89",
           "name": "Bridge framework_type recognition + materialization",
           "spec": ".harness/tasks/regseq-driver/89-bridge-framework-type-recognition.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-model-98"
           ],

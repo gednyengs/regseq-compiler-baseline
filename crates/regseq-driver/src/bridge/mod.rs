@@ -21,6 +21,7 @@ pub mod def_path;
 pub mod diag_log;
 mod discovery;
 pub mod fnsig;
+mod framework_type;
 mod handles;
 mod opaque_handle;
 mod sort;
