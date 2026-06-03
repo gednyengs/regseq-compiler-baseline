@@ -197,6 +197,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::Phase5(_) => "Phase5",
         BridgeError::DiagLogFormat { .. } => "DiagLogFormat",
         BridgeError::DiagLogValidation { .. } => "DiagLogValidation",
+        BridgeError::UnsupportedQuestionMark { .. } => "UnsupportedQuestionMark",
     }
 }
 

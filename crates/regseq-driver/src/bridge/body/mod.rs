@@ -7,6 +7,7 @@ pub mod basic_block;
 pub mod materialise;
 pub mod operand;
 pub mod place;
+pub mod question_mark;
 pub mod rvalue;
 pub mod statement;
 pub mod terminator;

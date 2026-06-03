@@ -286,13 +286,21 @@ fn materialise_function_body_inner<'tcx>(
     // borrow it via the existing `&'tcx LocalDecls<'tcx>` API
     // expected by `BodyCtxt::new_with_model_body`.
     let rustc_body_poly = cx.input.tcx.instance_mir(rustc_instance.def);
-    let rustc_body: &rustc_middle::mir::Body<'tcx> = cx.input.tcx.arena.alloc(
-        rustc_instance.instantiate_mir_and_normalize_erasing_regions(
-            cx.input.tcx,
-            ty::TypingEnv::fully_monomorphized(),
-            ty::EarlyBinder::bind(rustc_body_poly.clone()),
-        ),
+    let mut owned_body = rustc_instance.instantiate_mir_and_normalize_erasing_regions(
+        cx.input.tcx,
+        ty::TypingEnv::fully_monomorphized(),
+        ty::EarlyBinder::bind(rustc_body_poly.clone()),
     );
+    // Per regseq-driver-92: normalize same-type `Result`-`?` clusters on
+    // the owned, substituted MIR BEFORE local-decl and basic-block
+    // translation. Running here -- ahead of the `core` `branch` /
+    // `from_residual` callees reaching `translate_call` and the
+    // `Try::Residual` / `Try::Output` projections reaching `translate_ty`
+    // -- is what lets the bridge consume `?` at all (both would otherwise
+    // reject). A no-op for `?`-free bodies, so all existing fixtures
+    // bridge byte-identically.
+    super::question_mark::normalize_question_mark(cx.input.tcx, &mut owned_body)?;
+    let rustc_body: &rustc_middle::mir::Body<'tcx> = cx.input.tcx.arena.alloc(owned_body);
 
     let mut body = Body {
         basic_blocks: regseq_model::IndexVec::new(),

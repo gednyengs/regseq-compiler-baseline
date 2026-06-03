@@ -23,3 +23,9 @@ regseq-config = { path = "../regseq-config" }
 toml = "0.8"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
+
+[dev-dependencies]
+# regseq-driver-92: the `?`-normalizer coverage test names
+# `regseq_driver::bridge::BridgeError::UnsupportedQuestionMark` to assert
+# the fail-loud diagnostic. Same crate instance test-ir-fixtures links.
+regseq-driver = { path = "../regseq-driver" }

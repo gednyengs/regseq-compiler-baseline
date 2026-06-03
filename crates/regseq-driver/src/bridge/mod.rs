@@ -610,6 +610,19 @@ pub enum BridgeError {
         /// Author-facing detail for the failing rule.
         detail: String,
     },
+    /// A Rust `?`-operator MIR cluster could not be normalized by the
+    /// same-type `Result`-`?` pre-translation normalizer
+    /// (regseq-driver-92). Raised explicitly -- instead of the vague
+    /// `NonRigidTy` the un-normalized `Try::Residual` projection would
+    /// otherwise produce -- for a cross-type `?` (a real `From`
+    /// conversion), an `Option`/other-carrier `?`, a recognized-but-
+    /// unexpected cluster shape, or a `needs_drop` `Ok` payload the
+    /// rewrite cannot faithfully preserve.
+    #[error("unsupported `?` operator: {reason}")]
+    UnsupportedQuestionMark {
+        /// Author-facing explanation of which `?` shape was rejected.
+        reason: String,
+    },
 }
 
 /// Format-template parser rejection family per spec.md section 26.7
@@ -1023,6 +1036,19 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
                 if !is_source_derived_function(ctxt.input.tcx, def_id) {
                     continue;
                 }
+                // Per regseq-driver-92: the `core` `Try::branch` /
+                // `FromResidual::from_residual` methods are mono-collected
+                // from the pre-normalization `?` MIR, but the normalizer
+                // rewrites every `?` cluster away before translation, so
+                // they never appear in a translated body. Interning them
+                // here would leave zero-instance bucket-1 orphans whose
+                // `Try::Residual` projection signature the orphan-
+                // instantiation pass cannot translate (`NonRigidTy`).
+                // Skip them; the normalizer is their sole consumer.
+                if body::question_mark::is_question_mark_consumed_lang_item(ctxt.input.tcx, def_id)
+                {
+                    continue;
+                }
                 let _ = ty::intern_item(ctxt, def_id, ItemKind::Function, ty::SpecialAdt::None);
                 // Per regseq-driver-74 Change A: stash the resolved
                 // rustc `(DefId, args)` for this collected Item fn,
@@ -1110,11 +1136,22 @@ fn translate_with_interleaved_synthesis(ctxt: &mut BridgeCtxt<'_>) -> Result<(),
         // substitution is a natural no-op when `instance.args` is the
         // identity, so no defensive branch is needed.
         let polymorphic_body = ctxt.input.tcx.instance_mir(instance.def);
-        let body = instance.instantiate_mir_and_normalize_erasing_regions(
+        let mut body = instance.instantiate_mir_and_normalize_erasing_regions(
             ctxt.input.tcx,
             rustc_middle::ty::TypingEnv::fully_monomorphized(),
             rustc_middle::ty::EarlyBinder::bind(polymorphic_body.clone()),
         );
+        // Per regseq-driver-92: normalize same-type `Result`-`?` clusters
+        // before the synthesis scan walks this body, mirroring the
+        // Phase-5 materialiser. The scan resolves each call's callee type
+        // (`scan_call_ty_for_vtable`, line below) and every local decl;
+        // left intact, the `branch` / `from_residual` callee signatures
+        // would hit the `Try::Residual` projection here -- earlier than
+        // Phase-5 -- and the `ControlFlow` / `Infallible` locals would be
+        // interned. Normalizing first removes both. A no-op for `?`-free
+        // bodies. The same scope gate fails loud here for out-of-scope
+        // `?` (cross-type / `Option` / `needs_drop`-`Ok`).
+        body::question_mark::normalize_question_mark(ctxt.input.tcx, &mut body)?;
         for local in &body.local_decls {
             scan_ty_for_synthesis(ctxt, local.ty)?;
         }
