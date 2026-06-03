@@ -2415,6 +2415,25 @@
               "reason": "Codex review: cite GRILL D02 (ordinary-MIR claim) + D07 (fixture fallout), not D07 alone"
             }
           ]
+        },
+        {
+          "id": "regseq-driver-94",
+          "name": "Classify lazily-interned core generic ADTs as is_generic (Bucket 3)",
+          "spec": ".harness/tasks/regseq-driver/94-core-generic-adt-is-generic.md",
+          "status": "done",
+          "depends_on": [],
+          "artifacts": [],
+          "fail_reason": null,
+          "phase": "2b",
+          "spec_refs": [],
+          "spec_version": 1,
+          "history": [
+            {
+              "ts": "2026-06-03T18:21:22Z",
+              "event": "added",
+              "spec_version": 1
+            }
+          ]
         }
       ]
     },

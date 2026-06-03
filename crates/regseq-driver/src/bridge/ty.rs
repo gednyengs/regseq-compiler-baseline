@@ -699,9 +699,51 @@ fn intern_source_item_handle(
         item,
         def_path_hash,
         synthetic_kind: SyntheticItemKind::None,
-        bridge_flags: regseq_model::BridgeItemFlags::default(),
+        bridge_flags: source_bridge_item_flags(cx.input.tcx, def_id),
     });
     handle
+}
+
+/// Compute the source-derived `BridgeItemFlags` for `def_id`, shared by
+/// the eager HIR enumeration (`bridge/mod.rs::eager_hir_enumeration`)
+/// and the lazy intern push ([`intern_source_item_handle`]) so the two
+/// intern sites cannot drift in four-bucket classification policy
+/// (regseq-driver-94). Lazily-interned core / external generic ADTs
+/// (e.g. `core::result::Result<T, E>`) used at more than one
+/// monomorphisation previously misfiled into bucket 1 (the push
+/// hardcoded `BridgeItemFlags::default()`); routing both paths through
+/// this helper files them into bucket 3 (`is_generic`, 0+ Instances).
+///
+/// `is_generic` mirrors the regseq-driver-58 / -60 formula verbatim: an
+/// `AssocFn` belonging to a trait *declaration* (`trait_of_assoc`
+/// returns `Some`) is classified by its OWN params only, because the
+/// trait's inherited `Self` / trait-level generics inflate
+/// `generics_of().count()` and would misfile a non-generic trait default
+/// method into bucket 3. Every other Item uses
+/// `generics_of().count() > 0`, which includes generics inherited from an
+/// enclosing generic impl (so an inherent / trait-impl method inside a
+/// generic impl stays correctly generic). Do NOT substitute a raw
+/// `count() > 0` here: a lazily-interned core trait-declaration default
+/// method would then be misclassified.
+///
+/// `signature_non_rigid` is always `false`; the bucket-4 non-rigid-
+/// signature flag for functions is set on its own Phase-5 path and is
+/// not derivable from the DefId alone.
+pub(crate) fn source_bridge_item_flags(
+    tcx: rustc_middle::ty::TyCtxt<'_>,
+    def_id: DefId,
+) -> regseq_model::BridgeItemFlags {
+    let is_generic = if matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::AssocFn)
+        && tcx.trait_of_assoc(def_id).is_some()
+    {
+        !tcx.generics_of(def_id).own_params.is_empty()
+    } else {
+        tcx.generics_of(def_id).count() > 0
+    };
+    regseq_model::BridgeItemFlags {
+        is_generic,
+        signature_non_rigid: false,
+    }
 }
 
 /// Read the `link_section` / `inline` fields of rustc's per-DefId

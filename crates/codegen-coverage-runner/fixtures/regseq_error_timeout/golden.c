@@ -65,8 +65,8 @@ _Noreturn static inline void regseq_unreachable(void) {
 /* ---------------------------------------------------------------------------
  * Bank 2 (section 15): aggregate tag forward-decls.
  * --------------------------------------------------------------------------- */
-struct input_RegseqError;
 struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486;
+struct input_RegseqError;
 struct tuple_cbf29ce484222325;
 
 /* ---------------------------------------------------------------------------
@@ -104,7 +104,6 @@ _Static_assert(_Alignof(struct tuple_cbf29ce484222325) == 1, "tuple_cbf29ce48422
 /* ---------------------------------------------------------------------------
  * Bank 4 (section 15): prototypes + extern statics.
  * --------------------------------------------------------------------------- */
-inline __attribute__((always_inline)) struct input_RegseqError core_convert__impl_4__from__35800bfc539c35097b853ec8ba6ff66c(struct input_RegseqError);
 struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input_probe(uint8_t);
 struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input_regseq_main(void);
 

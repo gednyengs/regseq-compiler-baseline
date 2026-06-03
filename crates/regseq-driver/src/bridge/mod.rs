@@ -1241,36 +1241,15 @@ fn eager_hir_enumeration<'tcx>(ctxt: &mut BridgeCtxt<'tcx>) -> Result<(), Bridge
             // (`spec.md:2346-2350`).
             _ => continue,
         };
-        // Per spec.md regseq-driver-58 Change A/C step 1: bucket-3
-        // classification uses `generics_of(def_id).count() > 0`, NOT
-        // `own_params`. The two differ for associated items inside
-        // a generic impl / trait (impl-level parameters are
-        // inherited into the AssocFn's generics chain); using
-        // `own_params` would mis-classify those as bucket 1 / 4.
-        //
-        // Per regseq-driver-58 Change H + regseq-driver-60: the
-        // exception is a trait default method whose Item lives at
-        // the trait's DefPath (`tcx.trait_of_assoc(def_id) ==
-        // Some(_)`). Its parent_count carries `Self` (and any
-        // trait-level generics), but those are resolved at the call
-        // site by the regseq-driver-56 canonicalization. The Item
-        // itself is bucket-1 (non-generic + sig-rigid + non-foreign)
-        // per the regseq-driver-60 task Non-Goals: "Trait default
-        // bodies are still bucket 1 at the trait DefPath". Use the
-        // method's `own_params` to classify so the Item lands in
-        // bucket-1 unless the method itself introduces explicit
-        // generics.
-        let is_generic = if matches!(tcx.def_kind(def_id), DefKind::AssocFn)
-            && tcx.trait_of_assoc(def_id).is_some()
-        {
-            !tcx.generics_of(def_id).own_params.is_empty()
-        } else {
-            tcx.generics_of(def_id).count() > 0
-        };
-        let flags = BridgeItemFlags {
-            is_generic,
-            signature_non_rigid: false,
-        };
+        // Per spec.md regseq-driver-58 Change A/C step 1 + regseq-driver-60
+        // Change H + regseq-driver-94: bucket-3 classification is computed
+        // by the shared `ty::source_bridge_item_flags` helper so this
+        // eager intern site and the lazy `intern_source_item_handle` push
+        // cannot drift. The helper encodes the trait-declaration AssocFn
+        // `own_params` carve-out (an impl-inherited parameter inflates
+        // `count()`; a trait default method must stay bucket 1) and the
+        // `count() > 0` default for every other Item; see its doc comment.
+        let flags = ty::source_bridge_item_flags(tcx, def_id);
         let _ = ty::intern_eager_hir_item(
             ctxt,
             def_id,

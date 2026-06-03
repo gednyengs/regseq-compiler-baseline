@@ -497,3 +497,50 @@ pub fn entry() {}
         instances.len()
     );
 }
+
+// ------------------------------------------------------------------
+// regseq-driver-94: the trait-declaration AssocFn `own_params` carve-out
+// must survive the move of the `is_generic` formula into the shared
+// `ty::source_bridge_item_flags` helper. A NON-generic trait default
+// method lives at the trait's DefPath, so its `generics_of().count()`
+// is inflated by the trait's inherited `Self` (count() > 0), but its
+// `own_params` is empty -- it must stay bucket 1 (is_generic == false),
+// NOT flip to bucket 3. If a raw `count() > 0` had been substituted in
+// the helper, `Self` would misclassify it; this test guards exactly that.
+// ------------------------------------------------------------------
+#[test]
+fn trait_default_method_stays_bucket1_after_helper_refactor() {
+    let model = compile_with_bridge(
+        "driver94_trait_default",
+        r#"#![no_std]
+pub trait Greeter {
+    fn greet(&self) -> u32 {
+        42
+    }
+}
+pub struct S;
+impl Greeter for S {}
+pub fn entry(s: &S) -> u32 {
+    s.greet()
+}
+"#,
+    );
+
+    // The default body surfaces as a Function Item at the trait DefPath.
+    let (greet_id, greet_item) = find_item(&model, "Greeter::greet");
+    assert!(matches!(greet_item.kind, ItemKind::Function));
+    let greet_flags = flags_for(&model, greet_id);
+    assert_eq!(
+        greet_flags.is_generic, false,
+        "a non-generic trait default method must stay is_generic == false (own_params carve-out); \
+         a raw count() would misclassify it via the inherited `Self`"
+    );
+    assert_eq!(greet_flags.signature_non_rigid, false);
+
+    // Bucket 1: the caller `entry` forces exactly one covering Instance.
+    assert_eq!(
+        instances_for(&model, greet_id).len(),
+        1,
+        "the called trait default method must have exactly one bucket-1 Instance"
+    );
+}
