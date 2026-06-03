@@ -143,6 +143,6 @@ Phase-3+ plan doc states which applies.
 
 | Phase | Scope | Front-end status | Backend status | Detail |
 | ----- | ----- | ---------------- | -------------- | ------ |
-| **P1** | Rust surface + diag-logging | **ready** (gate passed; diag-log bridged) | pending | **fully scoped (above)** |
-| **P2** | RegseqError | TBD (check at P2 start) | pending | definition only; detail at P2 start |
+| **P1** | Rust surface + diag-logging | **ready** (gate passed; diag-log bridged) | **done** (gate `pass`) | **fully scoped (above)** |
+| **P2** | RegseqError | **done** for 2a (`framework_type` attr + certified `is_result` bridged) | **done** for 2a (entry-only `<entry>__regseq_exit` errno adapter; gate `pass`) | 2a shipped (`.claude/specs/regseq-error/`); trait-callback-exit lowering (spec §4) + G01 deferred |
 | **P3+** | domain constructs (Register Access, Interrupts, Atomics, Lifecycle, …) | mostly **not bridged** (stages 16/17/18) | pending | unscheduled; pick on need after P1–P2 |

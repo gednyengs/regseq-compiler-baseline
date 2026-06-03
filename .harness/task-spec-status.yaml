@@ -668,7 +668,7 @@ items:
   - id: regseqmodel-phase-1b
     phase: "1b"
     title: Generic-C codegen on top of phase-1a IR substrate
-    status: ready_to_elaborate
+    status: tasked  # elaborated + executed (28/28 done, gate pass); RegseqError Phase-2a followed via .claude/specs/regseq-error/ (GRILL->PRD->PLAN), not a batch here
     depends_on:
       - regseqmodel-phase-1a
     target_harness_groups:
