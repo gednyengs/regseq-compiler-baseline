@@ -2393,7 +2393,7 @@
           "id": "regseq-driver-93",
           "name": "RegseqError ?-support erratum (R02/D07)",
           "spec": ".harness/tasks/regseq-driver/93-question-mark-erratum.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-92"
           ],

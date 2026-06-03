@@ -113,6 +113,24 @@ This specification is consistent with the current trait-role direction:
 
 That rule is related, but not part of this specification directly.
 
+> **Addendum (2026-06-02, `?`-support erratum -- regseq-driver-92/93).** The
+> assertion above (and in PRD **R02** / GRILL **D02**) that authored code may use
+> `?` because it "lowers as ordinary MIR with no special handling" is **imprecise
+> for `?` and is corrected here.** `?` is a `Try`-trait *desugar*: at the bridge's
+> `mir_opt_level=0` (no inliner) it emits `core` calls (`Try::branch`,
+> `FromResidual::from_residual`) and associated-type-projection-typed locals
+> (`<Result as Try>::Residual`), which the bridge cannot translate as ordinary MIR
+> -- it originally blocked the D07 fixture-3. **Resolution (`regseq-driver-92`):**
+> regseq supports **same-error-type `?` on `core::result::Result`** -- the `Err`
+> type entering `?` equals the `Err` type of the enclosing function -- via a
+> pre-translation MIR normalizer that rewrites the `?` cluster to a direct
+> discriminant match before translation. **Deferred (fail-loud):** cross-type `?`
+> (an `Err` `From` conversion), `Option`/other-carrier `?`, and `needs_drop` `Ok`
+> payloads are rejected explicitly (`BridgeError::UnsupportedQuestionMark`), never
+> silently mistranslated. The authored-semantic model (§3, §5) is otherwise
+> unchanged: only the lowering-mechanism claim is corrected, and the D07 fixture's
+> same-type `Result`-`?` propagation is within the supported scope.
+
 ## 6. Backend-Native Operational Failure
 
 From the perspective of authored DSL modeling, backend-native operational
