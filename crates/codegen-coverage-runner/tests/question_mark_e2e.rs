@@ -359,6 +359,36 @@ pub extern "C" fn regseq_main() { let _ = does_q(); }
     }
 }
 
+/// A direct `FromResidual::from_residual` call with NO paired `branch`
+/// (an unstable `try_trait_v2` shape, not the `?` desugar). Phase-1
+/// mono-collection skips the `from_residual` lang item, so without an
+/// UNCONDITIONAL defensive scan this stray `core` call would slip past
+/// normalization (the `plans.is_empty()` early-out fires before the scan)
+/// and surface as a body-less core call / `NonRigidTy` instead of failing
+/// loud. Regression for the regseq-driver-92 guard-hole: the scan must run
+/// even when no `branch` cluster exists.
+#[test]
+fn stray_from_residual_without_branch_fails_loud() {
+    let src = r#"#![no_std]
+#![feature(try_trait_v2)]
+use core::convert::Infallible;
+use core::ops::FromResidual;
+pub enum E { A }
+fn does_fromres() -> Result<(), E> {
+    let residual: Result<Infallible, E> = Err(E::A);
+    FromResidual::from_residual(residual)
+}
+#[no_mangle]
+pub extern "C" fn regseq_main() { let _ = does_fromres(); }
+"#;
+    match bridge("strayfromres", src) {
+        BridgeOutcome::Rejected(BridgeError::UnsupportedQuestionMark { .. }) => {}
+        other => panic!(
+            "a stray `from_residual` with no `branch` must fail loud as UnsupportedQuestionMark, got {other:?}"
+        ),
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Test Plan 3 -- end-to-end emit + cc + run with the expected exit.
 // ---------------------------------------------------------------------------
@@ -425,6 +455,70 @@ pub extern "C" fn regseq_main() {
         run.exit_code,
         Some(0),
         "a correct same-type `?` lowering (both arms + drops preserved) exits 0; stderr: {}",
+        run.stderr
+    );
+}
+
+/// A same-type `?` whose `Err` payload needs drop (`Result<u32, DropErr>`).
+/// The `Ok` payload is `Copy`, so the rewrite is NOT rejected (only the
+/// `Ok` payload is `needs_drop`-gated), and the rewritten `Err` arm moves
+/// the `DropErr` out of the `?`-operand into the return aggregate. This
+/// locks in that the move-out is drop-faithful: the propagated `DropErr`
+/// is dropped EXACTLY once -- no double-drop from the move, no leak.
+/// (Codex Q4 lock-in for the regseq-driver-92 review.)
+#[test]
+fn needs_drop_err_question_mark_propagates_and_drops_once() {
+    let src = r#"#![no_std]
+extern "C" {
+    fn regseq_note_drop();
+    fn regseq_drops() -> u32;
+    fn regseq_test_fail();
+}
+struct DropErr;
+impl Drop for DropErr { fn drop(&mut self) { unsafe { regseq_note_drop(); } } }
+fn helper(ok: bool) -> Result<u32, DropErr> { if ok { Ok(7) } else { Err(DropErr) } }
+fn compute(ok: bool) -> Result<u32, DropErr> {
+    let v = helper(ok)?;
+    Ok(v)
+}
+#[no_mangle]
+pub extern "C" fn regseq_main() {
+    match compute(true) {
+        Ok(7) => {}
+        _ => unsafe { regseq_test_fail(); }
+    }
+    match compute(false) {
+        Ok(_) => unsafe { regseq_test_fail(); }
+        Err(_e) => {}
+    }
+    unsafe {
+        if regseq_drops() != 1 { regseq_test_fail(); }
+    }
+}
+"#;
+    let model = bridge_ok("needsdroperr", src);
+    assert_no_question_mark_residue(&model, "needsdroperr");
+    assert_direct_match_shape(fn_body(&model, "compute"), "needsdroperr");
+
+    let tu = emit_generic_c(&model).expect("needs_drop-`Err` same-type `?` body must emit");
+    let entry = fn_cname(&model, "regseq_main");
+    let note = fn_cname(&model, "regseq_note_drop");
+    let drops = fn_cname(&model, "regseq_drops");
+    let fail = fn_cname(&model, "regseq_test_fail");
+    let harness = format!(
+        "static unsigned __qmark_drops = 0;\n\
+         void {note}(void) {{ __qmark_drops++; }}\n\
+         unsigned {drops}(void) {{ return __qmark_drops; }}\n\
+         void {fail}(void) {{ fprintf(stderr, \"qmark needs_drop-err failed\\n\"); abort(); }}\n"
+    );
+    let tu = format!("{tu}\n{harness}");
+
+    let run = toolchain::compile_and_run(&tu, &EntryShim::unit_void(&entry), cc())
+        .expect("needs_drop-`Err` same-type `?` TU must compile + run");
+    assert_eq!(
+        run.exit_code,
+        Some(0),
+        "the propagated `Err(DropErr)` must drop exactly once (no double-drop, no leak); stderr: {}",
         run.stderr
     );
 }

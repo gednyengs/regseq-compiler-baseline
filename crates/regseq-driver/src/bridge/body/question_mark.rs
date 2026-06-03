@@ -124,13 +124,14 @@ pub(crate) fn normalize_question_mark<'tcx>(
         plans.push(recognize_cluster(tcx, body, bb)?);
     }
 
-    if plans.is_empty() {
-        return Ok(());
-    }
-
-    // Defensive: every `from_residual` call must be the break arm of a
-    // recognized cluster. A stray `from_residual` would otherwise reach
-    // translation as a body-less `core` call and fail to link.
+    // Defensive -- runs even when no `branch` cluster was found, so the
+    // guard is NOT skipped by the `plans.is_empty()` early-out below.
+    // Every `from_residual` call must be the break arm of a recognized
+    // cluster; a stray one with no paired `branch` (e.g. a direct
+    // `try_trait_v2` `from_residual`) would otherwise slip past
+    // normalization -- Phase-1 mono-collection skips the lang item -- and
+    // reach translation as a body-less `core` call, failing to link
+    // instead of failing loud with `UnsupportedQuestionMark`.
     for (bb, data) in body.basic_blocks.iter_enumerated() {
         let Some(term) = &data.terminator else {
             continue;
@@ -142,6 +143,10 @@ pub(crate) fn normalize_question_mark<'tcx>(
                 "found a `from_residual` call with no recognizable `?` cluster (unexpected MIR shape)",
             ));
         }
+    }
+
+    if plans.is_empty() {
+        return Ok(());
     }
 
     // Phase B: redirect every use of each cluster's `ControlFlow`
