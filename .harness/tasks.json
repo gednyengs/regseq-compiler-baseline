@@ -5676,7 +5676,7 @@
           "id": "regseq-backends-36",
           "name": "RegseqError e2e fixture 3 (? + reclassify -> ETIMEDOUT)",
           "spec": ".harness/tasks/regseq-backends/36-regseq-error-fixture-question-mark.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-driver-92",
             "regseq-backends-35"

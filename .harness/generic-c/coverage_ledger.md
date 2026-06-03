@@ -140,7 +140,7 @@
 | PL-6 | Covered | Pass | b3_refs_slices |
 | PL-7 | Covered | Pass | b3_refs_slices |
 | PL-8 | Covered | Pass | b4_enums |
-| RE-1 | Covered | Pass | regseq_error_einval, regseq_error_ok |
+| RE-1 | Covered | Pass | regseq_error_einval, regseq_error_ok, regseq_error_timeout |
 | RV-1 | Covered | Pass | b1_int_scalars |
 | RV-2 | Covered | Pass | b3_structs |
 | RV-3 | Covered | Pass | b3_refs_slices |

@@ -1,0 +1,25 @@
+name   = "regseq_error_timeout"
+kind   = "rust"
+entry  = "regseq_main"
+# RE-1 (Phase-2a): the RegseqError boundary mapping + exit-code propagation
+# domain construct, `?`/match/reclassify half. `regseq_main() -> Result<(),
+# RegseqError>` weaves authored-internal control flow that lowers as ordinary
+# code (R02/I01): a nested `probe` returning the SAME `Result<(), RegseqError>`
+# is `?`-propagated (same-error-type normalizer, regseq-driver-92), then a
+# `match` reclassifies `Err(DeviceBusy)` to `Err(Timeout)` before it escapes.
+# Only the escaping boundary value (`Err(Timeout)`) is mapped by the
+# `<entry>__regseq_exit` adapter's `case` arm, which returns the `ETIMEDOUT`
+# errno symbol; the entry shim returns that as the process exit status (D07/C04).
+# `expected.exit = "ETIMEDOUT"` is resolved to the host numeric on the fixture's
+# own libc (no manifest numeric -- I03); this nonzero exit relies on the
+# `bless_fixture`-honors-`expected.exit` fix landed in regseq-backends-35. The
+# marked enum self-declares its identity via
+# `#[rseq::framework_type("regseq-error")]` (D06: no facade crate) and carries
+# only C02-valid variants; no `Display`/`std::error::Error`,
+# `core::result::Result` (C01/I06/I07). `expect = "pass"` (a clean errno return,
+# not a panic); the stage-5 oracle also asserts empty stderr (the R11 guard).
+covers = ["RE-1"]
+expect = "pass"
+
+[expected]
+exit = "ETIMEDOUT"
