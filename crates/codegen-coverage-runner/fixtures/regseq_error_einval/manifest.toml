@@ -1,0 +1,19 @@
+name   = "regseq_error_einval"
+kind   = "rust"
+entry  = "regseq_main"
+# RE-1 (Phase-2a): the RegseqError boundary mapping + exit-code propagation
+# domain construct, error half. `regseq_main() -> Result<(), RegseqError>`
+# returning `Err(RegseqError::InvalidParameter)` drives the `<entry>__regseq_exit`
+# adapter's `case` arm, which returns the `EINVAL` errno symbol; the entry shim
+# returns that as the process exit status (D07/C04). `expected.exit = "EINVAL"`
+# is resolved to the host numeric on the fixture's own libc (no manifest numeric
+# -- I03). The marked enum self-declares its identity via
+# `#[rseq::framework_type("regseq-error")]` (D06: no facade crate) and carries
+# only C02-valid variants; no `Display`/`std::error::Error`, `core::result::Result`
+# (C01/I06/I07). `expect = "pass"` (a clean errno return, not a panic); the
+# stage-5 oracle also asserts empty stderr (the R11 guard).
+covers = ["RE-1"]
+expect = "pass"
+
+[expected]
+exit = "EINVAL"

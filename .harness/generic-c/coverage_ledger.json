@@ -1038,6 +1038,15 @@
       "result": "pass"
     },
     {
+      "id": "RE-1",
+      "status": "covered",
+      "fixtures": [
+        "regseq_error_einval",
+        "regseq_error_ok"
+      ],
+      "result": "pass"
+    },
+    {
       "id": "RV-1",
       "status": "covered",
       "fixtures": [

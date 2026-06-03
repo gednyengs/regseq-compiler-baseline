@@ -327,17 +327,38 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
         }
     };
 
-    // Stage-5 boundary (report mode): a non-zero exit or any stderr is a
+    // Stage-5 boundary (report mode): the run must exit with the resolved
+    // `expected.exit` (default 0) AND with empty stderr; otherwise it is a
     // broken-run miss -- report it (so a broken emit is not silently blessed),
-    // but golden.c is still written for diff review.
-    if run.exit_code != Some(0) || !run.stderr.is_empty() {
+    // but golden.c is still written for diff review. Honoring `expected.exit`
+    // (mirroring `run_fixture`) lets a nonzero-errno fixture -- e.g. the EINVAL
+    // RegseqError boundary fixture -- bless cleanly instead of tripping a
+    // spurious not-clean-exit miss; the symbol is resolved on the SAME cc/libc
+    // that ran the fixture (contract C04, no manifest numeric).
+    let exit_symbol = fixture.manifest.expected.exit.as_deref().unwrap_or("0");
+    let expected_exit = match toolchain::resolve_errno(exit_symbol, cc) {
+        Ok(code) => Some(code),
+        Err(err) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes,
+                report: format!(
+                    "blessed golden.c ({} bytes); cannot resolve expected.exit {exit_symbol:?}: {err}",
+                    emitted.len()
+                ),
+                ok: false,
+            };
+        }
+    };
+    if run.exit_code != expected_exit || !run.stderr.is_empty() {
         return BlessOutcome {
             name,
             blessed_bytes,
             report: format!(
-                "blessed golden.c ({} bytes); run did not exit cleanly (exit={:?}, stderr={:?}) -- actual stdout:\n{}",
+                "blessed golden.c ({} bytes); run did not exit as expected (exit={:?}, expected={:?}, stderr={:?}) -- actual stdout:\n{}",
                 emitted.len(),
                 run.exit_code,
+                expected_exit,
                 run.stderr,
                 run.stdout
             ),

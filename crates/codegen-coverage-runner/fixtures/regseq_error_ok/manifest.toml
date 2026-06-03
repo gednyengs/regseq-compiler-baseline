@@ -1,0 +1,14 @@
+name   = "regseq_error_ok"
+kind   = "rust"
+entry  = "regseq_main"
+# RE-1 (Phase-2a): the RegseqError boundary mapping + exit-code propagation
+# domain construct, Ok half. `regseq_main() -> Result<(), RegseqError>` returning
+# `Ok(())` drives the `<entry>__regseq_exit` adapter's niche Ok-test, which
+# returns 0, so the process exits 0 (D07/C04). `expected.exit` is omitted -> the
+# default 0 (no probe). The marked enum self-declares its identity via
+# `#[rseq::framework_type("regseq-error")]` (D06: no facade crate) and carries
+# only C02-valid variants; it implements no `Display`/`std::error::Error` and
+# uses `core::result::Result` (C01/I06/I07). Emitted C is symbolic (errno names,
+# never host numerics -- I03).
+covers = ["RE-1"]
+expect = "pass"

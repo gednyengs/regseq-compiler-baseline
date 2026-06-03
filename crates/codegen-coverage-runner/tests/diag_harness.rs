@@ -22,7 +22,7 @@ extern crate rustc_driver;
 
 use std::path::{Path, PathBuf};
 
-use codegen_coverage_runner::manifest::{Expect, Fixture, FixtureKind, Manifest};
+use codegen_coverage_runner::manifest::{Expect, Expected, Fixture, FixtureKind, Manifest};
 use codegen_coverage_runner::pipeline;
 use regseq_backends::{entry_c_symbol, EntrySymbol};
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
@@ -184,6 +184,71 @@ fn bless_reports_mismatch_against_hand_authored_expected_stdout() {
     // ...and the hand-authored expected.stdout is left UNTOUCHED.
     let after = std::fs::read_to_string(&fixture.expected_stdout).unwrap();
     assert_eq!(before, after, "--bless must not modify expected.stdout");
+}
+
+/// An error-returning entry over a self-declared
+/// `#[rseq::framework_type("regseq-error")]` enum, returning
+/// `Err(RegseqError::InvalidParameter)`. Mirrors the on-disk
+/// `regseq_error_einval` fixture: the boundary adapter maps the variant to the
+/// `EINVAL` errno, so the process exits with that (nonzero) status -- the case a
+/// `--bless` that hardcoded "exit 0" would wrongly flag.
+const EINVAL_INPUT: &str = r#"#![no_std]
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::framework_type("regseq-error")]
+pub enum RegseqError {
+    InvalidParameter,
+    OutOfMemory,
+}
+
+pub fn regseq_main() -> Result<(), RegseqError> {
+    Err(RegseqError::InvalidParameter)
+}
+"#;
+
+/// Build an error-returning `Fixture` over `dir` with `expected.exit = exit`.
+fn err_fixture_in(dir: &TempFixtureDir, input: PathBuf, exit: &str) -> Fixture {
+    Fixture {
+        manifest: Manifest {
+            name: "tmp_err".to_string(),
+            kind: FixtureKind::Rust,
+            entry: "regseq_main".to_string(),
+            covers: vec!["RE-1".to_string()],
+            expect: Expect::Pass,
+            overflow_checks: None,
+            expected: Expected {
+                exit: Some(exit.to_string()),
+            },
+        },
+        dir: dir.dir.clone(),
+        input,
+        golden_c: dir.dir.join("golden.c"),
+        expected_stdout: dir.dir.join("expected.stdout"),
+        expected_stderr: None,
+    }
+}
+
+#[test]
+fn bless_honors_expected_exit_for_a_nonzero_errno_fixture() {
+    // The EINVAL RegseqError boundary fixture exits with the EINVAL errno (a
+    // nonzero status). `bless_fixture` must resolve `expected.exit` (mirroring
+    // `run_fixture`) so this blesses cleanly instead of tripping the historical
+    // hardcoded "exit 0" not-clean-exit miss. golden.c is still written; the run
+    // matches the resolved expected exit AND has empty stderr (the R11 guard),
+    // and the empty expected.stdout matches -- so the bless is ok.
+    let td = TempFixtureDir::new("blesseinval");
+    let input = td.write("input.rs", EINVAL_INPUT);
+    td.write("expected.stdout", "");
+    let fixture = err_fixture_in(&td, input, "EINVAL");
+
+    let outcome = pipeline::bless_fixture(&fixture, cc());
+    assert!(fixture.golden_c.exists(), "golden.c must be written");
+    assert!(
+        outcome.ok,
+        "a nonzero-errno fixture matching expected.exit blesses cleanly: {}",
+        outcome.report
+    );
 }
 
 #[test]

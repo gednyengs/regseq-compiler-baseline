@@ -2,8 +2,8 @@
 
 - **Verdict:** `pass`
 - **Toolchain:** `cc` (cc (Ubuntu 13.3.0-6ubuntu2~24.04.1) 13.3.0)
-- **Matrix rows:** 176
-- **Covered rows:** 164 (164 with a green fixture)
+- **Matrix rows:** 177
+- **Covered rows:** 165 (165 with a green fixture)
 
 ## Rows
 
@@ -140,6 +140,7 @@
 | PL-6 | Covered | Pass | b3_refs_slices |
 | PL-7 | Covered | Pass | b3_refs_slices |
 | PL-8 | Covered | Pass | b4_enums |
+| RE-1 | Covered | Pass | regseq_error_einval, regseq_error_ok |
 | RV-1 | Covered | Pass | b1_int_scalars |
 | RV-2 | Covered | Pass | b3_structs |
 | RV-3 | Covered | Pass | b3_refs_slices |

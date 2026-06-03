@@ -443,6 +443,33 @@ the terminator spec delta.
 
 ---
 
+## 13. RegseqError boundary mapping domain construct -> errno exit code
+
+Source: the Phase-2 RegseqError design (`.claude/specs/regseq-error/`,
+decisions D06/D07/D08, contracts C01-C04); lowering pinned by the
+`generic-c-backend.md` errno boundary adapter (regseq-backends-28) over the
+per-target C02 table (`crates/regseq-backends/src/generic_c/errno.rs`). The
+second domain construct (after diag-log) bridged to generic C. An
+error-returning entry `regseq_main() -> Result<(), RegseqError>` whose `Err` is a
+`#[rseq::framework_type("regseq-error")]`-marked enum lowers to a
+`<entry>__regseq_exit` adapter: `Ok(())` returns a 0 exit; each marked variant
+returns its libc `<errno.h>` symbol (symbolic only, never a host numeric -- I03);
+the Doc-2 D3 entry shim returns that code as the process exit status. An unknown
+marked variant fails loud at emit (R08/I05), never a silent `EIO`.
+
+**Conformance (no behavior change).** Identity is the attribute, NOT a facade
+crate -- decision **D06** (GRILL `.claude/specs/regseq-error/GRILL-2026-06-01-233339.md:264`);
+the coverage fixtures self-declare the marked enum inline. Each declares no
+`Display`/`std::error::Error` and uses `core::result::Result` (**C01/I06/I07**).
+The Phase-3+ native-failure guardrail **G01** is recorded in
+`docs/discussions/generic-c-backend/roadmap.md`.
+
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| RE-1 | `regseq_main() -> Result<(), RegseqError>` boundary mapping + exit-code propagation | `<entry>__regseq_exit` adapter: `Ok(())` -> exit 0; each C02 marked variant -> its `<errno.h>` symbol; the entry shim returns that as the process exit status | covered | gc errno adapter (regseq-backends-28), C02 (`errno.rs`) | one **combined** row (D07/O2): the `regseq_error_ok` (Ok->0) + `regseq_error_einval` (EINVAL) e2e fixtures attribute it; the 9-row per-variant C02 table is unit-tested in regseq-backends-26; an unknown marked variant fails loud at emit (R08/I05) |
+
+---
+
 ## Output of this doc — the gap list
 
 The `unspecced` + `deferred` rows, grouped into the agenda for Doc 2

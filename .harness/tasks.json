@@ -5647,7 +5647,7 @@
           "id": "regseq-backends-35",
           "name": "RegseqError e2e fixtures Ok/EINVAL + coverage rows",
           "spec": ".harness/tasks/regseq-backends/35-regseq-error-fixtures-ok-einval.md",
-          "status": "pending",
+          "status": "done",
           "depends_on": [
             "regseq-backends-28",
             "regseq-backends-29",
