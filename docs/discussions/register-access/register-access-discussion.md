@@ -3,17 +3,7 @@
 ## Purpose
 
 This note consolidates the current design discussion around Register Access for
-the Regseq compiler implementation stream. It is intentionally self-contained
-and uses only the live compiler-collateral as authority:
-
-- `docs/compiler-collateral/compiler-baseline-overview.md`
-- `docs/compiler-collateral/compiler-constraints.md`
-- `docs/compiler-collateral/constructs/register-access.md`
-- `docs/compiler-collateral/constructs/serial-uart-management.md`
-- `docs/compiler-collateral/constructs/bus-resource-management.md`
-
-Its role is to capture the current reasoning before further review of the
-`phase-b-02` task specs.
+the Regseq compiler implementation stream. It is intentionally self-contained.
 
 ## Current Accepted Baseline
 
