@@ -262,6 +262,10 @@ impl RegisterBlock {
         let endian = &self.endian;
         let access_width = self.access_width;
         let width_ty = width_type(access_width);
+        // Register access width in BYTES, threaded into each descriptor so the
+        // backend can lower an MMIO op to a host hook from the descriptor value
+        // alone (no type-level offset recovery needed).
+        let width_bytes = (access_width / 8) as u32;
 
         let mut byte_offset: u64 = 0;
         let mut struct_fields = Vec::new();
@@ -294,7 +298,7 @@ impl RegisterBlock {
                                 quote! {
                                     /// Field descriptor.
                                     pub const #field_name: crate::regseq::Field<#width_ty, Register> =
-                                        crate::regseq::Field::new(#mask as #width_ty, #shift as #width_ty);
+                                        crate::regseq::Field::new(#current_offset, #mask as #width_ty, #shift as #width_ty, #width_bytes);
                                 }
                             } else {
                                 // Sub-module with FIELD constant and named values
@@ -307,7 +311,7 @@ impl RegisterBlock {
                                         quote! {
                                             /// Named field value.
                                             pub const #nv_name: crate::regseq::FieldValue<#width_ty, super::Register> =
-                                                crate::regseq::FieldValue::new(#mask as #width_ty, #nv_value as #width_ty);
+                                                crate::regseq::FieldValue::new(#current_offset, #mask as #width_ty, #nv_value as #width_ty, #width_bytes);
                                         }
                                     })
                                     .collect();
@@ -318,7 +322,7 @@ impl RegisterBlock {
                                     pub mod #field_name {
                                         /// Field descriptor.
                                         pub const FIELD: crate::regseq::Field<#width_ty, super::Register> =
-                                            crate::regseq::Field::new(#mask as #width_ty, #shift as #width_ty);
+                                            crate::regseq::Field::new(#current_offset, #mask as #width_ty, #shift as #width_ty, #width_bytes);
                                         #(#named_values)*
                                     }
                                 }
@@ -339,7 +343,7 @@ impl RegisterBlock {
 
                             /// RegisterId for full-register operations.
                             pub const REG: crate::regseq::RegisterId<#width_ty, Register> =
-                                crate::regseq::RegisterId::new();
+                                crate::regseq::RegisterId::new(#current_offset, #width_bytes);
 
                             #(#field_items)*
 

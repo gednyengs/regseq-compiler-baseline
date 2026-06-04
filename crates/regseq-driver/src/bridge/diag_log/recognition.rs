@@ -1,6 +1,6 @@
 //! Per-callee diagnostic-logging intrinsic recognition.
 
-use regseq_model::{AttrData, DefPathData, IntrinsicKind, ItemId, LogLevel, RegseqModel, Symbol};
+use regseq_model::{AttrData, DefPathData, IntrinsicKind, ItemId, LogLevel, MmioOp, RegseqModel};
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
 pub(super) fn recognise_log_intrinsic_attr(
@@ -52,7 +52,8 @@ pub(super) fn record_log_intrinsic(model: &mut RegseqModel, item: ItemId, kind: 
 }
 
 #[cfg(test)]
-fn intrinsic_name_for_fn_name(name: &str) -> Option<Symbol> {
+fn intrinsic_name_for_fn_name(name: &str) -> Option<regseq_model::Symbol> {
+    use regseq_model::Symbol;
     match name {
         "log_debug" | "log-debug" => Some(Symbol::new("log-debug")),
         "log_info" | "log-info" => Some(Symbol::new("log-info")),
@@ -63,28 +64,46 @@ fn intrinsic_name_for_fn_name(name: &str) -> Option<Symbol> {
 }
 
 fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
-    IntrinsicKind::from_name(match name {
-        "log-debug" => Symbol::new("log-debug"),
-        "log-info" => Symbol::new("log-info"),
-        "log-warn" => Symbol::new("log-warn"),
-        "log-error" => Symbol::new("log-error"),
-        _ => return None,
-    })
+    // Mirror the model's closed `IntrinsicKind::from_name` vocabulary. Matched
+    // here directly on the borrowed `&str` (the model API takes a `Symbol`,
+    // whose `new` requires a `'static` string). Keep in sync with
+    // `regseq_model::IntrinsicKind::from_name`.
+    match name {
+        "log-debug" => Some(IntrinsicKind::Log(LogLevel::Debug)),
+        "log-info" => Some(IntrinsicKind::Log(LogLevel::Info)),
+        "log-warn" => Some(IntrinsicKind::Log(LogLevel::Warn)),
+        "log-error" => Some(IntrinsicKind::Log(LogLevel::Error)),
+        "mmio_read" => Some(IntrinsicKind::Mmio(MmioOp::Read)),
+        "mmio_read_field" => Some(IntrinsicKind::Mmio(MmioOp::ReadField)),
+        "mmio_write" => Some(IntrinsicKind::Mmio(MmioOp::Write)),
+        "mmio_write_field" => Some(IntrinsicKind::Mmio(MmioOp::WriteField)),
+        "mmio_modify" => Some(IntrinsicKind::Mmio(MmioOp::Modify)),
+        "poll_until" => Some(IntrinsicKind::PollUntil),
+        _ => None,
+    }
 }
 
 fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
-    matches!(
-        (name, kind),
-        (
-            "log_debug" | "log-debug",
-            IntrinsicKind::Log(LogLevel::Debug)
-        ) | ("log_info" | "log-info", IntrinsicKind::Log(LogLevel::Info))
-            | ("log_warn" | "log-warn", IntrinsicKind::Log(LogLevel::Warn))
-            | (
-                "log_error" | "log-error",
-                IntrinsicKind::Log(LogLevel::Error)
-            )
-    )
+    match kind {
+        IntrinsicKind::Log(level) => matches!(
+            (name, level),
+            ("log_debug" | "log-debug", LogLevel::Debug)
+                | ("log_info" | "log-info", LogLevel::Info)
+                | ("log_warn" | "log-warn", LogLevel::Warn)
+                | ("log_error" | "log-error", LogLevel::Error)
+        ),
+        // Register-access wrapper methods on `Mmio<T>`. The `#[rseq::intrinsic]`
+        // attribute is the authority; the method-name match is a redundant gate.
+        IntrinsicKind::Mmio(op) => matches!(
+            (name, op),
+            ("read", MmioOp::Read)
+                | ("read_field", MmioOp::ReadField)
+                | ("write", MmioOp::Write)
+                | ("write_field", MmioOp::WriteField)
+                | ("modify", MmioOp::Modify)
+        ),
+        IntrinsicKind::PollUntil => name == "poll_until" || name == "until",
+    }
 }
 
 #[cfg(test)]

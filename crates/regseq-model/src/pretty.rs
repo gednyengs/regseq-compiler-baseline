@@ -1899,6 +1899,20 @@ impl<'a> PrettyPrinter<'a> {
                     };
                     out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
                 }
+                // Register-access MMIO + poll intrinsics (register-access construct).
+                AttrData::Intrinsic(IntrinsicKind::Mmio(op)) => {
+                    let label = match op {
+                        crate::MmioOp::Read => "mmio_read",
+                        crate::MmioOp::ReadField => "mmio_read_field",
+                        crate::MmioOp::Write => "mmio_write",
+                        crate::MmioOp::WriteField => "mmio_write_field",
+                        crate::MmioOp::Modify => "mmio_modify",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
+                AttrData::Intrinsic(IntrinsicKind::PollUntil) => {
+                    out.push_str("#[rseq::intrinsic(\"poll_until\")]\n");
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.

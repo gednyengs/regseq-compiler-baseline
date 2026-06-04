@@ -88,6 +88,30 @@ pub enum FrameworkType {
 pub enum IntrinsicKind {
     /// Diagnostic-logging intrinsic family.
     Log(LogLevel) = 0,
+    /// Register-access MMIO operation family (register-access construct).
+    /// Appended at discriminant 1, preserving `Log` at 0.
+    Mmio(MmioOp) = 1,
+    /// Busy-poll intrinsic (`regseq::poll::until`). Appended at discriminant 2.
+    PollUntil = 2,
+}
+
+/// MMIO register-access operation carried by `IntrinsicKind::Mmio`.
+///
+/// These correspond to the `#[rseq::intrinsic("mmio_*")]`-tagged wrapper
+/// methods on the `Mmio<T>` resource. Closed, append-only.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum MmioOp {
+    /// `mmio_read`: read a full register identified by a `RegisterId`.
+    Read = 0,
+    /// `mmio_read_field`: read a masked/shifted field identified by a `Field`.
+    ReadField = 1,
+    /// `mmio_write`: write a full register value.
+    Write = 2,
+    /// `mmio_write_field`: write masked field(s) via a `FieldValue`.
+    WriteField = 3,
+    /// `mmio_modify`: read-modify-write a register via a `RegisterId` + `FieldValue`.
+    Modify = 4,
 }
 
 /// Diagnostic-logging severity carried by `IntrinsicKind::Log`.
@@ -117,6 +141,14 @@ impl IntrinsicKind {
             "log-info" => Some(IntrinsicKind::Log(LogLevel::Info)),
             "log-warn" => Some(IntrinsicKind::Log(LogLevel::Warn)),
             "log-error" => Some(IntrinsicKind::Log(LogLevel::Error)),
+            // Register-access MMIO intrinsics (underscore form, matching the
+            // facade `#[rseq::intrinsic("mmio_*")]` / `"poll_until"` tags).
+            "mmio_read" => Some(IntrinsicKind::Mmio(MmioOp::Read)),
+            "mmio_read_field" => Some(IntrinsicKind::Mmio(MmioOp::ReadField)),
+            "mmio_write" => Some(IntrinsicKind::Mmio(MmioOp::Write)),
+            "mmio_write_field" => Some(IntrinsicKind::Mmio(MmioOp::WriteField)),
+            "mmio_modify" => Some(IntrinsicKind::Mmio(MmioOp::Modify)),
+            "poll_until" => Some(IntrinsicKind::PollUntil),
             _ => None,
         }
     }

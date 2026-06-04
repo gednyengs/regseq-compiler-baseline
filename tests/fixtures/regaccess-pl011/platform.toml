@@ -1,0 +1,10 @@
+# L2 platform binding (per-integration). For this host generic-c proof the
+# device model is a global register file, so no concrete base is consumed here;
+# a real target would carry physical_base/region_size (DT) or bar=N (PCI) under
+# the resource id, joined at map_region.
+[platform]
+name = "regaccess_pl011"
+
+[register_access.regs]
+physical_base = 0x09000000
+region_size = 0x1000

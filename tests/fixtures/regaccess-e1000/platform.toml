@@ -1,0 +1,9 @@
+# L2 platform binding (per-integration). E1000 is a PCI device: its register
+# space is MMIO BAR0. The L2 form is a BAR SELECTOR (base/size resolved at probe
+# by bus-resource) — NOT a static base in the L1 spec. For this host generic-c
+# proof the device model is a global register file, so the BAR is illustrative.
+[platform]
+name = "regaccess_e1000"
+
+[register_access.regs]
+bar = 0

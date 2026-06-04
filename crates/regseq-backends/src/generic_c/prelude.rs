@@ -72,6 +72,34 @@ _Noreturn static inline void regseq_unreachable(void) {
 #define REGSEQ_MSG_MISALIGNED "misaligned pointer dereference: address must be a multiple of %s but is %s" /* MisalignedPointerDereference{required,found} */
 #define REGSEQ_MSG_NULL_POINTER_DEREFERENCE "null pointer dereference occurred"          /* NullPointerDereference */
 #define REGSEQ_MSG_INVALID_ENUM_CONSTRUCTION "constructed invalid enum discriminant %s"  /* InvalidEnumConstruction(v) */
+
+/* ---------------------------------------------------------------------------
+ * Register-access host device model (register-access construct).
+ *
+ * A flat little-endian register file with TRACING accessors. Each access prints
+ * a "<R|W><bits> @0x<offset> = 0x<value>" line to stdout: this trace IS the
+ * behavioral oracle for register lowering (a wrong offset shows up as a wrong
+ * trace line, which a pure write/read-back round-trip would hide). `width` is
+ * in BYTES (1/2/4/8). Annotated `unused` so a TU with no register access is
+ * still warning-free; a TU that lowers MMIO ops references them. */
+#define REGSEQ_REGFILE_BYTES 65536u
+static uint8_t regseq_regfile[REGSEQ_REGFILE_BYTES] __attribute__((unused));
+__attribute__((unused)) static uint64_t regseq_mmio_read(uint32_t off, uint32_t width) {
+    uint64_t v = 0;
+    for (uint32_t i = 0; i < width && (off + i) < REGSEQ_REGFILE_BYTES; i++) {
+        v |= (uint64_t)regseq_regfile[off + i] << (8u * i);
+    }
+    printf("R%u @0x%03x = 0x%0*llx\n", (unsigned)(width * 8u), (unsigned)off,
+           (int)(width * 2u), (unsigned long long)v);
+    return v;
+}
+__attribute__((unused)) static void regseq_mmio_write(uint32_t off, uint32_t width, uint64_t val) {
+    printf("W%u @0x%03x = 0x%0*llx\n", (unsigned)(width * 8u), (unsigned)off,
+           (int)(width * 2u), (unsigned long long)val);
+    for (uint32_t i = 0; i < width && (off + i) < REGSEQ_REGFILE_BYTES; i++) {
+        regseq_regfile[off + i] = (uint8_t)(val >> (8u * i));
+    }
+}
 "#;
 
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the

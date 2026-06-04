@@ -43,7 +43,7 @@ use std::cell::RefCell;
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
     ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
-    IntKind, IntrinsicKind, ItemId, LocalId, LogLevel, NonDivergingIntrinsic, Operand, Place,
+    IntKind, IntrinsicKind, ItemId, LocalId, LogLevel, MmioOp, NonDivergingIntrinsic, Operand, Place,
     PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
     SyntheticItemKind, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
     VariantLayout,
@@ -2100,6 +2100,15 @@ impl BodyEmit<'_> {
                 let level = level.clone();
                 return self.emit_diag_log(level, args, target);
             }
+            // Register-access interception (register-access construct): a Direct
+            // callee whose source item carries `IntrinsicKind::Mmio(op)` lowers to
+            // a host device-model hook call instead of a C call. The descriptor
+            // argument (RegisterId / Field / FieldValue) carries the register
+            // offset/width (+ mask/shift/value) as ordinary runtime struct fields.
+            if let Some(IntrinsicKind::Mmio(op)) = self.model.instance_intrinsic(*inst) {
+                let op = *op;
+                return self.emit_mmio(op, callee, args, destination, target);
+            }
         }
 
         let callee_expr = match callee {
@@ -2191,6 +2200,88 @@ impl BodyEmit<'_> {
                 Ok(format!("{assign} goto bb_{};", t.as_u32()))
             }
         }
+    }
+
+    /// Register-access MMIO lowering (register-access construct): lower an
+    /// `IntrinsicKind::Mmio(op)` Call to a host device-model hook call against
+    /// the Bank-1 register file (`regseq_mmio_read` / `regseq_mmio_write`).
+    ///
+    /// The register offset/width (+ field mask/shift/value) ride in the
+    /// descriptor argument (`RegisterId` / `Field` / `FieldValue`) as ordinary
+    /// runtime struct fields the `register_block!` macro populates, so lowering
+    /// reads `(desc).offset` / `.width` / `.mask` / `.shift` / `.value` directly
+    /// — no type-level offset recovery needed.
+    ///
+    /// Argument layout (the `&self` receiver is `args[0]`; the host device model
+    /// is a single global register file, so the receiver is ignored):
+    /// - `mmio_read(reg)`         : args = [recv, reg]            -> dest = read
+    /// - `mmio_read_field(field)`  : args = [recv, field]          -> dest = read
+    /// - `mmio_write(reg, val)`   : args = [recv, reg, val]
+    /// - `mmio_write_field(fv)`   : args = [recv, fv]
+    fn emit_mmio(
+        &self,
+        op: MmioOp,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported("mmio call with no target"))?;
+        // A descriptor argument (RegisterId / Field / FieldValue) is an
+        // aggregate const, so it must be rendered against its parameter type (a
+        // `None` consumer type fails to emit a `Const::Bytes`). `operand_ty`
+        // yields `None` for constants, so recover the type from the callee's
+        // parameter signature, exactly as the ordinary-call path does.
+        let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        let arg = |this: &Self, i: usize| -> Result<String, EmitError> {
+            this.operand_expr(&args[i], param_tys.get(i).copied())
+        };
+        let desc_arg = arg;
+        let stmt = match op {
+            MmioOp::Write => {
+                let desc = desc_arg(self, 1)?;
+                let val = arg(self, 2)?;
+                format!(
+                    "regseq_mmio_write(({desc}).offset, ({desc}).width, (uint64_t)({val}));"
+                )
+            }
+            MmioOp::WriteField => {
+                let fv = desc_arg(self, 1)?;
+                format!(
+                    "regseq_mmio_write(({fv}).offset, ({fv}).width, (uint64_t)(({fv}).value));"
+                )
+            }
+            MmioOp::Read => {
+                let desc = desc_arg(self, 1)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                format!("{dst} = ({dst_cty})regseq_mmio_read(({desc}).offset, ({desc}).width);")
+            }
+            MmioOp::ReadField => {
+                let fld = desc_arg(self, 1)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
+                format!(
+                    "{dst} = ({dst_cty})((regseq_mmio_read(({fld}).offset, ({fld}).width) & ({fld}).mask) >> ({fld}).shift);"
+                )
+            }
+            MmioOp::Modify => {
+                // RMW: read, clear the field mask, OR the value, write back.
+                // Emitted in C so it needs no generic Rust bit-op lowering.
+                // args = [recv, reg (RegisterId), values (FieldValue)].
+                let reg = desc_arg(self, 1)?;
+                let values = arg(self, 2)?;
+                let off = self.fresh_temp_name("_rmw_off");
+                let w = self.fresh_temp_name("_rmw_w");
+                let cur = self.fresh_temp_name("_rmw_cur");
+                format!(
+                    "{{ uint32_t {off} = ({reg}).offset; uint32_t {w} = ({reg}).width; \
+                     uint64_t {cur} = regseq_mmio_read({off}, {w}); \
+                     regseq_mmio_write({off}, {w}, ({cur} & ~(uint64_t)(({values}).mask)) | (uint64_t)(({values}).value)); }}"
+                )
+            }
+        };
+        Ok(format!("{stmt} goto bb_{};", target.as_u32()))
     }
 
     /// `Assert` (section 7.1 + section 16): branch on success, panic on
