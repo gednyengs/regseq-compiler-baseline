@@ -57,24 +57,36 @@ const _: () = assert!(e1000::tdbah::OFFSET == 0x14);
 const _: () = assert!(e1000::tdlen::OFFSET == 0x18);
 const _: () = assert!(e1000::tdt::OFFSET == 0x1c);
 
+/// The driver: declares the typed MMIO resource (L1). The `id = "regs"` joins to
+/// the platform file's `[mmio.regs]` section (L2: PCI BAR0).
+pub struct E1000 {
+    #[rseq::mmio(id = "regs")]
+    regs: Mmio<e1000::Regs>,
+}
+
+impl E1000 {
+    fn bring_up(&self) {
+        // RMW CTRL: set link up.  -> R32 @0x000 ; W32 @0x000 = 0x40
+        self.regs.modify(e1000::ctrl::REG, e1000::ctrl::SLU::UP);
+        // read STATUS.            -> R32 @0x004
+        let _st = self.regs.read(e1000::status::REG);
+        // program the 64-bit TX ring base: HIGH then LOW (program order; device
+        // latches on the low write).  -> W32 @0x014 (high) ; W32 @0x010 (low)
+        self.regs.write(e1000::tdbah::REG, 0x0000_0001u32);
+        self.regs.write(e1000::tdbal::REG, 0x0000_2000u32);
+        // ring length.            -> W32 @0x018 = 0x80
+        self.regs.write(e1000::tdlen::REG, 0x80u32);
+        // enable TX via RMW.      -> R32 @0x00c ; W32 @0x00c = 0x2
+        self.regs.modify(e1000::tctl::REG, e1000::tctl::EN::ENABLED);
+        // doorbell: advance TX tail. -> W32 @0x01c = 0x1
+        self.regs.write(e1000::tdt::REG, 0x1u32);
+        // read-clear ICR (reading clears causes). -> R32 @0x008
+        let _icr = self.regs.read(e1000::icr::REG);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn regseq_main() {
-    let regs: Mmio<e1000::Regs> = Mmio::new();
-
-    // RMW CTRL: set link up.  -> R32 @0x000 ; W32 @0x000 = 0x40
-    regs.modify(e1000::ctrl::REG, e1000::ctrl::SLU::UP);
-    // read STATUS.            -> R32 @0x004
-    let _st = regs.read(e1000::status::REG);
-    // program the 64-bit TX ring base: HIGH then LOW (program order; device
-    // latches on the low write).  -> W32 @0x014 (high) ; W32 @0x010 (low)
-    regs.write(e1000::tdbah::REG, 0x0000_0001u32);
-    regs.write(e1000::tdbal::REG, 0x0000_2000u32);
-    // ring length.            -> W32 @0x018 = 0x80
-    regs.write(e1000::tdlen::REG, 0x80u32);
-    // enable TX via RMW.      -> R32 @0x00c ; W32 @0x00c = 0x2
-    regs.modify(e1000::tctl::REG, e1000::tctl::EN::ENABLED);
-    // doorbell: advance TX tail. -> W32 @0x01c = 0x1
-    regs.write(e1000::tdt::REG, 0x1u32);
-    // read-clear ICR (reading clears causes). -> R32 @0x008
-    let _icr = regs.read(e1000::icr::REG);
+    let dev = E1000 { regs: Mmio::new() };
+    dev.bring_up();
 }

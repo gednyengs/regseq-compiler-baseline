@@ -48,22 +48,36 @@ const _: () = assert!(pl011::fr::OFFSET == 0x18);
 const _: () = assert!(pl011::ibrd::OFFSET == 0x1c);
 const _: () = assert!(pl011::cr::OFFSET == 0x20);
 
+/// The driver: declares the typed MMIO resource (L1). The `id = "regs"` joins to
+/// the platform file's `[mmio.regs]` section (L2).
+pub struct Pl011 {
+    #[rseq::mmio(id = "regs")]
+    regs: Mmio<pl011::Regs>,
+}
+
+impl Pl011 {
+    fn configure(&self) {
+        // write a byte to DR  -> W32 @0x000 = 0x41
+        self.regs.write(pl011::dr::REG, 0x41u32);
+        // read DR back (round-trips through the device-model register file)
+        let _dr = self.regs.read(pl011::dr::REG);
+        // program the baud divisor -> W32 @0x01c = 0x1a
+        self.regs.write(pl011::ibrd::REG, 0x1Au32);
+        // enable UART + TX via RMW -> R32 @0x020, then W32 @0x020 = 0x101
+        self.regs.modify(
+            pl011::cr::REG,
+            pl011::cr::UARTEN::ENABLED + pl011::cr::TXE::ENABLED,
+        );
+        // read the BUSY flag field -> R32 @0x018 (masked/shifted). `BUSY` is a
+        // direct `Field` const (no named values), so there is no `::FIELD` submodule.
+        let _busy = self.regs.read_field(pl011::fr::BUSY);
+    }
+}
+
 #[no_mangle]
 pub extern "C" fn regseq_main() {
-    let regs: Mmio<pl011::Regs> = Mmio::new();
-
-    // write a byte to DR  -> W32 @0x000 = 0x41
-    regs.write(pl011::dr::REG, 0x41u32);
-    // read DR back (round-trips through the device-model register file)
-    let _dr = regs.read(pl011::dr::REG);
-    // program the baud divisor -> W32 @0x01c = 0x1a
-    regs.write(pl011::ibrd::REG, 0x1Au32);
-    // enable UART + TX via RMW -> R32 @0x020, then W32 @0x020 = 0x101
-    regs.modify(
-        pl011::cr::REG,
-        pl011::cr::UARTEN::ENABLED + pl011::cr::TXE::ENABLED,
-    );
-    // read the BUSY flag field -> R32 @0x018 (masked/shifted). `BUSY` is a
-    // direct `Field` const (no named values), so there is no `::FIELD` submodule.
-    let _busy = regs.read_field(pl011::fr::BUSY);
+    // The resource is normally bound by the compiler at init (map_region); for
+    // this host generic-c proof the device model is global, so a ZST Mmio suffices.
+    let dev = Pl011 { regs: Mmio::new() };
+    dev.configure();
 }

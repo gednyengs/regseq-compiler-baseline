@@ -1,9 +1,14 @@
-# L2 platform binding (per-integration). E1000 is a PCI device: its register
-# space is MMIO BAR0. The L2 form is a BAR SELECTOR (base/size resolved at probe
-# by bus-resource) — NOT a static base in the L1 spec. For this host generic-c
-# proof the device model is a global register file, so the BAR is illustrative.
-[platform]
-name = "regaccess_e1000"
+version = "1"
 
-[register_access.regs]
+[platform]
+os = "linux"
+board = "qemu-pc"
+arch = "x86_64"
+
+# Register-access MMIO region binding (L2). The section key `regs` joins to the
+# L1 resource declared `#[rseq::mmio(id = "regs")]`. E1000 is a PCI device: its
+# register space is MMIO BAR0, so the L2 binding is a BAR SELECTOR (base/size are
+# resolved at probe by bus-resource), not a static base. (For this host generic-c
+# proof the device model is a global register file, so this is illustrative.)
+[mmio.regs]
 bar = 0

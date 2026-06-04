@@ -144,13 +144,21 @@ pub struct Reserved<W> {
 
 // -- the typed MMIO resource + its operations (compiler-lowered intrinsics) ---
 
-/// Zero-sized MMIO resource marker (global host device model for this proof).
+/// Typed MMIO resource. Holds the bound region base (set by the compiler at
+/// `map_region`). Unused in this host proof — the device model is a single
+/// global register file — but a real (non-ZST) field is required so the resource
+/// can live as a driver-struct field whose address is taken at a call site.
 pub struct Mmio<T> {
+    #[allow(dead_code)]
+    base: usize,
     _t: PhantomData<T>,
 }
 impl<T> Mmio<T> {
     pub const fn new() -> Self {
-        Self { _t: PhantomData }
+        Self {
+            base: 0,
+            _t: PhantomData,
+        }
     }
 }
 
