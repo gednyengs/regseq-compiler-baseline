@@ -372,6 +372,8 @@ fn run_bridge_phase5_peels_all_four_severities() {
                 for attr in attrs.iter() {
                     match attr {
                         AttrData::Intrinsic(IntrinsicKind::Log(level)) => seen.push(level.clone()),
+                        // A non-log intrinsic (mmio / poll); skip it.
+                        AttrData::Intrinsic(_) => {}
                         // Not a log level; this fixture produces none, so skip.
                         AttrData::FrameworkType(_) => {}
                     }

@@ -167,6 +167,9 @@ fn diag_logging_post_peel_shape_and_attrs() {
             // silently admitted.
             match attr {
                 AttrData::Intrinsic(IntrinsicKind::Log(_)) => {}
+                AttrData::Intrinsic(_) => {
+                    panic!("spurious non-log intrinsic (mmio/poll) on log callee")
+                }
                 AttrData::FrameworkType(_) => {
                     panic!("spurious AttrData on log callee: FrameworkType")
                 }

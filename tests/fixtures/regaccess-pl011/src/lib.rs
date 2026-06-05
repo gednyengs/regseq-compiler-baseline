@@ -57,27 +57,33 @@ pub struct Pl011 {
 
 impl Pl011 {
     fn configure(&self) {
-        // write a byte to DR  -> W32 @0x000 = 0x41
-        self.regs.write(pl011::dr::REG, 0x41u32);
+        // Form B: the register is the receiver (`regs.dr`), reached via
+        // `Mmio<T>: Deref`; the backend recovers each register's byte offset
+        // from the `#[repr(C)]` block layout.
+        // write a byte to DR (whole-register raw) -> W32 @0x000 = 0x41
+        self.regs.dr.write(0x41u32);
         // read DR back (round-trips through the device-model register file)
-        let _dr = self.regs.read(pl011::dr::REG);
+        let _dr = self.regs.dr.read();
         // program the baud divisor -> W32 @0x01c = 0x1a
-        self.regs.write(pl011::ibrd::REG, 0x1Au32);
-        // enable UART + TX via RMW -> R32 @0x020, then W32 @0x020 = 0x101
-        self.regs.modify(
-            pl011::cr::REG,
-            pl011::cr::UARTEN::ENABLED + pl011::cr::TXE::ENABLED,
-        );
+        self.regs.ibrd.write(0x1Au32);
+        // enable UART + TX via field RMW -> R32 @0x020, then W32 @0x020 = 0x101
+        self.regs
+            .cr
+            .modify(pl011::cr::UARTEN::ENABLED + pl011::cr::TXE::ENABLED);
         // read the BUSY flag field -> R32 @0x018 (masked/shifted). `BUSY` is a
         // direct `Field` const (no named values), so there is no `::FIELD` submodule.
-        let _busy = self.regs.read_field(pl011::fr::BUSY);
+        let _busy = self.regs.fr.read_field(pl011::fr::BUSY);
+        let _ = (_dr, _busy);
     }
 }
 
 #[no_mangle]
 pub extern "C" fn regseq_main() {
     // The resource is normally bound by the compiler at init (map_region); for
-    // this host generic-c proof the device model is global, so a ZST Mmio suffices.
-    let dev = Pl011 { regs: Mmio::new() };
+    // this host generic-c proof the device model is a global register file, so
+    // the `Mmio` block instance is just a layout carrier.
+    let dev = Pl011 {
+        regs: Mmio::new(pl011::Regs::new()),
+    };
     dev.configure();
 }

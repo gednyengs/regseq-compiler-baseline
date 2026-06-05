@@ -1,0 +1,10 @@
+[package]
+name = "regaccess-formb-ops"
+version = "0.0.0"
+edition = "2021"
+publish = false
+
+[workspace]
+
+[dependencies]
+regseq-macros = { path = "../../../crates/regseq-macros" }

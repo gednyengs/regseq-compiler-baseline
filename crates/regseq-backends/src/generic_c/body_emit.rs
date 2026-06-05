@@ -43,8 +43,8 @@ use std::cell::RefCell;
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
     ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
-    IntKind, IntrinsicKind, ItemId, LocalId, LogLevel, MmioOp, NonDivergingIntrinsic, Operand, Place,
-    PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
+    IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MmioOp, NonDivergingIntrinsic,
+    Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
     SyntheticItemKind, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
     VariantLayout,
 };
@@ -2100,11 +2100,14 @@ impl BodyEmit<'_> {
                 let level = level.clone();
                 return self.emit_diag_log(level, args, target);
             }
-            // Register-access interception (register-access construct): a Direct
-            // callee whose source item carries `IntrinsicKind::Mmio(op)` lowers to
-            // a host device-model hook call instead of a C call. The descriptor
-            // argument (RegisterId / Field / FieldValue) carries the register
-            // offset/width (+ mask/shift/value) as ordinary runtime struct fields.
+            // Register-access interception (register-access construct, Form B): a
+            // Direct callee whose source item carries `IntrinsicKind::Mmio(op)`
+            // lowers to a host device-model hook call instead of a C call. The
+            // register is the *receiver* (`regs.dr`, reached via `Mmio<T>: Deref`),
+            // so the register byte offset + access width are recovered from the
+            // `#[repr(C)]` block layout (see `emit_mmio`); a field op's
+            // mask/shift/value still ride in the `Field`/`FieldValue` descriptor
+            // argument.
             if let Some(IntrinsicKind::Mmio(op)) = self.model.instance_intrinsic(*inst) {
                 let op = *op;
                 return self.emit_mmio(op, callee, args, destination, target);
@@ -2202,22 +2205,26 @@ impl BodyEmit<'_> {
         }
     }
 
-    /// Register-access MMIO lowering (register-access construct): lower an
-    /// `IntrinsicKind::Mmio(op)` Call to a host device-model hook call against
-    /// the Bank-1 register file (`regseq_mmio_read` / `regseq_mmio_write`).
+    /// Register-access MMIO lowering (register-access construct, Form B): lower
+    /// an `IntrinsicKind::Mmio(op)` wrapper-method Call to a host device-model
+    /// hook call against the register file (`regseq_mmio_read` /
+    /// `regseq_mmio_write`).
     ///
-    /// The register offset/width (+ field mask/shift/value) ride in the
-    /// descriptor argument (`RegisterId` / `Field` / `FieldValue`) as ordinary
-    /// runtime struct fields the `register_block!` macro populates, so lowering
-    /// reads `(desc).offset` / `.width` / `.mask` / `.shift` / `.value` directly
-    /// — no type-level offset recovery needed.
+    /// In Form B the register is the *receiver* (`regs.dr`, reached via
+    /// `Mmio<T>: Deref<Target = Block>`), not a token argument. The register's
+    /// byte offset and access width are recovered from the `#[repr(C)]` block
+    /// layout via `recover_register` (the receiver `args[0]` borrows the
+    /// register's wrapper field; its `Field(idx)` projection + the block's
+    /// resolved layout give `fields[idx].offset` and the field type's size). A
+    /// field op additionally reads the bit `mask`/`shift`/`value` from the
+    /// `Field`/`FieldValue` descriptor argument (`args[1]`).
     ///
-    /// Argument layout (the `&self` receiver is `args[0]`; the host device model
-    /// is a single global register file, so the receiver is ignored):
-    /// - `mmio_read(reg)`         : args = [recv, reg]            -> dest = read
-    /// - `mmio_read_field(field)`  : args = [recv, field]          -> dest = read
-    /// - `mmio_write(reg, val)`   : args = [recv, reg, val]
-    /// - `mmio_write_field(fv)`   : args = [recv, fv]
+    /// Argument layout (`args[0]` is the `&self` wrapper receiver):
+    /// - `read()`            : args = [recv]             -> dest = whole register
+    /// - `read_field(field)` : args = [recv, field]      -> dest = masked field
+    /// - `write(val)`        : args = [recv, val]
+    /// - `write_field(fv)`   : args = [recv, fv]
+    /// - `modify(fv)`        : args = [recv, fv]
     fn emit_mmio(
         &self,
         op: MmioOp,
@@ -2227,61 +2234,260 @@ impl BodyEmit<'_> {
         target: Option<regseq_model::BlockId>,
     ) -> Result<String, EmitError> {
         let target = target.ok_or(EmitError::Unsupported("mmio call with no target"))?;
-        // A descriptor argument (RegisterId / Field / FieldValue) is an
-        // aggregate const, so it must be rendered against its parameter type (a
-        // `None` consumer type fails to emit a `Const::Bytes`). `operand_ty`
-        // yields `None` for constants, so recover the type from the callee's
-        // parameter signature, exactly as the ordinary-call path does.
+        // The register is the receiver `args[0]`; recover its byte offset and
+        // access width from the `#[repr(C)]` block layout (Strategy C).
+        let recv = args
+            .first()
+            .ok_or(EmitError::Unsupported("mmio call with no receiver"))?;
+        let (offset, width) = self.recover_register(recv)?;
+        // A field descriptor argument (`Field` / `FieldValue`) is an aggregate
+        // const, so it renders against its parameter type (`operand_ty` yields
+        // `None` for a constant); recover the type from the callee signature,
+        // exactly as the ordinary-call path does.
         let param_tys = super::callee_param_tys(self.model, self.body, callee);
         let arg = |this: &Self, i: usize| -> Result<String, EmitError> {
             this.operand_expr(&args[i], param_tys.get(i).copied())
         };
-        let desc_arg = arg;
         let stmt = match op {
             MmioOp::Write => {
-                let desc = desc_arg(self, 1)?;
-                let val = arg(self, 2)?;
-                format!(
-                    "regseq_mmio_write(({desc}).offset, ({desc}).width, (uint64_t)({val}));"
-                )
+                // Whole-register raw write: no descriptor; value is `args[1]`.
+                let val = arg(self, 1)?;
+                format!("regseq_mmio_write({offset}, {width}, (uint64_t)({val}));")
             }
             MmioOp::WriteField => {
-                let fv = desc_arg(self, 1)?;
+                // Masked field write: confine the value to the field mask so
+                // bits outside the mask are 0 (the locked `write_field` semantics),
+                // independent of how the `FieldValue` was constructed.
+                let fv = arg(self, 1)?;
                 format!(
-                    "regseq_mmio_write(({fv}).offset, ({fv}).width, (uint64_t)(({fv}).value));"
+                    "regseq_mmio_write({offset}, {width}, (uint64_t)(({fv}).value & ({fv}).mask));"
                 )
             }
             MmioOp::Read => {
-                let desc = desc_arg(self, 1)?;
+                // Whole-register raw read.
                 let dst = self.place_lvalue(destination)?;
                 let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
-                format!("{dst} = ({dst_cty})regseq_mmio_read(({desc}).offset, ({desc}).width);")
+                format!("{dst} = ({dst_cty})regseq_mmio_read({offset}, {width});")
             }
             MmioOp::ReadField => {
-                let fld = desc_arg(self, 1)?;
+                // Masked + shifted field read.
+                let fld = arg(self, 1)?;
                 let dst = self.place_lvalue(destination)?;
                 let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
                 format!(
-                    "{dst} = ({dst_cty})((regseq_mmio_read(({fld}).offset, ({fld}).width) & ({fld}).mask) >> ({fld}).shift);"
+                    "{dst} = ({dst_cty})((regseq_mmio_read({offset}, {width}) & ({fld}).mask) >> ({fld}).shift);"
                 )
             }
             MmioOp::Modify => {
-                // RMW: read, clear the field mask, OR the value, write back.
-                // Emitted in C so it needs no generic Rust bit-op lowering.
-                // args = [recv, reg (RegisterId), values (FieldValue)].
-                let reg = desc_arg(self, 1)?;
-                let values = arg(self, 2)?;
-                let off = self.fresh_temp_name("_rmw_off");
-                let w = self.fresh_temp_name("_rmw_w");
+                // RMW: read, clear the field mask, OR the mask-confined value,
+                // write back. Emitted in C so it needs no generic Rust bit-op
+                // lowering. The `value & mask` confines the OR to the field bits
+                // regardless of how the `FieldValue` was constructed.
+                let values = arg(self, 1)?;
                 let cur = self.fresh_temp_name("_rmw_cur");
                 format!(
-                    "{{ uint32_t {off} = ({reg}).offset; uint32_t {w} = ({reg}).width; \
-                     uint64_t {cur} = regseq_mmio_read({off}, {w}); \
-                     regseq_mmio_write({off}, {w}, ({cur} & ~(uint64_t)(({values}).mask)) | (uint64_t)(({values}).value)); }}"
+                    "{{ uint64_t {cur} = regseq_mmio_read({offset}, {width}); \
+                     regseq_mmio_write({offset}, {width}, ({cur} & ~(uint64_t)(({values}).mask)) | (uint64_t)(({values}).value & ({values}).mask)); }}"
                 )
             }
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// Recover the (byte-offset expression, access width) of the register named
+    /// by the receiver operand of a Form-B mmio wrapper-method call, from the
+    /// `#[repr(C)]` register-block layout (Strategy C).
+    ///
+    /// The register is the receiver (`regs.dr` / `regs.mta[i]` / `regs.ra[i].ral`,
+    /// reached via `Mmio<T>: Deref`): the borrow of the wrapper place projects
+    /// into the block, so `args[0]` is (a transparent temp chain ending in) that
+    /// borrow. We walk the borrowed place's projection left-to-right, carrying a
+    /// running type and accumulating a byte offset:
+    /// - `Deref` enters the block via the resource reference (no offset; the base
+    ///   is bound at runtime by the device model).
+    /// - `Field(idx)` requires a struct layout and adds `fields[idx].offset`.
+    /// - `Index(local)` / `ConstantIndex` requires an array and adds
+    ///   `index * stride` (stride from the resolved array layout).
+    ///
+    /// The offset is returned as a C expression string — a literal when every
+    /// index is constant, else `(base + (uint64_t)(i) * stride + …)`. The access
+    /// width is the size of the final element (the register wrapper). Fails loud
+    /// rather than emit a guessed offset.
+    fn recover_register(&self, recv: &Operand) -> Result<(String, u64), EmitError> {
+        let src = self.resolve_receiver_src(recv, 0)?;
+        if src.projection.is_empty() {
+            return Err(EmitError::Unsupported(
+                "mmio receiver place has no projection into a register block",
+            ));
+        }
+        let mut ty = self.body.local_decls[src.local].ty;
+        let mut const_off: u64 = 0;
+        let mut index_terms: Vec<String> = Vec::new();
+        for elem in src.projection.iter() {
+            match elem {
+                PlaceElem::Deref => {
+                    ty = match &self.model.types[ty] {
+                        Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+                        _ => {
+                            return Err(EmitError::Unsupported(
+                                "mmio receiver deref of a non-pointer type",
+                            ))
+                        }
+                    };
+                }
+                PlaceElem::Field(idx, field_ty) => {
+                    let Ty::Struct { layout, .. } = &self.model.types[ty] else {
+                        return Err(EmitError::Unsupported(
+                            "mmio receiver field projection of a non-struct type",
+                        ));
+                    };
+                    let LayoutKind::Struct { fields } = &layout.kind else {
+                        return Err(EmitError::Unsupported(
+                            "mmio register block has a non-struct layout",
+                        ));
+                    };
+                    let f = fields.get(idx.index()).ok_or(EmitError::Unsupported(
+                        "mmio register field index out of range for block layout",
+                    ))?;
+                    // The projection's embedded field type is redundant with the
+                    // layout field type (model invariant, `place.rs`); cross-check
+                    // it so a corrupted model fails loud rather than lowering a
+                    // wrong offset/width.
+                    if f.ty != *field_ty {
+                        return Err(EmitError::Unsupported(
+                            "mmio receiver field type disagrees with the block layout",
+                        ));
+                    }
+                    const_off += f.offset;
+                    ty = f.ty;
+                }
+                PlaceElem::Index(index_local) => {
+                    let (elem, stride) = self.array_elem_stride(ty)?;
+                    let idx_c = local_c_name(self.model, self.body, *index_local);
+                    index_terms.push(format!("(uint64_t)({idx_c}) * {stride}"));
+                    ty = elem;
+                }
+                PlaceElem::ConstantIndex {
+                    offset, from_end, ..
+                } => {
+                    if *from_end {
+                        return Err(EmitError::Unsupported(
+                            "mmio receiver from-end constant index is unsupported",
+                        ));
+                    }
+                    let (elem, stride) = self.array_elem_stride(ty)?;
+                    const_off += offset.checked_mul(stride).ok_or(EmitError::Unsupported(
+                        "mmio register array offset arithmetic overflow",
+                    ))?;
+                    ty = elem;
+                }
+                PlaceElem::Downcast(_) | PlaceElem::Subslice { .. } => {
+                    return Err(EmitError::Unsupported(
+                        "mmio receiver has an unsupported projection element",
+                    ));
+                }
+            }
+        }
+        // The final element is the register wrapper; its size is the access width.
+        let width = self.model.size_align_of(ty).size;
+        if !matches!(width, 1 | 2 | 4 | 8) {
+            return Err(EmitError::Unsupported(
+                "mmio register access width is not 1, 2, 4, or 8 bytes",
+            ));
+        }
+        let offset = if index_terms.is_empty() {
+            format!("{const_off}")
+        } else {
+            let mut parts = Vec::with_capacity(index_terms.len() + 1);
+            parts.push(format!("{const_off}"));
+            parts.extend(index_terms);
+            format!("({})", parts.join(" + "))
+        };
+        Ok((offset, width))
+    }
+
+    /// The element type and byte stride of an array type, from its resolved
+    /// layout (stride = total array size / length, i.e. the alignment-rounded
+    /// element size — the authoritative `#[repr(C)]` array stride).
+    fn array_elem_stride(&self, array_ty: TyId) -> Result<(TyId, u64), EmitError> {
+        let Ty::Array(elem, len) = &self.model.types[array_ty] else {
+            return Err(EmitError::Unsupported(
+                "mmio receiver index projection of a non-array type",
+            ));
+        };
+        let (elem, len) = (*elem, *len);
+        if len == 0 {
+            return Err(EmitError::Unsupported(
+                "mmio register array has zero length",
+            ));
+        }
+        let stride = self.model.size_align_of(array_ty).size / len;
+        Ok((elem, stride))
+    }
+
+    /// Chase the receiver operand back to the place that borrows the register
+    /// wrapper field. Handles a directly-projected operand and bounded chains
+    /// of borrow / transparent-copy temps. The receiver borrow is not always in
+    /// the call's own block — a descriptor argument that is itself a call
+    /// (`FieldValue::new(..)`, or the `+`-compose `add`) splits the block, so
+    /// the borrow lands in a predecessor. At `mir_opt_level = 0` each such temp
+    /// is single-assignment, so the unique whole-body definition is the right
+    /// (and unambiguous) reaching def.
+    fn resolve_receiver_src(&self, op: &Operand, depth: u32) -> Result<Place, EmitError> {
+        if depth > 8 {
+            return Err(EmitError::Unsupported(
+                "mmio receiver reaching-def chase exceeded depth bound",
+            ));
+        }
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => {
+                return Err(EmitError::Unsupported("mmio receiver is a constant"))
+            }
+        };
+        // A directly-projected receiver (place already names a register — ends in
+        // a field or an array index): use it. The chain walk in `recover_register`
+        // validates the full projection.
+        match place.projection.last() {
+            Some(
+                PlaceElem::Field(..) | PlaceElem::Index(..) | PlaceElem::ConstantIndex { .. },
+            ) => return Ok(place.clone()),
+            // Bare local: find its unique definition (the hoisted borrow) below.
+            None => {}
+            Some(_) => {
+                return Err(EmitError::Unsupported(
+                    "mmio receiver has an unexpected trailing projection",
+                ))
+            }
+        }
+        let local = place.local;
+        let mut def: Option<&Rvalue> = None;
+        for bb in self.body.basic_blocks.iter() {
+            for stmt in bb.statements.iter() {
+                let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+                    continue;
+                };
+                if dst.local != local || !dst.projection.is_empty() {
+                    continue;
+                }
+                if def.is_some() {
+                    return Err(EmitError::Unsupported(
+                        "mmio receiver local has multiple definitions (ambiguous)",
+                    ));
+                }
+                def = Some(rhs);
+            }
+        }
+        match def {
+            Some(Rvalue::Ref(_, src) | Rvalue::RawPtr(_, src)) => Ok(src.clone()),
+            Some(Rvalue::Use(inner)) => self.resolve_receiver_src(inner, depth + 1),
+            Some(_) => Err(EmitError::Unsupported(
+                "mmio receiver temp has an unexpected rvalue",
+            )),
+            None => Err(EmitError::Unsupported(
+                "no definition for mmio receiver local in body",
+            )),
+        }
     }
 
     /// `Assert` (section 7.1 + section 16): branch on success, panic on

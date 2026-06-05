@@ -272,6 +272,8 @@ fn item_log_levels(model: &RegseqModel, leaf: &str) -> Vec<LogLevel> {
         .iter()
         .filter_map(|attr| match attr {
             AttrData::Intrinsic(IntrinsicKind::Log(level)) => Some(level.clone()),
+            // A non-log intrinsic (mmio / poll) is not a log level; skip it.
+            AttrData::Intrinsic(_) => None,
             // The framework-type marker is not a log level; skip it.
             AttrData::FrameworkType(_) => None,
         })
