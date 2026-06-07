@@ -27,7 +27,7 @@ use rustc_middle::ty::TyCtxt;
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
 use super::super::framework_type::recover_source_def_id;
-use super::super::{BridgeCtxt, BridgeError};
+use super::super::{BridgeCtxt, BridgeError, DeviceLifecycleDiagnostic};
 
 /// Raw `#[rseq::driver(...)]` + `#[rseq::device_class(...)]` payload, parsed off
 /// the tool attributes but not yet interned (strings are still owned `String`s;
@@ -35,6 +35,12 @@ use super::super::{BridgeCtxt, BridgeError};
 struct ParsedDriver {
     name: String,
     match_set: Vec<ParsedMatch>,
+    /// Whether a device-match attribute (`compatible`/`pci`/`amba`) was present
+    /// at all — set once its bracket group is successfully consumed, even if the
+    /// list is empty. Distinguishes D1 (no match attribute → `match_set` empty +
+    /// `!match_attr_present`) from D2 (a match attribute present but empty, e.g.
+    /// `compatible=[]` → `match_set` empty + `match_attr_present`). T17.
+    match_attr_present: bool,
     device_class: ParsedClass,
 }
 
@@ -115,7 +121,25 @@ fn recognise_driver_attr(
         return Ok(None);
     }
     match parse_driver_args(&delim.tokens) {
-        Ok(parsed) => Ok(Some(parsed)),
+        Ok(parsed) => {
+            // T17: a well-formed driver with no device-match is invalid — D1 (no
+            // match attribute at all) / D2 (a match attribute present but empty,
+            // e.g. `compatible=[]`). A MALFORMED match is a silent Drop (handled
+            // above as `DriverParseError::Drop`), NOT a D1/D2 rejection.
+            if parsed.match_set.is_empty() {
+                let diag = if parsed.match_attr_present {
+                    DeviceLifecycleDiagnostic::EmptyMatch {
+                        driver: parsed.name,
+                    }
+                } else {
+                    DeviceLifecycleDiagnostic::MissingMatch {
+                        driver: parsed.name,
+                    }
+                };
+                return Err(BridgeError::DeviceLifecycleValidation(diag));
+            }
+            Ok(Some(parsed))
+        }
         Err(DriverParseError::Drop) => Ok(None),
         Err(DriverParseError::UnsupportedBus(bus)) => {
             Err(BridgeError::DeviceLifecycleUnsupportedBus {
@@ -135,6 +159,8 @@ fn recognise_driver_attr(
 fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseError> {
     let mut name: Option<String> = None;
     let mut match_set: Vec<ParsedMatch> = Vec::new();
+    // Set once a match attribute's bracket group is consumed (T17 D1-vs-D2).
+    let mut match_attr_present = false;
     let mut iter = tokens.iter().peekable();
 
     while iter.peek().is_some() {
@@ -160,6 +186,7 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
                 let Some(TokenTree::Delimited(.., Delimiter::Bracket, inner)) = iter.next() else {
                     return Err(DriverParseError::Drop);
                 };
+                match_attr_present = true;
                 let mut elems = inner.iter().peekable();
                 while elems.peek().is_some() {
                     let compatible = expect_str_lit(elems.next()).ok_or(DriverParseError::Drop)?;
@@ -171,6 +198,7 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
                 let Some(TokenTree::Delimited(.., Delimiter::Bracket, inner)) = iter.next() else {
                     return Err(DriverParseError::Drop);
                 };
+                match_attr_present = true;
                 for record in record_groups(inner)? {
                     match_set.push(parse_pci_record(record)?);
                 }
@@ -179,6 +207,7 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
                 let Some(TokenTree::Delimited(.., Delimiter::Bracket, inner)) = iter.next() else {
                     return Err(DriverParseError::Drop);
                 };
+                match_attr_present = true;
                 for record in record_groups(inner)? {
                     match_set.push(parse_amba_record(record)?);
                 }
@@ -206,6 +235,7 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
     Ok(ParsedDriver {
         name: name.ok_or(DriverParseError::Drop)?,
         match_set,
+        match_attr_present,
         device_class: ParsedClass::Generic,
     })
 }
@@ -539,6 +569,7 @@ mod tests {
                 match_set: vec![ParsedMatch::Devicetree {
                     compatible: "acme,fake".to_string(),
                 }],
+                match_attr_present: true,
                 device_class: ParsedClass::Generic,
             },
         );
@@ -568,6 +599,7 @@ mod tests {
                         compatible: "acme,two".to_string(),
                     },
                 ],
+                match_attr_present: true,
                 device_class: ParsedClass::Generic,
             },
         );
@@ -593,6 +625,7 @@ mod tests {
             ParsedDriver {
                 name: "bare".to_string(),
                 match_set: vec![],
+                match_attr_present: false,
                 device_class: ParsedClass::Generic,
             },
         );
@@ -622,6 +655,7 @@ mod tests {
                         mask: 0x000f_ffff,
                     },
                 ],
+                match_attr_present: true,
                 device_class: ParsedClass::Network,
             },
         );
@@ -653,6 +687,7 @@ mod tests {
             ParsedDriver {
                 name: "blk".to_string(),
                 match_set: vec![],
+                match_attr_present: false,
                 device_class: ParsedClass::Other("block".to_string()),
             },
         );

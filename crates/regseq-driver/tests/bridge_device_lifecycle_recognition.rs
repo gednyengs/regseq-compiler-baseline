@@ -667,3 +667,43 @@ pub struct UdOptNc { slot: Option<NotCopy> }
         "Option<T> with a non-Copy inner must be rejected (D3)"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T17 — missing-match (D1) / empty-match (D2) validation (M8). A well-formed
+// driver with no device-match is rejected; a MALFORMED match is still a silent
+// drop (M1). The precise D1/D2 diagnostic is asserted by the M8 diag-harness
+// (lifecycle_diag.rs via BridgeOutcome); these bridge-unit tests assert the
+// rejection. (with_model erases the BridgeError to None on rejection.)
+// ---------------------------------------------------------------------------
+
+#[test]
+fn driver_with_no_match_attribute_is_rejected_d1() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "nomatch")]
+pub struct NoMatch;
+"#;
+    let outcome = with_model("dl_d1", src, |_model| ());
+    assert!(
+        outcome.is_none(),
+        "a driver with no device-match attribute must be rejected (D1)"
+    );
+}
+
+#[test]
+fn driver_with_empty_match_attribute_is_rejected_d2() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "empty", compatible = [])]
+pub struct Empty;
+"#;
+    let outcome = with_model("dl_d2", src, |_model| ());
+    assert!(
+        outcome.is_none(),
+        "a driver with a present-but-empty device-match set must be rejected (D2)"
+    );
+}
