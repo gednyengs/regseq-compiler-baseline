@@ -1,0 +1,4 @@
+LC register pl011 match=amba:0x41011/0xfffff
+LC create
+LC associate
+LC call on_init

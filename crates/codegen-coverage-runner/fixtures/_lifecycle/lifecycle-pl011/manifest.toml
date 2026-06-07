@@ -1,0 +1,13 @@
+name   = "lifecycle-pl011"
+kind   = "rust"
+# Device-lifecycle shutdown-OMIT (M5): an AMBA-matched (ARM PrimeCell UART) driver,
+# device_class serial, overriding `on_init` only and NO `regseq_main`. The backend
+# synthesizes `main` (RD-4/RD-6); the `shutdown` scenario lowers to register
+# (match=amba:0x41011/0xfffff) -> create -> associate -> `LC call on_init`, with NO
+# on_system_shutdown glue because the driver does not override it (omit-when-absent,
+# D10/I02 -- UNLIKE the four glued callbacks). The golden's ABSENCE of any
+# on_system_shutdown slot is the 5-negative. covers the registration (LC-1), the
+# AMBA match (LC-4), and the shutdown-omit (LC-8).
+lifecycle_scenario = "shutdown"
+covers = ["LC-1", "LC-4", "LC-8"]
+expect = "pass"

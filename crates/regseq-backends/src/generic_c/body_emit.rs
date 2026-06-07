@@ -4870,15 +4870,16 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
 /// is pure over `(model, options)`.
 ///
-/// Scope (M2-M4): `orderly` emits the teardown dispatch (`present=1`) + always-on
+/// Scope (M2-M5): `orderly` emits the teardown dispatch (`present=1`) + always-on
 /// `on_deinit` marker (CR-3); `surprise` mirrors it with `present=0` +
 /// `on_surprise_remove` (both via [`emit_teardown_dispatch`]); `init-fail`
 /// captures on_init's Result and on Err drives the rollback trace
-/// ([`emit_init_fail_body`]). `shutdown` remains the init-only sequence until M5.
-/// Resource preamble/postamble loops are deferred to the first resourceful fixture
-/// (M7) so a postamble can never appear without its preamble (C01). The `on_init`
-/// author call is synthesized only when overridden (`Some`), but the
-/// `regseq_lc_call("on_init")` marker is always emitted (CR-3).
+/// ([`emit_init_fail_body`]); `shutdown` emits `on_system_shutdown` ONLY when
+/// overridden (the lone omit-when-absent callback, D10/I02 — no marker/slot
+/// otherwise). Resource preamble/postamble loops are deferred to the first
+/// resourceful fixture (M7) so a postamble can never appear without its preamble
+/// (C01). The `on_init` author call is synthesized only when overridden (`Some`),
+/// but the `regseq_lc_call("on_init")` marker is always emitted (CR-3).
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
     names: &NameTable,
@@ -4926,6 +4927,7 @@ pub(crate) fn emit_lifecycle_synthesis(
         let on_deinit_sym = resolve_sym(&driver.ops.on_deinit)?;
         let on_surprise_remove_sym = resolve_sym(&driver.ops.on_surprise_remove)?;
         let on_init_failure_sym = resolve_sym(&driver.ops.on_init_failure)?;
+        let on_system_shutdown_sym = resolve_sym(&driver.ops.on_system_shutdown)?;
 
         for &scenario in options.lifecycle_scenarios() {
             let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
@@ -4949,7 +4951,9 @@ pub(crate) fn emit_lifecycle_synthesis(
                     on_init_sym.is_some() || on_surprise_remove_sym.is_some()
                 }
                 LifecycleScenario::InitFail => on_init_sym.is_some(),
-                LifecycleScenario::Shutdown => on_init_sym.is_some(),
+                LifecycleScenario::Shutdown => {
+                    on_init_sym.is_some() || on_system_shutdown_sym.is_some()
+                }
             };
             if needs_inst {
                 out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
@@ -4996,9 +5000,17 @@ pub(crate) fn emit_lifecycle_synthesis(
                         &mut out,
                     )?;
                 }
-                // Shutdown keeps the init-only body (on_init discarded) until M5.
+                // System shutdown (M5): on_init Result discarded, then
+                // `on_system_shutdown` — the ONLY omit-when-absent callback
+                // (D10/I02): UNLIKE the four glued callbacks it emits NO marker and
+                // NO slot when not overridden; when overridden, the marker + the
+                // author body (its Result discarded, CR-4).
                 LifecycleScenario::Shutdown => {
                     if let Some(sym) = &on_init_sym {
+                        out.push_str(&format!("    {sym}(&inst);\n"));
+                    }
+                    if let Some(sym) = &on_system_shutdown_sym {
+                        out.push_str("    regseq_lc_call(\"on_system_shutdown\");\n");
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
                 }

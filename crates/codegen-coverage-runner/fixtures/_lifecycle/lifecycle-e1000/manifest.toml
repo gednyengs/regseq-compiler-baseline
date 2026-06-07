@@ -1,0 +1,13 @@
+name   = "lifecycle-e1000"
+kind   = "rust"
+# Device-lifecycle shutdown-PRESENT (M5): a PCI-matched (Intel NIC) driver,
+# device_class network, overriding `on_init` + `on_system_shutdown` and NO
+# `regseq_main`. The backend synthesizes `main` (RD-4/RD-6); the `shutdown`
+# scenario lowers to register (match=pci:0x8086:0x100e) -> create -> associate ->
+# `LC call on_init` -> `LC call on_system_shutdown` + a call to
+# E1000::on_system_shutdown (the slot is PRESENT because the driver overrides it).
+# covers the registration (LC-1), the PCI match (LC-3), and the shutdown-present
+# (LC-9).
+lifecycle_scenario = "shutdown"
+covers = ["LC-1", "LC-3", "LC-9"]
+expect = "pass"
