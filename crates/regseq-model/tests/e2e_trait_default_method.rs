@@ -85,17 +85,19 @@ fn bridged_trait_default_method_body_surfaces_at_trait_def_path() {
             .resolve(model.items[greet_item].def_path.rendered),
     );
 
-    // (d) Bucket-1 classification: the Item is non-generic and has a
-    // rigid signature, so it must have BridgeItemFlags default
-    // (`is_generic == false`, `signature_non_rigid == false`).
+    // (d) Bucket-3 classification: a trait-declaration default method is generic
+    // over `Self` (a real monomorphization axis), so `is_generic == true`
+    // (bucket 3, 0+ instances) — NOT bucket 1. Its signature is still rigid.
+    // See `ty::source_bridge_item_flags` (this supersedes the old `own_params`
+    // carve-out that forced trait defaults to bucket 1).
     let flags = model
         .item_bridge_flags
         .get(&greet_item)
         .copied()
         .unwrap_or_default();
     assert!(
-        !flags.is_generic,
-        "Function Item `greet` must have `is_generic == false`; got {flags:?}",
+        flags.is_generic,
+        "Function Item `greet` (a trait default method) must have `is_generic == true` (bucket 3, generic over `Self`); got {flags:?}",
     );
     assert!(
         !flags.signature_non_rigid,

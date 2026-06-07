@@ -103,6 +103,7 @@ fn fixture(dir: &TempFixtureDir, entry: &str) -> Fixture {
             expect: Expect::Pass,
             overflow_checks: None,
             expected: Default::default(),
+            lifecycle_scenario: None,
         },
         dir: dir.dir.clone(),
         input: dir.dir.join("input.rs"),

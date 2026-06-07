@@ -470,6 +470,45 @@ The Phase-3+ native-failure guardrail **G01** is recorded in
 
 ---
 
+## 14. Device lifecycle domain construct -> registration / bind glue / teardown
+
+Source: the device-lifecycle design analysis (`docs/constructs/device-lifecycle/`)
+and the Stage-2 build contract (`.claude/specs/device-lifecycle/`, GRILL C01-C10,
+PLAN CR-1..CR-7). The third domain construct (after diag-log + RegseqError)
+bridged to generic C. The harness verbs were removed (RD-1): a `#[rseq::driver]`
+struct + an `impl Lifecycle` is recognized **item-driven** (RD-2), and the
+backend **synthesizes** the driving `main` (RD-4) — per driver × selected
+scenario, a `__rseq_lc_<n>_<driver>_<scenario>` helper emitting a fixed
+`LC <event>` trace (the `regseq_lc_*` hooks, GRILL C01) plus, for an overridden
+callback, a synthesized call to the author body that appears nowhere in the MIR,
+and a `__rseq_lc_run` runner the entry shim calls. The scenario set is the
+`backend.lifecycle.scenario` param (RD-5; default = all). The trace IS the
+behavioral oracle (`expected.stdout`); the morphed target-view struct + register
+routing is the `golden.c` half.
+
+Row IDs are **numeric** (`LC-<n>`, the matrix-parser ID grammar); the mnemonic
+(`LC-REG`, …) lives in the notes. Rows are **`deferred`** until each milestone's
+fixture lands (the status-flip workflow): M0 (`lifecycle-fake`, synthesized
+`main` → on_init) flips LC-1 / LC-2 / LC-5 to `covered`; later milestones flip the rest.
+
+| id | construct (variant/field) | C lowering | status | spec ref | notes |
+| -- | ------------------------- | ---------- | ------ | -------- | ----- |
+| LC-1 | synthesized scenario helper (registration) | `regseq_lc_register(<name>, <match>)` from the driver descriptor | deferred | GRILL C01/C04 | **LC-REG**: the registration trace; carries the logical driver name + typed match (R14) |
+| LC-2 | `MatchEntry::Devicetree { compatible }` | match rendered `dt:<compatible>` in the register trace | deferred | GRILL C03/D08 | **LC-MATCH-DT**: M0 witness (`fake`); flat-string `compatible` sugar |
+| LC-3 | `MatchEntry::Pci { vendor, device, .. }` | match rendered `pci:<vendor>:<device>` | deferred | GRILL C03/D08 | **LC-MATCH-PCI**: e1000 witness; nested-record sugar (T07) |
+| LC-4 | `MatchEntry::Amba { id, mask }` | match rendered `amba:<id>/<mask>` | deferred | GRILL C03/D08 | **LC-MATCH-AMBA**: pl011 witness; nested-record sugar (T07) |
+| LC-5 | synthesized scenario init ordering | `register -> create -> associate -> preamble* -> [call on_init]`, declaration order | deferred | GRILL C04/I01/I03 | **LC-BIND-ORDER**: the init invariant; on_init always emits its `LC call on_init` marker (CR-3) |
+| LC-6 | `on_init` returns `Err` | trace `LC on_init -> Err`, `[call on_init_failure]`, reverse-order partial postamble, clean exit | deferred | GRILL D12/I04 | **LC-INITFAIL**: rollback via high-water mark |
+| LC-7 | synthesized teardown scenario dispatch | `LC teardown present=<0 or 1>` dispatch marker | deferred | GRILL C04/D11 | **LC-UNBIND**: drives the orderly/surprise branch |
+| LC-8 | `on_system_shutdown` not overridden | zero glue; the shutdown slot is ABSENT in `golden.c` | deferred | GRILL D10/I02 | **LC-SHUTDOWN-OMIT**: pl011 5-negative (golden.c absence assertion) |
+| LC-9 | synthesized shutdown scenario + override | `LC call on_system_shutdown` + invoke author body | deferred | GRILL D10/I02 | **LC-SHUTDOWN-PRESENT**: e1000 5-positive |
+| LC-10 | teardown `present=true` | `LC call on_deinit` (always, CR-3) + postambles run | deferred | GRILL C04/I05 | **LC-DISPATCH-ORDERLY**: HW-reachable teardown |
+| LC-11 | teardown `present=false` | `LC call on_surprise_remove` + postambles `skipped(surprise)` | deferred | GRILL C04/I05 | **LC-DISPATCH-SURPRISE**: device-gone; byte-distinct from orderly |
+| LC-12 | `#[rseq::driver]` struct layout under Policy-P | `<driver>_target_t`: prepend `__rseq_dev`, wrap `Mmio<T>`, append `__rseq_state`; spec->target field map | deferred | GRILL C05/I06 | **LC-MORPH**: hardest path; composes with register-access Strategy-C (OI-1) |
+| LC-13 | Rule-1 scalar user-data field | the zero-allocated struct IS the init (no store); Rule-2 `Option<T:Copy>` = `None` | deferred | GRILL C10/I07 | **LC-USERDATA-ZEROINIT**: non-scalar Rule-1 rejected (D3) |
+
+---
+
 ## Output of this doc — the gap list
 
 The `unspecced` + `deferred` rows, grouped into the agenda for Doc 2

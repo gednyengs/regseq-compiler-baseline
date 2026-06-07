@@ -229,9 +229,29 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             tcx.dcx().warn(warning);
         }
 
-        // 5. Dispatch each emit spec. Any emit failure is fatal.
+        // 5. Resolve backend codegen options from the `backend.*` compiler
+        // params (RD-5/N1): the device-lifecycle scenario selection travels
+        // here, parallel to the model, never through the bridge. An invalid
+        // value (e.g. an unknown `backend.lifecycle.scenario` token) is fatal.
+        let backend_options = match regseq_backends::BackendOptions::from_backend_params(
+            self.options
+                .params
+                .iter()
+                .filter(|p| p.scope == regseq_config::ParamScope::Backend)
+                .map(|p| (p.name.as_str(), p.value.as_str())),
+        ) {
+            Ok(options) => options,
+            Err(err) => {
+                tcx.dcx()
+                    .fatal(format!("regseq-driver: backend param error: {err}"));
+            }
+        };
+
+        // 6. Dispatch each emit spec. Any emit failure is fatal.
         for spec in &self.options.emit {
-            if let Err(err) = crate::emit::emit_one(&model, spec, &self.options.output_dir) {
+            if let Err(err) =
+                crate::emit::emit_one_with(&model, spec, &self.options.output_dir, &backend_options)
+            {
                 tcx.dcx()
                     .fatal(format!("regseq-driver: emit {spec} failed: {err}"));
             }

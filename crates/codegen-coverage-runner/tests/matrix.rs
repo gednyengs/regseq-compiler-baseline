@@ -67,6 +67,35 @@ fn rejects_non_legend_status() {
 }
 
 #[test]
+fn committed_matrix_parses_with_device_lifecycle_rows() {
+    // The whole committed Doc-1 matrix must still parse after the §14
+    // device-lifecycle rows landed (no NonLegendStatus / DuplicateId), and the
+    // 13 numeric `LC-<n>` rows must be present and `deferred` at authoring time
+    // (T22a/T23/T24 flip them to `covered` as their fixtures land).
+    let path = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("../../docs/discussions/generic-c-backend/phase-1/01-construct-surface-and-matrix.md");
+    let rows = matrix::parse(&path).expect("the committed Doc-1 matrix must parse");
+    let lc: std::collections::BTreeSet<&str> = rows
+        .iter()
+        .map(|r| r.id.as_str())
+        .filter(|id| id.starts_with("LC-"))
+        .collect();
+    for n in 1..=13 {
+        let id = format!("LC-{n}");
+        assert!(lc.contains(id.as_str()), "matrix must contain {id}");
+    }
+    assert_eq!(lc.len(), 13, "exactly 13 device-lifecycle rows");
+    for r in rows.iter().filter(|r| r.id.starts_with("LC-")) {
+        assert_eq!(
+            r.status,
+            Status::Deferred,
+            "{} is `deferred` until its milestone fixture lands",
+            r.id
+        );
+    }
+}
+
+#[test]
 fn rejects_duplicate_ids() {
     let md = "\
 | id | construct | C lowering | status | spec ref | notes |\n\

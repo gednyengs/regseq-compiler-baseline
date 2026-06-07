@@ -33,6 +33,7 @@ use regseq_model::{
 
 pub mod prelude;
 
+mod backend_options;
 mod body_emit;
 mod enum_emit;
 mod errno;
@@ -40,6 +41,7 @@ mod layout_emit;
 mod naming;
 mod types;
 
+pub use backend_options::{BackendOptions, LifecycleScenario};
 pub use naming::{entry_c_symbol, generate_main_c, EntryShim, EntrySymbol};
 
 /// The default Doc-2 D3 entry suffix both consumers pass on the error path
@@ -145,9 +147,11 @@ fn slice_data_const(model: &RegseqModel, ref_ty: TyId) -> bool {
 /// Banks: (1) the prelude + helper block (model-independent), (2) type
 /// forward-decls, (3) type definitions (topologically sorted by by-value
 /// containment), (4) prototypes + `extern` statics, (5) function bodies +
-/// static initializers. The output is a *pure function of the model* (no
-/// wall-clock / iteration nondeterminism) so the snapshot oracle's
-/// byte-stability holds.
+/// static initializers. The output is a *pure function of `(model,
+/// BackendOptions)`* (no wall-clock / iteration nondeterminism) so the snapshot
+/// oracle's byte-stability holds (RD-7/N2). This entry uses
+/// [`BackendOptions::default`], which reproduces the historical model-only
+/// emission byte-for-byte; [`emit_generic_c_with`] takes explicit options.
 ///
 /// Returns [`EmitError::ContainmentCycle`] if the section 15 by-value
 /// containment graph has a cycle (impossible for sized Rust types, so it
@@ -155,7 +159,17 @@ fn slice_data_const(model: &RegseqModel, ref_ty: TyId) -> bool {
 /// static-init construct outside the task-d1 scalar / pointer / control-flow
 /// subset is reached; otherwise `Ok`.
 pub fn emit_generic_c(model: &RegseqModel) -> Result<String, EmitError> {
-    emit_generic_c_inner(model, None)
+    emit_generic_c_with(model, &BackendOptions::default())
+}
+
+/// [`emit_generic_c`] with explicit [`BackendOptions`] (the second half of the
+/// pure-emission input pair, RD-7/N2). The options carry the device-lifecycle
+/// scenario selection consumed by the synthesizer (T28).
+pub fn emit_generic_c_with(
+    model: &RegseqModel,
+    options: &BackendOptions,
+) -> Result<String, EmitError> {
+    emit_generic_c_inner(model, None, options)
 }
 
 /// What the regseq-backends-28 hand-emitted `RegseqError` -> errno boundary
@@ -183,6 +197,7 @@ struct AdapterSpec {
 fn emit_generic_c_inner(
     model: &RegseqModel,
     adapter: Option<&AdapterSpec>,
+    options: &BackendOptions,
 ) -> Result<String, EmitError> {
     let discovered = discover(model);
     let names = build_name_table(model, &discovered);
@@ -227,6 +242,11 @@ fn emit_generic_c_inner(
     let mut out = String::new();
     out.push_str(prelude::PRELUDE);
     out.push_str(&prelude::helper_block(&helper_use.borrow()));
+    // Device-lifecycle trace hooks (T12), emitted only for a TU with lifecycle
+    // drivers so a no-lifecycle TU's `.c` is byte-unchanged (no golden churn).
+    if !model.device_lifecycle.drivers.is_empty() {
+        out.push_str(prelude::LIFECYCLE_HELPERS);
+    }
     out.push_str(&bank2);
     out.push_str(&bank3);
     out.push_str(&bank4);
@@ -234,6 +254,13 @@ fn emit_generic_c_inner(
     if let Some(c) = adapter_c {
         out.push_str(&c);
     }
+    // Device-lifecycle harness synthesis (T28/RD-4): per-driver scenario helpers
+    // + the `__rseq_lc_run` runner the entry shim calls. Emitted last (after the
+    // type defs, prototypes, and callback bodies it references); empty for a
+    // no-lifecycle TU (byte-unchanged, RD-7); pure over `(model, options)`.
+    out.push_str(&body_emit::emit_lifecycle_synthesis(
+        model, &names, &syms, options,
+    )?);
     Ok(out)
 }
 
@@ -272,8 +299,20 @@ pub fn emit_generic_c_for_entry(
     model: &RegseqModel,
     entry_suffix: &str,
 ) -> Result<EntryEmit, EmitError> {
+    emit_generic_c_for_entry_with(model, entry_suffix, &BackendOptions::default())
+}
+
+/// [`emit_generic_c_for_entry`] with explicit [`BackendOptions`] (RD-7/N2). The
+/// codegen-coverage runner and `cargo-regseq` pass the scenario selection
+/// derived from `backend.lifecycle.scenario` here so the synthesized harness
+/// `main` (T28) runs the requested scenarios.
+pub fn emit_generic_c_for_entry_with(
+    model: &RegseqModel,
+    entry_suffix: &str,
+    options: &BackendOptions,
+) -> Result<EntryEmit, EmitError> {
     let (shim, adapter) = resolve_entry(model, entry_suffix)?;
-    let tu = emit_generic_c_inner(model, adapter.as_ref())?;
+    let tu = emit_generic_c_inner(model, adapter.as_ref(), options)?;
     Ok(EntryEmit { tu, shim })
 }
 
@@ -296,6 +335,12 @@ fn resolve_entry(
     model: &RegseqModel,
     entry_suffix: &str,
 ) -> Result<(EntryShim, Option<AdapterSpec>), EmitError> {
+    // The synthesized device-lifecycle runner (RD-6): present iff the TU has
+    // drivers. The shim calls it after the author entry; with no author entry it
+    // IS `main`.
+    let lifecycle_runner = (!model.device_lifecycle.drivers.is_empty())
+        .then(|| body_emit::LIFECYCLE_RUNNER_SYMBOL.to_string());
+
     // Resolve the entry instance (the `entry_c_symbol` suffix logic, but we keep
     // the matched instance so we can read its signature, not just the symbol).
     let mut matches = model.instances.iter().filter(|inst| {
@@ -307,6 +352,15 @@ fn resolve_entry(
     });
     let entry_inst = match (matches.next(), matches.next()) {
         (None, _) => {
+            // A lifecycle TU may carry no author `regseq_main`: the runner is the
+            // whole program (RD-6). This applies ONLY to the DEFAULT entry — a
+            // missing *custom* entry (e.g. a manifest typo) is still an error, not
+            // silently masked by the runner.
+            if entry_suffix == DEFAULT_ENTRY_SUFFIX {
+                if let Some(runner) = lifecycle_runner.clone() {
+                    return Ok((EntryShim::LifecycleOnly { runner }, None));
+                }
+            }
             return Err(EmitError::EntryShape(format!(
                 "no function instance whose emission_name ends with entry suffix {entry_suffix:?}"
             )));
@@ -348,7 +402,13 @@ fn resolve_entry(
     }
 
     match classify_entry_return(model, fn_sig.output) {
-        EntryReturnShape::UnitVoid => Ok((EntryShim::UnitVoid { entry }, None)),
+        EntryReturnShape::UnitVoid => Ok((
+            EntryShim::UnitVoid {
+                entry,
+                lifecycle_runner,
+            },
+            None,
+        )),
         EntryReturnShape::ErrResult { err_enum_ty } => {
             // A manifest-custom entry combined with an error-returning signature
             // is deferred this phase (D09): only the default suffix may return an
@@ -367,7 +427,13 @@ fn resolve_entry(
                 result_ty: fn_sig.output,
                 err_enum_ty,
             };
-            Ok((EntryShim::ErrResult { adapter }, Some(spec)))
+            Ok((
+                EntryShim::ErrResult {
+                    adapter,
+                    lifecycle_runner,
+                },
+                Some(spec),
+            ))
         }
         EntryReturnShape::Reject(reason) => Err(EmitError::EntryShape(format!(
             "entry {entry:?} return shape is unsupported: {reason}"
@@ -847,7 +913,17 @@ fn build_name_table(model: &RegseqModel, nodes: &[Node]) -> NameTable {
 ///    algorithm).
 fn build_instance_symbols(model: &RegseqModel) -> InstanceSymbols {
     let mut symbols: HashMap<InstanceId, String> = HashMap::new();
-    let mut used: HashSet<String> = prelude_ordinary_idents().into_iter().collect();
+    // Reserve the device-lifecycle helper names only for a lifecycle TU, so a
+    // no-lifecycle TU reserves exactly the historical set and stays
+    // byte-identical (RD-7), matching the conditional `LIFECYCLE_HELPERS` emit.
+    let include_lifecycle = !model.device_lifecycle.drivers.is_empty();
+    let mut used: HashSet<String> =
+        prelude_ordinary_idents(include_lifecycle).into_iter().collect();
+    // The synthesized lifecycle runner is an external-linkage TU symbol; reserve
+    // it for a lifecycle TU so no internal author symbol is renamed onto it.
+    if include_lifecycle {
+        used.insert(body_emit::LIFECYCLE_RUNNER_SYMBOL.to_string());
+    }
 
     // Pass 1: reserve the external symbols (taken as-is, never renamed).
     for idx in 0..model.instances.len() {
@@ -916,7 +992,13 @@ fn is_external_linkage(model: &RegseqModel, item: regseq_model::ItemId) -> bool 
 /// loudly, never silently). The
 /// `prelude_ordinary_idents_all_defined_in_prelude` test pins this list
 /// against the actually-emitted prelude text.
-fn prelude_ordinary_idents() -> Vec<String> {
+///
+/// `include_lifecycle` adds the device-lifecycle trace-hook names (T12), which
+/// are emitted only for a lifecycle TU; pass `true` only for such a TU so a
+/// no-lifecycle TU reserves exactly the historical set and stays byte-identical
+/// (RD-7) -- reserving them unconditionally could rename a no-lifecycle symbol
+/// that happened to collide with `regseq_lc_*`.
+fn prelude_ordinary_idents(include_lifecycle: bool) -> Vec<String> {
     // The integer C type spellings of the prelude's fixed helper set
     // (prelude.rs `INT_TYPES`) and the float prefixes (`FLOAT_TYPES`).
     const INT_CTYPES: [&str; 12] = [
@@ -944,6 +1026,16 @@ fn prelude_ordinary_idents() -> Vec<String> {
     for prefix in FLOAT_PREFIXES {
         for ity in INT_CTYPES {
             idents.push(format!("regseq_{prefix}_to_{ity}"));
+        }
+    }
+    // Device-lifecycle trace hooks (prelude.rs `LIFECYCLE_HELPERS`, T12),
+    // emitted only for a lifecycle TU. Reserved only for such a TU (matching the
+    // conditional emission) so a no-lifecycle TU's symbols are byte-identical
+    // (RD-7); an internal symbol there is renamed only against the historical
+    // helper set, never against `regseq_lc_*`.
+    if include_lifecycle {
+        for lc in ["register", "create", "associate", "call"] {
+            idents.push(format!("regseq_lc_{lc}"));
         }
     }
     idents
@@ -2166,6 +2258,11 @@ pub enum EmitError {
     /// corrupt-discriminant defense only, never a fallback for a known-but-
     /// unmapped variant.
     ErrnoMapping(String),
+    /// A `backend.*` codegen param could not be parsed (RD-5/N1). The `String`
+    /// names the offending value, e.g. an unknown `backend.lifecycle.scenario`
+    /// token. Both the CLI and the codegen-coverage runner surface it
+    /// identically ([`BackendOptions::from_backend_params`]).
+    BackendOption(String),
 }
 
 impl std::fmt::Display for EmitError {
@@ -2197,6 +2294,9 @@ impl std::fmt::Display for EmitError {
                      (regseq-error C02); a marked variant absent from the host error-mapping \
                      table fails emit rather than mapping to a generic code"
                 )
+            }
+            EmitError::BackendOption(detail) => {
+                write!(f, "generic-C emission: invalid backend param: {detail}")
             }
         }
     }

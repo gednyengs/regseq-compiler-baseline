@@ -43,7 +43,8 @@ use std::cell::RefCell;
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
     ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
-    IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MmioOp, NonDivergingIntrinsic,
+    IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MatchEntry, MmioOp,
+    NonDivergingIntrinsic,
     Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
     SyntheticItemKind, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
     VariantLayout,
@@ -52,8 +53,8 @@ use regseq_model::{
 use super::errno::errno_symbol;
 use super::prelude::HelperUsage;
 use super::{
-    enum_emit, layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable,
-    StorageTy,
+    enum_emit, layout_emit, naming, slice_data_const, types, BackendOptions, EmitError,
+    InstanceSymbols, NameTable, StorageTy,
 };
 
 /// The C identifier for a body-local `local`. The return place is always
@@ -2112,6 +2113,9 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_mmio(op, callee, args, destination, target);
             }
+            // (Device-lifecycle is no longer call-intercepted: the harness verbs
+            // were removed, RD-1; the synthesized `main` drives the lifecycle —
+            // see `emit_lifecycle_synthesis`.)
         }
 
         let callee_expr = match callee {
@@ -2293,6 +2297,10 @@ impl BodyEmit<'_> {
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
     }
+
+    // Device-lifecycle is no longer call-intercepted (RD-1): the bind/teardown/
+    // shutdown verbs were removed. The synthesized `main` drives the lifecycle
+    // from the model — see the free fn `emit_lifecycle_synthesis` below.
 
     /// Recover the (byte-offset expression, access width) of the register named
     /// by the receiver operand of a Form-B mmio wrapper-method call, from the
@@ -4849,6 +4857,114 @@ fn resolve_reloc(model: &RegseqModel, target: InstanceRef) -> Option<InstanceId>
     None
 }
 
+/// The external-linkage symbol of the synthesized device-lifecycle runner — the
+/// entry shim calls it after the author entry (RD-6). Reserved in
+/// `build_instance_symbols` for a lifecycle TU so an author symbol can never be
+/// renamed onto it.
+pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
+
+/// Synthesize the device-lifecycle harness (RD-4): for every interned driver,
+/// one `static void __rseq_lc_<driver>_<scenario>(void)` per selected scenario
+/// (each body drives `register -> create -> associate -> on_init`), plus the
+/// external `__rseq_lc_run()` runner that calls them in order. Returns the empty
+/// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
+/// is pure over `(model, options)`.
+///
+/// M0 scope: every scenario body is the init sequence; the scenario-specific
+/// teardown/shutdown suffix lands at T14/T15 (M2-M5). The `on_init` author call
+/// is synthesized only when overridden (`Some`), but the
+/// `regseq_lc_call("on_init")` marker is always emitted (CR-3).
+pub(crate) fn emit_lifecycle_synthesis(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    options: &BackendOptions,
+) -> Result<String, EmitError> {
+    if model.device_lifecycle.drivers.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::new();
+    let mut runner_calls: Vec<String> = Vec::new();
+
+    // `drivers` is a BTreeMap keyed by ItemId -> deterministic emission order.
+    // The per-driver `idx` makes every helper name unique even if two drivers
+    // share a logical `name` (the `__rseq_lc_` prefix already precludes a clash
+    // with an author symbol, which sanitizes to `<crate>_…`).
+    for (idx, (driver_item, driver)) in model.device_lifecycle.drivers.iter().enumerate() {
+        let driver_ty = driver_struct_ty(model, *driver_item).ok_or(EmitError::Unsupported(
+            "device-lifecycle driver struct has no emitted type",
+        ))?;
+        let driver_cty = types::c_type(model, names, driver_ty);
+        let name = c_escape(model.strings.resolve(driver.descriptor.name).as_bytes());
+        let match_str =
+            c_escape(render_match_trace(model, &driver.descriptor.match_set).as_bytes());
+        let label = naming::sanitize(model.strings.resolve(driver.descriptor.name));
+
+        // The author `on_init` symbol, if overridden (else only the marker).
+        let on_init_sym = match &driver.ops.on_init {
+            Some(iref) => {
+                let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
+                    "device-lifecycle on_init InstanceRef does not resolve",
+                ))?;
+                Some(syms.symbol(id).to_string())
+            }
+            None => None,
+        };
+
+        for scenario in options.lifecycle_scenarios() {
+            let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
+            out.push_str(&format!("static void {fn_name}(void) {{\n"));
+            out.push_str(&format!(
+                "    regseq_lc_register(\"{name}\", \"{match_str}\");\n"
+            ));
+            out.push_str("    regseq_lc_create();\n");
+            out.push_str("    regseq_lc_associate();\n");
+            out.push_str("    regseq_lc_call(\"on_init\");\n");
+            if let Some(sym) = &on_init_sym {
+                // A distinct zero-initialized instance; `&inst` is the
+                // callback's `&mut self`.
+                out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
+                out.push_str(&format!("    {sym}(&inst);\n"));
+            }
+            out.push_str("}\n\n");
+            runner_calls.push(format!("    {fn_name}();\n"));
+        }
+    }
+
+    out.push_str(&format!("void {LIFECYCLE_RUNNER_SYMBOL}(void) {{\n"));
+    for call in runner_calls {
+        out.push_str(&call);
+    }
+    out.push_str("}\n");
+    Ok(out)
+}
+
+/// The emitted `TyId` of a driver struct Item (the `inst` local's C type): the
+/// first `Ty::Struct` whose `item` is `driver_item` (a monomorphic driver has
+/// one such row).
+fn driver_struct_ty(model: &RegseqModel, driver_item: ItemId) -> Option<TyId> {
+    (0..model.types.len())
+        .map(|i| TyId::from_u32(i as u32))
+        .find(|ty| matches!(&model.types[*ty], Ty::Struct { item, .. } if *item == driver_item))
+}
+
+/// Render a driver's match set for the `LC register` trace. Renders the first
+/// match entry only (devicetree now; PCI/AMBA arrive with M1 recognition).
+/// Rendering only `.first()` is an accepted scope decision (PLAN SCOPE-1,
+/// 2026-06-07): the descriptor retains every entry, but multi-`compatible`
+/// rendering is out of scope — there is no `LC-MATCH-MULTI` row or fixture.
+fn render_match_trace(model: &RegseqModel, match_set: &[MatchEntry]) -> String {
+    match match_set.first() {
+        Some(MatchEntry::Devicetree { compatible }) => {
+            format!("dt:{}", model.strings.resolve(*compatible))
+        }
+        Some(MatchEntry::Pci { vendor, device, .. }) => format!("pci:{vendor:#06x}:{device:#06x}"),
+        Some(MatchEntry::Amba { id, mask }) => format!("amba:{id:#x}/{mask:#x}"),
+        Some(_) => "?".to_string(),
+        None => String::new(),
+    }
+}
+
 /// The section 16 operator verb for an `Overflow` `BinOp` (the `%s` slot in
 /// `"attempt to <op> with overflow"`).
 fn binop_verb(op: &BinOp) -> &'static str {
@@ -5011,8 +5127,62 @@ fn render_float(kind: FloatKind, bits: u128) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_float, render_int, render_uint};
-    use regseq_model::{FloatKind, IntKind, UintKind};
+    use super::{render_float, render_int, render_match_trace, render_uint};
+    use regseq_model::{FloatKind, IntKind, MatchEntry, RegseqModel, StableCrateId, UintKind};
+
+    #[test]
+    fn render_match_trace_formats_dt_pci_amba() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let dt = model.strings.intern("acme,fake");
+        assert_eq!(
+            render_match_trace(&model, &[MatchEntry::Devicetree { compatible: dt }]),
+            "dt:acme,fake"
+        );
+        assert_eq!(
+            render_match_trace(
+                &model,
+                &[MatchEntry::Pci {
+                    vendor: 0x8086,
+                    device: 0x100e,
+                    subsystem: None,
+                    class: None,
+                }]
+            ),
+            "pci:0x8086:0x100e"
+        );
+        assert_eq!(
+            render_match_trace(
+                &model,
+                &[MatchEntry::Amba {
+                    id: 0x0004_1011,
+                    mask: 0x000f_ffff,
+                }]
+            ),
+            "amba:0x41011/0xfffff"
+        );
+    }
+
+    #[test]
+    fn render_match_trace_renders_first_entry_only() {
+        // PLAN SCOPE-1: a multi-entry match set renders `.first()`; the rest are
+        // retained in the descriptor but not traced.
+        let model = RegseqModel::with_primary("test", StableCrateId(1));
+        assert_eq!(
+            render_match_trace(
+                &model,
+                &[
+                    MatchEntry::Pci {
+                        vendor: 0x8086,
+                        device: 0x100e,
+                        subsystem: None,
+                        class: None,
+                    },
+                    MatchEntry::Amba { id: 0x1, mask: 0x2 },
+                ]
+            ),
+            "pci:0x8086:0x100e"
+        );
+    }
 
     #[test]
     fn render_int_uses_twos_complement_bit_pattern() {

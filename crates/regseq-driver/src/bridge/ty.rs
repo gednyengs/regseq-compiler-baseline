@@ -714,17 +714,23 @@ fn intern_source_item_handle(
 /// hardcoded `BridgeItemFlags::default()`); routing both paths through
 /// this helper files them into bucket 3 (`is_generic`, 0+ Instances).
 ///
-/// `is_generic` mirrors the regseq-driver-58 / -60 formula verbatim: an
-/// `AssocFn` belonging to a trait *declaration* (`trait_of_assoc`
-/// returns `Some`) is classified by its OWN params only, because the
-/// trait's inherited `Self` / trait-level generics inflate
-/// `generics_of().count()` and would misfile a non-generic trait default
-/// method into bucket 3. Every other Item uses
-/// `generics_of().count() > 0`, which includes generics inherited from an
-/// enclosing generic impl (so an inherent / trait-impl method inside a
-/// generic impl stays correctly generic). Do NOT substitute a raw
-/// `count() > 0` here: a lazily-interned core trait-declaration default
-/// method would then be misclassified.
+/// `is_generic` is `generics_of(def_id).count() > 0` for every source Item.
+/// This includes generics inherited from an enclosing generic impl (so an
+/// inherent / trait-impl method inside a generic impl stays correctly generic)
+/// AND the `Self` parameter of a trait-*declaration* default method.
+///
+/// A trait-declaration default method body (e.g. a `Lifecycle` callback with a
+/// default `Ok(())`) IS a template over `Self`: bucket 1's "exactly one primary
+/// instance per Item" cannot hold for it — it has ZERO instances when the
+/// default is never called (the device-lifecycle markers-not-calls case, CR-3)
+/// and MULTIPLE when two implementors share the default (two bound drivers). So
+/// a `Self`-generic trait default is bucket 3 (generic, 0+ instances), not
+/// bucket 1. This REPLACES the earlier regseq-driver-58/-60/-94 `own_params`
+/// carve-out, which forced such defaults to bucket 1 and only held for the
+/// single-implementor / default-is-called shape (`bridge_eager_hir_enumeration`
+/// `trait_default_method_is_self_generic_bucket3`). A used default still gets
+/// its per-`Self` Instance with a body — emission is unchanged; only the
+/// (now-correct) bucket-3 validation is less strict.
 ///
 /// `signature_non_rigid` is always `false`; the bucket-4 non-rigid-
 /// signature flag for functions is set on its own Phase-5 path and is
@@ -733,13 +739,7 @@ pub(crate) fn source_bridge_item_flags(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     def_id: DefId,
 ) -> regseq_model::BridgeItemFlags {
-    let is_generic = if matches!(tcx.def_kind(def_id), rustc_hir::def::DefKind::AssocFn)
-        && tcx.trait_of_assoc(def_id).is_some()
-    {
-        !tcx.generics_of(def_id).own_params.is_empty()
-    } else {
-        tcx.generics_of(def_id).count() > 0
-    };
+    let is_generic = tcx.generics_of(def_id).count() > 0;
     regseq_model::BridgeItemFlags {
         is_generic,
         signature_non_rigid: false,

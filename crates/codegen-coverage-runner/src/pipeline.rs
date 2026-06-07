@@ -103,6 +103,23 @@ pub fn run_fixture(fixture: &Fixture, cc: &Path) -> FixtureResult {
     }
 }
 
+/// Build the backend codegen options for a fixture from its manifest (RD-8/T27):
+/// the manifest `lifecycle_scenario` CSV maps to the `backend.lifecycle.scenario`
+/// param, validated by the same [`regseq_backends::BackendOptions`] parser the
+/// CLI uses. Absent → the default (all scenarios; no effect on a no-lifecycle
+/// fixture).
+pub fn backend_options_for(
+    fixture: &Fixture,
+) -> Result<regseq_backends::BackendOptions, regseq_backends::EmitError> {
+    regseq_backends::BackendOptions::from_backend_params(
+        fixture
+            .manifest
+            .lifecycle_scenario
+            .iter()
+            .map(|csv| ("lifecycle.scenario", csv.as_str())),
+    )
+}
+
 /// The stage wiring proper, returning the [`FixtureVerdict`].
 fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
     // Stage 1: Acquire.
@@ -135,11 +152,20 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
     // Stage 2: Emit + entry-shim classification (the backend is the single
     // source of truth for the shim shape, contract C04; an unresolved /
     // ambiguous / unsupported entry shape fails loud here at emit, D08/D09).
-    let (emitted, shim) =
-        match regseq_backends::emit_generic_c_for_entry(&model, &fixture.manifest.entry) {
-            Ok(emit) => (emit.tu, emit.shim),
-            Err(err) => return fail(Stage::Emit, err.to_string()),
-        };
+    // The fixture's device-lifecycle scenario selection (RD-8) rides as a
+    // backend param, parallel to the model.
+    let backend_options = match backend_options_for(fixture) {
+        Ok(options) => options,
+        Err(err) => return fail(Stage::Emit, err.to_string()),
+    };
+    let (emitted, shim) = match regseq_backends::emit_generic_c_for_entry_with(
+        &model,
+        &fixture.manifest.entry,
+        &backend_options,
+    ) {
+        Ok(emit) => (emit.tu, emit.shim),
+        Err(err) => return fail(Stage::Emit, err.to_string()),
+    };
 
     // Stage 3: Snapshot oracle (emitted C vs golden C).
     let golden_c = match std::fs::read_to_string(&fixture.golden_c) {
@@ -285,19 +311,34 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
     };
 
     // Stage 2: Emit + entry-shim classification (the backend's single
-    // source of truth for the shim shape, contract C04).
-    let (emitted, shim) =
-        match regseq_backends::emit_generic_c_for_entry(&model, &fixture.manifest.entry) {
-            Ok(emit) => (emit.tu, emit.shim),
-            Err(err) => {
-                return BlessOutcome {
-                    name,
-                    blessed_bytes: None,
-                    report: format!("emit failed: {err}"),
-                    ok: false,
-                };
-            }
-        };
+    // source of truth for the shim shape, contract C04). The fixture's
+    // device-lifecycle scenario selection (RD-8) rides as a backend param.
+    let backend_options = match backend_options_for(fixture) {
+        Ok(options) => options,
+        Err(err) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes: None,
+                report: format!("backend param error: {err}"),
+                ok: false,
+            };
+        }
+    };
+    let (emitted, shim) = match regseq_backends::emit_generic_c_for_entry_with(
+        &model,
+        &fixture.manifest.entry,
+        &backend_options,
+    ) {
+        Ok(emit) => (emit.tu, emit.shim),
+        Err(err) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes: None,
+                report: format!("emit failed: {err}"),
+                ok: false,
+            };
+        }
+    };
 
     // Write golden.c (the ONLY file --bless ever writes). Stage 3 is skipped.
     if let Err(err) = std::fs::write(&fixture.golden_c, &emitted) {

@@ -17,6 +17,7 @@ mod const_interner;
 mod const_value;
 mod crate_info;
 mod def_path;
+mod device_lifecycle;
 mod domain_attr;
 mod fn_sig;
 mod fn_sig_interner;
@@ -64,6 +65,10 @@ pub use const_value::{canonical_const_bytes, Byte, Const};
 pub use crate_info::{CrateInfo, StableCrateId};
 pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
+};
+pub use device_lifecycle::{
+    ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle, DriverLifecycle, LifecycleOps,
+    MatchEntry, ResourceField, ResourceKind, UserDataField, UserDataKind,
 };
 pub use domain_attr::{
     AttrData, DomainAttrTables, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp,

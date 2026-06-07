@@ -102,6 +102,35 @@ __attribute__((unused)) static void regseq_mmio_write(uint32_t off, uint32_t wid
 }
 "#;
 
+/// Device-lifecycle trace-hook block (device-lifecycle construct, GRILL C01).
+///
+/// Unlike the always-on register-access block above, this is emitted ONLY for a
+/// TU that has recognized lifecycle drivers (the caller gates on
+/// `model.device_lifecycle.drivers`), so a no-lifecycle TU's `.c` is unchanged
+/// — no golden churn. Each helper prints an `LC <event>` line to stdout: that
+/// trace IS the behavioral oracle for lifecycle lowering (the `expected.stdout`
+/// half of the dual oracle). `unused` keeps an unreferenced helper warning-free
+/// within a lifecycle TU. The exact line spelling is blessed at the first
+/// lifecycle golden (OI-3); the shape + ordering is the contract.
+pub const LIFECYCLE_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Device-lifecycle trace hooks (device-lifecycle construct). Each prints an
+ * "LC <event>" line to stdout -- this trace IS the behavioral oracle for
+ * lifecycle lowering. Emitted only for a TU with lifecycle drivers. */
+__attribute__((unused)) static void regseq_lc_register(const char *name, const char *match_set) {
+    printf("LC register %s match=%s\n", name, match_set);
+}
+__attribute__((unused)) static void regseq_lc_create(void) {
+    printf("LC create\n");
+}
+__attribute__((unused)) static void regseq_lc_associate(void) {
+    printf("LC associate\n");
+}
+__attribute__((unused)) static void regseq_lc_call(const char *cb) {
+    printf("LC call %s\n", cb);
+}
+"#;
+
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the
 /// fixed helper set (section 10 / section 11). The order is fixed so the
 /// emitted block is byte-stable. The 128-bit bounds reference the

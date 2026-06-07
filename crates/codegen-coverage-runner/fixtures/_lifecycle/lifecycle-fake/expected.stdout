@@ -1,0 +1,4 @@
+LC register fake match=dt:acme,fake
+LC create
+LC associate
+LC call on_init

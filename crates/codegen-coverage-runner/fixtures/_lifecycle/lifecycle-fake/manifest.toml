@@ -1,0 +1,11 @@
+name   = "lifecycle-fake"
+kind   = "rust"
+# Device-lifecycle M0 walking skeleton: a fieldless DT-matched `#[rseq::driver]`
+# with an `impl Lifecycle` overriding `on_init` only and NO `regseq_main`. The
+# backend synthesizes `main` (RD-4/RD-6); the `orderly` scenario lowers to
+# register -> create -> associate -> `LC call on_init` + a call to `Fake::on_init`.
+# covers the registration (LC-1), the devicetree match (LC-2), and the
+# create->on_init ordering (LC-5).
+lifecycle_scenario = "orderly"
+covers = ["LC-1", "LC-2", "LC-5"]
+expect = "pass"

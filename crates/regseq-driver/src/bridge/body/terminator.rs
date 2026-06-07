@@ -12,7 +12,7 @@ use rustc_middle::mir;
 use rustc_middle::ty;
 
 use crate::bridge::{
-    canonicalize_call_site_callee, diag_log, synth, ty::translate_ty, BridgeCtxt, BridgeError,
+    canonicalize_call_site_callee, intrinsic, synth, ty::translate_ty, BridgeCtxt, BridgeError,
     CanonicalCallSiteCallee, DslRejectionKind, ItemHandle,
 };
 
@@ -845,7 +845,7 @@ fn translate_call_callee<'tcx>(
                 .lookup_item_def_path(callee_item)
                 .expect("FnDef callee Item must be interned")
                 .clone();
-            diag_log::recognise_log_intrinsic_def_id(
+            intrinsic::recognise_intrinsic_def_id(
                 cx,
                 ItemHandle::from_u32(callee_item.as_u32()),
                 &callee_def_path,

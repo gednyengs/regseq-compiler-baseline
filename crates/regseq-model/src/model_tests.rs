@@ -179,6 +179,7 @@ fn root_struct_exposes_spec_field_set() {
         vtables,
         closure_captures_struct_ty,
         domain_attrs,
+        device_lifecycle,
     } = m;
 
     assert_eq!(primary_crate, CrateId::ZERO);
@@ -199,6 +200,7 @@ fn root_struct_exposes_spec_field_set() {
     assert!(vtables.is_empty());
     assert!(closure_captures_struct_ty.is_empty());
     assert_eq!(domain_attrs, crate::DomainAttrTables::default());
+    assert_eq!(device_lifecycle, crate::DeviceLifecycleTables::default());
 }
 
 // ------------------------------------------------------------------
