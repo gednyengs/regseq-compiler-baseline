@@ -27,15 +27,17 @@
 use std::collections::HashMap;
 
 use regseq_model::{
-    DriverHandle, InstanceRef, ItemId, LifecycleOps, ResourceField, ResourceKind,
+    DriverHandle, InstanceRef, ItemId, LifecycleOps, ResourceField, ResourceKind, UserDataField,
+    UserDataKind,
 };
 use rustc_hir::def::DefKind;
-use rustc_middle::ty::{self, Ty, TyCtxt};
+use rustc_middle::ty::{self, Ty, TyCtxt, TyKind, UintTy};
 use rustc_span::def_id::DefId;
 
 use super::super::const_::instance_ref_for_function_provenance;
 use super::super::framework_type::recover_source_def_id;
-use super::super::{BridgeCtxt, BridgeError};
+use super::super::ty::translate_ty;
+use super::super::{BridgeCtxt, BridgeError, DeviceLifecycleDiagnostic};
 
 /// The author-facing `Lifecycle` trait is identified by name (RD-2), mirroring
 /// the name-based `Mmio` wrapper detection in [`is_mmio_resource`]. The
@@ -79,8 +81,12 @@ pub(crate) fn resolve_drivers(cx: &mut BridgeCtxt<'_>) -> Result<(), BridgeError
         .collect();
 
     for (item_id, d_def_id) in targets {
-        // T10/B1: classify fields for EVERY driver, impl or not.
-        let handle = classify_fields(cx, d_def_id);
+        // T10/T11/B1: classify fields (resources + user-data) for EVERY driver,
+        // impl or not. The driver's logical name (for a D3 diagnostic) is read
+        // first to avoid aliasing the mutable `cx` borrow `classify_fields` takes.
+        let name_id = cx.model.device_lifecycle.drivers[&item_id].descriptor.name;
+        let driver_name = cx.model.strings.resolve(name_id).to_string();
+        let handle = classify_fields(cx, d_def_id, &driver_name)?;
         // T09: resolve callbacks only when the driver has an `impl Lifecycle`.
         let ops = match lifecycle_impls.get(&d_def_id).copied() {
             Some(lifecycle_trait) => {
@@ -177,14 +183,23 @@ fn assign_callback_slot(ops: &mut LifecycleOps, name: &str, iref: InstanceRef) {
     }
 }
 
-/// T10: split the driver struct's fields into resources and (deferred to T11)
-/// user-data. Only resource fields (`Mmio<T>`) are populated here; the M0 `Fake`
-/// driver is fieldless, so this returns an empty handle. Declaration order is
-/// preserved (the lifecycle glue runs preamble/postamble in that order).
-fn classify_fields(cx: &mut BridgeCtxt<'_>, d_def_id: DefId) -> DriverHandle {
+/// T10 + T11: split the driver struct's fields into resources (`Mmio<T>`) and
+/// user-data, in declaration order (the lifecycle glue runs preamble/postamble in
+/// that order). Each non-resource field is classified into its user-data init
+/// rule ([`classify_user_data`]); a field that is neither Rule-1 nor Rule-2 is
+/// rejected as the D3 diagnostic — the rejection is decided BEFORE [`translate_ty`]
+/// so a bad field is a clean D3, not a generic type-translator error. Build-now is
+/// scalar-only (C10). Runs for EVERY driver, impl or not (B1/RD-3); a fieldless
+/// driver yields an empty handle.
+fn classify_fields(
+    cx: &mut BridgeCtxt<'_>,
+    d_def_id: DefId,
+    driver_name: &str,
+) -> Result<DriverHandle, BridgeError> {
     let tcx = cx.input.tcx;
     let adt = tcx.adt_def(d_def_id);
     let mut resource_fields = Vec::new();
+    let mut user_data_fields = Vec::new();
     for variant in adt.variants() {
         for field in &variant.fields {
             let field_ty = tcx.type_of(field.did).instantiate_identity();
@@ -194,14 +209,54 @@ fn classify_fields(cx: &mut BridgeCtxt<'_>, d_def_id: DefId) -> DriverHandle {
                     name,
                     kind: ResourceKind::Mmio,
                 });
+                continue;
             }
-            // Non-resource fields are user-data candidates; their Rule-1/Rule-2
-            // classification + `UserDataField` construction is T11.
+            // T11: a non-resource field is user-data. Classify (and reject, D3)
+            // from the rustc type BEFORE translating it to a model `TyId`.
+            let kind = classify_user_data(tcx, field_ty).ok_or_else(|| {
+                BridgeError::DeviceLifecycleValidation(
+                    DeviceLifecycleDiagnostic::UserDataNotInitializable {
+                        driver: driver_name.to_string(),
+                        field: field.name.to_string(),
+                        rejected_type: field_ty.to_string(),
+                    },
+                )
+            })?;
+            let ty = translate_ty(cx, field_ty)?;
+            let name = cx.model.strings.intern(field.name.as_str());
+            user_data_fields.push(UserDataField { name, ty, kind });
         }
     }
-    DriverHandle {
+    Ok(DriverHandle {
         resource_fields,
-        user_data_fields: Vec::new(),
+        user_data_fields,
+    })
+}
+
+/// Classify a non-resource driver field's type into its user-data init rule, or
+/// `None` if it is neither (→ the D3 diagnostic). Rule-2: `Option<T: Copy>` →
+/// [`UserDataKind::OptionCopy`]. Rule-1 (scalar zero-init whitelist):
+/// `bool`/`u8`/`u16`/`u32`/`u64` → [`UserDataKind::ZeroInit`]. Build-now is
+/// scalar-only (C10): arrays, structs, signed/`u128`/`usize` ints, and non-`Copy`
+/// types are rejected.
+fn classify_user_data<'tcx>(tcx: TyCtxt<'tcx>, ty: Ty<'tcx>) -> Option<UserDataKind> {
+    // Rule-2: `Option<T: Copy>` — `None` is the unseeded state.
+    if let TyKind::Adt(adt, args) = ty.kind() {
+        if tcx.get_diagnostic_name(adt.did()) == Some(rustc_span::sym::Option) {
+            let inner = args.types().next()?;
+            let typing_env = ty::TypingEnv::fully_monomorphized();
+            return tcx
+                .type_is_copy_modulo_regions(typing_env, inner)
+                .then_some(UserDataKind::OptionCopy);
+        }
+    }
+    // Rule-1: the scalar zero-init whitelist (these are inherently `Copy`).
+    match ty.kind() {
+        TyKind::Bool => Some(UserDataKind::ZeroInit),
+        TyKind::Uint(UintTy::U8 | UintTy::U16 | UintTy::U32 | UintTy::U64) => {
+            Some(UserDataKind::ZeroInit)
+        }
+        _ => None,
     }
 }
 

@@ -24,7 +24,7 @@ use std::sync::{Arc, Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
 use regseq_driver::bridge::{run_bridge, BridgeInput};
-use regseq_model::{ClassTag, DriverLifecycle, MatchEntry, RegseqModel};
+use regseq_model::{ClassTag, DriverLifecycle, LifecycleOps, MatchEntry, RegseqModel, UserDataKind};
 use rustc_middle::ty::TyCtxt;
 
 static INIT: Once = Once::new();
@@ -546,5 +546,124 @@ pub fn make_weird() -> Weird { loop {} }
         class,
         ClassTag::Generic,
         "a multi-token device_class is malformed and defaults to Generic"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T11 — user-data Rule-1/Rule-2 classification + D3 rejection (M6). The precise
+// D3 diagnostic message is exercised by the M8 diag-harness (T20); these
+// bridge-unit tests assert the classification + that a bad field is rejected.
+// ---------------------------------------------------------------------------
+
+/// The (field-name, kind) of a driver's user-data fields, in declaration order.
+fn user_data_kinds(model: &RegseqModel, driver: &DriverLifecycle) -> Vec<(String, UserDataKind)> {
+    driver
+        .handle
+        .user_data_fields
+        .iter()
+        .map(|f| (model.strings.resolve(f.name).to_string(), f.kind))
+        .collect()
+}
+
+#[test]
+fn scalar_user_data_fields_are_zero_init_in_decl_order() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "ud_scalar", compatible = ["acme,ud"])]
+pub struct UdScalar { count: u32, flag: bool }
+"#;
+    let kinds = with_model("dl_ud_scalar", src, |model| {
+        user_data_kinds(model, driver_by_name(model, "ud_scalar").expect("recognized"))
+    })
+    .expect("bridge should succeed");
+    assert_eq!(
+        kinds,
+        vec![
+            ("count".to_string(), UserDataKind::ZeroInit),
+            ("flag".to_string(), UserDataKind::ZeroInit),
+        ],
+        "scalar-whitelist fields classify as ZeroInit, in declaration order"
+    );
+}
+
+#[test]
+fn option_copy_user_data_field_is_option_copy() {
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "ud_opt", compatible = ["acme,ud"])]
+pub struct UdOpt { slot: Option<u32> }
+"#;
+    let kinds = with_model("dl_ud_opt", src, |model| {
+        user_data_kinds(model, driver_by_name(model, "ud_opt").expect("recognized"))
+    })
+    .expect("bridge should succeed");
+    assert_eq!(
+        kinds,
+        vec![("slot".to_string(), UserDataKind::OptionCopy)],
+        "Option<T: Copy> classifies as OptionCopy"
+    );
+}
+
+#[test]
+fn no_impl_driver_still_classifies_user_data() {
+    // RD-3/B1: field classification runs for EVERY driver, even one with no
+    // `impl Lifecycle`; the driver flows on with all-None ops + classified fields.
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "ud_noimpl", compatible = ["acme,ud"])]
+pub struct UdNoImpl { count: u32 }
+"#;
+    let (kinds, all_none) = with_model("dl_ud_noimpl", src, |model| {
+        let d = driver_by_name(model, "ud_noimpl").expect("recognized");
+        (user_data_kinds(model, d), d.ops == LifecycleOps::default())
+    })
+    .expect("bridge should succeed");
+    assert_eq!(kinds, vec![("count".to_string(), UserDataKind::ZeroInit)]);
+    assert!(
+        all_none,
+        "a no-impl driver has all-None LifecycleOps but is still field-classified"
+    );
+}
+
+#[test]
+fn non_scalar_user_data_field_is_rejected() {
+    // A non-scalar Rule-1 field ([u8; 4]) is build-now-rejected (D3). The control
+    // is `scalar_user_data_fields_are_zero_init_in_decl_order` (a scalar bridges).
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+#[rseq::driver(name = "ud_array", compatible = ["acme,ud"])]
+pub struct UdArray { buf: [u8; 4] }
+"#;
+    let outcome = with_model("dl_ud_array", src, |_model| ());
+    assert!(
+        outcome.is_none(),
+        "a non-scalar user-data field ([u8; 4]) must be rejected (D3)"
+    );
+}
+
+#[test]
+fn option_non_copy_user_data_field_is_rejected() {
+    // Rule-2 requires the `Option` inner be `Copy`; `Option<NotCopy>` → D3.
+    let src = r#"
+#![feature(register_tool)]
+#![register_tool(rseq)]
+
+pub struct NotCopy { x: u8 }
+
+#[rseq::driver(name = "ud_optnc", compatible = ["acme,ud"])]
+pub struct UdOptNc { slot: Option<NotCopy> }
+"#;
+    let outcome = with_model("dl_ud_optnc", src, |_model| ());
+    assert!(
+        outcome.is_none(),
+        "Option<T> with a non-Copy inner must be rejected (D3)"
     );
 }

@@ -635,6 +635,46 @@ pub enum BridgeError {
         /// The deferred bus family token (`acpi`/`usb`/`i2c`/`spi`).
         bus: String,
     },
+    /// A `#[rseq::driver]` failed device-lifecycle validation (PLAN T16, GRILL
+    /// I09): D1 (missing-match) / D2 (empty-match) / D3 (non-initializable
+    /// user-data). Distinct from the parse-time CR-5 unsupported-bus rejection.
+    #[error("device-lifecycle validation: {0}")]
+    DeviceLifecycleValidation(DeviceLifecycleDiagnostic),
+}
+
+/// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
+/// D06 per-construct numbering). D4 is deferred. Carried by
+/// [`BridgeError::DeviceLifecycleValidation`]. M6 constructs only D3
+/// ([`Self::UserDataNotInitializable`]); D1/D2 ([`Self::MissingMatch`] /
+/// [`Self::EmptyMatch`]) are defined here for the M8 match-validation pass (T17).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeviceLifecycleDiagnostic {
+    /// D1: a `#[rseq::driver]` declared no device-match attribute.
+    #[error("driver `{driver}` declares no device-match attribute (expected one of compatible/pci/amba)")]
+    MissingMatch {
+        /// The offending driver's logical name.
+        driver: String,
+    },
+    /// D2: a `#[rseq::driver]`'s device-match set is present but empty.
+    #[error("driver `{driver}` declares an empty device-match set")]
+    EmptyMatch {
+        /// The offending driver's logical name.
+        driver: String,
+    },
+    /// D3: a user-data field whose type is neither Rule-1 (the scalar zero-init
+    /// whitelist bool/u8/u16/u32/u64) nor Rule-2 (`Option<T: Copy>`).
+    #[error(
+        "driver `{driver}` field `{field}` of type `{rejected_type}` is not a valid user-data \
+         field (expected a scalar bool/u8/u16/u32/u64 or Option<T: Copy>)"
+    )]
+    UserDataNotInitializable {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The rejected field type, rendered.
+        rejected_type: String,
+    },
 }
 
 /// Format-template parser rejection family per spec.md section 26.7

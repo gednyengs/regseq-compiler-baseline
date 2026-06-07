@@ -199,6 +199,7 @@ pub fn bridge_error_variant(err: &BridgeError) -> &'static str {
         BridgeError::DiagLogValidation { .. } => "DiagLogValidation",
         BridgeError::UnsupportedQuestionMark { .. } => "UnsupportedQuestionMark",
         BridgeError::DeviceLifecycleUnsupportedBus { .. } => "DeviceLifecycleUnsupportedBus",
+        BridgeError::DeviceLifecycleValidation(_) => "DeviceLifecycleValidation",
     }
 }
 
