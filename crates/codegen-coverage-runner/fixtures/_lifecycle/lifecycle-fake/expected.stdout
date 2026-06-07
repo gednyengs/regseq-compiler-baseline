@@ -2,3 +2,5 @@ LC register fake match=dt:acme,fake
 LC create
 LC associate
 LC call on_init
+LC teardown present=1
+LC call on_deinit

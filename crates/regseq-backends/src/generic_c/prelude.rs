@@ -129,6 +129,9 @@ __attribute__((unused)) static void regseq_lc_associate(void) {
 __attribute__((unused)) static void regseq_lc_call(const char *cb) {
     printf("LC call %s\n", cb);
 }
+__attribute__((unused)) static void regseq_lc_teardown(int present) {
+    printf("LC teardown present=%d\n", present);
+}
 "#;
 
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the

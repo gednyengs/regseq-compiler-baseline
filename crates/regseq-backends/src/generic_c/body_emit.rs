@@ -54,7 +54,7 @@ use super::errno::errno_symbol;
 use super::prelude::HelperUsage;
 use super::{
     enum_emit, layout_emit, naming, slice_data_const, types, BackendOptions, EmitError,
-    InstanceSymbols, NameTable, StorageTy,
+    InstanceSymbols, LifecycleScenario, NameTable, StorageTy,
 };
 
 /// The C identifier for a body-local `local`. The return place is always
@@ -4870,9 +4870,13 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
 /// is pure over `(model, options)`.
 ///
-/// M0 scope: every scenario body is the init sequence; the scenario-specific
-/// teardown/shutdown suffix lands at T14/T15 (M2-M5). The `on_init` author call
-/// is synthesized only when overridden (`Some`), but the
+/// Scope (M2): the `orderly` scenario diverges — after the init sequence it
+/// emits the teardown dispatch marker (`present=1`) and the always-on `on_deinit`
+/// marker (CR-3), invoking the author body iff overridden. `surprise`/`init-fail`/
+/// `shutdown` remain the init-only sequence until their milestones (M3-M5).
+/// Resource preamble/postamble loops are deferred to the first resourceful
+/// fixture (M7) so a postamble can never appear without its preamble (C01). The
+/// `on_init` author call is synthesized only when overridden (`Some`), but the
 /// `regseq_lc_call("on_init")` marker is always emitted (CR-3).
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
@@ -4885,6 +4889,21 @@ pub(crate) fn emit_lifecycle_synthesis(
     }
     let mut out = String::new();
     let mut runner_calls: Vec<String> = Vec::new();
+
+    // Resolve a lifecycle callback's content-addressed `InstanceRef` to the C
+    // symbol of its emitted body, or `None` when the author did not override it
+    // (`resolve_reloc` maps the ref through the post-`F4-2` instance sort).
+    let resolve_sym = |op: &Option<InstanceRef>| -> Result<Option<String>, EmitError> {
+        match op {
+            Some(iref) => {
+                let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
+                    "device-lifecycle callback InstanceRef does not resolve",
+                ))?;
+                Ok(Some(syms.symbol(id).to_string()))
+            }
+            None => Ok(None),
+        }
+    };
 
     // `drivers` is a BTreeMap keyed by ItemId -> deterministic emission order.
     // The per-driver `idx` makes every helper name unique even if two drivers
@@ -4900,32 +4919,62 @@ pub(crate) fn emit_lifecycle_synthesis(
             c_escape(render_match_trace(model, &driver.descriptor.match_set).as_bytes());
         let label = naming::sanitize(model.strings.resolve(driver.descriptor.name));
 
-        // The author `on_init` symbol, if overridden (else only the marker).
-        let on_init_sym = match &driver.ops.on_init {
-            Some(iref) => {
-                let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
-                    "device-lifecycle on_init InstanceRef does not resolve",
-                ))?;
-                Some(syms.symbol(id).to_string())
-            }
-            None => None,
-        };
+        // The author callback symbols this milestone may invoke (else only the
+        // managed `LC call <cb>` marker is emitted — CR-3).
+        let on_init_sym = resolve_sym(&driver.ops.on_init)?;
+        let on_deinit_sym = resolve_sym(&driver.ops.on_deinit)?;
 
-        for scenario in options.lifecycle_scenarios() {
+        for &scenario in options.lifecycle_scenarios() {
             let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
             out.push_str(&format!("static void {fn_name}(void) {{\n"));
+
+            // Bring-up: managed steps that always run, identical across scenarios
+            // (registration carries the descriptor name + typed match, R14).
             out.push_str(&format!(
                 "    regseq_lc_register(\"{name}\", \"{match_str}\");\n"
             ));
             out.push_str("    regseq_lc_create();\n");
             out.push_str("    regseq_lc_associate();\n");
+
+            // The created instance — a distinct zero-initialized backend-local
+            // whose address is each callback's `&mut self`. Declared once iff a
+            // callback invoked in THIS scenario is overridden (an empty
+            // `impl Lifecycle` would otherwise leave it unused -> -Wunused).
+            let needs_inst = on_init_sym.is_some()
+                || (matches!(scenario, LifecycleScenario::Orderly) && on_deinit_sym.is_some());
+            if needs_inst {
+                out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
+            }
+
+            // on_init: the marker always prints (CR-3); the author body is
+            // invoked iff overridden.
             out.push_str("    regseq_lc_call(\"on_init\");\n");
             if let Some(sym) = &on_init_sym {
-                // A distinct zero-initialized instance; `&inst` is the
-                // callback's `&mut self`.
-                out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
                 out.push_str(&format!("    {sym}(&inst);\n"));
             }
+
+            // Scenario-specific teardown/shutdown suffix.
+            match scenario {
+                // Orderly teardown (device present, M2): the dispatch marker
+                // (present=1), then the deinit marker ALWAYS (CR-3 — the
+                // trait-default no-op still counts as invoked), then the author
+                // body iff overridden (its Result discarded, CR-4). HW-reachable
+                // resource postambles land with the first resourceful fixture
+                // (M7) so a postamble can never appear without its preamble (C01).
+                LifecycleScenario::Orderly => {
+                    out.push_str("    regseq_lc_teardown(1);\n");
+                    out.push_str("    regseq_lc_call(\"on_deinit\");\n");
+                    if let Some(sym) = &on_deinit_sym {
+                        out.push_str(&format!("    {sym}(&inst);\n"));
+                    }
+                }
+                // Surprise / init-failure / shutdown keep the init-only body
+                // until their milestones (M3-M5).
+                LifecycleScenario::Surprise
+                | LifecycleScenario::InitFail
+                | LifecycleScenario::Shutdown => {}
+            }
+
             out.push_str("}\n\n");
             runner_calls.push(format!("    {fn_name}();\n"));
         }

@@ -103,6 +103,9 @@ __attribute__((unused)) static void regseq_lc_associate(void) {
 __attribute__((unused)) static void regseq_lc_call(const char *cb) {
     printf("LC call %s\n", cb);
 }
+__attribute__((unused)) static void regseq_lc_teardown(int present) {
+    printf("LC teardown present=%d\n", present);
+}
 
 /* ---------------------------------------------------------------------------
  * Bank 2 (section 15): aggregate tag forward-decls.
@@ -162,9 +165,11 @@ static void __rseq_lc_0_fake_orderly(void) {
     regseq_lc_register("fake", "dt:acme,fake");
     regseq_lc_create();
     regseq_lc_associate();
-    regseq_lc_call("on_init");
     struct input_Fake inst = {0};
+    regseq_lc_call("on_init");
     input__impl_0__on_init(&inst);
+    regseq_lc_teardown(1);
+    regseq_lc_call("on_deinit");
 }
 
 void __rseq_lc_run(void) {

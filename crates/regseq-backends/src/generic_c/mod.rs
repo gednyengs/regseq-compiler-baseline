@@ -1034,7 +1034,7 @@ fn prelude_ordinary_idents(include_lifecycle: bool) -> Vec<String> {
     // (RD-7); an internal symbol there is renamed only against the historical
     // helper set, never against `regseq_lc_*`.
     if include_lifecycle {
-        for lc in ["register", "create", "associate", "call"] {
+        for lc in ["register", "create", "associate", "call", "teardown"] {
             idents.push(format!("regseq_lc_{lc}"));
         }
     }
