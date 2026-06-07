@@ -78,4 +78,18 @@ fn lifecycle_handle_m7_gate() {
         "golden.c must bracket the callbacks with the resource preamble + reverse postambles \
          (released for orderly, skipped(surprise) for surprise)"
     );
+    // LC-12 (Policy-P container morph): the target-view container embeds the spec
+    // driver as `inner` + wraps it with __rseq_dev/__rseq_state; the callbacks run
+    // spec-view over &inst.inner (CR-7). The register access composes through the
+    // morph (offset 0, asserted above) with the stdout trace unchanged.
+    assert!(
+        golden.contains("struct __rseq_lc_0_handle_target {")
+            && golden.contains("void *__rseq_dev;")
+            && golden.contains("struct input_Handle inner;")
+            && golden.contains("uint32_t __rseq_state;")
+            && golden.contains("on_init(&inst.inner)"),
+        "golden.c must emit the Policy-P target-view container (embedding the spec \
+         driver as inner, wrapped with __rseq_dev/__rseq_state) and run the callbacks \
+         over &inst.inner (LC-12)"
+    );
 }

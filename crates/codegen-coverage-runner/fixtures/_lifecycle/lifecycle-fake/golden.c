@@ -174,13 +174,19 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_0__on_in
         return _0;
     }
 }
+struct __rseq_lc_0_fake_target {
+    void *__rseq_dev;
+    struct input_Fake inner;
+    uint32_t __rseq_state;
+};
+
 static void __rseq_lc_0_fake_orderly(void) {
     regseq_lc_register("fake", "dt:acme,fake");
     regseq_lc_create();
     regseq_lc_associate();
-    struct input_Fake inst = {0};
+    struct __rseq_lc_0_fake_target inst = {0};
     regseq_lc_call("on_init");
-    input__impl_0__on_init(&inst);
+    input__impl_0__on_init(&inst.inner);
     regseq_lc_teardown(1);
     regseq_lc_call("on_deinit");
 }

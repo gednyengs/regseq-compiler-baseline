@@ -182,15 +182,21 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_0__on_sy
         return _0;
     }
 }
+struct __rseq_lc_0_e1000_target {
+    void *__rseq_dev;
+    struct input_E1000 inner;
+    uint32_t __rseq_state;
+};
+
 static void __rseq_lc_0_e1000_shutdown(void) {
     regseq_lc_register("e1000", "pci:0x8086:0x100e");
     regseq_lc_create();
     regseq_lc_associate();
-    struct input_E1000 inst = {0};
+    struct __rseq_lc_0_e1000_target inst = {0};
     regseq_lc_call("on_init");
-    input__impl_0__on_init(&inst);
+    input__impl_0__on_init(&inst.inner);
     regseq_lc_call("on_system_shutdown");
-    input__impl_0__on_system_shutdown(&inst);
+    input__impl_0__on_system_shutdown(&inst.inner);
 }
 
 void __rseq_lc_run(void) {

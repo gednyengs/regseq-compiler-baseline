@@ -504,7 +504,7 @@ fixture lands (the status-flip workflow): M0 (`lifecycle-fake`, synthesized
 | LC-9 | synthesized shutdown scenario + override | `LC call on_system_shutdown` + invoke author body | deferred | GRILL D10/I02 | **LC-SHUTDOWN-PRESENT**: e1000 5-positive |
 | LC-10 | teardown `present=true` | `LC call on_deinit` (always, CR-3) + postambles run | deferred | GRILL C04/I05 | **LC-DISPATCH-ORDERLY**: HW-reachable teardown |
 | LC-11 | teardown `present=false` | `LC call on_surprise_remove` + postambles `skipped(surprise)` | deferred | GRILL C04/I05 | **LC-DISPATCH-SURPRISE**: device-gone; byte-distinct from orderly |
-| LC-12 | `#[rseq::driver]` struct layout under Policy-P | `<driver>_target_t`: prepend `__rseq_dev`, wrap `Mmio<T>`, append `__rseq_state`; spec->target field map | deferred | GRILL C05/I06 | **LC-MORPH**: hardest path; composes with register-access Strategy-C (OI-1) |
+| LC-12 | `#[rseq::driver]` struct layout under Policy-P | `<driver>_target_t` CONTAINER morph: embed the spec driver as `inner`, wrap with `void* __rseq_dev` (prepended) + `uint32_t __rseq_state` (appended); callbacks run spec-view over `&inst.inner` (CR-7) | deferred | GRILL C05/I06 | **LC-MORPH**: hardest path; composes with register-access Strategy-C (OI-1). As-built (M7-B) uses the container_of embedding (a faithful, less-invasive realization of the two-view rule) rather than a flattened field relocation |
 | LC-13 | Rule-1 scalar user-data field | the zero-allocated struct IS the init (no store); Rule-2 `Option<T:Copy>` = `None` | deferred | GRILL C10/I07 | **LC-USERDATA-ZEROINIT**: non-scalar Rule-1 rejected (D3) |
 
 ---

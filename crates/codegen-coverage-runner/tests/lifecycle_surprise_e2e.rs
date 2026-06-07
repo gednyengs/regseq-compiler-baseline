@@ -87,8 +87,9 @@ fn lifecycle_surprise_m4_gate() {
         "golden.c must SYNTHESIZE the surprise dispatch (regseq_lc_teardown(0))"
     );
     assert!(
-        golden.contains("on_surprise_remove(&inst)"),
-        "golden.c must SYNTHESIZE a call to FakeSurprise::on_surprise_remove"
+        golden.contains("on_surprise_remove(&inst.inner)"),
+        "golden.c must SYNTHESIZE a call to FakeSurprise::on_surprise_remove \
+         (over the embedded spec driver &inst.inner — the Policy-P container morph)"
     );
     assert!(
         !golden.contains("regseq_lc_teardown(1)") && !golden.contains("on_deinit"),

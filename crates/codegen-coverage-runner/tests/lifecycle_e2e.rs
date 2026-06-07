@@ -87,8 +87,8 @@ fn lifecycle_fake_m0_gate() {
         "golden.c must DEFINE Fake::on_init (a fn over `&mut Fake`)"
     );
     assert!(
-        golden.contains("on_init(&inst)"),
-        "golden.c must SYNTHESIZE a call to Fake::on_init on the scenario instance \
-         (no MIR call terminator references it)"
+        golden.contains("on_init(&inst.inner)"),
+        "golden.c must SYNTHESIZE a call to Fake::on_init on the embedded spec driver \
+         (&inst.inner, the Policy-P container morph; no MIR call terminator references it)"
     );
 }

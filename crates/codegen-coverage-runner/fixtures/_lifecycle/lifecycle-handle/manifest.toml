@@ -12,8 +12,10 @@ kind   = "rust"
 # resource postamble is observed released (orderly) and skipped(surprise) — the
 # two byte-distinct dispatch branches with resources. covers the registration
 # (LC-1), the orderly dispatch with postambles (LC-10), the surprise dispatch with
-# skipped postambles (LC-11), and the user-data zero-init (LC-13). The Policy-P
-# morph (LC-12) lands with M7-B.
+# skipped postambles (LC-11), the user-data zero-init (LC-13), and the Policy-P
+# container morph (LC-12): the target-view container embeds the spec driver as
+# `inner` + wraps it with __rseq_dev/__rseq_state, callbacks run spec-view over
+# &inst.inner (CR-7), and the register write still hits offset 0 (composition).
 lifecycle_scenario = "orderly,surprise"
-covers = ["LC-1", "LC-10", "LC-11", "LC-13"]
+covers = ["LC-1", "LC-10", "LC-11", "LC-12", "LC-13"]
 expect = "pass"

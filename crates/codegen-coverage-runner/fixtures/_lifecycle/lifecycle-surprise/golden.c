@@ -174,15 +174,21 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_0__on_su
         return _0;
     }
 }
+struct __rseq_lc_0_fakesurprise_target {
+    void *__rseq_dev;
+    struct input_FakeSurprise inner;
+    uint32_t __rseq_state;
+};
+
 static void __rseq_lc_0_fakesurprise_surprise(void) {
     regseq_lc_register("fakesurprise", "dt:acme,fakesurprise");
     regseq_lc_create();
     regseq_lc_associate();
-    struct input_FakeSurprise inst = {0};
+    struct __rseq_lc_0_fakesurprise_target inst = {0};
     regseq_lc_call("on_init");
     regseq_lc_teardown(0);
     regseq_lc_call("on_surprise_remove");
-    input__impl_0__on_surprise_remove(&inst);
+    input__impl_0__on_surprise_remove(&inst.inner);
 }
 
 void __rseq_lc_run(void) {

@@ -87,7 +87,8 @@ fn lifecycle_initfail_m3_gate() {
         "golden.c must SYNTHESIZE the init-failure trace (regseq_lc_on_init_err)"
     );
     assert!(
-        golden.contains("on_init_failure(&inst)"),
-        "golden.c must SYNTHESIZE a call to FakeFail::on_init_failure on the failure path"
+        golden.contains("on_init_failure(&inst.inner)"),
+        "golden.c must SYNTHESIZE a call to FakeFail::on_init_failure on the failure path \
+         (over the embedded spec driver &inst.inner — the Policy-P container morph)"
     );
 }

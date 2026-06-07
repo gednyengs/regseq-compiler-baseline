@@ -288,17 +288,23 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_4__on_su
         return _0;
     }
 }
+struct __rseq_lc_0_handle_target {
+    void *__rseq_dev;
+    struct input_Handle inner;
+    uint32_t __rseq_state;
+};
+
 static void __rseq_lc_0_handle_orderly(void) {
     regseq_lc_register("handle", "dt:acme,handle");
     regseq_lc_create();
     regseq_lc_associate();
     regseq_lc_preamble("regs");
-    struct input_Handle inst = {0};
+    struct __rseq_lc_0_handle_target inst = {0};
     regseq_lc_call("on_init");
-    input__impl_4__on_init(&inst);
+    input__impl_4__on_init(&inst.inner);
     regseq_lc_teardown(1);
     regseq_lc_call("on_deinit");
-    input__impl_4__on_deinit(&inst);
+    input__impl_4__on_deinit(&inst.inner);
     regseq_lc_postamble("regs", 0);
 }
 
@@ -307,12 +313,12 @@ static void __rseq_lc_0_handle_surprise(void) {
     regseq_lc_create();
     regseq_lc_associate();
     regseq_lc_preamble("regs");
-    struct input_Handle inst = {0};
+    struct __rseq_lc_0_handle_target inst = {0};
     regseq_lc_call("on_init");
-    input__impl_4__on_init(&inst);
+    input__impl_4__on_init(&inst.inner);
     regseq_lc_teardown(0);
     regseq_lc_call("on_surprise_remove");
-    input__impl_4__on_surprise_remove(&inst);
+    input__impl_4__on_surprise_remove(&inst.inner);
     regseq_lc_postamble("regs", 1);
 }
 

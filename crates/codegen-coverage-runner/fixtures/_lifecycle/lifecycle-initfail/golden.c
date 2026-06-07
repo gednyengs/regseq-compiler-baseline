@@ -184,19 +184,25 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_0__on_in
         return _0;
     }
 }
+struct __rseq_lc_0_fakefail_target {
+    void *__rseq_dev;
+    struct input_FakeFail inner;
+    uint32_t __rseq_state;
+};
+
 static void __rseq_lc_0_fakefail_init_fail(void) {
     regseq_lc_register("fakefail", "dt:acme,fakefail");
     regseq_lc_create();
     regseq_lc_associate();
-    struct input_FakeFail inst = {0};
+    struct __rseq_lc_0_fakefail_target inst = {0};
     regseq_lc_call("on_init");
-    struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 __r = input__impl_0__on_init(&inst);
+    struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 __r = input__impl_0__on_init(&inst.inner);
     uint8_t __disc;
     { uint8_t __nd; memcpy(&__nd, (const unsigned char *)&(__r) + 0, sizeof(__nd)); __disc = (__nd == ((uint8_t)(2U)) ? ((uint8_t)(0U)) : ((uint8_t)(1U))); }
     if (__disc != ((uint8_t)(0U))) {
         regseq_lc_on_init_err();
         regseq_lc_call("on_init_failure");
-        input__impl_0__on_init_failure(&inst);
+        input__impl_0__on_init_failure(&inst.inner);
     }
 }
 

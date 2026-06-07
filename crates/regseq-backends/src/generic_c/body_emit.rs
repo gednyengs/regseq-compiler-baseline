@@ -4941,6 +4941,23 @@ pub(crate) fn emit_lifecycle_synthesis(
         let on_init_failure_sym = resolve_sym(&driver.ops.on_init_failure)?;
         let on_system_shutdown_sym = resolve_sym(&driver.ops.on_system_shutdown)?;
 
+        // Policy-P container morph (M7-B, LC-12): the driver realizes in a
+        // target-view container that EMBEDS the spec driver as `inner` and wraps
+        // it with the OS-managed metadata — `void* __rseq_dev` (the device handle,
+        // recovered via container_of in a real OS; NULL/unobservable in the
+        // oracle) prepended + `uint32_t __rseq_state` appended. The synthesized
+        // create() builds this container; the callbacks run SPEC-VIEW over
+        // `&inst.inner` (CR-7: register-offset recovery + field projection stay
+        // spec-view), so the morph is NON-BEHAVIORAL — the observable is this
+        // struct + the create() init in golden.c (the stdout trace is unchanged).
+        // Emitted for every lifecycle driver (fieldless included).
+        let target_name = format!("__rseq_lc_{idx}_{label}_target");
+        out.push_str(&format!("struct {target_name} {{\n"));
+        out.push_str("    void *__rseq_dev;\n");
+        out.push_str(&format!("    {driver_cty} inner;\n"));
+        out.push_str("    uint32_t __rseq_state;\n");
+        out.push_str("};\n\n");
+
         for &scenario in options.lifecycle_scenarios() {
             let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
             out.push_str(&format!("static void {fn_name}(void) {{\n"));
@@ -4977,7 +4994,10 @@ pub(crate) fn emit_lifecycle_synthesis(
                 }
             };
             if needs_inst {
-                out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
+                // The target-view container instance (Policy-P morph). The
+                // callbacks take `&inst.inner` — a spec-view pointer to the
+                // embedded driver (CR-7).
+                out.push_str(&format!("    struct {target_name} inst = {{0}};\n"));
             }
 
             // on_init: the marker always prints (CR-3). The author body is
@@ -4991,7 +5011,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                 // then the teardown dispatch (present=1) + always-on `on_deinit`.
                 LifecycleScenario::Orderly => {
                     if let Some(sym) = &on_init_sym {
-                        out.push_str(&format!("    {sym}(&inst);\n"));
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
                     }
                     emit_teardown_dispatch(1, "on_deinit", &on_deinit_sym, &resource_names, &mut out);
                 }
@@ -5002,7 +5022,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                 // resourceful fixture lands (M7) — none here (fieldless).
                 LifecycleScenario::Surprise => {
                     if let Some(sym) = &on_init_sym {
-                        out.push_str(&format!("    {sym}(&inst);\n"));
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
                     }
                     emit_teardown_dispatch(
                         0,
@@ -5034,11 +5054,11 @@ pub(crate) fn emit_lifecycle_synthesis(
                 // author body (its Result discarded, CR-4).
                 LifecycleScenario::Shutdown => {
                     if let Some(sym) = &on_init_sym {
-                        out.push_str(&format!("    {sym}(&inst);\n"));
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
                     }
                     if let Some(sym) = &on_system_shutdown_sym {
                         out.push_str("    regseq_lc_call(\"on_system_shutdown\");\n");
-                        out.push_str(&format!("    {sym}(&inst);\n"));
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
                     }
                 }
             }
@@ -5073,7 +5093,7 @@ fn emit_teardown_dispatch(
     out.push_str(&format!("    regseq_lc_teardown({present});\n"));
     out.push_str(&format!("    regseq_lc_call(\"{cb}\");\n"));
     if let Some(sym) = cb_sym {
-        out.push_str(&format!("    {sym}(&inst);\n"));
+        out.push_str(&format!("    {sym}(&inst.inner);\n"));
     }
     let skipped = if present == 0 { 1 } else { 0 };
     for res in resource_names.iter().rev() {
@@ -5144,14 +5164,14 @@ fn emit_init_fail_body(
 
     // Capture on_init's Result and branch on the Err niche discriminant (`!= Ok`,
     // the inverse of the exit-adapter's `== Ok -> return 0`).
-    out.push_str(&format!("    {result_decl} = {sym}(&inst);\n"));
+    out.push_str(&format!("    {result_decl} = {sym}(&inst.inner);\n"));
     out.push_str(&format!("    {disc_cty} __disc;\n"));
     out.push_str(&format!("    {niche_block}\n"));
     out.push_str(&format!("    if (__disc != {ok_disc_render}) {{\n"));
     out.push_str("        regseq_lc_on_init_err();\n");
     out.push_str("        regseq_lc_call(\"on_init_failure\");\n");
     if let Some(fsym) = on_init_failure_sym {
-        out.push_str(&format!("        {fsym}(&inst);\n"));
+        out.push_str(&format!("        {fsym}(&inst.inner);\n"));
     }
     out.push_str("    }\n");
     Ok(())

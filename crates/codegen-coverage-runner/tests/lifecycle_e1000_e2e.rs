@@ -75,8 +75,9 @@ fn lifecycle_e1000_m5_gate() {
     // `LC call on_system_shutdown` line.
     let golden = std::fs::read_to_string(dir.join("golden.c")).expect("read golden.c");
     assert!(
-        golden.contains("on_system_shutdown(&inst)"),
-        "golden.c must SYNTHESIZE a call to E1000::on_system_shutdown (shutdown-present)"
+        golden.contains("on_system_shutdown(&inst.inner)"),
+        "golden.c must SYNTHESIZE a call to E1000::on_system_shutdown (shutdown-present, \
+         over the embedded spec driver &inst.inner — the Policy-P container morph)"
     );
     assert!(
         golden.contains("pci:0x8086:0x100e"),

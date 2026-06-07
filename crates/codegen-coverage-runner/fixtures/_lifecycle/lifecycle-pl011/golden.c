@@ -174,13 +174,19 @@ struct core_result_Result__a96be460e4ad8f92502af3ac2c2f6486 input__impl_0__on_in
         return _0;
     }
 }
+struct __rseq_lc_0_pl011_target {
+    void *__rseq_dev;
+    struct input_Pl011 inner;
+    uint32_t __rseq_state;
+};
+
 static void __rseq_lc_0_pl011_shutdown(void) {
     regseq_lc_register("pl011", "amba:0x41011/0xfffff");
     regseq_lc_create();
     regseq_lc_associate();
-    struct input_Pl011 inst = {0};
+    struct __rseq_lc_0_pl011_target inst = {0};
     regseq_lc_call("on_init");
-    input__impl_0__on_init(&inst);
+    input__impl_0__on_init(&inst.inner);
 }
 
 void __rseq_lc_run(void) {
