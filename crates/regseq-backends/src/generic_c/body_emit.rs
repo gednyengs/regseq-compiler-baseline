@@ -4870,15 +4870,15 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
 /// is pure over `(model, options)`.
 ///
-/// Scope (M2-M3): the `orderly` scenario emits the teardown dispatch marker
-/// (`present=1`) and the always-on `on_deinit` marker (CR-3), invoking the author
-/// body iff overridden; `init-fail` captures on_init's Result and on Err drives
-/// the rollback trace ([`emit_init_fail_body`]). `surprise`/`shutdown` remain the
-/// init-only sequence until their milestones (M4/M5). Resource preamble/postamble
-/// loops are deferred to the first resourceful fixture (M7) so a postamble can
-/// never appear without its preamble (C01). The `on_init` author call is
-/// synthesized only when overridden (`Some`), but the `regseq_lc_call("on_init")`
-/// marker is always emitted (CR-3).
+/// Scope (M2-M4): `orderly` emits the teardown dispatch (`present=1`) + always-on
+/// `on_deinit` marker (CR-3); `surprise` mirrors it with `present=0` +
+/// `on_surprise_remove` (both via [`emit_teardown_dispatch`]); `init-fail`
+/// captures on_init's Result and on Err drives the rollback trace
+/// ([`emit_init_fail_body`]). `shutdown` remains the init-only sequence until M5.
+/// Resource preamble/postamble loops are deferred to the first resourceful fixture
+/// (M7) so a postamble can never appear without its preamble (C01). The `on_init`
+/// author call is synthesized only when overridden (`Some`), but the
+/// `regseq_lc_call("on_init")` marker is always emitted (CR-3).
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
     names: &NameTable,
@@ -4924,6 +4924,7 @@ pub(crate) fn emit_lifecycle_synthesis(
         // managed `LC call <cb>` marker is emitted — CR-3).
         let on_init_sym = resolve_sym(&driver.ops.on_init)?;
         let on_deinit_sym = resolve_sym(&driver.ops.on_deinit)?;
+        let on_surprise_remove_sym = resolve_sym(&driver.ops.on_surprise_remove)?;
         let on_init_failure_sym = resolve_sym(&driver.ops.on_init_failure)?;
 
         for &scenario in options.lifecycle_scenarios() {
@@ -4942,8 +4943,14 @@ pub(crate) fn emit_lifecycle_synthesis(
             // whose address is each callback's `&mut self`. Declared once iff a
             // callback invoked in THIS scenario is overridden (an empty
             // `impl Lifecycle` would otherwise leave it unused -> -Wunused).
-            let needs_inst = on_init_sym.is_some()
-                || (matches!(scenario, LifecycleScenario::Orderly) && on_deinit_sym.is_some());
+            let needs_inst = match scenario {
+                LifecycleScenario::Orderly => on_init_sym.is_some() || on_deinit_sym.is_some(),
+                LifecycleScenario::Surprise => {
+                    on_init_sym.is_some() || on_surprise_remove_sym.is_some()
+                }
+                LifecycleScenario::InitFail => on_init_sym.is_some(),
+                LifecycleScenario::Shutdown => on_init_sym.is_some(),
+            };
             if needs_inst {
                 out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
             }
@@ -4956,20 +4963,23 @@ pub(crate) fn emit_lifecycle_synthesis(
             // Scenario-specific on_init handling + teardown/shutdown suffix.
             match scenario {
                 // Orderly teardown (device present, M2): on_init Result discarded,
-                // then the dispatch marker (present=1), then the deinit marker
-                // ALWAYS (CR-3 — the trait-default no-op still counts as invoked),
-                // then the author body iff overridden. HW-reachable resource
-                // postambles land with the first resourceful fixture (M7) so a
-                // postamble can never appear without its preamble (C01).
+                // then the teardown dispatch (present=1) + always-on `on_deinit`.
                 LifecycleScenario::Orderly => {
                     if let Some(sym) = &on_init_sym {
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
-                    out.push_str("    regseq_lc_teardown(1);\n");
-                    out.push_str("    regseq_lc_call(\"on_deinit\");\n");
-                    if let Some(sym) = &on_deinit_sym {
+                    emit_teardown_dispatch(1, "on_deinit", &on_deinit_sym, &mut out);
+                }
+                // Surprise removal (device gone, M4): on_init Result discarded, then
+                // the teardown dispatch (present=0) + always-on `on_surprise_remove`.
+                // Byte-distinct from orderly (present=0, surprise_remove vs deinit);
+                // HW-touching postambles would be `skipped(surprise)` once a
+                // resourceful fixture lands (M7) — none here (fieldless).
+                LifecycleScenario::Surprise => {
+                    if let Some(sym) = &on_init_sym {
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
+                    emit_teardown_dispatch(0, "on_surprise_remove", &on_surprise_remove_sym, &mut out);
                 }
                 // Init-failure rollback (M3): capture on_init's Result; on the Err
                 // niche discriminant emit `LC on_init -> Err`, the always-on
@@ -4986,9 +4996,8 @@ pub(crate) fn emit_lifecycle_synthesis(
                         &mut out,
                     )?;
                 }
-                // Surprise / shutdown keep the init-only body (on_init discarded)
-                // until their milestones (M4/M5).
-                LifecycleScenario::Surprise | LifecycleScenario::Shutdown => {
+                // Shutdown keeps the init-only body (on_init discarded) until M5.
+                LifecycleScenario::Shutdown => {
                     if let Some(sym) = &on_init_sym {
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
@@ -5006,6 +5015,20 @@ pub(crate) fn emit_lifecycle_synthesis(
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+/// Emit a teardown-dispatch suffix shared by the orderly (M2) and surprise (M4)
+/// scenarios: the `present` dispatch marker, then the teardown callback's marker
+/// ALWAYS (CR-3 — the trait-default no-op still counts as invoked), then the
+/// author body iff overridden (its Result discarded, CR-4). The HW-reachable
+/// resource postamble loop (reverse, `skipped(surprise)` for present=0) lands
+/// with the first resourceful fixture (M7).
+fn emit_teardown_dispatch(present: u8, cb: &str, cb_sym: &Option<String>, out: &mut String) {
+    out.push_str(&format!("    regseq_lc_teardown({present});\n"));
+    out.push_str(&format!("    regseq_lc_call(\"{cb}\");\n"));
+    if let Some(sym) = cb_sym {
+        out.push_str(&format!("    {sym}(&inst);\n"));
+    }
 }
 
 /// Emit the `init-fail` scenario's on_init Result inspection + rollback (M3/T14).

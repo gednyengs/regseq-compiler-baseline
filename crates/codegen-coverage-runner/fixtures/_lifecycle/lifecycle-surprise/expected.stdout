@@ -1,0 +1,6 @@
+LC register fakesurprise match=dt:acme,fakesurprise
+LC create
+LC associate
+LC call on_init
+LC teardown present=0
+LC call on_surprise_remove
