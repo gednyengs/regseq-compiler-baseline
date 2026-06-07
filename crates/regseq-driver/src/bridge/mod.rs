@@ -18,11 +18,13 @@ mod assign;
 pub mod body;
 pub mod const_;
 pub mod def_path;
+mod device_lifecycle;
 pub mod diag_log;
 mod discovery;
 pub mod fnsig;
 mod framework_type;
 mod handles;
+pub(crate) mod intrinsic;
 mod opaque_handle;
 mod sort;
 pub mod synth;
@@ -107,8 +109,9 @@ pub struct BridgeCtxt<'tcx> {
     pub vtable_synth_cache: HashMap<synth::VTableSynthKey, VTableSynthHandles>,
     /// Phase-2 cache for bridge-synthesised drop-glue items.
     pub drop_glue_synth_cache: HashMap<TyId, ItemHandle>,
-    /// Phase-2 cache for diagnostic-logging intrinsic callees.
-    pub diag_log_intrinsics: HashMap<DefPathHash, regseq_model::IntrinsicKind>,
+    /// Phase-2 cache for recognized `#[rseq::intrinsic]` callees (any family:
+    /// diagnostic logging, register-access MMIO/poll).
+    pub intrinsics: HashMap<DefPathHash, regseq_model::IntrinsicKind>,
     /// Deferred resolution side-table for `Ty::Dynamic.vtable_ty`
     /// `Ty::Struct` views interned during Phase 2 with placeholder
     /// `ItemId`s. Per spec.md section 3.4 D-12-5.3, final `ItemId`s
@@ -200,7 +203,7 @@ impl<'tcx> BridgeCtxt<'tcx> {
             vtable_type_synth_cache: HashMap::new(),
             vtable_synth_cache: HashMap::new(),
             drop_glue_synth_cache: HashMap::new(),
-            diag_log_intrinsics: HashMap::new(),
+            intrinsics: HashMap::new(),
             dynamic_vtable_ty_pending: HashMap::new(),
             source_item_handles: HashMap::new(),
             source_ty_pending: HashMap::new(),
@@ -622,6 +625,55 @@ pub enum BridgeError {
     UnsupportedQuestionMark {
         /// Author-facing explanation of which `?` shape was rejected.
         reason: String,
+    },
+    /// A `#[rseq::driver]` match descriptor named a bus family whose match
+    /// sugar is not yet supported (`acpi`/`usb`/`i2c`/`spi`). A parse-time
+    /// rejection for the Device Lifecycle construct (PLAN CR-5), deliberately
+    /// distinct from the D1/D2/D3 validation diagnostics.
+    #[error("device-lifecycle: `{bus}` bus match sugar is not yet supported")]
+    DeviceLifecycleUnsupportedBus {
+        /// The deferred bus family token (`acpi`/`usb`/`i2c`/`spi`).
+        bus: String,
+    },
+    /// A `#[rseq::driver]` failed device-lifecycle validation (PLAN T16, GRILL
+    /// I09): D1 (missing-match) / D2 (empty-match) / D3 (non-initializable
+    /// user-data). Distinct from the parse-time CR-5 unsupported-bus rejection.
+    #[error("device-lifecycle validation: {0}")]
+    DeviceLifecycleValidation(DeviceLifecycleDiagnostic),
+}
+
+/// Per-construct device-lifecycle validation diagnostics (PLAN T16; GRILL I09;
+/// D06 per-construct numbering). D4 is deferred. Carried by
+/// [`BridgeError::DeviceLifecycleValidation`]. M6 constructs only D3
+/// ([`Self::UserDataNotInitializable`]); D1/D2 ([`Self::MissingMatch`] /
+/// [`Self::EmptyMatch`]) are defined here for the M8 match-validation pass (T17).
+#[derive(Clone, Debug, PartialEq, Eq, Error)]
+pub enum DeviceLifecycleDiagnostic {
+    /// D1: a `#[rseq::driver]` declared no device-match attribute.
+    #[error("driver `{driver}` declares no device-match attribute (expected one of compatible/pci/amba)")]
+    MissingMatch {
+        /// The offending driver's logical name.
+        driver: String,
+    },
+    /// D2: a `#[rseq::driver]`'s device-match set is present but empty.
+    #[error("driver `{driver}` declares an empty device-match set")]
+    EmptyMatch {
+        /// The offending driver's logical name.
+        driver: String,
+    },
+    /// D3: a user-data field whose type is neither Rule-1 (the scalar zero-init
+    /// whitelist bool/u8/u16/u32/u64) nor Rule-2 (`Option<T: Copy>`).
+    #[error(
+        "driver `{driver}` field `{field}` of type `{rejected_type}` is not a valid user-data \
+         field (expected a scalar bool/u8/u16/u32/u64 or Option<T: Copy>)"
+    )]
+    UserDataNotInitializable {
+        /// The offending driver's logical name.
+        driver: String,
+        /// The offending field name.
+        field: String,
+        /// The rejected field type, rendered.
+        rejected_type: String,
     },
 }
 
@@ -1242,13 +1294,12 @@ fn eager_hir_enumeration<'tcx>(ctxt: &mut BridgeCtxt<'tcx>) -> Result<(), Bridge
             _ => continue,
         };
         // Per spec.md regseq-driver-58 Change A/C step 1 + regseq-driver-60
-        // Change H + regseq-driver-94: bucket-3 classification is computed
-        // by the shared `ty::source_bridge_item_flags` helper so this
-        // eager intern site and the lazy `intern_source_item_handle` push
-        // cannot drift. The helper encodes the trait-declaration AssocFn
-        // `own_params` carve-out (an impl-inherited parameter inflates
-        // `count()`; a trait default method must stay bucket 1) and the
-        // `count() > 0` default for every other Item; see its doc comment.
+        // Change H: bucket classification is computed by the shared
+        // `ty::source_bridge_item_flags` helper so this eager intern site and
+        // the lazy `intern_source_item_handle` push cannot drift. The helper
+        // uses `generics_of(def_id).count() > 0` uniformly, so a trait
+        // default method is bucket 3 (generic over its `Self` param), not
+        // bucket 1; see its doc comment.
         let flags = ty::source_bridge_item_flags(tcx, def_id);
         let _ = ty::intern_eager_hir_item(
             ctxt,
@@ -1423,8 +1474,11 @@ fn scan_terminator_for_synthesis<'tcx>(
                 // vtable / drop-glue needs.
                 if !matches!(canonical.flavor, FunctionInstanceFlavor::FnPtrShim) {
                     let _ = ty::translate_ty(ctxt, canonical.callee_ty);
-                    if diag_log::intrinsic_kind_for_def_id(ctxt.input.tcx, canonical.callee_def_id)
-                        .is_some()
+                    if intrinsic::intrinsic_kind_for_def_id(
+                        ctxt.input.tcx,
+                        canonical.callee_def_id,
+                    )
+                    .is_some()
                     {
                         let model_ty = ty::translate_ty(ctxt, canonical.callee_ty)?;
                         if let Ty::FnDef(callee_item, _) =
@@ -1439,7 +1493,7 @@ fn scan_terminator_for_synthesis<'tcx>(
                                 .lookup_item_def_path(callee_item)
                                 .expect("FnDef callee Item must be interned")
                                 .clone();
-                            diag_log::recognise_log_intrinsic_def_id(
+                            intrinsic::recognise_intrinsic_def_id(
                                 ctxt,
                                 ItemHandle::from_u32(callee_item.as_u32()),
                                 &callee_def_path,
@@ -1719,6 +1773,10 @@ fn construct_instances_and_resolve_cross_references(
     // fill in `body` via the existing closure-body resolution at
     // `body/materialise.rs:87-100`.
     construct_closure_call_instances(ctxt)?;
+    // Device-lifecycle (T09/T10): override-check each bound driver's callbacks
+    // and force-materialize the overriding instances BEFORE the Phase-5 body
+    // drain, so those synthesized callbacks get bodies the backend can emit.
+    device_lifecycle::resolve_drivers(ctxt)?;
     body::run_phase5_body_passes(ctxt)?;
     // Body materialisation calls `translate_const`, which can synthesise
     // late `ConstMemoryStatic` pending items for reference-typed const
@@ -1953,18 +2011,16 @@ fn construct_function_instances(ctxt: &mut BridgeCtxt<'_>) -> Result<(), BridgeE
             continue;
         }
 
-        // Per regseq-driver-58 Change H + regseq-driver-60: trait
-        // default method Items live at the trait's DefPath and are
-        // classified bucket-1 (non-generic) per the eager-HIR
-        // exemption in `eager_hir_enumeration`. Their identity args
-        // include the trait's `Self` param (and any trait-level
-        // generics), so `Instance::try_resolve` with identity_args
-        // cannot pin them to a concrete impl. The concrete Function
-        // Instance for the resolved receiver is created reactively
-        // by Phase 5's `lookup_or_create_direct_instance` at the
-        // call site; skip the eager bucket-1 push here. The
-        // validator's bucket-1 count check still applies to the
-        // reactive Instance(s).
+        // Trait default method Items live at the trait's DefPath. They are now
+        // bucket 3 (generic over the trait's `Self` param), so the `is_generic`
+        // guard above already skips them; this explicit check is a defensive
+        // belt-and-suspenders guard. Their identity args include `Self` (and
+        // any trait-level generics), so `Instance::try_resolve` with
+        // identity_args cannot pin them to a concrete impl. The concrete
+        // Function Instance for a resolved receiver is created reactively by
+        // Phase 5's `lookup_or_create_direct_instance` at the call site (or,
+        // for device-lifecycle callbacks, force-materialized in
+        // `device_lifecycle::resolve_drivers`).
         if matches!(
             ctxt.input.tcx.def_kind(def_id),
             rustc_hir::def::DefKind::AssocFn

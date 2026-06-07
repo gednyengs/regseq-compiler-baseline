@@ -93,6 +93,8 @@ pub enum IntrinsicKind {
     Mmio(MmioOp) = 1,
     /// Busy-poll intrinsic (`regseq::poll::until`). Appended at discriminant 2.
     PollUntil = 2,
+    // (Device-lifecycle has no intrinsic family: the harness verbs were removed,
+    // RD-1. Discriminant 3 stays free for a future append.)
 }
 
 /// MMIO register-access operation carried by `IntrinsicKind::Mmio`.
@@ -301,6 +303,16 @@ mod tests {
         for name in ["log_debug", "mmio-read32", "", "lambda-\u{03bb}"] {
             assert_eq!(IntrinsicKind::from_name(symbol(name)), None);
         }
+    }
+
+    #[test]
+    fn attr_data_intrinsic_tag_is_zero() {
+        // `AttrData::Intrinsic` must stay at serialized discriminant 0 regardless
+        // of which intrinsic family it carries.
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::PollUntil)),
+            0
+        );
     }
 
     #[test]

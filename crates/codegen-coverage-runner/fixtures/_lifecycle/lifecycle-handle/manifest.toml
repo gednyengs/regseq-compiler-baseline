@@ -1,0 +1,21 @@
+name   = "lifecycle-handle"
+kind   = "rust"
+# Device-lifecycle handle (M7): the first non-fieldless driver -- combines a
+# Rule-1 user-data field (`count`) with a register-access resource (`regs`). The
+# backend synthesizes `main` (RD-4/RD-6); the `orderly` scenario lowers to
+# register -> create -> associate -> preamble(regs) -> `LC call on_init` (which
+# writes the zero-initialized count to a register, then sets + rewrites it) ->
+# `LC teardown present=1` -> `LC call on_deinit` -> postamble(regs). Exercises the
+# register-access composition (the register write hits the right offset), the
+# user-data zero-init (the first write observes 0x0, C10), and (with the Policy-P
+# morph) the target-view driver layout. Runs BOTH orderly and surprise so the
+# resource postamble is observed released (orderly) and skipped(surprise) — the
+# two byte-distinct dispatch branches with resources. covers the registration
+# (LC-1), the orderly dispatch with postambles (LC-10), the surprise dispatch with
+# skipped postambles (LC-11), the user-data zero-init (LC-13), and the Policy-P
+# container morph (LC-12): the target-view container embeds the spec driver as
+# `inner` + wraps it with __rseq_dev/__rseq_state, callbacks run spec-view over
+# &inst.inner (CR-7), and the register write still hits offset 0 (composition).
+lifecycle_scenario = "orderly,surprise"
+covers = ["LC-1", "LC-10", "LC-11", "LC-12", "LC-13"]
+expect = "pass"

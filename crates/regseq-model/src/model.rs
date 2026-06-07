@@ -116,6 +116,10 @@ pub struct RegseqModel {
 
     /// Domain attribute sibling tables.
     pub domain_attrs: DomainAttrTables,
+
+    /// Device-lifecycle driver sibling table (construct #2), keyed by the
+    /// `#[rseq::driver]` struct's Item.
+    pub device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables,
 }
 
 #[cfg(test)]
@@ -1072,6 +1076,7 @@ impl RegseqModel {
             vtables: HashMap::new(),
             closure_captures_struct_ty: HashMap::new(),
             domain_attrs: DomainAttrTables::default(),
+            device_lifecycle: crate::device_lifecycle::DeviceLifecycleTables::default(),
         }
     }
 
@@ -1346,6 +1351,17 @@ impl RegseqModel {
             self.item_bridge_flags.insert(new_id, flags);
         }
 
+        // `device_lifecycle.drivers` is keyed by the driver-struct `ItemId`
+        // (its values carry no `ItemId` references — StringId/TyId/InstanceRef
+        // only), so re-key the map by the same remap, exactly like
+        // `item_bridge_flags`. Without this the backend's post-sort
+        // `Ty::Struct { item }` would not find the descriptor.
+        let old_drivers = std::mem::take(&mut self.device_lifecycle.drivers);
+        for (old_id, driver) in old_drivers {
+            let new_id = remap[old_id.index()];
+            self.device_lifecycle.drivers.insert(new_id, driver);
+        }
+
         #[cfg(debug_assertions)]
         for idx in 0..self.items.len().saturating_sub(1) {
             let first = ItemId::from_u32(idx as u32);
@@ -1520,6 +1536,18 @@ impl RegseqModel {
         for (old_id, flags) in old_flags {
             if let Some(new_id) = remap[old_id.index()] {
                 self.item_bridge_flags.insert(new_id, flags);
+            }
+        }
+
+        // `device_lifecycle.drivers` is keyed by the driver-struct `ItemId`, so
+        // remap it the same way (dropping any removed driver's entry). Without
+        // this, a TU that runs diag-log DCE (`remove_items_and_remap`) AFTER the
+        // F4 sort would leave the drivers map keyed by stale ItemIds and the
+        // backend's `Ty::Struct { item }` would not find the descriptor.
+        let old_drivers = std::mem::take(&mut self.device_lifecycle.drivers);
+        for (old_id, driver) in old_drivers {
+            if let Some(new_id) = remap[old_id.index()] {
+                self.device_lifecycle.drivers.insert(new_id, driver);
             }
         }
         remap

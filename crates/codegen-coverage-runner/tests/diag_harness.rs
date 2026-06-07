@@ -126,6 +126,7 @@ fn fixture_in(dir: &TempFixtureDir, input: PathBuf) -> Fixture {
             expect: Expect::Pass,
             overflow_checks: None,
             expected: Default::default(),
+            lifecycle_scenario: None,
         },
         dir: dir.dir.clone(),
         input,
@@ -220,6 +221,7 @@ fn err_fixture_in(dir: &TempFixtureDir, input: PathBuf, exit: &str) -> Fixture {
             expected: Expected {
                 exit: Some(exit.to_string()),
             },
+            lifecycle_scenario: None,
         },
         dir: dir.dir.clone(),
         input,

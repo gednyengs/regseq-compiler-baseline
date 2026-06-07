@@ -1,9 +1,16 @@
-//! Per-callee diagnostic-logging intrinsic recognition.
+//! Generic per-callee `#[rseq::intrinsic("...")]` recognition.
+//!
+//! This is the shared dispatch used by every intrinsic family — diagnostic
+//! logging and register-access MMIO/poll. It
+//! reads the attribute, maps the closed NAME vocabulary to an
+//! `IntrinsicKind`, redundantly gates on the callee's function name, and
+//! records the marker on the model. It is construct-neutral on purpose;
+//! family-specific logic lives in each construct's bridge module.
 
 use regseq_model::{AttrData, DefPathData, IntrinsicKind, ItemId, LogLevel, MmioOp, RegseqModel};
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
-pub(super) fn recognise_log_intrinsic_attr(
+pub(crate) fn recognise_intrinsic_attr(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     def_id: DefId,
 ) -> Option<IntrinsicKind> {
@@ -27,7 +34,7 @@ pub(super) fn recognise_log_intrinsic_attr(
     intrinsic_kind_for_name(name.as_str())
 }
 
-pub(super) fn callee_name_matches_kind(
+pub(crate) fn callee_name_matches_kind(
     model: &RegseqModel,
     callee_def_path: &regseq_model::DefPath,
     kind: &IntrinsicKind,
@@ -41,7 +48,7 @@ pub(super) fn callee_name_matches_kind(
     fn_name_matches_kind(model.strings.resolve(name), kind)
 }
 
-pub(super) fn record_log_intrinsic(model: &mut RegseqModel, item: ItemId, kind: IntrinsicKind) {
+pub(crate) fn record_intrinsic(model: &mut RegseqModel, item: ItemId, kind: IntrinsicKind) {
     let attrs = &mut model.domain_attrs.item_attrs[item];
     if !attrs
         .iter()
@@ -140,7 +147,7 @@ mod tests {
             .expect("log name should map");
         assert!(callee_name_matches_kind(&model, &def_path, &kind));
 
-        record_log_intrinsic(&mut model, ItemId::from_u32(0), kind);
+        record_intrinsic(&mut model, ItemId::from_u32(0), kind);
 
         assert_eq!(
             model.domain_attrs.item_attrs[ItemId::from_u32(0)],
@@ -176,12 +183,13 @@ mod tests {
         let kind = IntrinsicKind::Log(LogLevel::Warn);
         assert!(callee_name_matches_kind(&model, &def_path, &kind));
 
-        record_log_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
-        record_log_intrinsic(&mut model, ItemId::from_u32(0), kind);
+        record_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
+        record_intrinsic(&mut model, ItemId::from_u32(0), kind);
 
         assert_eq!(
             model.domain_attrs.item_attrs[ItemId::from_u32(0)],
             vec![AttrData::Intrinsic(IntrinsicKind::Log(LogLevel::Warn))]
         );
     }
+
 }

@@ -45,6 +45,14 @@ pub struct Manifest {
     /// run unchanged.
     #[serde(default)]
     pub expected: Expected,
+    /// Optional device-lifecycle scenario selection (RD-5/RD-8), a CSV of
+    /// scenario tokens (`orderly`, `surprise`, `init-fail`, `shutdown`) passed
+    /// to the backend as the `backend.lifecycle.scenario` param. Absent (the
+    /// default) selects all scenarios; for a no-lifecycle fixture it has no
+    /// effect (the backend emits no scenarios). Maps to the same
+    /// `BackendOptions` the CLI `--param backend.lifecycle.scenario` produces.
+    #[serde(default)]
+    pub lifecycle_scenario: Option<String>,
 }
 
 /// The `[expected]` manifest table: expected-outcome configuration resolved

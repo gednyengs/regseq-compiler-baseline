@@ -1,0 +1,5 @@
+LC register e1000 match=pci:0x8086:0x100e
+LC create
+LC associate
+LC call on_init
+LC call on_system_shutdown

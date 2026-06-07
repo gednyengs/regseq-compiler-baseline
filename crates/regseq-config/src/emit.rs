@@ -58,7 +58,8 @@ pub enum EmitSpec {
         path: Option<PathBuf>,
     },
     /// Emit the generic-C translation unit via
-    /// `regseq_backends::emit_generic_c(&model)`.
+    /// `regseq_backends::emit_generic_c_with(&model, &backend_options)`
+    /// (the `backend.*` params feed `BackendOptions`).
     ///
     /// The compiler builds a `RegseqModel` from rustc HIR/MIR and
     /// lowers it to a single host-compilable C translation unit. The

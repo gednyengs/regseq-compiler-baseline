@@ -499,23 +499,28 @@ pub fn entry() {}
 }
 
 // ------------------------------------------------------------------
-// regseq-driver-94: the trait-declaration AssocFn `own_params` carve-out
-// must survive the move of the `is_generic` formula into the shared
-// `ty::source_bridge_item_flags` helper. A NON-generic trait default
-// method lives at the trait's DefPath, so its `generics_of().count()`
-// is inflated by the trait's inherited `Self` (count() > 0), but its
-// `own_params` is empty -- it must stay bucket 1 (is_generic == false),
-// NOT flip to bucket 3. If a raw `count() > 0` had been substituted in
-// the helper, `Self` would misclassify it; this test guards exactly that.
+// A trait-declaration default method body surfaces as a Function Item at the
+// trait's DefPath, and is BUCKET 3 (generic over `Self`) — NOT bucket 1. Its
+// `generics_of().count()` includes the trait's inherited `Self`, which is a real
+// monomorphization axis: bucket-1's "exactly one primary instance" cannot hold
+// for it (zero instances when the default is never called; multiple when two
+// implementors share it). This SUPERSEDES the earlier regseq-driver-58/-60/-94
+// `own_params` carve-out (which forced such defaults to bucket 1 and only held
+// for the single-implementor / default-is-called shape); the device-lifecycle
+// `Lifecycle` callbacks — overridable, often uncalled, shared across drivers —
+// are exactly the case it broke on. See `ty::source_bridge_item_flags`.
 // ------------------------------------------------------------------
 #[test]
-fn trait_default_method_stays_bucket1_after_helper_refactor() {
+fn trait_default_method_is_self_generic_bucket3() {
     let model = compile_with_bridge(
         "driver94_trait_default",
         r#"#![no_std]
 pub trait Greeter {
     fn greet(&self) -> u32 {
         42
+    }
+    fn unused(&self) -> u32 {
+        7
     }
 }
 pub struct S;
@@ -526,21 +531,32 @@ pub fn entry(s: &S) -> u32 {
 "#,
     );
 
-    // The default body surfaces as a Function Item at the trait DefPath.
+    // The default body surfaces as a Function Item at the trait DefPath, and is
+    // bucket 3 (generic over `Self`).
     let (greet_id, greet_item) = find_item(&model, "Greeter::greet");
     assert!(matches!(greet_item.kind, ItemKind::Function));
     let greet_flags = flags_for(&model, greet_id);
-    assert_eq!(
-        greet_flags.is_generic, false,
-        "a non-generic trait default method must stay is_generic == false (own_params carve-out); \
-         a raw count() would misclassify it via the inherited `Self`"
+    assert!(
+        greet_flags.is_generic,
+        "a trait default method is generic over `Self` => bucket 3 (the `Self` \
+         monomorphization axis means bucket-1's exactly-one-instance cannot hold)"
     );
     assert_eq!(greet_flags.signature_non_rigid, false);
 
-    // Bucket 1: the caller `entry` forces exactly one covering Instance.
+    // Bucket 3 allows 0+ instances. A CALLED default gets its per-`Self` Instance...
     assert_eq!(
         instances_for(&model, greet_id).len(),
         1,
-        "the called trait default method must have exactly one bucket-1 Instance"
+        "the called trait default `greet` has its one `<S>` Instance"
+    );
+
+    // ...while an UNCALLED trait default is a zero-instance bucket-3 template that
+    // does NOT orphan (bucket 1 would have rejected it — the device-lifecycle bug).
+    let (unused_id, _) = find_item(&model, "Greeter::unused");
+    assert!(flags_for(&model, unused_id).is_generic);
+    assert_eq!(
+        instances_for(&model, unused_id).len(),
+        0,
+        "an uncalled trait default method is a zero-instance bucket-3 template"
     );
 }

@@ -43,7 +43,8 @@ use std::cell::RefCell;
 use regseq_model::{
     args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
     ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
-    IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MmioOp, NonDivergingIntrinsic,
+    IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MatchEntry, MmioOp,
+    NonDivergingIntrinsic,
     Operand, Place, PlaceElem, PointerCoercion, RegseqModel, Rvalue, StatementKind, SwitchTargets,
     SyntheticItemKind, TagEncoding, TerminatorKind, Ty, TyId, UintKind, UnOp, VariantIdx,
     VariantLayout,
@@ -52,8 +53,8 @@ use regseq_model::{
 use super::errno::errno_symbol;
 use super::prelude::HelperUsage;
 use super::{
-    enum_emit, layout_emit, naming, slice_data_const, types, EmitError, InstanceSymbols, NameTable,
-    StorageTy,
+    enum_emit, layout_emit, naming, slice_data_const, types, BackendOptions, EmitError,
+    InstanceSymbols, LifecycleScenario, NameTable, StorageTy,
 };
 
 /// The C identifier for a body-local `local`. The return place is always
@@ -2112,6 +2113,9 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_mmio(op, callee, args, destination, target);
             }
+            // (Device-lifecycle is no longer call-intercepted: the harness verbs
+            // were removed, RD-1; the synthesized `main` drives the lifecycle —
+            // see `emit_lifecycle_synthesis`.)
         }
 
         let callee_expr = match callee {
@@ -2293,6 +2297,10 @@ impl BodyEmit<'_> {
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
     }
+
+    // Device-lifecycle is no longer call-intercepted (RD-1): the bind/teardown/
+    // shutdown verbs were removed. The synthesized `main` drives the lifecycle
+    // from the model — see the free fn `emit_lifecycle_synthesis` below.
 
     /// Recover the (byte-offset expression, access width) of the register named
     /// by the receiver operand of a Form-B mmio wrapper-method call, from the
@@ -4849,6 +4857,352 @@ fn resolve_reloc(model: &RegseqModel, target: InstanceRef) -> Option<InstanceId>
     None
 }
 
+/// The external-linkage symbol of the synthesized device-lifecycle runner — the
+/// entry shim calls it after the author entry (RD-6). Reserved in
+/// `build_instance_symbols` for a lifecycle TU so an author symbol can never be
+/// renamed onto it.
+pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
+
+/// Synthesize the device-lifecycle harness (RD-4): for every interned driver,
+/// one `static void __rseq_lc_<driver>_<scenario>(void)` per selected scenario
+/// (each body drives `register -> create -> associate -> on_init`), plus the
+/// external `__rseq_lc_run()` runner that calls them in order. Returns the empty
+/// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
+/// is pure over `(model, options)`.
+///
+/// Scope (M2-M7): `orderly` emits the teardown dispatch (`present=1`) + always-on
+/// `on_deinit` marker (CR-3); `surprise` mirrors it with `present=0` +
+/// `on_surprise_remove` (both via [`emit_teardown_dispatch`]); `init-fail`
+/// captures on_init's Result and on Err drives the rollback trace
+/// ([`emit_init_fail_body`]); `shutdown` emits `on_system_shutdown` ONLY when
+/// overridden (the lone omit-when-absent callback, D10/I02 — no marker/slot
+/// otherwise). Resource preambles (forward, at bring-up) + postambles (reverse,
+/// at teardown; `skipped(surprise)` for present=0) bracket the callbacks for a
+/// resourceful driver (M7) — trace-only in the oracle (D15), empty for a
+/// fieldless driver. The `on_init` author call is synthesized only when
+/// overridden (`Some`), but the `regseq_lc_call("on_init")` marker is always
+/// emitted (CR-3).
+pub(crate) fn emit_lifecycle_synthesis(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    options: &BackendOptions,
+) -> Result<String, EmitError> {
+    if model.device_lifecycle.drivers.is_empty() {
+        return Ok(String::new());
+    }
+    let mut out = String::new();
+    let mut runner_calls: Vec<String> = Vec::new();
+
+    // Resolve a lifecycle callback's content-addressed `InstanceRef` to the C
+    // symbol of its emitted body, or `None` when the author did not override it
+    // (`resolve_reloc` maps the ref through the post-`F4-2` instance sort).
+    let resolve_sym = |op: &Option<InstanceRef>| -> Result<Option<String>, EmitError> {
+        match op {
+            Some(iref) => {
+                let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
+                    "device-lifecycle callback InstanceRef does not resolve",
+                ))?;
+                Ok(Some(syms.symbol(id).to_string()))
+            }
+            None => Ok(None),
+        }
+    };
+
+    // `drivers` is a BTreeMap keyed by ItemId -> deterministic emission order.
+    // The per-driver `idx` makes every helper name unique even if two drivers
+    // share a logical `name` (the `__rseq_lc_` prefix already precludes a clash
+    // with an author symbol, which sanitizes to `<crate>_…`).
+    for (idx, (driver_item, driver)) in model.device_lifecycle.drivers.iter().enumerate() {
+        let driver_ty = driver_struct_ty(model, *driver_item).ok_or(EmitError::Unsupported(
+            "device-lifecycle driver struct has no emitted type",
+        ))?;
+        let driver_cty = types::c_type(model, names, driver_ty);
+        let name = c_escape(model.strings.resolve(driver.descriptor.name).as_bytes());
+        let match_str =
+            c_escape(render_match_trace(model, &driver.descriptor.match_set).as_bytes());
+        let label = naming::sanitize(model.strings.resolve(driver.descriptor.name));
+
+        // The resource fields (declaration order) — the lifecycle glue runs
+        // forward preambles at bring-up and reverse postambles at teardown
+        // (trace-only in the oracle, D15). Empty for a fieldless driver.
+        let resource_names: Vec<String> = driver
+            .handle
+            .resource_fields
+            .iter()
+            .map(|r| c_escape(model.strings.resolve(r.name).as_bytes()))
+            .collect();
+
+        // The author callback symbols this milestone may invoke (else only the
+        // managed `LC call <cb>` marker is emitted — CR-3).
+        let on_init_sym = resolve_sym(&driver.ops.on_init)?;
+        let on_deinit_sym = resolve_sym(&driver.ops.on_deinit)?;
+        let on_surprise_remove_sym = resolve_sym(&driver.ops.on_surprise_remove)?;
+        let on_init_failure_sym = resolve_sym(&driver.ops.on_init_failure)?;
+        let on_system_shutdown_sym = resolve_sym(&driver.ops.on_system_shutdown)?;
+
+        // Policy-P container morph (M7-B, LC-12): the driver realizes in a
+        // target-view container that EMBEDS the spec driver as `inner` and wraps
+        // it with the OS-managed metadata — `void* __rseq_dev` (the device handle,
+        // recovered via container_of in a real OS; NULL/unobservable in the
+        // oracle) prepended + `uint32_t __rseq_state` appended. The synthesized
+        // create() builds this container; the callbacks run SPEC-VIEW over
+        // `&inst.inner` (CR-7: register-offset recovery + field projection stay
+        // spec-view), so the morph is NON-BEHAVIORAL — the observable is this
+        // struct + the create() init in golden.c (the stdout trace is unchanged).
+        // Emitted for every lifecycle driver (fieldless included).
+        let target_name = format!("__rseq_lc_{idx}_{label}_target");
+        out.push_str(&format!("struct {target_name} {{\n"));
+        out.push_str("    void *__rseq_dev;\n");
+        out.push_str(&format!("    {driver_cty} inner;\n"));
+        out.push_str("    uint32_t __rseq_state;\n");
+        out.push_str("};\n\n");
+
+        for &scenario in options.lifecycle_scenarios() {
+            let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
+            out.push_str(&format!("static void {fn_name}(void) {{\n"));
+
+            // Bring-up: managed steps that always run, identical across scenarios
+            // (registration carries the descriptor name + typed match, R14).
+            out.push_str(&format!(
+                "    regseq_lc_register(\"{name}\", \"{match_str}\");\n"
+            ));
+            out.push_str("    regseq_lc_create();\n");
+            out.push_str("    regseq_lc_associate();\n");
+
+            // Resource preambles (bring-up acquire) in forward declaration order
+            // — trace-only in the oracle (D15); empty for a fieldless driver. Runs
+            // for every scenario (resources are acquired before on_init regardless
+            // of the teardown mode); the matching reverse postambles run at
+            // teardown ([`emit_teardown_dispatch`]).
+            for res in &resource_names {
+                out.push_str(&format!("    regseq_lc_preamble(\"{res}\");\n"));
+            }
+
+            // The created instance — a distinct zero-initialized backend-local
+            // whose address is each callback's `&mut self`. Declared once iff a
+            // callback invoked in THIS scenario is overridden (an empty
+            // `impl Lifecycle` would otherwise leave it unused -> -Wunused).
+            let needs_inst = match scenario {
+                LifecycleScenario::Orderly => on_init_sym.is_some() || on_deinit_sym.is_some(),
+                LifecycleScenario::Surprise => {
+                    on_init_sym.is_some() || on_surprise_remove_sym.is_some()
+                }
+                LifecycleScenario::InitFail => on_init_sym.is_some(),
+                LifecycleScenario::Shutdown => {
+                    on_init_sym.is_some() || on_system_shutdown_sym.is_some()
+                }
+            };
+            if needs_inst {
+                // The target-view container instance (Policy-P morph). The
+                // callbacks take `&inst.inner` — a spec-view pointer to the
+                // embedded driver (CR-7).
+                out.push_str(&format!("    struct {target_name} inst = {{0}};\n"));
+            }
+
+            // on_init: the marker always prints (CR-3). The author body is
+            // invoked iff overridden — its Result discarded (CR-4) in every
+            // scenario except `init-fail`, which captures it to drive rollback.
+            out.push_str("    regseq_lc_call(\"on_init\");\n");
+
+            // Scenario-specific on_init handling + teardown/shutdown suffix.
+            match scenario {
+                // Orderly teardown (device present, M2): on_init Result discarded,
+                // then the teardown dispatch (present=1) + always-on `on_deinit`.
+                LifecycleScenario::Orderly => {
+                    if let Some(sym) = &on_init_sym {
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
+                    }
+                    emit_teardown_dispatch(1, "on_deinit", &on_deinit_sym, &resource_names, &mut out);
+                }
+                // Surprise removal (device gone, M4): on_init Result discarded, then
+                // the teardown dispatch (present=0) + always-on `on_surprise_remove`.
+                // Byte-distinct from orderly (present=0, surprise_remove vs deinit);
+                // HW-touching postambles would be `skipped(surprise)` once a
+                // resourceful fixture lands (M7) — none here (fieldless).
+                LifecycleScenario::Surprise => {
+                    if let Some(sym) = &on_init_sym {
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
+                    }
+                    emit_teardown_dispatch(
+                        0,
+                        "on_surprise_remove",
+                        &on_surprise_remove_sym,
+                        &resource_names,
+                        &mut out,
+                    );
+                }
+                // Init-failure rollback (M3): capture on_init's Result; on the Err
+                // niche discriminant emit `LC on_init -> Err`, the always-on
+                // on_init_failure marker (CR-3), and the author failure body iff
+                // overridden. Emits nothing when on_init is not overridden (the
+                // trait-default `Ok` can never take the failure path).
+                LifecycleScenario::InitFail => {
+                    emit_init_fail_body(
+                        model,
+                        names,
+                        syms,
+                        &driver.ops.on_init,
+                        &on_init_failure_sym,
+                        &mut out,
+                    )?;
+                }
+                // System shutdown (M5): on_init Result discarded, then
+                // `on_system_shutdown` — the ONLY omit-when-absent callback
+                // (D10/I02): UNLIKE the four glued callbacks it emits NO marker and
+                // NO slot when not overridden; when overridden, the marker + the
+                // author body (its Result discarded, CR-4).
+                LifecycleScenario::Shutdown => {
+                    if let Some(sym) = &on_init_sym {
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
+                    }
+                    if let Some(sym) = &on_system_shutdown_sym {
+                        out.push_str("    regseq_lc_call(\"on_system_shutdown\");\n");
+                        out.push_str(&format!("    {sym}(&inst.inner);\n"));
+                    }
+                }
+            }
+
+            out.push_str("}\n\n");
+            runner_calls.push(format!("    {fn_name}();\n"));
+        }
+    }
+
+    out.push_str(&format!("void {LIFECYCLE_RUNNER_SYMBOL}(void) {{\n"));
+    for call in runner_calls {
+        out.push_str(&call);
+    }
+    out.push_str("}\n");
+    Ok(out)
+}
+
+/// Emit a teardown-dispatch suffix shared by the orderly (M2) and surprise (M4)
+/// scenarios: the `present` dispatch marker, then the teardown callback's marker
+/// ALWAYS (CR-3 — the trait-default no-op still counts as invoked), then the
+/// author body iff overridden (its Result discarded, CR-4), then the resource
+/// postambles in REVERSE declaration order (M7) — HW-reachable (released) when
+/// `present=1`, `skipped(surprise)` when `present=0` (HW gone). Trace-only in the
+/// oracle (D15); the postamble loop is empty for a fieldless driver.
+fn emit_teardown_dispatch(
+    present: u8,
+    cb: &str,
+    cb_sym: &Option<String>,
+    resource_names: &[String],
+    out: &mut String,
+) {
+    out.push_str(&format!("    regseq_lc_teardown({present});\n"));
+    out.push_str(&format!("    regseq_lc_call(\"{cb}\");\n"));
+    if let Some(sym) = cb_sym {
+        out.push_str(&format!("    {sym}(&inst.inner);\n"));
+    }
+    let skipped = if present == 0 { 1 } else { 0 };
+    for res in resource_names.iter().rev() {
+        out.push_str(&format!("    regseq_lc_postamble(\"{res}\", {skipped});\n"));
+    }
+}
+
+/// Emit the `init-fail` scenario's on_init Result inspection + rollback (M3/T14).
+///
+/// When `on_init` is overridden, capture its `Result<(), RegseqError>` C struct,
+/// read the niche discriminant (the exact machinery the errno exit-adapter uses —
+/// [`niche_discriminant_read_block`] over the [`enum_emit`] shape/tag), and on the
+/// Err discriminant emit `LC on_init -> Err`, the always-on `LC call on_init_failure`
+/// marker (CR-3 — the trait-default no-op still counts as invoked), and the author
+/// failure body iff overridden. The reverse partial postamble (high-water mark,
+/// GRILL D12) lands with the first resourceful fixture (M7); a fieldless driver
+/// rolls back nothing. Emits nothing when `on_init` is not overridden: the
+/// trait-default `Ok(())` can never take the failure path. The process exits
+/// cleanly — the rollback is asserted by the stdout trace, not a nonzero exit.
+fn emit_init_fail_body(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    on_init: &Option<InstanceRef>,
+    on_init_failure_sym: &Option<String>,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let Some(iref) = on_init else {
+        return Ok(());
+    };
+    let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
+        "device-lifecycle on_init InstanceRef does not resolve",
+    ))?;
+    let sym = syms.symbol(id).to_string();
+    let data = model.instances[id].kind.as_function().ok_or(EmitError::Unsupported(
+        "device-lifecycle on_init instance is not a function",
+    ))?;
+    let result_ty = model.sigs.resolve(data.fn_sig).output;
+
+    // The on_init `Result<(), RegseqError>` niche enum: the niche cell scalar (the
+    // discriminant temp's C type + the `Ok` test) and the `Ok` discriminant
+    // (variant index 0, rustc's `Result` order).
+    let result_shape = enum_emit::enum_shape(model, result_ty).ok_or(EmitError::Unsupported(
+        "init-fail: the on_init return type is not an enum",
+    ))?;
+    let niche_scalar_ty = match enum_emit::enum_tag(model, result_shape) {
+        enum_emit::EnumTag::Niche { scalar_ty, .. } => scalar_ty,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "init-fail: the on_init Result is not niche-encoded",
+            ))
+        }
+    };
+    let ok_disc = match result_shape {
+        EnumShape::Multiple { variants, .. } if !variants.is_empty() => variants[0].discriminant,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "init-fail: the on_init Result is not a multi-variant enum",
+            ))
+        }
+    };
+
+    let result_decl = types::declare(model, names, result_ty, "__r");
+    let disc_cty = types::c_type(model, names, niche_scalar_ty);
+    let niche_block =
+        niche_discriminant_read_block(model, result_ty, "__r", "__disc", niche_scalar_ty, "__nd")?;
+    let ok_disc_render = render_discriminant(model, niche_scalar_ty, ok_disc)?;
+
+    // Capture on_init's Result and branch on the Err niche discriminant (`!= Ok`,
+    // the inverse of the exit-adapter's `== Ok -> return 0`).
+    out.push_str(&format!("    {result_decl} = {sym}(&inst.inner);\n"));
+    out.push_str(&format!("    {disc_cty} __disc;\n"));
+    out.push_str(&format!("    {niche_block}\n"));
+    out.push_str(&format!("    if (__disc != {ok_disc_render}) {{\n"));
+    out.push_str("        regseq_lc_on_init_err();\n");
+    out.push_str("        regseq_lc_call(\"on_init_failure\");\n");
+    if let Some(fsym) = on_init_failure_sym {
+        out.push_str(&format!("        {fsym}(&inst.inner);\n"));
+    }
+    out.push_str("    }\n");
+    Ok(())
+}
+
+/// The emitted `TyId` of a driver struct Item (the `inst` local's C type): the
+/// first `Ty::Struct` whose `item` is `driver_item` (a monomorphic driver has
+/// one such row).
+fn driver_struct_ty(model: &RegseqModel, driver_item: ItemId) -> Option<TyId> {
+    (0..model.types.len())
+        .map(|i| TyId::from_u32(i as u32))
+        .find(|ty| matches!(&model.types[*ty], Ty::Struct { item, .. } if *item == driver_item))
+}
+
+/// Render a driver's match set for the `LC register` trace. Renders the first
+/// match entry only (devicetree now; PCI/AMBA arrive with M1 recognition).
+/// Rendering only `.first()` is an accepted scope decision (PLAN SCOPE-1,
+/// 2026-06-07): the descriptor retains every entry, but multi-`compatible`
+/// rendering is out of scope — there is no `LC-MATCH-MULTI` row or fixture.
+fn render_match_trace(model: &RegseqModel, match_set: &[MatchEntry]) -> String {
+    match match_set.first() {
+        Some(MatchEntry::Devicetree { compatible }) => {
+            format!("dt:{}", model.strings.resolve(*compatible))
+        }
+        Some(MatchEntry::Pci { vendor, device, .. }) => format!("pci:{vendor:#06x}:{device:#06x}"),
+        Some(MatchEntry::Amba { id, mask }) => format!("amba:{id:#x}/{mask:#x}"),
+        Some(_) => "?".to_string(),
+        None => String::new(),
+    }
+}
+
 /// The section 16 operator verb for an `Overflow` `BinOp` (the `%s` slot in
 /// `"attempt to <op> with overflow"`).
 fn binop_verb(op: &BinOp) -> &'static str {
@@ -5011,8 +5365,62 @@ fn render_float(kind: FloatKind, bits: u128) -> String {
 
 #[cfg(test)]
 mod tests {
-    use super::{render_float, render_int, render_uint};
-    use regseq_model::{FloatKind, IntKind, UintKind};
+    use super::{render_float, render_int, render_match_trace, render_uint};
+    use regseq_model::{FloatKind, IntKind, MatchEntry, RegseqModel, StableCrateId, UintKind};
+
+    #[test]
+    fn render_match_trace_formats_dt_pci_amba() {
+        let mut model = RegseqModel::with_primary("test", StableCrateId(1));
+        let dt = model.strings.intern("acme,fake");
+        assert_eq!(
+            render_match_trace(&model, &[MatchEntry::Devicetree { compatible: dt }]),
+            "dt:acme,fake"
+        );
+        assert_eq!(
+            render_match_trace(
+                &model,
+                &[MatchEntry::Pci {
+                    vendor: 0x8086,
+                    device: 0x100e,
+                    subsystem: None,
+                    class: None,
+                }]
+            ),
+            "pci:0x8086:0x100e"
+        );
+        assert_eq!(
+            render_match_trace(
+                &model,
+                &[MatchEntry::Amba {
+                    id: 0x0004_1011,
+                    mask: 0x000f_ffff,
+                }]
+            ),
+            "amba:0x41011/0xfffff"
+        );
+    }
+
+    #[test]
+    fn render_match_trace_renders_first_entry_only() {
+        // PLAN SCOPE-1: a multi-entry match set renders `.first()`; the rest are
+        // retained in the descriptor but not traced.
+        let model = RegseqModel::with_primary("test", StableCrateId(1));
+        assert_eq!(
+            render_match_trace(
+                &model,
+                &[
+                    MatchEntry::Pci {
+                        vendor: 0x8086,
+                        device: 0x100e,
+                        subsystem: None,
+                        class: None,
+                    },
+                    MatchEntry::Amba { id: 0x1, mask: 0x2 },
+                ]
+            ),
+            "pci:0x8086:0x100e"
+        );
+    }
 
     #[test]
     fn render_int_uses_twos_complement_bit_pattern() {

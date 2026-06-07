@@ -63,6 +63,53 @@ fn emit_is_byte_identical_across_two_calls() {
     assert_eq!(a, b);
 }
 
+#[test]
+fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
+    // T12: a no-lifecycle TU is byte-unchanged — no device-lifecycle trace
+    // hooks (so adding the construct churns no existing golden).
+    let without = emit_generic_c(&trivial_model()).unwrap();
+    assert!(
+        !without.contains("regseq_lc_"),
+        "a no-lifecycle TU must not emit device-lifecycle trace hooks"
+    );
+
+    // A TU with a recognized lifecycle driver emits the trace-hook block. The
+    // synthesizer needs the driver's emitted struct type (`driver_struct_ty`),
+    // so register a fieldless driver struct and key the descriptor by its Item.
+    let mut m = model();
+    let driver_ty = push_struct_instance(&mut m, "Fake", struct_layout(0, 1, None, vec![]));
+    let driver_item = match &m.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        other => panic!("expected a struct ty, got {other:?}"),
+    };
+    let name = m.strings.intern("fake");
+    m.device_lifecycle.drivers.insert(
+        driver_item,
+        regseq_model::DriverLifecycle {
+            descriptor: regseq_model::DriverDescriptor {
+                name,
+                match_set: Vec::new(),
+                device_class: regseq_model::ClassTag::Generic,
+            },
+            handle: regseq_model::DriverHandle::default(),
+            ops: regseq_model::LifecycleOps::default(),
+        },
+    );
+    let with = emit_generic_c(&m).unwrap();
+    for helper in [
+        "regseq_lc_register",
+        "regseq_lc_create",
+        "regseq_lc_associate",
+        "regseq_lc_call",
+        "regseq_lc_teardown",
+        "regseq_lc_on_init_err",
+        "regseq_lc_preamble",
+        "regseq_lc_postamble",
+    ] {
+        assert!(with.contains(helper), "lifecycle TU must emit `{helper}`");
+    }
+}
+
 // ---------------------------------------------------------------------------
 // Hand-built model scaffolding for the task-c1 layout / naming tests.
 // ---------------------------------------------------------------------------
@@ -3160,13 +3207,17 @@ fn prelude_ordinary_idents_all_defined_in_prelude() {
     // sync with the *emittable* helper superset (Change B step 1 / plan 10):
     // every reserved name is defined when the full library is requested.
     // `helper_block` is now demand-driven, so feed it `HelperUsage::all()`; the
-    // reservation stays full even though any one TU emits only a subset.
+    // reservation stays full even though any one TU emits only a subset. The
+    // device-lifecycle `LIFECYCLE_HELPERS` are reserved only for a lifecycle TU
+    // (RD-7) but every reserved name must still be a real helper, so check the
+    // full superset (`include_lifecycle = true`) against the superset text.
     let prelude_text = format!(
-        "{}{}",
+        "{}{}{}",
         prelude::PRELUDE,
-        prelude::helper_block(&prelude::HelperUsage::all())
+        prelude::helper_block(&prelude::HelperUsage::all()),
+        prelude::LIFECYCLE_HELPERS,
     );
-    for ident in prelude_ordinary_idents() {
+    for ident in prelude_ordinary_idents(true) {
         assert!(
             prelude_text.contains(&format!("{ident}(")),
             "reserved prelude ident `{ident}` is not emitted as a function"
@@ -7338,7 +7389,8 @@ fn resolve_shim_unit_void_returns_void_shim_with_sanitized_symbol() {
     assert_eq!(
         resolve_entry_shim(&m, "regseq_main").unwrap(),
         EntryShim::UnitVoid {
-            entry: "regseq_main".to_string()
+            entry: "regseq_main".to_string(),
+            lifecycle_runner: None,
         }
     );
 }
@@ -7354,7 +7406,8 @@ fn resolve_shim_default_entry_err_result_returns_adapter_symbol() {
     assert_eq!(
         resolve_entry_shim(&m, "regseq_main").unwrap(),
         EntryShim::ErrResult {
-            adapter: "regseq_main__regseq_exit".to_string()
+            adapter: "regseq_main__regseq_exit".to_string(),
+            lifecycle_runner: None,
         }
     );
 }
@@ -7435,7 +7488,8 @@ fn resolve_shim_custom_entry_unit_void_is_allowed() {
     assert_eq!(
         resolve_entry_shim(&m, "my_custom_entry").unwrap(),
         EntryShim::UnitVoid {
-            entry: "my_custom_entry".to_string()
+            entry: "my_custom_entry".to_string(),
+            lifecycle_runner: None,
         }
     );
 }
@@ -7451,7 +7505,8 @@ fn emit_for_entry_unit_void_tu_is_identical_to_emit_generic_c() {
     assert_eq!(
         emit.shim,
         EntryShim::UnitVoid {
-            entry: "regseq_main".to_string()
+            entry: "regseq_main".to_string(),
+            lifecycle_runner: None,
         }
     );
     // I02/R05: the unit-void TU is byte-identical to the plain emit.
@@ -7491,6 +7546,7 @@ fn generate_main_c_unit_void_is_byte_identical_to_the_historical_void_shim() {
 fn generate_main_c_err_result_emits_int_shim_calling_the_adapter() {
     let main_c = generate_main_c(&EntryShim::ErrResult {
         adapter: "regseq_main__regseq_exit".to_string(),
+        lifecycle_runner: None,
     });
     assert!(main_c.contains("extern int regseq_main__regseq_exit(void);"));
     assert!(main_c.contains("return regseq_main__regseq_exit();"));
@@ -7506,7 +7562,8 @@ fn entry_shim_unit_void_constructor_matches_struct_form() {
     assert_eq!(
         EntryShim::unit_void("foo"),
         EntryShim::UnitVoid {
-            entry: "foo".to_string()
+            entry: "foo".to_string(),
+            lifecycle_runner: None,
         }
     );
 }
@@ -7577,7 +7634,8 @@ fn emit_err_result_entry(m: &mut RegseqModel, err_ty: TyId) -> String {
     assert_eq!(
         emit.shim,
         EntryShim::ErrResult {
-            adapter: "regseq_main__regseq_exit".to_string()
+            adapter: "regseq_main__regseq_exit".to_string(),
+            lifecycle_runner: None,
         }
     );
     emit.tu

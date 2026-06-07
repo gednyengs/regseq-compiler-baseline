@@ -6,7 +6,9 @@
 //! `serde_json::to_writer_pretty` over `RegseqModel`'s
 //! `Serialize` derive at `crates/regseq-model/src/model.rs:53`, or
 //! the generic-C translation unit via
-//! `regseq_backends::emit_generic_c(&model)`.
+//! `regseq_backends::emit_generic_c_with(&model, &backend_options)`
+//! (the `backend.*` params; [`emit_one_with`]). Emission is pure over
+//! `(model, BackendOptions)` (RD-7/N2).
 //!
 //! Per `pipeline-refactor.md:879`, the `Driver` and `Analysis`
 //! variants are accepted at the CLI surface but not implemented
@@ -18,6 +20,7 @@ use std::fs;
 use std::io::Write;
 use std::path::{Path, PathBuf};
 
+use regseq_backends::BackendOptions;
 use regseq_config::EmitSpec;
 use regseq_model::{PrettyPrinter, RegseqModel};
 
@@ -32,6 +35,19 @@ use regseq_model::{PrettyPrinter, RegseqModel};
 /// surfacing user-visible warnings via
 /// `collect_unsupported_warnings`.
 pub fn emit_one(model: &RegseqModel, spec: &EmitSpec, output_dir: &Path) -> std::io::Result<()> {
+    emit_one_with(model, spec, output_dir, &BackendOptions::default())
+}
+
+/// [`emit_one`] with explicit backend codegen options (RD-5/N1). The generic-C
+/// and binary arms thread `backend_options` (derived from the `backend.*`
+/// compiler params) to the backend so the device-lifecycle scenario selection
+/// reaches the synthesized harness `main` (T28). All other arms ignore it.
+pub fn emit_one_with(
+    model: &RegseqModel,
+    spec: &EmitSpec,
+    output_dir: &Path,
+    backend_options: &BackendOptions,
+) -> std::io::Result<()> {
     match spec {
         EmitSpec::Model { path } => {
             let dest = resolve(path, output_dir, "model.txt");
@@ -50,7 +66,7 @@ pub fn emit_one(model: &RegseqModel, spec: &EmitSpec, output_dir: &Path) -> std:
         EmitSpec::GenericC { path } => {
             let dest = resolve(path, output_dir, "generic.c");
             ensure_parent(&dest)?;
-            let code = regseq_backends::emit_generic_c(model)
+            let code = regseq_backends::emit_generic_c_with(model, backend_options)
                 .map_err(|e| std::io::Error::other(e.to_string()))?;
             fs::write(dest, code)
         }
@@ -68,8 +84,9 @@ pub fn emit_one(model: &RegseqModel, spec: &EmitSpec, output_dir: &Path) -> std:
             // unit-void path is wired here; an error-returning entry's runnable
             // binary lands once the in-TU adapter exists (regseq-backends-28 /
             // regseq-driver-90).
-            let emit = regseq_backends::emit_generic_c_for_entry(model, "regseq_main")
-                .map_err(|e| std::io::Error::other(format!("--emit bin: {e}")))?;
+            let emit =
+                regseq_backends::emit_generic_c_for_entry_with(model, "regseq_main", backend_options)
+                    .map_err(|e| std::io::Error::other(format!("--emit bin: {e}")))?;
             let tu_dest = output_dir.join("generic.c");
             ensure_parent(&tu_dest)?;
             fs::write(&tu_dest, &emit.tu)?;

@@ -20,7 +20,7 @@ use super::BridgeCtxt;
 /// Read the `#[rseq::framework_type("...")]` tool attribute on
 /// `def_id` and map it to a [`FrameworkType`].
 ///
-/// Mirrors `diag_log::recognition::recognise_log_intrinsic_attr`: the
+/// Mirrors `intrinsic::recognition::recognise_intrinsic_attr`: the
 /// tool-attribute path is `[rseq, framework_type]` (fixtures enable it
 /// with `#![register_tool(rseq)]`). Returns `None` when the attribute
 /// is absent, appears more than once, is not a single string literal,
@@ -84,7 +84,7 @@ fn record_framework_type(model: &mut RegseqModel, item: ItemId, ty: FrameworkTyp
 /// use the reserved `StableCrateId(0)`, whose hash panics inside
 /// `def_path_hash_to_def_id`; callers MUST filter those out before
 /// calling this helper.
-fn recover_source_def_id(
+pub(crate) fn recover_source_def_id(
     tcx: rustc_middle::ty::TyCtxt<'_>,
     def_path_hash: regseq_model::DefPathHash,
 ) -> Option<DefId> {
@@ -100,7 +100,7 @@ fn recover_source_def_id(
 /// its `#[rseq::framework_type("...")]` tool attribute, and record the
 /// recognized [`FrameworkType`] onto its `ItemId`.
 ///
-/// Mirrors `diag_log::materialise_log_intrinsics` in shape, but is
+/// Mirrors `intrinsic::materialise_intrinsics` in shape, but is
 /// item-driven (walking `model.items` enum entries) rather than
 /// call-driven. Recognition fires for any marked enum regardless of
 /// how it is used -- including an enum that appears only as a
