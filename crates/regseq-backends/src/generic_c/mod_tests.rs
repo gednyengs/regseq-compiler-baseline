@@ -103,6 +103,8 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
         "regseq_lc_call",
         "regseq_lc_teardown",
         "regseq_lc_on_init_err",
+        "regseq_lc_preamble",
+        "regseq_lc_postamble",
     ] {
         assert!(with.contains(helper), "lifecycle TU must emit `{helper}`");
     }

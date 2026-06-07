@@ -4870,16 +4870,18 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
 /// is pure over `(model, options)`.
 ///
-/// Scope (M2-M5): `orderly` emits the teardown dispatch (`present=1`) + always-on
+/// Scope (M2-M7): `orderly` emits the teardown dispatch (`present=1`) + always-on
 /// `on_deinit` marker (CR-3); `surprise` mirrors it with `present=0` +
 /// `on_surprise_remove` (both via [`emit_teardown_dispatch`]); `init-fail`
 /// captures on_init's Result and on Err drives the rollback trace
 /// ([`emit_init_fail_body`]); `shutdown` emits `on_system_shutdown` ONLY when
 /// overridden (the lone omit-when-absent callback, D10/I02 — no marker/slot
-/// otherwise). Resource preamble/postamble loops are deferred to the first
-/// resourceful fixture (M7) so a postamble can never appear without its preamble
-/// (C01). The `on_init` author call is synthesized only when overridden (`Some`),
-/// but the `regseq_lc_call("on_init")` marker is always emitted (CR-3).
+/// otherwise). Resource preambles (forward, at bring-up) + postambles (reverse,
+/// at teardown; `skipped(surprise)` for present=0) bracket the callbacks for a
+/// resourceful driver (M7) — trace-only in the oracle (D15), empty for a
+/// fieldless driver. The `on_init` author call is synthesized only when
+/// overridden (`Some`), but the `regseq_lc_call("on_init")` marker is always
+/// emitted (CR-3).
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
     names: &NameTable,
@@ -4921,6 +4923,16 @@ pub(crate) fn emit_lifecycle_synthesis(
             c_escape(render_match_trace(model, &driver.descriptor.match_set).as_bytes());
         let label = naming::sanitize(model.strings.resolve(driver.descriptor.name));
 
+        // The resource fields (declaration order) — the lifecycle glue runs
+        // forward preambles at bring-up and reverse postambles at teardown
+        // (trace-only in the oracle, D15). Empty for a fieldless driver.
+        let resource_names: Vec<String> = driver
+            .handle
+            .resource_fields
+            .iter()
+            .map(|r| c_escape(model.strings.resolve(r.name).as_bytes()))
+            .collect();
+
         // The author callback symbols this milestone may invoke (else only the
         // managed `LC call <cb>` marker is emitted — CR-3).
         let on_init_sym = resolve_sym(&driver.ops.on_init)?;
@@ -4940,6 +4952,15 @@ pub(crate) fn emit_lifecycle_synthesis(
             ));
             out.push_str("    regseq_lc_create();\n");
             out.push_str("    regseq_lc_associate();\n");
+
+            // Resource preambles (bring-up acquire) in forward declaration order
+            // — trace-only in the oracle (D15); empty for a fieldless driver. Runs
+            // for every scenario (resources are acquired before on_init regardless
+            // of the teardown mode); the matching reverse postambles run at
+            // teardown ([`emit_teardown_dispatch`]).
+            for res in &resource_names {
+                out.push_str(&format!("    regseq_lc_preamble(\"{res}\");\n"));
+            }
 
             // The created instance — a distinct zero-initialized backend-local
             // whose address is each callback's `&mut self`. Declared once iff a
@@ -4972,7 +4993,7 @@ pub(crate) fn emit_lifecycle_synthesis(
                     if let Some(sym) = &on_init_sym {
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
-                    emit_teardown_dispatch(1, "on_deinit", &on_deinit_sym, &mut out);
+                    emit_teardown_dispatch(1, "on_deinit", &on_deinit_sym, &resource_names, &mut out);
                 }
                 // Surprise removal (device gone, M4): on_init Result discarded, then
                 // the teardown dispatch (present=0) + always-on `on_surprise_remove`.
@@ -4983,7 +5004,13 @@ pub(crate) fn emit_lifecycle_synthesis(
                     if let Some(sym) = &on_init_sym {
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
-                    emit_teardown_dispatch(0, "on_surprise_remove", &on_surprise_remove_sym, &mut out);
+                    emit_teardown_dispatch(
+                        0,
+                        "on_surprise_remove",
+                        &on_surprise_remove_sym,
+                        &resource_names,
+                        &mut out,
+                    );
                 }
                 // Init-failure rollback (M3): capture on_init's Result; on the Err
                 // niche discriminant emit `LC on_init -> Err`, the always-on
@@ -5032,14 +5059,25 @@ pub(crate) fn emit_lifecycle_synthesis(
 /// Emit a teardown-dispatch suffix shared by the orderly (M2) and surprise (M4)
 /// scenarios: the `present` dispatch marker, then the teardown callback's marker
 /// ALWAYS (CR-3 — the trait-default no-op still counts as invoked), then the
-/// author body iff overridden (its Result discarded, CR-4). The HW-reachable
-/// resource postamble loop (reverse, `skipped(surprise)` for present=0) lands
-/// with the first resourceful fixture (M7).
-fn emit_teardown_dispatch(present: u8, cb: &str, cb_sym: &Option<String>, out: &mut String) {
+/// author body iff overridden (its Result discarded, CR-4), then the resource
+/// postambles in REVERSE declaration order (M7) — HW-reachable (released) when
+/// `present=1`, `skipped(surprise)` when `present=0` (HW gone). Trace-only in the
+/// oracle (D15); the postamble loop is empty for a fieldless driver.
+fn emit_teardown_dispatch(
+    present: u8,
+    cb: &str,
+    cb_sym: &Option<String>,
+    resource_names: &[String],
+    out: &mut String,
+) {
     out.push_str(&format!("    regseq_lc_teardown({present});\n"));
     out.push_str(&format!("    regseq_lc_call(\"{cb}\");\n"));
     if let Some(sym) = cb_sym {
         out.push_str(&format!("    {sym}(&inst);\n"));
+    }
+    let skipped = if present == 0 { 1 } else { 0 };
+    for res in resource_names.iter().rev() {
+        out.push_str(&format!("    regseq_lc_postamble(\"{res}\", {skipped});\n"));
     }
 }
 

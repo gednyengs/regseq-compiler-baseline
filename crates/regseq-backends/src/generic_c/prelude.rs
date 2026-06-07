@@ -135,6 +135,16 @@ __attribute__((unused)) static void regseq_lc_teardown(int present) {
 __attribute__((unused)) static void regseq_lc_on_init_err(void) {
     printf("LC on_init -> Err\n");
 }
+__attribute__((unused)) static void regseq_lc_preamble(const char *res) {
+    printf("LC preamble %s\n", res);
+}
+__attribute__((unused)) static void regseq_lc_postamble(const char *res, int skipped) {
+    if (skipped) {
+        printf("LC postamble %s skipped(surprise)\n", res);
+    } else {
+        printf("LC postamble %s\n", res);
+    }
+}
 "#;
 
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the

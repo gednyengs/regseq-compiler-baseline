@@ -1,0 +1,20 @@
+LC register handle match=dt:acme,handle
+LC create
+LC associate
+LC preamble regs
+LC call on_init
+W32 @0x000 = 0x00000000
+W32 @0x000 = 0x00000005
+LC teardown present=1
+LC call on_deinit
+LC postamble regs
+LC register handle match=dt:acme,handle
+LC create
+LC associate
+LC preamble regs
+LC call on_init
+W32 @0x000 = 0x00000000
+W32 @0x000 = 0x00000005
+LC teardown present=0
+LC call on_surprise_remove
+LC postamble regs skipped(surprise)
