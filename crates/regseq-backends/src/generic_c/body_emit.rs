@@ -4870,14 +4870,15 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// string for a no-lifecycle TU so its `.c` is byte-unchanged (RD-7); emission
 /// is pure over `(model, options)`.
 ///
-/// Scope (M2): the `orderly` scenario diverges — after the init sequence it
-/// emits the teardown dispatch marker (`present=1`) and the always-on `on_deinit`
-/// marker (CR-3), invoking the author body iff overridden. `surprise`/`init-fail`/
-/// `shutdown` remain the init-only sequence until their milestones (M3-M5).
-/// Resource preamble/postamble loops are deferred to the first resourceful
-/// fixture (M7) so a postamble can never appear without its preamble (C01). The
-/// `on_init` author call is synthesized only when overridden (`Some`), but the
-/// `regseq_lc_call("on_init")` marker is always emitted (CR-3).
+/// Scope (M2-M3): the `orderly` scenario emits the teardown dispatch marker
+/// (`present=1`) and the always-on `on_deinit` marker (CR-3), invoking the author
+/// body iff overridden; `init-fail` captures on_init's Result and on Err drives
+/// the rollback trace ([`emit_init_fail_body`]). `surprise`/`shutdown` remain the
+/// init-only sequence until their milestones (M4/M5). Resource preamble/postamble
+/// loops are deferred to the first resourceful fixture (M7) so a postamble can
+/// never appear without its preamble (C01). The `on_init` author call is
+/// synthesized only when overridden (`Some`), but the `regseq_lc_call("on_init")`
+/// marker is always emitted (CR-3).
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
     names: &NameTable,
@@ -4923,6 +4924,7 @@ pub(crate) fn emit_lifecycle_synthesis(
         // managed `LC call <cb>` marker is emitted — CR-3).
         let on_init_sym = resolve_sym(&driver.ops.on_init)?;
         let on_deinit_sym = resolve_sym(&driver.ops.on_deinit)?;
+        let on_init_failure_sym = resolve_sym(&driver.ops.on_init_failure)?;
 
         for &scenario in options.lifecycle_scenarios() {
             let fn_name = format!("__rseq_lc_{idx}_{label}_{}", scenario.ident());
@@ -4946,33 +4948,51 @@ pub(crate) fn emit_lifecycle_synthesis(
                 out.push_str(&format!("    {driver_cty} inst = {{0}};\n"));
             }
 
-            // on_init: the marker always prints (CR-3); the author body is
-            // invoked iff overridden.
+            // on_init: the marker always prints (CR-3). The author body is
+            // invoked iff overridden — its Result discarded (CR-4) in every
+            // scenario except `init-fail`, which captures it to drive rollback.
             out.push_str("    regseq_lc_call(\"on_init\");\n");
-            if let Some(sym) = &on_init_sym {
-                out.push_str(&format!("    {sym}(&inst);\n"));
-            }
 
-            // Scenario-specific teardown/shutdown suffix.
+            // Scenario-specific on_init handling + teardown/shutdown suffix.
             match scenario {
-                // Orderly teardown (device present, M2): the dispatch marker
-                // (present=1), then the deinit marker ALWAYS (CR-3 — the
-                // trait-default no-op still counts as invoked), then the author
-                // body iff overridden (its Result discarded, CR-4). HW-reachable
-                // resource postambles land with the first resourceful fixture
-                // (M7) so a postamble can never appear without its preamble (C01).
+                // Orderly teardown (device present, M2): on_init Result discarded,
+                // then the dispatch marker (present=1), then the deinit marker
+                // ALWAYS (CR-3 — the trait-default no-op still counts as invoked),
+                // then the author body iff overridden. HW-reachable resource
+                // postambles land with the first resourceful fixture (M7) so a
+                // postamble can never appear without its preamble (C01).
                 LifecycleScenario::Orderly => {
+                    if let Some(sym) = &on_init_sym {
+                        out.push_str(&format!("    {sym}(&inst);\n"));
+                    }
                     out.push_str("    regseq_lc_teardown(1);\n");
                     out.push_str("    regseq_lc_call(\"on_deinit\");\n");
                     if let Some(sym) = &on_deinit_sym {
                         out.push_str(&format!("    {sym}(&inst);\n"));
                     }
                 }
-                // Surprise / init-failure / shutdown keep the init-only body
-                // until their milestones (M3-M5).
-                LifecycleScenario::Surprise
-                | LifecycleScenario::InitFail
-                | LifecycleScenario::Shutdown => {}
+                // Init-failure rollback (M3): capture on_init's Result; on the Err
+                // niche discriminant emit `LC on_init -> Err`, the always-on
+                // on_init_failure marker (CR-3), and the author failure body iff
+                // overridden. Emits nothing when on_init is not overridden (the
+                // trait-default `Ok` can never take the failure path).
+                LifecycleScenario::InitFail => {
+                    emit_init_fail_body(
+                        model,
+                        names,
+                        syms,
+                        &driver.ops.on_init,
+                        &on_init_failure_sym,
+                        &mut out,
+                    )?;
+                }
+                // Surprise / shutdown keep the init-only body (on_init discarded)
+                // until their milestones (M4/M5).
+                LifecycleScenario::Surprise | LifecycleScenario::Shutdown => {
+                    if let Some(sym) = &on_init_sym {
+                        out.push_str(&format!("    {sym}(&inst);\n"));
+                    }
+                }
             }
 
             out.push_str("}\n\n");
@@ -4986,6 +5006,82 @@ pub(crate) fn emit_lifecycle_synthesis(
     }
     out.push_str("}\n");
     Ok(out)
+}
+
+/// Emit the `init-fail` scenario's on_init Result inspection + rollback (M3/T14).
+///
+/// When `on_init` is overridden, capture its `Result<(), RegseqError>` C struct,
+/// read the niche discriminant (the exact machinery the errno exit-adapter uses —
+/// [`niche_discriminant_read_block`] over the [`enum_emit`] shape/tag), and on the
+/// Err discriminant emit `LC on_init -> Err`, the always-on `LC call on_init_failure`
+/// marker (CR-3 — the trait-default no-op still counts as invoked), and the author
+/// failure body iff overridden. The reverse partial postamble (high-water mark,
+/// GRILL D12) lands with the first resourceful fixture (M7); a fieldless driver
+/// rolls back nothing. Emits nothing when `on_init` is not overridden: the
+/// trait-default `Ok(())` can never take the failure path. The process exits
+/// cleanly — the rollback is asserted by the stdout trace, not a nonzero exit.
+fn emit_init_fail_body(
+    model: &RegseqModel,
+    names: &NameTable,
+    syms: &InstanceSymbols,
+    on_init: &Option<InstanceRef>,
+    on_init_failure_sym: &Option<String>,
+    out: &mut String,
+) -> Result<(), EmitError> {
+    let Some(iref) = on_init else {
+        return Ok(());
+    };
+    let id = resolve_reloc(model, *iref).ok_or(EmitError::Unsupported(
+        "device-lifecycle on_init InstanceRef does not resolve",
+    ))?;
+    let sym = syms.symbol(id).to_string();
+    let data = model.instances[id].kind.as_function().ok_or(EmitError::Unsupported(
+        "device-lifecycle on_init instance is not a function",
+    ))?;
+    let result_ty = model.sigs.resolve(data.fn_sig).output;
+
+    // The on_init `Result<(), RegseqError>` niche enum: the niche cell scalar (the
+    // discriminant temp's C type + the `Ok` test) and the `Ok` discriminant
+    // (variant index 0, rustc's `Result` order).
+    let result_shape = enum_emit::enum_shape(model, result_ty).ok_or(EmitError::Unsupported(
+        "init-fail: the on_init return type is not an enum",
+    ))?;
+    let niche_scalar_ty = match enum_emit::enum_tag(model, result_shape) {
+        enum_emit::EnumTag::Niche { scalar_ty, .. } => scalar_ty,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "init-fail: the on_init Result is not niche-encoded",
+            ))
+        }
+    };
+    let ok_disc = match result_shape {
+        EnumShape::Multiple { variants, .. } if !variants.is_empty() => variants[0].discriminant,
+        _ => {
+            return Err(EmitError::Unsupported(
+                "init-fail: the on_init Result is not a multi-variant enum",
+            ))
+        }
+    };
+
+    let result_decl = types::declare(model, names, result_ty, "__r");
+    let disc_cty = types::c_type(model, names, niche_scalar_ty);
+    let niche_block =
+        niche_discriminant_read_block(model, result_ty, "__r", "__disc", niche_scalar_ty, "__nd")?;
+    let ok_disc_render = render_discriminant(model, niche_scalar_ty, ok_disc)?;
+
+    // Capture on_init's Result and branch on the Err niche discriminant (`!= Ok`,
+    // the inverse of the exit-adapter's `== Ok -> return 0`).
+    out.push_str(&format!("    {result_decl} = {sym}(&inst);\n"));
+    out.push_str(&format!("    {disc_cty} __disc;\n"));
+    out.push_str(&format!("    {niche_block}\n"));
+    out.push_str(&format!("    if (__disc != {ok_disc_render}) {{\n"));
+    out.push_str("        regseq_lc_on_init_err();\n");
+    out.push_str("        regseq_lc_call(\"on_init_failure\");\n");
+    if let Some(fsym) = on_init_failure_sym {
+        out.push_str(&format!("        {fsym}(&inst);\n"));
+    }
+    out.push_str("    }\n");
+    Ok(())
 }
 
 /// The emitted `TyId` of a driver struct Item (the `inst` local's C type): the

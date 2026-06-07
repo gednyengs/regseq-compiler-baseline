@@ -1,0 +1,6 @@
+LC register fakefail match=dt:acme,fakefail
+LC create
+LC associate
+LC call on_init
+LC on_init -> Err
+LC call on_init_failure

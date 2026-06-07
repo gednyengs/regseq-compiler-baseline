@@ -1,0 +1,15 @@
+name   = "lifecycle-initfail"
+kind   = "rust"
+# Device-lifecycle init-failure rollback (M3): a fieldless DT-matched
+# `#[rseq::driver]` whose `on_init` returns Err(HardwareError) and which overrides
+# `on_init_failure`, with NO `regseq_main`. The backend synthesizes `main`
+# (RD-4/RD-6); the `init-fail` scenario captures on_init's Result and on the Err
+# niche discriminant emits register -> create -> associate -> `LC call on_init` ->
+# `LC on_init -> Err` -> `LC call on_init_failure` (always, CR-3) + a call to
+# `FakeFail::on_init_failure`. Fieldless, so no partial postamble (the high-water
+# rollback lands with the first resourceful fixture, M7). Clean exit; asserted via
+# the stdout trace, not a nonzero exit (GRILL D12). covers the registration
+# (LC-1), the devicetree match (LC-2), and the init-failure rollback (LC-6).
+lifecycle_scenario = "init-fail"
+covers = ["LC-1", "LC-2", "LC-6"]
+expect = "pass"
