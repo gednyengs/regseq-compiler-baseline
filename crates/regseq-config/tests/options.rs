@@ -1,16 +1,12 @@
 use std::path::PathBuf;
 
 use regseq_config::{
-    ColorChoice, CompilerOptions, DumpStage, EmitSpec, LogLevel, ParamScope, RegseqParam, TargetOs,
+    ColorChoice, CompilerOptions, DumpStage, EmitSpec, LogLevel, ParamScope, RegseqParam,
 };
 
-#[test]
-fn serde_round_trip_target_os_linux() {
-    let encoded = serde_json::to_string(&TargetOs::Linux).unwrap();
-    assert_eq!(encoded, "\"linux\"");
-    let decoded: TargetOs = serde_json::from_str(&encoded).unwrap();
-    assert_eq!(decoded, TargetOs::Linux);
-}
+// `serde_round_trip_target_os_linux` was removed with the `TargetOs` relocation
+// to `regseq-model` (R5/D6/D8); serde round-trips of the typed identity are
+// covered by `regseq-l2::resolve_platform_identity` tests.
 
 #[test]
 fn serde_round_trip_dump_stage_post_analysis() {
@@ -88,7 +84,6 @@ fn serde_round_trip_regseq_param() {
 #[test]
 fn serde_round_trip_full_compiler_options() {
     let options = CompilerOptions {
-        target_os: TargetOs::Linux,
         platform_file: PathBuf::from("platform.toml"),
         output_dir: PathBuf::from("out"),
         emit: vec![

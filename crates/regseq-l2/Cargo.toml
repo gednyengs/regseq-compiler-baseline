@@ -1,0 +1,8 @@
+[package]
+name = "regseq-l2"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+regseq-config = { path = "../regseq-config" }
+regseq-model = { path = "../regseq-model" }

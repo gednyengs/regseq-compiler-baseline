@@ -4,7 +4,7 @@ use std::path::PathBuf;
 use clap::Parser;
 use regseq_config::{
     validate_dotted_ident, ColorChoice, CompilerOptions, DumpStage, EmitSpec, LogLevel,
-    RegseqParam, TargetOs,
+    RegseqParam,
 };
 
 use crate::Error;
@@ -20,11 +20,9 @@ pub enum CargoCli {
 /// `cargo regseq` command-line options.
 #[derive(Debug, Parser)]
 pub struct Cli {
-    /// Target OS for code generation.
-    #[arg(long = "target-os")]
-    pub target_os: TargetOs,
-
-    /// Path to the platform file (.toml).
+    /// Path to the platform file (.toml). The `[platform]` table in this file is
+    /// the single source of target identity (os/board/arch) — there is no
+    /// `--target-os` flag (D4/D6).
     #[arg(long = "platform-file")]
     pub platform_file: PathBuf,
 
@@ -162,7 +160,6 @@ impl Cli {
     /// Convert parsed CLI arguments into serializable compiler options.
     pub fn into_compiler_options(self) -> CompilerOptions {
         let Cli {
-            target_os,
             platform_file,
             output_dir,
             mut emit,
@@ -196,7 +193,6 @@ impl Cli {
         };
 
         CompilerOptions {
-            target_os,
             platform_file: std::fs::canonicalize(&platform_file).unwrap_or(platform_file),
             output_dir: std::path::absolute(&output_dir).unwrap_or(output_dir),
             emit,

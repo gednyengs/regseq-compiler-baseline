@@ -183,8 +183,6 @@ fn cargo_regseq_emits_non_empty_model_for_playground() {
     // having to manipulate PATH for cargo's `cargo-<sub>` lookup.
     let output = Command::new(cargo_regseq_bin())
         .arg("regseq")
-        .arg("--target-os")
-        .arg("linux")
         .arg("--platform-file")
         .arg("platform.toml")
         .arg("--emit")

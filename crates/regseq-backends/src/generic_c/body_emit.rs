@@ -41,7 +41,8 @@
 use std::cell::RefCell;
 
 use regseq_model::{
-    args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind, Const,
+    args_key_for_generic_args, AggregateKind, AssertKind, BinOp, Byte, CallCallee, CastKind,
+    ConfigOp, Const,
     ConstId, Endian, EnumShape, FloatKind, GenericArg, InstanceId, InstanceKind, InstanceRef,
     IntKind, IntrinsicKind, ItemId, LayoutKind, LocalId, LogLevel, MatchEntry, MmioOp,
     NonDivergingIntrinsic,
@@ -2113,6 +2114,15 @@ impl BodyEmit<'_> {
                 let op = *op;
                 return self.emit_mmio(op, callee, args, destination, target);
             }
+            // Bus-resource-management config-space interception (construct #3
+            // M5): a Direct callee carrying `IntrinsicKind::Config(op)` (the
+            // `regseq::bus::read_config/write_config` free functions) lowers to
+            // the host bus model's config hooks instead of a C call. The PCI-gate
+            // (BRM-001, non-PCI rejection) is the construct-#3 M6 diagnostic.
+            if let Some(IntrinsicKind::Config(op)) = self.model.instance_intrinsic(*inst) {
+                let op = *op;
+                return self.emit_config(op, callee, args, destination, target);
+            }
             // (Device-lifecycle is no longer call-intercepted: the harness verbs
             // were removed, RD-1; the synthesized `main` drives the lifecycle —
             // see `emit_lifecycle_synthesis`.)
@@ -2252,11 +2262,28 @@ impl BodyEmit<'_> {
         let arg = |this: &Self, i: usize| -> Result<String, EmitError> {
             this.operand_expr(&args[i], param_tys.get(i).copied())
         };
+        // Bus-resource-management keystone (construct #3): when the TU has a
+        // resolved bus-resource binding, route through the BASED accessors so
+        // the access traces the real mapped address (`map_region`'s base + the
+        // recovered offset). Otherwise use the always-on faked-base accessors —
+        // identical args, so no register-access op changes (I04); this is the
+        // single difference the keystone makes to register-access lowering.
+        let bus = model_has_bus_binding(self.model);
+        let read_fn = if bus {
+            "regseq_bus_mmio_read"
+        } else {
+            "regseq_mmio_read"
+        };
+        let write_fn = if bus {
+            "regseq_bus_mmio_write"
+        } else {
+            "regseq_mmio_write"
+        };
         let stmt = match op {
             MmioOp::Write => {
                 // Whole-register raw write: no descriptor; value is `args[1]`.
                 let val = arg(self, 1)?;
-                format!("regseq_mmio_write({offset}, {width}, (uint64_t)({val}));")
+                format!("{write_fn}({offset}, {width}, (uint64_t)({val}));")
             }
             MmioOp::WriteField => {
                 // Masked field write: confine the value to the field mask so
@@ -2264,14 +2291,14 @@ impl BodyEmit<'_> {
                 // independent of how the `FieldValue` was constructed.
                 let fv = arg(self, 1)?;
                 format!(
-                    "regseq_mmio_write({offset}, {width}, (uint64_t)(({fv}).value & ({fv}).mask));"
+                    "{write_fn}({offset}, {width}, (uint64_t)(({fv}).value & ({fv}).mask));"
                 )
             }
             MmioOp::Read => {
                 // Whole-register raw read.
                 let dst = self.place_lvalue(destination)?;
                 let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
-                format!("{dst} = ({dst_cty})regseq_mmio_read({offset}, {width});")
+                format!("{dst} = ({dst_cty}){read_fn}({offset}, {width});")
             }
             MmioOp::ReadField => {
                 // Masked + shifted field read.
@@ -2279,7 +2306,7 @@ impl BodyEmit<'_> {
                 let dst = self.place_lvalue(destination)?;
                 let dst_cty = types::c_type(self.model, self.names, self.place_ty(destination));
                 format!(
-                    "{dst} = ({dst_cty})((regseq_mmio_read({offset}, {width}) & ({fld}).mask) >> ({fld}).shift);"
+                    "{dst} = ({dst_cty})(({read_fn}({offset}, {width}) & ({fld}).mask) >> ({fld}).shift);"
                 )
             }
             MmioOp::Modify => {
@@ -2290,12 +2317,100 @@ impl BodyEmit<'_> {
                 let values = arg(self, 1)?;
                 let cur = self.fresh_temp_name("_rmw_cur");
                 format!(
-                    "{{ uint64_t {cur} = regseq_mmio_read({offset}, {width}); \
-                     regseq_mmio_write({offset}, {width}, ({cur} & ~(uint64_t)(({values}).mask)) | (uint64_t)(({values}).value & ({values}).mask)); }}"
+                    "{{ uint64_t {cur} = {read_fn}({offset}, {width}); \
+                     {write_fn}({offset}, {width}, ({cur} & ~(uint64_t)(({values}).mask)) | (uint64_t)(({values}).value & ({values}).mask)); }}"
                 )
             }
         };
         Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// Bus-resource-management config-space intrinsic (construct #3 M5): a
+    /// `regseq::bus::read_config::<T>(offset)` / `write_config::<T>(offset, val)`
+    /// free-function Call lowered to the host bus model's config hooks
+    /// (`regseq_bus_on_config_read` / `regseq_bus_on_config_write`,
+    /// [`super::prelude::BUS_RESOURCE_HELPERS`]). The access width is
+    /// `size_of::<T>()` — the destination type for a read, the value argument's
+    /// type for a write; the config offset is the first argument. Unlike
+    /// `emit_mmio` there is no register receiver: the offset is a direct argument
+    /// and the bus-handle context is the (global) host model.
+    ///
+    /// `read_config` is the thin witness (PCI_COMMAND + the PCI-ID-caching rule,
+    /// realized in the host model); `write_config` lowers to the recording hook
+    /// but has no behavioral witness (GRILL O3). The PCI-gate (BRM-001, reject on
+    /// a non-PCI bus) is the construct-#3 M6 diagnostic, not enforced here. A
+    /// shape this does not handle (no offset / a non-scalar width / no target)
+    /// fails loud rather than mis-emit.
+    fn emit_config(
+        &self,
+        op: ConfigOp,
+        callee: &CallCallee,
+        args: &[Operand],
+        destination: &Place,
+        target: Option<regseq_model::BlockId>,
+    ) -> Result<String, EmitError> {
+        let target = target.ok_or(EmitError::Unsupported("config call with no target"))?;
+        // The callee's parameter types, positionally aligned with `args`
+        // (args[0] = offset, args[1] = value). Recovered from the signature so a
+        // CONSTANT argument — whose `operand_ty` is `None` — still types: this is
+        // the same recovery `emit_mmio` / the ordinary-call path use for a
+        // descriptor / substituted argument.
+        let param_tys = super::callee_param_tys(self.model, self.body, callee);
+        let off_arg = args
+            .first()
+            .ok_or(EmitError::Unsupported("config call with no offset argument"))?;
+        let off = self.operand_expr(off_arg, param_tys.first().copied())?;
+        let stmt = match op {
+            ConfigOp::Read => {
+                // Width = size_of::<T>(), the destination (return) type's size —
+                // validated scalar int/bool of width 1/2/4/8 (the host model is
+                // `uint64_t`-backed; a wider or aggregate `T` fails loud).
+                let ty = self.place_ty(destination);
+                let width = self.config_access_width(ty)?;
+                let dst = self.place_lvalue(destination)?;
+                let dst_cty = types::c_type(self.model, self.names, ty);
+                format!(
+                    "{dst} = ({dst_cty})regseq_bus_on_config_read((uint32_t)({off}), {width});"
+                )
+            }
+            ConfigOp::Write => {
+                // Width = size_of::<T>(), the value argument's type's size. Take
+                // the type from the callee's 2nd parameter (recoverable even for a
+                // constant value, which `operand_ty` cannot type); fall back to the
+                // value's own place type for a non-constant value.
+                let val_arg = args
+                    .get(1)
+                    .ok_or(EmitError::Unsupported("write_config with no value argument"))?;
+                let val_ty = param_tys
+                    .get(1)
+                    .copied()
+                    .or_else(|| self.operand_ty(val_arg))
+                    .ok_or(EmitError::Unsupported("write_config value has no recoverable type"))?;
+                let width = self.config_access_width(val_ty)?;
+                let val = self.operand_expr(val_arg, param_tys.get(1).copied())?;
+                format!(
+                    "regseq_bus_on_config_write((uint32_t)({off}), {width}, (uint64_t)({val}));"
+                )
+            }
+        };
+        Ok(format!("{stmt} goto bb_{};", target.as_u32()))
+    }
+
+    /// The validated byte width of a config-space access type `T` (construct #3
+    /// M5). The host model returns/stores through `uint64_t`, so `T` must be a
+    /// **scalar integer/bool of width 1/2/4/8**: a `u128`/`i128` would drive a
+    /// ≥64-bit shift in `regseq_bus_config_assemble` (UB), and an aggregate `T`
+    /// would emit an invalid `(T)` cast. Anything else fails loud.
+    fn config_access_width(&self, ty: TyId) -> Result<u64, EmitError> {
+        let is_scalar = matches!(self.model.types[ty], Ty::Int(_) | Ty::Uint(_) | Ty::Bool);
+        let width = self.model.size_align_of(ty).size;
+        if is_scalar && matches!(width, 1 | 2 | 4 | 8) {
+            Ok(width)
+        } else {
+            Err(EmitError::Unsupported(
+                "config access type must be a scalar integer/bool of width 1, 2, 4, or 8",
+            ))
+        }
     }
 
     // Device-lifecycle is no longer call-intercepted (RD-1): the bind/teardown/
@@ -4882,6 +4997,94 @@ pub(crate) const LIFECYCLE_RUNNER_SYMBOL: &str = "__rseq_lc_run";
 /// fieldless driver. The `on_init` author call is synthesized only when
 /// overridden (`Some`), but the `regseq_lc_call("on_init")` marker is always
 /// emitted (CR-3).
+/// Whether the model has any resolved bus-resource binding (a resource field
+/// with a `(base, size)` from the platform-file join) — the gate for the
+/// bus-resource host model + the based MMIO accessors (construct #3, the
+/// keystone). A TU without one lowers MMIO through the faked-base accessor
+/// (`regseq_mmio_read/write`, unchanged) and emits no `BUS_RESOURCE_HELPERS`
+/// block, so existing register-access goldens do not churn.
+pub(crate) fn model_has_bus_binding(model: &RegseqModel) -> bool {
+    model
+        .device_lifecycle
+        .drivers
+        .values()
+        .any(|d| d.handle.resource_fields.iter().any(|r| r.binding.is_resolved()))
+}
+
+/// Whether any device-lifecycle driver declares a `bus` (`bus_type.is_some()`)
+/// — the gate (alongside [`model_has_bus_binding`]) for emitting
+/// `BUS_RESOURCE_HELPERS`. A bus-declared driver needs the registration-selector
+/// helper (construct #3 M6/T18) even when it has no resolved region binding yet,
+/// so the helper block must be present whenever a `bus` is declared. No existing
+/// fixture declares a `bus`, so this broadening churns no committed golden.
+pub(crate) fn model_has_bus_type(model: &RegseqModel) -> bool {
+    model
+        .device_lifecycle
+        .drivers
+        .values()
+        .any(|d| d.descriptor.bus_type.is_some())
+}
+
+/// Whether any item carries a config-space intrinsic tag (`IntrinsicKind::Config`,
+/// construct #3 M5) — a third demand gate (with [`model_has_bus_binding`] /
+/// [`model_has_bus_type`]) for `BUS_RESOURCE_HELPERS`. A `read_config`/
+/// `write_config` call lowers (via `emit_config`) to the
+/// `regseq_bus_on_config_read/write` host hooks, so the helper block MUST be
+/// present whenever a config intrinsic is — even in a TU with no resolved binding
+/// and no declared `bus` (else the lowered call would reference an undefined
+/// function). No existing fixture uses a config intrinsic, so this churns no
+/// committed golden.
+pub(crate) fn model_has_config_intrinsic(model: &RegseqModel) -> bool {
+    model.domain_attrs.item_attrs.iter().any(|attrs| {
+        attrs
+            .iter()
+            .any(|a| matches!(a, regseq_model::AttrData::Intrinsic(IntrinsicKind::Config(_))))
+    })
+}
+
+/// The bus-path selector token bus-resource supplies to device-lifecycle's
+/// `register_driver` emission (construct #3 M6/T18). The token is the bus
+/// identity; the real backend maps it to the per-target registration call
+/// (`pci_register_driver` / `module_amba_driver` / `DEVICE_DT_DEFINE` —
+/// backend-[Open]).
+fn bus_selector_token(model: &RegseqModel, bus_type: &regseq_model::BusType) -> String {
+    use regseq_model::BusType;
+    match bus_type {
+        BusType::Pci => "pci".to_string(),
+        BusType::Platform => "platform".to_string(),
+        BusType::Amba => "amba".to_string(),
+        BusType::I2c => "i2c".to_string(),
+        BusType::Spi => "spi".to_string(),
+        BusType::Usb => "usb".to_string(),
+        BusType::Other(sid) => c_escape(model.strings.resolve(*sid).as_bytes()),
+    }
+}
+
+/// The maximum number of resolved bus-resource bindings on any single driver.
+///
+/// M1 maps one region per driver via a single global mapped base
+/// (`regseq_bus_mapped_base`); a driver with two resolved MMIO regions would
+/// clobber it (every access would consult the last-mapped region's base). This
+/// count gates a loud rejection of that case — per-access region base threading
+/// is a later milestone — so the keystone never emits wrong code. (Distinct
+/// drivers are fine: each scenario function maps its own region immediately
+/// before its own callbacks run.)
+pub(crate) fn max_resolved_bindings_per_driver(model: &RegseqModel) -> usize {
+    model
+        .device_lifecycle
+        .drivers
+        .values()
+        .map(|d| {
+            d.handle
+                .resource_fields
+                .iter()
+                .filter(|r| r.binding.is_resolved())
+                .count()
+        })
+        .max()
+        .unwrap_or(0)
+}
+
 pub(crate) fn emit_lifecycle_synthesis(
     model: &RegseqModel,
     names: &NameTable,
@@ -4922,6 +5125,33 @@ pub(crate) fn emit_lifecycle_synthesis(
         let match_str =
             c_escape(render_match_trace(model, &driver.descriptor.match_set).as_bytes());
         let label = naming::sanitize(model.strings.resolve(driver.descriptor.name));
+
+        // Bus-resource-management registration seam (construct #3 M6/T18,
+        // R09/D05): the `bus_type` selector + the L1↔L2 binding that DL's
+        // `register_driver` emission consumes. `register_driver` itself is
+        // DL-emitted (the `regseq_lc_register` marker, carrying the descriptor
+        // name + typed match — the AMBA periphid match stays DL's, rendered in
+        // `match_str`); bus-resource supplies ONLY the bus-path selector (1 of 4
+        // inputs). On a real backend the selector picks `pci_register_driver` /
+        // `module_amba_driver` / `DEVICE_DT_DEFINE`; the host trace records the
+        // selector token + whether a region binding is supplied. `None` for a
+        // driver that declares no `bus` (existing fixtures — no marker, zero
+        // churn). The exact per-target framework call is backend-[Open].
+        let bus_register = driver.descriptor.bus_type.as_ref().map(|bt| {
+            let sel = bus_selector_token(model, bt);
+            // Whether bus-resource supplies a resolved region binding to the
+            // registration (the L1↔L2 join result); a bus driver may register
+            // before/without a resolved region (then `binding=none`).
+            let bound = driver
+                .handle
+                .resource_fields
+                .iter()
+                .any(|rf| rf.binding.is_resolved());
+            format!(
+                "    regseq_bus_register_driver(\"{sel}\", \"{}\");\n",
+                if bound { "bound" } else { "none" }
+            )
+        });
 
         // The resource fields (declaration order) — the lifecycle glue runs
         // forward preambles at bring-up and reverse postambles at teardown
@@ -4967,6 +5197,12 @@ pub(crate) fn emit_lifecycle_synthesis(
             out.push_str(&format!(
                 "    regseq_lc_register(\"{name}\", \"{match_str}\");\n"
             ));
+            // The bus-path selector bus-resource supplies to the registration
+            // (construct #3 M6/T18); emitted right after DL's register marker,
+            // only for a bus-declared driver (zero churn otherwise).
+            if let Some(line) = &bus_register {
+                out.push_str(line);
+            }
             out.push_str("    regseq_lc_create();\n");
             out.push_str("    regseq_lc_associate();\n");
 
@@ -4975,8 +5211,77 @@ pub(crate) fn emit_lifecycle_synthesis(
             // for every scenario (resources are acquired before on_init regardless
             // of the teardown mode); the matching reverse postambles run at
             // teardown ([`emit_teardown_dispatch`]).
-            for res in &resource_names {
+            for rf in &driver.handle.resource_fields {
+                let res = c_escape(model.strings.resolve(rf.name).as_bytes());
                 out.push_str(&format!("    regseq_lc_preamble(\"{res}\");\n"));
+            }
+
+            // Bus-resource-management acquisition (construct #3 M3, R04): the four
+            // compiler-managed ops synthesized into the device-lifecycle preamble
+            // (here — after register→create→associate, before on_init — slotting
+            // into DL's existing state machine without reordering it, T13) in the
+            // canonical order
+            //   enable_device → claim_regions → set_bus_master → get_resource_handle
+            // then register-access's `map_region` (the keystone seam, design §4).
+            // The whole block is gated on the driver having a resolved bus binding
+            // (zero churn for a no-bus TU — the same condition `model_has_bus_binding`
+            // gates the host-model block on); inside it the PCI-only ops are further
+            // gated by the gating matrix (T12, design §3):
+            //   • enable_device    — PCI-capable bus only (absent on platform,
+            //                         default-on; I05)
+            //   • claim_regions    — per region-bearing binding, on EVERY bus
+            //                         (NOT PCI-gated); host realization is a
+            //                         trace-only no-op (the three real realizations
+            //                         are backend-[Open], design §3/§8.2)
+            //   • set_bus_master   — PCI-capable AND DMA-presence (placeholder bit,
+            //                         defaults absent → emitted by no fixture yet;
+            //                         GRILL O2, the DMA construct's fact)
+            //   • get_resource_handle — unconditional; captures the bus-handle
+            //                         context (I06)
+            // `emit_generic_c_inner` already rejected >1 resolved region per driver
+            // (`max_resolved_bindings_per_driver`), so `map_region`'s single global
+            // mapped base is unambiguous.
+            let resolved: Vec<_> = driver
+                .handle
+                .resource_fields
+                .iter()
+                .filter(|rf| rf.binding.is_resolved())
+                .collect();
+            if !resolved.is_empty() {
+                let is_pci = driver
+                    .descriptor
+                    .bus_type
+                    .as_ref()
+                    .is_some_and(|b| b.is_pci_like());
+                // enable_device — PCI-capable bus only.
+                if is_pci {
+                    out.push_str("    regseq_bus_enable_device();\n");
+                }
+                // claim_regions — per region-bearing binding, on every bus. The
+                // effective BAR (L2.bar ?? L1.bar) keys the region; -1 = no BAR
+                // (platform/DT).
+                for rf in &resolved {
+                    let bar = rf.binding.effective_bar.map(i64::from).unwrap_or(-1);
+                    out.push_str(&format!("    regseq_bus_claim_regions({bar});\n"));
+                }
+                // set_bus_master — PCI-capable AND DMA-presence.
+                if is_pci && driver.descriptor.dma_present {
+                    out.push_str("    regseq_bus_set_master();\n");
+                }
+                // get_resource_handle — unconditional (I06).
+                out.push_str("    regseq_bus_get_handle();\n");
+                // register-access's `map_region` (after get_handle): hand it the
+                // resolved (base, size) keyed by the effective BAR. Tracing the BAR
+                // makes the L2 override provable end-to-end (M2/D02): an L2 `bar=2`
+                // over an L1 `bar=0` traces `bar=2` + the BAR-2 base.
+                for rf in &resolved {
+                    let base = rf.binding.base.expect("resolved binding has base");
+                    let size = rf.binding.size.expect("resolved binding has size");
+                    let bar = rf.binding.effective_bar.map(i64::from).unwrap_or(-1);
+                    out.push_str(&format!(
+                        "    regseq_bus_map_region(0x{base:x}ull, 0x{size:x}ull, {bar});\n"
+                    ));
+                }
             }
 
             // The created instance — a distinct zero-initialized backend-local

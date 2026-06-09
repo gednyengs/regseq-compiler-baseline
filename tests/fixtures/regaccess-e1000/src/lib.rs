@@ -77,9 +77,12 @@ const _: () = assert!(e1000::vfta::OFFSET == 0x40); //  8 * 4B  -> 0x40..0x60
 const _: () = assert!(e1000::ra::OFFSET == 0x60); //  4 * 8B  -> 0x60..0x80
 
 /// The driver: declares the typed MMIO resource (L1). The `id = "regs"` joins to
-/// the platform file's `[mmio.regs]` section (L2: PCI BAR0).
+/// the platform file's `[mmio.regs]` section (L2). The `bar = 0` is the
+/// L1-preferred BAR declaration (bus-resource-management O4(b)/A01): the
+/// effective BAR is `L2.bar ?? L1.bar`, so an L2 `bar` may still override it, and
+/// the L2-supplies form (no L1 `bar`) remains legal — both are supported.
 pub struct E1000 {
-    #[rseq::mmio(id = "regs")]
+    #[rseq::mmio(id = "regs", bar = 0)]
     regs: Mmio<e1000::Regs>,
 }
 

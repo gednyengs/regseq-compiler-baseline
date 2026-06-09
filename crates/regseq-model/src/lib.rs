@@ -67,11 +67,12 @@ pub use def_path::{
     def_path_data_sort_rank, render_def_path, DefPath, DefPathData, DefPathHash, DefPathSegment,
 };
 pub use device_lifecycle::{
-    ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle, DriverLifecycle, LifecycleOps,
-    MatchEntry, ResourceField, ResourceKind, UserDataField, UserDataKind,
+    BarType, BusType, ClassTag, DeviceLifecycleTables, DriverDescriptor, DriverHandle,
+    DriverLifecycle, LifecycleOps, MatchEntry, MmioBinding, ResourceField, ResourceKind,
+    UserDataField, UserDataKind,
 };
 pub use domain_attr::{
-    AttrData, DomainAttrTables, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp,
+    AttrData, ConfigOp, DomainAttrTables, FieldPath, FrameworkType, IntrinsicKind, LogLevel, MmioOp,
 };
 pub use fn_sig::{canonical_fn_sig, FnSig};
 pub use fn_sig_interner::FnSigInterner;
@@ -106,7 +107,9 @@ pub use synthetic::{
     ClosureCallKind, ContentHash, PrincipalTraitKey, ProjectionBindingsKey, SyntheticItemKind,
 };
 pub use synthetic_def_path::{synthetic_def_path_hash, synthetic_def_path_segments};
-pub use target::{default_scalar_layouts, Endian, ScalarLayouts, SizeAlign, TargetInfo};
+pub use target::{
+    default_scalar_layouts, Endian, PlatformIdentity, ScalarLayouts, SizeAlign, TargetInfo, TargetOs,
+};
 pub use terminator::{AssertKind, CallCallee, SwitchTargets, Terminator, TerminatorKind};
 pub use ty::{
     AutoTrait, ClosedEnumDiscriminantError, FloatKind, FnAbi, IntKind, Mutability, Provenance,

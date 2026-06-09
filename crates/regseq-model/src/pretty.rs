@@ -1913,6 +1913,14 @@ impl<'a> PrettyPrinter<'a> {
                 AttrData::Intrinsic(IntrinsicKind::PollUntil) => {
                     out.push_str("#[rseq::intrinsic(\"poll_until\")]\n");
                 }
+                // Bus config-space intrinsics (bus-resource-management construct #3).
+                AttrData::Intrinsic(IntrinsicKind::Config(op)) => {
+                    let label = match op {
+                        crate::ConfigOp::Read => "read_config",
+                        crate::ConfigOp::Write => "write_config",
+                    };
+                    out.push_str(&format!("#[rseq::intrinsic(\"{label}\")]\n"));
+                }
                 // The framework-type marker has no DSL attribute render
                 // form in this phase; its render rule (if any) lands with
                 // the bridge/backend stages that consume it. Emit nothing.

@@ -197,6 +197,18 @@ size = 0x1000
   it marks the **field** as the typed resource and names the platform-file binding key — **no transport
   parameter** (`bar`/base/size) appears in the Rust spec. [Contract — **L1/L2 fix per Codex #2**: `bar` is a
   *concrete transport parameter* and the model puts those in L2 (`register-access-model.md:85,197`).]
+  - **O4(b) reconciliation (bus-resource-management construct #3, 2026-06-07) — `bar` is now L1-or-L2, L1
+    preferred.** The original "no `bar` in the Rust spec" rule above is **superseded** for `bar` specifically:
+    a *default-decoded* BAR index is a device-invariant L1 fact (the E1000 register window is always BAR0,
+    regardless of board), so `#[rseq::mmio(id = "regs", bar = 0)]` is the **L1-preferred** declaration. The L2
+    `[mmio.<id>] bar` remains legal and **overrides** L1 when present: **effective BAR = `L2.bar ?? L1.bar`**
+    (GRILL I01). `base`/`size` stay **L2-only** (per-integration). So: `bar` may appear at L1 or L2 (L1
+    preferred, L2 overrides); `base`/`size` are L2-only. The E1000 fixture is migrated to the L1 form
+    (`tests/fixtures/regaccess-e1000/src/lib.rs`), with the agreeing L2 `bar = 0` retained for back-compat; the
+    L2-supplies form (no L1 `bar`, as PL011 uses for `base`/`size`) is unchanged. A01 is **assumed, not
+    ratified** — if reverted, the L2-supplies form still works (low-risk). Hybrid support is proven by the
+    bridge join tests (`regseq-l2/src/bus_resource.rs::tests::{join_by_id_resolves_base_size_and_effective_bar,
+    l2_bar_overrides_l1}`).
 - `Mmio<T>: Deref<Target = T>`; `T` must be a `#[rseq::register_block]` type (a compiler-side extraction check,
   not a trait bound — discussion Q4).
 - L2 binding (a `[mmio.<id>]` section with `base`/`size` **or** a `bar` selector) lives in `platform.toml`
@@ -318,8 +330,10 @@ fake-UART `DR`→stdout, W1C/read-clear, FIFO — are a follow-on; the tracing p
 ## 6. Implementation plan (compiler exploration branch `explore/regaccess-lowering`)
 
 Sequential; each step compiles/tests before the next. Build: `cargo build -p cargo-regseq -p regseq-driver`
-(toolchain `nightly-2026-02-01`). Emit: `cargo-regseq regseq --target-os generic-c --platform-file
-platform.toml --emit generic-c --output-dir regseq-out` (with `REGSEQ_DRIVER=target/debug/regseq-driver`).
+(toolchain `nightly-2026-02-01`). Emit: `cargo-regseq regseq --platform-file platform.toml --emit
+generic-c --output-dir regseq-out` (with `REGSEQ_DRIVER=target/debug/regseq-driver`). *(The
+`--target-os` flag was hard-removed in the L2-platform-binding work — target identity now comes solely
+from `[platform]` in `platform.toml`; `--emit` selects the backend.)*
 Behavioral: `codegen-coverage-runner` 6-stage pipeline on a `<name>/{input.rs,manifest.toml,golden.c,
 expected.stdout}` fixture (or a `--emit bin` + run).
 

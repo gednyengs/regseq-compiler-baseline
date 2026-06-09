@@ -204,6 +204,53 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             }
         };
 
+        // 1b. Bus-resource-management construct (#3) + platform identity (T7):
+        // parse the platform file ONCE (Codex A1). Join `[mmio.<id>]` to the
+        // model's resource fields (resolving the effective BAR + `(base, size)`),
+        // and resolve the `[platform]` identity (os/board/arch) — the single
+        // source of target identity (D4), carried to the backend via the
+        // `BackendContext` below. Not rustc-driven — runs here, post bridge,
+        // parallel to the model. A platform file that is absent or empty yields no
+        // bindings and the default (empty) identity; a malformed file is a hard
+        // error.
+        let mut platform_identity = regseq_model::PlatformIdentity::default();
+        match regseq_config::parse_platform_file_path(&self.options.platform_file) {
+            Ok(file) => {
+                if let Err(err) = regseq_l2::bind_all(&mut model, &file.bindings) {
+                    tcx.dcx().fatal(format!("regseq-driver: bus-resource {err}"));
+                }
+                match regseq_l2::resolve_platform_identity(&file.identity) {
+                    Ok(identity) => platform_identity = identity,
+                    Err(err) => {
+                        tcx.dcx().fatal(format!(
+                            "regseq-driver: platform identity [{}] {err}",
+                            err.code()
+                        ));
+                    }
+                }
+            }
+            Err(regseq_config::PlatformParseError::Io { .. }) => {
+                // An unreadable/absent platform file is non-fatal: no L2 bindings
+                // to join (the faked-base path is used) and the default identity.
+                // The bus-resource `BRM-006` unresolvable diagnostic (construct #3
+                // M6) is what fails a region that actually needs a binding.
+            }
+            Err(err) => {
+                tcx.dcx()
+                    .fatal(format!("regseq-driver: platform file error: {err}"));
+            }
+        }
+
+        // Bus-resource-management surface validation (construct #3 M6, T19/T20):
+        // the BRM-002/003/005/006 + unknown-`bus` diagnostics over the joined
+        // L1+L2 view. Runs for every bus-declared driver regardless of whether a
+        // platform file was present (an absent file still leaves a bus-managed
+        // region unresolvable -> BRM-006). A non-bus driver is never affected.
+        if let Err(err) = regseq_l2::validate_l2_surface(&model) {
+            tcx.dcx()
+                .fatal(format!("regseq-driver: bus-resource {err}"));
+        }
+
         // 2. Joint validate. `RegseqModel::validate` takes `&mut self`
         // because it rebuilds the vtables side table (per
         // `crates/regseq-model/src/model.rs:91,3207`); subsequent
@@ -247,10 +294,16 @@ impl rustc_driver::Callbacks for RegseqCallbacks {
             }
         };
 
+        // The pure-emission context (T7): backend options + the platform identity
+        // resolved at the 1b seam. generic-C traces the identity (D7); future
+        // Zephyr/Linux backends select a framework from it.
+        let backend_context =
+            regseq_backends::BackendContext::new(backend_options, platform_identity);
+
         // 6. Dispatch each emit spec. Any emit failure is fatal.
         for spec in &self.options.emit {
             if let Err(err) =
-                crate::emit::emit_one_with(&model, spec, &self.options.output_dir, &backend_options)
+                crate::emit::emit_one_with(&model, spec, &self.options.output_dir, &backend_context)
             {
                 tcx.dcx()
                     .fatal(format!("regseq-driver: emit {spec} failed: {err}"));

@@ -7,7 +7,7 @@ use cargo_regseq::invoke::{build_cargo_command, invoke_cargo};
 use cargo_regseq::toolchain::ToolchainInfo;
 use clap::Parser;
 use regseq_config::{
-    ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam, TargetOs,
+    ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam,
 };
 use tempfile::{NamedTempFile, TempDir};
 
@@ -26,7 +26,6 @@ fn sample_options_and_toolchain(
     let output_dir = root.path().join("regseq-out");
 
     let options = CompilerOptions {
-        target_os: TargetOs::Linux,
         platform_file: platform_file.path().to_path_buf(),
         output_dir: output_dir.clone(),
         emit: vec![EmitSpec::Driver { match_id: None }],
@@ -304,8 +303,6 @@ fn compiler_options_platform_file_is_absolute_after_cli_conversion() {
     let args = vec![
         "cargo-regseq".to_string(),
         "regseq".to_string(),
-        "--target-os".to_string(),
-        "linux".to_string(),
         "--platform-file".to_string(),
         platform_file.path().to_string_lossy().into_owned(),
     ];

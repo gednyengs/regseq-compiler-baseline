@@ -1,0 +1,15 @@
+name   = "brm-e1000-keystone"
+kind   = "rust"
+# Bus-resource-management (construct #3) keystone: a PCI-matched (Intel NIC)
+# driver with a bus-managed MMIO region whose `(base, size)` is supplied by the
+# sibling `platform.toml` (L2). The `orderly` scenario lowers to register
+# (match=pci:0x8086:0x100e) → create → associate → resource preamble → the
+# construct-#3 bus acquisition (enable_device → claim_regions(0) → get_handle →
+# map_region(0xf0000000, 0x20000, 0)) → `LC call on_init` (a CTRL write + ICR
+# read through the BASED accessor) → on_deinit → teardown. This is the end-to-end
+# L2 proof: the base/size flow platform.toml → bound model → emitted C with NO
+# hand-set `MmioBinding`. Run by the dedicated `bus_keystone_e2e` test (a clean
+# process, like the other lifecycle e2e gates).
+lifecycle_scenario = "orderly"
+covers = ["BRM-M2", "BRM-M3"]
+expect = "pass"

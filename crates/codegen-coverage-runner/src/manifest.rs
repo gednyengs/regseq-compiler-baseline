@@ -15,6 +15,8 @@ use std::path::{Path, PathBuf};
 
 use serde::Deserialize;
 
+use crate::pipeline::Stage;
+
 /// The `manifest.toml` schema per Doc 3 section 3.
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone)]
 pub struct Manifest {
@@ -56,8 +58,9 @@ pub struct Manifest {
 }
 
 /// The `[expected]` manifest table: expected-outcome configuration resolved
-/// at run time rather than from a sibling file. Currently just the symbolic
-/// process exit oracle.
+/// at run time rather than from a sibling file. Carries the symbolic process
+/// exit oracle (for `pass`/`panic`) and the expected-rejection localization
+/// (for `reject`).
 #[derive(Debug, Deserialize, PartialEq, Eq, Clone, Default)]
 pub struct Expected {
     /// Symbolic expected process exit code: an errno identifier
@@ -67,6 +70,18 @@ pub struct Expected {
     /// is ever stored here (invariant I03).
     #[serde(default)]
     pub exit: Option<String>,
+    /// For `expect = "reject"`: the pipeline [`Stage`] the fixture MUST fail at
+    /// (e.g. `stage = "bind"` for a join-time BRM). Absent → any stage is
+    /// accepted as the rejection point (the diagnostic still gates it). Ignored
+    /// for `pass`/`panic`.
+    #[serde(default)]
+    pub stage: Option<Stage>,
+    /// For `expect = "reject"`: a substring the failure detail MUST contain
+    /// (e.g. `diagnostic = "BRM-005"`). Absent → the failure detail is not
+    /// checked (only that a failure occurred at the expected stage). Ignored for
+    /// `pass`/`panic`.
+    #[serde(default)]
+    pub diagnostic: Option<String>,
 }
 
 /// Fixture input source kind.
@@ -89,6 +104,12 @@ pub enum Expect {
     /// Non-zero exit; stderr is compared to `expected.stderr` (stage 5
     /// inverted).
     Panic,
+    /// The pipeline is EXPECTED to fail (reject the fixture) before it produces a
+    /// running program — a compile-fail oracle. Green iff it fails at the
+    /// `[expected].stage` (when set) with the `[expected].diagnostic` substring
+    /// (when set); red if it is accepted (reaches emit) or fails differently. The
+    /// end-to-end home for the join-time BRM diagnostics (T5).
+    Reject,
 }
 
 /// Default entry instance name when the manifest omits `entry`.
@@ -112,6 +133,13 @@ pub struct Fixture {
     pub expected_stdout: PathBuf,
     /// `expected.stderr`; `Some` iff `expect == Panic` (stage-5 oracle).
     pub expected_stderr: Option<PathBuf>,
+    /// Sibling `platform.toml` (the L2 binding input), `Some` iff present in
+    /// the fixture dir. Mirrors production's `--platform-file` and the
+    /// `tests/fixtures/regaccess-*` convention. Absent = no L2 binding (the
+    /// historical behavior; every existing fixture resolves to `None`). When
+    /// `Some`, the pipeline parses it and runs the `regseq_l2` bind/validate
+    /// over the bridged model before emit (T2).
+    pub platform: Option<PathBuf>,
 }
 
 /// Errors from manifest parsing / corpus discovery.
@@ -126,6 +154,14 @@ pub enum ManifestError {
         /// The underlying TOML error.
         err: toml::de::Error,
     },
+    /// A `manifest.toml` parsed but is not a valid committed fixture (a
+    /// corpus-level lint beyond the schema, e.g. an under-specified `reject`).
+    Invalid {
+        /// The offending manifest path.
+        path: PathBuf,
+        /// What is wrong + how to fix it.
+        detail: String,
+    },
 }
 
 impl std::fmt::Display for ManifestError {
@@ -134,6 +170,9 @@ impl std::fmt::Display for ManifestError {
             ManifestError::Io(err) => write!(f, "fixture discovery I/O error: {err}"),
             ManifestError::Parse { path, err } => {
                 write!(f, "failed to parse {}: {err}", path.display())
+            }
+            ManifestError::Invalid { path, detail } => {
+                write!(f, "invalid fixture manifest {}: {detail}", path.display())
             }
         }
     }
@@ -182,11 +221,59 @@ pub fn discover(fixtures_dir: &Path) -> Result<Vec<Fixture>, ManifestError> {
             path: manifest_path.clone(),
             err,
         })?;
+        lint_manifest(&manifest, &manifest_path)?;
         fixtures.push(resolve(manifest, dir));
     }
 
     fixtures.sort_by(|a, b| a.manifest.name.cmp(&b.manifest.name));
     Ok(fixtures)
+}
+
+/// Corpus-level lint for a committed fixture, beyond schema parsing
+/// ([`parse_manifest`] stays lenient so unit tests can drive the raw schema).
+///
+/// A committed `expect = "reject"` fixture MUST localize its rejection precisely,
+/// to avoid two footguns (T4/T5 Codex review):
+/// - **No localization → masks regressions.** With neither `[expected].stage` nor
+///   `[expected].diagnostic`, [`crate::pipeline`]'s `apply_expectation` greens ANY
+///   failure — so the fixture later breaking for an unrelated reason still passes.
+/// - **Post-emit stage → permanently red.** A `reject` fixture short-circuits
+///   after emit, so only `acquire`/`bind`/`emit` can be the rejection point; a
+///   `snapshot`/`compile`/`run`/`behavioral` stage could never be reached and the
+///   fixture would never go green.
+///
+/// So a committed reject requires a pre-emit `[expected].stage` AND an
+/// `[expected].diagnostic` substring. (`pass`/`panic` fixtures are unaffected.)
+fn lint_manifest(manifest: &Manifest, path: &Path) -> Result<(), ManifestError> {
+    if manifest.expect != Expect::Reject {
+        return Ok(());
+    }
+    let invalid = |detail: String| ManifestError::Invalid {
+        path: path.to_path_buf(),
+        detail,
+    };
+    let stage = manifest.expected.stage.ok_or_else(|| {
+        invalid(
+            "expect = \"reject\" requires [expected].stage (the pre-emit stage \
+             acquire/bind/emit it must fail at)"
+                .to_string(),
+        )
+    })?;
+    if !matches!(stage, Stage::Acquire | Stage::Bind | Stage::Emit) {
+        return Err(invalid(format!(
+            "[expected].stage = {stage:?} is post-emit; a reject fixture \
+             short-circuits after emit, so only acquire/bind/emit are valid \
+             rejection points"
+        )));
+    }
+    if manifest.expected.diagnostic.is_none() {
+        return Err(invalid(
+            "expect = \"reject\" requires [expected].diagnostic (a substring of \
+             the failure, e.g. a BRM code) so a wrong-reason failure cannot pass"
+                .to_string(),
+        ));
+    }
+    Ok(())
 }
 
 /// Resolve the sibling file paths for a parsed manifest in `dir`.
@@ -199,7 +286,16 @@ fn resolve(manifest: Manifest, dir: PathBuf) -> Fixture {
     let expected_stdout = dir.join("expected.stdout");
     let expected_stderr = match manifest.expect {
         Expect::Panic => Some(dir.join("expected.stderr")),
-        Expect::Pass => None,
+        // A reject fixture fails before it runs — no stderr oracle (the rejection
+        // is localized by `[expected].stage`/`diagnostic`, not a sibling file).
+        Expect::Pass | Expect::Reject => None,
+    };
+    // The platform file is discovered by presence (unlike the always-joined
+    // golden/expected paths): absent = no L2 binding, so every L2-free fixture
+    // keeps `None` and the pipeline's bind step is a no-op for it.
+    let platform = {
+        let p = dir.join("platform.toml");
+        p.exists().then_some(p)
     };
     Fixture {
         manifest,
@@ -208,5 +304,6 @@ fn resolve(manifest: Manifest, dir: PathBuf) -> Fixture {
         golden_c,
         expected_stdout,
         expected_stderr,
+        platform,
     }
 }

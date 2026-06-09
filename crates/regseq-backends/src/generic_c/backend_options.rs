@@ -13,6 +13,8 @@
 //! the equivalent fixture-manifest field; the parser lives here so both paths
 //! validate it identically.
 
+use regseq_model::PlatformIdentity;
+
 use super::EmitError;
 
 /// A canonical device-lifecycle scenario the synthesized harness `main` runs.
@@ -112,6 +114,52 @@ impl BackendOptions {
     }
 }
 
+/// The full pure-emission context for a generic-C emit: the backend codegen
+/// [`BackendOptions`] (harness/codegen knobs — today the lifecycle scenario
+/// selection) PLUS the target [`PlatformIdentity`] (os/board/arch, sourced from
+/// the platform file's `[platform]` table — D4/D5).
+///
+/// Kept as two distinct fields rather than overloading [`BackendOptions`]: "how
+/// the harness exercises this driver" and "what real platform we target" are
+/// different kinds of input (Codex B). Emission stays pure over `(model,
+/// BackendContext)`. generic-C currently only *traces* the identity (a one-line
+/// header comment, emitted only when an identity is present — D7); future
+/// Zephyr/Linux backends will select a framework from it.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct BackendContext {
+    options: BackendOptions,
+    platform: PlatformIdentity,
+}
+
+impl BackendContext {
+    /// Bundle backend options with a target platform identity.
+    pub fn new(options: BackendOptions, platform: PlatformIdentity) -> BackendContext {
+        BackendContext { options, platform }
+    }
+
+    /// The backend codegen options (lifecycle scenarios, …).
+    pub fn options(&self) -> &BackendOptions {
+        &self.options
+    }
+
+    /// The target platform identity (os/board/arch).
+    pub fn platform(&self) -> &PlatformIdentity {
+        &self.platform
+    }
+}
+
+impl From<BackendOptions> for BackendContext {
+    /// Wrap options with the default (empty) identity — the zero-churn path for
+    /// callers with no platform identity (the `_with(&BackendOptions)` shims and
+    /// existing tests). An empty identity emits no trace, so goldens are stable.
+    fn from(options: BackendOptions) -> BackendContext {
+        BackendContext {
+            options,
+            platform: PlatformIdentity::default(),
+        }
+    }
+}
+
 /// Parse a `lifecycle.scenario` CSV into a deduplicated, canonical-order
 /// selection. An empty list (`""` / all-whitespace) means "all" — emission is
 /// independent of CSV token order so the golden is stable regardless of how the
@@ -199,5 +247,32 @@ mod tests {
         let opts =
             BackendOptions::from_backend_params([("some.other.backend.knob", "whatever")]).unwrap();
         assert_eq!(opts, BackendOptions::default());
+    }
+
+    #[test]
+    fn backend_context_exposes_options_and_platform() {
+        let opts = BackendOptions::from_backend_params([("lifecycle.scenario", "orderly")]).unwrap();
+        let platform = PlatformIdentity {
+            board: Some("qemu-pc".to_string()),
+            ..PlatformIdentity::default()
+        };
+        let ctx = BackendContext::new(opts.clone(), platform.clone());
+        assert_eq!(ctx.options(), &opts);
+        assert_eq!(ctx.platform(), &platform);
+    }
+
+    #[test]
+    fn backend_context_from_options_has_default_identity() {
+        let opts = BackendOptions::default();
+        let ctx = BackendContext::from(opts.clone());
+        assert_eq!(ctx.options(), &opts);
+        assert_eq!(ctx.platform(), &PlatformIdentity::default());
+    }
+
+    #[test]
+    fn backend_context_default_is_default_options_and_identity() {
+        let ctx = BackendContext::default();
+        assert_eq!(ctx.options(), &BackendOptions::default());
+        assert_eq!(ctx.platform(), &PlatformIdentity::default());
     }
 }

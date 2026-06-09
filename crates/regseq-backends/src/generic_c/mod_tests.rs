@@ -90,6 +90,8 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
                 name,
                 match_set: Vec::new(),
                 device_class: regseq_model::ClassTag::Generic,
+                bus_type: None,
+                dma_present: false,
             },
             handle: regseq_model::DriverHandle::default(),
             ops: regseq_model::LifecycleOps::default(),
@@ -108,6 +110,564 @@ fn lifecycle_trace_hooks_emitted_only_for_lifecycle_tu() {
     ] {
         assert!(with.contains(helper), "lifecycle TU must emit `{helper}`");
     }
+}
+
+// ---------------------------------------------------------------------------
+// bus-resource-management (construct #3) — generic-C emission over HAND-SET
+// bindings (the fast, toolchain-free coverage tier).
+//
+// These tests hand-construct an already-bound model in memory (via
+// `model_with_bound_mmio_field*`, whose `MmioBinding { base: Some(..), .. }` is
+// supplied directly) and assert the emitter's behavior over it. They deliberately
+// SKIP the `platform.toml` -> `parse_platform_*` -> `regseq_l2::bind_all` path so
+// they can sweep the full emission matrix cheaply, with no fixture or `cc`:
+//   - M1 keystone base literal           bus_resource_keystone_maps_the_real_declared_base
+//   - M1 runtime based accessor (cc)      bus_resource_based_accessor_traces_the_real_mapped_address
+//   - M2/D02 effective-BAR override       bus_resource_map_region_records_the_effective_bar_override
+//   - M3 four-op canonical order + DMA    bus_resource_m3_preamble_emits_four_ops_in_canonical_order
+//                                         bus_resource_m3_set_master_gated_on_dma_presence
+//   - M3/M4 non-PCI degradation           bus_resource_m3_non_pci_omits_enable_and_master
+//                                         bus_resource_m4_non_pci_no_bar_acquire_degrades
+//   - M5 config-space host model          bus_resource_m5_config_read_witness_and_pci_id_caching
+//   - M6 registration selector            bus_resource_m6_registration_selector
+//   - multi-region rejection (loud)       bus_resource_rejects_more_than_one_mapped_region_per_driver
+//   - zero-churn absent-binding gate      bus_resource_block_absent_without_a_resolved_binding
+// (The two `..._traces_..` / `..._witness_..` tests do invoke `cc`, but they
+// hand-write the C `main` over the host bus helpers — still NOT the parse->bind
+// path.)
+//
+// The END-TO-END L2 truth — that the declared `[mmio.<id>] base/size` actually
+// FLOWS `platform.toml` -> parse -> `regseq_l2::bind_all` -> bound model ->
+// emitted C, with NOTHING hand-set — is the keystone FIXTURE
+// `codegen-coverage-runner/fixtures/_bus/brm-e1000-keystone/`, run by
+// `codegen-coverage-runner/tests/bus_keystone_e2e.rs`. That fixture also carries
+// the `[platform]` identity block, so it (not this file) is the end-to-end proof
+// that os/board/arch flow file -> `PlatformIdentity` -> `BackendContext` ->
+// emitted trace; the T7 tests below pin only the `platform_trace_comment`
+// rendering in isolation. NB the in-file `..._keystone_maps_the_real_declared_base`
+// test shares the "keystone" name but is the hand-set variant — it proves the
+// emitter CONSUMES the declared base; the fixture proves the base ARRIVES there.
+//
+// Division of labor: keep these hand-set tests for fast, exhaustive matrix
+// coverage of the emitter; the fixture is the single unfaked parse->join->emit
+// oracle, backend-neutrally extensible to Zephyr/Linux. Do not migrate the matrix
+// into fixtures (slow, `cc`-bound) nor hand-set what the fixture proves end-to-end.
+// ---------------------------------------------------------------------------
+
+/// Build a lifecycle model with one driver carrying a single MMIO resource
+/// field whose binding is `binding` (bus-resource-management construct #3). The
+/// driver is on a PCI bus with DMA-presence absent (the keystone default).
+fn model_with_bound_mmio_field(binding: regseq_model::MmioBinding) -> RegseqModel {
+    model_with_bound_mmio_field_cfg(binding, Some(regseq_model::BusType::Pci), false)
+}
+
+/// As [`model_with_bound_mmio_field`] but with the `bus_type` + DMA-presence
+/// gating bit explicit — exercises the M3 gating matrix (T12): `enable_device`
+/// PCI-only, `set_bus_master` PCI ∧ DMA-presence.
+fn model_with_bound_mmio_field_cfg(
+    binding: regseq_model::MmioBinding,
+    bus_type: Option<regseq_model::BusType>,
+    dma_present: bool,
+) -> RegseqModel {
+    let mut m = model();
+    let driver_ty = push_struct_instance(&mut m, "Dev", struct_layout(0, 1, None, vec![]));
+    let driver_item = match &m.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        other => panic!("expected a struct ty, got {other:?}"),
+    };
+    let name = m.strings.intern("dev");
+    let regs = m.strings.intern("regs");
+    m.device_lifecycle.drivers.insert(
+        driver_item,
+        regseq_model::DriverLifecycle {
+            descriptor: regseq_model::DriverDescriptor {
+                name,
+                match_set: Vec::new(),
+                device_class: regseq_model::ClassTag::Generic,
+                bus_type,
+                dma_present,
+            },
+            handle: regseq_model::DriverHandle {
+                resource_fields: vec![regseq_model::ResourceField {
+                    name: regs,
+                    kind: regseq_model::ResourceKind::Mmio,
+                    binding,
+                }],
+                user_data_fields: Vec::new(),
+            },
+            ops: regseq_model::LifecycleOps::default(),
+        },
+    );
+    m
+}
+
+/// A resolved PCI MMIO binding (bar 0, base 0xf000_0000, size 0x2_0000) — the
+/// M3 gating-matrix tests vary only the bus/DMA cfg around this.
+fn resolved_pci_binding() -> regseq_model::MmioBinding {
+    regseq_model::MmioBinding {
+        id: None,
+        bar_index: Some(0),
+        bar_type: regseq_model::BarType::Mem,
+        effective_bar: Some(0),
+        base: Some(0xf000_0000),
+        size: Some(0x2_0000),
+    }
+}
+
+/// The 0-based byte index of `needle` in `hay`, or a panic naming it (used to
+/// assert canonical op ordering in the M3 preamble trace).
+fn idx_of<'a>(hay: &'a str, needle: &str) -> usize {
+    hay.find(needle)
+        .unwrap_or_else(|| panic!("expected `{needle}` in emitted C; got:\n{hay}"))
+}
+
+#[test]
+fn bus_resource_keystone_maps_the_real_declared_base() {
+    // Bus-resource-management construct #3, the KEYSTONE: a resource field with
+    // a resolved (base,size) makes the device-lifecycle preamble emit
+    // `regseq_bus_map_region(<base>, <size>)` with the DECLARED base literal
+    // (not a faked constant) + the based host bus model. This is the proof that
+    // the base register-access consumes == the declared `[mmio.<id>] base` (the
+    // faked oracle is retired). R05/R06/I04/I06.
+    let with = emit_generic_c(&model_with_bound_mmio_field(regseq_model::MmioBinding {
+        id: None,
+        bar_index: Some(0),
+        bar_type: regseq_model::BarType::Mem,
+        effective_bar: Some(0),
+        base: Some(0xf000_0000),
+        size: Some(0x2_0000),
+    }))
+    .unwrap();
+    // The host bus model block is emitted (gated on the resolved binding).
+    assert!(
+        with.contains("regseq_bus_map_region") && with.contains("regseq_bus_mmio_read"),
+        "a bound TU must emit the bus host model"
+    );
+    // The preamble maps the region with the DECLARED (base, size) literals and
+    // the effective BAR (here L1 bar=0).
+    assert!(
+        with.contains("regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);"),
+        "preamble must map the region with the declared (base,size,bar); got:\n{with}"
+    );
+    // `get_resource_handle` (unconditional, I06) precedes `map_region`.
+    let gh = with
+        .find("regseq_bus_get_handle();")
+        .expect("get_resource_handle call present");
+    let mr = with
+        .find("regseq_bus_map_region(0xf0000000ull")
+        .expect("map_region call present");
+    assert!(gh < mr, "get_resource_handle must precede map_region");
+}
+
+#[test]
+fn bus_resource_map_region_records_the_effective_bar_override() {
+    // Bus-resource-management construct #3, M2/D02 (the BAR override): a region
+    // whose effective BAR was overridden to 2 (L1 bar=0, L2 bar=2) maps the
+    // BAR-2 base/size and records `bar=2` in the trace — the only host-side
+    // proof that the emitted enumeration index follows the L2 override (the
+    // generic-c host has no real PCI enumeration; design §7.2). The companion
+    // `l2_bar_overrides_l1` join test proves `effective_bar = L2.bar ?? L1.bar`.
+    let with = emit_generic_c(&model_with_bound_mmio_field(regseq_model::MmioBinding {
+        id: None,
+        bar_index: Some(0),       // L1 default-decoded BAR
+        bar_type: regseq_model::BarType::Mem,
+        effective_bar: Some(2),   // L2 override -> resolution follows BAR 2
+        base: Some(0xc000_0000),  // the BAR-2 base
+        size: Some(0x1000),
+    }))
+    .unwrap();
+    assert!(
+        with.contains("regseq_bus_map_region(0xc0000000ull, 0x1000ull, 2);"),
+        "the override must map the BAR-2 base with the overridden index 2; got:\n{with}"
+    );
+}
+
+#[test]
+fn bus_resource_m3_preamble_emits_four_ops_in_canonical_order() {
+    // Construct #3 M3 (T11/T12/R04): a PCI driver with a resolved region emits
+    // the full preamble in canonical order
+    //   enable_device → claim_regions → get_resource_handle → map_region
+    // with `set_bus_master` ABSENT (DMA-presence defaults off, T12). The four
+    // managed ops are synthesized into the device-lifecycle preamble.
+    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        resolved_pci_binding(),
+        Some(regseq_model::BusType::Pci),
+        false,
+    ))
+    .unwrap();
+    let enable = idx_of(&with, "regseq_bus_enable_device();");
+    let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
+    let handle = idx_of(&with, "regseq_bus_get_handle();");
+    let map = idx_of(&with, "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);");
+    assert!(
+        enable < claim && claim < handle && handle < map,
+        "canonical order enable→claim→get_handle→map violated \
+         (enable={enable} claim={claim} handle={handle} map={map}); got:\n{with}"
+    );
+    // set_bus_master is gated on DMA-presence (absent here) — not emitted.
+    assert!(
+        !with.contains("regseq_bus_set_master();"),
+        "set_bus_master must be absent when DMA-presence is off; got:\n{with}"
+    );
+}
+
+#[test]
+fn bus_resource_m3_set_master_gated_on_dma_presence() {
+    // Construct #3 M3 (T12): on a PCI bus, `set_bus_master` IS emitted once the
+    // DMA-presence gating bit is set, and it sits between `claim_regions` and
+    // `get_resource_handle` in canonical order.
+    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        resolved_pci_binding(),
+        Some(regseq_model::BusType::Pci),
+        true, // DMA-presence on
+    ))
+    .unwrap();
+    let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
+    let master = idx_of(&with, "regseq_bus_set_master();");
+    let handle = idx_of(&with, "regseq_bus_get_handle();");
+    assert!(
+        claim < master && master < handle,
+        "set_bus_master must sit between claim and get_handle \
+         (claim={claim} master={master} handle={handle}); got:\n{with}"
+    );
+}
+
+#[test]
+fn bus_resource_m3_non_pci_omits_enable_and_master() {
+    // Construct #3 M3 (T12 gating / I05, the M4 degradation outcome): on a
+    // non-PCI bus (`amba`) the acquire path still claims + maps the region and
+    // captures the handle, but the PCI-only `enable_device`/`set_bus_master` are
+    // NOT emitted — asserted against the emitted C, not stdout silence.
+    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        resolved_pci_binding(),
+        Some(regseq_model::BusType::Amba),
+        true, // even with DMA-presence on, a non-PCI bus emits no master
+    ))
+    .unwrap();
+    // The surviving non-PCI ops keep canonical order claim → get_handle → map
+    // (pinned as tightly as the PCI paths, not merely "present").
+    let claim = idx_of(&with, "regseq_bus_claim_regions(0);");
+    let handle = idx_of(&with, "regseq_bus_get_handle();");
+    let map = idx_of(&with, "regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);");
+    assert!(
+        claim < handle && handle < map,
+        "non-PCI acquire must keep canonical order claim→get_handle→map \
+         (claim={claim} handle={handle} map={map}); got:\n{with}"
+    );
+    assert!(
+        !with.contains("regseq_bus_enable_device();"),
+        "enable_device is PCI-only — must be absent on amba; got:\n{with}"
+    );
+    assert!(
+        !with.contains("regseq_bus_set_master();"),
+        "set_bus_master is PCI-only — must be absent on amba; got:\n{with}"
+    );
+}
+
+#[test]
+fn bus_resource_m4_non_pci_no_bar_acquire_degrades() {
+    // Construct #3 M4 (T14, R07/I05): the genuine non-PCI degradation — a
+    // platform/DT region with NO BAR (effective_bar=None, the DT-reg stand-in)
+    // on `bus="amba"`. The acquire path still resolves (base,size) and maps the
+    // region (keyed by `bar=-1`, "no BAR"); the PCI-only `enable_device` and
+    // `set_bus_master` are absent. Asserted against the EMITTED C (not stdout
+    // silence). The join half (no-BAR region resolves) is proven by
+    // `bus_resource::tests::non_pci_no_bar_region_resolves_with_effective_bar_none`.
+    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        regseq_model::MmioBinding {
+            id: None,
+            bar_index: None,         // no L1 BAR
+            bar_type: regseq_model::BarType::Mem,
+            effective_bar: None,     // platform/DT region: no effective BAR
+            base: Some(0x4000_0000), // the DT-reg base stand-in
+            size: Some(0x1000),
+        },
+        Some(regseq_model::BusType::Amba),
+        false,
+    ))
+    .unwrap();
+    // The acquire resolves + maps with `bar=-1` (no BAR), in canonical order
+    // claim → get_handle → map.
+    let claim = idx_of(&with, "regseq_bus_claim_regions(-1);");
+    let handle = idx_of(&with, "regseq_bus_get_handle();");
+    let map = idx_of(&with, "regseq_bus_map_region(0x40000000ull, 0x1000ull, -1);");
+    assert!(
+        claim < handle && handle < map,
+        "non-PCI no-BAR acquire must claim(-1)→get_handle→map(-1) in order \
+         (claim={claim} handle={handle} map={map}); got:\n{with}"
+    );
+    // The PCI-only elements are absent in the emitted C (the degradation).
+    assert!(
+        !with.contains("regseq_bus_enable_device();")
+            && !with.contains("regseq_bus_set_master();"),
+        "non-PCI degradation must omit enable_device + set_bus_master; got:\n{with}"
+    );
+}
+
+#[test]
+fn bus_resource_m5_config_read_witness_and_pci_id_caching() {
+    // Construct #3 M5 (T16/T17, R03): the config-space host model. Compile the
+    // host bus model + a tiny main that seeds config space and exercises the
+    // hooks. Behavioral witnesses: (1) a PCI_COMMAND read traces its value; (2)
+    // the PCI-ID-caching rule — two reads of the vendor/device id offset produce
+    // exactly ONE fresh `config_read` + one `id_cache` line (the second is served
+    // from cache); (3) `write_config` is recorded. This is the behavioral half of
+    // M5; the recognition + model + call-interception wiring is unit-tested
+    // separately (the full Rust-source→read_config→emit_config exercise is the
+    // Tier-2-deferred composed fixture, as for the keystone).
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    if std::process::Command::new(&cc)
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping bus-resource config witness: no C compiler ({cc})");
+        return;
+    }
+    let program = format!(
+        "{prelude}{bus}\nint main(void) {{\n\
+         \x20\x20\x20\x20regseq_bus_config_space[0] = 0xec; regseq_bus_config_space[1] = 0x10;\n\
+         \x20\x20\x20\x20regseq_bus_config_space[2] = 0x68; regseq_bus_config_space[3] = 0x81;\n\
+         \x20\x20\x20\x20regseq_bus_config_space[4] = 0x07; regseq_bus_config_space[5] = 0x00;\n\
+         \x20\x20\x20\x20uint64_t id1 = regseq_bus_on_config_read(0x00, 4);\n\
+         \x20\x20\x20\x20uint64_t id2 = regseq_bus_on_config_read(0x00, 4);\n\
+         \x20\x20\x20\x20uint64_t cmd = regseq_bus_on_config_read(0x04, 2);\n\
+         \x20\x20\x20\x20regseq_bus_on_config_write(0x04, 2, 0x6);\n\
+         \x20\x20\x20\x20if (id1 != id2) return 1;\n\
+         \x20\x20\x20\x20if (cmd != 0x7) return 2;\n\
+         \x20\x20\x20\x20return 0;\n\
+         }}\n",
+        prelude = prelude::PRELUDE,
+        bus = prelude::BUS_RESOURCE_HELPERS,
+    );
+    let dir = std::env::temp_dir().join(format!("regseq_brm_config_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let src = dir.join("config.c");
+    let bin = dir.join("config");
+    std::fs::write(&src, &program).expect("write source");
+    let compile = std::process::Command::new(&cc)
+        .args(["-std=gnu11", "-fwrapv", "-Wall", "-o"])
+        .arg(&bin)
+        .arg(&src)
+        .output()
+        .expect("invoke cc");
+    assert!(
+        compile.status.success(),
+        "cc failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&bin).output().expect("run binary");
+    assert!(
+        run.status.success(),
+        "config witness program returned non-zero (id mismatch or wrong COMMAND): {:?}",
+        run.status.code()
+    );
+    let out = String::from_utf8_lossy(&run.stdout);
+    // (1) PCI_COMMAND read witness.
+    assert!(
+        out.contains("BUS config_read off=0x4 width=2 = 0x7"),
+        "PCI_COMMAND read must trace its value; got:\n{out}"
+    );
+    // (2) PCI-ID-caching: exactly one FRESH id read + one cached read.
+    assert_eq!(
+        out.matches("BUS config_read off=0x0").count(),
+        1,
+        "the vendor/device id must be read fresh exactly once (the rest cached); got:\n{out}"
+    );
+    assert!(
+        out.contains("BUS config_read id_cache off=0x0"),
+        "the second id read must be served from cache; got:\n{out}"
+    );
+    // (3) write_config recorded.
+    assert!(
+        out.contains("BUS config_write off=0x4 width=2 val=0x6"),
+        "write_config must be recorded by the host model; got:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bus_resource_based_accessor_traces_the_real_mapped_address() {
+    // RUNTIME keystone proof: compile the host bus model + a tiny main that maps
+    // a region at the declared base and does a based write/read; the trace must
+    // show the ABSOLUTE mapped address (base + off), proving the faked base
+    // (`@0x008`) is retired in favor of the real one (`@0xf0000008`). This is
+    // the behavioral half of the keystone oracle (design §7.1).
+    let cc = std::env::var("CC").unwrap_or_else(|_| "cc".to_string());
+    if std::process::Command::new(&cc)
+        .arg("--version")
+        .output()
+        .is_err()
+    {
+        eprintln!("skipping bus-resource runtime keystone: no C compiler ({cc})");
+        return;
+    }
+    let program = format!(
+        "{prelude}{bus}\nint main(void) {{\n\
+         \x20\x20\x20\x20regseq_bus_get_handle();\n\
+         \x20\x20\x20\x20regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0);\n\
+         \x20\x20\x20\x20regseq_bus_mmio_write(0x8, 4, 0xabcdu);\n\
+         \x20\x20\x20\x20(void)regseq_bus_mmio_read(0x8, 4);\n\
+         \x20\x20\x20\x20return 0;\n\
+         }}\n",
+        prelude = prelude::PRELUDE,
+        bus = prelude::BUS_RESOURCE_HELPERS,
+    );
+    let dir = std::env::temp_dir().join(format!("regseq_brm_keystone_{}", std::process::id()));
+    std::fs::create_dir_all(&dir).expect("temp dir");
+    let src = dir.join("keystone.c");
+    let bin = dir.join("keystone");
+    std::fs::write(&src, &program).expect("write source");
+    let compile = std::process::Command::new(&cc)
+        .args(["-std=gnu11", "-fwrapv", "-Wall", "-o"])
+        .arg(&bin)
+        .arg(&src)
+        .output()
+        .expect("invoke cc");
+    assert!(
+        compile.status.success(),
+        "cc failed:\n{}",
+        String::from_utf8_lossy(&compile.stderr)
+    );
+    let run = std::process::Command::new(&bin).output().expect("run binary");
+    let out = String::from_utf8_lossy(&run.stdout);
+    assert!(
+        out.contains("BUS map base=0xf0000000 size=0x20000"),
+        "map_region must trace the declared base; got:\n{out}"
+    );
+    assert!(
+        out.contains("W32 @0xf0000008 = 0x0000abcd"),
+        "based write must trace the REAL mapped address (base+off), not the faked @0x008; got:\n{out}"
+    );
+    assert!(
+        out.contains("R32 @0xf0000008 = 0x0000abcd"),
+        "based read must round-trip at the real mapped address; got:\n{out}"
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[test]
+fn bus_resource_block_absent_without_a_resolved_binding() {
+    // Zero-churn gate: a register-access lifecycle driver — NO `bus` declared and
+    // NO resolved binding — emits no bus host model, so existing register-access
+    // goldens (the faked-base `regseq_mmio_read/write` path) are byte-unchanged.
+    // (A bus-DECLARED driver without a binding does emit the helper block for the
+    // M6/T18 registration selector — see `bus_resource_m6_registration_selector`.)
+    let without = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        regseq_model::MmioBinding::default(),
+        None, // no `bus` -> the register-access case
+        false,
+    ))
+    .unwrap();
+    assert!(
+        !without.contains("regseq_bus_map_region")
+            && !without.contains("regseq_bus_get_handle")
+            && !without.contains("regseq_bus_register_driver"),
+        "no bus host model for a no-bus, no-binding TU"
+    );
+}
+
+#[test]
+fn bus_resource_m6_registration_selector() {
+    // Construct #3 M6 (T18, R09/D05): DL emits the registration (`regseq_lc_register`)
+    // and bus-resource supplies the bus-path SELECTOR right after it
+    // (`regseq_bus_register_driver("<bus>", "<bound|none>")`). A PCI driver with a
+    // resolved region registers with path=pci, binding=bound, after the DL marker;
+    // a no-`bus` driver emits no selector (zero churn).
+    let with = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        resolved_pci_binding(),
+        Some(regseq_model::BusType::Pci),
+        false,
+    ))
+    .unwrap();
+    // Anchor on the synthesized CALLS (with their `"` arg), not the helper
+    // DEFINITIONS (`regseq_lc_register(const char *...`): the selector must sit
+    // between the `register` call and the `create` call.
+    let reg = idx_of(&with, "regseq_lc_register(\"dev\"");
+    let sel = idx_of(&with, "regseq_bus_register_driver(\"pci\", \"bound\");");
+    let create = idx_of(&with, "regseq_lc_create();");
+    assert!(
+        reg < sel && sel < create,
+        "the bus selector must follow DL's register CALL and precede create \
+         (reg={reg} sel={sel} create={create}); got:\n{with}"
+    );
+
+    // A bus-declared driver with NO resolved region still registers (the selector
+    // is bus_type-derived, independent of the binding) — binding=none.
+    let unbound = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        regseq_model::MmioBinding::default(),
+        Some(regseq_model::BusType::Amba),
+        false,
+    ))
+    .unwrap();
+    assert!(
+        unbound.contains("regseq_bus_register_driver(\"amba\", \"none\");"),
+        "an unbound amba driver registers with path=amba, binding=none; got:\n{unbound}"
+    );
+
+    // A no-`bus` driver emits no selector CALL (the helper definition may still
+    // be present because the resolved binding emits BUS_RESOURCE_HELPERS — match
+    // the call form `regseq_bus_register_driver("` to exclude the definition).
+    let nobus = emit_generic_c(&model_with_bound_mmio_field_cfg(
+        resolved_pci_binding(),
+        None,
+        false,
+    ))
+    .unwrap();
+    assert!(
+        !nobus.contains("regseq_bus_register_driver(\""),
+        "a no-bus driver emits no registration selector call; got:\n{nobus}"
+    );
+}
+
+#[test]
+fn bus_resource_rejects_more_than_one_mapped_region_per_driver() {
+    // M1 maps one region per driver via a single global mapped base; two
+    // resolved regions would clobber it, so emit must reject LOUDLY rather than
+    // silently emit wrong code (every access would use the last-mapped base).
+    let mut m = model();
+    let driver_ty = push_struct_instance(&mut m, "Dev", struct_layout(0, 1, None, vec![]));
+    let driver_item = match &m.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        other => panic!("expected a struct ty, got {other:?}"),
+    };
+    let name = m.strings.intern("dev");
+    let resolved = |sid| regseq_model::ResourceField {
+        name: sid,
+        kind: regseq_model::ResourceKind::Mmio,
+        binding: regseq_model::MmioBinding {
+            id: Some(sid),
+            bar_index: Some(0),
+            bar_type: regseq_model::BarType::Mem,
+            effective_bar: Some(0),
+            base: Some(0x1000),
+            size: Some(0x100),
+        },
+    };
+    let a = m.strings.intern("a");
+    let b = m.strings.intern("b");
+    m.device_lifecycle.drivers.insert(
+        driver_item,
+        regseq_model::DriverLifecycle {
+            descriptor: regseq_model::DriverDescriptor {
+                name,
+                match_set: Vec::new(),
+                device_class: regseq_model::ClassTag::Generic,
+                bus_type: Some(regseq_model::BusType::Pci),
+                dma_present: false,
+            },
+            handle: regseq_model::DriverHandle {
+                resource_fields: vec![resolved(a), resolved(b)],
+                user_data_fields: Vec::new(),
+            },
+            ops: regseq_model::LifecycleOps::default(),
+        },
+    );
+    let err = emit_generic_c(&m).unwrap_err();
+    assert!(
+        format!("{err:?}").contains("more than one mapped MMIO region"),
+        "expected a multi-region rejection, got: {err:?}"
+    );
 }
 
 // ---------------------------------------------------------------------------
@@ -7879,4 +8439,62 @@ fn emit_for_entry_rejects_custom_entry_with_error_return_at_emit() {
         ),
         other => panic!("expected EntryShape from emit, got {other:?}"),
     }
+}
+
+// ---------------------------------------------------------------------------
+// T7: platform-identity trace. `platform_trace_comment` renders the `[platform]`
+// identity (os/board/arch) as a one-line header comment ONLY when present, so a
+// TU with no `[platform]` identity is byte-unchanged (zero golden churn). The
+// end-to-end "identity reaches the backend" proof is the keystone fixture
+// (`bus_keystone_e2e`); these pin the helper's present/absent/subset behavior.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn platform_trace_present_renders_set_fields_in_order() {
+    let id = PlatformIdentity {
+        os: Some(regseq_model::TargetOs::Linux),
+        board: Some("qemu-pc".to_string()),
+        arch: Some("x86_64".to_string()),
+    };
+    assert_eq!(
+        platform_trace_comment(&id).as_deref(),
+        Some("/* regseq target platform: os=linux board=qemu-pc arch=x86_64 */\n")
+    );
+}
+
+#[test]
+fn platform_trace_renders_only_a_set_subset() {
+    let id = PlatformIdentity {
+        os: Some(regseq_model::TargetOs::Zephyr),
+        ..PlatformIdentity::default()
+    };
+    assert_eq!(
+        platform_trace_comment(&id).as_deref(),
+        Some("/* regseq target platform: os=zephyr */\n")
+    );
+}
+
+#[test]
+fn platform_trace_absent_for_empty_identity_is_none() {
+    // The zero-churn guarantee: no `[platform]` identity -> no comment -> a TU
+    // byte-identical to the historical emission.
+    assert_eq!(platform_trace_comment(&PlatformIdentity::default()), None);
+}
+
+#[test]
+fn platform_trace_neutralizes_comment_terminator_and_newlines() {
+    // `board`/`arch` are free-form; a hostile/typo'd `*/` or newline must not be
+    // able to close the C block comment early or inject text (Codex T7 review).
+    let id = PlatformIdentity {
+        os: None,
+        board: Some("*/ evil(); /*".to_string()),
+        arch: Some("a\nb".to_string()),
+    };
+    let trace = platform_trace_comment(&id).expect("present");
+    // Exactly one `*/` survives: the intended closing terminator (the injected
+    // one was neutralized to `* /`), so the comment cannot be escaped.
+    assert_eq!(trace.matches("*/").count(), 1, "trace: {trace:?}");
+    assert!(trace.ends_with(" */\n"), "trace: {trace:?}");
+    // Interior newlines collapsed to spaces; only the single trailing newline.
+    assert_eq!(trace.matches('\n').count(), 1, "trace: {trace:?}");
 }

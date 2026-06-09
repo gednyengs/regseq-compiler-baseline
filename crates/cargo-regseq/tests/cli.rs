@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 use cargo_regseq::cli::{CargoCli, Cli};
 use cargo_regseq::Error;
 use clap::{CommandFactory, Parser};
-use regseq_config::{ColorChoice, DumpStage, EmitSpec, LogLevel, ParamScope, TargetOs};
+use regseq_config::{ColorChoice, DumpStage, EmitSpec, LogLevel, ParamScope};
 use tempfile::NamedTempFile;
 
 fn base_args() -> (NamedTempFile, Vec<String>) {
@@ -16,8 +16,6 @@ fn base_args_for_path(path: &Path) -> Vec<String> {
     vec![
         "cargo-regseq".to_string(),
         "regseq".to_string(),
-        "--target-os".to_string(),
-        "linux".to_string(),
         "--platform-file".to_string(),
         path.display().to_string(),
     ]
@@ -30,28 +28,14 @@ fn parse_ok(args: Vec<String>) -> Cli {
 }
 
 #[test]
-fn parse_base_args_linux() {
+fn parse_base_args() {
     let (platform, args) = base_args();
     let cli = parse_ok(args);
-    assert_eq!(cli.target_os, TargetOs::Linux);
     assert_eq!(cli.platform_file, platform.path());
 }
 
-#[test]
-fn parse_target_os_zephyr() {
-    let (_platform, mut args) = base_args();
-    args[3] = "zephyr".to_string();
-    let cli = parse_ok(args);
-    assert_eq!(cli.target_os, TargetOs::Zephyr);
-}
-
-#[test]
-fn parse_target_os_case_insensitive() {
-    let (_platform, mut args) = base_args();
-    args[3] = "LINUX".to_string();
-    let cli = parse_ok(args);
-    assert_eq!(cli.target_os, TargetOs::Linux);
-}
+// `parse_target_os_*` tests were removed with the `--target-os` flag (D6); os
+// identity now comes from the platform file's `[platform]` table (D4).
 
 #[test]
 fn parse_output_dir_override() {
@@ -69,25 +53,9 @@ fn parse_output_dir_default() {
 }
 
 #[test]
-fn parse_missing_target_os_fails() {
-    let (platform, _args) = base_args();
-    let args = vec![
-        "cargo-regseq".to_string(),
-        "regseq".to_string(),
-        "--platform-file".to_string(),
-        platform.path().display().to_string(),
-    ];
-    assert!(CargoCli::try_parse_from(args).is_err());
-}
-
-#[test]
 fn parse_missing_platform_file_fails() {
-    let args = vec![
-        "cargo-regseq".to_string(),
-        "regseq".to_string(),
-        "--target-os".to_string(),
-        "linux".to_string(),
-    ];
+    // `--platform-file` is the sole required arg now that `--target-os` is gone.
+    let args = vec!["cargo-regseq".to_string(), "regseq".to_string()];
     assert!(CargoCli::try_parse_from(args).is_err());
 }
 

@@ -4,7 +4,8 @@ Cargo subcommand that orchestrates the Regseq compilation flow.
 
 ## Responsibilities
 
-- Parse CLI arguments: `cargo regseq --target-os <linux|zephyr> --platform-file <path> [OPTIONS]`
+- Parse CLI arguments: `cargo regseq --platform-file <path> [OPTIONS]` (target identity —
+  os/board/arch — comes from the platform file's `[platform]` table, not a `--target-os` flag)
 - Select what to emit with `--emit <SPEC>`; when omitted, the default is
   `--emit model`, which writes the pretty-printed RegseqModel text (pass
   `--emit json` for the machine-readable form).

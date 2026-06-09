@@ -147,6 +147,154 @@ __attribute__((unused)) static void regseq_lc_postamble(const char *res, int ski
 }
 "#;
 
+/// Bus-resource-management host bus-model block (construct #3, the keystone).
+///
+/// Emitted ONLY for a TU that has a resolved bus-resource binding (the caller
+/// gates on `model_has_bus_binding`), so a no-bus TU's `.c` is byte-unchanged —
+/// the existing register-access / diag-log / lifecycle goldens do not churn.
+///
+/// This is the host realization of bus-resource's keystone seam: the resolved
+/// `(base, size)` (from the platform file's `[mmio.<id>]` literals, GRILL D06)
+/// is installed at runtime by `regseq_bus_map_region` in the device-lifecycle
+/// preamble; the based MMIO accessors then print the REAL mapped address
+/// (`base + off`), not the faked global-regfile offset. Swapping the literal
+/// source for a real `pci_resource_start` / `DT_REG_ADDR` changes no
+/// register-access operation (I04) — only what `map_region` is handed.
+///
+/// The based accessors mirror the always-on `regseq_mmio_read/write` byte
+/// machinery over `regseq_regfile` (relative offsets), but trace the absolute
+/// mapped address. Each `BUS <event>` / based-access line is the behavioral
+/// oracle for the keystone (the mapped base = the declared `[mmio.<id>] base`).
+///
+/// Construct #3 M3 adds the full four compiler-managed preamble ops in canonical
+/// order `enable_device → claim_regions → set_bus_master → get_resource_handle`
+/// (then register-access's `map_region`). The gating (which ops emit) is decided
+/// in `emit_lifecycle_synthesis`; these helpers are the host realizations
+/// (`enable`/`master` record host-model state, `claim_regions` is a trace-only
+/// no-op on the host — the three real claim realizations are backend-[Open]).
+pub const BUS_RESOURCE_HELPERS: &str = r#"
+/* ---------------------------------------------------------------------------
+ * Bus-resource-management host bus model (construct #3, the keystone). Emitted
+ * only for a TU with a resolved bus-resource binding. `regseq_bus_map_region`
+ * installs the real (base,size) the device-lifecycle preamble resolved from the
+ * platform file's [mmio.<id>] literals; the based accessors trace the absolute
+ * mapped address (base+off), retiring the faked base. */
+static uint64_t regseq_bus_mapped_base __attribute__((unused)) = 0;
+/* `register_driver` selector (construct #3 M6/T18): DL emits the registration;
+ * bus-resource supplies the bus-path selector (`pci`/`amba`/`platform`/…) + a
+ * marker of whether a resolved region binding was supplied. The real backend
+ * maps the selector to `pci_register_driver` / `module_amba_driver` /
+ * `DEVICE_DT_DEFINE` (backend-[Open]); the host trace just records it. */
+__attribute__((unused)) static void regseq_bus_register_driver(const char *sel, const char *binding) {
+    printf("BUS register_driver path=%s binding=%s\n", sel, binding);
+}
+/* Host bus-model state the four compiler-managed preamble ops record (design
+ * §5: generic-c `enable_device`/`set_bus_master` "record in the host bus
+ * model"). Inspectable so a fixture can witness that bring-up ran. */
+static int regseq_bus_enabled __attribute__((unused)) = 0;
+static int regseq_bus_mastered __attribute__((unused)) = 0;
+/* `enable_device` (construct #3 M3): PCI-capable bus only (default-on on
+ * platform, so not emitted there). Records "enabled" in the host bus model. */
+__attribute__((unused)) static void regseq_bus_enable_device(void) {
+    regseq_bus_enabled = 1;
+    printf("BUS enable_device\n");
+}
+/* `claim_regions` (construct #3 M3): per region-bearing binding, on EVERY bus
+ * (not PCI-gated). On the generic-c host there is no runtime reservation — the
+ * region IS the [mmio.<id>] binding (design §5), so this is a trace-only marker
+ * carrying the effective BAR. The three real realizations are backend-[Open]
+ * (design §3/§8.2): Linux PCI reserves (pci_request_selected_regions); Linux
+ * AMBA fuses claim∘map into one devm_ioremap_resource; Zephyr has no runtime
+ * claim (the region is resolved/sized, not reserved). */
+__attribute__((unused)) static void regseq_bus_claim_regions(int64_t bar) {
+    printf("BUS claim_regions bar=%lld\n", (long long)bar);
+}
+/* `set_bus_master` (construct #3 M3): PCI-capable bus AND DMA-Management
+ * surface present (design §3; DMA-presence is GRILL O2, the DMA construct's
+ * fact). Defaults absent today, so this is emitted by no fixture yet. Records
+ * "master" in the host bus model. */
+__attribute__((unused)) static void regseq_bus_set_master(void) {
+    regseq_bus_mastered = 1;
+    printf("BUS set_master\n");
+}
+__attribute__((unused)) static void *regseq_bus_get_handle(void) {
+    printf("BUS get_handle\n");
+    return &regseq_bus_mapped_base;
+}
+__attribute__((unused)) static void regseq_bus_map_region(uint64_t base, uint64_t size, int64_t bar) {
+    regseq_bus_mapped_base = base;
+    /* `bar` is the resolved EFFECTIVE BAR (L2.bar ?? L1.bar) the real backend
+     * would enumerate from (pci_resource_start(effective_bar)); -1 = no BAR (a
+     * platform/DT region). Tracing it makes the L2 `bar` override observable:
+     * an L2 `bar = 2` over an L1 `bar = 0` traces `bar=2` + the BAR-2 base. */
+    printf("BUS map base=0x%llx size=0x%llx bar=%lld\n",
+           (unsigned long long)base, (unsigned long long)size, (long long)bar);
+}
+__attribute__((unused)) static uint64_t regseq_bus_mmio_read(uint32_t off, uint32_t width) {
+    uint64_t v = 0;
+    for (uint32_t i = 0; i < width && (off + i) < REGSEQ_REGFILE_BYTES; i++) {
+        v |= (uint64_t)regseq_regfile[off + i] << (8u * i);
+    }
+    printf("R%u @0x%llx = 0x%0*llx\n", (unsigned)(width * 8u),
+           (unsigned long long)(regseq_bus_mapped_base + off),
+           (int)(width * 2u), (unsigned long long)v);
+    return v;
+}
+__attribute__((unused)) static void regseq_bus_mmio_write(uint32_t off, uint32_t width, uint64_t val) {
+    printf("W%u @0x%llx = 0x%0*llx\n", (unsigned)(width * 8u),
+           (unsigned long long)(regseq_bus_mapped_base + off),
+           (int)(width * 2u), (unsigned long long)val);
+    for (uint32_t i = 0; i < width && (off + i) < REGSEQ_REGFILE_BYTES; i++) {
+        regseq_regfile[off + i] = (uint8_t)(val >> (8u * i));
+    }
+}
+/* ---------------------------------------------------------------------------
+ * Config-space host model (construct #3 M5). A tiny PCI config space the host
+ * bus model answers for the `regseq::bus::read_config/write_config` intrinsics:
+ *   - `read_config` witnesses the PCI_COMMAND register read, AND implements the
+ *     PCI-ID-caching rule — the vendor/device id (config offset 0x00) is read
+ *     from config space ONCE and cached; a later id read is served from the
+ *     cache, not a fresh config read (design §3, GRILL R03).
+ *   - `write_config` is recorded only (no behavioral witness, GRILL O3).
+ * The fixture seeds `regseq_bus_config_space` before exercising the hooks. */
+#define REGSEQ_PCI_VENDOR_ID 0x00u
+#define REGSEQ_PCI_COMMAND   0x04u
+static uint8_t regseq_bus_config_space[256] __attribute__((unused)) = {0};
+static int regseq_bus_pci_id_cached __attribute__((unused)) = 0;
+static uint64_t regseq_bus_pci_id_cache __attribute__((unused)) = 0;
+__attribute__((unused)) static uint64_t regseq_bus_config_assemble(uint32_t off, uint32_t width) {
+    uint64_t v = 0;
+    for (uint32_t i = 0; i < width && (off + i) < sizeof(regseq_bus_config_space); i++) {
+        v |= (uint64_t)regseq_bus_config_space[off + i] << (8u * i);
+    }
+    return v;
+}
+__attribute__((unused)) static uint64_t regseq_bus_on_config_read(uint32_t off, uint32_t width) {
+    /* PCI-ID-caching rule: a second read of the vendor/device id offset is
+     * served from the cache (one underlying config read for two id reads). */
+    if (off == REGSEQ_PCI_VENDOR_ID) {
+        if (regseq_bus_pci_id_cached) {
+            printf("BUS config_read id_cache off=0x%x width=%u = 0x%llx\n",
+                   off, width, (unsigned long long)regseq_bus_pci_id_cache);
+            return regseq_bus_pci_id_cache;
+        }
+        regseq_bus_pci_id_cache = regseq_bus_config_assemble(off, width);
+        regseq_bus_pci_id_cached = 1;
+    }
+    uint64_t v = regseq_bus_config_assemble(off, width);
+    printf("BUS config_read off=0x%x width=%u = 0x%llx\n",
+           off, width, (unsigned long long)v);
+    return v;
+}
+__attribute__((unused)) static void regseq_bus_on_config_write(uint32_t off, uint32_t width, uint64_t val) {
+    printf("BUS config_write off=0x%x width=%u val=0x%llx\n",
+           off, width, (unsigned long long)val);
+    for (uint32_t i = 0; i < width && (off + i) < sizeof(regseq_bus_config_space); i++) {
+        regseq_bus_config_space[off + i] = (uint8_t)(val >> (8u * i));
+    }
+}
+"#;
+
 /// `(c_type, min_expr, max_expr)` for every primitive integer type in the
 /// fixed helper set (section 10 / section 11). The order is fixed so the
 /// emitted block is byte-stable. The 128-bit bounds reference the

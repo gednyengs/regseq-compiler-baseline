@@ -1,0 +1,12 @@
+name   = "brm-amba-bar-reject"
+kind   = "rust"
+# Bus-resource-management (construct #3) compile-fail oracle: an AMBA driver that
+# declares a PCI BAR (`bar = 0`) on its MMIO region. A BAR is PCI-only, so the
+# harness must REJECT it at the Bind stage with BRM-002 — from the L1 `bar` alone
+# (no platform.toml). Pairs the unit-tested `validate_l2_surface` diagnostic with
+# the runner pipeline (Stream-B T5). Run by `bus_reject_corpus_e2e`.
+covers = ["BRM-002"]
+expect = "reject"
+[expected]
+stage = "bind"
+diagnostic = "BRM-002"
