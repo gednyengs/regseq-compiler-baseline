@@ -7,7 +7,9 @@
 //! records the marker on the model. It is construct-neutral on purpose;
 //! family-specific logic lives in each construct's bridge module.
 
-use regseq_model::{AttrData, DefPathData, IntrinsicKind, ItemId, LogLevel, MmioOp, RegseqModel};
+use regseq_model::{
+    AttrData, ConfigOp, DefPathData, IntrinsicKind, ItemId, LogLevel, MmioOp, RegseqModel,
+};
 use rustc_span::{def_id::DefId, Symbol as RustcSymbol};
 
 pub(crate) fn recognise_intrinsic_attr(
@@ -86,6 +88,9 @@ fn intrinsic_kind_for_name(name: &str) -> Option<IntrinsicKind> {
         "mmio_write_field" => Some(IntrinsicKind::Mmio(MmioOp::WriteField)),
         "mmio_modify" => Some(IntrinsicKind::Mmio(MmioOp::Modify)),
         "poll_until" => Some(IntrinsicKind::PollUntil),
+        // Bus config-space intrinsics (bus-resource-management construct #3 M5).
+        "read_config" => Some(IntrinsicKind::Config(ConfigOp::Read)),
+        "write_config" => Some(IntrinsicKind::Config(ConfigOp::Write)),
         _ => None,
     }
 }
@@ -110,6 +115,13 @@ fn fn_name_matches_kind(name: &str, kind: &IntrinsicKind) -> bool {
                 | ("modify", MmioOp::Modify)
         ),
         IntrinsicKind::PollUntil => name == "poll_until" || name == "until",
+        // The `regseq::bus::{read_config,write_config}` free functions; the
+        // `#[rseq::intrinsic]` attribute is the authority, the name a redundant
+        // gate (bus-resource-management construct #3 M5).
+        IntrinsicKind::Config(op) => matches!(
+            (name, op),
+            ("read_config", ConfigOp::Read) | ("write_config", ConfigOp::Write)
+        ),
     }
 }
 
@@ -174,6 +186,27 @@ mod tests {
             &IntrinsicKind::Log(LogLevel::Debug)
         ));
         assert!(model.domain_attrs.item_attrs[ItemId::from_u32(0)].is_empty());
+    }
+
+    #[test]
+    fn recognises_config_space_intrinsics() {
+        // Bus-resource-management construct #3 M5: the `regseq::bus::read_config`/
+        // `write_config` free functions map to `IntrinsicKind::Config(op)` and the
+        // redundant fn-name gate accepts them.
+        for (leaf, kind) in [
+            ("read_config", IntrinsicKind::Config(regseq_model::ConfigOp::Read)),
+            ("write_config", IntrinsicKind::Config(regseq_model::ConfigOp::Write)),
+        ] {
+            assert_eq!(intrinsic_kind_for_name(leaf), Some(kind.clone()));
+            let mut model = model_with_item_attrs(1);
+            let def_path = def_path(&mut model, leaf);
+            assert!(callee_name_matches_kind(&model, &def_path, &kind));
+            record_intrinsic(&mut model, ItemId::from_u32(0), kind.clone());
+            assert_eq!(
+                model.domain_attrs.item_attrs[ItemId::from_u32(0)],
+                vec![AttrData::Intrinsic(kind)]
+            );
+        }
     }
 
     #[test]

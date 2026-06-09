@@ -51,6 +51,56 @@ pub struct DriverDescriptor {
     pub match_set: Vec<MatchEntry>,
     /// Device-class tag (default `Generic`); stored, unvalidated this stage.
     pub device_class: ClassTag,
+    /// Authored bus the device speaks (`#[rseq::driver(bus = "…")]`,
+    /// bus-resource-management construct #3, GRILL D07). `None` for a driver
+    /// that declares no `bus` key (existing register-access/device-lifecycle
+    /// fixtures). Selects the per-target framework path + gates the PCI-only
+    /// surface; defaulted via `#[serde(default)]` so models serialized before
+    /// the field existed still deserialize.
+    #[serde(default)]
+    pub bus_type: Option<BusType>,
+    /// The DMA-Management surface-presence gating bit (bus-resource-management
+    /// construct #3, M3/T12). `set_bus_master` is gated on a PCI-capable bus
+    /// **AND** this bit (design §3). DMA-presence is properly defined by the DMA
+    /// construct (GRILL O2, not yet built), so this is a placeholder that
+    /// defaults `false` — no driver sets it today, so `set_bus_master` is not
+    /// emitted yet. Wiring it to a real DMA-surface fact is the DMA construct's
+    /// job. `#[serde(default)]` keeps pre-construct-#3 models deserializable.
+    #[serde(default)]
+    pub dma_present: bool,
+}
+
+/// The bus a device speaks, authored as `#[rseq::driver(bus = "…")]` (L1,
+/// bus-resource-management construct #3). Closed, append-only. `Amba` is a
+/// distinct value (GRILL D07): Linux lowers it to `amba_driver` + periphid,
+/// not `platform_driver`. The capability to bear PCI config space / BARs is
+/// [`BusType::is_pci_like`].
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BusType {
+    /// PCI / PCIe (config space + BARs).
+    Pci,
+    /// Generic platform / SoC bus (devicetree `reg`).
+    Platform,
+    /// ARM AMBA / PrimeCell (periphid match; GRILL D07).
+    Amba,
+    /// I²C (deferred lowering).
+    I2c,
+    /// SPI (deferred lowering).
+    Spi,
+    /// USB (deferred lowering).
+    Usb,
+    /// Any other authored bus token, carried verbatim.
+    Other(StringId),
+}
+
+impl BusType {
+    /// Whether this bus bears PCI-style config space + BARs — the gate for the
+    /// PCI-only surface (config intrinsics, `bar`, `type = "io"`,
+    /// `enable_device`/`set_bus_master`). Only [`BusType::Pci`] is PCI-like in
+    /// the build-now surface (GRILL C01 / I05).
+    pub fn is_pci_like(&self) -> bool {
+        matches!(self, BusType::Pci)
+    }
 }
 
 /// A typed device-match entry. All bus variants are modeled; the bridge parses
@@ -139,6 +189,64 @@ pub struct ResourceField {
     pub name: StringId,
     /// The resource kind (its setup is owned by another construct).
     pub kind: ResourceKind,
+    /// The bus-resource-management binding for this region (construct #3): the
+    /// authored L1 facts (`id`/`bar`/`type` from `#[rseq::mmio(...)]`) and the
+    /// resolved L2 `(base, size)` from the platform file's `[mmio.<id>]`
+    /// section. Empty (`MmioBinding::default`) for a field that carries no
+    /// bus-resource binding (existing register-access fixtures, no
+    /// platform-file join). `#[serde(default)]` keeps pre-construct-#3 models
+    /// deserializable.
+    #[serde(default)]
+    pub binding: MmioBinding,
+}
+
+/// The bus-resource-management per-region binding (construct #3, GRILL C01).
+///
+/// Carries the authored L1 facts and the resolved L2 `(base, size)`. The
+/// keystone seam: a resolved `(base, size)` (host literal, or — on a real
+/// backend — `pci_resource_start`/`DT_REG_ADDR`) feeds register-access's
+/// `map_region` with **no register-access op change** (I04). Empty by default.
+#[derive(Clone, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MmioBinding {
+    /// The L1 resource id (`#[rseq::mmio(id = "<id>")]`); the join key to the
+    /// platform file's `[mmio.<id>]` section. `None` falls back to the field
+    /// name as the join key.
+    pub id: Option<StringId>,
+    /// The L1 default-decoded BAR index (`#[rseq::mmio(bar = N)]`, 0..5;
+    /// PCI-like bus only). `None` if unauthored.
+    pub bar_index: Option<u8>,
+    /// The L1 carrier marker (`type = "io"` → [`BarType::Io`]); default
+    /// [`BarType::Mem`] (PCI-like bus only).
+    pub bar_type: BarType,
+    /// The resolved effective BAR = `L2.bar ?? L1.bar` (GRILL I01); `None`
+    /// until joined or on a non-PCI-like bus.
+    pub effective_bar: Option<u8>,
+    /// The resolved region physical base. On the generic-c host this is the
+    /// `[mmio.<id>] base` literal (GRILL D06); `None` until resolved.
+    pub base: Option<u64>,
+    /// The resolved region length (binds together with `base`, GRILL I02).
+    pub size: Option<u64>,
+}
+
+impl MmioBinding {
+    /// Whether this region has a resolved `(base, size)` the backend can hand
+    /// to `map_region` — the gate for the generic-c bus host-model path (the
+    /// keystone). A region without it lowers through the faked-base accessor
+    /// (unchanged) or is rejected (`BRM-006`, construct #3 M6).
+    pub fn is_resolved(&self) -> bool {
+        self.base.is_some() && self.size.is_some()
+    }
+}
+
+/// The MMIO region carrier (`bar_type`): memory-mapped (default) or port-I/O.
+/// Port-I/O is PCI-gated (GRILL C01 / BRM-003).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+pub enum BarType {
+    /// Memory-mapped region (default carrier).
+    #[default]
+    Mem,
+    /// Port-I/O region (`type = "io"`; PCI-like bus only).
+    Io,
 }
 
 /// Closed, append-only resource-family taxonomy. Only `Mmio` exists now.
@@ -256,6 +364,9 @@ mod tests {
                         compatible: sid(1),
                     }],
                     device_class: ClassTag::Generic,
+                    bus_type: Some(BusType::Pci),
+                    // Exercise the M3 gating bit through serialize/deserialize.
+                    dma_present: true,
                 },
                 handle: DriverHandle::default(),
                 ops: LifecycleOps::default(),
@@ -277,6 +388,8 @@ mod tests {
                             mask: 0xffff,
                         }],
                         device_class: ClassTag::Serial,
+                        bus_type: None,
+                        dma_present: false,
                     },
                     handle: DriverHandle::default(),
                     ops: LifecycleOps::default(),

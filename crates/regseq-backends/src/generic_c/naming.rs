@@ -37,7 +37,7 @@ pub enum EntrySymbol {
 
 /// Resolve the entry function's emitted C symbol by a rendered-`emission_name`
 /// suffix (Change F). Finds the **function** instance whose rendered
-/// `emission_name` ends with `rendered_suffix`, then applies [`sanitize`] to
+/// `emission_name` ends with `rendered_suffix`, then applies `sanitize` to
 /// produce the emitted C symbol -- the single source of truth for the symbol
 /// convention, reused by the on-disk coverage pipeline (it mints the entry the
 /// same way the in-crate `fn_cname` resolver does). Returns [`EntrySymbol`] so a

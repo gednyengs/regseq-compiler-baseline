@@ -28,7 +28,7 @@ use std::collections::{HashMap, HashSet};
 
 use regseq_model::{
     CAbiLowering, CAbiShape, FnAbi, FnSig, FnSigId, InlineHint, InstanceId, InstanceKind,
-    InstanceRef, Linkage, Mutability, Provenance, RegseqModel, Ty, TyId,
+    InstanceRef, Linkage, Mutability, PlatformIdentity, Provenance, RegseqModel, Ty, TyId,
 };
 
 pub mod prelude;
@@ -41,7 +41,7 @@ mod layout_emit;
 mod naming;
 mod types;
 
-pub use backend_options::{BackendOptions, LifecycleScenario};
+pub use backend_options::{BackendContext, BackendOptions, LifecycleScenario};
 pub use naming::{entry_c_symbol, generate_main_c, EntryShim, EntrySymbol};
 
 /// The default Doc-2 D3 entry suffix both consumers pass on the error path
@@ -169,7 +169,19 @@ pub fn emit_generic_c_with(
     model: &RegseqModel,
     options: &BackendOptions,
 ) -> Result<String, EmitError> {
-    emit_generic_c_inner(model, None, options)
+    emit_generic_c_inner(model, None, options, &PlatformIdentity::default())
+}
+
+/// [`emit_generic_c_with`] over a full [`BackendContext`] (options + target
+/// [`PlatformIdentity`]). The production `--emit generic-c` path and any backend
+/// that needs the platform identity call this; the `_with(&BackendOptions)` form
+/// is the default-identity shim (no trace, byte-identical to the historical
+/// emission). generic-C only traces the identity (D7).
+pub fn emit_generic_c_with_context(
+    model: &RegseqModel,
+    context: &BackendContext,
+) -> Result<String, EmitError> {
+    emit_generic_c_inner(model, None, context.options(), context.platform())
 }
 
 /// What the regseq-backends-28 hand-emitted `RegseqError` -> errno boundary
@@ -189,6 +201,34 @@ struct AdapterSpec {
     err_enum_ty: TyId,
 }
 
+/// A one-line C header comment recording the target [`PlatformIdentity`] when any
+/// field (os / board / arch) is set, else `None` so a TU with no `[platform]`
+/// identity is byte-unchanged (zero golden churn for the existing corpus). This
+/// is generic-C's "may trace it" hook (T7/D7); only the present fields appear.
+fn platform_trace_comment(platform: &PlatformIdentity) -> Option<String> {
+    let mut parts = Vec::new();
+    if let Some(os) = platform.os {
+        // `os` is a closed `TargetOs` token ("linux"/"zephyr") — comment-safe.
+        parts.push(format!("os={os}"));
+    }
+    if let Some(board) = &platform.board {
+        parts.push(format!("board={}", c_comment_safe(board)));
+    }
+    if let Some(arch) = &platform.arch {
+        parts.push(format!("arch={}", c_comment_safe(arch)));
+    }
+    (!parts.is_empty()).then(|| format!("/* regseq target platform: {} */\n", parts.join(" ")))
+}
+
+/// Make a FREE-FORM identity field (`board` / `arch` — accepted as arbitrary
+/// strings by the config parser) safe to embed in a C block comment: neutralize
+/// any `*/` (which would close the comment early and let a hostile or typo'd
+/// value inject C text) and collapse newlines so the trace stays one line. `os`
+/// is a closed `TargetOs` token, so it is not routed through this.
+fn c_comment_safe(field: &str) -> String {
+    field.replace("*/", "* /").replace(['\n', '\r'], " ")
+}
+
 /// Lower a post-mono [`RegseqModel`] to the section 15 five-bank translation
 /// unit, optionally appending the regseq-backends-28 errno boundary `adapter`
 /// (and its demand-driven `<errno.h>`) when the entry classifies as an error
@@ -198,7 +238,21 @@ fn emit_generic_c_inner(
     model: &RegseqModel,
     adapter: Option<&AdapterSpec>,
     options: &BackendOptions,
+    platform: &PlatformIdentity,
 ) -> Result<String, EmitError> {
+    // Bus-resource-management (construct #3): M1's host bus model maps a single
+    // region per driver through one global mapped base. A driver with more than
+    // one resolved MMIO region would clobber it (every access would consult the
+    // last-mapped base), so reject loudly rather than emit wrong code —
+    // per-access region base threading is a later milestone.
+    if body_emit::max_resolved_bindings_per_driver(model) > 1 {
+        return Err(EmitError::Unsupported(
+            "bus-resource-management: more than one mapped MMIO region per driver \
+             is not yet supported (single global mapped base; per-region base \
+             threading is a later milestone)",
+        ));
+    }
+
     let discovered = discover(model);
     let names = build_name_table(model, &discovered);
     let syms = build_instance_symbols(model);
@@ -241,11 +295,32 @@ fn emit_generic_c_inner(
 
     let mut out = String::new();
     out.push_str(prelude::PRELUDE);
+    // Target-platform trace (T7): a one-line header comment recording the
+    // `[platform]` identity (os/board/arch), emitted ONLY when an identity is
+    // present so a TU with no `[platform]` table is byte-unchanged (no golden
+    // churn for the existing corpus). generic-C does not otherwise consume the
+    // identity (D7); future Zephyr/Linux backends select a framework from it.
+    if let Some(trace) = platform_trace_comment(platform) {
+        out.push_str(&trace);
+    }
     out.push_str(&prelude::helper_block(&helper_use.borrow()));
     // Device-lifecycle trace hooks (T12), emitted only for a TU with lifecycle
     // drivers so a no-lifecycle TU's `.c` is byte-unchanged (no golden churn).
     if !model.device_lifecycle.drivers.is_empty() {
         out.push_str(prelude::LIFECYCLE_HELPERS);
+    }
+    // Bus-resource-management host bus model (construct #3, the keystone),
+    // emitted for a TU with a resolved bus-resource binding, a bus-declared
+    // driver (the M6/T18 registration selector needs the helper even without a
+    // resolved region), OR a config-space intrinsic (its `emit_config` lowering
+    // calls the host config hooks, which live in this block). A TU with none of
+    // those has a byte-unchanged `.c` (no existing fixture declares a `bus` or
+    // uses a config intrinsic), so no register-access golden churns.
+    if body_emit::model_has_bus_binding(model)
+        || body_emit::model_has_bus_type(model)
+        || body_emit::model_has_config_intrinsic(model)
+    {
+        out.push_str(prelude::BUS_RESOURCE_HELPERS);
     }
     out.push_str(&bank2);
     out.push_str(&bank3);
@@ -311,8 +386,31 @@ pub fn emit_generic_c_for_entry_with(
     entry_suffix: &str,
     options: &BackendOptions,
 ) -> Result<EntryEmit, EmitError> {
+    emit_generic_c_for_entry_impl(model, entry_suffix, options, &PlatformIdentity::default())
+}
+
+/// [`emit_generic_c_for_entry_with`] over a full [`BackendContext`] (options +
+/// target [`PlatformIdentity`]). The production `--emit bin` path and the
+/// codegen-coverage harness call this so the platform identity reaches the
+/// backend; the `_with(&BackendOptions)` form is the default-identity shim.
+pub fn emit_generic_c_for_entry_with_context(
+    model: &RegseqModel,
+    entry_suffix: &str,
+    context: &BackendContext,
+) -> Result<EntryEmit, EmitError> {
+    emit_generic_c_for_entry_impl(model, entry_suffix, context.options(), context.platform())
+}
+
+/// Shared body for the entry-aware emit: resolve + classify the entry, then lower
+/// the TU with the given options + platform identity.
+fn emit_generic_c_for_entry_impl(
+    model: &RegseqModel,
+    entry_suffix: &str,
+    options: &BackendOptions,
+    platform: &PlatformIdentity,
+) -> Result<EntryEmit, EmitError> {
     let (shim, adapter) = resolve_entry(model, entry_suffix)?;
-    let tu = emit_generic_c_inner(model, adapter.as_ref(), options)?;
+    let tu = emit_generic_c_inner(model, adapter.as_ref(), options, platform)?;
     Ok(EntryEmit { tu, shim })
 }
 

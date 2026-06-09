@@ -13,7 +13,7 @@ use std::process::Command;
 
 use cargo_regseq::invoke::build_cargo_command;
 use cargo_regseq::toolchain::ToolchainInfo;
-use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, TargetOs};
+use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel};
 use tempfile::{NamedTempFile, TempDir};
 
 fn env_value(command: &Command, key: &str) -> Option<String> {
@@ -39,7 +39,6 @@ fn sample_options_and_toolchain() -> (
     let output_dir = root.path().join("regseq-out");
 
     let options = CompilerOptions {
-        target_os: TargetOs::Linux,
         platform_file: platform_file.path().to_path_buf(),
         output_dir,
         emit: vec![EmitSpec::Driver { match_id: None }],

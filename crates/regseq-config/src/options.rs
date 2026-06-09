@@ -2,15 +2,14 @@ use std::path::PathBuf;
 
 use serde::{Deserialize, Serialize};
 
-use crate::{ColorChoice, DumpStage, EmitSpec, LogLevel, RegseqParam, TargetOs};
+use crate::{ColorChoice, DumpStage, EmitSpec, LogLevel, RegseqParam};
 
 /// Complete compiler configuration passed from `cargo-regseq` to
 /// `regseq-driver` via the `REGSEQ_OPTIONS` JSON environment variable.
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct CompilerOptions {
-    /// Target operating system for backend selection.
-    pub target_os: TargetOs,
-    /// Platform file path.
+    /// Platform file path. The `[platform]` table within is the single source of
+    /// target identity (os/board/arch) — D4/D6; there is no `target_os` field.
     pub platform_file: PathBuf,
     /// Output directory for generated artifacts.
     pub output_dir: PathBuf,

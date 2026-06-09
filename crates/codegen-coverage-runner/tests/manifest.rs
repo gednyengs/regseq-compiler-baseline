@@ -8,7 +8,8 @@
 
 extern crate rustc_driver;
 
-use codegen_coverage_runner::manifest::{parse_manifest, Expect, FixtureKind};
+use codegen_coverage_runner::manifest::{discover, parse_manifest, Expect, FixtureKind};
+use codegen_coverage_runner::pipeline::Stage;
 
 #[test]
 fn parses_rust_pass_manifest_with_default_entry() {
@@ -128,5 +129,177 @@ expect = "pass"
     assert!(
         parse_manifest(text).is_err(),
         "unknown kind value must fail to parse"
+    );
+}
+
+#[test]
+fn parses_reject_manifest_with_stage_and_diagnostic() {
+    // T4: a compile-fail oracle. `expect = "reject"` + the `[expected]`
+    // stage/diagnostic localize WHERE and WHY the pipeline must reject it.
+    let text = r#"
+name = "brm-halfspec-reject"
+kind = "rust"
+covers = ["BRM-005"]
+expect = "reject"
+[expected]
+stage = "bind"
+diagnostic = "BRM-005"
+"#;
+    let m = parse_manifest(text).expect("valid reject manifest must parse");
+    assert_eq!(m.expect, Expect::Reject);
+    assert_eq!(m.expected.stage, Some(Stage::Bind));
+    assert_eq!(m.expected.diagnostic.as_deref(), Some("BRM-005"));
+
+    // The localization is optional: `expect = "reject"` alone parses, with both
+    // fields absent (any-stage / any-detail rejection).
+    let bare = r#"
+name = "bare-reject"
+kind = "rust"
+covers = ["X-1"]
+expect = "reject"
+"#;
+    let b = parse_manifest(bare).expect("bare reject manifest must parse");
+    assert_eq!(b.expect, Expect::Reject);
+    assert_eq!(b.expected.stage, None);
+    assert_eq!(b.expected.diagnostic, None);
+}
+
+// ---- T1: sibling `platform.toml` discovery -------------------------------
+
+/// A temp fixtures-corpus dir removed on drop. `discover` walks a real
+/// directory, so the platform-discovery contract needs an on-disk fixture.
+struct TempCorpus {
+    dir: std::path::PathBuf,
+}
+
+impl TempCorpus {
+    fn new(label: &str) -> TempCorpus {
+        let nanos = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .map(|d| d.as_nanos())
+            .unwrap_or(0);
+        let dir = std::env::temp_dir().join(format!(
+            "ccr-manifest-{label}-{}-{nanos}",
+            std::process::id()
+        ));
+        std::fs::create_dir_all(&dir).expect("must create temp corpus dir");
+        TempCorpus { dir }
+    }
+
+    /// Write a one-fixture corpus: `<corpus>/<name>/{manifest.toml,input.rs}`
+    /// plus an optional sibling `platform.toml`. Returns the fixture dir.
+    fn fixture(&self, name: &str, with_platform: bool) -> std::path::PathBuf {
+        let fixture_dir = self.dir.join(name);
+        std::fs::create_dir_all(&fixture_dir).expect("must create fixture dir");
+        std::fs::write(
+            fixture_dir.join("manifest.toml"),
+            format!("name = \"{name}\"\nkind = \"rust\"\ncovers = [\"BRM-1\"]\nexpect = \"pass\"\n"),
+        )
+        .expect("must write manifest.toml");
+        std::fs::write(fixture_dir.join("input.rs"), "#![no_std]\n").expect("must write input.rs");
+        if with_platform {
+            std::fs::write(
+                fixture_dir.join("platform.toml"),
+                "version = \"1\"\n[mmio.regs]\nbar = 0\n",
+            )
+            .expect("must write platform.toml");
+        }
+        fixture_dir
+    }
+
+    /// Write a fixture with a caller-supplied `manifest.toml` body (+ an
+    /// `input.rs`), for driving the corpus-level lint via `discover`.
+    fn manifest_fixture(&self, name: &str, manifest_body: &str) -> std::path::PathBuf {
+        let fixture_dir = self.dir.join(name);
+        std::fs::create_dir_all(&fixture_dir).expect("must create fixture dir");
+        std::fs::write(fixture_dir.join("manifest.toml"), manifest_body)
+            .expect("must write manifest.toml");
+        std::fs::write(fixture_dir.join("input.rs"), "#![no_std]\n").expect("must write input.rs");
+        fixture_dir
+    }
+}
+
+impl Drop for TempCorpus {
+    fn drop(&mut self) {
+        let _ = std::fs::remove_dir_all(&self.dir);
+    }
+}
+
+#[test]
+fn discover_resolves_sibling_platform_toml_when_present() {
+    let corpus = TempCorpus::new("with-platform");
+    let fixture_dir = corpus.fixture("brm_keystone", true);
+
+    let fixtures = discover(&corpus.dir).expect("discovery must succeed");
+    assert_eq!(fixtures.len(), 1, "one fixture in the temp corpus");
+    let f = &fixtures[0];
+    assert_eq!(
+        f.platform.as_deref(),
+        Some(fixture_dir.join("platform.toml").as_path()),
+        "a fixture with a sibling platform.toml resolves platform = Some(<dir>/platform.toml)"
+    );
+}
+
+#[test]
+fn discover_lints_committed_reject_fixtures() {
+    // A committed reject with a pre-emit stage + a diagnostic is VALID.
+    let ok = TempCorpus::new("reject-ok");
+    ok.manifest_fixture(
+        "good_reject",
+        "name = \"good_reject\"\nkind = \"rust\"\ncovers = [\"BRM-005\"]\n\
+         expect = \"reject\"\n[expected]\nstage = \"bind\"\ndiagnostic = \"BRM-005\"\n",
+    );
+    assert!(
+        discover(&ok.dir).is_ok(),
+        "a reject fixture with a pre-emit stage + diagnostic must discover cleanly"
+    );
+
+    // A bare reject (no stage/diagnostic) is REJECTED — it would green any failure.
+    let bare = TempCorpus::new("reject-bare");
+    bare.manifest_fixture(
+        "bare_reject",
+        "name = \"bare_reject\"\nkind = \"rust\"\ncovers = [\"X\"]\nexpect = \"reject\"\n",
+    );
+    assert!(
+        discover(&bare.dir).is_err(),
+        "a committed reject with no [expected].stage must be rejected by the lint"
+    );
+
+    // A post-emit stage is REJECTED — reject short-circuits after emit, so it
+    // could never be reached.
+    let post = TempCorpus::new("reject-postemit");
+    post.manifest_fixture(
+        "postemit_reject",
+        "name = \"postemit_reject\"\nkind = \"rust\"\ncovers = [\"X\"]\n\
+         expect = \"reject\"\n[expected]\nstage = \"compile\"\ndiagnostic = \"x\"\n",
+    );
+    assert!(
+        discover(&post.dir).is_err(),
+        "a reject fixture with a post-emit stage must be rejected by the lint"
+    );
+
+    // Stage present but diagnostic missing is REJECTED (wrong-reason green guard).
+    let nodiag = TempCorpus::new("reject-nodiag");
+    nodiag.manifest_fixture(
+        "nodiag_reject",
+        "name = \"nodiag_reject\"\nkind = \"rust\"\ncovers = [\"X\"]\n\
+         expect = \"reject\"\n[expected]\nstage = \"bind\"\n",
+    );
+    assert!(
+        discover(&nodiag.dir).is_err(),
+        "a committed reject with no [expected].diagnostic must be rejected by the lint"
+    );
+}
+
+#[test]
+fn discover_leaves_platform_none_when_absent() {
+    let corpus = TempCorpus::new("no-platform");
+    corpus.fixture("plain_fixture", false);
+
+    let fixtures = discover(&corpus.dir).expect("discovery must succeed");
+    assert_eq!(fixtures.len(), 1, "one fixture in the temp corpus");
+    assert_eq!(
+        fixtures[0].platform, None,
+        "a fixture with no sibling platform.toml resolves platform = None (the L2-free baseline)"
     );
 }

@@ -16,40 +16,11 @@ pub struct ParseEnumError {
     pub expected: &'static str,
 }
 
-/// Target operating system for code generation.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
-#[serde(rename_all = "kebab-case")]
-pub enum TargetOs {
-    /// Linux kernel driver backend.
-    Linux,
-    /// Zephyr RTOS driver backend.
-    Zephyr,
-}
-
-impl FromStr for TargetOs {
-    type Err = ParseEnumError;
-
-    fn from_str(value: &str) -> Result<Self, Self::Err> {
-        match value.to_ascii_lowercase().as_str() {
-            "linux" => Ok(Self::Linux),
-            "zephyr" => Ok(Self::Zephyr),
-            _ => Err(ParseEnumError {
-                value: value.to_string(),
-                type_name: "TargetOs",
-                expected: "linux, zephyr",
-            }),
-        }
-    }
-}
-
-impl fmt::Display for TargetOs {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.write_str(match self {
-            Self::Linux => "linux",
-            Self::Zephyr => "zephyr",
-        })
-    }
-}
+// `TargetOs` was relocated to `regseq-model` (`regseq_model::TargetOs`) as part
+// of making the platform file the single source of target identity (R5/D6/D8):
+// it is consumed by `regseq-backends` (which depends on `regseq-model` only),
+// and a platform-file os token is validated by `regseq-l2::resolve_platform_identity`.
+// `regseq-config` no longer defines or parses it.
 
 /// Log verbosity level.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]

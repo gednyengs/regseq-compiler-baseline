@@ -1,0 +1,8 @@
+version = "1"
+
+# A half-specified region: `base` present, `size` absent. They bind together
+# (construct #3 I02), so this trips BRM-005 at the Bind stage. The fixture is
+# `expect = "reject"` — green iff the harness rejects it here with BRM-005.
+[mmio.regs]
+bar = 0
+base = 0xf0000000

@@ -133,6 +133,7 @@ fn fixture_in(dir: &TempFixtureDir, input: PathBuf) -> Fixture {
         golden_c: dir.dir.join("golden.c"),
         expected_stdout: dir.dir.join("expected.stdout"),
         expected_stderr: None,
+        platform: None,
     }
 }
 
@@ -220,6 +221,8 @@ fn err_fixture_in(dir: &TempFixtureDir, input: PathBuf, exit: &str) -> Fixture {
             overflow_checks: None,
             expected: Expected {
                 exit: Some(exit.to_string()),
+                stage: None,
+                diagnostic: None,
             },
             lifecycle_scenario: None,
         },
@@ -228,6 +231,7 @@ fn err_fixture_in(dir: &TempFixtureDir, input: PathBuf, exit: &str) -> Fixture {
         golden_c: dir.dir.join("golden.c"),
         expected_stdout: dir.dir.join("expected.stdout"),
         expected_stderr: None,
+        platform: None,
     }
 }
 

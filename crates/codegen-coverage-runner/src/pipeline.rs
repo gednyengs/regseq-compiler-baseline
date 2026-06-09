@@ -29,11 +29,78 @@ fn bridge_overrides(fixture: &Fixture) -> BuildOverrides {
     }
 }
 
-/// The pipeline stage a fixture failure is attributed to.
-#[derive(Debug, PartialEq, Eq, Clone, Copy)]
+/// Stage 1b (T2): bind the fixture's L2 platform surface into the bridged model
+/// and validate the joined L1+L2 surface, mirroring the production post-bridge
+/// "1b" seam in `regseq-driver`'s `callbacks.rs` (~L214–250).
+///
+/// Two phases, deliberately split so the harness matches production's semantics
+/// for BOTH the platform-present and platform-absent cases:
+/// - **Bind** (only when the fixture carries a sibling `platform.toml`): parse it
+///   (`regseq_config::parse_platform_bindings_path`) → run every registered L2
+///   binder over the model (`regseq_l2::bind_all`). An absent file (`None`) is
+///   production's "unreadable/absent platform file" path (`callbacks.rs:220`):
+///   no bindings to join.
+/// - **Validate** (ALWAYS, both cases): `regseq_l2::validate_l2_surface`
+///   (`callbacks.rs:237`) → re-run the core `model.validate` on the model
+///   (`callbacks.rs:246`). Production runs these for *every* bus-declared driver
+///   regardless of whether a platform file existed — so a bus-managed region with
+///   no resolvable `(base, size)` is rejected (BRM-006) here too, instead of
+///   false-greening. For a non-bus fixture `validate_l2_surface` is a no-op, so
+///   this stays zero-churn for the L2-free corpus.
+///
+/// Re-validation note: the bridge helper validated the model *pre*-join
+/// (`test-ir-fixtures:468`); this re-runs `model.validate` *post*-join for
+/// fidelity with production. `BridgeInput::matching` reconstructs the validator
+/// input from the model itself, exactly as production does. Idempotent on an
+/// unbound model — the core validator checks no bus facts (those live in
+/// `MmioBinding`, checked by `validate_l2_surface`).
+///
+/// On any failure returns the human-readable detail; the caller attributes it to
+/// [`Stage::Bind`].
+///
+/// `pub` so a fixture's `BLESS` path can apply the identical bind before emit
+/// (the keystone e2e gate), exactly as `run_fixture` does internally — keeping
+/// the blessed golden and the verified golden on one bind implementation.
+pub fn bind_l2_platform(
+    model: &mut regseq_model::RegseqModel,
+    fixture: &Fixture,
+) -> Result<regseq_model::PlatformIdentity, String> {
+    // Parse the platform file ONCE (Codex A1): bind `[mmio.<id>]` only when a file
+    // is present (an absent file mirrors production's no-bindings path), and
+    // resolve the `[platform]` identity (os/board/arch) — returned for the
+    // `BackendContext` the caller builds at emit (T7). Absent file → default
+    // (empty) identity.
+    let mut identity = regseq_model::PlatformIdentity::default();
+    if let Some(platform_path) = fixture.platform.as_deref() {
+        let file = regseq_config::parse_platform_file_path(platform_path)
+            .map_err(|err| format!("platform file {}: {err}", platform_path.display()))?;
+        regseq_l2::bind_all(model, &file.bindings)
+            .map_err(|err| format!("[{}] {err}", err.code()))?;
+        identity = regseq_l2::resolve_platform_identity(&file.identity)
+            .map_err(|err| format!("[{}] {err}", err.code()))?;
+    }
+    // Validate the L2 surface + re-validate the (possibly bound) model for EVERY
+    // fixture, exactly as production does for every bus-declared driver.
+    regseq_l2::validate_l2_surface(model).map_err(|err| format!("[{}] {err}", err.code()))?;
+    let bridge_input = regseq_model::BridgeInput::matching(model);
+    model
+        .validate(&bridge_input)
+        .map_err(|violation| format!("post-bind model.validate failed: {violation:?}"))?;
+    Ok(identity)
+}
+
+/// The pipeline stage a fixture failure is attributed to. Deserializable so a
+/// `reject` fixture's `[expected] stage = "bind"` can name the stage it must fail
+/// at (the lowercase variant name).
+#[derive(Debug, PartialEq, Eq, Clone, Copy, serde::Deserialize)]
+#[serde(rename_all = "lowercase")]
 pub enum Stage {
     /// Stage 1: acquire a validated `RegseqModel` (bridge).
     Acquire,
+    /// Stage 1b: bind the L2 platform surface (`platform.toml`) into the model
+    /// and validate the joined L1+L2 surface (T2). Only reached for a fixture
+    /// that carries a sibling `platform.toml`; an L2-free fixture skips it.
+    Bind,
     /// Stage 2: emit the generic-C translation unit.
     Emit,
     /// Stage 3: snapshot oracle (emitted C vs golden C).
@@ -95,11 +162,68 @@ impl FixtureResult {
 pub fn run_fixture(fixture: &Fixture, cc: &Path) -> FixtureResult {
     let name = fixture.manifest.name.clone();
     let covers = fixture.manifest.covers.clone();
-    let verdict = run_stages(fixture, cc);
+    let verdict = apply_expectation(fixture, run_stages(fixture, cc));
     FixtureResult {
         name,
         covers,
         verdict,
+    }
+}
+
+/// Fold a fixture's `expect` policy over the raw stage verdict (T4). For
+/// `pass`/`panic` the raw verdict already encodes the outcome (the stage wiring
+/// runs the behavioral oracle), so it passes through unchanged. For `reject` the
+/// polarity inverts: the fixture is GREEN iff the pipeline FAILED at the expected
+/// stage with the expected diagnostic substring, and RED if it was accepted
+/// (raw `Pass`, i.e. reached emit) or failed at a different stage / without the
+/// diagnostic. A `Skipped` raw verdict passes through (a width/kind gate is
+/// orthogonal to the expectation).
+fn apply_expectation(fixture: &Fixture, raw: FixtureVerdict) -> FixtureVerdict {
+    if fixture.manifest.expect != Expect::Reject {
+        return raw;
+    }
+    let expected = &fixture.manifest.expected;
+    match raw {
+        FixtureVerdict::Skipped { reason } => FixtureVerdict::Skipped { reason },
+        // Accepted through emit — the rejection never happened.
+        FixtureVerdict::Pass => fail(
+            expected.stage.unwrap_or(Stage::Bind),
+            format!(
+                "expected rejection{}{}, but the fixture was accepted through emit",
+                expected
+                    .stage
+                    .map(|s| format!(" at {s:?}"))
+                    .unwrap_or_default(),
+                expected
+                    .diagnostic
+                    .as_deref()
+                    .map(|d| format!(" with {d}"))
+                    .unwrap_or_default(),
+            ),
+        ),
+        FixtureVerdict::Fail { stage, detail } => {
+            // Wrong stage → the fixture failed, but not where it was meant to.
+            if let Some(want) = expected.stage {
+                if stage != want {
+                    return fail(
+                        stage,
+                        format!("expected rejection at {want:?}, but failed at {stage:?}: {detail}"),
+                    );
+                }
+            }
+            // Missing diagnostic substring → failed at the right stage for the
+            // wrong reason.
+            if let Some(want) = expected.diagnostic.as_deref() {
+                if !detail.contains(want) {
+                    return fail(
+                        stage,
+                        format!("expected diagnostic {want:?} not found in failure: {detail}"),
+                    );
+                }
+            }
+            // Failed exactly as expected → a green reject.
+            FixtureVerdict::Pass
+        }
     }
 }
 
@@ -123,7 +247,7 @@ pub fn backend_options_for(
 /// The stage wiring proper, returning the [`FixtureVerdict`].
 fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
     // Stage 1: Acquire.
-    let model = match fixture.manifest.kind {
+    let mut model = match fixture.manifest.kind {
         FixtureKind::Ir => {
             return FixtureVerdict::Skipped {
                 reason: "kind=ir unsupported in Phase-1 task a".to_string(),
@@ -149,23 +273,43 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
         }
     };
 
+    // Stage 1b: L2 platform binding (T2). Bind `platform.toml` into the bridged
+    // model BEFORE emit, so the bound model is the artifact the backend consumes
+    // (the goldens then capture L2 correctness for free). No-op for an L2-free
+    // fixture; a parse / BRM / re-validate failure fails loud here, tagged Bind.
+    let platform_identity = match bind_l2_platform(&mut model, fixture) {
+        Ok(identity) => identity,
+        Err(detail) => return fail(Stage::Bind, detail),
+    };
+
     // Stage 2: Emit + entry-shim classification (the backend is the single
     // source of truth for the shim shape, contract C04; an unresolved /
     // ambiguous / unsupported entry shape fails loud here at emit, D08/D09).
     // The fixture's device-lifecycle scenario selection (RD-8) rides as a
-    // backend param, parallel to the model.
+    // backend param; the `[platform]` identity (T7) rides the BackendContext —
+    // both parallel to the model, mirroring production's `callbacks.rs` seam.
     let backend_options = match backend_options_for(fixture) {
         Ok(options) => options,
         Err(err) => return fail(Stage::Emit, err.to_string()),
     };
-    let (emitted, shim) = match regseq_backends::emit_generic_c_for_entry_with(
+    let backend_context = regseq_backends::BackendContext::new(backend_options, platform_identity);
+    let (emitted, shim) = match regseq_backends::emit_generic_c_for_entry_with_context(
         &model,
         &fixture.manifest.entry,
-        &backend_options,
+        &backend_context,
     ) {
         Ok(emit) => (emit.tu, emit.shim),
         Err(err) => return fail(Stage::Emit, err.to_string()),
     };
+
+    // A `reject` fixture was EXPECTED to fail at acquire/bind/emit. Reaching here
+    // means emit accepted it — the rejection did not happen. Stop before the
+    // snapshot/compile/run stages (a reject fixture has no golden / behavioral
+    // oracle); `apply_expectation` turns this "accepted through emit" `Pass` into
+    // a Fail.
+    if fixture.manifest.expect == Expect::Reject {
+        return FixtureVerdict::Pass;
+    }
 
     // Stage 3: Snapshot oracle (emitted C vs golden C).
     let golden_c = match std::fs::read_to_string(&fixture.golden_c) {
@@ -196,6 +340,9 @@ fn run_stages(fixture: &Fixture, cc: &Path) -> FixtureVerdict {
 
     // Stage 6: Behavioral oracle.
     match fixture.manifest.expect {
+        // A reject fixture never reaches stage 3+ (it short-circuits after emit
+        // above), so this point is unreachable for it.
+        Expect::Reject => unreachable!("reject fixtures short-circuit after emit"),
         Expect::Pass => {
             // Stage 5 boundary for a pass fixture: the process must exit with
             // the resolved `expected.exit` (default 0) AND with empty stderr.
@@ -285,7 +432,7 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
     let name = fixture.manifest.name.clone();
 
     // Stage 1: Acquire.
-    let model = match fixture.manifest.kind {
+    let mut model = match fixture.manifest.kind {
         FixtureKind::Ir => {
             return BlessOutcome {
                 name,
@@ -310,9 +457,25 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
         }
     };
 
+    // Stage 1b: L2 platform binding (T2) — same join as run_stages, so the
+    // blessed golden.c reflects the BOUND model (no hand-set binding).
+    let platform_identity = match bind_l2_platform(&mut model, fixture) {
+        Ok(identity) => identity,
+        Err(detail) => {
+            return BlessOutcome {
+                name,
+                blessed_bytes: None,
+                report: format!("L2 bind failed: {detail}"),
+                ok: false,
+            };
+        }
+    };
+
     // Stage 2: Emit + entry-shim classification (the backend's single
     // source of truth for the shim shape, contract C04). The fixture's
-    // device-lifecycle scenario selection (RD-8) rides as a backend param.
+    // device-lifecycle scenario selection (RD-8) rides as a backend param; the
+    // `[platform]` identity (T7) rides the BackendContext, so the blessed
+    // golden.c reflects the traced identity too.
     let backend_options = match backend_options_for(fixture) {
         Ok(options) => options,
         Err(err) => {
@@ -324,10 +487,11 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
             };
         }
     };
-    let (emitted, shim) = match regseq_backends::emit_generic_c_for_entry_with(
+    let backend_context = regseq_backends::BackendContext::new(backend_options, platform_identity);
+    let (emitted, shim) = match regseq_backends::emit_generic_c_for_entry_with_context(
         &model,
         &fixture.manifest.entry,
-        &backend_options,
+        &backend_context,
     ) {
         Ok(emit) => (emit.tu, emit.shim),
         Err(err) => {

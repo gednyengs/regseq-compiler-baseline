@@ -5,13 +5,12 @@ extern crate rustc_driver;
 use std::path::PathBuf;
 
 use regseq_config::{
-    ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam, TargetOs,
+    ColorChoice, CompilerOptions, EmitSpec, LogLevel, ParamScope, RegseqParam,
 };
 use regseq_driver::{regseq_mir_passes, RegseqCallbacks};
 
 fn sample_options() -> CompilerOptions {
     CompilerOptions {
-        target_os: TargetOs::Linux,
         platform_file: PathBuf::from("platforms/test.toml"),
         output_dir: PathBuf::from("out"),
         emit: vec![
@@ -40,7 +39,6 @@ fn sample_options() -> CompilerOptions {
 #[test]
 fn deserialize_valid_regseq_options_json() {
     let json = r#"{
-        "target_os":"linux",
         "platform_file":"platforms/test.toml",
         "output_dir":"out",
         "emit":[
@@ -64,7 +62,7 @@ fn deserialize_valid_regseq_options_json() {
 
 #[test]
 fn deserialize_invalid_regseq_options_json_returns_error() {
-    let invalid = r#"{"target_os":"linux","platform_file":}"#;
+    let invalid = r#"{"platform_file":}"#;
     assert!(serde_json::from_str::<CompilerOptions>(invalid).is_err());
 }
 

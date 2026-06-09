@@ -93,8 +93,27 @@ pub enum IntrinsicKind {
     Mmio(MmioOp) = 1,
     /// Busy-poll intrinsic (`regseq::poll::until`). Appended at discriminant 2.
     PollUntil = 2,
-    // (Device-lifecycle has no intrinsic family: the harness verbs were removed,
-    // RD-1. Discriminant 3 stays free for a future append.)
+    /// Bus config-space access family (`regseq::bus::read_config/write_config`,
+    /// bus-resource-management construct #3, M5). Appended at discriminant 3,
+    /// preserving the discriminants above. PCI-only (BRM-001, the non-PCI
+    /// rejection is the construct-#3 M6 diagnostic).
+    Config(ConfigOp) = 3,
+}
+
+/// Config-space operation carried by [`IntrinsicKind::Config`]
+/// (bus-resource-management construct #3, M5). These correspond to the
+/// `#[rseq::intrinsic("read_config"/"write_config")]`-tagged
+/// `regseq::bus::{read_config,write_config}` free functions. Closed,
+/// append-only.
+#[repr(u8)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize)]
+pub enum ConfigOp {
+    /// `read_config::<T>(offset)`: read `size_of::<T>()` bytes of PCI config
+    /// space (the PCI_COMMAND witness + the PCI-ID-caching rule).
+    Read = 0,
+    /// `write_config::<T>(offset, val)`: write `size_of::<T>()` bytes of PCI
+    /// config space (recognized + lowerable; no behavioral witness, GRILL O3).
+    Write = 1,
 }
 
 /// MMIO register-access operation carried by `IntrinsicKind::Mmio`.
@@ -151,6 +170,10 @@ impl IntrinsicKind {
             "mmio_write_field" => Some(IntrinsicKind::Mmio(MmioOp::WriteField)),
             "mmio_modify" => Some(IntrinsicKind::Mmio(MmioOp::Modify)),
             "poll_until" => Some(IntrinsicKind::PollUntil),
+            // Bus config-space intrinsics (construct #3 M5; underscore form,
+            // matching the `#[rseq::intrinsic("read_config"/"write_config")]` tags).
+            "read_config" => Some(IntrinsicKind::Config(ConfigOp::Read)),
+            "write_config" => Some(IntrinsicKind::Config(ConfigOp::Write)),
             _ => None,
         }
     }
@@ -417,6 +440,32 @@ mod tests {
         for level in levels() {
             assert_json_round_trip(log(level));
         }
+    }
+
+    #[test]
+    fn config_intrinsic_from_name_round_trip_and_discriminant() {
+        // Bus-resource-management construct #3 M5: the config-space intrinsics
+        // map from their underscore-form NAMEs, round-trip through JSON, and the
+        // `Config` family appends at discriminant 3 (Log/Mmio/PollUntil unmoved).
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("read_config")),
+            Some(IntrinsicKind::Config(ConfigOp::Read))
+        );
+        assert_eq!(
+            IntrinsicKind::from_name(symbol("write_config")),
+            Some(IntrinsicKind::Config(ConfigOp::Write))
+        );
+        assert_json_round_trip(IntrinsicKind::Config(ConfigOp::Read));
+        assert_json_round_trip(IntrinsicKind::Config(ConfigOp::Write));
+        // The two config ops are distinct, and `AttrData::Intrinsic` stays at 0.
+        assert_ne!(
+            IntrinsicKind::Config(ConfigOp::Read),
+            IntrinsicKind::Config(ConfigOp::Write)
+        );
+        assert_eq!(
+            attr_data_tag(&AttrData::Intrinsic(IntrinsicKind::Config(ConfigOp::Write))),
+            0
+        );
     }
 
     #[test]

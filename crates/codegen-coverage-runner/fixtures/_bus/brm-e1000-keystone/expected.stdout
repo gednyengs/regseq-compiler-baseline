@@ -1,0 +1,15 @@
+LC register e1000 match=pci:0x8086:0x100e
+BUS register_driver path=pci binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS enable_device
+BUS claim_regions bar=0
+BUS get_handle
+BUS map base=0xf0000000 size=0x20000 bar=0
+LC call on_init
+W32 @0xf0000000 = 0x00000040
+R32 @0xf0000008 = 0x00000000
+LC teardown present=1
+LC call on_deinit
+LC postamble regs

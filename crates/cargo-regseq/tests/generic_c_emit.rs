@@ -287,8 +287,6 @@ fn cargo_regseq_emit_generic_c_compiles_and_runs() {
     // inject; going direct avoids PATH manipulation).
     let output = Command::new(cargo_regseq_bin())
         .arg("regseq")
-        .arg("--target-os")
-        .arg("linux")
         .arg("--platform-file")
         .arg("platform.toml")
         .arg("--emit")
@@ -401,8 +399,6 @@ fn cargo_regseq_emit_bin_links_and_runs() {
 
     let output = Command::new(cargo_regseq_bin())
         .arg("regseq")
-        .arg("--target-os")
-        .arg("linux")
         .arg("--platform-file")
         .arg("platform.toml")
         .arg("--emit")
@@ -484,8 +480,6 @@ fn cargo_regseq_emit_bin_prunes_drop_cleanup_blocks() {
 
     let output = Command::new(cargo_regseq_bin())
         .arg("regseq")
-        .arg("--target-os")
-        .arg("linux")
         .arg("--platform-file")
         .arg("platform.toml")
         .arg("--emit")

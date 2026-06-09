@@ -1,7 +1,8 @@
-use regseq_config::TargetOs;
+use regseq_config::LogLevel;
 
 #[test]
 fn crate_can_be_imported() {
-    let os = TargetOs::Linux;
-    assert_eq!(os.to_string(), "linux");
+    // `TargetOs` moved to `regseq-model` (R5/D6/D8); smoke-test the crate via a
+    // type it still owns.
+    assert_eq!(LogLevel::default(), LogLevel::Warn);
 }

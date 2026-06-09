@@ -1,0 +1,13 @@
+name   = "brm-halfspec-reject"
+kind   = "rust"
+# Bus-resource-management (construct #3) compile-fail oracle: a PCI bus-managed
+# region whose sibling platform.toml supplies `base` without `size` (a
+# half-specified region). The harness must REJECT it at the Bind stage with
+# BRM-005 — the end-to-end pairing of the unit-tested `validate_l2_surface`
+# diagnostic with the runner pipeline (Stream-B T5). Run by the dedicated
+# `bus_reject_corpus_e2e` test.
+covers = ["BRM-005"]
+expect = "reject"
+[expected]
+stage = "bind"
+diagnostic = "BRM-005"

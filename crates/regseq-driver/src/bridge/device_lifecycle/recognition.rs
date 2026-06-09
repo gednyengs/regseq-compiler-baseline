@@ -17,8 +17,8 @@
 //! resource/user-data field split (T10) run in the `resolve` pass.
 
 use regseq_model::{
-    ClassTag, DriverDescriptor, DriverHandle, DriverLifecycle, ItemId, ItemKind, LifecycleOps,
-    MatchEntry, RegseqModel, SyntheticItemKind,
+    BarType, BusType, ClassTag, DriverDescriptor, DriverHandle, DriverLifecycle, ItemId, ItemKind,
+    LifecycleOps, MatchEntry, RegseqModel, SyntheticItemKind,
 };
 use rustc_ast::token::{Delimiter, LitKind as TokenLitKind, TokenKind};
 use rustc_ast::tokenstream::{TokenStream, TokenTree};
@@ -42,6 +42,14 @@ struct ParsedDriver {
     /// `compatible=[]` → `match_set` empty + `match_attr_present`). T17.
     match_attr_present: bool,
     device_class: ParsedClass,
+    /// The authored bus token (`bus = "pci"|"platform"|"amba"|…`,
+    /// bus-resource-management construct #3, GRILL D07). `None` for a driver
+    /// that declares no `bus` key. Optional in recognition this milestone (M1):
+    /// the existing register-access/device-lifecycle fixtures declare no `bus`,
+    /// so requiring it would break them; the "required-bus" enforcement is a
+    /// construct-#3 M6 diagnostic (the PCI-only surface gates on
+    /// `bus_type.is_pci_like()` regardless).
+    bus: Option<String>,
 }
 
 /// Typed match sugar parsed from `#[rseq::driver(...)]`: devicetree (T05) and
@@ -161,6 +169,8 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
     let mut match_set: Vec<ParsedMatch> = Vec::new();
     // Set once a match attribute's bracket group is consumed (T17 D1-vs-D2).
     let mut match_attr_present = false;
+    // The authored `bus = "…"` selector (bus-resource-management construct #3).
+    let mut bus: Option<String> = None;
     let mut iter = tokens.iter().peekable();
 
     while iter.peek().is_some() {
@@ -181,6 +191,12 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
         match key.as_str() {
             "name" => {
                 name = Some(expect_str_lit(iter.next()).ok_or(DriverParseError::Drop)?);
+            }
+            // `bus = "<token>"` — the bus-resource-management bus selector (L1,
+            // construct #3, GRILL D07). A non-string value is a malformed entry
+            // (Drop); the token → `BusType` mapping happens in `build_descriptor`.
+            "bus" => {
+                bus = Some(expect_str_lit(iter.next()).ok_or(DriverParseError::Drop)?);
             }
             "compatible" => {
                 let Some(TokenTree::Delimited(.., Delimiter::Bracket, inner)) = iter.next() else {
@@ -237,6 +253,7 @@ fn parse_driver_args(tokens: &TokenStream) -> Result<ParsedDriver, DriverParseEr
         match_set,
         match_attr_present,
         device_class: ParsedClass::Generic,
+        bus,
     })
 }
 
@@ -406,6 +423,85 @@ fn parse_int_symbol(symbol: &str) -> Option<u64> {
     u64::from_str_radix(body, radix).ok()
 }
 
+/// Raw `#[rseq::mmio(...)]` field-attribute L1 facts (bus-resource-management
+/// construct #3): the resource `id` (join key to the platform file's
+/// `[mmio.<id>]` section), the optional default-decoded BAR index, and the
+/// carrier marker. Strings are still owned (interning the `id` needs `&mut
+/// model`); the caller resolves `(base, size)`/`effective_bar` at the
+/// platform-file join.
+pub(crate) struct ParsedMmio {
+    pub id: Option<String>,
+    pub bar_index: Option<u8>,
+    pub bar_type: BarType,
+}
+
+/// Read `#[rseq::mmio(id = "<id>", bar = N?, type = "io"?)]` on a struct field
+/// `def_id` into its L1 facts (construct #3, GRILL C01). Lenient: an absent
+/// attribute, an unknown key, or a malformed value yields the defaults (empty
+/// `id`, no `bar`, `mem` carrier) rather than dropping the field — the field is
+/// still a recognized `Mmio` resource (its presence is type-driven). Range /
+/// bus gating of `bar`/`type` are construct-#3 M6 diagnostics (BRM-002/003); a
+/// `bar` that does not fit `u8` is dropped to `None` here. The shared
+/// `#[rseq::mmio]` attribute is owned by register-access; bus-resource
+/// contributes the `bar`/`type` arguments.
+pub(crate) fn recognise_mmio_field_attr(tcx: TyCtxt<'_>, def_id: DefId) -> ParsedMmio {
+    let mut parsed = ParsedMmio {
+        id: None,
+        bar_index: None,
+        bar_type: BarType::Mem,
+    };
+    let path = [RustcSymbol::intern("rseq"), RustcSymbol::intern("mmio")];
+    let Some(attr) = tcx.get_attrs_by_path(def_id, &path).next() else {
+        return parsed;
+    };
+    let Attribute::Unparsed(item) = attr else {
+        return parsed;
+    };
+    let AttrArgs::Delimited(delim) = &item.args else {
+        return parsed;
+    };
+    if delim.delim != Delimiter::Parenthesis {
+        return parsed;
+    }
+    let mut iter = delim.tokens.iter().peekable();
+    while iter.peek().is_some() {
+        let Some(TokenTree::Token(key_tok, _)) = iter.next() else {
+            break;
+        };
+        let Some(key) = key_tok.ident().map(|(ident, _)| ident.name) else {
+            break;
+        };
+        match iter.next() {
+            Some(TokenTree::Token(tok, _)) if matches!(tok.kind, TokenKind::Eq) => {}
+            _ => break,
+        }
+        match key.as_str() {
+            "id" => parsed.id = expect_str_lit(iter.next()),
+            "bar" => {
+                parsed.bar_index = expect_int_lit(iter.next()).and_then(|v| u8::try_from(v).ok())
+            }
+            "type" => {
+                if expect_str_lit(iter.next()).as_deref() == Some("io") {
+                    parsed.bar_type = BarType::Io;
+                }
+            }
+            // Unknown key (a register-access arg this stage does not model):
+            // skip its single value token so the comma walk stays in sync.
+            _ => {
+                let _ = iter.next();
+            }
+        }
+        match iter.peek() {
+            None => break,
+            Some(TokenTree::Token(tok, _)) if matches!(tok.kind, TokenKind::Comma) => {
+                iter.next();
+            }
+            _ => break,
+        }
+    }
+    parsed
+}
+
 /// Read `#[rseq::device_class(<tag>)]` on `def_id` into a [`ParsedClass`] (T08).
 /// Absent (or any shape other than `(<ident>)`) → `Generic` (unvalidated,
 /// D06/D09); `generic`/`serial`/`network` map to their tags, any other
@@ -547,10 +643,27 @@ fn build_descriptor(model: &mut RegseqModel, parsed: ParsedDriver) -> DriverDesc
         ParsedClass::Network => ClassTag::Network,
         ParsedClass::Other(tag) => ClassTag::Other(model.strings.intern(&tag)),
     };
+    // Map the authored `bus = "…"` token to a `BusType` (bus-resource-management
+    // construct #3, GRILL D07). `amba` is distinct from `platform` (Linux →
+    // `amba_driver` + periphid). An unknown token is carried verbatim as
+    // `Other` (its lowering is rejected downstream, not here).
+    let bus_type = parsed.bus.map(|bus| match bus.as_str() {
+        "pci" => BusType::Pci,
+        "platform" => BusType::Platform,
+        "amba" => BusType::Amba,
+        "i2c" => BusType::I2c,
+        "spi" => BusType::Spi,
+        "usb" => BusType::Usb,
+        other => BusType::Other(model.strings.intern(other)),
+    });
     DriverDescriptor {
         name,
         match_set,
         device_class,
+        bus_type,
+        // DMA-presence is the DMA construct's fact (GRILL O2); not yet built, so
+        // it defaults absent and `set_bus_master` is not emitted (design §3, M3).
+        dma_present: false,
     }
 }
 
@@ -571,6 +684,7 @@ mod tests {
                 }],
                 match_attr_present: true,
                 device_class: ParsedClass::Generic,
+                bus: None,
             },
         );
         assert_eq!(model.strings.resolve(desc.name), "fake");
@@ -601,6 +715,7 @@ mod tests {
                 ],
                 match_attr_present: true,
                 device_class: ParsedClass::Generic,
+                bus: None,
             },
         );
         let got: Vec<&str> = desc
@@ -627,6 +742,7 @@ mod tests {
                 match_set: vec![],
                 match_attr_present: false,
                 device_class: ParsedClass::Generic,
+                bus: None,
             },
         );
         assert_eq!(model.strings.resolve(desc.name), "bare");
@@ -657,6 +773,7 @@ mod tests {
                 ],
                 match_attr_present: true,
                 device_class: ParsedClass::Network,
+                bus: None,
             },
         );
         assert_eq!(desc.device_class, ClassTag::Network);
@@ -689,6 +806,7 @@ mod tests {
                 match_set: vec![],
                 match_attr_present: false,
                 device_class: ParsedClass::Other("block".to_string()),
+                bus: None,
             },
         );
         match desc.device_class {

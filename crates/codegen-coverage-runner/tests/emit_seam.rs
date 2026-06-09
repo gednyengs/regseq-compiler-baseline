@@ -83,6 +83,7 @@ fn pipeline_advances_past_emit_now_that_the_seam_is_live() {
         golden_c: snippet.dir.join("golden.c"),
         expected_stdout: snippet.dir.join("expected.stdout"),
         expected_stderr: None,
+        platform: None,
     };
 
     let result = pipeline::run_fixture(&fixture, Path::new("cc"));

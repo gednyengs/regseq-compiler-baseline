@@ -25,7 +25,7 @@ use std::process::Command;
 use std::sync::{Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, RegseqParam, TargetOs};
+use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, RegseqParam};
 use regseq_driver::RegseqCallbacks;
 
 static INIT: Once = Once::new();
@@ -114,7 +114,6 @@ fn resolve_errno(symbol: &str, cc: &Path, dir: &Path) -> i32 {
 /// `crates/regseq-driver/tests/emit_dispatch.rs::base_options`.
 fn bin_options(output_dir: PathBuf) -> CompilerOptions {
     CompilerOptions {
-        target_os: TargetOs::Linux,
         platform_file: PathBuf::from("/dev/null"),
         output_dir,
         emit: vec![EmitSpec::Bin { name: None }],

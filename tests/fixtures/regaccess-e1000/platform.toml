@@ -6,9 +6,10 @@ board = "qemu-pc"
 arch = "x86_64"
 
 # Register-access MMIO region binding (L2). The section key `regs` joins to the
-# L1 resource declared `#[rseq::mmio(id = "regs")]`. E1000 is a PCI device: its
-# register space is MMIO BAR0, so the L2 binding is a BAR SELECTOR (base/size are
-# resolved at probe by bus-resource), not a static base. (For this host generic-c
-# proof the device model is a global register file, so this is illustrative.)
+# L1 resource declared `#[rseq::mmio(id = "regs", bar = 0)]`. E1000 is a PCI
+# device: its register space is MMIO BAR0. Per bus-resource-management O4(b), the
+# BAR is L1-PREFERRED (declared on the L1 attr); this L2 `bar` is retained and
+# AGREES with L1 (effective BAR = L2.bar ?? L1.bar = 0). An L2 `bar` overrides L1
+# only when they differ; the L2-supplies form (no L1 `bar`) is also legal.
 [mmio.regs]
 bar = 0

@@ -110,6 +110,7 @@ fn fixture(dir: &TempFixtureDir, entry: &str) -> Fixture {
         golden_c: dir.dir.join("golden.c"),
         expected_stdout: dir.dir.join("expected.stdout"),
         expected_stderr: None,
+        platform: None,
     }
 }
 

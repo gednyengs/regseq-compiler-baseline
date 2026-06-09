@@ -1,26 +1,10 @@
 use std::str::FromStr;
 
-use regseq_config::{ColorChoice, DumpStage, LogLevel, TargetOs};
+use regseq_config::{ColorChoice, DumpStage, LogLevel};
 
-#[test]
-fn target_os_parses_linux() {
-    assert_eq!(TargetOs::from_str("linux").unwrap(), TargetOs::Linux);
-}
-
-#[test]
-fn target_os_parses_zephyr_case_insensitive() {
-    assert_eq!(TargetOs::from_str("ZEPHYR").unwrap(), TargetOs::Zephyr);
-}
-
-#[test]
-fn target_os_parse_invalid_fails() {
-    assert!(TargetOs::from_str("invalid").is_err());
-}
-
-#[test]
-fn target_os_display_linux() {
-    assert_eq!(TargetOs::Linux.to_string(), "linux");
-}
+// `TargetOs` parse/display tests were removed with the enum's relocation to
+// `regseq-model` (R5/D6/D8); the os-token vocabulary check now lives in
+// `regseq-l2::resolve_platform_identity` (see its `identity_tests`).
 
 #[test]
 fn log_level_parses_debug() {

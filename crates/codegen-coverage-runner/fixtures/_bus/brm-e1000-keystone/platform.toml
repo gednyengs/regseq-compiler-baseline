@@ -1,0 +1,18 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-pc"
+arch = "x86_64"
+
+# L2 MMIO region binding for the keystone (construct #3). The section key `regs`
+# joins to the L1 resource declared `#[rseq::mmio(id = "regs", bar = 0)]`. Unlike
+# the `tests/fixtures/regaccess-e1000` platform file (which supplies only `bar`,
+# leaving the binding UNRESOLVED → the faked-base path), this one supplies the
+# full `(base, size)`, so the binding RESOLVES and the emitted C carries the real
+# `regseq_bus_map_region(0xf0000000ull, 0x20000ull, 0)` — the literal flows
+# platform.toml → bound model → emitted C with NO hand-set binding.
+[mmio.regs]
+bar = 0
+base = 0xf0000000
+size = 0x20000

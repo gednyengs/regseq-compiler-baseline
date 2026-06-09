@@ -19,7 +19,7 @@ use std::process::Command;
 use std::sync::{Mutex, Once};
 use std::time::{SystemTime, UNIX_EPOCH};
 
-use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, RegseqParam, TargetOs};
+use regseq_config::{ColorChoice, CompilerOptions, EmitSpec, LogLevel, RegseqParam};
 use regseq_driver::RegseqCallbacks;
 use regseq_model::RegseqModel;
 use test_ir_fixtures::fixture_names;
@@ -62,7 +62,6 @@ fn fixture_path(name: &str) -> PathBuf {
 
 fn base_options(emit: Vec<EmitSpec>, check: bool, output_dir: PathBuf) -> CompilerOptions {
     CompilerOptions {
-        target_os: TargetOs::Linux,
         platform_file: PathBuf::from("/dev/null"),
         output_dir,
         emit,

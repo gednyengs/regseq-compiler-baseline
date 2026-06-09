@@ -27,8 +27,8 @@
 use std::collections::HashMap;
 
 use regseq_model::{
-    DriverHandle, InstanceRef, ItemId, LifecycleOps, ResourceField, ResourceKind, UserDataField,
-    UserDataKind,
+    DriverHandle, InstanceRef, ItemId, LifecycleOps, MmioBinding, ResourceField, ResourceKind,
+    UserDataField, UserDataKind,
 };
 use rustc_hir::def::DefKind;
 use rustc_middle::ty::{self, Ty, TyCtxt, TyKind, UintTy};
@@ -204,10 +204,24 @@ fn classify_fields(
         for field in &variant.fields {
             let field_ty = tcx.type_of(field.did).instantiate_identity();
             if is_mmio_resource(tcx, field_ty) {
+                // Recognize the bus-resource-management L1 facts on the shared
+                // `#[rseq::mmio(...)]` field attribute (construct #3, T03): the
+                // `id` join key + the optional `bar`/`type`. `(base, size)` /
+                // `effective_bar` stay `None` until the platform-file join (T05).
+                let parsed = super::recognition::recognise_mmio_field_attr(tcx, field.did);
+                let id = parsed.id.map(|s| cx.model.strings.intern(&s));
                 let name = cx.model.strings.intern(field.name.as_str());
                 resource_fields.push(ResourceField {
                     name,
                     kind: ResourceKind::Mmio,
+                    binding: MmioBinding {
+                        id,
+                        bar_index: parsed.bar_index,
+                        bar_type: parsed.bar_type,
+                        effective_bar: None,
+                        base: None,
+                        size: None,
+                    },
                 });
                 continue;
             }
