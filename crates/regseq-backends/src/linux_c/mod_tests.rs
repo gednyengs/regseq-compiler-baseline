@@ -314,15 +314,13 @@ fn no_driver_is_a_named_driver_error() {
     assert!(matches!(err, EmitError::Driver(ref s) if s.contains("no recognized")));
 }
 
-#[test]
-fn pci_bus_names_the_delivering_unit() {
-    let m = driver_model(Some(BusType::Pci), amba_match(), LifecycleOps::default());
-    let err = emit_linux_c(&m).unwrap_err();
-    let EmitError::UnsupportedInUnit { what, unit } = err else {
-        panic!("expected UnsupportedInUnit, got {err:?}");
-    };
-    assert!(what.contains("PCI scaffold"));
-    assert_eq!(unit, "backend/linux-c-e1000");
+fn pci_match() -> Vec<MatchEntry> {
+    vec![MatchEntry::Pci {
+        vendor: 0x8086,
+        device: 0x100e,
+        subsystem: None,
+        class: None,
+    }]
 }
 
 #[test]
@@ -570,6 +568,22 @@ fn resolved_region_probe_carries_the_devm_claim_map_and_native_channel() {
 /// register has the given byte `width`. `resolved` controls the L2 binding
 /// (the A-10 trigger).
 fn mmio_write_model(width: u64, resolved: bool) -> RegseqModel {
+    mmio_write_model_for(width, resolved, BusType::Amba, amba_match(), None)
+}
+
+/// The PCI flavor of [`mmio_write_model`] (backend-linux-c-e1000 T04):
+/// width-4 write, PCI bus + match, with the given `effective_bar`.
+fn pci_mmio_write_model(resolved: bool, effective_bar: Option<u8>) -> RegseqModel {
+    mmio_write_model_for(4, resolved, BusType::Pci, pci_match(), effective_bar)
+}
+
+fn mmio_write_model_for(
+    width: u64,
+    resolved: bool,
+    bus: BusType,
+    match_set: Vec<MatchEntry>,
+    effective_bar: Option<u8>,
+) -> RegseqModel {
     let mut m = model();
     let store_kind = match width {
         1 => UintKind::U8,
@@ -759,9 +773,9 @@ fn mmio_write_model(width: u64, resolved: bool) -> RegseqModel {
         regseq_model::DriverLifecycle {
             descriptor: regseq_model::DriverDescriptor {
                 name,
-                match_set: amba_match(),
+                match_set,
                 device_class: regseq_model::ClassTag::Generic,
-                bus_type: Some(BusType::Amba),
+                bus_type: Some(bus),
                 dma_present: false,
             },
             handle: regseq_model::DriverHandle {
@@ -772,7 +786,7 @@ fn mmio_write_model(width: u64, resolved: bool) -> RegseqModel {
                         id: Some(regs_name),
                         bar_index: None,
                         bar_type: regseq_model::BarType::Mem,
-                        effective_bar: None,
+                        effective_bar,
                         base: resolved.then_some(0x0900_0000),
                         size: resolved.then_some(0x1000),
                     },
@@ -1335,5 +1349,225 @@ fn returning_an_accessor_result_fails_loud() {
     assert!(
         matches!(&err, EmitError::Unsupported(s) if s.contains("un-lowered instance") || s.contains("elided accessor result")),
         "returning an accessor result must fail loud, never emit uninitialized C: {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// backend-linux-c-e1000 T04: the PCI dispatch arm + scaffold — ordering
+// landmarks, the T03-pinned managed preamble (ledger C-7), adapter polarity,
+// and one negative test per new diagnostic (>1 region B-5, resolved-no-BAR).
+// ---------------------------------------------------------------------------
+
+/// The minimal emitting PCI model: fieldless PCI driver, `on_init` = `Ok(())`.
+fn minimal_pci_model() -> RegseqModel {
+    let mut m = driver_model(Some(BusType::Pci), pci_match(), LifecycleOps::default());
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let on_init = push_ok_on_init(&mut m, driver_ty, result_ty);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    m
+}
+
+/// Like [`model_with_callback`], on the PCI arm.
+fn pci_model_with_callback(cb: &str) -> RegseqModel {
+    let mut m = driver_model(Some(BusType::Pci), pci_match(), LifecycleOps::default());
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let on_init = push_ok_on_init(&mut m, driver_ty, result_ty);
+    let extra = push_ok_on_init(&mut m, driver_ty, result_ty);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    match cb {
+        "on_surprise_remove" => driver.ops.on_surprise_remove = Some(extra),
+        "on_init_failure" => driver.ops.on_init_failure = Some(extra),
+        "on_system_shutdown" => driver.ops.on_system_shutdown = Some(extra),
+        _ => unreachable!(),
+    }
+    m
+}
+
+#[test]
+fn minimal_pci_model_emits_the_artifact_set() {
+    let emit = emit_linux_c(&minimal_pci_model()).expect("emit");
+    assert_eq!(emit.module_name, "minimal");
+    assert_eq!(emit.kbuild, "obj-m += minimal.o\n");
+    assert!(!emit.tu.is_empty());
+}
+
+#[test]
+fn pci_tu_carries_the_d04_ordering_landmarks() {
+    let tu = emit_linux_c(&minimal_pci_model()).unwrap().tu;
+    let pos = |needle: &str| {
+        tu.find(needle)
+            .unwrap_or_else(|| panic!("TU must contain `{needle}`:\n{tu}"))
+    };
+    let includes = pos("#include <linux/pci.h>");
+    let container = pos("struct minimal_priv {");
+    let pdev_member = pos("struct pci_dev *pdev;");
+    let body = pos("static struct Result minimal_on_init(");
+    let probe =
+        pos("static int minimal_probe(struct pci_dev *pdev, const struct pci_device_id *id)");
+    let remove = pos("static void minimal_remove(struct pci_dev *pdev)");
+    let table = pos("static const struct pci_device_id minimal_ids[]");
+    let devtable = pos("MODULE_DEVICE_TABLE(pci, minimal_ids);");
+    let drvstruct = pos("static struct pci_driver minimal_driver = {");
+    let macros = pos("module_pci_driver(minimal_driver);");
+    let license = pos("MODULE_LICENSE(\"GPL\");");
+    assert!(includes < container, "includes precede driver state");
+    assert!(container < pdev_member && pdev_member < body);
+    assert!(body < probe, "lowered bodies precede callbacks");
+    assert!(probe < remove);
+    assert!(remove < table, "callbacks precede the match table");
+    assert!(table < devtable);
+    assert!(devtable < drvstruct, "match table precedes the driver struct");
+    assert!(drvstruct < macros && macros < license);
+    // The PCI TU carries no AMBA scaffolding.
+    assert!(!tu.contains("amba"), "no AMBA residue in a PCI TU:\n{tu}");
+    assert!(tu.contains("(PCI match)"), "the header names the PCI match");
+}
+
+#[test]
+fn pci_probe_carries_create_associate_and_the_negated_adapter() {
+    let tu = emit_linux_c(&minimal_pci_model()).unwrap().tu;
+    // create → associate (canonical order) over the PCI device.
+    let create = tu
+        .find("devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL)")
+        .unwrap();
+    let associate = tu.find("pci_set_drvdata(pdev, priv);").unwrap();
+    let call = tu.find("minimal_on_init(&priv->inner)").unwrap();
+    assert!(create < associate && associate < call);
+    // The adapter: Ok tag compare + per-variant NEGATED errno arms +
+    // corrupt-discriminant default (shared with the AMBA arm).
+    assert!(tu.contains("if (__tag != 0x2)"));
+    assert!(tu.contains("return -EIO;"), "HardwareError -> -EIO");
+    assert!(tu.contains("return -EBUSY;"), "DeviceBusy -> -EBUSY");
+    assert!(tu.contains("default:"), "corrupt-discriminant defense");
+    assert!(!tu.contains("int main("));
+}
+
+#[test]
+fn pci_resolved_region_probe_carries_the_t03_pinned_preamble() {
+    let tu = emit_linux_c(&pci_mmio_write_model(true, Some(0))).unwrap().tu;
+    // Canonical order: create -> associate -> enable -> fused request+map ->
+    // on_init, with the native status declared up front.
+    assert!(tu.contains("\tint ret;\n"), "native status declared:\n{tu}");
+    let create = tu.find("devm_kzalloc").unwrap();
+    let associate = tu.find("pci_set_drvdata(pdev, priv);").unwrap();
+    let enable = tu
+        .find("ret = pcim_enable_device(pdev);")
+        .expect("the T03-pinned managed enable");
+    let enable_check = tu.find("if (ret)\n\t\treturn ret;").expect("native ret channel");
+    let map = tu
+        .find("priv->inner.regs = pcim_iomap_region(pdev, 0, \"mmiodrv\");")
+        .expect("the T03-pinned fused request+map of BAR0");
+    let native = tu
+        .find("return PTR_ERR(priv->inner.regs);")
+        .expect("the native error channel propagates directly");
+    let on_init = tu.find("mmiodrv_on_init(&priv->inner)").unwrap();
+    assert!(create < associate && associate < enable);
+    assert!(enable < enable_check && enable_check < map && map < native && native < on_init);
+    // The pin REPLACES the unmanaged-era calls: no plain request/map, no AMBA
+    // devm fusion call, and no explicit release ladder in .remove (A-2).
+    assert!(!tu.contains("pci_request_selected_regions"));
+    assert!(!tu.contains("pci_iomap("), "the unfused map never appears");
+    assert!(!tu.contains("pci_ioremap_bar"));
+    assert!(!tu.contains("devm_ioremap_resource"));
+    assert!(!tu.contains("pci_release_region"));
+    assert!(!tu.contains("pci_iounmap"));
+    assert!(tu.contains("devres-managed resources release automatically"));
+}
+
+#[test]
+fn pci_resolved_region_without_a_bar_fails_loud() {
+    let err = emit_linux_c(&pci_mmio_write_model(true, None)).unwrap_err();
+    assert!(
+        matches!(&err, EmitError::Driver(s) if s.contains("BAR index")),
+        "a resolved PCI region with no effective BAR must fail loud: {err:?}"
+    );
+}
+
+#[test]
+fn pci_unresolved_binding_is_the_a10_hard_error() {
+    let err = emit_linux_c(&pci_mmio_write_model(false, Some(0))).unwrap_err();
+    let EmitError::UnresolvedBinding(msg) = err else {
+        panic!("expected the A-10 UnresolvedBinding error, got {err:?}");
+    };
+    assert!(
+        msg.contains("[mmio.regs]") && msg.contains("base/size"),
+        "the A-10 error must name the missing L2 literals: {msg}"
+    );
+}
+
+#[test]
+fn pci_more_than_one_region_fails_loud_naming_b5() {
+    let mut m = minimal_pci_model();
+    let regs = m.strings.intern("regs");
+    let regs2 = m.strings.intern("regs2");
+    let field = |name| regseq_model::ResourceField {
+        name,
+        kind: regseq_model::ResourceKind::Mmio,
+        binding: regseq_model::MmioBinding {
+            id: None,
+            bar_index: None,
+            bar_type: regseq_model::BarType::Mem,
+            effective_bar: Some(0),
+            base: Some(0xf000_0000),
+            size: Some(0x1000),
+        },
+    };
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.handle.resource_fields = vec![field(regs), field(regs2)];
+    let err = emit_linux_c(&m).unwrap_err();
+    assert!(
+        matches!(&err, EmitError::Unsupported(s) if s.contains("B-5")),
+        ">1 MMIO region must fail loud naming B-5: {err:?}"
+    );
+}
+
+#[test]
+fn pci_surprise_remove_fails_loud_until_t06() {
+    let err = emit_linux_c(&pci_model_with_callback("on_surprise_remove")).unwrap_err();
+    assert!(
+        matches!(err, EmitError::Unsupported(ref s) if s.contains("on_surprise_remove")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn pci_on_init_failure_hook_runs_on_the_authored_err_arm_only() {
+    let tu = emit_linux_c(&pci_model_with_callback("on_init_failure")).unwrap().tu;
+    let hook = tu
+        .find("(void)minimal_on_init_failure(&priv->inner);")
+        .expect("the failure hook is emitted");
+    let err_branch = tu.find("if (__tag != 0x2)").expect("the Err branch");
+    let switch = tu.find("switch (__err)").expect("the errno switch");
+    assert!(
+        err_branch < hook && hook < switch,
+        "the hook must run inside the authored Err arm, before the errno return"
+    );
+}
+
+#[test]
+fn pci_shutdown_slot_is_omit_when_absent() {
+    let with = emit_linux_c(&pci_model_with_callback("on_system_shutdown")).unwrap().tu;
+    assert!(with.contains("static void minimal_shutdown(struct pci_dev *pdev)"));
+    assert!(with.contains(".shutdown\t= minimal_shutdown,"));
+    assert!(with.contains("(void)minimal_on_system_shutdown(&priv->inner);"));
+
+    let without = emit_linux_c(&minimal_pci_model()).unwrap().tu;
+    assert!(
+        !without.contains(".shutdown"),
+        "the .shutdown initializer must be omitted when on_system_shutdown is not overridden"
     );
 }
