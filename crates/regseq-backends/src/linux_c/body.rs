@@ -1451,6 +1451,11 @@ impl Descriptor {
 impl LowerCx<'_> {
     /// Lower one `IntrinsicKind::Config(op)` call shape against the given
     /// PCI device expression.
+    ///
+    /// Reached only through the unit seam this unit (the TU interception
+    /// path rejects config intrinsics until the e1000 unit threads the
+    /// device pointer), hence the non-test dead-code allowance.
+    #[cfg_attr(not(test), allow(dead_code))]
     pub(crate) fn emit_config(
         &mut self,
         op: regseq_model::ConfigOp,
@@ -1518,6 +1523,7 @@ impl LowerCx<'_> {
 
 /// The width-selected PCI config accessor + its carrier C type. Width-8 has
 /// no PCI primitive (ledger B-3): fail loud.
+#[cfg_attr(not(test), allow(dead_code))]
 fn config_accessor(
     model: &RegseqModel,
     ty: TyId,
@@ -1550,6 +1556,7 @@ fn config_accessor(
 
 /// Find the interned `u{8*size}` type (present whenever a config op typed at
 /// that width exists in the model).
+#[cfg_attr(not(test), allow(dead_code))]
 fn uint_ty(model: &RegseqModel, size: u8) -> Result<TyId, EmitError> {
     let want = match size {
         1 => regseq_model::UintKind::U8,
