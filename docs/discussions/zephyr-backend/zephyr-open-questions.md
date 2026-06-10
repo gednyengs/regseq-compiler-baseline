@@ -193,7 +193,23 @@ eth_e1000.c:220-221).
     still hold) **as its own reviewed change** rather than folding ~3000
     lines of churn into a content fix.
 
----
+20. **Aligned hardware-status read-back value divergence (L3 whitelist
+    policy).** *(Addendum, ratified 2026-06-10 at the backend-zephyr-c C4
+    chunk close — the external-review channel per the unit's
+    autonomous-run delegation; closes the C4 review's blocking finding
+    #1.)* The L3 capture is the LIVE QEMU device model; the committed
+    oracle's device model is a passive register file (a read returns the
+    last-written or reset-zero state — it cannot carry hardware-status
+    semantics like the PL011 FR's reset `TXFE|RXFE = 0x90`). A read-back
+    VALUE divergence at an ALIGNED event — op, width, offset, and stream
+    position all equal — is therefore whitelistable per-entry on the
+    capture side, mirroring the linux first-light precedent (the linux
+    GRILL D07 `status-register-read-value` entry; same physics, same
+    comparator). The license is VALUE-ONLY: the `on_init` MMIO stream's
+    ops, widths, offsets, and ORDER still must match exactly, and an extra
+    or reordered MMIO event is never whitelistable (C04) — the comparator
+    enforces this structurally (a `matches="linux"` entry fires only at an
+    aligned position and consumes both events; it cannot absorb extras).
 
 ## B. `needs-new-surface` gaps (blocking — escalate against the model, do not invent)
 
