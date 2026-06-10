@@ -233,6 +233,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             driver_ty,
             resources,
             reg_macros,
+            bus_type: driver.descriptor.bus_type.clone(),
+            drv: drv.clone(),
         },
         width8_used: false,
         uses_pr: false,

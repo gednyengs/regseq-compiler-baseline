@@ -643,10 +643,37 @@ fn emit_call(
                 "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)"
                     .into(),
             )),
-            IntrinsicKind::Config(_) => Err(EmitError::UnsupportedInUnit {
-                what: "config-space intrinsics in a lowered TU (PCI-only surface)".into(),
-                unit: "backend/linux-c-e1000",
-            }),
+            IntrinsicKind::Config(op) => {
+                // C01 legality (a): config space exists only under the PCI
+                // scaffold; in any other TU the intrinsic is a loud error (a
+                // backend-local guard that does not wait for the model-level
+                // BRM-001 diagnostic).
+                if cx.driver.bus_type != Some(regseq_model::BusType::Pci) {
+                    return Err(EmitError::Unsupported(
+                        "config-space intrinsic in a non-PCI driver TU (C01: legal \
+                         only under bus = \"pci\")"
+                            .into(),
+                    ));
+                }
+                // C01 legality (b) + the per-site recovery: the device
+                // expression materializes INSIDE this op's own braces block,
+                // strictly per-site, never hoisted — no lowered body holds a
+                // device pointer outside a config-op block (the A-3
+                // preservation property). container_of is compile-time
+                // pointer arithmetic; per-site repetition costs nothing.
+                let recovery = config_recovery(cx, body)?;
+                cx.extra_includes.insert("<linux/pci.h>");
+                cx.extra_includes.insert("<linux/container_of.h>");
+                cx.emit_config(
+                    op,
+                    body,
+                    args,
+                    destination,
+                    "__rseq_priv->pdev",
+                    Some(&recovery),
+                    out,
+                )
+            }
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -677,6 +704,40 @@ fn emit_call(
         out.push_str(&format!("\t{lv} = {call};\n"));
     }
     Ok(())
+}
+
+/// C01 legality (b) + the per-site recovery declaration: a config intrinsic
+/// is legal only in a body whose receiver (first argument) is `&<driver>` /
+/// `&mut <driver>`; any other body is a loud diagnostic. Returns the
+/// rendered `container_of` recovery line over that receiver (well-defined
+/// because the PCI scaffold is the sole driver instantiation site — every
+/// `&<drv>` points at a priv's `inner`, the D04 aliasing premise).
+fn config_recovery(
+    cx: &LowerCx<'_>,
+    body: &regseq_model::Body,
+) -> Result<String, EmitError> {
+    let recv = body
+        .arg_locals()
+        .next()
+        .filter(|l| {
+            matches!(
+                &cx.model.types[body.local_decls[*l].ty],
+                Ty::Ref(pointee, _) if *pointee == cx.driver.driver_ty
+            )
+        })
+        .ok_or_else(|| {
+            EmitError::Unsupported(
+                "config-space intrinsic in a body whose receiver is not the driver \
+                 type (C01: per-site container_of recovery is defined only for \
+                 driver-receiver bodies)"
+                    .into(),
+            )
+        })?;
+    let recv_name = local_name(cx.model, body, recv);
+    let drv = &cx.driver.drv;
+    Ok(format!(
+        "struct {drv}_priv *__rseq_priv = container_of({recv_name}, struct {drv}_priv, inner);"
+    ))
 }
 
 fn operand_is_zst(model: &RegseqModel, body: &regseq_model::Body, op: &Operand) -> bool {
@@ -886,6 +947,11 @@ pub(crate) struct DriverFacts {
     /// `(macro name, byte offset)` per named register of the single block,
     /// for the const bank + offset rendering.
     pub reg_macros: Vec<(String, u64)>,
+    /// The driver's bus (C01 legality (a): config ops only under PCI).
+    pub bus_type: Option<regseq_model::BusType>,
+    /// The C-sanitized driver name (`struct <drv>_priv` in the per-site
+    /// container recovery).
+    pub drv: String,
 }
 
 impl LowerCx<'_> {
@@ -1440,22 +1506,17 @@ impl Descriptor {
 // the model surface is infallible while the kernel accessors return a
 // status int; the drop is visible in the generated C (never silent).
 //
-// Full-TU emission for PCI-bus models stays fail-loud this unit (D02): the
-// TU call-interception path rejects config intrinsics naming the e1000
-// unit; THIS seam — `emit_config`, driven directly with a synthetic
-// config-op body and a caller-supplied device expression — is the A-11
-// proof surface. The device-pointer threading into lowered bodies is the
-// e1000 unit's deliverable.
+// The TU call-interception path routes `IntrinsicKind::Config` here for PCI
+// drivers with the C01 per-site container recovery (backend-linux-c-e1000
+// T07); the seam also stays directly drivable with a caller-supplied device
+// expression — the A-11 unit proof surface.
 // ---------------------------------------------------------------------------
 
 impl LowerCx<'_> {
     /// Lower one `IntrinsicKind::Config(op)` call shape against the given
-    /// PCI device expression.
-    ///
-    /// Reached only through the unit seam this unit (the TU interception
-    /// path rejects config intrinsics until the e1000 unit threads the
-    /// device pointer), hence the non-test dead-code allowance.
-    #[cfg_attr(not(test), allow(dead_code))]
+    /// PCI device expression. Both directions emit a braces block (C01);
+    /// `recovery` is the per-site `container_of` declaration placed first in
+    /// the block when the call comes through the TU interception.
     pub(crate) fn emit_config(
         &mut self,
         op: regseq_model::ConfigOp,
@@ -1463,6 +1524,7 @@ impl LowerCx<'_> {
         args: &[Operand],
         destination: &Place,
         pdev: &str,
+        recovery: Option<&str>,
         out: &mut String,
     ) -> Result<(), EmitError> {
         use regseq_model::ConfigOp;
@@ -1470,6 +1532,9 @@ impl LowerCx<'_> {
             EmitError::Unsupported("config call with no offset argument".into())
         })?;
         let off = operand_expr(self, body, off_arg)?;
+        let rec_line = recovery
+            .map(|r| format!("\t\t{r}\n"))
+            .unwrap_or_default();
         match op {
             ConfigOp::Read => {
                 let ty = place_ty(self.model, body, destination)?;
@@ -1479,7 +1544,7 @@ impl LowerCx<'_> {
                 // A-11: the status int is explicitly discarded; the in-band
                 // failure signal on PCI is all-ones read data (out of scope).
                 out.push_str(&format!(
-                    "\t{{\n\t\t{tmp_cty} __cv;\n\t\t(void){accessor}({pdev}, (int)({off}), &__cv);\n\t\t{dst} = ({dst_cty})__cv;\n\t}}\n"
+                    "\t{{\n{rec_line}\t\t{tmp_cty} __cv;\n\t\t(void){accessor}({pdev}, (int)({off}), &__cv);\n\t\t{dst} = ({dst_cty})__cv;\n\t}}\n"
                 ));
             }
             ConfigOp::Write => {
@@ -1512,8 +1577,10 @@ impl LowerCx<'_> {
                 };
                 let (accessor, tmp_cty) = config_accessor(self.model, val_ty, "pci_write_config")?;
                 let val = operand_expr(self, body, val_arg)?;
+                // The write shape carries its own braces block too (C01: the
+                // block is what scopes the per-site recovery).
                 out.push_str(&format!(
-                    "\t(void){accessor}({pdev}, (int)({off}), ({tmp_cty})({val}));\n"
+                    "\t{{\n{rec_line}\t\t(void){accessor}({pdev}, (int)({off}), ({tmp_cty})({val}));\n\t}}\n"
                 ));
             }
         }
@@ -1523,7 +1590,6 @@ impl LowerCx<'_> {
 
 /// The width-selected PCI config accessor + its carrier C type. Width-8 has
 /// no PCI primitive (ledger B-3): fail loud.
-#[cfg_attr(not(test), allow(dead_code))]
 fn config_accessor(
     model: &RegseqModel,
     ty: TyId,
@@ -1556,7 +1622,6 @@ fn config_accessor(
 
 /// Find the interned `u{8*size}` type (present whenever a config op typed at
 /// that width exists in the model).
-#[cfg_attr(not(test), allow(dead_code))]
 fn uint_ty(model: &RegseqModel, size: u8) -> Result<TyId, EmitError> {
     let want = match size {
         1 => regseq_model::UintKind::U8,

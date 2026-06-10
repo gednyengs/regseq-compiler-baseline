@@ -873,6 +873,8 @@ fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>,
             driver_ty: dst_ty, // unused by the config seam
             resources: vec![],
             reg_macros: vec![],
+            bus_type: Some(BusType::Pci),
+            drv: "seam".into(),
         },
         width8_used: false,
         uses_pr: false,
@@ -896,6 +898,7 @@ fn a11_read_config_carries_the_void_discard() {
         &[Operand::Constant(off)],
         &Place::from(dst),
         "pdev",
+        None,
         &mut out,
     )
     .expect("read_config lowers");
@@ -925,12 +928,17 @@ fn a11_write_config_carries_the_void_discard() {
         &[Operand::Constant(off), Operand::Constant(val)],
         &Place::from(dst),
         "pdev",
+        None,
         &mut out,
     )
     .expect("write_config lowers");
+    // The bracketed write shape (C01: the braces block scopes the per-site
+    // recovery when present).
     assert!(
-        out.contains("(void)pci_write_config_dword(pdev, (int)(0x4u), (u32)(0x146u));"),
-        "the write status must be explicitly discarded: {out}"
+        out.contains(
+            "\t{\n\t\t(void)pci_write_config_dword(pdev, (int)(0x4u), (u32)(0x146u));\n\t}\n"
+        ),
+        "the write must be bracketed with an explicit status discard: {out}"
     );
 }
 
@@ -949,6 +957,7 @@ fn a11_width8_config_fails_loud() {
             &[Operand::Constant(off)],
             &Place::from(dst),
             "pdev",
+            None,
             &mut out,
         )
         .unwrap_err();
@@ -1660,6 +1669,267 @@ fn pci_remove_without_surprise_override_is_plain_orderly() {
     assert!(
         !tu.contains("pci_device_is_present"),
         "no predicate without the override:\n{tu}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// backend-linux-c-e1000 T07: config-space activation per C01 — the TU
+// interception path: legal sites lower with the per-site container recovery;
+// non-PCI TUs and non-driver-receiver bodies are distinct loud diagnostics;
+// sibling ops each carry their own block (the A-3 preservation property).
+// ---------------------------------------------------------------------------
+
+/// A driver model whose `on_init` performs the given config ops in sequence
+/// (`Read` = u16 @0x6 into a local; `Write` = u8 0x10 @0xc), through
+/// intrinsic-anchored `read_config`/`write_config` callees. `bus`/`match_set`
+/// parametrize the legality tests; `receiver_is_driver` controls C01 (b).
+fn config_model(
+    ops: &[regseq_model::ConfigOp],
+    bus: BusType,
+    match_set: Vec<MatchEntry>,
+    receiver_is_driver: bool,
+) -> RegseqModel {
+    use regseq_model::{BlockId, ConfigOp, LocalId};
+    let mut m = model();
+    let driver_ty = push_struct(&mut m, "CfgDrv", struct_layout(0, 1, vec![]));
+    let driver_item = match &m.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => unreachable!(),
+    };
+    // A decoy receiver type for the C01 (b) negative.
+    let other_ty = push_struct(&mut m, "NotTheDriver", struct_layout(0, 1, vec![]));
+
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+    let u16t = m.types.intern(Ty::Uint(UintKind::U16));
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: struct_layout(0, 1, vec![]),
+    });
+
+    // The intrinsic-anchored config callees.
+    let mut anchor = |m: &mut RegseqModel, name: &str, op: ConfigOp, sig_in: Vec<TyId>, sig_out: TyId| {
+        let sig = m.sigs.intern(FnSig {
+            inputs: sig_in,
+            output: sig_out,
+            abi: FnAbi::Rust,
+            c_variadic: false,
+            safety: Safety::Safe,
+        });
+        let it = item(m, ItemKind::Function, name);
+        while m.domain_attrs.item_attrs.len() <= it.as_u32() as usize {
+            m.domain_attrs.item_attrs.push(Vec::new());
+        }
+        m.domain_attrs.item_attrs[it].push(regseq_model::AttrData::Intrinsic(
+            regseq_model::IntrinsicKind::Config(op),
+        ));
+        let emission = m.strings.intern(name);
+        m.instances.push(Instance {
+            item: it,
+            generic_args: regseq_model::GenericArgs::new(),
+            emission_name: emission,
+            span: span(),
+            kind: InstanceKind::Function(FunctionInstanceData {
+                fn_sig: sig,
+                body: None,
+                flavor: FunctionInstanceFlavor::Item,
+                virtual_idx: None,
+            }),
+        })
+    };
+    let read_id = anchor(&mut m, "read_config", ConfigOp::Read, vec![u32t], u16t);
+    let write_id = anchor(
+        &mut m,
+        "write_config",
+        ConfigOp::Write,
+        vec![u32t, u8t],
+        unit,
+    );
+
+    // on_init(&mut <recv>) -> Result, performing the ops in sequence.
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let recv_pointee = if receiver_is_driver { driver_ty } else { other_ty };
+    let self_ty = m.types.intern(Ty::Ref(recv_pointee, Provenance::UniqueBorrow));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: result_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("self")),
+    });
+    body.arg_count = 1;
+    let off_read = m.consts.intern(Const::Uint(UintKind::U32, 0x6));
+    let off_write = m.consts.intern(Const::Uint(UintKind::U32, 0xc));
+    let val_write = m.consts.intern(Const::Uint(UintKind::U8, 0x10));
+    let unit_const = m.consts.intern(Const::ZST);
+    for (i, op) in ops.iter().enumerate() {
+        let next = BlockId::from_u32(i as u32 + 1);
+        let term = match op {
+            ConfigOp::Read => {
+                let dst = body.push_synthetic_local(u16t);
+                TerminatorKind::Call {
+                    callee: regseq_model::CallCallee::Direct(read_id),
+                    args: Box::new([Operand::Constant(off_read)]),
+                    destination: Place::from(dst),
+                    target: Some(next),
+                }
+            }
+            ConfigOp::Write => {
+                let dst = body.push_synthetic_local(unit);
+                TerminatorKind::Call {
+                    callee: regseq_model::CallCallee::Direct(write_id),
+                    args: Box::new([Operand::Constant(off_write), Operand::Constant(val_write)]),
+                    destination: Place::from(dst),
+                    target: Some(next),
+                }
+            }
+        };
+        body.basic_blocks.push(BasicBlock {
+            statements: Box::new([]),
+            terminator: Terminator { kind: term, span: span() },
+        });
+    }
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let on_init_item = item(&mut m, ItemKind::Function, "on_init");
+    let emission = m.strings.intern("on_init");
+    let on_init_id = m.instances.push(Instance {
+        item: on_init_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let on_init_ref = m.instance_ref_of(on_init_id);
+
+    let name = m.strings.intern("cfgdrv");
+    m.device_lifecycle.drivers.insert(
+        driver_item,
+        regseq_model::DriverLifecycle {
+            descriptor: regseq_model::DriverDescriptor {
+                name,
+                match_set,
+                device_class: regseq_model::ClassTag::Generic,
+                bus_type: Some(bus),
+                dma_present: false,
+            },
+            handle: regseq_model::DriverHandle::default(),
+            ops: regseq_model::LifecycleOps {
+                on_init: Some(on_init_ref),
+                ..Default::default()
+            },
+        },
+    );
+    m
+}
+
+#[test]
+fn config_ops_lower_with_the_per_site_container_recovery() {
+    use regseq_model::ConfigOp;
+    let m = config_model(
+        &[ConfigOp::Read, ConfigOp::Write],
+        BusType::Pci,
+        pci_match(),
+        true,
+    );
+    let tu = emit_linux_c(&m).unwrap().tu;
+    // The C01 read shape: recovery + carrier + (void) accessor + marshal,
+    // one braces block.
+    assert!(
+        tu.contains(
+            "\t{\n\t\tstruct cfgdrv_priv *__rseq_priv = container_of(self, struct cfgdrv_priv, inner);\n\t\tu16 __cv;\n\t\t(void)pci_read_config_word(__rseq_priv->pdev, (int)(0x6u), &__cv);\n"
+        ),
+        "the C01 read shape with per-site recovery; TU:\n{tu}"
+    );
+    // The C01 write shape: recovery + (void) accessor, its own braces block.
+    assert!(
+        tu.contains(
+            "\t{\n\t\tstruct cfgdrv_priv *__rseq_priv = container_of(self, struct cfgdrv_priv, inner);\n\t\t(void)pci_write_config_byte(__rseq_priv->pdev, (int)(0xcu), (u8)(0x10u));\n\t}\n"
+        ),
+        "the C01 bracketed write shape with per-site recovery; TU:\n{tu}"
+    );
+    // The includes ride the helper-usage mechanism.
+    assert!(tu.contains("#include <linux/container_of.h>"));
+    assert!(tu.contains("#include <linux/pci.h>"));
+}
+
+#[test]
+fn sibling_config_ops_each_carry_their_own_recovery_block() {
+    use regseq_model::ConfigOp;
+    let m = config_model(
+        &[ConfigOp::Read, ConfigOp::Read],
+        BusType::Pci,
+        pci_match(),
+        true,
+    );
+    let tu = emit_linux_c(&m).unwrap().tu;
+    // Strictly per-site, never hoisted (the A-3 preservation property): TWO
+    // sibling ops -> TWO recovery declarations, each inside its own block;
+    // no function-scope device pointer exists.
+    assert_eq!(
+        tu.matches("__rseq_priv = container_of(self, struct cfgdrv_priv, inner);")
+            .count(),
+        2,
+        "each sibling op carries its own per-site recovery; TU:\n{tu}"
+    );
+    assert_eq!(
+        tu.matches("\t{\n\t\tstruct cfgdrv_priv *__rseq_priv").count(),
+        2,
+        "every recovery lives inside its own braces block (never hoisted); TU:\n{tu}"
+    );
+}
+
+#[test]
+fn config_op_in_a_non_pci_tu_is_a_loud_diagnostic() {
+    use regseq_model::ConfigOp;
+    let m = config_model(&[ConfigOp::Read], BusType::Amba, amba_match(), true);
+    let err = emit_linux_c(&m).unwrap_err();
+    assert!(
+        matches!(&err, EmitError::Unsupported(s) if s.contains("non-PCI")),
+        "config in a non-PCI TU must fail loud naming the restriction: {err:?}"
+    );
+}
+
+#[test]
+fn config_op_with_a_non_driver_receiver_is_a_loud_diagnostic() {
+    use regseq_model::ConfigOp;
+    let m = config_model(&[ConfigOp::Read], BusType::Pci, pci_match(), false);
+    let err = emit_linux_c(&m).unwrap_err();
+    assert!(
+        matches!(&err, EmitError::Unsupported(s) if s.contains("receiver is not the driver type")),
+        "config outside a driver-receiver body must fail loud: {err:?}"
     );
 }
 
