@@ -33,6 +33,15 @@ fn composed_corpus() -> PathBuf {
     Path::new(env!("CARGO_MANIFEST_DIR")).join("fixtures/_composed")
 }
 
+/// Print to the REAL stderr (bypassing libtest's capture): the C03 skip
+/// notice must be visible on a green run, not swallowed (the kbuild gate's
+/// precedent; C3 review finding #1).
+fn visible(line: String) {
+    use std::io::Write;
+    let mut err = std::io::stderr().lock();
+    let _ = writeln!(err, "{line}");
+}
+
 #[test]
 fn zephyr_build_gate_over_the_composed_goldens() {
     let fixtures = manifest::discover(&composed_corpus()).expect("discover composed corpus");
@@ -60,19 +69,19 @@ fn zephyr_build_gate_over_the_composed_goldens() {
     match west_build(&driver) {
         Ok(WestOutcome::Skipped { notice }) => {
             // The ONE visible notice (C03) — never a silent pass.
-            println!("{notice}");
+            visible(notice);
         }
         Ok(WestOutcome::Built {
             zephyr_version,
             warnings,
         }) => {
-            println!(
+            visible(format!(
                 "west gate PASSED: the composed TU built for {BOARD} against Zephyr \
                  {zephyr_version} (workspace: ${WORKSPACE_VAR})"
-            );
+            ));
             if !warnings.trim().is_empty() {
                 // Warnings are recorded, not gating (C01.2).
-                println!("--- build warnings (recorded) ---\n{warnings}");
+                visible(format!("--- build warnings (recorded) ---\n{warnings}"));
             }
         }
         Err(err) => panic!("west gate FAILED:\n{err}"),
