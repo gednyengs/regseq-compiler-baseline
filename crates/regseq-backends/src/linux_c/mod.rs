@@ -619,16 +619,7 @@ fn emit_scaffold_pci(
     let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
     let on_init = find("on_init");
     let on_deinit = find("on_deinit");
-    if find("on_surprise_remove").is_some() {
-        // The present-predicate `.remove` (pci_device_is_present dispatch,
-        // GRILL D06(3)) is T06's deliverable; until it lands the override is
-        // a loud in-unit gate, never a silently-orderly remove.
-        return Err(EmitError::Unsupported(
-            "on_surprise_remove on a PCI driver (the present-predicate .remove \
-             arrives with T06 of this unit)"
-                .into(),
-        ));
-    }
+    let on_surprise_remove = find("on_surprise_remove");
     let on_init_failure = find("on_init_failure");
     let on_system_shutdown = find("on_system_shutdown");
 
@@ -729,18 +720,33 @@ fn emit_scaffold_pci(
     }
     out.push_str("\treturn 0;\n}\n\n");
 
-    // .remove — orderly teardown (void; the kernel slot has no status
-    // channel). The present-predicate surprise dispatch is T06's.
+    // .remove — one `void` slot. With `on_surprise_remove` overridden it
+    // branches on the ratified present predicate (GRILL D06(3), ledger A-7):
+    // orderly arm runs on_deinit (HW still reachable), surprise arm runs
+    // on_surprise_remove with NO MMIO-touching releases (devres still
+    // unwinds; the mappings are dead, not leaked). Without the override the
+    // remove is plain orderly.
     out.push_str(&format!(
         "static void {drv}_remove(struct pci_dev *pdev)\n{{\n\tstruct {drv}_priv *priv = pci_get_drvdata(pdev);\n\n"
     ));
-    match on_deinit {
+    let orderly_arm = |indent: &str| match on_deinit {
+        Some(id) => format!("{indent}(void){}(&priv->inner);\n", cx.fn_symbols[&id]),
+        None => {
+            format!("{indent}/* on_deinit not overridden: default no-op teardown */\n{indent}(void)priv;\n")
+        }
+    };
+    match on_surprise_remove {
         Some(id) => {
             let sym = cx.fn_symbols[&id].clone();
-            out.push_str(&format!("\t(void){sym}(&priv->inner);\n"));
+            out.push_str("\tif (pci_device_is_present(pdev)) {\n");
+            out.push_str(&orderly_arm("\t\t"));
+            out.push_str("\t} else {\n");
+            out.push_str(&format!(
+                "\t\t/* surprise removal: the device is gone — no MMIO-touching\n\t\t * releases run on this arm (D06(3)) */\n\t\t(void){sym}(&priv->inner);\n"
+            ));
+            out.push_str("\t}\n");
         }
-        None => out
-            .push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
+        None => out.push_str(&orderly_arm("\t")),
     }
     out.push_str("\t/* postamble: devres-managed resources release automatically (A-2) */\n}\n\n");
 

@@ -1613,11 +1613,63 @@ fn pci_match_entry_with_qualifiers_fails_loud() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// backend-linux-c-e1000 T06: the surprise-remove present-predicate `.remove`
+// (GRILL D06(3)) — both polarities; the AMBA rejection unchanged.
+// ---------------------------------------------------------------------------
+
 #[test]
-fn pci_surprise_remove_fails_loud_until_t06() {
-    let err = emit_linux_c(&pci_model_with_callback("on_surprise_remove")).unwrap_err();
+fn pci_surprise_remove_emits_the_present_predicate_branch() {
+    // Overridden ⇒ ONE void .remove branching on pci_device_is_present:
+    // orderly arm = on_deinit... wired in via a second callback so both arms
+    // carry real calls.
+    let mut m = pci_model_with_callback("on_surprise_remove");
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let on_deinit = push_ok_on_init(&mut m, driver_ty, result_ty);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_deinit = Some(on_deinit);
+    let tu = emit_linux_c(&m).unwrap().tu;
+    let remove = tu
+        .find("static void minimal_remove(struct pci_dev *pdev)")
+        .unwrap();
+    let predicate = tu
+        .find("if (pci_device_is_present(pdev)) {")
+        .expect("the ratified present predicate");
+    let orderly = tu
+        .find("(void)minimal_on_deinit(&priv->inner);")
+        .expect("orderly arm runs on_deinit");
+    let surprise = tu
+        .find("(void)minimal_on_surprise_remove(&priv->inner);")
+        .expect("surprise arm runs on_surprise_remove");
+    assert!(remove < predicate && predicate < orderly && orderly < surprise);
+    // The surprise arm runs no MMIO-touching releases — and the remove emits
+    // no release ladder at all (A-2 devres).
+    assert!(!tu.contains("pci_iounmap"));
+    assert!(!tu.contains("pci_release_region"));
+}
+
+#[test]
+fn pci_remove_without_surprise_override_is_plain_orderly() {
+    let tu = emit_linux_c(&minimal_pci_model()).unwrap().tu;
     assert!(
-        matches!(err, EmitError::Unsupported(ref s) if s.contains("on_surprise_remove")),
+        !tu.contains("pci_device_is_present"),
+        "no predicate without the override:\n{tu}"
+    );
+}
+
+#[test]
+fn amba_surprise_remove_rejection_is_unchanged() {
+    // The AMBA arm still has no ratified present predicate (T06 delivers the
+    // PCI arm only).
+    let err = emit_linux_c(&model_with_callback("on_surprise_remove")).unwrap_err();
+    assert!(
+        matches!(err, EmitError::Unsupported(ref s) if s.contains("on_surprise_remove") && s.contains("AMBA")),
         "got {err:?}"
     );
 }
