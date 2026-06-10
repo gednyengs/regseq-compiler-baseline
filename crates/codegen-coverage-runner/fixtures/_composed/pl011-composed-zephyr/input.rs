@@ -373,11 +373,13 @@ const ALL_UART_INTERRUPTS_MASK: u32 = 0x7ff;
 // multi-row amba_id table lowering (the kernel tables are inherently
 // multi-row + zero-sentinel).
 #[rseq::driver(name = "pl011", bus = "amba",
+    // RSEQ-LICENSED-REGION-BEGIN: match-transport [ratified: A-13/B-5 via D01/D04]
     // The Zephyr analog of the reserved test periphid (GRILL D04): the eval
     // DUT node (the second PL011, 0x09040000) carries `regseq,pl011`; stock
     // `uart_pl011` matches "arm,pl011" only, so it cannot bind the DUT, and
     // this driver matches ONLY the DUT (console uart0 untouched).
     compatible = ["regseq,pl011"],
+    // RSEQ-LICENSED-REGION-END: match-transport
 )]
 pub struct Pl011Composed {
     #[rseq::mmio(id = "regs")]
@@ -472,6 +474,8 @@ impl Lifecycle for Pl011Composed {
         Ok(())
     }
 
+    // RSEQ-LICENSED-REGION-BEGIN: deinit [ratified: B-6/C-3 via D06]
+    // RSEQ-LICENSED-REGION-END: deinit
 }
 
 // No `regseq_main`: the generic-c backend synthesizes `main` (RD-4/RD-6). The

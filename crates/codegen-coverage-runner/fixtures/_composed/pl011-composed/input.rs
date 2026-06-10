@@ -372,10 +372,14 @@ const ALL_UART_INTERRUPTS_MASK: u32 = 0x7ff;
 // it; this driver can). The second row also exercises the FULL match_set →
 // multi-row amba_id table lowering (the kernel tables are inherently
 // multi-row + zero-sentinel).
-#[rseq::driver(name = "pl011", bus = "amba", amba = [
+#[rseq::driver(name = "pl011", bus = "amba",
+    // RSEQ-LICENSED-REGION-BEGIN: match-transport [ratified: linux_c AMBA match gate; A-13/B-5 via D01/D04]
+    amba = [
     { id = 0x00041011, mask = 0x000fffff },
     { id = 0x00abc123, mask = 0x00ffffff },
-])]
+    ]
+    // RSEQ-LICENSED-REGION-END: match-transport
+)]
 pub struct Pl011Composed {
     #[rseq::mmio(id = "regs")]
     regs: Mmio<pl011::Regs>,
@@ -469,6 +473,7 @@ impl Lifecycle for Pl011Composed {
         Ok(())
     }
 
+    // RSEQ-LICENSED-REGION-BEGIN: deinit [ratified: B-6/C-3 via D06]
     fn on_deinit(&mut self) -> Result<(), RegseqError> {
         // Donor teardown facts (port_close/deinit compressed): defensively
         // mask so no late source re-latches, quiesce the UART, clear latched
@@ -479,6 +484,7 @@ impl Lifecycle for Pl011Composed {
         self.clear_all_interrupts();
         Ok(())
     }
+    // RSEQ-LICENSED-REGION-END: deinit
 }
 
 // No `regseq_main`: the generic-c backend synthesizes `main` (RD-4/RD-6). The
