@@ -861,6 +861,7 @@ fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>,
             reg_macros: vec![],
         },
         width8_used: false,
+        uses_pr: false,
     };
     let body = Body::default();
     (cx, body)
@@ -939,5 +940,223 @@ fn a11_width8_config_fails_loud() {
     assert!(
         matches!(err, EmitError::Unsupported(ref s) if s.contains("B-3")),
         "width-8 config must fail loud naming the ledger gap: {err:?}"
+    );
+}
+
+// ---------------------------------------------------------------------------
+// T09: diagnostics-logging — printk reassembly (one pr_* call per Log,
+// level -> macro, literal % doubling, certified specifier mapping, pr_fmt
+// module prefix; A-3: pr_* in lowered bodies).
+// ---------------------------------------------------------------------------
+
+/// Intern a `&str` carrier constant for `text` (Aggregate[Reloc -> CMS
+/// static Bytes, Uint(len)]).
+fn str_carrier(m: &mut RegseqModel, text: &str) -> regseq_model::ConstId {
+    let bytes: Vec<regseq_model::Byte> = text
+        .bytes()
+        .map(regseq_model::Byte::Value)
+        .collect();
+    let bytes_cid = m.consts.intern(Const::Bytes(bytes));
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+    let cms_item = item(m, ItemKind::Static { mutability: Mutability::Not }, "fmt_cms");
+    let emission = m.strings.intern("fmt_cms");
+    let cms_id = m.instances.push(Instance {
+        item: cms_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u8t,
+            init: Some(bytes_cid),
+        },
+    });
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms_id)));
+    let len = m.consts.intern(Const::Uint(UintKind::Usize, text.len() as u128));
+    m.consts.intern(Const::Aggregate(vec![reloc, len]))
+}
+
+/// A minimal AMBA model whose on_init performs one Log call at `level` with
+/// `template` and the given value operands, then returns Ok(()).
+fn log_model(
+    level: regseq_model::LogLevel,
+    template: &str,
+    extra_args: impl Fn(&mut RegseqModel) -> Vec<Operand>,
+) -> RegseqModel {
+    let mut m = driver_model(Some(BusType::Amba), amba_match(), LifecycleOps::default());
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+
+    // The intrinsic-anchored log callee.
+    let unit_out = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: struct_layout(0, 1, vec![]),
+    });
+    let log_sig = m.sigs.intern(FnSig {
+        inputs: vec![],
+        output: unit_out,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let log_item = item(&mut m, ItemKind::Function, "log_anchor");
+    while m.domain_attrs.item_attrs.len() <= log_item.as_u32() as usize {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+    m.domain_attrs.item_attrs[log_item].push(regseq_model::AttrData::Intrinsic(
+        regseq_model::IntrinsicKind::Log(level),
+    ));
+    let log_emission = m.strings.intern("log_anchor");
+    let log_id = m.instances.push(Instance {
+        item: log_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: log_emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: log_sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    // on_init: log(...) -> Ok(()).
+    let fmt = str_carrier(&mut m, template);
+    let mut call_args = vec![Operand::Constant(fmt)];
+    call_args.extend(extra_args(&mut m));
+    let self_ty = m.types.intern(Ty::Ref(driver_ty, Provenance::UniqueBorrow));
+    let on_init_sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let unit_const = m.consts.intern(Const::ZST);
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: result_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: None,
+    });
+    body.arg_count = 1;
+    use regseq_model::{BlockId, LocalId};
+    let unit_out2 = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: struct_layout(0, 1, vec![]),
+    });
+    let unit_local = body.push_synthetic_local(unit_out2);
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(log_id),
+                args: call_args.into_boxed_slice(),
+                destination: Place::from(unit_local),
+                target: Some(BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let on_init_item = item(&mut m, ItemKind::Function, "on_init");
+    let emission = m.strings.intern("on_init");
+    let on_init_id = m.instances.push(Instance {
+        item: on_init_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: on_init_sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let on_init_ref = m.instance_ref_of(on_init_id);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init_ref);
+    m
+}
+
+#[test]
+fn log_reassembles_one_pr_call_with_doubled_percent_and_specs() {
+    let m = log_model(regseq_model::LogLevel::Info, "duty 50% {} {:#x}", |m| {
+        vec![
+            Operand::Constant(m.consts.intern(Const::Uint(UintKind::U32, 13))),
+            Operand::Constant(m.consts.intern(Const::Uint(UintKind::U32, 0x301))),
+        ]
+    });
+    let tu = emit_linux_c(&m).unwrap().tu;
+    assert!(
+        tu.contains("pr_info(\"duty 50%% %u %#x\\n\", (unsigned)(0xdu), (unsigned)(0x301u));"),
+        "one reassembled pr_info with doubled %% and certified specs; TU:\n{tu}"
+    );
+    // pr_fmt module prefix precedes every include (A-3).
+    let prfmt = tu
+        .find("#define pr_fmt(fmt) KBUILD_MODNAME \": \" fmt")
+        .expect("pr_fmt define");
+    let first_inc = tu.find("#include").unwrap();
+    assert!(prfmt < first_inc);
+    assert!(tu.contains("#include <linux/printk.h>"));
+    // The [LEVEL] text tag is dropped (severity is the macro).
+    assert!(!tu.contains("[INFO]"));
+    // A-3: no dev_* in lowered bodies (no scaffold-synthesized logs exist).
+    assert!(!tu.contains("dev_info("));
+}
+
+#[test]
+fn log_levels_map_to_the_printk_macro_family() {
+    use regseq_model::LogLevel;
+    for (level, macro_name) in [
+        (LogLevel::Debug, "pr_debug"),
+        (LogLevel::Info, "pr_info"),
+        (LogLevel::Warn, "pr_warn"),
+        (LogLevel::Error, "pr_err"),
+    ] {
+        let m = log_model(level, "tick", |_| vec![]);
+        let tu = emit_linux_c(&m).unwrap().tu;
+        assert!(
+            tu.contains(&format!("{macro_name}(\"tick\\n\");")),
+            "{macro_name} expected; TU:\n{tu}"
+        );
+    }
+}
+
+#[test]
+fn static_str_value_lowers_to_dot_star_s() {
+    let m = log_model(regseq_model::LogLevel::Info, "dev={}", |m| {
+        vec![Operand::Constant(str_carrier(m, "uart0"))]
+    });
+    let tu = emit_linux_c(&m).unwrap().tu;
+    assert!(
+        tu.contains("pr_info(\"dev=%.*s\\n\", (int)5, \"uart0\");"),
+        "static &str -> %.*s with decoded literal + len; TU:\n{tu}"
     );
 }

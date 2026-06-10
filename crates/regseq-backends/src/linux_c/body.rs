@@ -35,6 +35,9 @@ pub(crate) struct LowerCx<'m> {
     /// Whether any width-8 MMIO op was lowered (A-12: the TU must carry the
     /// `#ifndef CONFIG_64BIT` / `#error` guard).
     pub width8_used: bool,
+    /// Whether any `pr_*` call was lowered (the TU then carries the
+    /// `pr_fmt` module-prefix define + <linux/printk.h>).
+    pub uses_pr: bool,
 }
 
 impl<'m> LowerCx<'m> {
@@ -477,6 +480,7 @@ fn emit_call(
     if let Some(kind) = cx.intrinsic_of(*instance).cloned() {
         return match kind {
             IntrinsicKind::Mmio(op) => cx.emit_mmio(op, body, args, destination, out),
+            IntrinsicKind::Log(level) => cx.emit_diag_log(&level, body, args, out),
             IntrinsicKind::PollUntil => Err(EmitError::Unsupported(
                 "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)"
                     .into(),
@@ -485,9 +489,6 @@ fn emit_call(
                 what: "config-space intrinsics in a lowered TU (PCI-only surface)".into(),
                 unit: "backend/linux-c-e1000",
             }),
-            other => Err(EmitError::Unsupported(format!(
-                "intrinsic {other:?} (not yet lowered in this revision of linux_c)"
-            ))),
         };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
@@ -1172,4 +1173,358 @@ fn uint_ty(model: &RegseqModel, size: u8) -> Result<TyId, EmitError> {
         .find(|(_, t)| matches!(t, Ty::Uint(k) if *k == want))
         .map(|(id, _)| id)
         .ok_or_else(|| EmitError::Unsupported("config width type not interned".into()))
+}
+
+// ---------------------------------------------------------------------------
+// Diagnostics-logging lowering (T09): each Log(level) call reassembles into
+// ONE printk-family macro invocation (the inverse of the oracle's fwrite
+// decomposition): level -> pr_debug/pr_info/pr_warn/pr_err (the `[LEVEL]`
+// text tag is DROPPED — severity is structural via the macro), the template
+// re-becomes a single format literal (literal `%` doubled to `%%`), numeric
+// placeholders reuse the certified (specifier, cast) mapping with kernel
+// type spelling, a trailing `\n` is mandatory.
+//
+// A-3 (ratified): `dev_*` only in scaffold-synthesized statements where a
+// `struct device *` is lexically in scope as-built; every Log in a lowered
+// body — this path — is `pr_*` with the `pr_fmt` module prefix. The bridge
+// pre-flattens LogArg (peel): args = [template, v1, v2, ...].
+// ---------------------------------------------------------------------------
+
+/// A parsed template placeholder modifier (the bridge's accepted set).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Modifier {
+    None,
+    Hex { upper: bool, alternate: bool, width: u32 },
+}
+
+/// One parsed template segment.
+enum Segment {
+    Literal(Vec<u8>),
+    Placeholder(Modifier),
+}
+
+impl LowerCx<'_> {
+    /// Lower one `IntrinsicKind::Log(level)` call to a single `pr_*` call.
+    pub(crate) fn emit_diag_log(
+        &mut self,
+        level: &regseq_model::LogLevel,
+        body: &regseq_model::Body,
+        args: &[Operand],
+        out: &mut String,
+    ) -> Result<(), EmitError> {
+        use regseq_model::LogLevel;
+        let macro_name = match level {
+            LogLevel::Debug => "pr_debug",
+            LogLevel::Info => "pr_info",
+            LogLevel::Warn => "pr_warn",
+            LogLevel::Error => "pr_err",
+        };
+        let fmt_op = args.first().ok_or_else(|| {
+            EmitError::Unsupported("diag-log call with no format operand".into())
+        })?;
+        let template = self.read_str_carrier_bytes(fmt_op).ok_or_else(|| {
+            EmitError::Unsupported("diag-log format operand is not a string literal".into())
+        })?;
+        let segments = parse_template(&template)?;
+        let value_ops = &args[1..];
+        let placeholders = segments
+            .iter()
+            .filter(|s| matches!(s, Segment::Placeholder(_)))
+            .count();
+        if placeholders != value_ops.len() {
+            return Err(EmitError::Unsupported(
+                "diag-log placeholder/argument arity mismatch".into(),
+            ));
+        }
+
+        let mut fmt = String::new();
+        let mut call_args: Vec<String> = Vec::new();
+        let mut value_idx = 0usize;
+        for seg in &segments {
+            match seg {
+                Segment::Literal(bytes) => {
+                    // The reassembled literal IS a printk format string:
+                    // double every literal `%`.
+                    fmt.push_str(&c_escape_fmt(bytes));
+                }
+                Segment::Placeholder(modifier) => {
+                    let op = &value_ops[value_idx];
+                    value_idx += 1;
+                    // Static `&str` value: `%.*s` + (len, decoded literal)
+                    // args (idiomatic; interior-NUL truncates — the ratified
+                    // A-4 documented divergence).
+                    if let Some(bytes) = self.read_str_carrier_bytes(op) {
+                        require_default_modifier(*modifier)?;
+                        fmt.push_str("%.*s");
+                        call_args.push(format!("(int){}", bytes.len()));
+                        call_args.push(format!("\"{}\"", c_escape_arg(&bytes)));
+                        continue;
+                    }
+                    // Numeric: the certified (specifier, cast) mapping, kernel
+                    // type spelling.
+                    let ty = self.diag_numeric_ty(body, op)?;
+                    let (spec, cast) = diag_specifier_and_cast(*modifier, &ty)?;
+                    let expr = operand_expr(self, body, op)?;
+                    fmt.push_str(&spec);
+                    call_args.push(format!("{cast}({expr})"));
+                }
+            }
+        }
+        fmt.push_str("\\n"); // mandatory trailing newline (else KERN_CONT)
+
+        self.uses_pr = true;
+        if call_args.is_empty() {
+            out.push_str(&format!("\t{macro_name}(\"{fmt}\");\n"));
+        } else {
+            out.push_str(&format!(
+                "\t{macro_name}(\"{fmt}\", {});\n",
+                call_args.join(", ")
+            ));
+        }
+        Ok(())
+    }
+
+    /// The `&str` carrier byte read: an `Operand::Constant` resolving to
+    /// `Aggregate([Reloc -> CMS static, Uint(len)])` → the CMS bytes.
+    fn read_str_carrier_bytes(&self, op: &Operand) -> Option<Vec<u8>> {
+        let cid = match op {
+            Operand::Constant(cid) => *cid,
+            _ => return None,
+        };
+        let (reloc_cid, len_cid) = match self.model.consts.resolve(cid) {
+            Const::Aggregate(parts) if parts.len() == 2 => (parts[0], parts[1]),
+            _ => return None,
+        };
+        let target = match self.model.consts.resolve(reloc_cid) {
+            Const::Reloc(r) => *r,
+            _ => return None,
+        };
+        let len = match self.model.consts.resolve(len_cid) {
+            Const::Uint(_, v) => *v as usize,
+            _ => return None,
+        };
+        let cms_id = (0..self.model.instances.len())
+            .map(|i| InstanceId::from_u32(i as u32))
+            .find(|id| self.model.instance_ref_of(*id) == target)?;
+        let bytes_cid = match &self.model.instances[cms_id].kind {
+            InstanceKind::Static { init: Some(c), .. } => *c,
+            _ => return None,
+        };
+        let raw = match self.model.consts.resolve(bytes_cid) {
+            Const::Bytes(bytes) => bytes,
+            _ => return None,
+        };
+        if len > raw.len() {
+            return None;
+        }
+        let mut out = Vec::with_capacity(len);
+        for b in &raw[..len] {
+            match b {
+                regseq_model::Byte::Value(v) => out.push(*v),
+                _ => return None,
+            }
+        }
+        Some(out)
+    }
+
+    /// The numeric type of a diag-log argument (a place's declared type or a
+    /// scalar constant's kind).
+    fn diag_numeric_ty(
+        &self,
+        body: &regseq_model::Body,
+        op: &Operand,
+    ) -> Result<Ty, EmitError> {
+        match op {
+            Operand::Copy(p) | Operand::Move(p) => {
+                let ty = place_ty(self.model, body, p)?;
+                Ok(self.model.types[ty].clone())
+            }
+            Operand::Constant(id) => match &self.model.consts[*id] {
+                Const::Bool(_) => Ok(Ty::Bool),
+                Const::Uint(kind, _) => Ok(Ty::Uint(*kind)),
+                Const::Int(kind, _) => Ok(Ty::Int(*kind)),
+                other => Err(EmitError::Unsupported(format!(
+                    "diag-log argument constant {other:?} (non-static &str values are \
+                     not lowered in this unit)"
+                ))),
+            },
+        }
+    }
+}
+
+/// The (printk specifier, kernel cast) for a numeric placeholder — the
+/// certified mapping with kernel type spelling for the hex source-width
+/// reinterpret.
+fn diag_specifier_and_cast(modifier: Modifier, ty: &Ty) -> Result<(String, String), EmitError> {
+    use regseq_model::{IntKind, UintKind};
+    match modifier {
+        Modifier::None => {
+            let (spec, cast) = match ty {
+                Ty::Bool | Ty::Int(IntKind::I8 | IntKind::I16 | IntKind::I32) => ("%d", "(int)"),
+                Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32) => ("%u", "(unsigned)"),
+                Ty::Uint(UintKind::U64) => ("%llu", "(unsigned long long)"),
+                Ty::Int(IntKind::I64) => ("%lld", "(long long)"),
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "diag-log argument of non-admissible type".into(),
+                    ))
+                }
+            };
+            Ok((spec.to_string(), cast.to_string()))
+        }
+        Modifier::Hex {
+            upper,
+            alternate,
+            width,
+        } => {
+            let (src_cast, varargs, is_64) = match ty {
+                Ty::Int(IntKind::I8) => ("(u8)", "(unsigned)", false),
+                Ty::Int(IntKind::I16) => ("(u16)", "(unsigned)", false),
+                Ty::Int(IntKind::I32) => ("(u32)", "(unsigned)", false),
+                Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32) => {
+                    ("", "(unsigned)", false)
+                }
+                Ty::Uint(UintKind::U64) | Ty::Int(IntKind::I64) => {
+                    ("", "(unsigned long long)", true)
+                }
+                _ => {
+                    return Err(EmitError::Unsupported(
+                        "diag-log hex modifier on a non-integer operand".into(),
+                    ))
+                }
+            };
+            let letter = if upper { "X" } else { "x" };
+            let hash = if alternate { "#" } else { "" };
+            let pad = if width > 0 {
+                format!("0{width}")
+            } else {
+                String::new()
+            };
+            let length = if is_64 { "ll" } else { "" };
+            Ok((
+                format!("%{hash}{pad}{length}{letter}"),
+                format!("{varargs}{src_cast}"),
+            ))
+        }
+    }
+}
+
+/// A `&str` placeholder admits only the default `{}` modifier.
+fn require_default_modifier(modifier: Modifier) -> Result<(), EmitError> {
+    if matches!(modifier, Modifier::None) {
+        Ok(())
+    } else {
+        Err(EmitError::Unsupported(
+            "diag-log hex modifier on a non-integer operand".into(),
+        ))
+    }
+}
+
+/// Parse a format template into segments (the bridge's accepted grammar:
+/// `{}`, the eight hex forms, `{{`/`}}` escapes).
+fn parse_template(bytes: &[u8]) -> Result<Vec<Segment>, EmitError> {
+    let mut segments: Vec<Segment> = Vec::new();
+    let mut literal: Vec<u8> = Vec::new();
+    let mut i = 0usize;
+    while i < bytes.len() {
+        match bytes[i] {
+            b'{' => {
+                if bytes.get(i + 1) == Some(&b'{') {
+                    literal.push(b'{');
+                    i += 2;
+                    continue;
+                }
+                let close = bytes[i + 1..]
+                    .iter()
+                    .position(|&c| c == b'}')
+                    .map(|p| i + 1 + p)
+                    .ok_or_else(|| {
+                        EmitError::Unsupported("diag-log unclosed `{` in template".into())
+                    })?;
+                let modifier = parse_placeholder(&bytes[i + 1..close])?;
+                if !literal.is_empty() {
+                    segments.push(Segment::Literal(std::mem::take(&mut literal)));
+                }
+                segments.push(Segment::Placeholder(modifier));
+                i = close + 1;
+            }
+            b'}' => {
+                if bytes.get(i + 1) == Some(&b'}') {
+                    literal.push(b'}');
+                    i += 2;
+                    continue;
+                }
+                return Err(EmitError::Unsupported(
+                    "diag-log stray `}` in template".into(),
+                ));
+            }
+            b => {
+                literal.push(b);
+                i += 1;
+            }
+        }
+    }
+    if !literal.is_empty() {
+        segments.push(Segment::Literal(literal));
+    }
+    Ok(segments)
+}
+
+/// Parse a placeholder's inner text into a [`Modifier`] (exact-match set).
+fn parse_placeholder(inner: &[u8]) -> Result<Modifier, EmitError> {
+    if inner.is_empty() {
+        return Ok(Modifier::None);
+    }
+    if inner[0] != b':' {
+        return Err(EmitError::Unsupported(
+            "diag-log non-empty placeholder spec".into(),
+        ));
+    }
+    let m = |upper, alternate, width| Modifier::Hex {
+        upper,
+        alternate,
+        width,
+    };
+    Ok(match &inner[1..] {
+        b"x" => m(false, false, 0),
+        b"X" => m(true, false, 0),
+        b"#x" => m(false, true, 0),
+        b"#X" => m(true, true, 0),
+        b"08x" => m(false, false, 8),
+        b"08X" => m(true, false, 8),
+        b"#010x" => m(false, true, 10),
+        b"#010X" => m(true, true, 10),
+        _ => {
+            return Err(EmitError::Unsupported(
+                "diag-log out-of-subset format modifier".into(),
+            ))
+        }
+    })
+}
+
+/// Escape a literal run for use INSIDE a printk format string: C escapes +
+/// `%` doubled to `%%` (the run is now format text, unlike the oracle's raw
+/// fwrite).
+fn c_escape_fmt(bytes: &[u8]) -> String {
+    let mut out = c_escape_arg(bytes);
+    out = out.replace('%', "%%");
+    out
+}
+
+/// Escape a byte run as a C string-literal body (no `%` doubling: argument
+/// strings are not format text).
+fn c_escape_arg(bytes: &[u8]) -> String {
+    let mut out = String::new();
+    for &b in bytes {
+        match b {
+            b'"' => out.push_str("\\\""),
+            b'\\' => out.push_str("\\\\"),
+            b'\n' => out.push_str("\\n"),
+            b'\t' => out.push_str("\\t"),
+            b'\r' => out.push_str("\\r"),
+            0x20..=0x7e => out.push(b as char),
+            _ => out.push_str(&format!("\\{:03o}", b)),
+        }
+    }
+    out
 }
