@@ -188,12 +188,32 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         .map(|f| c_ident(model.strings.resolve(f.name)))
         .collect();
 
+    // -- driver facts for register-access lowering (T06) --------------------
+    let mut resources = Vec::new();
+    for f in &driver.handle.resource_fields {
+        let c_name = c_ident(model.strings.resolve(f.name));
+        let join_id = f
+            .binding
+            .id
+            .map(|id| model.strings.resolve(id).to_string())
+            .unwrap_or_else(|| c_name.clone());
+        resources.push((c_name, f.binding.is_resolved(), join_id));
+    }
+    let resource_c_names: Vec<String> = resources.iter().map(|(n, _, _)| n.clone()).collect();
+    let reg_macros = register_macros(model, driver_ty, &drv, &resource_c_names)?;
+
     // -- the lowered-function closure (callbacks + transitive callees) ------
     let mut cx = LowerCx {
         model,
         names: types::TypeNames::new(),
         fn_symbols: BTreeMap::new(),
         extra_includes: std::collections::BTreeSet::new(),
+        driver: body::DriverFacts {
+            driver_ty,
+            resources,
+            reg_macros,
+        },
+        width8_used: false,
     };
     let callbacks = [
         ("on_init", &driver.ops.on_init),
@@ -253,7 +273,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     let type_defs = emit_type_defs(&mut cx, driver_ty, &resource_names)?;
 
     // -- match table + driver struct + module macros ------------------------
-    let tail = emit_module_tail(model, &drv, driver)?;
+    let tail = emit_module_tail(model, &drv, driver, scaffold.shutdown_sym.as_deref())?;
 
     // -- includes (demand-light: the scaffold set; <linux/errno.h> rides the
     //    adapter, <linux/io.h> arrives with register access in T06) ---------
@@ -281,6 +301,20 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         tu.push_str(&format!("#include {inc}\n"));
     }
     tu.push('\n');
+    if cx.width8_used {
+        // A-12 (ratified): width-8 MMIO lowers to readq/writeq for
+        // CONFIG_64BIT targets only — never a silent non-atomic split.
+        tu.push_str(
+            "#ifndef CONFIG_64BIT\n#error \"this Regseq-generated driver performs 64-bit MMIO and requires CONFIG_64BIT (ratified A-12: no io-64-nonatomic split)\"\n#endif\n\n",
+        );
+    }
+    if !cx.driver.reg_macros.is_empty() {
+        tu.push_str("/* register offsets, recovered from the spec's #[repr(C)] block layout */\n");
+        for (name, off) in &cx.driver.reg_macros {
+            tu.push_str(&format!("#define {name} {off:#05x}\n"));
+        }
+        tu.push('\n');
+    }
     tu.push_str(&type_defs);
     tu.push('\n');
     tu.push_str(&scaffold.container);
@@ -363,9 +397,13 @@ fn is_intrinsic_anchored(model: &RegseqModel, instance: InstanceId) -> bool {
 struct Scaffold {
     /// The per-device private container definition (driver-state bank, D04).
     container: String,
-    /// The `.probe`/`.remove` callback definitions (callback bank, D04).
+    /// The `.probe`/`.remove`/`.shutdown` callback definitions (callback
+    /// bank, D04).
     text: String,
     uses_errno: bool,
+    /// The shutdown wrapper symbol iff `on_system_shutdown` is overridden
+    /// (the omit-when-absent `.drv.shutdown` initializer).
+    shutdown_sym: Option<String>,
 }
 
 /// Synthesize the private container, `.probe`, and `.remove` for the AMBA
@@ -384,20 +422,18 @@ fn emit_scaffold(
     let on_init = find("on_init");
     let on_deinit = find("on_deinit");
     if find("on_surprise_remove").is_some() {
+        // The spec's present-predicate examples (pci_device_is_present /
+        // pci_channel_offline) are PCI-shaped; no AMBA surprise-removal
+        // predicate is pinned by the ratified spec, and AMBA devices do not
+        // hot-unplug on the first-light target. Fail loud rather than guess.
         return Err(EmitError::Unsupported(
-            "on_surprise_remove (the .remove present-predicate dispatch lands with T07)".into(),
+            "on_surprise_remove on an AMBA driver (no ratified present predicate; \
+             the PCI dispatch arrives with backend/linux-c-e1000)"
+                .into(),
         ));
     }
-    if find("on_init_failure").is_some() {
-        return Err(EmitError::Unsupported(
-            "on_init_failure (the .probe goto-error ladder lands with T07)".into(),
-        ));
-    }
-    if find("on_system_shutdown").is_some() {
-        return Err(EmitError::Unsupported(
-            "on_system_shutdown (the .drv.shutdown slot lands with T07)".into(),
-        ));
-    }
+    let on_init_failure = find("on_init_failure");
+    let on_system_shutdown = find("on_system_shutdown");
 
     // .probe always carries -ENOMEM (the alloc guard), so the TU always
     // includes <linux/errno.h>.
@@ -422,15 +458,46 @@ fn emit_scaffold(
     if resource_names.is_empty() {
         out.push_str("\n\t/* preamble: no bus-managed regions in this model */\n");
     } else {
-        // The BRM acquisition block (devm ioremap of &adev->res) lands with
-        // T07; until then a region-bearing AMBA model is fail-loud.
-        return Err(EmitError::Unsupported(
-            "bus-managed MMIO region acquisition in .probe (lands with T07)".into(),
-        ));
+        if resource_names.len() > 1 {
+            return Err(EmitError::Unsupported(
+                "more than one MMIO resource region per driver (model gate B-5; \
+                 single-region only)"
+                    .into(),
+            ));
+        }
+        let fname = &resource_names[0];
+        let resolved = cx.driver.resources.iter().any(|(n, r, _)| n == fname && *r);
+        if resolved {
+            // The canonical acquisition (integration doc §2, AMBA column):
+            // get_handle = &adev->res; map_region = devm_ioremap_resource
+            // (claim∘map FUSED on the devm path — claim_regions is a no-op
+            // here, not silently dropped: ratified A-2, invariant 6). The
+            // failure is the NATIVE channel: PTR_ERR propagates directly,
+            // never wrapped in RegseqError (-EPROBE_DEFER survives).
+            cx.extra_includes.insert("<linux/io.h>");
+            cx.extra_includes.insert("<linux/err.h>");
+            out.push_str(&format!(
+                "\n\t/* preamble: claim+map the AMBA region (devm: claim_regions fuses\n\t * into the ioremap and the postamble unwinds automatically, A-2) */\n\tpriv->inner.{fname} = devm_ioremap_resource(&adev->dev, &adev->res);\n\tif (IS_ERR(priv->inner.{fname}))\n\t\treturn PTR_ERR(priv->inner.{fname});\n"
+            ));
+        } else {
+            // A-10 (ratified, option (a)): the L2 literals are the resolution
+            // trigger; an unresolved region emits NO preamble, and any MMIO
+            // op against it is the op-site hard error.
+            out.push_str(
+                "\n\t/* preamble: region binding unresolved (no L2 literals) — not mapped */\n",
+            );
+        }
     }
     if let Some(id) = on_init {
         let sym = cx.fn_symbols[&id].clone();
-        let adapter = emit_result_adapter(cx, id, &format!("{sym}(&priv->inner)"))?;
+        let failure_hook = on_init_failure.map(|fid| {
+            format!(
+                "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * (the kernel does not call .remove on probe failure; devm\n\t\t\t * unwinds the preamble) */\n\t\t\t(void){}(&priv->inner);\n",
+                cx.fn_symbols[&fid]
+            )
+        });
+        let adapter =
+            emit_result_adapter(cx, id, &format!("{sym}(&priv->inner)"), failure_hook.as_deref())?;
         out.push_str(&adapter);
     }
     out.push_str("\treturn 0;\n}\n\n");
@@ -451,10 +518,23 @@ fn emit_scaffold(
     }
     out.push_str("\t/* postamble: devm-managed resources release automatically (A-2) */\n}\n\n");
 
+    // .shutdown — the lone omit-when-absent slot, on device_driver (.drv)
+    // for AMBA (scaffold doc §4): quiesce only, Result discarded (void).
+    let mut shutdown_sym = None;
+    if let Some(id) = on_system_shutdown {
+        let sym = format!("{drv}_shutdown");
+        let cb = cx.fn_symbols[&id].clone();
+        out.push_str(&format!(
+            "static void {sym}(struct device *dev)\n{{\n\tstruct {drv}_priv *priv = dev_get_drvdata(dev);\n\n\t(void){cb}(&priv->inner);\n}}\n\n"
+        ));
+        shutdown_sym = Some(sym);
+    }
+
     Ok(Scaffold {
         container,
         text: out,
         uses_errno,
+        shutdown_sym,
     })
 }
 
@@ -465,6 +545,7 @@ fn emit_result_adapter(
     cx: &mut LowerCx<'_>,
     callee: InstanceId,
     call_expr: &str,
+    failure_hook: Option<&str>,
 ) -> Result<String, EmitError> {
     let model = cx.model;
     let InstanceKind::Function(data) = &model.instances[callee].kind else {
@@ -487,6 +568,9 @@ fn emit_result_adapter(
         "\t\tif (__tag != {:#x}) {{\n",
         facts.ok_tag_value
     ));
+    if let Some(hook) = failure_hook {
+        out.push_str(hook);
+    }
     // The Err payload is the marked RegseqError; read its tag and map every
     // variant through the C02 table, negated. `default` is corrupt-
     // discriminant defense only (a known-but-unmapped variant is the
@@ -749,6 +833,7 @@ fn emit_module_tail(
     model: &RegseqModel,
     drv: &str,
     driver: &regseq_model::DriverLifecycle,
+    shutdown_sym: Option<&str>,
 ) -> Result<String, EmitError> {
     let mut out = String::new();
     out.push_str(&format!("static const struct amba_id {drv}_ids[] = {{\n"));
@@ -763,8 +848,11 @@ fn emit_module_tail(
     out.push_str("\t{ 0, 0 },\n};\n\n");
     out.push_str(&format!("MODULE_DEVICE_TABLE(amba, {drv}_ids);\n\n"));
 
+    let shutdown_field = shutdown_sym
+        .map(|s| format!("\n\t\t.shutdown = {s},"))
+        .unwrap_or_default();
     out.push_str(&format!(
-        "static struct amba_driver {drv}_driver = {{\n\t.drv = {{\n\t\t.name\t= \"{}\",\n\t}},\n\t.id_table\t= {drv}_ids,\n\t.probe\t\t= {drv}_probe,\n\t.remove\t\t= {drv}_remove,\n}};\n\n",
+        "static struct amba_driver {drv}_driver = {{\n\t.drv = {{\n\t\t.name\t= \"{}\",{shutdown_field}\n\t}},\n\t.id_table\t= {drv}_ids,\n\t.probe\t\t= {drv}_probe,\n\t.remove\t\t= {drv}_remove,\n}};\n\n",
         model.strings.resolve(driver.descriptor.name)
     ));
     out.push_str(&format!("module_amba_driver({drv}_driver);\n\n"));
@@ -772,5 +860,66 @@ fn emit_module_tail(
         "MODULE_DESCRIPTION(\"Regseq-generated {} driver\");\nMODULE_LICENSE(\"GPL\");\n",
         model.strings.resolve(driver.descriptor.name)
     ));
+    Ok(out)
+}
+
+/// The const bank (GRILL D04: register/bitfield consts): `(macro, offset)`
+/// per named register of the single resource block, recovered from the
+/// `#[repr(C)]` block layout. Underscore-named spacer fields are skipped.
+fn register_macros(
+    model: &RegseqModel,
+    driver_ty: TyId,
+    drv: &str,
+    resource_c_names: &[String],
+) -> Result<Vec<(String, u64)>, EmitError> {
+    use regseq_model::LayoutKind;
+    let mut out = Vec::new();
+    let Some(layout) = types::layout_of(model, driver_ty) else {
+        return Ok(out);
+    };
+    let LayoutKind::Struct { fields } = &layout.kind else {
+        return Ok(out);
+    };
+    let prefix = drv.to_uppercase();
+    for f in fields {
+        if !resource_c_names
+            .iter()
+            .any(|n| *n == c_ident(model.strings.resolve(f.name)))
+        {
+            continue;
+        }
+        // A resource field's spec type is `Mmio<Block>`: one `inner` field
+        // whose type is the register block.
+        let Some(mmio_layout) = types::layout_of(model, f.ty) else {
+            continue;
+        };
+        let LayoutKind::Struct {
+            fields: mmio_fields,
+        } = &mmio_layout.kind
+        else {
+            continue;
+        };
+        let [inner] = &mmio_fields[..] else { continue };
+        let Some(block_layout) = types::layout_of(model, inner.ty) else {
+            continue;
+        };
+        let LayoutKind::Struct {
+            fields: block_fields,
+        } = &block_layout.kind
+        else {
+            continue;
+        };
+        for reg in block_fields {
+            let name = model.strings.resolve(reg.name);
+            if name.starts_with('_') {
+                continue;
+            }
+            out.push((
+                format!("{prefix}_{}", c_ident(name).to_uppercase()),
+                reg.offset,
+            ));
+        }
+    }
+    out.sort_by_key(|(_, off)| *off);
     Ok(out)
 }

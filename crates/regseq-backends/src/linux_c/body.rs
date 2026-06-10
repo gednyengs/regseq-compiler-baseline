@@ -30,6 +30,11 @@ pub(crate) struct LowerCx<'m> {
     pub fn_symbols: BTreeMap<InstanceId, String>,
     /// Demand-recorded extra includes (e.g. `<linux/bug.h>` for `BUG()`).
     pub extra_includes: std::collections::BTreeSet<&'static str>,
+    /// Driver facts for register-access lowering (T06).
+    pub driver: DriverFacts,
+    /// Whether any width-8 MMIO op was lowered (A-12: the TU must carry the
+    /// `#ifndef CONFIG_64BIT` / `#error` guard).
+    pub width8_used: bool,
 }
 
 impl<'m> LowerCx<'m> {
@@ -469,10 +474,17 @@ fn emit_call(
             "indirect (function-pointer) call (first-light subset)".into(),
         ));
     };
-    if let Some(kind) = cx.intrinsic_of(*instance) {
-        return Err(EmitError::Unsupported(format!(
-            "intrinsic {kind:?} (not yet lowered in this revision of linux_c)"
-        )));
+    if let Some(kind) = cx.intrinsic_of(*instance).cloned() {
+        return match kind {
+            IntrinsicKind::Mmio(op) => cx.emit_mmio(op, body, args, destination, out),
+            IntrinsicKind::PollUntil => Err(EmitError::Unsupported(
+                "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)"
+                    .into(),
+            )),
+            other => Err(EmitError::Unsupported(format!(
+                "intrinsic {other:?} (not yet lowered in this revision of linux_c)"
+            ))),
+        };
     }
     let Some(symbol) = cx.fn_symbols.get(instance).cloned() else {
         return Err(EmitError::Unsupported(format!(
@@ -632,4 +644,397 @@ pub(crate) fn place_ty(
         }
     }
     Ok(ty)
+}
+
+// ---------------------------------------------------------------------------
+// Register-access lowering (T06): MmioOp interception per the traceability
+// matrix section A — width-switched readb/w/l/q + writeb/w/l/q over the
+// resource field's iomem cookie, value-first write args, mask/shift RMW;
+// the ratified A-10 resolved-binding gate; the A-12 width-8 CONFIG_64BIT
+// guard (the caller injects the #error block when `width8_used` is set).
+// ---------------------------------------------------------------------------
+
+/// The driver facts the mmio lowering needs, supplied by the TU fold.
+pub(crate) struct DriverFacts {
+    /// The driver struct type (the lowered `self` pointee).
+    pub driver_ty: TyId,
+    /// Per resource field: `(C field name, A-10 resolved?, L1 join id)`.
+    pub resources: Vec<(String, bool, String)>,
+    /// `(macro name, byte offset)` per named register of the single block,
+    /// for the const bank + offset rendering.
+    pub reg_macros: Vec<(String, u64)>,
+}
+
+impl LowerCx<'_> {
+    /// Lower one `IntrinsicKind::Mmio(op)` call.
+    pub(crate) fn emit_mmio(
+        &mut self,
+        op: regseq_model::MmioOp,
+        body: &regseq_model::Body,
+        args: &[Operand],
+        destination: &Place,
+        out: &mut String,
+    ) -> Result<(), EmitError> {
+        use regseq_model::MmioOp;
+        let recv = args
+            .first()
+            .ok_or_else(|| EmitError::Unsupported("mmio call with no receiver".into()))?;
+        let (base, offset, width) = self.recover_register(body, recv)?;
+        self.extra_includes.insert("<linux/io.h>");
+        let (read_fn, write_fn, cast) = match width {
+            1 => ("readb", "writeb", "u8"),
+            2 => ("readw", "writew", "u16"),
+            4 => ("readl", "writel", "u32"),
+            8 => {
+                // A-12: width-8 lowers to readq/writeq for CONFIG_64BIT
+                // targets only; the TU carries the fail-loud #error guard.
+                self.width8_used = true;
+                ("readq", "writeq", "u64")
+            }
+            other => {
+                return Err(EmitError::Unsupported(format!(
+                    "MMIO access width {other} (no kernel accessor)"
+                )))
+            }
+        };
+        let addr = if offset == 0 {
+            base.clone()
+        } else {
+            format!("{base} + {}", self.offset_token(offset))
+        };
+        // Field/FieldValue descriptors: a runtime place renders as member
+        // reads; a const-propagated aggregate const-folds to literals.
+        let stmt = match op {
+            MmioOp::Write => {
+                let val = self.operand_or_desc(body, &args[1], None)?;
+                format!("\twritel(({cast})({val}), {addr});\n").replace("writel", write_fn)
+            }
+            MmioOp::WriteField => {
+                let fv = self.descriptor(body, &args[1])?;
+                let (mask, value) = (fv.member("mask")?, fv.member("value")?);
+                format!("\t{write_fn}(({cast})(({value}) & ({mask})), {addr});\n")
+            }
+            MmioOp::Read => {
+                let dst = place_lvalue(self, body, destination)?;
+                let dst_cty = {
+                    let ty = place_ty(self.model, body, destination)?;
+                    types::c_type(self.model, &mut self.names, ty)?
+                };
+                format!("\t{dst} = ({dst_cty}){read_fn}({addr});\n")
+            }
+            MmioOp::ReadField => {
+                let fld = self.descriptor(body, &args[1])?;
+                let (mask, shift) = (fld.member("mask")?, fld.member("shift")?);
+                let dst = place_lvalue(self, body, destination)?;
+                let dst_cty = {
+                    let ty = place_ty(self.model, body, destination)?;
+                    types::c_type(self.model, &mut self.names, ty)?
+                };
+                format!(
+                    "\t{dst} = ({dst_cty})(({read_fn}({addr}) & ({mask})) >> ({shift}));\n"
+                )
+            }
+            MmioOp::Modify => {
+                let fv = self.descriptor(body, &args[1])?;
+                let (mask, value) = (fv.member("mask")?, fv.member("value")?);
+                format!(
+                    "\t{{\n\t\t{cast} __cur = {read_fn}({addr});\n\t\t{write_fn}((__cur & ~({cast})({mask})) | (({cast})(({value}) & ({mask}))), {addr});\n\t}}\n"
+                )
+            }
+        };
+        out.push_str(&stmt);
+        Ok(())
+    }
+
+    /// Render a recovered register offset: the const-bank macro when one
+    /// names it exactly, else a hex literal.
+    fn offset_token(&self, offset: u64) -> String {
+        if let Some((name, _)) = self
+            .driver
+            .reg_macros
+            .iter()
+            .find(|(_, off)| *off == offset)
+        {
+            name.clone()
+        } else {
+            format!("{offset:#x}")
+        }
+    }
+
+    /// Resolve an mmio receiver to `(base expr, byte offset, access width)`.
+    ///
+    /// The receiver borrows the register wrapper through the chain
+    /// `self.<resource>.inner.<reg>` (`Mmio<T>: Deref` inlined by rustc).
+    /// The resource-field prefix becomes the iomem-cookie base expression
+    /// (`<self>-><resource>`); the remaining projections accumulate the
+    /// device-relative byte offset; the final wrapper's size is the width.
+    /// The ratified A-10 gate fires here: an op against an unresolved
+    /// binding is a hard error naming the missing L2 literals.
+    fn recover_register(
+        &mut self,
+        body: &regseq_model::Body,
+        recv: &Operand,
+    ) -> Result<(String, u64, u64), EmitError> {
+        let src = self.resolve_receiver_src(body, recv, 0)?;
+        let root_ty = body.local_decls[src.local].ty;
+        let pointee = match &self.model.types[root_ty] {
+            Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "mmio receiver root is not a borrow of the driver struct".into(),
+                ))
+            }
+        };
+        if pointee != self.driver.driver_ty {
+            return Err(EmitError::Unsupported(
+                "mmio receiver does not project from the driver struct's resource field \
+                 (first-light subset)"
+                    .into(),
+            ));
+        }
+        let mut elems = src.projection.iter();
+        match elems.next() {
+            Some(PlaceElem::Deref) => {}
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "mmio receiver must start by dereferencing the driver borrow".into(),
+                ))
+            }
+        }
+        // The resource field.
+        let (base, mut ty) = match elems.next() {
+            Some(PlaceElem::Field(idx, field_ty)) => {
+                let fname = field_c_name(self.model, pointee, idx.as_u32() as usize)?;
+                let Some((_, resolved, join_id)) = self
+                    .driver
+                    .resources
+                    .iter()
+                    .find(|(name, _, _)| *name == fname)
+                else {
+                    return Err(EmitError::Unsupported(format!(
+                        "mmio receiver projects through non-resource field `{fname}`"
+                    )));
+                };
+                if !resolved {
+                    return Err(EmitError::UnresolvedBinding(format!(
+                        "MMIO op against resource `{fname}` whose binding is not resolved: \
+                         the platform file must supply `[mmio.{join_id}] base/size` \
+                         (the L2 literals are the resolution trigger)"
+                    )));
+                }
+                let root = local_name(self.model, body, src.local);
+                (format!("{root}->{fname}"), *field_ty)
+            }
+            _ => {
+                return Err(EmitError::Unsupported(
+                    "mmio receiver does not name a driver resource field".into(),
+                ))
+            }
+        };
+        // The block-relative offset (Mmio.inner + register fields).
+        let mut offset: u64 = 0;
+        for elem in elems {
+            match elem {
+                PlaceElem::Field(idx, field_ty) => {
+                    let layout = types::layout_of(self.model, ty).ok_or_else(|| {
+                        EmitError::Unsupported("mmio block projection without layout".into())
+                    })?;
+                    let LayoutKind::Struct { fields } = &layout.kind else {
+                        return Err(EmitError::Unsupported(
+                            "mmio block projection into a non-struct layout".into(),
+                        ));
+                    };
+                    let f = fields.get(idx.as_u32() as usize).ok_or_else(|| {
+                        EmitError::Unsupported("mmio register field index out of range".into())
+                    })?;
+                    if f.ty != *field_ty {
+                        return Err(EmitError::Unsupported(
+                            "mmio receiver field type disagrees with the block layout".into(),
+                        ));
+                    }
+                    offset += f.offset;
+                    ty = f.ty;
+                }
+                other => {
+                    return Err(EmitError::Unsupported(format!(
+                        "mmio receiver projection {other:?} (first-light subset)"
+                    )))
+                }
+            }
+        }
+        let width = types::layout_of(self.model, ty)
+            .map(|l| l.size)
+            .ok_or_else(|| {
+                EmitError::Unsupported("mmio register wrapper has no layout".into())
+            })?;
+        Ok((base, offset, width))
+    }
+
+    /// Chase a bare-local receiver to the place it uniquely borrows
+    /// (the hoisted `&self.regs.inner.<reg>` borrow).
+    fn resolve_receiver_src(
+        &self,
+        body: &regseq_model::Body,
+        op: &Operand,
+        depth: u32,
+    ) -> Result<Place, EmitError> {
+        if depth > 8 {
+            return Err(EmitError::Unsupported(
+                "mmio receiver reaching-def chase exceeded depth bound".into(),
+            ));
+        }
+        let place = match op {
+            Operand::Copy(p) | Operand::Move(p) => p,
+            Operand::Constant(_) => {
+                return Err(EmitError::Unsupported("mmio receiver is a constant".into()))
+            }
+        };
+        if matches!(place.projection.last(), Some(PlaceElem::Field(..))) {
+            return Ok(place.clone());
+        }
+        if !place.projection.is_empty() {
+            return Err(EmitError::Unsupported(
+                "mmio receiver has an unexpected trailing projection".into(),
+            ));
+        }
+        let local = place.local;
+        let mut def: Option<&Rvalue> = None;
+        for bb in body.basic_blocks.iter() {
+            for stmt in bb.statements.iter() {
+                let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+                    continue;
+                };
+                if dst.local != local || !dst.projection.is_empty() {
+                    continue;
+                }
+                if def.is_some() {
+                    return Err(EmitError::Unsupported(
+                        "mmio receiver local has multiple definitions (ambiguous)".into(),
+                    ));
+                }
+                def = Some(rhs);
+            }
+        }
+        match def {
+            Some(Rvalue::Ref(_, src) | Rvalue::RawPtr(_, src)) => Ok(src.clone()),
+            Some(Rvalue::Use(inner)) => self.resolve_receiver_src(body, inner, depth + 1),
+            Some(_) => Err(EmitError::Unsupported(
+                "mmio receiver temp has an unexpected rvalue".into(),
+            )),
+            None => Err(EmitError::Unsupported(
+                "no definition for mmio receiver local in body".into(),
+            )),
+        }
+    }
+
+    /// A `Field`/`FieldValue` descriptor argument: either a runtime place
+    /// (members render as C member reads) or a const-propagated aggregate
+    /// (members const-fold to hex literals).
+    fn descriptor(
+        &mut self,
+        body: &regseq_model::Body,
+        op: &Operand,
+    ) -> Result<Descriptor, EmitError> {
+        match op {
+            Operand::Copy(place) | Operand::Move(place) => {
+                let ty = place_ty(self.model, body, place)?;
+                let expr = place_lvalue(self, body, place)?;
+                Ok(Descriptor::Place {
+                    expr,
+                    fields: self.descriptor_field_names(ty)?,
+                })
+            }
+            Operand::Constant(id) => match &self.model.consts[*id] {
+                Const::Aggregate(children) => {
+                    let mut values = Vec::new();
+                    for child in children {
+                        match &self.model.consts[*child] {
+                            Const::Uint(_, bits) => values.push(*bits as u64),
+                            Const::ZST => {}
+                            other => {
+                                return Err(EmitError::Unsupported(format!(
+                                    "descriptor const child {other:?}"
+                                )))
+                            }
+                        }
+                    }
+                    Ok(Descriptor::Const { values })
+                }
+                other => Err(EmitError::Unsupported(format!(
+                    "mmio descriptor constant {other:?}"
+                ))),
+            },
+        }
+    }
+
+    /// The member-name order of a descriptor struct (mask first), from its
+    /// layout — `["mask", "shift"]` / `["mask", "value"]`.
+    fn descriptor_field_names(&self, ty: TyId) -> Result<Vec<String>, EmitError> {
+        let layout = types::layout_of(self.model, ty)
+            .ok_or_else(|| EmitError::Unsupported("descriptor without layout".into()))?;
+        let LayoutKind::Struct { fields } = &layout.kind else {
+            return Err(EmitError::Unsupported(
+                "descriptor with non-struct layout".into(),
+            ));
+        };
+        Ok(fields
+            .iter()
+            .filter(|f| !types::is_zst(self.model, f.ty))
+            .map(|f| super::naming::c_ident(self.model.strings.resolve(f.name)))
+            .collect())
+    }
+
+    /// An operand that may be a plain value (mmio_write's `val`).
+    fn operand_or_desc(
+        &mut self,
+        body: &regseq_model::Body,
+        op: &Operand,
+        _consumer: Option<TyId>,
+    ) -> Result<String, EmitError> {
+        operand_expr(self, body, op)
+    }
+}
+
+/// A lowered descriptor argument.
+pub(crate) enum Descriptor {
+    /// Runtime struct value: members read as `(expr).member`.
+    Place { expr: String, fields: Vec<String> },
+    /// Const-folded: `[mask, shift-or-value]` literal values in declaration
+    /// order.
+    Const { values: Vec<u64> },
+}
+
+impl Descriptor {
+    /// The C expression for a named member (`mask`/`shift`/`value`).
+    fn member(&self, name: &str) -> Result<String, EmitError> {
+        match self {
+            Descriptor::Place { expr, fields } => {
+                if fields.iter().any(|f| f == name) {
+                    Ok(format!("({expr}).{name}"))
+                } else {
+                    Err(EmitError::Unsupported(format!(
+                        "descriptor has no `{name}` member (fields: {fields:?})"
+                    )))
+                }
+            }
+            Descriptor::Const { values } => {
+                // Declaration order: mask first, then shift (Field) or value
+                // (FieldValue).
+                let idx = match name {
+                    "mask" => 0,
+                    "shift" | "value" => 1,
+                    _ => {
+                        return Err(EmitError::Unsupported(format!(
+                            "descriptor member `{name}`"
+                        )))
+                    }
+                };
+                values.get(idx).map(|v| format!("{v:#x}")).ok_or_else(|| {
+                    EmitError::Unsupported(format!(
+                        "descriptor const has no member {idx} (`{name}`)"
+                    ))
+                })
+            }
+        }
+    }
 }

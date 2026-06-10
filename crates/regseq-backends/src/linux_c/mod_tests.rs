@@ -480,28 +480,363 @@ fn full_match_set_renders_with_zero_sentinel() {
     assert!(first < second && second < sentinel);
 }
 
+/// Build a minimal model with one extra callback (besides on_init) bound.
+fn model_with_callback(cb: &str) -> RegseqModel {
+    let mut m = driver_model(Some(BusType::Amba), amba_match(), LifecycleOps::default());
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { .. }))
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let on_init = push_ok_on_init(&mut m, driver_ty, result_ty);
+    let extra = push_ok_on_init(&mut m, driver_ty, result_ty);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    match cb {
+        "on_surprise_remove" => driver.ops.on_surprise_remove = Some(extra),
+        "on_init_failure" => driver.ops.on_init_failure = Some(extra),
+        "on_system_shutdown" => driver.ops.on_system_shutdown = Some(extra),
+        _ => unreachable!(),
+    }
+    m
+}
+
 #[test]
-fn deferred_callbacks_fail_loud_until_t07() {
-    for cb in ["on_surprise_remove", "on_init_failure", "on_system_shutdown"] {
-        let mut m = driver_model(Some(BusType::Amba), amba_match(), LifecycleOps::default());
-        let driver_ty = m
-            .types
-            .iter()
-            .find(|(_, t)| matches!(t, Ty::Struct { .. }))
-            .map(|(id, _)| id)
-            .unwrap();
-        let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
-        let r = push_ok_on_init(&mut m, driver_ty, result_ty);
-        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
-        match cb {
-            "on_surprise_remove" => driver.ops.on_surprise_remove = Some(r),
-            "on_init_failure" => driver.ops.on_init_failure = Some(r),
-            _ => driver.ops.on_system_shutdown = Some(r),
-        }
-        let err = emit_linux_c(&m).unwrap_err();
+fn amba_surprise_remove_fails_loud() {
+    // No ratified AMBA present predicate: fail loud, naming the PCI unit.
+    let err = emit_linux_c(&model_with_callback("on_surprise_remove")).unwrap_err();
+    assert!(
+        matches!(err, EmitError::Unsupported(ref s) if s.contains("on_surprise_remove")),
+        "got {err:?}"
+    );
+}
+
+#[test]
+fn on_init_failure_hook_runs_on_the_authored_err_arm_only() {
+    let tu = emit_linux_c(&model_with_callback("on_init_failure")).unwrap().tu;
+    let hook = tu
+        .find("(void)minimal_on_init_failure(&priv->inner);")
+        .expect("the failure hook is emitted");
+    let err_branch = tu.find("if (__tag != 0x2)").expect("the Err branch");
+    let switch = tu.find("switch (__err)").expect("the errno switch");
+    assert!(
+        err_branch < hook && hook < switch,
+        "the hook must run inside the authored Err arm, before the errno return"
+    );
+}
+
+#[test]
+fn shutdown_slot_is_omit_when_absent() {
+    let with = emit_linux_c(&model_with_callback("on_system_shutdown")).unwrap().tu;
+    assert!(with.contains("static void minimal_shutdown(struct device *dev)"));
+    assert!(with.contains(".shutdown = minimal_shutdown,"));
+    assert!(with.contains("(void)minimal_on_system_shutdown(&priv->inner);"));
+
+    let without = emit_linux_c(&minimal_amba_model()).unwrap().tu;
+    assert!(
+        !without.contains(".shutdown"),
+        "the .shutdown initializer must be omitted when on_system_shutdown is not overridden"
+    );
+}
+
+#[test]
+fn resolved_region_probe_carries_the_devm_claim_map_and_native_channel() {
+    let tu = emit_linux_c(&mmio_write_model(4, true)).unwrap().tu;
+    // Canonical order: create -> associate -> preamble -> on_init.
+    let create = tu.find("devm_kzalloc").unwrap();
+    let associate = tu.find("amba_set_drvdata").unwrap();
+    let map = tu
+        .find("priv->inner.regs = devm_ioremap_resource(&adev->dev, &adev->res);")
+        .expect("devm claim+map fused acquisition");
+    let native = tu
+        .find("return PTR_ERR(priv->inner.regs);")
+        .expect("the native error channel propagates directly");
+    let on_init = tu.find("mmiodrv_on_init(&priv->inner)").unwrap();
+    assert!(create < associate && associate < map && map < native && native < on_init);
+    // The postamble emits nothing (devm, A-2) and remove stays void.
+    assert!(tu.contains("devm-managed resources release automatically"));
+}
+
+// ---------------------------------------------------------------------------
+// T06: register-access lowering — accessor selection (width-switched),
+// value-first arg order, const bank, A-12 guard both polarities, and the
+// ratified A-10 unresolved-binding hard error.
+// ---------------------------------------------------------------------------
+
+/// Build a driver model whose `on_init` performs one whole-register write
+/// of `0x40` through a `Mmio<Regs>`-shaped resource field whose single
+/// register has the given byte `width`. `resolved` controls the L2 binding
+/// (the A-10 trigger).
+fn mmio_write_model(width: u64, resolved: bool) -> RegseqModel {
+    let mut m = model();
+    let store_kind = match width {
+        1 => UintKind::U8,
+        2 => UintKind::U16,
+        4 => UintKind::U32,
+        _ => UintKind::U64,
+    };
+    let store = m.types.intern(Ty::Uint(store_kind));
+
+    // The register wrapper (repr(transparent) over the storage width).
+    let wrapper_ty = {
+        let f = FieldLayout {
+            name: m.strings.intern("_v"),
+            ty: store,
+            offset: 0,
+        };
+        push_struct(&mut m, "ReadWrite", struct_layout(width, width, vec![f]))
+    };
+    // The block: one register `ctrl` at offset 0.
+    let block_ty = {
+        let f = FieldLayout {
+            name: m.strings.intern("ctrl"),
+            ty: wrapper_ty,
+            offset: 0,
+        };
+        push_struct(&mut m, "Regs", struct_layout(width, width, vec![f]))
+    };
+    // The Mmio resource carrier.
+    let mmio_ty = {
+        let f = FieldLayout {
+            name: m.strings.intern("inner"),
+            ty: block_ty,
+            offset: 0,
+        };
+        push_struct(&mut m, "Mmio", struct_layout(width, width, vec![f]))
+    };
+    // The driver struct with the `regs` resource field.
+    let driver_ty = {
+        let f = FieldLayout {
+            name: m.strings.intern("regs"),
+            ty: mmio_ty,
+            offset: 0,
+        };
+        push_struct(&mut m, "MmioDrv", struct_layout(width, width, vec![f]))
+    };
+    let driver_item = match &m.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => unreachable!(),
+    };
+
+    // The intrinsic-anchored `mmio_write` callee (no body; intercepted).
+    let recv_ty = m.types.intern(Ty::Ref(wrapper_ty, Provenance::SharedBorrow));
+    let unit_out = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: struct_layout(0, 1, vec![]),
+    });
+    let write_sig = m.sigs.intern(FnSig {
+        inputs: vec![recv_ty, store],
+        output: unit_out,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let write_item = item(&mut m, ItemKind::Function, "write");
+    while m.domain_attrs.item_attrs.len() <= write_item.as_u32() as usize {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+    m.domain_attrs.item_attrs[write_item].push(regseq_model::AttrData::Intrinsic(
+        regseq_model::IntrinsicKind::Mmio(regseq_model::MmioOp::Write),
+    ));
+    let write_emission = m.strings.intern("write");
+    let write_id = m.instances.push(Instance {
+        item: write_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: write_emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: write_sig,
+            body: None,
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    // on_init: borrow self.regs.inner.ctrl, call write(recv, 0x40), Ok(()).
+    let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
+    let self_ty = m.types.intern(Ty::Ref(driver_ty, Provenance::UniqueBorrow));
+    let on_init_sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let val_const = m.consts.intern(Const::Uint(store_kind, 0x40));
+    let unit_const = m.consts.intern(Const::ZST);
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: result_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: None,
+    });
+    body.arg_count = 1;
+    let recv_local = body.push_synthetic_local(recv_ty);
+    use regseq_model::{BlockId, FieldIdx, LocalId, PlaceElem};
+    let recv_place = Place {
+        local: LocalId::from_u32(1),
+        projection: Box::new([
+            PlaceElem::Deref,
+            PlaceElem::Field(FieldIdx::from_u32(0), mmio_ty),
+            PlaceElem::Field(FieldIdx::from_u32(0), block_ty),
+            PlaceElem::Field(FieldIdx::from_u32(0), wrapper_ty),
+        ]),
+    };
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(recv_local),
+                Rvalue::Ref(Provenance::SharedBorrow, recv_place),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(write_id),
+                args: Box::new([
+                    Operand::Move(Place::from(recv_local)),
+                    Operand::Constant(val_const),
+                ]),
+                destination: Place::from(LocalId::from_u32(0)),
+                target: Some(BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    // Patch: the Call writes a unit destination; use a dedicated ZST local.
+    let unit_local = body.push_synthetic_local(unit_out);
+    if let TerminatorKind::Call { destination, .. } =
+        &mut body.basic_blocks[BlockId::from_u32(0)].terminator.kind
+    {
+        *destination = Place::from(unit_local);
+    }
+
+    let on_init_item = item(&mut m, ItemKind::Function, "on_init");
+    let emission = m.strings.intern("on_init");
+    let on_init_id = m.instances.push(Instance {
+        item: on_init_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: on_init_sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let on_init_ref = m.instance_ref_of(on_init_id);
+
+    let name = m.strings.intern("mmiodrv");
+    let regs_name = m.strings.intern("regs");
+    m.device_lifecycle.drivers.insert(
+        driver_item,
+        regseq_model::DriverLifecycle {
+            descriptor: regseq_model::DriverDescriptor {
+                name,
+                match_set: amba_match(),
+                device_class: regseq_model::ClassTag::Generic,
+                bus_type: Some(BusType::Amba),
+                dma_present: false,
+            },
+            handle: regseq_model::DriverHandle {
+                resource_fields: vec![regseq_model::ResourceField {
+                    name: regs_name,
+                    kind: regseq_model::ResourceKind::Mmio,
+                    binding: regseq_model::MmioBinding {
+                        id: Some(regs_name),
+                        bar_index: None,
+                        bar_type: regseq_model::BarType::Mem,
+                        effective_bar: None,
+                        base: resolved.then_some(0x0900_0000),
+                        size: resolved.then_some(0x1000),
+                    },
+                }],
+                user_data_fields: vec![],
+            },
+            ops: regseq_model::LifecycleOps {
+                on_init: Some(on_init_ref),
+                ..Default::default()
+            },
+        },
+    );
+    m
+}
+
+#[test]
+fn mmio_write_selects_the_width_accessor_value_first() {
+    for (width, accessor, cast) in [
+        (1, "writeb", "u8"),
+        (2, "writew", "u16"),
+        (4, "writel", "u32"),
+        (8, "writeq", "u64"),
+    ] {
+        let emit = emit_linux_c(&mmio_write_model(width, true))
+            .unwrap_or_else(|e| panic!("width {width}: {e}"));
+        let needle = format!("{accessor}(({cast})(0x40u");
         assert!(
-            matches!(err, EmitError::Unsupported(ref s) if s.contains(cb) && s.contains("T07")),
-            "{cb} must fail loud naming itself and T07; got {err:?}"
+            emit.tu.contains(&needle) || emit.tu.contains(&format!("{accessor}(({cast})(0x40")),
+            "width {width} must lower to value-first {accessor}; TU:\n{}",
+            emit.tu
+        );
+        // The iomem cookie is the base; the register is at offset 0.
+        assert!(
+            emit.tu.contains("_1->regs)"),
+            "the access must address the resource cookie; TU:\n{}",
+            emit.tu
         );
     }
+}
+
+#[test]
+fn width8_injects_the_a12_guard_and_width4_does_not() {
+    let with = emit_linux_c(&mmio_write_model(8, true)).unwrap().tu;
+    assert!(with.contains("#ifndef CONFIG_64BIT"));
+    assert!(with.contains("#error"));
+    let without = emit_linux_c(&mmio_write_model(4, true)).unwrap().tu;
+    assert!(!without.contains("CONFIG_64BIT"), "width-4 TU must carry no guard");
+}
+
+#[test]
+fn mmio_tu_carries_the_register_const_bank_and_io_include() {
+    let tu = emit_linux_c(&mmio_write_model(4, true)).unwrap().tu;
+    assert!(tu.contains("#define MMIODRV_CTRL 0x000"));
+    assert!(tu.contains("#include <linux/io.h>"));
+}
+
+#[test]
+fn unresolved_binding_is_the_a10_hard_error() {
+    let err = emit_linux_c(&mmio_write_model(4, false)).unwrap_err();
+    let EmitError::UnresolvedBinding(msg) = err else {
+        panic!("expected the A-10 UnresolvedBinding error, got {err:?}");
+    };
+    assert!(
+        msg.contains("[mmio.regs]") && msg.contains("base/size"),
+        "the A-10 error must name the missing L2 literals: {msg}"
+    );
 }
