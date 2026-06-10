@@ -1161,3 +1161,179 @@ fn static_str_value_lowers_to_dot_star_s() {
         "static &str -> %.*s with decoded literal + len; TU:\n{tu}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// C3-close P1 regression: a function returning a trivial-accessor result is
+// never elided into the return place — it fails loud (the accessor is not a
+// lowered instance), instead of returning an uninitialized value.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn returning_an_accessor_result_fails_loud() {
+    let mut m = mmio_write_model(4, true);
+    // The accessor: &Mmio<Regs> -> &Regs (`_0 = &((*_1).inner); return;`).
+    let mmio_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { item, .. }
+            if m.strings.resolve(m.items[*item].def_path.rendered) == "Mmio"))
+        .map(|(id, _)| id)
+        .unwrap();
+    let block_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { item, .. }
+            if m.strings.resolve(m.items[*item].def_path.rendered) == "Regs"))
+        .map(|(id, _)| id)
+        .unwrap();
+    let mmio_ref = m.types.intern(Ty::Ref(mmio_ty, Provenance::SharedBorrow));
+    let block_ref = m.types.intern(Ty::Ref(block_ty, Provenance::SharedBorrow));
+    use regseq_model::{BlockId, FieldIdx, LocalId, PlaceElem};
+    let deref_sig = m.sigs.intern(FnSig {
+        inputs: vec![mmio_ref],
+        output: block_ref,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let mut deref_body = Body::default();
+    deref_body.local_decls.push(LocalDecl {
+        ty: block_ref,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    deref_body.local_decls.push(LocalDecl {
+        ty: mmio_ref,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: None,
+    });
+    deref_body.arg_count = 1;
+    deref_body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(LocalId::RETURN_PLACE),
+                Rvalue::Ref(
+                    Provenance::SharedBorrow,
+                    Place {
+                        local: LocalId::from_u32(1),
+                        projection: Box::new([
+                            PlaceElem::Deref,
+                            PlaceElem::Field(FieldIdx::from_u32(0), block_ty),
+                        ]),
+                    },
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let deref_item = item(&mut m, ItemKind::Function, "deref");
+    let deref_emission = m.strings.intern("deref");
+    let deref_id = m.instances.push(Instance {
+        item: deref_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: deref_emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: deref_sig,
+            body: Some(deref_body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+
+    // A wrapper whose RETURN PLACE is the accessor call's destination.
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Struct { item, .. }
+            if m.strings.resolve(m.items[*item].def_path.rendered) == "MmioDrv"))
+        .map(|(id, _)| id)
+        .unwrap();
+    let self_ty = m.types.intern(Ty::Ref(driver_ty, Provenance::UniqueBorrow));
+    let wrapper_sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: block_ref,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let mut wbody = Body::default();
+    wbody.local_decls.push(LocalDecl {
+        ty: block_ref,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    wbody.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: None,
+    });
+    wbody.arg_count = 1;
+    let arg_tmp = wbody.push_synthetic_local(mmio_ref);
+    wbody.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(arg_tmp),
+                Rvalue::Ref(
+                    Provenance::SharedBorrow,
+                    Place {
+                        local: LocalId::from_u32(1),
+                        projection: Box::new([
+                            PlaceElem::Deref,
+                            PlaceElem::Field(FieldIdx::from_u32(0), mmio_ty),
+                        ]),
+                    },
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(deref_id),
+                args: Box::new([Operand::Move(Place::from(arg_tmp))]),
+                destination: Place::from(LocalId::RETURN_PLACE),
+                target: Some(BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    wbody.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let wrapper_item = item(&mut m, ItemKind::Function, "get_regs");
+    let wrapper_emission = m.strings.intern("get_regs");
+    let wrapper_id = m.instances.push(Instance {
+        item: wrapper_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: wrapper_emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: wrapper_sig,
+            body: Some(wbody),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    // Wire the wrapper in as on_deinit so it joins the lowered closure.
+    let wrapper_ref = m.instance_ref_of(wrapper_id);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_deinit = Some(wrapper_ref);
+
+    let err = emit_linux_c(&m).unwrap_err();
+    assert!(
+        matches!(&err, EmitError::Unsupported(s) if s.contains("un-lowered instance") || s.contains("elided accessor result")),
+        "returning an accessor result must fail loud, never emit uninitialized C: {err:?}"
+    );
+}

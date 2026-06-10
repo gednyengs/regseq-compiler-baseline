@@ -186,6 +186,11 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
             if cx.intrinsic_of(*callee).is_none()
                 && trivial_accessor_tail(cx.model, *callee).is_some()
                 && destination.projection.is_empty()
+                // Never elide into the return place: `return _0;` bypasses
+                // the place_lvalue guard, so elision there could return an
+                // uninitialized value. Left un-elided, the call lowers as an
+                // ordinary call to an un-lowered instance — a loud error.
+                && destination.local != body.return_local()
             {
                 cx.elided_locals.insert(destination.local);
                 // The call's argument temps exist only to feed the elided
@@ -535,6 +540,11 @@ fn emit_terminator(
             Ok(())
         }
         TerminatorKind::Return => {
+            if cx.elided_locals.contains(&body.return_local()) {
+                return Err(EmitError::Unsupported(
+                    "function returns an elided accessor result (first-light subset)".into(),
+                ));
+            }
             if ret_zst {
                 out.push_str("\treturn;\n");
             } else {
