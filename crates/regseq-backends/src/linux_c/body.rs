@@ -975,7 +975,7 @@ impl LowerCx<'_> {
         let recv = args
             .first()
             .ok_or_else(|| EmitError::Unsupported("mmio call with no receiver".into()))?;
-        let (base, offset, width) = self.recover_register(body, recv)?;
+        let (base, offset, runtime, width) = self.recover_register(body, recv)?;
         self.extra_includes.insert("<linux/io.h>");
         let (read_fn, write_fn, cast) = match width {
             1 => ("readb", "writeb", "u8"),
@@ -993,11 +993,15 @@ impl LowerCx<'_> {
                 )))
             }
         };
-        let addr = if offset == 0 {
+        let mut addr = if offset == 0 {
             base.clone()
         } else {
             format!("{base} + {}", self.offset_token(offset))
         };
+        // Runtime register-array index terms (`base + i*stride`).
+        for (idx, stride) in &runtime {
+            addr = format!("{addr} + ({idx}) * {stride}");
+        }
         // Field/FieldValue descriptors: a runtime place renders as member
         // reads; a const-propagated aggregate const-folds to literals.
         let stmt = match op {
@@ -1070,7 +1074,7 @@ impl LowerCx<'_> {
         &mut self,
         body: &regseq_model::Body,
         recv: &Operand,
-    ) -> Result<(String, u64, u64), EmitError> {
+    ) -> Result<(String, u64, Vec<(String, u64)>, u64), EmitError> {
         let mut src = self.resolve_receiver_src(body, recv, 0)?;
         // Normalize through intermediate borrow temps: while the root local
         // is not the driver borrow, splice in its unique `Ref` definition
@@ -1248,8 +1252,13 @@ impl LowerCx<'_> {
                 ))
             }
         };
-        // The block-relative offset (Mmio.inner + register fields).
+        // The block-relative offset (Mmio.inner + register fields), plus the
+        // runtime index terms of register-array accesses (the donor
+        // `mta[m]`/`ra[r].ral` patterns): each `Index` contributes
+        // `(<index local>) * <element stride>` — the offset is recovered as
+        // `base + i*stride`, not a layout constant.
         let mut offset: u64 = 0;
+        let mut runtime: Vec<(String, u64)> = Vec::new();
         for elem in elems {
             match elem {
                 PlaceElem::Field(idx, field_ty) => {
@@ -1272,6 +1281,17 @@ impl LowerCx<'_> {
                     offset += f.offset;
                     ty = f.ty;
                 }
+                PlaceElem::Index(idx_local) => {
+                    let Ty::Array(elem_ty, _) = &self.model.types[ty] else {
+                        return Err(EmitError::Unsupported(
+                            "mmio index projection into a non-array register field".into(),
+                        ));
+                    };
+                    let elem_ty = *elem_ty;
+                    let stride = self.model.size_align_of(elem_ty).size;
+                    runtime.push((local_name(self.model, body, *idx_local), stride));
+                    ty = elem_ty;
+                }
                 other => {
                     return Err(EmitError::Unsupported(format!(
                         "mmio receiver projection {other:?} (first-light subset)"
@@ -1284,7 +1304,7 @@ impl LowerCx<'_> {
             .ok_or_else(|| {
                 EmitError::Unsupported("mmio register wrapper has no layout".into())
             })?;
-        Ok((base, offset, width))
+        Ok((base, offset, runtime, width))
     }
 
     /// Chase a bare-local receiver to the place it uniquely borrows
