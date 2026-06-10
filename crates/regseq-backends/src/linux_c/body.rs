@@ -38,6 +38,8 @@ pub(crate) struct LowerCx<'m> {
     /// Whether any `pr_*` call was lowered (the TU then carries the
     /// `pr_fmt` module-prefix define + <linux/printk.h>).
     pub uses_pr: bool,
+    /// Per-function: locals holding elided trivial-accessor results.
+    pub elided_locals: std::collections::BTreeSet<LocalId>,
 }
 
 impl<'m> LowerCx<'m> {
@@ -102,6 +104,65 @@ pub(crate) fn fn_head(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     Ok(format!("static {ret} {c_name}({params})"))
 }
 
+/// A trivial projection accessor: a one-block body of exactly
+/// `_0 = &((*_1).<fields...>); return;` — the `Mmio::<T>::deref` shape. Such
+/// callees are inlined ANALYTICALLY at mmio-receiver recovery (the borrow
+/// projection splices into the receiver chain) and their calls are elided;
+/// any other use of the elided destination fails loud (never wrong code).
+pub(crate) fn trivial_accessor_tail(
+    model: &RegseqModel,
+    instance: InstanceId,
+) -> Option<Vec<PlaceElem>> {
+    let InstanceKind::Function(data) = &model.instances[instance].kind else {
+        return None;
+    };
+    let body = data.body.as_ref()?;
+    if body.arg_count != 1 || body.basic_blocks.len() != 1 {
+        return None;
+    }
+    let bb = &body.basic_blocks[regseq_model::BlockId::from_u32(0)];
+    if !matches!(bb.terminator.kind, TerminatorKind::Return) {
+        return None;
+    }
+    // In-order symbolic evaluation over borrow chains: each known local maps
+    // to "a borrow of arg-1's pointee at <tail>". Reborrows (`&(*t)`,
+    // `&(*t).f`) extend the tail; bare moves/copies propagate. The return
+    // place must end up known.
+    let arg = regseq_model::LocalId::from_u32(1);
+    let mut known: BTreeMap<regseq_model::LocalId, Vec<PlaceElem>> = BTreeMap::new();
+    for stmt in bb.statements.iter() {
+        let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+            return None;
+        };
+        if !dst.projection.is_empty() {
+            return None;
+        }
+        let tail = match rhs {
+            Rvalue::Ref(_, rp) => {
+                if !matches!(rp.projection.first(), Some(PlaceElem::Deref)) {
+                    return None;
+                }
+                let rest: Vec<PlaceElem> = rp.projection[1..].to_vec();
+                if rp.local == arg {
+                    rest
+                } else if let Some(base) = known.get(&rp.local) {
+                    let mut t = base.clone();
+                    t.extend(rest);
+                    t
+                } else {
+                    return None;
+                }
+            }
+            Rvalue::Use(Operand::Copy(q) | Operand::Move(q)) if q.projection.is_empty() => {
+                known.get(&q.local)?.clone()
+            }
+            _ => return None,
+        };
+        known.insert(dst.local, tail);
+    }
+    known.get(&body.return_local()).cloned()
+}
+
 /// Emit one lowered function definition.
 pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<String, EmitError> {
     let head = fn_head(cx, instance)?;
@@ -111,6 +172,66 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     };
     let body = data.body.as_ref().expect("fn_head certified a body");
     let sig = cx.model.sigs.resolve(data.fn_sig);
+
+    // Destinations of trivial-accessor calls: their calls are elided and the
+    // locals are never declared; any non-receiver use fails loud.
+    cx.elided_locals.clear();
+    for bb in body.basic_blocks.iter() {
+        if let TerminatorKind::Call {
+            callee: CallCallee::Direct(callee),
+            destination,
+            ..
+        } = &bb.terminator.kind
+        {
+            if cx.intrinsic_of(*callee).is_none()
+                && trivial_accessor_tail(cx.model, *callee).is_some()
+                && destination.projection.is_empty()
+            {
+                cx.elided_locals.insert(destination.local);
+                // The call's argument temps exist only to feed the elided
+                // accessor; elide them too (a use elsewhere fails loud).
+                if let TerminatorKind::Call { args, .. } = &bb.terminator.kind {
+                    for arg in args.iter() {
+                        if let Operand::Copy(p) | Operand::Move(p) = arg {
+                            if p.projection.is_empty() {
+                                cx.elided_locals.insert(p.local);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+    // Taint to fixpoint: borrow/copy temps deriving from an elided local are
+    // elided too (they exist only symbolically, for the receiver chase). A
+    // non-elided use of any of them still fails loud in `place_lvalue`.
+    loop {
+        let mut grew = false;
+        for bb in body.basic_blocks.iter() {
+            for stmt in bb.statements.iter() {
+                let StatementKind::Assign(dst, rhs) = &stmt.kind else {
+                    continue;
+                };
+                if !dst.projection.is_empty() || cx.elided_locals.contains(&dst.local) {
+                    continue;
+                }
+                let root = match rhs {
+                    Rvalue::Ref(_, p) | Rvalue::RawPtr(_, p) => Some(p.local),
+                    Rvalue::Use(Operand::Copy(p) | Operand::Move(p)) => Some(p.local),
+                    _ => None,
+                };
+                if let Some(root) = root {
+                    if cx.elided_locals.contains(&root) {
+                        cx.elided_locals.insert(dst.local);
+                        grew = true;
+                    }
+                }
+            }
+        }
+        if !grew {
+            break;
+        }
+    }
 
     let mut out = format!("{head}\n{{\n");
 
@@ -124,7 +245,7 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     }
     for local in body.inner_locals() {
         let decl = &body.local_decls[local];
-        if types::is_zst(cx.model, decl.ty) {
+        if types::is_zst(cx.model, decl.ty) || cx.elided_locals.contains(&local) {
             continue;
         }
         out.push_str(&format!(
@@ -169,6 +290,13 @@ fn emit_statement(
     out: &mut String,
 ) -> Result<(), EmitError> {
     match kind {
+        StatementKind::Assign(place, rvalue)
+            if place.projection.is_empty() && cx.elided_locals.contains(&place.local) =>
+        {
+            // The value exists only symbolically (receiver-chase input).
+            let _ = rvalue;
+            Ok(())
+        }
         StatementKind::Assign(place, rvalue) => emit_assign(cx, body, place, rvalue, out),
         StatementKind::SetDiscriminant(place, variant) => {
             let ty = place_ty(cx.model, body, place)?;
@@ -454,10 +582,22 @@ fn emit_terminator(
                 )),
             }
         }
-        TerminatorKind::Assert { .. } => Err(EmitError::Unsupported(
-            "Assert terminator (first-light subset: build fixtures with overflow checks off)"
-                .into(),
-        )),
+        TerminatorKind::Assert {
+            cond,
+            expected,
+            target,
+            ..
+        } => {
+            // The MIR integrity guard (div-by-zero etc.): branch on success,
+            // trap on violation — the kernel BUG() is the faithful analogue
+            // of the oracle's panic (unrecoverable, logs file/line).
+            cx.extra_includes.insert("<linux/bug.h>");
+            let c = operand_expr(cx, body, cond)?;
+            let bang = if *expected { "!" } else { "" };
+            out.push_str(&format!("\tif ({bang}({c}))\n\t\tBUG();\n"));
+            out.push_str(&format!("\tgoto bb_{};\n", target.as_u32()));
+            Ok(())
+        }
     }
 }
 
@@ -477,9 +617,17 @@ fn emit_call(
             "indirect (function-pointer) call (first-light subset)".into(),
         ));
     };
+    if trivial_accessor_tail(cx.model, *instance).is_some()
+        && destination.projection.is_empty()
+        && cx.elided_locals.contains(&destination.local)
+    {
+        // Elided: the accessor is inlined analytically at the receiver
+        // chase; the call lowers to nothing.
+        return Ok(());
+    }
     if let Some(kind) = cx.intrinsic_of(*instance).cloned() {
         return match kind {
-            IntrinsicKind::Mmio(op) => cx.emit_mmio(op, body, args, destination, out),
+            IntrinsicKind::Mmio(op) => cx.emit_mmio(op, *instance, body, args, destination, out),
             IntrinsicKind::Log(level) => cx.emit_diag_log(&level, body, args, out),
             IntrinsicKind::PollUntil => Err(EmitError::Unsupported(
                 "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)"
@@ -499,12 +647,16 @@ fn emit_call(
                 .resolve(cx.model.instances[*instance].emission_name)
         )));
     };
+    let param_tys: Vec<TyId> = match &cx.model.instances[*instance].kind {
+        InstanceKind::Function(d) => cx.model.sigs.resolve(d.fn_sig).inputs.clone(),
+        _ => Vec::new(),
+    };
     let mut rendered = Vec::new();
-    for arg in args.iter() {
+    for (i, arg) in args.iter().enumerate() {
         if operand_is_zst(cx.model, body, arg) {
             continue;
         }
-        rendered.push(operand_expr(cx, body, arg)?);
+        rendered.push(operand_expr_typed(cx, body, arg, param_tys.get(i).copied())?);
     }
     let call = format!("{symbol}({})", rendered.join(", "));
     let dest_ty = place_ty(cx.model, body, destination)?;
@@ -526,20 +678,69 @@ fn operand_is_zst(model: &RegseqModel, body: &regseq_model::Body, op: &Operand) 
     }
 }
 
-/// Render an operand as a C expression.
+/// Render an operand as a C expression. `consumer` types a constant operand
+/// (a call's parameter type) so non-scalar constants can render.
+fn operand_expr_typed(
+    cx: &mut LowerCx<'_>,
+    body: &regseq_model::Body,
+    op: &Operand,
+    consumer: Option<TyId>,
+) -> Result<String, EmitError> {
+    match op {
+        Operand::Copy(place) | Operand::Move(place) => place_lvalue(cx, body, place),
+        Operand::Constant(id) => const_expr(cx, *id, consumer),
+    }
+}
+
+/// Render an operand with no consumer-type context.
 fn operand_expr(
     cx: &mut LowerCx<'_>,
     body: &regseq_model::Body,
     op: &Operand,
 ) -> Result<String, EmitError> {
-    match op {
-        Operand::Copy(place) | Operand::Move(place) => place_lvalue(cx, body, place),
-        Operand::Constant(id) => const_expr(cx, *id),
-    }
+    operand_expr_typed(cx, body, op, None)
 }
 
-/// Render a scalar constant as a C literal.
-fn const_expr(cx: &mut LowerCx<'_>, id: regseq_model::ConstId) -> Result<String, EmitError> {
+/// Render a constant as a C expression.
+fn const_expr(
+    cx: &mut LowerCx<'_>,
+    id: regseq_model::ConstId,
+    consumer: Option<TyId>,
+) -> Result<String, EmitError> {
+    // A struct-typed byte image renders as a compound literal against the
+    // consumer type's layout (the const-propagated FieldValue shape).
+    if let (Const::Bytes(bytes), Some(cty)) = (&cx.model.consts[id], consumer) {
+        if let Some(layout) = types::layout_of(cx.model, cty) {
+            if let LayoutKind::Struct { fields } = &layout.kind {
+                let cname = types::c_type(cx.model, &mut cx.names, cty)?;
+                let mut members = Vec::new();
+                for f in fields {
+                    if types::is_zst(cx.model, f.ty) {
+                        continue;
+                    }
+                    let size = types::layout_of(cx.model, f.ty)
+                        .map(|l| l.size)
+                        .unwrap_or_else(|| scalar_size(cx.model, f.ty));
+                    let mut v: u64 = 0;
+                    for i in 0..size {
+                        match bytes.get((f.offset + i) as usize) {
+                            Some(regseq_model::Byte::Value(b)) => v |= (*b as u64) << (8 * i),
+                            _ => {
+                                return Err(EmitError::Unsupported(
+                                    "byte-image constant with non-value bytes".into(),
+                                ))
+                            }
+                        }
+                    }
+                    members.push(format!(
+                        ".{} = {v:#x}",
+                        super::naming::c_ident(cx.model.strings.resolve(f.name))
+                    ));
+                }
+                return Ok(format!("({cname}){{ {} }}", members.join(", ")));
+            }
+        }
+    }
     match &cx.model.consts[id] {
         Const::Bool(b) => Ok(if *b { "true" } else { "false" }.into()),
         Const::Uint(kind, bits) => {
@@ -576,6 +777,13 @@ fn place_lvalue(
     body: &regseq_model::Body,
     place: &Place,
 ) -> Result<String, EmitError> {
+    if cx.elided_locals.contains(&place.local) {
+        return Err(EmitError::Unsupported(
+            "use of an elided accessor result outside an MMIO receiver position \
+             (first-light subset)"
+                .into(),
+        ));
+    }
     let mut expr = local_name(cx.model, body, place.local);
     let mut ty = body.local_decls[place.local].ty;
     for elem in place.projection.iter() {
@@ -675,11 +883,18 @@ impl LowerCx<'_> {
     pub(crate) fn emit_mmio(
         &mut self,
         op: regseq_model::MmioOp,
+        callee: InstanceId,
         body: &regseq_model::Body,
         args: &[Operand],
         destination: &Place,
         out: &mut String,
     ) -> Result<(), EmitError> {
+        let desc_ty = match &self.model.instances[callee].kind {
+            InstanceKind::Function(d) => {
+                self.model.sigs.resolve(d.fn_sig).inputs.get(1).copied()
+            }
+            _ => None,
+        };
         use regseq_model::MmioOp;
         let recv = args
             .first()
@@ -715,7 +930,7 @@ impl LowerCx<'_> {
                 format!("\t{write_fn}(({cast})({val}), {addr});\n")
             }
             MmioOp::WriteField => {
-                let fv = self.descriptor(body, &args[1])?;
+                let fv = self.descriptor(body, &args[1], desc_ty)?;
                 let (mask, value) = (fv.member("mask")?, fv.member("value")?);
                 format!("\t{write_fn}(({cast})(({value}) & ({mask})), {addr});\n")
             }
@@ -728,7 +943,7 @@ impl LowerCx<'_> {
                 format!("\t{dst} = ({dst_cty}){read_fn}({addr});\n")
             }
             MmioOp::ReadField => {
-                let fld = self.descriptor(body, &args[1])?;
+                let fld = self.descriptor(body, &args[1], desc_ty)?;
                 let (mask, shift) = (fld.member("mask")?, fld.member("shift")?);
                 let dst = place_lvalue(self, body, destination)?;
                 let dst_cty = {
@@ -740,7 +955,7 @@ impl LowerCx<'_> {
                 )
             }
             MmioOp::Modify => {
-                let fv = self.descriptor(body, &args[1])?;
+                let fv = self.descriptor(body, &args[1], desc_ty)?;
                 let (mask, value) = (fv.member("mask")?, fv.member("value")?);
                 format!(
                     "\t{{\n\t\t{cast} __cur = {read_fn}({addr});\n\t\t{write_fn}((__cur & ~({cast})({mask})) | (({cast})(({value}) & ({mask}))), {addr});\n\t}}\n"
@@ -780,7 +995,93 @@ impl LowerCx<'_> {
         body: &regseq_model::Body,
         recv: &Operand,
     ) -> Result<(String, u64, u64), EmitError> {
-        let src = self.resolve_receiver_src(body, recv, 0)?;
+        let mut src = self.resolve_receiver_src(body, recv, 0)?;
+        // Normalize through intermediate borrow temps: while the root local
+        // is not the driver borrow, splice in its unique `Ref` definition
+        // (`(*(&P)).x` == `P.x`). Bounded so a cyclic/corrupt body fails
+        // loud instead of spinning.
+        for _ in 0..8 {
+            let root_ty = body.local_decls[src.local].ty;
+            let is_driver_root = matches!(
+                &self.model.types[root_ty],
+                Ty::Ref(p, _) | Ty::Ptr(p, _) if *p == self.driver.driver_ty
+            );
+            if is_driver_root {
+                break;
+            }
+            if !matches!(src.projection.first(), Some(PlaceElem::Deref)) {
+                break;
+            }
+            // The unique definition of the root local.
+            let mut def: Option<&Rvalue> = None;
+            for bb in body.basic_blocks.iter() {
+                for stmt in bb.statements.iter() {
+                    if let StatementKind::Assign(dst, rhs) = &stmt.kind {
+                        if dst.local == src.local && dst.projection.is_empty() {
+                            if def.is_some() {
+                                def = None;
+                                break;
+                            }
+                            def = Some(rhs);
+                        }
+                    }
+                }
+            }
+            match def {
+                Some(Rvalue::Ref(_, inner)) => {
+                    let mut projection: Vec<PlaceElem> = inner.projection.to_vec();
+                    projection.extend(src.projection.iter().skip(1).cloned());
+                    src = Place {
+                        local: inner.local,
+                        projection: projection.into_boxed_slice(),
+                    };
+                }
+                Some(Rvalue::Use(Operand::Copy(q) | Operand::Move(q)))
+                    if q.projection.is_empty() =>
+                {
+                    src = Place {
+                        local: q.local,
+                        projection: src.projection.clone(),
+                    };
+                }
+                _ => {
+                    // Not Assign-defined: an elided trivial-accessor call
+                    // destination — splice `arg0's pointee ++ accessor tail`.
+                    let mut spliced = false;
+                    for bb in body.basic_blocks.iter() {
+                        let TerminatorKind::Call {
+                            callee: CallCallee::Direct(callee),
+                            args: cargs,
+                            destination,
+                            ..
+                        } = &bb.terminator.kind
+                        else {
+                            continue;
+                        };
+                        if destination.local != src.local || !destination.projection.is_empty() {
+                            continue;
+                        }
+                        let Some(tail) = trivial_accessor_tail(self.model, *callee) else {
+                            continue;
+                        };
+                        let arg_place = self.resolve_receiver_src(body, &cargs[0], 0)?;
+                        // `*(&P).tail.rest` == `P.tail.rest`.
+                        let mut projection: Vec<PlaceElem> = arg_place.projection.to_vec();
+                        projection.extend(tail);
+                        projection.extend(src.projection.iter().skip(1).cloned());
+                        src = Place {
+                            local: arg_place.local,
+                            projection: projection.into_boxed_slice(),
+                        };
+                        spliced = true;
+                        break;
+                    }
+                    if !spliced {
+                        break;
+                    }
+                }
+            }
+        }
         let root_ty = body.local_decls[src.local].ty;
         let pointee = match &self.model.types[root_ty] {
             Ty::Ref(p, _) | Ty::Ptr(p, _) => *p,
@@ -791,11 +1092,46 @@ impl LowerCx<'_> {
             }
         };
         if pointee != self.driver.driver_ty {
-            return Err(EmitError::Unsupported(
+            // Diagnostic dump: what defines the root local?
+            let mut defs = Vec::new();
+            if src.local.as_u32() as usize <= body.arg_count {
+                defs.push("ARG".to_string());
+            }
+            for bb in body.basic_blocks.iter() {
+                for stmt in bb.statements.iter() {
+                    if let StatementKind::Assign(dst, rhs) = &stmt.kind {
+                        if dst.local == src.local {
+                            defs.push(format!("assign({:?} <- {rhs:?})", dst.projection));
+                        }
+                    }
+                }
+                if let TerminatorKind::Call {
+                    callee,
+                    destination,
+                    ..
+                } = &bb.terminator.kind
+                {
+                    if destination.local == src.local {
+                        let name = match callee {
+                            CallCallee::Direct(id) => self
+                                .model
+                                .strings
+                                .resolve(self.model.instances[*id].emission_name)
+                                .to_string(),
+                            _ => "indirect".into(),
+                        };
+                        defs.push(format!("call({name})"));
+                    }
+                }
+            }
+            return Err(EmitError::Unsupported(format!(
                 "mmio receiver does not project from the driver struct's resource field \
-                 (first-light subset)"
-                    .into(),
-            ));
+                 (first-light subset); root local _{} type {:?}, projection {:?}, defs {:?}",
+                src.local.as_u32(),
+                self.model.types[root_ty],
+                src.projection,
+                defs
+            )));
         }
         let mut elems = src.projection.iter();
         match elems.next() {
@@ -939,6 +1275,7 @@ impl LowerCx<'_> {
         &mut self,
         body: &regseq_model::Body,
         op: &Operand,
+        desc_ty: Option<TyId>,
     ) -> Result<Descriptor, EmitError> {
         match op {
             Operand::Copy(place) | Operand::Move(place) => {
@@ -962,6 +1299,48 @@ impl LowerCx<'_> {
                                 )))
                             }
                         }
+                    }
+                    Ok(Descriptor::Const { values })
+                }
+                // A const-propagated descriptor arrives as its LE byte
+                // image; decode the scalar fields through the descriptor
+                // type's layout.
+                Const::Bytes(bytes) => {
+                    let ty = desc_ty.ok_or_else(|| {
+                        EmitError::Unsupported(
+                            "byte-image descriptor with no recoverable type".into(),
+                        )
+                    })?;
+                    let layout = types::layout_of(self.model, ty).ok_or_else(|| {
+                        EmitError::Unsupported("byte-image descriptor without layout".into())
+                    })?;
+                    let LayoutKind::Struct { fields } = &layout.kind else {
+                        return Err(EmitError::Unsupported(
+                            "byte-image descriptor with non-struct layout".into(),
+                        ));
+                    };
+                    let mut values = Vec::new();
+                    for f in fields {
+                        if types::is_zst(self.model, f.ty) {
+                            continue;
+                        }
+                        let size = types::layout_of(self.model, f.ty)
+                            .map(|l| l.size)
+                            .unwrap_or_else(|| scalar_size(self.model, f.ty));
+                        let mut v: u64 = 0;
+                        for i in 0..size {
+                            let idx = (f.offset + i) as usize;
+                            let byte = match bytes.get(idx) {
+                                Some(regseq_model::Byte::Value(b)) => *b,
+                                _ => {
+                                    return Err(EmitError::Unsupported(
+                                        "byte-image descriptor with non-value bytes".into(),
+                                    ))
+                                }
+                            };
+                            v |= (byte as u64) << (8 * i);
+                        }
+                        values.push(v);
                     }
                     Ok(Descriptor::Const { values })
                 }
@@ -1527,4 +1906,15 @@ fn c_escape_arg(bytes: &[u8]) -> String {
         }
     }
     out
+}
+
+/// The byte size of a scalar type (descriptor field decoding).
+fn scalar_size(model: &RegseqModel, ty: TyId) -> u64 {
+    match &model.types[ty] {
+        Ty::Bool => 1,
+        Ty::Uint(regseq_model::UintKind::U8) | Ty::Int(regseq_model::IntKind::I8) => 1,
+        Ty::Uint(regseq_model::UintKind::U16) | Ty::Int(regseq_model::IntKind::I16) => 2,
+        Ty::Uint(regseq_model::UintKind::U32) | Ty::Int(regseq_model::IntKind::I32) => 4,
+        _ => 8,
+    }
 }

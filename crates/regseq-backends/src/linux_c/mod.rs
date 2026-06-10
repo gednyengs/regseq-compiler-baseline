@@ -215,6 +215,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         },
         width8_used: false,
         uses_pr: false,
+        elided_locals: std::collections::BTreeSet::new(),
     };
     let callbacks = [
         ("on_init", &driver.ops.on_init),
@@ -257,13 +258,22 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     //    function first (callees may be emitted after their callers), then
     //    the definitions.
     let mut bodies = String::new();
+    let with_fn_context = |err: EmitError, model: &RegseqModel, id: InstanceId| match err {
+        EmitError::Unsupported(s) => EmitError::Unsupported(format!(
+            "{s} [while lowering `{}`]",
+            model.strings.resolve(model.instances[id].emission_name)
+        )),
+        other => other,
+    };
     for id in &closure {
-        bodies.push_str(&body::fn_head(&mut cx, *id)?);
+        let head = body::fn_head(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
+        bodies.push_str(&head);
         bodies.push_str(";\n");
     }
     bodies.push('\n');
     for id in &closure {
-        bodies.push_str(&body::emit_fn(&mut cx, *id)?);
+        let f = body::emit_fn(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
+        bodies.push_str(&f);
         bodies.push('\n');
     }
 
@@ -380,7 +390,9 @@ fn reachable_closure(
                 ..
             } = &bb.terminator.kind
             {
-                if is_intrinsic_anchored(model, *callee) {
+                if is_intrinsic_anchored(model, *callee)
+                    || body::trivial_accessor_tail(model, *callee).is_some()
+                {
                     continue;
                 }
                 if !seen.contains(callee) {
@@ -774,6 +786,13 @@ fn emit_type_defs(
             break;
         }
         for ty in pending {
+            let name_for_err = cx.names.name_of(model, ty)?;
+            let with_ctx = |err: EmitError| match err {
+                EmitError::Unsupported(s) => EmitError::Unsupported(format!(
+                    "{s} [while defining `struct {name_for_err}`]"
+                )),
+                other => other,
+            };
             let chunk = if ty == driver_ty {
                 let rn = resource_names.to_vec();
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
@@ -782,9 +801,10 @@ fn emit_type_defs(
                     } else {
                         None
                     }
-                })?
+                })
+                .map_err(with_ctx)?
             } else {
-                types::emit_aggregate_def(model, &mut cx.names, ty, &|_| None)?
+                types::emit_aggregate_def(model, &mut cx.names, ty, &|_| None).map_err(with_ctx)?
             };
             out_chunks.insert(ty, chunk);
             emitted.push(ty);
