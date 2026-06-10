@@ -10,11 +10,19 @@
 //! idiomatic Linux kernel module + Kbuild fragment. Its module-local error
 //! type is re-exported as `LinuxEmitError` (the name `EmitError` at the crate
 //! root stays the generic-C type for the unchanged harness import path).
+//!
+//! The zephyr_c backend (F-1 independent lowering; `zephyr_c` module) emits
+//! an idiomatic Zephyr driver TU + generated DT binding yaml. Its
+//! module-local error type is re-exported as `ZephyrEmitError` (same naming
+//! convention as the linux family).
 
 mod generic_c;
 mod linux_c;
+mod zephyr_c;
 
 pub use linux_c::{emit_linux_c, EmitError as LinuxEmitError, LinuxEmit};
+
+pub use zephyr_c::{emit_zephyr_c, EmitError as ZephyrEmitError, ZephyrEmit};
 
 pub use generic_c::{
     emit_generic_c, emit_generic_c_for_entry, emit_generic_c_for_entry_with,
