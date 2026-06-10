@@ -163,6 +163,22 @@ Zephyr call.
 
 ## Target pin
 
+> **Pin supersession (2026-06-10, backend-zephyr-c unit, GRILL D05/D15).**
+> The normative pin for the `zephyr_c` backend is now **Zephyr v4.4.0**
+> (tag `v4.4.0`, commit `684c9e8f32e4`), aligning the spec with the eval
+> harness (`versions.lock`: Zephyr v4.4.0 + SDK 1.0.1 + `qemu_cortex_a53`).
+> The 3.7-pinned citations throughout these documents **remain as authored
+> evidence**: the emitted API surface (`DEVICE_DT_INST_DEFINE`,
+> `DEVICE_MMIO_*`, `sys_io`, `LOG_*`, `BUILD_ASSERT`/
+> `DT_NUM_INST_STATUS_OKAY`) is stable across 3.7→4.4 and stays corroborated
+> by the vendored drivers. The unit-load-bearing C-series pins (C-9 guard
+> macros; C-5 `init_res`/`device_is_ready`) are re-verified against the
+> local v4.4.0 checkout — see the verification notes at the end of
+> [`zephyr-open-questions.md`](./zephyr-open-questions.md) §C. Teardown
+> stays fail-loud despite the re-pin (D06): `device_deinit()` exists on
+> 4.4 but is unverified/undesigned — delivered by `spec-convergence-pl011`.
+> The full mechanical re-cite of 3.7 URLs is folded into the A-19 sweep.
+
 **Zephyr 3.7 LTS, forward-compatible with 4.x.** The single most consequential
 sub-pin is **platform/DT vs PCIe**, which changes the realization of half the
 BRM rows — and unlike the foundation docs' original framing, **Zephyr-over-PCI

@@ -350,6 +350,39 @@ eth_e1000.c:220-221).
    by the vendored drivers and the URLs were not live-fetched. Confirm on the
    pinned release.
 
+### Verification notes — v4.4.0 re-pin (2026-06-10, backend-zephyr-c T04)
+
+Read live from the **local v4.4.0 checkout** (tag `v4.4.0`, commit
+`684c9e8f32e4`) in the eval workspace, for the two pins this unit's emitter
+and smoke app rely on (GRILL D05/D15; the remaining §C items keep their
+3.7-era status and stay folded into the A-19 sweep):
+
+- **C-9 — VERIFIED on v4.4.0.** `BUILD_ASSERT(EXPR, MSG...)` is defined at
+  `include/zephyr/toolchain/gcc.h:76` (C++ `static_assert` arm) /
+  `gcc.h:87` (`_Static_assert` arm), with the generic fallback at
+  `include/zephyr/toolchain/common.h:204`. `DT_NUM_INST_STATUS_OKAY(compat)`
+  is defined at `include/zephyr/devicetree.h:3905`. The emitted
+  single-instance guard (`BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT)
+  == 1, …)`, A-2/D18) is well-founded on the pinned release.
+
+- **C-5 — VERIFIED on v4.4.0.** `struct device_state` carries
+  `uint8_t init_res` (`include/zephyr/device.h:466`) and
+  `bool initialized : 1` (`device.h:471`). `do_device_init()`
+  (`kernel/device.c:18-50`) records the **positive** value of a failed
+  init's negative-errno return, with an explicit `rc > UINT8_MAX` clamp to
+  `UINT8_MAX`, and sets `initialized = true` unconditionally;
+  `z_impl_device_is_ready()` (`kernel/device.c:186-196`) returns
+  `initialized && (init_res == 0U)` — so the generated init fn returning a
+  negated errno yields `device_is_ready() == false`, the T14/T16 oracle.
+  **Errno aliasing under the `uint8_t` clamp is impossible for the nine C02
+  rows:** the seven distinct symbols map to identical values ≤ 116 across
+  all three libc choices on the pinned stack — minimal
+  (`lib/libc/minimal/include/errno.h`), newlib (SDK 1.0.1
+  `aarch64-zephyr-elf` `sys/errno.h`), and the picolibc module
+  (`modules/lib/picolibc/newlib/libc/include/sys/errno.h`): `EPERM=1`,
+  `EIO=5`, `ENOMEM=12`, `EBUSY=16`, `ENODEV=19`, `EINVAL=22`,
+  `EOPNOTSUPP=95`, `ETIMEDOUT=116`.
+
 ---
 
 ## D. Completeness ledger
