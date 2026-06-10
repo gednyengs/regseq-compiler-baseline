@@ -1,9 +1,10 @@
 //! The env-gated L1 kbuild gate (backend-linux-c T11+T12; GRILL C03, C01.2).
 //!
-//! With `RSEQ_LINUX_KDIR` pointing at the eval campaign's configured 6.6 LTS
-//! kernel build tree, the generated drivers — `linux-minimal` (T11
-//! infrastructure) and the composed PL011 first-light driver (T12 final
-//! acceptance) — must compile as out-of-tree modules with ZERO errors
+//! With `RSEQ_LINUX_KDIR` pointing at the eval campaign's configured kernel
+//! build tree (6.18.21 at both campaign pins), the generated drivers —
+//! `linux-minimal`, the composed PL011 first-light driver, and the two
+//! e1000 drivers (backend-linux-c-e1000 T10) — must compile as out-of-tree
+//! modules with ZERO errors
 //! (warnings recorded, not gating). Unset ⇒ one visible skip notice per
 //! driver naming the variable (the suite stays green on machines with no
 //! kernel tree, I02); set-but-invalid ⇒ hard failure (C03).
@@ -14,7 +15,7 @@
 
 extern crate rustc_driver;
 
-use std::path::{Path, PathBuf};
+use std::path::Path;
 
 use codegen_coverage_runner::{kbuild, manifest, pipeline};
 use test_ir_fixtures::{try_bridge_fixture_path, BridgeOutcome};
@@ -73,9 +74,9 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
     gate("linux-minimal", &emit(&minimal));
 
     // T12: the composed PL011 first-light driver is the gating acceptance
-    // (C01.2). PathBuf used so the composed bridge runs in this same
-    // process AFTER minimal's — no snapshot comparison happens here, so
-    // interner history is irrelevant.
+    // (C01.2). The composed bridge runs in this same process AFTER
+    // minimal's — no snapshot comparison happens here, so interner history
+    // is irrelevant.
     let composed = fixture("fixtures/_composed", "pl011-composed");
     gate("pl011-composed", &emit(&composed));
 
@@ -87,5 +88,4 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
     gate("e1000-composed", &emit(&e1000));
     let e1000fail = fixture("fixtures/_composed", "e1000-initfail");
     gate("e1000-initfail", &emit(&e1000fail));
-    let _ = PathBuf::new();
 }
