@@ -1,0 +1,10 @@
+name   = "linux-minimal"
+kind   = "rust"
+# linux_c smoke fixture (backend-linux-c T05): the smallest AMBA lifecycle
+# driver, run ONLY by the dedicated sole-binary `linux_minimal_e2e` through
+# the C02 linux pipeline row (bridge -> emit_linux_c -> golden.linux.c
+# snapshot; no host cc/run stages — compile proof is the env-gated kbuild
+# gate). `expect = "pass"` refers to that row; this fixture is never run
+# through the generic_c 6-stage pipeline and commits no golden.c.
+covers = []
+expect = "pass"
