@@ -23,6 +23,7 @@
 
 extern crate rustc_driver;
 
+pub mod identity;
 pub mod kbuild;
 pub mod ledger;
 pub mod manifest;
@@ -30,3 +31,4 @@ pub mod matrix;
 pub mod oracle;
 pub mod pipeline;
 pub mod toolchain;
+pub mod zephyr_build;

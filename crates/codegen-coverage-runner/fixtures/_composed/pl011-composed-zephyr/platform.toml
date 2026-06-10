@@ -1,0 +1,18 @@
+version = "1"
+
+[platform]
+os = "zephyr"
+board = "qemu_cortex_a53"
+arch = "aarch64"
+
+# L2 MMIO region binding: the section key `regs` joins to the L1 resource
+# declared `#[rseq::mmio(id = "regs")]`. The eval campaign's DUT is the SECOND
+# PL011 of the patched QEMU machine: base 0x0904_0000, size 0x1000 (GRILL
+# D04/D11 — the console PL011 at 0x0900_0000 stays untouched). Per the
+# ratified A-10 policy these L2 literals are REQUIRED as the resolution
+# trigger: the generic_c oracle maps them literally, while the zephyr_c
+# backend consumes DT `reg` normatively and emits the A-1 `BUILD_ASSERT`
+# cross-checking DT against these literals (D11).
+[mmio.regs]
+base = 0x09040000
+size = 0x1000

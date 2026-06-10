@@ -1,0 +1,11 @@
+name   = "pl011-initfail-zephyr"
+kind   = "rust"
+# The init-fail VARIANT fixture (backend-zephyr-c T10, GRILL D14): the
+# authored-Err live witness. Zephyr-only by design — OUTSIDE the C02
+# identity invariant, NO generic_c oracle bless, NO L3 leg. Its sole-binary
+# `zephyr_initfail_e2e` byte-locks `golden.zephyr.c` +
+# `golden.zephyr.binding.yaml`; the T16 L2 leg boots its image and asserts
+# `device_is_ready(DUT) == false` plus the authored LOG_ERR on the console.
+covers = []
+lifecycle_scenario = "orderly"
+expect = "pass"
