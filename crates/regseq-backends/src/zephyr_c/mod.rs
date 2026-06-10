@@ -1049,6 +1049,37 @@ fn scan_closure_ops(model: &RegseqModel, closure: &[InstanceId]) -> Result<(), E
                 Some(IntrinsicKind::Config(op)) => {
                     return Err(config_rejection(model, *callee, op));
                 }
+                Some(IntrinsicKind::Log(_)) => {
+                    // The A-5 gate must fire on the PUBLIC path BEFORE any
+                    // local/signature C-type emission can trip over the fat
+                    // pointer (C2 review finding #1): a runtime &str log
+                    // argument is the unexercised bounce-buffer shape.
+                    let TerminatorKind::Call { args, .. } = &bb.terminator.kind else {
+                        unreachable!("matched Call above");
+                    };
+                    for arg in args.iter().skip(1) {
+                        let place = match arg {
+                            regseq_model::Operand::Copy(p) | regseq_model::Operand::Move(p) => p,
+                            regseq_model::Operand::Constant(_) => continue,
+                        };
+                        let Ok(ty) = body::place_ty(model, b, place) else {
+                            continue;
+                        };
+                        let is_str_ref = matches!(
+                            &model.types[ty],
+                            Ty::Ref(p, _) if matches!(&model.types[*p], Ty::Str)
+                        );
+                        if is_str_ref {
+                            return Err(EmitError::Rejected(
+                                "diag-log non-static &str argument under deferred mode: the \
+                                 call-site bounce-buffer delivery (ratified A-5 \
+                                 recommendation) is unexercised by this unit's corpus — \
+                                 rejected fail-loud, never silently over-read"
+                                    .into(),
+                            ));
+                        }
+                    }
+                }
                 _ => {}
             }
         }

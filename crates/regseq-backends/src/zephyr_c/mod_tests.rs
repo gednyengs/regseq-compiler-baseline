@@ -1748,7 +1748,6 @@ fn push_logging_on_init(
     driver_ty: TyId,
     result_ty: TyId,
     level: regseq_model::LogLevel,
-    template: &[u8],
     log_args: Vec<Operand>,
 ) -> regseq_model::InstanceRef {
     let ut = unit_ty(m);
@@ -1850,7 +1849,7 @@ fn emit_with_log(
     let fmt = str_carrier(&mut m, template);
     let mut args: Vec<Operand> = vec![Operand::Constant(fmt)];
     args.extend(extra_args(&mut m));
-    let on_init = push_logging_on_init(&mut m, driver_ty, result_ty, level, template, args);
+    let on_init = push_logging_on_init(&mut m, driver_ty, result_ty, level, args);
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_init = Some(on_init);
     emit_zephyr_c(&m)
@@ -1986,6 +1985,128 @@ fn log_non_static_str_arg_is_rejected_citing_a5() {
             &mut out,
         )
         .unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("A-5") && s.contains("non-static"), "{s}");
+}
+
+#[test]
+fn log_non_static_str_arg_is_rejected_citing_a5_on_the_public_path() {
+    // The C2-review fix: the A-5 gate fires through `emit_zephyr_c` (the
+    // closure-level frame scan), BEFORE any local/signature C-type emission
+    // can trip over the fat pointer with a generic Unsupported.
+    let mut m = minimal_dt_model();
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, &["HardwareError", "DeviceBusy"]);
+    let fmt = str_carrier(&mut m, b"mode {}");
+    let str_ty = m.types.intern(Ty::Str);
+    let str_ref = m
+        .types
+        .intern(Ty::Ref(str_ty, regseq_model::Provenance::SharedBorrow));
+    let ut = unit_ty(&mut m);
+    let log_intrinsic = push_intrinsic(
+        &mut m,
+        "log_site",
+        IntrinsicKind::Log(regseq_model::LogLevel::Info),
+        vec![],
+        ut,
+    );
+    let self_ty = m
+        .types
+        .intern(Ty::Ref(driver_ty, regseq_model::Provenance::UniqueBorrow));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: result_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("self")),
+    });
+    body.local_decls.push(LocalDecl {
+        ty: str_ref,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("s")),
+    });
+    body.local_decls.push(LocalDecl {
+        ty: ut,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.arg_count = 1;
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(log_intrinsic),
+                args: Box::new([
+                    Operand::Constant(fmt),
+                    Operand::Copy(Place::from(regseq_model::LocalId::from_u32(2))),
+                ]),
+                destination: Place::from(regseq_model::LocalId::from_u32(3)),
+                target: Some(regseq_model::BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    let unit_const = m.consts.intern(Const::ZST);
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(regseq_model::LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    regseq_model::AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let fn_item = item(&mut m, ItemKind::Function, "on_init");
+    let emission = m.strings.intern("on_init");
+    let id = m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    let on_init = m.instance_ref_of(id);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    let err = emit_zephyr_c(&m).unwrap_err();
     let EmitError::Rejected(s) = err else {
         panic!("expected Rejected, got {err:?}");
     };
