@@ -1,0 +1,30 @@
+LC register pl011 match=amba:0x41011/0xfffff
+BUS register_driver path=amba binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS claim_regions bar=-1
+BUS get_handle
+BUS map base=0x9000000 size=0x1000 bar=-1
+LC call on_init
+[DEBUG] pl011 probe start
+W32 @0x9000030 = 0x00000000
+R32 @0x9000018 = 0x00000000
+R32 @0x900002c = 0x00000000
+W32 @0x900002c = 0x00000000
+W32 @0x9000024 = 0x0000000d
+W32 @0x9000028 = 0x00000001
+[INFO] pl011 baud divisors: 13 1
+W32 @0x900002c = 0x00000070
+W32 @0x9000038 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+W32 @0x9000030 = 0x00000301
+R32 @0x9000030 = 0x00000301
+[INFO] pl011 up
+LC teardown present=1
+LC call on_deinit
+[WARN] pl011 deinit: masking interrupts
+W32 @0x9000038 = 0x00000000
+W32 @0x9000030 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+LC postamble regs
