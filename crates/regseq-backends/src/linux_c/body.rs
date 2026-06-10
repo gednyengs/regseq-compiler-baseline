@@ -481,6 +481,10 @@ fn emit_call(
                 "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)"
                     .into(),
             )),
+            IntrinsicKind::Config(_) => Err(EmitError::UnsupportedInUnit {
+                what: "config-space intrinsics in a lowered TU (PCI-only surface)".into(),
+                unit: "backend/linux-c-e1000",
+            }),
             other => Err(EmitError::Unsupported(format!(
                 "intrinsic {other:?} (not yet lowered in this revision of linux_c)"
             ))),
@@ -707,7 +711,7 @@ impl LowerCx<'_> {
         let stmt = match op {
             MmioOp::Write => {
                 let val = self.operand_or_desc(body, &args[1], None)?;
-                format!("\twritel(({cast})({val}), {addr});\n").replace("writel", write_fn)
+                format!("\t{write_fn}(({cast})({val}), {addr});\n")
             }
             MmioOp::WriteField => {
                 let fv = self.descriptor(body, &args[1])?;
@@ -1037,4 +1041,135 @@ impl Descriptor {
             }
         }
     }
+}
+
+// ---------------------------------------------------------------------------
+// Config-space lowering (T08, ratified A-11): `read_config`/`write_config`
+// lower to pci_read_config_{byte,word,dword} / pci_write_config_* call
+// shapes carrying an EXPLICIT `(void)` status discard in both directions —
+// the model surface is infallible while the kernel accessors return a
+// status int; the drop is visible in the generated C (never silent).
+//
+// Full-TU emission for PCI-bus models stays fail-loud this unit (D02): the
+// TU call-interception path rejects config intrinsics naming the e1000
+// unit; THIS seam — `emit_config`, driven directly with a synthetic
+// config-op body and a caller-supplied device expression — is the A-11
+// proof surface. The device-pointer threading into lowered bodies is the
+// e1000 unit's deliverable.
+// ---------------------------------------------------------------------------
+
+impl LowerCx<'_> {
+    /// Lower one `IntrinsicKind::Config(op)` call shape against the given
+    /// PCI device expression.
+    pub(crate) fn emit_config(
+        &mut self,
+        op: regseq_model::ConfigOp,
+        body: &regseq_model::Body,
+        args: &[Operand],
+        destination: &Place,
+        pdev: &str,
+        out: &mut String,
+    ) -> Result<(), EmitError> {
+        use regseq_model::ConfigOp;
+        let off_arg = args.first().ok_or_else(|| {
+            EmitError::Unsupported("config call with no offset argument".into())
+        })?;
+        let off = operand_expr(self, body, off_arg)?;
+        match op {
+            ConfigOp::Read => {
+                let ty = place_ty(self.model, body, destination)?;
+                let (accessor, tmp_cty) = config_accessor(self.model, ty, "pci_read_config")?;
+                let dst = place_lvalue(self, body, destination)?;
+                let dst_cty = types::c_type(self.model, &mut self.names, ty)?;
+                // A-11: the status int is explicitly discarded; the in-band
+                // failure signal on PCI is all-ones read data (out of scope).
+                out.push_str(&format!(
+                    "\t{{\n\t\t{tmp_cty} __cv;\n\t\t(void){accessor}({pdev}, (int)({off}), &__cv);\n\t\t{dst} = ({dst_cty})__cv;\n\t}}\n"
+                ));
+            }
+            ConfigOp::Write => {
+                let val_arg = args.get(1).ok_or_else(|| {
+                    EmitError::Unsupported("write_config with no value argument".into())
+                })?;
+                let val_ty = match val_arg {
+                    Operand::Copy(p) | Operand::Move(p) => place_ty(self.model, body, p)?,
+                    Operand::Constant(id) => match &self.model.consts[*id] {
+                        Const::Uint(kind, _) => {
+                            // Type the constant by its own width (the carrier
+                            // the accessor family is selected from).
+                            match kind {
+                                regseq_model::UintKind::U8 => uint_ty(self.model, 1)?,
+                                regseq_model::UintKind::U16 => uint_ty(self.model, 2)?,
+                                regseq_model::UintKind::U32 => uint_ty(self.model, 4)?,
+                                other => {
+                                    return Err(EmitError::Unsupported(format!(
+                                        "write_config constant width {other:?}"
+                                    )))
+                                }
+                            }
+                        }
+                        other => {
+                            return Err(EmitError::Unsupported(format!(
+                                "write_config value constant {other:?}"
+                            )))
+                        }
+                    },
+                };
+                let (accessor, tmp_cty) = config_accessor(self.model, val_ty, "pci_write_config")?;
+                let val = operand_expr(self, body, val_arg)?;
+                out.push_str(&format!(
+                    "\t(void){accessor}({pdev}, (int)({off}), ({tmp_cty})({val}));\n"
+                ));
+            }
+        }
+        Ok(())
+    }
+}
+
+/// The width-selected PCI config accessor + its carrier C type. Width-8 has
+/// no PCI primitive (ledger B-3): fail loud.
+fn config_accessor(
+    model: &RegseqModel,
+    ty: TyId,
+    family: &str,
+) -> Result<(String, &'static str), EmitError> {
+    let size = match &model.types[ty] {
+        Ty::Bool => 1,
+        Ty::Uint(regseq_model::UintKind::U8) | Ty::Int(regseq_model::IntKind::I8) => 1,
+        Ty::Uint(regseq_model::UintKind::U16) | Ty::Int(regseq_model::IntKind::I16) => 2,
+        Ty::Uint(regseq_model::UintKind::U32) | Ty::Int(regseq_model::IntKind::I32) => 4,
+        Ty::Uint(regseq_model::UintKind::U64) | Ty::Int(regseq_model::IntKind::I64) => {
+            return Err(EmitError::Unsupported(
+                "width-8 config access: PCI config accessors top out at dword \
+                 (ledger B-3, undesigned)"
+                    .into(),
+            ))
+        }
+        other => {
+            return Err(EmitError::Unsupported(format!(
+                "config access type {other:?}"
+            )))
+        }
+    };
+    Ok(match size {
+        1 => (format!("{family}_byte"), "u8"),
+        2 => (format!("{family}_word"), "u16"),
+        _ => (format!("{family}_dword"), "u32"),
+    })
+}
+
+/// Find the interned `u{8*size}` type (present whenever a config op typed at
+/// that width exists in the model).
+fn uint_ty(model: &RegseqModel, size: u8) -> Result<TyId, EmitError> {
+    let want = match size {
+        1 => regseq_model::UintKind::U8,
+        2 => regseq_model::UintKind::U16,
+        _ => regseq_model::UintKind::U32,
+    };
+    model
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Uint(k) if *k == want))
+        .map(|(id, _)| id)
+        .ok_or_else(|| EmitError::Unsupported("config width type not interned".into()))
 }

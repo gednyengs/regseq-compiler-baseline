@@ -840,3 +840,104 @@ fn unresolved_binding_is_the_a10_hard_error() {
         "the A-10 error must name the missing L2 literals: {msg}"
     );
 }
+
+// ---------------------------------------------------------------------------
+// T08 (ratified A-11): the config-intrinsic body-lowering seam — explicit
+// `(void)` status discards in BOTH directions, proven by driving
+// `emit_config` directly with synthetic config-op bodies. The full-TU PCI
+// path stays fail-loud (D02), asserted at the TU interception.
+// ---------------------------------------------------------------------------
+
+/// A bare lowering context + body for driving the seam directly.
+fn seam_cx_and_body(m: &RegseqModel, dst_ty: TyId) -> (super::body::LowerCx<'_>, Body) {
+    let cx = super::body::LowerCx {
+        model: m,
+        names: super::types::TypeNames::new(),
+        fn_symbols: std::collections::BTreeMap::new(),
+        extra_includes: std::collections::BTreeSet::new(),
+        driver: super::body::DriverFacts {
+            driver_ty: dst_ty, // unused by the config seam
+            resources: vec![],
+            reg_macros: vec![],
+        },
+        width8_used: false,
+    };
+    let body = Body::default();
+    (cx, body)
+}
+
+#[test]
+fn a11_read_config_carries_the_void_discard() {
+    let mut m = model();
+    let u16t = m.types.intern(Ty::Uint(UintKind::U16));
+    let off = m.consts.intern(Const::Uint(UintKind::U16, 0x6));
+    let (mut cx, mut body) = seam_cx_and_body(&m, u16t);
+    let dst = body.push_synthetic_local(u16t);
+    let mut out = String::new();
+    cx.emit_config(
+        regseq_model::ConfigOp::Read,
+        &body,
+        &[Operand::Constant(off)],
+        &Place::from(dst),
+        "pdev",
+        &mut out,
+    )
+    .expect("read_config lowers");
+    assert!(
+        out.contains("(void)pci_read_config_word(pdev, (int)(0x6u), &__cv);"),
+        "the read status must be explicitly discarded: {out}"
+    );
+    assert!(out.contains("= (u16)__cv;"), "out-param marshalling: {out}");
+}
+
+#[test]
+fn a11_write_config_carries_the_void_discard() {
+    let mut m = model();
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let off = m.consts.intern(Const::Uint(UintKind::U16, 0x4));
+    let val = m.consts.intern(Const::Uint(UintKind::U32, 0x146));
+    let unit = m.types.intern(Ty::Tuple {
+        fields: vec![],
+        layout: struct_layout(0, 1, vec![]),
+    });
+    let (mut cx, mut body) = seam_cx_and_body(&m, u32t);
+    let dst = body.push_synthetic_local(unit);
+    let mut out = String::new();
+    cx.emit_config(
+        regseq_model::ConfigOp::Write,
+        &body,
+        &[Operand::Constant(off), Operand::Constant(val)],
+        &Place::from(dst),
+        "pdev",
+        &mut out,
+    )
+    .expect("write_config lowers");
+    assert!(
+        out.contains("(void)pci_write_config_dword(pdev, (int)(0x4u), (u32)(0x146u));"),
+        "the write status must be explicitly discarded: {out}"
+    );
+}
+
+#[test]
+fn a11_width8_config_fails_loud() {
+    let mut m = model();
+    let u64t = m.types.intern(Ty::Uint(UintKind::U64));
+    let off = m.consts.intern(Const::Uint(UintKind::U16, 0x0));
+    let (mut cx, mut body) = seam_cx_and_body(&m, u64t);
+    let dst = body.push_synthetic_local(u64t);
+    let mut out = String::new();
+    let err = cx
+        .emit_config(
+            regseq_model::ConfigOp::Read,
+            &body,
+            &[Operand::Constant(off)],
+            &Place::from(dst),
+            "pdev",
+            &mut out,
+        )
+        .unwrap_err();
+    assert!(
+        matches!(err, EmitError::Unsupported(ref s) if s.contains("B-3")),
+        "width-8 config must fail loud naming the ledger gap: {err:?}"
+    );
+}
