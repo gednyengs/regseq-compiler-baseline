@@ -317,6 +317,94 @@ Each item cites the construct it came from and a repo `path:line` or pinned doc.
    four-level / nine-modifier surface is the frozen contract before freezing this
    Linux mapping. *(diagnostics-logging §D.0/§D.6.)*
 
+7. **PCI managed acquisition cascade + map call — RESOLVED: PINNED against the
+   campaign tree (backend-linux-c-e1000 T03, the GRILL O3 verification;
+   2026-06-10).** All citations are the campaign kernel tree
+   `~/regseq-eval/e1000/linux/kernel-src/e1000-x86_64-linux`, **kernel 6.18.21**
+   (`include/config/kernel.release`).
+
+   **Verified facts.**
+   - `pcim_enable_device` (drivers/pci/devres.c:370-393) registers exactly ONE
+     devres action — `pcim_disable_device` (devres.c:351-359:
+     `pci_disable_device` unless pinned) — and sets `pdev->is_managed = true`.
+     Its cascade covers the *enable only*.
+   - The v6.6-era auto-management of subsequent plain requests **does not exist
+     in this tree**: `pci_request_selected_regions` (drivers/pci/pci.c:4031-4036)
+     → `__pci_request_selected_regions` (pci.c:4003-4020) →
+     `__pci_request_region` (pci.c:3936-3961) is plain
+     `request_region`/`__request_mem_region` with **no devres path and no
+     `is_managed` check**; the only behavioral reader of `is_managed` left is
+     MSI auto-teardown (drivers/pci/msi/msi.c:85) — irrelevant here (no IRQ
+     constructs). The per-construct spec's §B.3 combination
+     (`pcim_enable_device` → plain `pci_request_selected_regions` →
+     `pci_iomap`, linux-lowering-per-construct.md:314-321,366-367,395-396) was
+     fact-pinned at v6.6, where `__pci_request_region` recorded managed regions
+     via `find_pci_dr` [hypothesis for the v6.6 mechanism name — verified only
+     insofar as the v6.6-pinned spec asserts the combination was managed; the
+     rework that removed it landed around v6.11]. On 6.18.21 that combination
+     LEAKS the region and the mapping on detach — it would silently violate
+     ratified A-2's no-explicit-release `.remove`. **This supersedes §B.3's
+     map/claim step realization for the PCI arm.**
+   - Managed realizations available in-tree: `pcim_request_region`
+     (devres.c:724-747; region only), `pcim_iomap` (devres.c:538-568; map only,
+     legacy iomap table, "This SHOULD only be used once per BAR",
+     NULL-returning for backwards compat), `pcim_iomap_regions` (devres.c:679,
+     "This function is DEPRECATED. Do not use it in new code. Use
+     pcim_iomap_region() instead"), and **`pcim_iomap_region(pdev, bar, name)`**
+     (devres.c:607-643, `EXPORT_SYMBOL`): `pci_request_region` + `pci_iomap`
+     fused behind ONE devres entry whose release unmaps AND releases the
+     region; returns `IOMEM_ERR_PTR` on failure.
+   - In-tree managed-NIC witness (campaign tree): the r8169 probe runs
+     `pcim_enable_device(pdev)`
+     (drivers/net/ethernet/realtek/r8169_main.c:5416) →
+     `pcim_iomap_region(pdev, region, KBUILD_MODNAME)` (r8169_main.c:5428).
+     This fills the GRILL D06(2) gap ("no in-corpus managed-PCI witness") with
+     a campaign-tree witness.
+
+   **THE PIN (consumed verbatim by T04; gates every linux PCI snapshot bless):**
+   ```c
+   ret = pcim_enable_device(pdev);      /* native status propagates unwrapped */
+   if (ret)
+           return ret;
+   <base> = pcim_iomap_region(pdev, <effective_bar>, "<drv name>");
+   if (IS_ERR(<base>))
+           return PTR_ERR(<base>);
+   ```
+   - **Map call = `pcim_iomap_region`** — a deliberate fourth option over the
+     GRILL's three candidates: `pci_iomap` and the witnessed `pci_ioremap_bar`
+     are unmanaged in this tree (leak under A-2); `pcim_iomap` does not request
+     the region (would need a separate `pcim_request_region` = two devres
+     entries) and is the legacy-table API; the kernel's own docs deprecate the
+     multi-BAR wrapper in favor of `pcim_iomap_region`.
+   - **Devres cascade on detach (LIFO):** unmap + release region (the
+     `pcim_iomap_region` entry) → `pci_disable_device` (the
+     `pcim_enable_device` action). `.remove` emits NO release ladder (A-2
+     holds). Probe-failure unwind rides the same cascade.
+   - **Claim∘map fusion recorded:** the ratified D06(2) *shape* named
+     `pci_request_selected_regions(pdev, 1<<effective_bar, name)` as a separate
+     step; on 6.18.21 the managed request and map FUSE into the single
+     `pcim_iomap_region` call — the exact PCI analogue of the AMBA
+     `devm_ioremap_resource` claim∘map fusion already whitelisted at L3
+     (`devres-claim-fusion` row; C-1 above). The oracle's separate
+     `BUS claim_regions` / `BUS map` events stay whitelist-licensed under the
+     same A-2 citation plus this pin.
+   - **Deviation from the vendored witness recorded:** the in-repo e1000 probe
+     is deliberately UNMANAGED (`pci_enable_device`/`pci_enable_device_mem` +
+     manual `goto` unwind + `pci_ioremap_bar`,
+     reference-drivers/e1000/linux/e1000_main.c:931-972); it witnesses the
+     acquisition *shape* only. The managed variant rests on ratified A-2 + this
+     campaign-tree verification + the r8169 witness.
+   - `pci_set_master` is NOT emitted: no DMA constructs exist (unit non-goals);
+     the witness's `set_master` serves its DMA engine.
+   - **Version note:** `pcim_iomap_region` postdates the v6.6 fact-pin (it
+     arrived with the devres rework, ~v6.11 era) [hypothesis as to the exact
+     version; verified present + exported in 6.18.21]. The unit's compile gate
+     is the campaign tree only. If a pre-rework target ever materializes, the
+     recorded fallback is the era's `pcim_iomap_regions(pdev, 1<<bar, name)` +
+     `pcim_iomap_table(pdev)[bar]` idiom — recorded here, NOT emitted.
+   *(bus-resource-management §B.3; device-lifecycle §C.4; GRILL
+   backend-linux-c-e1000 D06(2)/O3.)*
+
 7. **RMW atomicity / ordering.** `mmio_modify` lowers to a non-atomic
    read-modify-write (matching `generic_c`); the construct excludes ordering/locking
    (`convergence §1`, OUT). No `ordered!`/fence is modeled. Confirm this is

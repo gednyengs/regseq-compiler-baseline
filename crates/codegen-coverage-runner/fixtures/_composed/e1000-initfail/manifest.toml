@@ -1,0 +1,13 @@
+name   = "e1000-initfail"
+kind   = "rust"
+# The induced-failure E1000 variant (backend-linux-c-e1000 T08, GRILL D07):
+# `on_init` reads STATUS and errs on a deliberately wrong expectation —
+# deterministic against both the host oracle (regfile 0) and the QEMU
+# 82540EM (nonzero reset STATUS). Driver `e1000fail` (distinct module name;
+# coexists with the composed module at L2). Consumed by the sole-binary
+# `linux_e1000_initfail_e2e` (bridge -> emit_linux_c -> golden.linux.c);
+# no generic_c oracle trace is committed for this variant — its behavioral
+# proof is the L2 dmesg errno (T14). The scenario key is inert here.
+covers = []
+lifecycle_scenario = "orderly"
+expect = "pass"

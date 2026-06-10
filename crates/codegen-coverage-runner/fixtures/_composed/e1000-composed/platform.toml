@@ -1,0 +1,15 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-pc"
+arch = "x86_64"
+
+# A-10(a) ratified: literal base/size are REQUIRED as the preamble trigger.
+# On Linux their VALUES are semantically dead — probe-time enumeration
+# (pci_resource_start/len) supplies the real extent; see ledger B-11 for the
+# escalated durable fix (per-OS mappable predicate, post-both-backends).
+[mmio.regs]
+bar = 0
+base = 0xf0000000   # dead literal (A-10(a) trigger only)
+size = 0x20000      # dead literal (A-10(a) trigger only)

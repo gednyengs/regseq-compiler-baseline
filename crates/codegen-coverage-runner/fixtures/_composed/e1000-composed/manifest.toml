@@ -1,0 +1,18 @@
+name   = "e1000-composed"
+kind   = "rust"
+# The composed E1000 proof fixture (backend-linux-c-e1000 unit, GRILL D01):
+# the five refined construct surfaces — register-access, BRM (PCI),
+# device-lifecycle, diagnostics-logging, RegseqError — PLUS the config-space
+# ops (read_config/write_config, A-11) in one PCI spec. The `orderly` scenario
+# lowers to register (match=pci:0x8086:0x100e) → create → associate →
+# resource preamble → PCI acquisition over the platform.toml binding (bar 0,
+# base 0xf0000000, size 0x20000 — A-10(a) dead literals) → `LC call on_init`
+# (config header reads + one benign CLS write + the donor-pattern MMIO
+# bring-up) → `LC call on_deinit` → teardown. Run by the dedicated sole-binary
+# `e1000_composed_e2e` ONLY (clean-process interner isolation, like
+# `pl011-composed`): its blessed `expected.stdout` is the canonical E1000
+# oracle trace for the L3 trace differential, and its bound model is the
+# linux_c PCI-scaffold input.
+covers = []
+lifecycle_scenario = "orderly"
+expect = "pass"

@@ -28,8 +28,8 @@ mod mod_tests;
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AttrData, BusType, EnumShape, FrameworkType, InstanceId, InstanceKind, InstanceRef,
-    LayoutKind, MatchEntry, RegseqModel, TerminatorKind, Ty, TyId,
+    AttrData, BusType, EnumShape, FrameworkType, InstanceId, InstanceKind, InstanceRef, LayoutKind,
+    MatchEntry, RegseqModel, TerminatorKind, Ty, TyId,
 };
 
 use body::LowerCx;
@@ -98,6 +98,14 @@ impl std::fmt::Display for EmitError {
 
 impl std::error::Error for EmitError {}
 
+/// The two scaffolded bus arms (every other bus is a loud rejection in the
+/// dispatch above the scaffold).
+#[derive(Clone, Copy, PartialEq, Eq)]
+enum ScaffoldBus {
+    Amba,
+    Pci,
+}
+
 /// The C02 per-target errno table, name-keyed (identical symbols on Linux;
 /// the polarity — negation — is applied at the emission site, per the
 /// ratified spec `linux-lowering-per-construct.md` §E.3).
@@ -124,29 +132,23 @@ fn errno_symbol(variant_name: &str) -> Option<&'static str> {
 pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     // -- the driver (exactly one for a single-module TU) -------------------
     let mut drivers = model.device_lifecycle.drivers.iter();
-    let (driver_item, driver) = drivers
-        .next()
-        .ok_or_else(|| EmitError::Driver(
+    let (driver_item, driver) = drivers.next().ok_or_else(|| {
+        EmitError::Driver(
             "no recognized device-lifecycle driver in the model; a Linux kernel module needs \
              exactly one `#[rseq::driver]`"
                 .into(),
-        ))?;
+        )
+    })?;
     if drivers.next().is_some() {
         return Err(EmitError::Driver(
-            "more than one recognized driver in the model; one Linux module per driver"
-                .into(),
+            "more than one recognized driver in the model; one Linux module per driver".into(),
         ));
     }
 
-    // -- unit scope gates (GRILL D02; R04) ----------------------------------
-    match &driver.descriptor.bus_type {
-        Some(BusType::Amba) => {}
-        Some(BusType::Pci) => {
-            return Err(EmitError::UnsupportedInUnit {
-                what: "the PCI scaffold (bus = \"pci\": pci_driver, config space, BARs)".into(),
-                unit: "backend/linux-c-e1000",
-            })
-        }
+    // -- unit scope gates (GRILL D02; R04; e1000-unit PCI arm) ---------------
+    let bus = match &driver.descriptor.bus_type {
+        Some(BusType::Amba) => ScaffoldBus::Amba,
+        Some(BusType::Pci) => ScaffoldBus::Pci,
         Some(other) => {
             return Err(EmitError::UnsupportedInUnit {
                 what: format!("the `{other:?}` bus scaffold"),
@@ -155,23 +157,41 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         }
         None => {
             return Err(EmitError::Driver(
-                "driver declares no bus; the linux_c first-light unit lowers AMBA drivers \
-                 only (declare `bus = \"amba\"`)"
+                "driver declares no bus; linux_c lowers AMBA and PCI drivers only \
+                 (declare `bus = \"amba\"` or `bus = \"pci\"`)"
                     .into(),
             ))
         }
-    }
+    };
     for entry in &driver.descriptor.match_set {
-        if !matches!(entry, MatchEntry::Amba { .. }) {
-            return Err(EmitError::UnsupportedInUnit {
-                what: format!("non-AMBA match entry {entry:?}"),
-                unit: "a post-first-light unit",
-            });
+        match (bus, entry) {
+            (ScaffoldBus::Amba, MatchEntry::Amba { .. }) => {}
+            (ScaffoldBus::Pci, MatchEntry::Pci { .. }) => {}
+            // The e1000-unit T05 polarity pin: the match-entry lift covers
+            // `Pci` entries under a PCI driver ONLY. A foreign-transport
+            // entry under a PCI driver stays LOUD naming the spec-convergence
+            // successor — the mixed-match-set rule is that unit's design,
+            // never silently dropped (I03; B-6 never-truncate).
+            (ScaffoldBus::Pci, other) => {
+                return Err(EmitError::UnsupportedInUnit {
+                    what: format!(
+                        "foreign-transport match entry {other:?} under a PCI driver \
+                         (mixed match sets, ledger B-6)"
+                    ),
+                    unit: "the spec-convergence mixed-match-set successor unit",
+                })
+            }
+            (ScaffoldBus::Amba, other) => {
+                return Err(EmitError::UnsupportedInUnit {
+                    what: format!("non-AMBA match entry {other:?}"),
+                    unit: "a post-first-light unit",
+                })
+            }
         }
     }
     if driver.descriptor.match_set.is_empty() {
         return Err(EmitError::Driver(
-            "driver has an empty match set; an amba_id table needs at least one entry".into(),
+            "driver has an empty match set; a kernel id table needs at least one entry".into(),
         ));
     }
 
@@ -212,6 +232,8 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
             driver_ty,
             resources,
             reg_macros,
+            bus_type: driver.descriptor.bus_type.clone(),
+            drv: drv.clone(),
         },
         width8_used: false,
         uses_pr: false,
@@ -278,28 +300,47 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     }
 
     // -- lifecycle callbacks: probe / remove (D04 bank 5) -------------------
-    let scaffold = emit_scaffold(&mut cx, &drv, driver_ty, &resource_names, &roots)?;
+    let scaffold = match bus {
+        ScaffoldBus::Amba => emit_scaffold(&mut cx, &drv, driver_ty, &resource_names, &roots)?,
+        ScaffoldBus::Pci => {
+            emit_scaffold_pci(&mut cx, &drv, driver_ty, &resource_names, &roots, driver)?
+        }
+    };
 
     // -- type definitions (D04 bank 2/3), now that every use is known -------
     let type_defs = emit_type_defs(&mut cx, driver_ty, &resource_names)?;
 
     // -- match table + driver struct + module macros ------------------------
-    let tail = emit_module_tail(model, &drv, driver, scaffold.shutdown_sym.as_deref())?;
+    let tail = match bus {
+        ScaffoldBus::Amba => {
+            emit_module_tail(model, &drv, driver, scaffold.shutdown_sym.as_deref())?
+        }
+        ScaffoldBus::Pci => {
+            emit_module_tail_pci(model, &drv, driver, scaffold.shutdown_sym.as_deref())?
+        }
+    };
 
     // -- includes (demand-light: the scaffold set; <linux/errno.h> rides the
     //    adapter, <linux/io.h> arrives with register access in T06) ---------
     let mut tu = String::new();
     tu.push_str(&format!(
         "// SPDX-License-Identifier: GPL-2.0\n/*\n * {drv}.c - Regseq-generated Linux driver ({} match).\n *\n * Generated by the regseq linux_c backend; do not edit.\n */\n\n",
-        "AMBA"
+        match bus {
+            ScaffoldBus::Amba => "AMBA",
+            ScaffoldBus::Pci => "PCI",
+        }
     ));
     if cx.uses_pr {
         // The pr_fmt module prefix must precede every include (A-3 / kernel
         // convention).
         tu.push_str("#define pr_fmt(fmt) KBUILD_MODNAME \": \" fmt\n\n");
     }
+    let bus_include = match bus {
+        ScaffoldBus::Amba => "<linux/amba/bus.h>",
+        ScaffoldBus::Pci => "<linux/pci.h>",
+    };
     let mut includes: std::collections::BTreeSet<&str> = [
-        "<linux/amba/bus.h>",
+        bus_include,
         "<linux/device.h>",
         "<linux/mod_devicetable.h>",
         "<linux/module.h>",
@@ -517,8 +558,12 @@ fn emit_scaffold(
                 cx.fn_symbols[&fid]
             )
         });
-        let adapter =
-            emit_result_adapter(cx, id, &format!("{sym}(&priv->inner)"), failure_hook.as_deref())?;
+        let adapter = emit_result_adapter(
+            cx,
+            id,
+            &format!("{sym}(&priv->inner)"),
+            failure_hook.as_deref(),
+        )?;
         out.push_str(&adapter);
     }
     out.push_str("\treturn 0;\n}\n\n");
@@ -535,7 +580,8 @@ fn emit_scaffold(
             // structurally discarded (CR-4), visibly.
             out.push_str(&format!("\t(void){sym}(&priv->inner);\n"));
         }
-        None => out.push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
+        None => out
+            .push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
     }
     out.push_str("\t/* postamble: devm-managed resources release automatically (A-2) */\n}\n\n");
 
@@ -547,6 +593,187 @@ fn emit_scaffold(
         let cb = cx.fn_symbols[&id].clone();
         out.push_str(&format!(
             "static void {sym}(struct device *dev)\n{{\n\tstruct {drv}_priv *priv = dev_get_drvdata(dev);\n\n\t(void){cb}(&priv->inner);\n}}\n\n"
+        ));
+        shutdown_sym = Some(sym);
+    }
+
+    Ok(Scaffold {
+        container,
+        text: out,
+        uses_errno,
+        shutdown_sym,
+    })
+}
+
+/// Synthesize the private container, `.probe`, `.remove`, and `.shutdown`
+/// for the PCI scaffold (backend-linux-c-e1000 T04; canonical order
+/// create → associate → preamble → on_init, mirroring the AMBA arm). The
+/// acquisition preamble is the T03-pinned managed cascade (ledger C-7):
+/// `pcim_enable_device` → `pcim_iomap_region(pdev, effective_bar, <name>)`,
+/// devres releasing map+region then disabling on detach — `.remove` emits
+/// no release ladder (ratified A-2). Native preamble failures propagate
+/// their kernel status unwrapped (two-channel rule).
+fn emit_scaffold_pci(
+    cx: &mut LowerCx<'_>,
+    drv: &str,
+    driver_ty: TyId,
+    resource_names: &[String],
+    roots: &[(&'static str, InstanceId)],
+    driver: &regseq_model::DriverLifecycle,
+) -> Result<Scaffold, EmitError> {
+    let model = cx.model;
+    let driver_struct = cx.names.name_of(model, driver_ty)?;
+    let dev_name = model.strings.resolve(driver.descriptor.name).to_string();
+    let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
+    let on_init = find("on_init");
+    let on_deinit = find("on_deinit");
+    let on_surprise_remove = find("on_surprise_remove");
+    let on_init_failure = find("on_init_failure");
+    let on_system_shutdown = find("on_system_shutdown");
+
+    // .probe always carries -ENOMEM (the alloc guard), so the TU always
+    // includes <linux/errno.h>.
+    let uses_errno = true;
+    let mut out = String::new();
+
+    // The per-device private container (the morph, §C.7): kernel device
+    // back-pointer + the spec driver embedded verbatim. `pdev` is the C01
+    // premise: the scaffold is the sole driver instantiation site, so every
+    // `&<drv>` points at `inner` and `container_of` recovery is well-defined.
+    let container = format!(
+        "/* per-device private container: kernel back-pointer + the spec driver */\nstruct {drv}_priv {{\n\tstruct pci_dev *pdev;\n\tstruct {driver_struct} inner;\n}};\n\n"
+    );
+
+    // The single resolved region's BAR (D02: per-region-shaped via
+    // effective_bar; >1 region is the loud B-5 gate).
+    let preamble = if resource_names.is_empty() {
+        None
+    } else {
+        if resource_names.len() > 1 {
+            return Err(EmitError::Unsupported(
+                "more than one MMIO resource region per driver (model gate B-5; \
+                 single-region only)"
+                    .into(),
+            ));
+        }
+        let fname = resource_names[0].clone();
+        let resolved = cx
+            .driver
+            .resources
+            .iter()
+            .any(|(n, r, _)| n == &fname && *r);
+        if resolved {
+            let bar = driver
+                .handle
+                .resource_fields
+                .first()
+                .and_then(|f| f.binding.effective_bar)
+                .ok_or_else(|| {
+                    EmitError::Driver(format!(
+                        "PCI MMIO region `{fname}` resolved with no BAR index \
+                         (effective_bar = L2.bar ?? L1.bar); declare `bar` on the \
+                         resource or in [mmio.{fname}]"
+                    ))
+                })?;
+            Some((fname, bar))
+        } else {
+            None
+        }
+    };
+
+    // .probe
+    out.push_str(&format!(
+        "static int {drv}_probe(struct pci_dev *pdev, const struct pci_device_id *id)\n{{\n\tstruct {drv}_priv *priv;\n"
+    ));
+    if preamble.is_some() {
+        out.push_str("\tint ret;\n");
+    }
+    out.push('\n');
+    out.push_str(
+        "\tpriv = devm_kzalloc(&pdev->dev, sizeof(*priv), GFP_KERNEL);\n\tif (!priv)\n\t\treturn -ENOMEM;\n",
+    );
+    out.push_str("\tpriv->pdev = pdev;\n\tpci_set_drvdata(pdev, priv);\n");
+    match &preamble {
+        Some((fname, bar)) => {
+            // The T03-pinned managed acquisition (ledger C-7): enable, then
+            // the fused request+map of the effective BAR. The base/size L2
+            // literals are dead on Linux (A-10(a)): probe-time enumeration
+            // inside pcim_iomap_region supplies the real extent. The failure
+            // is the NATIVE channel: ret / PTR_ERR propagate directly, never
+            // wrapped in RegseqError (-EPROBE_DEFER survives).
+            cx.extra_includes.insert("<linux/err.h>");
+            out.push_str(&format!(
+                "\n\t/* preamble: managed enable + fused request+map of BAR{bar} (T03 pin\n\t * C-7: pcim_iomap_region; devres unwinds the map, the region, then\n\t * the enable on detach and on probe failure — A-2) */\n\tret = pcim_enable_device(pdev);\n\tif (ret)\n\t\treturn ret;\n\tpriv->inner.{fname} = pcim_iomap_region(pdev, {bar}, \"{dev_name}\");\n\tif (IS_ERR(priv->inner.{fname}))\n\t\treturn PTR_ERR(priv->inner.{fname});\n"
+            ));
+        }
+        None if resource_names.is_empty() => {
+            out.push_str("\n\t/* preamble: no bus-managed regions in this model */\n");
+        }
+        None => {
+            // A-10 (ratified, option (a)): the L2 literals are the resolution
+            // trigger; an unresolved region emits NO preamble, and any MMIO
+            // op against it is the op-site hard error.
+            out.push_str(
+                "\n\t/* preamble: region binding unresolved (no L2 literals) — not mapped */\n",
+            );
+        }
+    }
+    if let Some(id) = on_init {
+        let sym = cx.fn_symbols[&id].clone();
+        let failure_hook = on_init_failure.map(|fid| {
+            format!(
+                "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * (the kernel does not call .remove on probe failure; devres\n\t\t\t * unwinds the preamble) */\n\t\t\t(void){}(&priv->inner);\n",
+                cx.fn_symbols[&fid]
+            )
+        });
+        let adapter = emit_result_adapter(
+            cx,
+            id,
+            &format!("{sym}(&priv->inner)"),
+            failure_hook.as_deref(),
+        )?;
+        out.push_str(&adapter);
+    }
+    out.push_str("\treturn 0;\n}\n\n");
+
+    // .remove — one `void` slot. With `on_surprise_remove` overridden it
+    // branches on the ratified present predicate (GRILL D06(3), ledger A-7):
+    // orderly arm runs on_deinit (HW still reachable), surprise arm runs
+    // on_surprise_remove with NO MMIO-touching releases (devres still
+    // unwinds; the mappings are dead, not leaked). Without the override the
+    // remove is plain orderly.
+    out.push_str(&format!(
+        "static void {drv}_remove(struct pci_dev *pdev)\n{{\n\tstruct {drv}_priv *priv = pci_get_drvdata(pdev);\n\n"
+    ));
+    let orderly_arm = |indent: &str| match on_deinit {
+        Some(id) => format!("{indent}(void){}(&priv->inner);\n", cx.fn_symbols[&id]),
+        None => {
+            format!("{indent}/* on_deinit not overridden: default no-op teardown */\n{indent}(void)priv;\n")
+        }
+    };
+    match on_surprise_remove {
+        Some(id) => {
+            let sym = cx.fn_symbols[&id].clone();
+            out.push_str("\tif (pci_device_is_present(pdev)) {\n");
+            out.push_str(&orderly_arm("\t\t"));
+            out.push_str("\t} else {\n");
+            out.push_str(&format!(
+                "\t\t/* surprise removal: the device is gone — no MMIO-touching\n\t\t * releases run on this arm (D06(3)) */\n\t\t(void){sym}(&priv->inner);\n"
+            ));
+            out.push_str("\t}\n");
+        }
+        None => out.push_str(&orderly_arm("\t")),
+    }
+    out.push_str("\t/* postamble: devres-managed resources release automatically (A-2) */\n}\n\n");
+
+    // .shutdown — the lone omit-when-absent slot; pci_driver carries its own
+    // `void (*shutdown)(struct pci_dev *)` member (pci.h:980).
+    let mut shutdown_sym = None;
+    if let Some(id) = on_system_shutdown {
+        let sym = format!("{drv}_shutdown");
+        let cb = cx.fn_symbols[&id].clone();
+        out.push_str(&format!(
+            "static void {sym}(struct pci_dev *pdev)\n{{\n\tstruct {drv}_priv *priv = pci_get_drvdata(pdev);\n\n\t(void){cb}(&priv->inner);\n}}\n\n"
         ));
         shutdown_sym = Some(sym);
     }
@@ -585,10 +812,7 @@ fn emit_result_adapter(
         facts.result_tag_offset,
         facts.result_tag_size,
     ));
-    out.push_str(&format!(
-        "\t\tif (__tag != {:#x}) {{\n",
-        facts.ok_tag_value
-    ));
+    out.push_str(&format!("\t\tif (__tag != {:#x}) {{\n", facts.ok_tag_value));
     if let Some(hook) = failure_hook {
         out.push_str(hook);
     }
@@ -663,8 +887,7 @@ fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierF
     };
     if !model.items[result_item].is_result {
         return Err(EmitError::Driver(
-            "callback return enum is not the certified core Result (item.is_result unset)"
-                .into(),
+            "callback return enum is not the certified core Result (item.is_result unset)".into(),
         ));
     }
     let mut ok_tag: Option<u64> = None;
@@ -684,16 +907,16 @@ fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierF
                 }
                 let Some(tag) = v.tag_value else {
                     return Err(EmitError::Unsupported(
-                        "Result whose Ok variant is the untagged niche (first-light subset)"
-                            .into(),
+                        "Result whose Ok variant is the untagged niche (first-light subset)".into(),
                     ));
                 };
                 ok_tag = Some(tag as u64);
             }
             "Err" => {
-                let field = v.fields.first().ok_or_else(|| {
-                    EmitError::Driver("Err variant with no payload field".into())
-                })?;
+                let field = v
+                    .fields
+                    .first()
+                    .ok_or_else(|| EmitError::Driver("Err variant with no payload field".into()))?;
                 err_field = Some((field.offset, field.ty));
             }
             other => {
@@ -788,9 +1011,9 @@ fn emit_type_defs(
         for ty in pending {
             let name_for_err = cx.names.name_of(model, ty)?;
             let with_ctx = |err: EmitError| match err {
-                EmitError::Unsupported(s) => EmitError::Unsupported(format!(
-                    "{s} [while defining `struct {name_for_err}`]"
-                )),
+                EmitError::Unsupported(s) => {
+                    EmitError::Unsupported(format!("{s} [while defining `struct {name_for_err}`]"))
+                }
                 other => other,
             };
             let chunk = if ty == driver_ty {
@@ -885,6 +1108,63 @@ fn emit_module_tail(
         model.strings.resolve(driver.descriptor.name)
     ));
     out.push_str(&format!("module_amba_driver({drv}_driver);\n\n"));
+    out.push_str(&format!(
+        "MODULE_DESCRIPTION(\"Regseq-generated {} driver\");\nMODULE_LICENSE(\"GPL\");\n",
+        model.strings.resolve(driver.descriptor.name)
+    ));
+    Ok(out)
+}
+
+/// The PCI match table, driver struct, registration macro, and module
+/// metadata (backend-linux-c-e1000 T05: the FULL `match_set`, zero-sentinel,
+/// `MODULE_DEVICE_TABLE(pci, ...)` — B-6 never-truncate; the PCI analogue of
+/// [`emit_module_tail`]).
+fn emit_module_tail_pci(
+    model: &RegseqModel,
+    drv: &str,
+    driver: &regseq_model::DriverLifecycle,
+    shutdown_sym: Option<&str>,
+) -> Result<String, EmitError> {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "static const struct pci_device_id {drv}_ids[] = {{\n"
+    ));
+    for entry in &driver.descriptor.match_set {
+        let MatchEntry::Pci {
+            vendor,
+            device,
+            subsystem,
+            class,
+        } = entry
+        else {
+            unreachable!("foreign-transport entries rejected by the scope gate");
+        };
+        if subsystem.is_some() || class.is_some() {
+            // The composed surface carries vendor/device rows only; a
+            // qualified row would need a subvendor/subdevice/class-mask
+            // rendering this unit has no witness for — loud, never guessed
+            // (I03).
+            return Err(EmitError::Unsupported(
+                "PCI match entry with subsystem/class qualifiers (no witness this \
+                 unit; vendor/device rows only)"
+                    .into(),
+            ));
+        }
+        out.push_str(&format!(
+            "\t{{\n\t\t.vendor\t\t= {vendor:#06x},\n\t\t.device\t\t= {device:#06x},\n\t\t.subvendor\t= PCI_ANY_ID,\n\t\t.subdevice\t= PCI_ANY_ID,\n\t}},\n"
+        ));
+    }
+    out.push_str("\t{ 0, },\n};\n\n");
+    out.push_str(&format!("MODULE_DEVICE_TABLE(pci, {drv}_ids);\n\n"));
+
+    let shutdown_field = shutdown_sym
+        .map(|s| format!("\n\t.shutdown\t= {s},"))
+        .unwrap_or_default();
+    out.push_str(&format!(
+        "static struct pci_driver {drv}_driver = {{\n\t.name\t\t= \"{}\",\n\t.id_table\t= {drv}_ids,\n\t.probe\t\t= {drv}_probe,\n\t.remove\t\t= {drv}_remove,{shutdown_field}\n}};\n\n",
+        model.strings.resolve(driver.descriptor.name)
+    ));
+    out.push_str(&format!("module_pci_driver({drv}_driver);\n\n"));
     out.push_str(&format!(
         "MODULE_DESCRIPTION(\"Regseq-generated {} driver\");\nMODULE_LICENSE(\"GPL\");\n",
         model.strings.resolve(driver.descriptor.name)
