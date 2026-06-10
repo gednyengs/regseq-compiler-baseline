@@ -82,6 +82,9 @@ pub enum EmitError {
     /// A-10/D11 hard error naming the missing L2 literals (platform.toml
     /// stays REQUIRED even though DT `reg` is the normative map source).
     UnresolvedBinding(String),
+    /// A marked `RegseqError` variant has no row in the C02 errno table —
+    /// fail-loud at emit time, never a silent default arm.
+    ErrnoMapping(String),
 }
 
 impl std::fmt::Display for EmitError {
@@ -99,6 +102,10 @@ impl std::fmt::Display for EmitError {
             EmitError::UnresolvedBinding(what) => write!(
                 f,
                 "zephyr_c emission: unresolved MMIO binding (ratified A-10/D11): {what}"
+            ),
+            EmitError::ErrnoMapping(variant) => write!(
+                f,
+                "zephyr_c emission: RegseqError variant `{variant}` has no C02 errno mapping"
             ),
         }
     }
@@ -288,6 +295,28 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         }
     }
 
+    // The literal `is_resolved()` preamble gate (ratified A-10/D11): DT
+    // `reg` is the normative map source on Zephyr, but platform.toml stays
+    // REQUIRED — its literals are the resolution trigger AND the emitted A-1
+    // cross-check's right-hand side. An unresolved binding is a hard
+    // emit-time error, never a silently-skipped preamble.
+    for field in &driver.handle.resource_fields {
+        if !field.binding.is_resolved() {
+            let fname = c_ident(model.strings.resolve(field.name));
+            let join_id = field
+                .binding
+                .id
+                .map(|id| model.strings.resolve(id).to_string())
+                .unwrap_or_else(|| fname.clone());
+            return Err(EmitError::UnresolvedBinding(format!(
+                "resource `{fname}` has no resolved (base, size): the platform file must \
+                 supply `[mmio.{join_id}] base/size` (the L2 literals are the resolution \
+                 trigger, ratified A-10; D11 consumes them in the emitted BUILD_ASSERT \
+                 cross-check)"
+            )));
+        }
+    }
+
     let drv = c_ident(model.strings.resolve(driver.descriptor.name));
 
     // -- the driver struct type ----------------------------------------------
@@ -315,27 +344,117 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
     //    regardless of how far the body banks have grown (D12 frame) --------
     scan_closure_ops(model, &closure)?;
 
-    // -- body lowering: the T06–T08 banks ------------------------------------
-    if !roots.is_empty() {
-        // Fail-loud placeholder that shrinks as the lowering grows: T06
-        // (MMIO width family), T07 (lifecycle/BRM + errno adapter +
-        // authored bodies), T08 (LOG_* reassembly).
-        return Err(EmitError::Unsupported(format!(
-            "authored lifecycle body lowering (`{}`): delivered by the T06-T08 banks",
-            roots[0].0
-        )));
+    // -- the lowering context (T06 bank consumer) ----------------------------
+    let resources: Vec<(String, bool, String)> = driver
+        .handle
+        .resource_fields
+        .iter()
+        .map(|f| {
+            let c_name = c_ident(model.strings.resolve(f.name));
+            let join_id = f
+                .binding
+                .id
+                .map(|id| model.strings.resolve(id).to_string())
+                .unwrap_or_else(|| c_name.clone());
+            (c_name, f.binding.is_resolved(), join_id)
+        })
+        .collect();
+    let resource_c_names: Vec<String> = resources.iter().map(|(n, _, _)| n.clone()).collect();
+    let reg_macros = register_macros(model, driver_ty, &drv, &resource_c_names);
+    let base_symbol = format!("{drv}_mmio_base");
+    let has_region = !driver.handle.resource_fields.is_empty();
+    let mut cx = body::LowerCx {
+        model,
+        names: TypeNames::new(),
+        fn_symbols: std::collections::BTreeMap::new(),
+        extra_includes: std::collections::BTreeSet::new(),
+        driver: body::DriverFacts {
+            driver_ty,
+            resources,
+            reg_macros,
+            base_symbol: base_symbol.clone(),
+        },
+        width8_used: false,
+        uses_log: false,
+        elided_locals: std::collections::BTreeSet::new(),
+    };
+
+    // Symbols: `<drv>_<leaf>` with deterministic clash suffixes, callbacks
+    // named first so they always get the bare leaf (A-14 prefix policy).
+    for (name, id) in &roots {
+        cx.fn_symbols.insert(*id, format!("{drv}_{name}"));
+    }
+    for id in &closure {
+        if cx.fn_symbols.contains_key(id) {
+            continue;
+        }
+        let leaf = naming::path_leaf(model.strings.resolve(model.instances[*id].emission_name));
+        let base = format!("{drv}_{}", c_ident(leaf));
+        let mut sym = base.clone();
+        let mut n = 1;
+        while cx.fn_symbols.values().any(|v| v == &sym) {
+            n += 1;
+            sym = format!("{base}_{n}");
+        }
+        cx.fn_symbols.insert(*id, sym);
     }
 
-    // -- demand facts ---------------------------------------------------------
-    // The log-module block is demand-driven (scaffold §1 item 2): present
-    // iff ≥1 log call site is reachable. With no authored bodies the demand
-    // is structurally zero; T08 wires the real closure scan in.
-    let log_demand = false;
+    // -- lowered bodies (scaffold §1 item 5): forward prototypes for every
+    //    lowered function first (callees may be emitted after their
+    //    callers), then the definitions.
+    let with_fn_context = |err: EmitError, model: &RegseqModel, id: InstanceId| match err {
+        EmitError::Unsupported(s) => EmitError::Unsupported(format!(
+            "{s} [while lowering `{}`]",
+            model.strings.resolve(model.instances[id].emission_name)
+        )),
+        other => other,
+    };
+    let mut bodies = String::new();
+    for id in &closure {
+        let head = body::fn_head(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
+        bodies.push_str(&head);
+        bodies.push_str(";\n");
+    }
+    if !closure.is_empty() {
+        bodies.push('\n');
+    }
+    for id in &closure {
+        let f = body::emit_fn(&mut cx, *id).map_err(|e| with_fn_context(e, model, *id))?;
+        bodies.push_str(&f);
+        bodies.push('\n');
+    }
+
+    // -- the init function (scaffold §3) + the fused errno adapter ----------
+    let find = |name: &str| roots.iter().find(|(n, _)| *n == name).map(|(_, id)| *id);
+    let init_fn = emit_init_fn(
+        &mut cx,
+        &drv,
+        &base_symbol,
+        has_region,
+        find("on_init"),
+        find("on_init_failure"),
+    )?;
+
+    // -- type definitions, now that every use is known -----------------------
+    let type_defs = emit_type_defs(&mut cx, driver_ty)?;
 
     // -- TU assembly, scaffold §1 top to bottom ------------------------------
-    let mut names = TypeNames::new();
+    let resolved_region = driver
+        .handle
+        .resource_fields
+        .first()
+        .map(|f| (f.binding.base.unwrap(), f.binding.size.unwrap()));
     let tu = emit_tu(
-        model, &mut names, &drv, compatible, driver_ty, driver, log_demand,
+        &mut cx,
+        &drv,
+        compatible,
+        driver_ty,
+        &base_symbol,
+        has_region,
+        resolved_region,
+        &type_defs,
+        &bodies,
+        &init_fn,
     )?;
     let binding_yaml = emit_binding_yaml(model, &drv, compatible, driver);
 
@@ -344,6 +463,457 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         binding_yaml,
         driver_name: drv,
     })
+}
+
+/// The C02 per-target errno table, name-keyed (symbol-identical on Zephyr
+/// per the ratified A-10 recommendation — `EOPNOTSUPP` is public in Zephyr
+/// libc; the negation polarity is applied at the adapter's emission site).
+fn errno_symbol(variant_name: &str) -> Option<&'static str> {
+    Some(match variant_name {
+        "InvalidParameter" => "EINVAL",
+        "OutOfMemory" => "ENOMEM",
+        "HardwareError" => "EIO",
+        "Timeout" => "ETIMEDOUT",
+        "Unsupported" => "EOPNOTSUPP",
+        "DeviceBusy" => "EBUSY",
+        "PermissionDenied" => "EPERM",
+        "DeviceNotFound" => "ENODEV",
+        "GenericFailure" => "EIO",
+        _ => return None,
+    })
+}
+
+/// Synthesize the per-instance init function (scaffold §3): the one runtime
+/// dispatch hub — resource preamble (claim_regions = ZERO calls, the
+/// ratified elision; `DEVICE_MMIO_MAP` + the TU-static base install, A-2),
+/// then the authored `on_init` through the fused negated-errno adapter with
+/// the `on_init_failure` cleanup slot sequenced BEFORE the error return.
+///
+/// I10 is enforced structurally here: an authored `RegseqError` crosses the
+/// adapter at this boundary ONLY; generated preamble code has no fallible
+/// native calls in this unit (the DT map cannot fail at this layer), so no
+/// native status exists to conflate.
+fn emit_init_fn(
+    cx: &mut body::LowerCx<'_>,
+    drv: &str,
+    base_symbol: &str,
+    has_region: bool,
+    on_init: Option<InstanceId>,
+    on_init_failure: Option<InstanceId>,
+) -> Result<String, EmitError> {
+    let mut out = String::new();
+    out.push_str(&format!(
+        "/* the one runtime dispatch hub (scaffold §3) */\nstatic int {drv}_init(const struct device *dev)\n{{\n"
+    ));
+    let uses_data = on_init.is_some() || on_init_failure.is_some();
+    if uses_data {
+        out.push_str(&format!("\tstruct {drv}_data *data = dev->data;\n\n"));
+    }
+    if has_region {
+        out.push_str(
+            "\t/* resource preamble (scaffold §3): claim_regions = zero calls (the\n\t * ratified elision — the DT `reg` capture happened at build time);\n\t * the canonical map slot precedes every MMIO op */\n",
+        );
+        out.push_str("\tDEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);\n");
+        out.push_str(&format!(
+            "\t{base_symbol} = DEVICE_MMIO_GET(dev); /* TU-static base (A-2) */\n\n"
+        ));
+    } else if !uses_data {
+        out.push_str("\tARG_UNUSED(dev);\n");
+    }
+    if let Some(init_id) = on_init {
+        let sym = cx.fn_symbols[&init_id].clone();
+        let failure_hook = on_init_failure.map(|fid| {
+            format!(
+                "\t\t\t/* authored on_init -> Err: the failure hook IS the cleanup\n\t\t\t * slot, sequenced before the error return (D12); its one and\n\t\t\t * only call site */\n\t\t\t(void){}(&data->inner);\n",
+                cx.fn_symbols[&fid]
+            )
+        });
+        out.push_str(
+            "\t/* authored on_init over the embedded spec driver; an authored\n\t * RegseqError crosses the negated-errno adapter HERE and only here\n\t * (I10: native status — none exists in this preamble — would\n\t * propagate directly, never wrapped) */\n",
+        );
+        let adapter = emit_result_adapter(
+            cx,
+            init_id,
+            &format!("{sym}(&data->inner)"),
+            failure_hook.as_deref(),
+        )?;
+        out.push_str(&adapter);
+    }
+    out.push_str("\treturn 0;\n}\n");
+    Ok(out)
+}
+
+/// The RegseqError → negated-errno boundary adapter, fused into the init
+/// fn's return path (the nine C02 rows, symbol-identical, NEGATED — Zephyr
+/// init contract: 0 on success, -errno on failure, recorded positive in
+/// `init_res` and gating `device_is_ready()`, C-5 verified on v4.4.0).
+fn emit_result_adapter(
+    cx: &mut body::LowerCx<'_>,
+    callee: InstanceId,
+    call_expr: &str,
+    failure_hook: Option<&str>,
+) -> Result<String, EmitError> {
+    let model = cx.model;
+    let InstanceKind::Function(data) = &model.instances[callee].kind else {
+        return Err(EmitError::Driver("callback is not a function".into()));
+    };
+    let result_ty = model.sigs.resolve(data.fn_sig).output;
+    let facts = result_carrier_facts(model, result_ty)?;
+    let result_c = types::c_type(model, &mut cx.names, result_ty)?;
+    cx.extra_includes.insert("<errno.h>");
+
+    let mut out = String::new();
+    out.push_str(&format!("\t{{\n\t\t{result_c} __r = {call_expr};\n"));
+    // Read the Result tag cell.
+    out.push_str(&read_scalar(
+        "__tag",
+        "__r",
+        facts.result_tag_offset,
+        facts.result_tag_size,
+        &mut cx.extra_includes,
+    ));
+    out.push_str(&format!("\t\tif (__tag != {:#x}) {{\n", facts.ok_tag_value));
+    if let Some(hook) = failure_hook {
+        out.push_str(hook);
+    }
+    // The Err payload is the marked RegseqError; read its tag and map every
+    // variant through the C02 table, negated, in DETERMINISTIC variant
+    // order. `default` is corrupt-discriminant defense only (a known-but-
+    // unmapped variant is the fail-loud ErrnoMapping above, never a silent
+    // EIO).
+    out.push_str(&read_scalar(
+        "__err",
+        "__r",
+        facts.err_tag_offset,
+        facts.err_tag_size,
+        &mut cx.extra_includes,
+    ));
+    out.push_str("\t\t\tswitch (__err) {\n");
+    for (tag, symbol) in &facts.errno_arms {
+        out.push_str(&format!(
+            "\t\t\tcase {tag:#x}:\n\t\t\t\treturn -{symbol};\n"
+        ));
+    }
+    out.push_str("\t\t\tdefault:\n\t\t\t\treturn -EIO;\n\t\t\t}\n\t\t}\n\t}\n");
+    Ok(out)
+}
+
+/// `uint8_t`-exact scalar read out of an opaque carrier: emits a declaration
+/// of `name` loaded from `<carrier>._raw[offset..offset+size]`.
+fn read_scalar(
+    name: &str,
+    carrier: &str,
+    offset: u64,
+    size: u64,
+    includes: &mut std::collections::BTreeSet<&'static str>,
+) -> String {
+    if size > 1 {
+        includes.insert("<string.h>");
+    }
+    match size {
+        1 => format!("\t\tuint8_t {name} = {carrier}._raw[{offset}];\n"),
+        2 => format!("\t\tuint16_t {name}; memcpy(&{name}, &{carrier}._raw[{offset}], 2);\n"),
+        4 => format!("\t\tuint32_t {name}; memcpy(&{name}, &{carrier}._raw[{offset}], 4);\n"),
+        _ => format!("\t\tuint64_t {name}; memcpy(&{name}, &{carrier}._raw[{offset}], 8);\n"),
+    }
+}
+
+/// The layout facts of a callback's `Result<(), RegseqError>` carrier: where
+/// the Result tag lives, the Ok encoding, where the Err payload's own tag
+/// lives, and the per-variant negated-errno arms.
+struct CarrierFacts {
+    result_tag_offset: u64,
+    result_tag_size: u64,
+    ok_tag_value: u64,
+    err_tag_offset: u64,
+    err_tag_size: u64,
+    /// `(E tag value, errno symbol)` per RegseqError variant, variant order
+    /// (the deterministic arm order R03 locks).
+    errno_arms: Vec<(u64, &'static str)>,
+}
+
+fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierFacts, EmitError> {
+    let layout = types::layout_of(model, result_ty).ok_or_else(|| {
+        EmitError::Driver("callback return type is not an aggregate Result".into())
+    })?;
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple { variants, .. },
+    } = &layout.kind
+    else {
+        return Err(EmitError::Driver(
+            "callback return type is not a multi-variant enum (expected Result<(), RegseqError>)"
+                .into(),
+        ));
+    };
+    let (result_tag_offset, result_tag_size) = types::enum_tag_cell(model, result_ty)?;
+
+    // Certification: the carrier item must be the certified core Result, and
+    // Ok's payload must be exactly unit/ZST.
+    let result_item = match &model.types[result_ty] {
+        Ty::Enum { item, .. } => *item,
+        other => {
+            return Err(EmitError::Driver(format!(
+                "callback return type is not a nominal enum: {other:?}"
+            )))
+        }
+    };
+    if !model.items[result_item].is_result {
+        return Err(EmitError::Driver(
+            "callback return enum is not the certified core Result (item.is_result unset)".into(),
+        ));
+    }
+    let mut ok_tag: Option<u64> = None;
+    let mut err_field: Option<(u64, TyId)> = None;
+    for v in variants {
+        let name = model.strings.resolve(v.name);
+        match name {
+            "Ok" => {
+                for f in &v.fields {
+                    if !types::is_zst(model, f.ty) {
+                        return Err(EmitError::Driver(
+                            "callback Result Ok payload is not unit (expected Result<(), \
+                             RegseqError>)"
+                                .into(),
+                        ));
+                    }
+                }
+                let Some(tag) = v.tag_value else {
+                    return Err(EmitError::Unsupported(
+                        "Result whose Ok variant is the untagged niche (first-light subset)".into(),
+                    ));
+                };
+                ok_tag = Some(tag as u64);
+            }
+            "Err" => {
+                let field = v
+                    .fields
+                    .first()
+                    .ok_or_else(|| EmitError::Driver("Err variant with no payload field".into()))?;
+                err_field = Some((field.offset, field.ty));
+            }
+            other => {
+                return Err(EmitError::Driver(format!(
+                    "callback return enum has unexpected variant `{other}` \
+                     (expected Result<(), RegseqError>)"
+                )))
+            }
+        }
+    }
+    let ok_tag_value =
+        ok_tag.ok_or_else(|| EmitError::Driver("Result has no Ok variant".into()))?;
+    let (err_payload_offset, err_ty) =
+        err_field.ok_or_else(|| EmitError::Driver("Result has no Err variant".into()))?;
+
+    // The payload must be the marked RegseqError framework type.
+    let err_item = match &model.types[err_ty] {
+        Ty::Enum { item, .. } => *item,
+        other => {
+            return Err(EmitError::Driver(format!(
+                "Err payload is not an enum: {other:?}"
+            )))
+        }
+    };
+    let marked = (err_item.as_u32() as usize) < model.domain_attrs.item_attrs.len()
+        && model.domain_attrs.item_attrs[err_item].iter().any(|a| {
+            matches!(
+                a,
+                AttrData::FrameworkType(regseq_model::FrameworkType::RegseqError)
+            )
+        });
+    if !marked {
+        return Err(EmitError::Driver(
+            "Err payload enum is not the marked RegseqError framework type".into(),
+        ));
+    }
+
+    let (err_tag_off_in_e, err_tag_size) = types::enum_tag_cell(model, err_ty)?;
+    let err_layout = types::layout_of(model, err_ty).expect("enum layout");
+    let LayoutKind::Enum {
+        shape: EnumShape::Multiple {
+            variants: err_variants,
+            ..
+        },
+    } = &err_layout.kind
+    else {
+        return Err(EmitError::Driver("RegseqError is not multi-variant".into()));
+    };
+    let mut errno_arms = Vec::new();
+    for v in err_variants {
+        let name = model.strings.resolve(v.name);
+        let symbol = errno_symbol(name).ok_or_else(|| EmitError::ErrnoMapping(name.into()))?;
+        let Some(tag) = v.tag_value else {
+            return Err(EmitError::Unsupported(
+                "RegseqError variant without a direct tag (first-light subset)".into(),
+            ));
+        };
+        errno_arms.push((tag as u64, symbol));
+    }
+
+    Ok(CarrierFacts {
+        result_tag_offset,
+        result_tag_size,
+        ok_tag_value,
+        err_tag_offset: err_payload_offset + err_tag_off_in_e,
+        err_tag_size,
+        errno_arms,
+    })
+}
+
+/// Emit every named aggregate's definition, dependency-ordered (by-value
+/// struct containment first). The driver struct's resource fields are
+/// substituted with their dead-weight zephyr carrier (`mm_reg_t`, A-2).
+fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String, EmitError> {
+    let model = cx.model;
+    // The driver struct is always defined (the data struct embeds it, A-17).
+    cx.names.name_of(model, driver_ty)?;
+    let mut emitted: Vec<TyId> = Vec::new();
+    let mut out_chunks: std::collections::BTreeMap<TyId, String> =
+        std::collections::BTreeMap::new();
+    loop {
+        let pending: Vec<TyId> = cx
+            .names
+            .iter()
+            .map(|(ty, _)| *ty)
+            .filter(|ty| !emitted.contains(ty))
+            .collect();
+        if pending.is_empty() {
+            break;
+        }
+        for ty in pending {
+            let name_for_err = cx.names.name_of(model, ty)?;
+            let with_ctx = |err: EmitError| match err {
+                EmitError::Unsupported(s) => {
+                    EmitError::Unsupported(format!("{s} [while defining `struct {name_for_err}`]"))
+                }
+                other => other,
+            };
+            let chunk = if ty == driver_ty {
+                let rn: Vec<String> = cx
+                    .driver
+                    .resources
+                    .iter()
+                    .map(|(n, _, _)| n.clone())
+                    .collect();
+                types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
+                    if rn.iter().any(|r| r == fname) {
+                        Some(format!(
+                            "mm_reg_t {fname}; /* dead under the TU-static base carrier (A-2) */"
+                        ))
+                    } else {
+                        None
+                    }
+                })
+                .map_err(with_ctx)?
+            } else {
+                types::emit_aggregate_def(model, &mut cx.names, ty, &|_| None).map_err(with_ctx)?
+            };
+            out_chunks.insert(ty, chunk);
+            emitted.push(ty);
+        }
+    }
+
+    // Dependency order: emit in topological order of by-value containment.
+    let mut ordered: Vec<TyId> = Vec::new();
+    let keys: Vec<TyId> = out_chunks.keys().copied().collect();
+    fn visit(
+        model: &RegseqModel,
+        ty: TyId,
+        all: &[TyId],
+        ordered: &mut Vec<TyId>,
+        visiting: &mut Vec<TyId>,
+    ) -> Result<(), EmitError> {
+        if ordered.contains(&ty) {
+            return Ok(());
+        }
+        if visiting.contains(&ty) {
+            return Err(EmitError::Driver(
+                "by-value containment cycle in lowered types (model corruption)".into(),
+            ));
+        }
+        visiting.push(ty);
+        if let Some(layout) = types::layout_of(model, ty) {
+            if let LayoutKind::Struct { fields } = &layout.kind {
+                for f in fields {
+                    if all.contains(&f.ty) {
+                        visit(model, f.ty, all, ordered, visiting)?;
+                    }
+                }
+            }
+        }
+        visiting.pop();
+        ordered.push(ty);
+        Ok(())
+    }
+    for ty in &keys {
+        visit(model, *ty, &keys, &mut ordered, &mut Vec::new())?;
+    }
+
+    let mut out = String::new();
+    for ty in ordered {
+        out.push_str(&out_chunks[&ty]);
+        out.push('\n');
+    }
+    Ok(out)
+}
+
+/// The const bank: `(macro, offset)` per named register of the single
+/// resource block, recovered from the `#[repr(C)]` block layout.
+/// Underscore-named spacer fields are skipped.
+fn register_macros(
+    model: &RegseqModel,
+    driver_ty: TyId,
+    drv: &str,
+    resource_c_names: &[String],
+) -> Vec<(String, u64)> {
+    let mut out = Vec::new();
+    let Some(layout) = types::layout_of(model, driver_ty) else {
+        return out;
+    };
+    let LayoutKind::Struct { fields } = &layout.kind else {
+        return out;
+    };
+    let prefix = drv.to_uppercase();
+    for f in fields {
+        if !resource_c_names
+            .iter()
+            .any(|n| *n == c_ident(model.strings.resolve(f.name)))
+        {
+            continue;
+        }
+        // A resource field's spec type is `Mmio<Block>`: one `inner` field
+        // whose type is the register block.
+        let Some(mmio_layout) = types::layout_of(model, f.ty) else {
+            continue;
+        };
+        let LayoutKind::Struct {
+            fields: mmio_fields,
+        } = &mmio_layout.kind
+        else {
+            continue;
+        };
+        let [inner] = &mmio_fields[..] else { continue };
+        let Some(block_layout) = types::layout_of(model, inner.ty) else {
+            continue;
+        };
+        let LayoutKind::Struct {
+            fields: block_fields,
+        } = &block_layout.kind
+        else {
+            continue;
+        };
+        for reg in block_fields {
+            let name = model.strings.resolve(reg.name);
+            if name.starts_with('_') {
+                continue;
+            }
+            out.push((
+                format!("{prefix}_{}", c_ident(name).to_uppercase()),
+                reg.offset,
+            ));
+        }
+    }
+    out.sort_by_key(|(_, off)| *off);
+    out
 }
 
 /// Whether the all-zero bit pattern of an `Option`-shaped enum decodes to
@@ -535,54 +1105,23 @@ fn config_width(model: &RegseqModel, callee: InstanceId, op: &ConfigOp) -> Optio
     }
 }
 
-/// Render the embedded spec-driver struct definition (A-17: the whole spec
-/// driver lands in `data`; the Mmio resource fields are dead weight under
-/// the TU-static base carrier and documented as such).
-fn emit_driver_struct(
-    model: &RegseqModel,
-    names: &mut TypeNames,
-    driver_ty: TyId,
-    driver: &regseq_model::DriverLifecycle,
-) -> Result<(String, String), EmitError> {
-    let tag = names.name_of(model, driver_ty)?;
-    let mut out = String::new();
-    out.push_str(&format!(
-        "/* the spec driver, embedded verbatim in the data image (A-17) */\nstruct {tag} {{\n"
-    ));
-    let mut any = false;
-    for field in &driver.handle.resource_fields {
-        let name = c_ident(model.strings.resolve(field.name));
-        out.push_str(&format!(
-            "\tmm_reg_t {name}; /* dead under the TU-static base carrier (A-2) */\n"
-        ));
-        any = true;
-    }
-    for field in &driver.handle.user_data_fields {
-        let name = c_ident(model.strings.resolve(field.name));
-        let cty = types::c_type(model, names, field.ty)?;
-        out.push_str(&format!("\t{cty} {name};\n"));
-        any = true;
-    }
-    if !any {
-        out.push_str("\t/* fieldless spec driver */\n");
-    }
-    out.push_str("};\n");
-    Ok((tag, out))
-}
-
 /// Assemble the TU per the scaffold §1 skeleton, top to bottom.
 #[allow(clippy::too_many_arguments)]
 fn emit_tu(
-    model: &RegseqModel,
-    names: &mut TypeNames,
+    cx: &mut body::LowerCx<'_>,
     drv: &str,
     compatible: &str,
     driver_ty: TyId,
-    driver: &regseq_model::DriverLifecycle,
-    log_demand: bool,
+    base_symbol: &str,
+    has_region: bool,
+    resolved_region: Option<(u64, u64)>,
+    type_defs: &str,
+    bodies: &str,
+    init_fn: &str,
 ) -> Result<String, EmitError> {
-    let has_region = !driver.handle.resource_fields.is_empty();
-    let (inner_tag, inner_def) = emit_driver_struct(model, names, driver_ty, driver)?;
+    let model = cx.model;
+    let inner_tag = cx.names.name_of(model, driver_ty)?;
+    let log_demand = cx.uses_log;
 
     let mut tu = String::new();
     // Header: provenance + the hardcoded init placement (D13) + the A-9
@@ -596,6 +1135,11 @@ fn emit_tu(
             " *\n * Logging Kconfig pins (A-9, documented not asserted): CONFIG_LOG=y,\n * deferred mode, CONFIG_CBPRINTF_COMPLETE, CONFIG_CBPRINTF_FULL_INTEGRAL\n * (for %lld/%llu).\n",
         );
     }
+    if cx.width8_used {
+        tu.push_str(
+            " *\n * Width-8 MMIO note (D19/C-2): sys_read64/sys_write64 are\n * arch-conditional; this TU is validated on aarch64 — a target arch\n * lacking them fails the C compile loud.\n",
+        );
+    }
     tu.push_str(" */\n\n");
 
     // §1 item 1: the compatible pin.
@@ -604,7 +1148,7 @@ fn emit_tu(
         compat_token(compatible)
     ));
 
-    // §1 item 2: the demand-driven log-module block (T08 wires the demand).
+    // §1 item 2: the demand-driven log-module block (≥1 reachable log site).
     if log_demand {
         tu.push_str(&format!(
             "#define LOG_MODULE_NAME {drv}\n#include <zephyr/logging/log.h>\nLOG_MODULE_REGISTER(LOG_MODULE_NAME);\n\n"
@@ -613,24 +1157,32 @@ fn emit_tu(
 
     // §1 item 3: demand-driven includes.
     let mut includes: std::collections::BTreeSet<&str> =
-        ["<zephyr/device.h>"].into_iter().collect();
+        ["<zephyr/device.h>", "<stdint.h>"].into_iter().collect();
     if has_region {
         includes.insert("<zephyr/sys/device_mmio.h>");
     }
-    if !driver.handle.user_data_fields.is_empty() {
-        includes.insert("<stdint.h>");
-        includes.insert("<stdbool.h>");
-    }
+    includes.extend(cx.extra_includes.iter().copied());
     for inc in &includes {
         tu.push_str(&format!("#include {inc}\n"));
     }
     tu.push('\n');
 
-    // §1 item 4: per-instance state — config(ROM)/data(RAM), MMIO macros
-    // FIRST members, the spec driver embedded in data (A-17), the retained
-    // lifecycle state word (zero in the static image).
-    tu.push_str(&inner_def);
-    tu.push('\n');
+    // Register-offset const bank (recovered from the spec's #[repr(C)]
+    // block layout).
+    if !cx.driver.reg_macros.is_empty() {
+        tu.push_str("/* register offsets, recovered from the spec's #[repr(C)] block layout */\n");
+        for (name, off) in &cx.driver.reg_macros {
+            tu.push_str(&format!("#define {name} {off:#05x}\n"));
+        }
+        tu.push('\n');
+    }
+
+    // §1 item 4: per-instance state — type definitions (the spec driver +
+    // every carrier the lowered bodies use), then config(ROM)/data(RAM)
+    // with the MMIO macros as FIRST members, the spec driver embedded in
+    // data (A-17), and the retained lifecycle state word (zero in the
+    // static image).
+    tu.push_str(type_defs);
     tu.push_str(&format!("struct {drv}_config {{\n"));
     if has_region {
         tu.push_str("\tDEVICE_MMIO_ROM; /* FIRST member (scaffold §1) */\n");
@@ -645,13 +1197,17 @@ fn emit_tu(
     tu.push_str(&format!(
         "\tstruct {inner_tag} inner;\n\tuint32_t __rseq_state; /* retained; zero in the static image */\n}};\n\n"
     ));
+    if has_region {
+        tu.push_str(&format!(
+            "/* the TU-static base every MMIO op reads (A-2: the faithful first\n * realization, paired with the single-instance BUILD_ASSERT below) */\nstatic mm_reg_t {base_symbol};\n\n"
+        ));
+    }
 
-    // §1 items 5-7: helper bodies (T06-T08 banks) + the init function — the
-    // one runtime dispatch hub (§3). The resource preamble, the A-1
-    // cross-check and the authored on_init body land with T07.
-    tu.push_str(&format!(
-        "/* the one runtime dispatch hub (scaffold §3) */\nstatic int {drv}_init(const struct device *dev)\n{{\n\tARG_UNUSED(dev);\n\treturn 0;\n}}\n\n"
-    ));
+    // §1 items 5-7: lowered helper/callback bodies, then the init function
+    // — the one runtime dispatch hub (§3).
+    tu.push_str(bodies);
+    tu.push_str(init_fn);
+    tu.push('\n');
 
     // §1 item 8: the build-time instantiation block —
     // register/match/create/associate as build-time facts (§2); init level
@@ -681,6 +1237,15 @@ fn emit_tu(
     tu.push_str(
         "BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1,\n\t     \"TU-static MMIO base requires a single status-okay instance\");\n",
     );
+
+    // The A-1 cross-check (ratified D11): DT `reg` is the normative map
+    // source; the platform.toml literals are REQUIRED and re-asserted here
+    // against the DT at C compile time, with a named message.
+    if let Some((base, size)) = resolved_region {
+        tu.push_str(&format!(
+            "\n/* A-1/D11: the DT `reg` the map consumes must agree with the L2\n * platform literals the spec was resolved against */\nBUILD_ASSERT(DT_REG_ADDR(DT_DRV_INST(0)) == {base:#x} &&\n\t     DT_REG_SIZE(DT_DRV_INST(0)) == {size:#x},\n\t     \"DT reg disagrees with the resolved [mmio] platform literals (D11)\");\n"
+        ));
+    }
 
     Ok(tu)
 }

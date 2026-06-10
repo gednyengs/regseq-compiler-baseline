@@ -633,18 +633,45 @@ fn option_copy_within_the_zero_image_passes_through() {
     // guarantee holds and the field rides the zero-filled static image.
     let opt = option_enum(&mut m, "OptNz", 0);
     let field_name = m.strings.intern("count");
-    driver_into(
+    // The driver struct carries the field in its LAYOUT (the type-defs bank
+    // renders from the layout) and in the handle (the B-8 gate's input).
+    let driver_ty = push_struct(
         &mut m,
-        None,
-        match_set,
-        LifecycleOps::default(),
-        regseq_model::DriverHandle {
-            resource_fields: vec![],
-            user_data_fields: vec![UserDataField {
+        "Minimal",
+        struct_layout(
+            1,
+            1,
+            vec![FieldLayout {
                 name: field_name,
                 ty: opt,
-                kind: UserDataKind::OptionCopy,
+                offset: 0,
             }],
+        ),
+    );
+    let driver_item = match &m.types[driver_ty] {
+        Ty::Struct { item, .. } => *item,
+        _ => unreachable!(),
+    };
+    let name = m.strings.intern("minimal");
+    m.device_lifecycle.drivers.insert(
+        driver_item,
+        regseq_model::DriverLifecycle {
+            descriptor: regseq_model::DriverDescriptor {
+                name,
+                match_set,
+                device_class: ClassTag::Generic,
+                bus_type: None,
+                dma_present: false,
+            },
+            handle: regseq_model::DriverHandle {
+                resource_fields: vec![],
+                user_data_fields: vec![UserDataField {
+                    name: field_name,
+                    ty: opt,
+                    kind: UserDataKind::OptionCopy,
+                }],
+            },
+            ops: LifecycleOps::default(),
         },
     );
     let emit = emit_zephyr_c(&m).expect("zero-image OptionCopy must emit");
@@ -741,27 +768,348 @@ fn specified_config_shape_on_non_pci_is_rejected_citing_b4() {
     );
 }
 
-#[test]
-fn authored_body_lowering_is_the_shrinking_placeholder() {
-    // The T06-T08 placeholder: a clean on_init (no frame-scan hits) is
-    // still Unsupported until the body banks land — fail-loud, named.
+// -- T07: lifecycle/BRM lowering — MMIO scaffold, errno adapter,
+//    on_init_failure ---------------------------------------------------------
+
+/// Intern the marked RegseqError (fieldless variants, direct u8 tag) and
+/// the niche-encoded `Result<(), RegseqError>` carrier; returns
+/// `(result_ty, regseq_error_ty)`. `err_variant_names` lets the
+/// ErrnoMapping negative test inject an unmapped variant and the arm-order
+/// test permute the declaration order.
+fn result_carrier(m: &mut RegseqModel, err_variant_names: &[&str]) -> (TyId, TyId) {
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+
+    let err_item = item(m, ItemKind::Enum, "RegseqError");
+    while m.domain_attrs.item_attrs.len() <= err_item.as_u32() as usize {
+        m.domain_attrs.item_attrs.push(Vec::new());
+    }
+    m.domain_attrs.item_attrs[err_item].push(regseq_model::AttrData::FrameworkType(
+        regseq_model::FrameworkType::RegseqError,
+    ));
+    let err_variants: Vec<VariantLayout> = err_variant_names
+        .iter()
+        .enumerate()
+        .map(|(i, n)| VariantLayout {
+            name: m.strings.intern(n),
+            fields: vec![],
+            uninhabited: false,
+            discriminant: i as u128,
+            tag_value: Some(i as u128),
+        })
+        .collect();
+    let end = err_variant_names.len() as u128 - 1;
+    let err_ty = m.types.intern(Ty::Enum {
+        item: err_item,
+        args: regseq_model::GenericArgs::new(),
+        layout: Layout {
+            size: 1,
+            align: 1,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Enum {
+                shape: EnumShape::Multiple {
+                    tag: TagScalar {
+                        offset: 0,
+                        scalar_ty: u8t,
+                        valid_range: WrappingRange { start: 0, end },
+                    },
+                    encoding: TagEncoding::Direct,
+                    variants: err_variants,
+                },
+            },
+        },
+    });
+
+    let result_item = item(m, ItemKind::Enum, "Result");
+    m.items[result_item].is_result = true;
+    let ok_name = m.strings.intern("Ok");
+    let err_name = m.strings.intern("Err");
+    let payload_name = m.strings.intern("0");
+    let result_ty = m.types.intern(Ty::Enum {
+        item: result_item,
+        args: regseq_model::GenericArgs::new(),
+        layout: Layout {
+            size: 1,
+            align: 1,
+            pack: None,
+            uninhabited: false,
+            kind: LayoutKind::Enum {
+                shape: EnumShape::Multiple {
+                    tag: TagScalar {
+                        offset: 0,
+                        scalar_ty: u8t,
+                        valid_range: WrappingRange { start: 0, end: 2 },
+                    },
+                    encoding: TagEncoding::Niche {
+                        untagged_variant: VariantIdx::from_u32(1),
+                        niche_variants: VariantRange {
+                            start: VariantIdx::from_u32(0),
+                            end: VariantIdx::from_u32(0),
+                        },
+                        niche_start: 2,
+                    },
+                    variants: vec![
+                        VariantLayout {
+                            name: ok_name,
+                            fields: vec![],
+                            uninhabited: false,
+                            discriminant: 0,
+                            tag_value: Some(2),
+                        },
+                        VariantLayout {
+                            name: err_name,
+                            fields: vec![FieldLayout {
+                                name: payload_name,
+                                ty: err_ty,
+                                offset: 0,
+                            }],
+                            uninhabited: false,
+                            discriminant: 1,
+                            tag_value: None,
+                        },
+                    ],
+                },
+            },
+        },
+    });
+    (result_ty, err_ty)
+}
+
+/// Push a callback whose body is `_0 = Ok(()); return;` over
+/// `&mut <driver_ty>`; returns its `InstanceRef` for `LifecycleOps`.
+fn push_ok_callback(
+    m: &mut RegseqModel,
+    driver_ty: TyId,
+    result_ty: TyId,
+    leaf: &str,
+) -> regseq_model::InstanceRef {
+    let self_ty = m
+        .types
+        .intern(Ty::Ref(driver_ty, regseq_model::Provenance::UniqueBorrow));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let unit_const = m.consts.intern(Const::ZST);
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: result_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("self")),
+    });
+    body.arg_count = 1;
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(regseq_model::LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    regseq_model::AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let fn_item = item(m, ItemKind::Function, leaf);
+    let emission = m.strings.intern(leaf);
+    let id = m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    m.instance_ref_of(id)
+}
+
+/// The minimal full-TU model: one-region DT driver + `Ok(())` on_init over
+/// the given RegseqError variant set.
+fn emitting_model(err_variants: &[&str]) -> RegseqModel {
     let mut m = minimal_dt_model();
-    let ut = unit_ty(&mut m);
-    let helper = push_intrinsic(
-        &mut m,
-        "mmio_read",
-        IntrinsicKind::Mmio(regseq_model::MmioOp::Read),
-        vec![],
-        ut,
-    );
-    let on_init = push_callback_calling(&mut m, helper, ut);
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                let rendered = m.strings.resolve(m.items[*item].def_path.rendered);
+                rendered == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, err_variants);
+    let on_init = push_ok_callback(&mut m, driver_ty, result_ty, "on_init");
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.ops.on_init = Some(on_init);
+    m
+}
+
+#[test]
+fn full_tu_lowers_authored_on_init_through_the_adapter() {
+    let emit = emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"]))
+        .expect("the composed shape must emit");
+    let tu = &emit.tu;
+    // The init preamble: claim elision documented, map, TU-static base.
+    assert!(
+        tu.contains("DEVICE_MMIO_MAP(dev, K_MEM_CACHE_NONE);"),
+        "{tu}"
+    );
+    assert!(
+        tu.contains("minimal_mmio_base = DEVICE_MMIO_GET(dev); /* TU-static base (A-2) */"),
+        "{tu}"
+    );
+    assert!(tu.contains("static mm_reg_t minimal_mmio_base;"), "{tu}");
+    assert!(
+        !tu.contains("claim_regions("),
+        "claim_regions is the ratified ZERO-CALL elision: {tu}"
+    );
+    // The authored callback, lowered and called through the adapter.
+    assert!(
+        tu.contains("static struct Result minimal_on_init(struct Minimal * self)"),
+        "{tu}"
+    );
+    assert!(
+        tu.contains("struct Result __r = minimal_on_init(&data->inner);"),
+        "{tu}"
+    );
+    // Ok -> return 0; Err arms negated through the C02 table.
+    assert!(tu.contains("if (__tag != 0x2)"), "{tu}");
+    assert!(
+        tu.contains("return -EIO;") && tu.contains("return -EBUSY;"),
+        "{tu}"
+    );
+    assert!(tu.contains("\treturn 0;\n}"), "{tu}");
+    // <errno.h> rides the adapter.
+    assert!(tu.contains("#include <errno.h>"), "{tu}");
+}
+
+#[test]
+fn errno_arms_follow_variant_declaration_order() {
+    // Deterministic arm order = the enum's variant order, whatever it is.
+    let emit = emit_zephyr_c(&emitting_model(&["DeviceBusy", "Timeout", "HardwareError"]))
+        .expect("must emit");
+    let tu = &emit.tu;
+    let p_busy = tu.find("return -EBUSY;").expect("EBUSY arm");
+    let p_timeout = tu.find("return -ETIMEDOUT;").expect("ETIMEDOUT arm");
+    let p_eio = tu.find("return -EIO;").expect("EIO arm");
+    assert!(
+        p_busy < p_timeout && p_timeout < p_eio,
+        "arms must follow variant order: {tu}"
+    );
+    // Tags are the declaration-order discriminants.
+    assert!(tu.contains("case 0x0:"), "{tu}");
+    assert!(tu.contains("case 0x1:"), "{tu}");
+    assert!(tu.contains("case 0x2:"), "{tu}");
+}
+
+#[test]
+fn on_init_failure_has_one_call_site_before_the_errno_switch() {
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let result_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| matches!(t, Ty::Enum { item, .. } if m.items[*item].is_result))
+        .map(|(id, _)| id)
+        .unwrap();
+    let on_init_failure = push_ok_callback(&mut m, driver_ty, result_ty, "on_init_failure");
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init_failure = Some(on_init_failure);
+    let emit = emit_zephyr_c(&m).expect("must emit");
+    let tu = &emit.tu;
+    // Exactly ONE call site (D12: non-vacuous, the synthetic seam).
+    let call = "(void)minimal_on_init_failure(&data->inner);";
+    assert_eq!(tu.matches(call).count(), 1, "{tu}");
+    // Positioned on the error path, BEFORE the errno switch (the cleanup
+    // slot is sequenced ahead of the error return).
+    let p_call = tu.find(call).unwrap();
+    let p_switch = tu.find("switch (__err)").expect("errno switch");
+    let p_tag = tu.find("if (__tag != 0x2)").expect("err branch");
+    assert!(p_tag < p_call && p_call < p_switch, "{tu}");
+}
+
+#[test]
+fn unmapped_regseq_error_variant_fails_loud() {
+    let err = emit_zephyr_c(&emitting_model(&["HardwareError", "Bogus"])).unwrap_err();
+    assert_eq!(err, EmitError::ErrnoMapping("Bogus".into()));
+}
+
+#[test]
+fn unresolved_binding_is_a_hard_preamble_gate() {
+    // Even with NO MMIO op in any body, an unresolved region is the A-10
+    // hard emit-time error (platform.toml is REQUIRED).
+    let mut m = model();
+    let match_set = dt_match_for(&mut m, "regseq,pl011");
+    let unresolved = ResourceField {
+        name: m.strings.intern("regs"),
+        kind: ResourceKind::Mmio,
+        binding: MmioBinding::default(),
+    };
+    driver_into(
+        &mut m,
+        None,
+        match_set,
+        LifecycleOps::default(),
+        regseq_model::DriverHandle {
+            resource_fields: vec![unresolved],
+            user_data_fields: vec![],
+        },
+    );
     let err = emit_zephyr_c(&m).unwrap_err();
-    assert!(matches!(
-        err,
-        EmitError::Unsupported(ref s) if s.contains("T06-T08")
-    ));
+    let EmitError::UnresolvedBinding(s) = err else {
+        panic!("expected UnresolvedBinding, got {err:?}");
+    };
+    assert!(
+        s.contains("[mmio.regs] base/size") && s.contains("A-10"),
+        "{s}"
+    );
+}
+
+#[test]
+fn a1_cross_check_build_assert_carries_the_platform_literals() {
+    let emit = emit_zephyr_c(&emitting_model(&["HardwareError", "DeviceBusy"])).expect("must emit");
+    let tu = &emit.tu;
+    assert!(
+        tu.contains("BUILD_ASSERT(DT_REG_ADDR(DT_DRV_INST(0)) == 0x9040000 &&"),
+        "{tu}"
+    );
+    assert!(
+        tu.contains("DT_REG_SIZE(DT_DRV_INST(0)) == 0x1000,"),
+        "{tu}"
+    );
+    // D11: a NAMED message.
+    assert!(
+        tu.contains("\"DT reg disagrees with the resolved [mmio] platform literals (D11)\""),
+        "{tu}"
+    );
 }
 
 // -- the minimal scaffold (R01/R02, S01/S02): artifact set + §1 landmarks ----

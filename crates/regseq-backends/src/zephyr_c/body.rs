@@ -20,11 +20,6 @@
 //! accessors over the TU-static `mm_reg_t` base (A-2), `LOG_*` reassembly,
 //! `k_panic()` traps).
 
-// T06 lands the bank + its unit seam; the TU fold consumes it in T07 (the
-// linux_c `emit_config` precedent for a seam that tests drive directly
-// before its production caller exists).
-#![cfg_attr(not(test), allow(dead_code))]
-
 use std::collections::BTreeMap;
 
 use regseq_model::{

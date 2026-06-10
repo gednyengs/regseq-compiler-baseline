@@ -51,6 +51,65 @@ impl TypeNames {
         self.names.insert(ty, name.clone());
         Ok(name)
     }
+
+    /// Every named aggregate, in BTreeMap (TyId-keyed) order — deterministic
+    /// per model.
+    pub(crate) fn iter(&self) -> impl Iterator<Item = (&TyId, &String)> {
+        self.names.iter()
+    }
+}
+
+/// Emit the C definition for one named aggregate. Structs get real members
+/// (resource fields substituted by the caller via `field_override`); enums
+/// become opaque layout-faithful byte carriers (`uint8_t _raw[N]`) whose
+/// tag/payload bytes the body emitter writes per the model's resolved
+/// `Layout` — the byte image, not a C view structure, is the contract (the
+/// carrier crosses the scaffold boundary only through the errno adapter's
+/// discriminant read).
+pub(crate) fn emit_aggregate_def(
+    model: &RegseqModel,
+    names: &mut TypeNames,
+    ty: TyId,
+    field_override: &dyn Fn(&str) -> Option<String>,
+) -> Result<String, EmitError> {
+    let name = names.name_of(model, ty)?;
+    let layout = layout_of(model, ty)
+        .ok_or_else(|| EmitError::Unsupported("definition of a non-aggregate".into()))?;
+    match (&model.types[ty], &layout.kind) {
+        (Ty::Enum { .. }, _) => Ok(format!(
+            "/* {} - layout-faithful byte carrier (size {}, align {}) */\nstruct {} {{\n\tuint8_t _raw[{}];\n}} __attribute__((aligned({})));\n",
+            name, layout.size, layout.align, name, layout.size, layout.align
+        )),
+        (Ty::Struct { .. } | Ty::Tuple { .. }, regseq_model::LayoutKind::Struct { fields }) => {
+            // Emit fields in MEMORY order (by offset) so the C layout matches
+            // the model layout without padding directives in the common case.
+            let mut ordered: Vec<_> = fields.iter().collect();
+            ordered.sort_by_key(|f| f.offset);
+            let mut out = format!("struct {name} {{\n");
+            let mut any = false;
+            for f in &ordered {
+                let fname = c_ident(model.strings.resolve(f.name));
+                if let Some(subst) = field_override(&fname) {
+                    out.push_str(&format!("\t{subst};\n"));
+                    any = true;
+                    continue;
+                }
+                if is_zst(model, f.ty) {
+                    continue;
+                }
+                out.push_str(&format!("\t{} {};\n", c_type(model, names, f.ty)?, fname));
+                any = true;
+            }
+            if !any {
+                out.push_str("\t/* fieldless spec aggregate */\n");
+            }
+            out.push_str("};\n");
+            Ok(out)
+        }
+        other => Err(EmitError::Unsupported(format!(
+            "aggregate definition for {other:?} (first-light subset)"
+        ))),
+    }
 }
 
 pub(crate) fn int_spelling(kind: IntKind) -> Result<&'static str, EmitError> {
