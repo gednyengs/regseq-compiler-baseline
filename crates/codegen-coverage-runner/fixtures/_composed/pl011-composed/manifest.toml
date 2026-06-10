@@ -1,0 +1,16 @@
+name   = "pl011-composed"
+kind   = "rust"
+# The composed PL011 proof fixture (backend-linux-c unit, GRILL D06/D08 C2):
+# the five refined construct surfaces — register-access, BRM (AMBA),
+# device-lifecycle, diagnostics-logging, RegseqError — in one spec. The
+# `orderly` scenario lowers to register (match=amba:0x41011/0xfffff) → create
+# → associate → resource preamble → bus acquisition over the platform.toml
+# binding (base 0x09000000, size 0x1000; QEMU virt PL011) → `LC call on_init`
+# (the datasheet §3.3.8 bring-up) → `LC call on_deinit` → teardown. Run by the
+# dedicated sole-binary `pl011_composed_e2e` ONLY (clean-process interner
+# isolation, like `_bus`/`_lifecycle`): its blessed `expected.stdout` is the
+# canonical PL011 oracle trace for the L3 trace differential, and its bound
+# model is the linux_c first-light input.
+covers = []
+lifecycle_scenario = "orderly"
+expect = "pass"

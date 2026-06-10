@@ -50,6 +50,7 @@ pub use sync::{Completion, Guard, IrqSpinLock, Mutex, SpinLock};
 pub use time::Duration;
 
 // `#[macro_export]` exports the log macros at the crate root. Re-export
-// them inside this module so that `crate::regseq::log_info!(...)` resolves
-// — the canonical authored path under this restructure.
+// them inside this module as plumbing for the `log` submodule's aliases —
+// the canonical authored spelling is `crate::regseq::log::{debug, info,
+// warn, error}!(...)`.
 pub use crate::{log_debug, log_error, log_info, log_warn};

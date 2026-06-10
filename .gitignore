@@ -18,6 +18,12 @@ __pycache__/
 .claude/*
 # …but keep the grill-to-plan design records (GRILL/PRD/PLAN) version-controlled
 !.claude/specs/
+# grill-to-plan artifacts (GRILL/PRD/PLAN) are project records, like .claude/specs/
+!.claude/sekekama/
+.claude/sekekama/*
+!.claude/sekekama/grill-to-plan/
+.claude/sekekama/grill-to-plan/*
+!.claude/sekekama/grill-to-plan/specs/
 
 # Tool config
 .mcp.json

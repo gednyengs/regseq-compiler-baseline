@@ -607,3 +607,81 @@ pub fn bless_fixture(fixture: &Fixture, cc: &Path) -> BlessOutcome {
         ok,
     }
 }
+
+/// Run a fixture through the linux_c pipeline row (GRILL C02):
+/// bridge → L2 bind → `emit_linux_c` → byte-exact snapshot vs the committed
+/// `golden.linux.c`. No host cc/run stages — kernel code cannot host-run;
+/// compile proof is the env-gated kbuild gate (L1, `linux_kbuild_e2e`).
+/// Stage attribution mirrors [`run_fixture`] (`FixtureVerdict::Fail{stage,..}`).
+pub fn run_linux_fixture(fixture: &Fixture) -> FixtureResult {
+    let name = fixture.manifest.name.clone();
+    let covers = fixture.manifest.covers.clone();
+    let verdict = run_linux_stages(fixture);
+    FixtureResult {
+        name,
+        covers,
+        verdict,
+    }
+}
+
+/// The committed linux_c snapshot beside a fixture (`golden.linux.c`).
+pub fn linux_golden_path(fixture: &Fixture) -> std::path::PathBuf {
+    fixture.dir.join("golden.linux.c")
+}
+
+fn run_linux_stages(fixture: &Fixture) -> FixtureVerdict {
+    // Stage 1: Acquire (same bridge seam as the generic row).
+    let mut model = match fixture.manifest.kind {
+        FixtureKind::Ir => {
+            return FixtureVerdict::Skipped {
+                reason: "kind=ir unsupported".to_string(),
+            };
+        }
+        FixtureKind::Rust => {
+            match try_bridge_fixture_path_with_overrides(&fixture.input, &bridge_overrides(fixture))
+            {
+                BridgeOutcome::Ok(model) => model,
+                BridgeOutcome::ValidatorFailed { violation, .. } => {
+                    return fail(Stage::Acquire, format!("validator failed: {violation:?}"));
+                }
+                BridgeOutcome::Rejected(err) => {
+                    return fail(Stage::Acquire, format!("bridge rejected: {err}"));
+                }
+                BridgeOutcome::RustcRejected { stderr } => {
+                    return fail(
+                        Stage::Acquire,
+                        format!("rustc rejected before after_analysis: {stderr}"),
+                    );
+                }
+            }
+        }
+    };
+
+    // Stage 1b: L2 bind (identical seam; the bound model is what linux_c
+    // consumes, so `golden.linux.c` captures L2 correctness for free).
+    if let Err(detail) = bind_l2_platform(&mut model, fixture) {
+        return fail(Stage::Bind, detail);
+    }
+
+    // Stage 2: linux_c emit (fail-loud diagnostics surface here).
+    let emit = match regseq_backends::emit_linux_c(&model) {
+        Ok(emit) => emit,
+        Err(err) => return fail(Stage::Emit, err.to_string()),
+    };
+
+    // Stage 3: byte-exact snapshot vs golden.linux.c.
+    let golden_path = linux_golden_path(fixture);
+    let golden = match std::fs::read_to_string(&golden_path) {
+        Ok(text) => text,
+        Err(err) => {
+            return fail(
+                Stage::Snapshot,
+                format!("cannot read golden {}: {err}", golden_path.display()),
+            );
+        }
+    };
+    if let Err(mismatch) = oracle::snapshot(&emit.tu, &golden) {
+        return fail(Stage::Snapshot, mismatch.summary);
+    }
+    FixtureVerdict::Pass
+}

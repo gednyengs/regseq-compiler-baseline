@@ -23,6 +23,7 @@
 
 extern crate rustc_driver;
 
+pub mod kbuild;
 pub mod ledger;
 pub mod manifest;
 pub mod matrix;

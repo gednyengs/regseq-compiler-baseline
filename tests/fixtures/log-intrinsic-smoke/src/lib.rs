@@ -1,11 +1,12 @@
 //! Log intrinsic format-kind coverage fixture.
 //!
-//! Each method below issues exactly one `log_info!` call whose template
+//! Each method below issues exactly one `regseq::log::info!` call whose template
 //! exercises a single `FormatKind` variant from
-//! `regseq_model::ir::FormatKind`. The test in
-//! `crates/regseq-driver/tests/construction_log_metadata.rs` translates
-//! every method body and asserts that Rule 6 metadata extraction
-//! produces the expected placeholders.
+//! `regseq_model::ir::FormatKind`. The historical consumer,
+//! `crates/regseq-driver-old/tests/construction_log_metadata.rs` (archived
+//! outside the workspace), translated every method body and asserted that
+//! Rule 6 metadata extraction produces the expected placeholders; no live
+//! test compiles this fixture today.
 //!
 //! `FormatKind::Pointer` (`{:p}`) is intentionally absent: the
 //! Regseq IR does not currently model raw pointer types
@@ -31,38 +32,38 @@ pub struct LogSmoke {}
 
 impl LogSmoke {
     pub fn log_display(value: u32) {
-        crate::regseq::log_info!("display: {}", value);
+        crate::regseq::log::info!("display: {}", value);
     }
 
     pub fn log_lower_hex(value: u32) {
-        crate::regseq::log_info!("lower hex: {:x}", value);
+        crate::regseq::log::info!("lower hex: {:x}", value);
     }
 
     pub fn log_upper_hex(value: u32) {
-        crate::regseq::log_info!("upper hex: {:X}", value);
+        crate::regseq::log::info!("upper hex: {:X}", value);
     }
 
     pub fn log_lower_hex_prefixed(value: u32) {
-        crate::regseq::log_info!("lower prefix: {:#x}", value);
+        crate::regseq::log::info!("lower prefix: {:#x}", value);
     }
 
     pub fn log_upper_hex_prefixed(value: u32) {
-        crate::regseq::log_info!("upper prefix: {:#X}", value);
+        crate::regseq::log::info!("upper prefix: {:#X}", value);
     }
 
     pub fn log_padded_hex(value: u32) {
-        crate::regseq::log_info!("padded: {:08x}", value);
+        crate::regseq::log::info!("padded: {:08x}", value);
     }
 
     pub fn log_padded_prefix_hex(value: u32) {
-        crate::regseq::log_info!("padded prefix: {:#010x}", value);
+        crate::regseq::log::info!("padded prefix: {:#010x}", value);
     }
 
     pub fn log_two_args(value: u32) {
-        crate::regseq::log_info!("two: {} {:#x}", value, value);
+        crate::regseq::log::info!("two: {} {:#x}", value, value);
     }
 
     pub fn log_no_args() {
-        crate::regseq::log_info!("no args at all");
+        crate::regseq::log::info!("no args at all");
     }
 }
