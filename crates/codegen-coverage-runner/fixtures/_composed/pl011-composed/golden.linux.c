@@ -559,6 +559,10 @@ static const struct amba_id pl011_ids[] = {
 		.id	= 0x00041011,
 		.mask	= 0x000fffff,
 	},
+	{
+		.id	= 0x00abc123,
+		.mask	= 0x00ffffff,
+	},
 	{ 0, 0 },
 };
 

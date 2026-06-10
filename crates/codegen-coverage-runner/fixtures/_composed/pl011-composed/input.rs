@@ -366,7 +366,16 @@ const BUSY_SPIN_BOUND: u32 = 1_000;
 /// All eleven PL011 interrupt sources (IMSC/ICR claim-path bits).
 const ALL_UART_INTERRUPTS_MASK: u32 = 0x7ff;
 
-#[rseq::driver(name = "pl011", bus = "amba", amba = [{ id = 0x00041011, mask = 0x000fffff }])]
+// Two-row match table: the real PrimeCell PL011 periphid (the amba-pl011
+// idiom) PLUS the eval campaign's reserved test periphid (the L2 DTB
+// overrides ttyAMA1 to 0x00abc123 so the stock built-in driver cannot bind
+// it; this driver can). The second row also exercises the FULL match_set →
+// multi-row amba_id table lowering (the kernel tables are inherently
+// multi-row + zero-sentinel).
+#[rseq::driver(name = "pl011", bus = "amba", amba = [
+    { id = 0x00041011, mask = 0x000fffff },
+    { id = 0x00abc123, mask = 0x00ffffff },
+])]
 pub struct Pl011Composed {
     #[rseq::mmio(id = "regs")]
     regs: Mmio<pl011::Regs>,

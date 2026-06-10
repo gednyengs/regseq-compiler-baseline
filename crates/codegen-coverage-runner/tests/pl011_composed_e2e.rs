@@ -170,11 +170,17 @@ fn assert_recognition_facts(model: &RegseqModel) {
     let driver = model.device_lifecycle.drivers.values().next().unwrap();
     assert_eq!(
         driver.descriptor.match_set,
-        vec![MatchEntry::Amba {
-            id: 0x0004_1011,
-            mask: 0x000f_ffff
-        }],
-        "the amba-pl011 periphid match entry"
+        vec![
+            MatchEntry::Amba {
+                id: 0x0004_1011,
+                mask: 0x000f_ffff
+            },
+            MatchEntry::Amba {
+                id: 0x00ab_c123,
+                mask: 0x00ff_ffff
+            },
+        ],
+        "the real PL011 periphid + the campaign's reserved test periphid"
     );
     assert!(
         driver.ops.on_init.is_some() && driver.ops.on_deinit.is_some(),

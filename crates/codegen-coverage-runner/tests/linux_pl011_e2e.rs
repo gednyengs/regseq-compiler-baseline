@@ -129,7 +129,9 @@ fn linux_pl011_snapshot_and_l0_structure() {
     // -- module tail: full match set + sentinel + MODULE_DEVICE_TABLE +
     //    module_amba_driver (scaffold doc §1).
     let table = pos(".id\t= 0x00041011,");
+    let second = pos(".id\t= 0x00abc123,");
     let sentinel = pos("{ 0, 0 },");
+    assert!(table < second && second < sentinel, "full multi-row match table");
     let devtable = pos("MODULE_DEVICE_TABLE(amba, pl011_ids);");
     let macros = pos("module_amba_driver(pl011_driver);");
     assert!(remove < table && table < sentinel && sentinel < devtable && devtable < macros);
