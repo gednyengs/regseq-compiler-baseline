@@ -1,0 +1,18 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+# L2 MMIO region binding: the section key `regs` joins to the L1 resource
+# declared `#[rseq::mmio(id = "regs")]`. QEMU virt machine PL011: base
+# 0x0900_0000, size 0x1000. No `bar` — a BAR is PCI-only (BRM-002); the AMBA
+# region carries only the resolved `(base, size)`. Per the ratified A-10
+# policy these L2 literals are REQUIRED as the resolution trigger: the
+# generic_c oracle maps them literally, while the Linux backend discards the
+# values in favor of probe-time enumeration (the no-literal-map-region L3
+# whitelist entry).
+[mmio.regs]
+base = 0x09000000
+size = 0x1000
