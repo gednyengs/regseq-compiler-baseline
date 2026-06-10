@@ -1706,3 +1706,288 @@ fn mmio_against_unresolved_binding_is_the_a10_hard_error() {
         "{s}"
     );
 }
+
+// -- T08: diagnostics-logging lowering — LOG_* reassembly --------------------
+
+/// Intern a static `&str` carrier const: `Aggregate([Reloc -> CMS static,
+/// Uint(len)])` with the CMS static holding the literal bytes.
+fn str_carrier(m: &mut RegseqModel, text: &[u8]) -> regseq_model::ConstId {
+    let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+    let bytes: Vec<regseq_model::Byte> =
+        text.iter().map(|b| regseq_model::Byte::Value(*b)).collect();
+    let bytes_cid = m.consts.intern(Const::Bytes(bytes));
+    let st_item = item(
+        m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "cms",
+    );
+    let emission = m.strings.intern("cms");
+    let st_id = m.instances.push(Instance {
+        item: st_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Static {
+            ty: u8t,
+            init: Some(bytes_cid),
+        },
+    });
+    let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(st_id)));
+    let len = m
+        .consts
+        .intern(Const::Uint(UintKind::Usize, text.len() as u128));
+    m.consts.intern(Const::Aggregate(vec![reloc, len]))
+}
+
+/// Push an on_init whose body logs once (the given level/template/args)
+/// then returns `Ok(())`.
+fn push_logging_on_init(
+    m: &mut RegseqModel,
+    driver_ty: TyId,
+    result_ty: TyId,
+    level: regseq_model::LogLevel,
+    template: &[u8],
+    log_args: Vec<Operand>,
+) -> regseq_model::InstanceRef {
+    let ut = unit_ty(m);
+    let log_intrinsic = push_intrinsic(m, "log_site", IntrinsicKind::Log(level), vec![], ut);
+    let self_ty = m
+        .types
+        .intern(Ty::Ref(driver_ty, regseq_model::Provenance::UniqueBorrow));
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: result_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let unit_const = m.consts.intern(Const::ZST);
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: result_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("self")),
+    });
+    body.local_decls.push(LocalDecl {
+        ty: ut,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.arg_count = 1;
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(log_intrinsic),
+                args: log_args.into_boxed_slice(),
+                destination: Place::from(regseq_model::LocalId::from_u32(2)),
+                target: Some(regseq_model::BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(regseq_model::LocalId::RETURN_PLACE),
+                Rvalue::Aggregate(
+                    regseq_model::AggregateKind::Enum(result_ty, VariantIdx::from_u32(0)),
+                    Box::new([Operand::Constant(unit_const)]),
+                ),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+    let fn_item = item(m, ItemKind::Function, "on_init");
+    let emission = m.strings.intern("on_init");
+    let id = m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    });
+    m.instance_ref_of(id)
+}
+
+/// Model with a logging on_init; returns the emit result.
+fn emit_with_log(
+    level: regseq_model::LogLevel,
+    template: &[u8],
+    extra_args: impl FnOnce(&mut RegseqModel) -> Vec<Operand>,
+) -> Result<super::ZephyrEmit, EmitError> {
+    let mut m = minimal_dt_model();
+    let driver_ty = m
+        .types
+        .iter()
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. } if {
+                m.strings.resolve(m.items[*item].def_path.rendered) == "Minimal"
+            })
+        })
+        .map(|(id, _)| id)
+        .unwrap();
+    let (result_ty, _) = result_carrier(&mut m, &["HardwareError", "DeviceBusy"]);
+    let fmt = str_carrier(&mut m, template);
+    let mut args: Vec<Operand> = vec![Operand::Constant(fmt)];
+    args.extend(extra_args(&mut m));
+    let on_init = push_logging_on_init(&mut m, driver_ty, result_ty, level, template, args);
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.ops.on_init = Some(on_init);
+    emit_zephyr_c(&m)
+}
+
+#[test]
+fn log_levels_select_the_zephyr_macros() {
+    use regseq_model::LogLevel;
+    for (level, mac) in [
+        (LogLevel::Debug, "LOG_DBG(\"probe start\");"),
+        (LogLevel::Info, "LOG_INF(\"probe start\");"),
+        (LogLevel::Warn, "LOG_WRN(\"probe start\");"),
+        (LogLevel::Error, "LOG_ERR(\"probe start\");"),
+    ] {
+        let emit = emit_with_log(level, b"probe start", |_| vec![]).expect("must emit");
+        assert!(emit.tu.contains(mac), "{}", emit.tu);
+        // The [LEVEL] text tag is structural via the macro — never in fmt.
+        assert!(
+            !emit.tu.contains("[DEBUG]") && !emit.tu.contains("[INFO]"),
+            "{}",
+            emit.tu
+        );
+    }
+}
+
+#[test]
+fn log_demand_wires_the_module_block_and_a9_pins() {
+    let emit = emit_with_log(regseq_model::LogLevel::Info, b"up", |_| vec![]).expect("emit");
+    let tu = &emit.tu;
+    // Demand-driven module block (scaffold §1 item 2), A-14 name.
+    assert!(tu.contains("#define LOG_MODULE_NAME minimal"), "{tu}");
+    assert!(tu.contains("LOG_MODULE_REGISTER(LOG_MODULE_NAME);"), "{tu}");
+    assert!(tu.contains("#include <zephyr/logging/log.h>"), "{tu}");
+    // The A-9 Kconfig pins ride the TU header when the log block exists.
+    assert!(tu.contains("CONFIG_CBPRINTF_FULL_INTEGRAL"), "{tu}");
+}
+
+#[test]
+fn log_literal_percent_doubles_and_no_trailing_newline() {
+    let emit = emit_with_log(
+        regseq_model::LogLevel::Info,
+        b"duty 50% reached",
+        |_| vec![],
+    )
+    .expect("emit");
+    assert!(
+        emit.tu.contains("LOG_INF(\"duty 50%% reached\");"),
+        "{}",
+        emit.tu
+    );
+    assert!(!emit.tu.contains("reached\\n"), "{}", emit.tu);
+}
+
+#[test]
+fn log_numeric_args_use_the_certified_mapping() {
+    // u32 default + u32 alternate-hex: "{} {:#x}" -> "%u %#x".
+    let emit = emit_with_log(regseq_model::LogLevel::Info, b"vals {} {:#x}", |m| {
+        let a = m.consts.intern(Const::Uint(UintKind::U32, 13));
+        let b = m.consts.intern(Const::Uint(UintKind::U32, 0x301));
+        vec![Operand::Constant(a), Operand::Constant(b)]
+    })
+    .expect("emit");
+    assert!(
+        emit.tu
+            .contains("LOG_INF(\"vals %u %#x\", (unsigned)(0xdu), (unsigned)(0x301u));"),
+        "{}",
+        emit.tu
+    );
+}
+
+#[test]
+fn log_static_nul_free_str_arg_is_delivered() {
+    let emit = emit_with_log(regseq_model::LogLevel::Warn, b"mode {}", |m| {
+        vec![Operand::Constant(str_carrier(m, b"polling"))]
+    })
+    .expect("emit");
+    assert!(
+        emit.tu.contains("LOG_WRN(\"mode %s\", \"polling\");"),
+        "{}",
+        emit.tu
+    );
+}
+
+#[test]
+fn log_static_str_with_interior_nul_is_rejected_citing_a6() {
+    let err = emit_with_log(regseq_model::LogLevel::Warn, b"mode {}", |m| {
+        vec![Operand::Constant(str_carrier(m, b"po\0lling"))]
+    })
+    .unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("A-6") && s.contains("interior NUL"), "{s}");
+}
+
+#[test]
+fn log_non_static_str_arg_is_rejected_citing_a5() {
+    // A runtime &str place as the log argument (the A-5 deferred-mode gap).
+    // Through `emit_zephyr_c` the fat-pointer LOCAL already fails loud at
+    // declaration; the A-5 arm is the bank's defense-in-depth — drive the
+    // seam directly (the T06 pattern) so its citation is locked.
+    let (mut m, driver_ty, _self_ty, _w) = mmio_block_model();
+    let ut = unit_ty(&mut m);
+    let fmt = str_carrier(&mut m, b"mode {}");
+    let str_ty = m.types.intern(Ty::Str);
+    let str_ref = m
+        .types
+        .intern(Ty::Ref(str_ty, regseq_model::Provenance::SharedBorrow));
+    let mut body = Body::default();
+    body.local_decls.push(LocalDecl {
+        ty: ut,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: str_ref,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("s")),
+    });
+    body.arg_count = 1;
+    let mut cx = lower_cx(&m, driver_ty, true);
+    let mut out = String::new();
+    let err = cx
+        .emit_diag_log(
+            &regseq_model::LogLevel::Info,
+            &body,
+            &[
+                Operand::Constant(fmt),
+                Operand::Copy(Place::from(regseq_model::LocalId::from_u32(1))),
+            ],
+            &mut out,
+        )
+        .unwrap_err();
+    let EmitError::Rejected(s) = err else {
+        panic!("expected Rejected, got {err:?}");
+    };
+    assert!(s.contains("A-5") && s.contains("non-static"), "{s}");
+}
