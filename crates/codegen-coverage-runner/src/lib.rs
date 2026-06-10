@@ -31,3 +31,4 @@ pub mod matrix;
 pub mod oracle;
 pub mod pipeline;
 pub mod toolchain;
+pub mod zephyr_build;
