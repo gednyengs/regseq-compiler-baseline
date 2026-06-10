@@ -78,5 +78,14 @@ fn generated_drivers_kbuild_against_the_campaign_tree() {
     // interner history is irrelevant.
     let composed = fixture("fixtures/_composed", "pl011-composed");
     gate("pl011-composed", &emit(&composed));
+
+    // backend-linux-c-e1000 T10: both generated e1000 drivers — the composed
+    // PCI keystone and the induced-failure variant — compile against the
+    // same campaign tree (C02 item 2). This is the O3 pin's mechanical
+    // backstop: a wrong pcim symbol or include fails compilation here.
+    let e1000 = fixture("fixtures/_composed", "e1000-composed");
+    gate("e1000-composed", &emit(&e1000));
+    let e1000fail = fixture("fixtures/_composed", "e1000-initfail");
+    gate("e1000-initfail", &emit(&e1000fail));
     let _ = PathBuf::new();
 }
