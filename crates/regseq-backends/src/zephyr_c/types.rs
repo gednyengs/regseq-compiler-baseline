@@ -36,6 +36,13 @@ impl TypeNames {
             Ty::Struct { item, .. } | Ty::Enum { item, .. } | Ty::Union { item, .. } => c_ident(
                 path_leaf(model.strings.resolve(model.items[*item].def_path.rendered)),
             ),
+            Ty::Tuple { fields, .. } => {
+                let mut parts = vec!["rseq_tuple".to_string()];
+                for f in fields {
+                    parts.push(c_ident(scalar_spelling_or_err(model, *f)?));
+                }
+                parts.join("_")
+            }
             other => {
                 return Err(EmitError::Unsupported(format!(
                     "C name for non-nominal type {other:?}"
@@ -108,6 +115,19 @@ pub(crate) fn emit_aggregate_def(
         }
         other => Err(EmitError::Unsupported(format!(
             "aggregate definition for {other:?} (first-light subset)"
+        ))),
+    }
+}
+
+/// The scalar spelling for a type when it has one (used for tuple name
+/// mangling); errors on non-scalars.
+fn scalar_spelling_or_err(model: &RegseqModel, ty: TyId) -> Result<&'static str, EmitError> {
+    match &model.types[ty] {
+        Ty::Bool => Ok("bool"),
+        Ty::Int(k) => int_spelling(*k),
+        Ty::Uint(k) => uint_spelling(*k),
+        other => Err(EmitError::Unsupported(format!(
+            "tuple over non-scalar field {other:?}"
         ))),
     }
 }

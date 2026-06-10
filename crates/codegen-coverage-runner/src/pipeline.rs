@@ -685,3 +685,94 @@ fn run_linux_stages(fixture: &Fixture) -> FixtureVerdict {
     }
     FixtureVerdict::Pass
 }
+
+/// Run the zephyr_c row (C05): bridge -> L2 bind -> `emit_zephyr_c` ->
+/// byte-exact snapshot of BOTH artifacts (`golden.zephyr.c` +
+/// `golden.zephyr.binding.yaml`).
+pub fn run_zephyr_fixture(fixture: &Fixture) -> FixtureResult {
+    let name = fixture.manifest.name.clone();
+    let covers = fixture.manifest.covers.clone();
+    let verdict = run_zephyr_stages(fixture);
+    FixtureResult {
+        name,
+        covers,
+        verdict,
+    }
+}
+
+/// The committed zephyr_c TU snapshot beside a fixture (`golden.zephyr.c`).
+pub fn zephyr_golden_path(fixture: &Fixture) -> std::path::PathBuf {
+    fixture.dir.join("golden.zephyr.c")
+}
+
+/// The committed zephyr_c generated DT binding beside a fixture
+/// (`golden.zephyr.binding.yaml`).
+pub fn zephyr_binding_path(fixture: &Fixture) -> std::path::PathBuf {
+    fixture.dir.join("golden.zephyr.binding.yaml")
+}
+
+fn run_zephyr_stages(fixture: &Fixture) -> FixtureVerdict {
+    // Stage 1: Acquire (same bridge seam as the generic/linux rows).
+    let mut model = match fixture.manifest.kind {
+        FixtureKind::Ir => {
+            return FixtureVerdict::Skipped {
+                reason: "kind=ir unsupported".to_string(),
+            };
+        }
+        FixtureKind::Rust => {
+            match try_bridge_fixture_path_with_overrides(&fixture.input, &bridge_overrides(fixture))
+            {
+                BridgeOutcome::Ok(model) => model,
+                BridgeOutcome::ValidatorFailed { violation, .. } => {
+                    return fail(Stage::Acquire, format!("validator failed: {violation:?}"));
+                }
+                BridgeOutcome::Rejected(err) => {
+                    return fail(Stage::Acquire, format!("bridge rejected: {err}"));
+                }
+                BridgeOutcome::RustcRejected { stderr } => {
+                    return fail(
+                        Stage::Acquire,
+                        format!("rustc rejected before after_analysis: {stderr}"),
+                    );
+                }
+            }
+        }
+    };
+
+    // Stage 1b: L2 bind (identical seam; the bound model is what zephyr_c
+    // consumes, so the snapshots capture L2 correctness for free).
+    if let Err(detail) = bind_l2_platform(&mut model, fixture) {
+        return fail(Stage::Bind, detail);
+    }
+
+    // Stage 2: zephyr_c emit (fail-loud diagnostics surface here).
+    let emit = match regseq_backends::emit_zephyr_c(&model) {
+        Ok(emit) => emit,
+        Err(err) => return fail(Stage::Emit, err.to_string()),
+    };
+
+    // Stage 3: byte-exact snapshots vs golden.zephyr.c AND the generated
+    // binding yaml (both artifacts are the D07 set; either drifting fails).
+    for (artifact, text, path) in [
+        ("golden.zephyr.c", &emit.tu, zephyr_golden_path(fixture)),
+        (
+            "golden.zephyr.binding.yaml",
+            &emit.binding_yaml,
+            zephyr_binding_path(fixture),
+        ),
+    ] {
+        let golden = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                return fail(
+                    Stage::Snapshot,
+                    format!("cannot read golden {}: {err}", path.display()),
+                );
+            }
+        };
+        if let Err(mismatch) = oracle::snapshot(text, &golden) {
+            return fail(Stage::Snapshot, format!("{artifact}: {}", mismatch.summary));
+        }
+    }
+    FixtureVerdict::Pass
+}

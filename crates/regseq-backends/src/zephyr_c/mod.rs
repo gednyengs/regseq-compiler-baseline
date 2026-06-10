@@ -797,7 +797,7 @@ fn emit_type_defs(cx: &mut body::LowerCx<'_>, driver_ty: TyId) -> Result<String,
                 types::emit_aggregate_def(model, &mut cx.names, ty, &move |fname: &str| {
                     if rn.iter().any(|r| r == fname) {
                         Some(format!(
-                            "mm_reg_t {fname}; /* dead under the TU-static base carrier (A-2) */"
+                            "mm_reg_t {fname} /* dead under the TU-static base carrier (A-2) */"
                         ))
                     } else {
                         None
@@ -964,9 +964,11 @@ fn resolve_instance_ref(model: &RegseqModel, target: InstanceRef) -> Option<Inst
 }
 
 /// BFS over `Call(Direct)` edges from the callback roots. Intrinsic-anchored
-/// callees do not join the closure (they are intercepted at emission), but
-/// [`scan_closure_ops`] inspects them from the caller side. Deterministic
-/// order: roots first, then discovery order.
+/// callees do not join the closure (they are intercepted at emission) and
+/// neither do trivial projection accessors (`Mmio::deref` — inlined
+/// analytically at the receiver chase, their calls elided); but
+/// [`scan_closure_ops`] inspects intrinsics from the caller side.
+/// Deterministic order: roots first, then discovery order.
 fn reachable_closure(
     model: &RegseqModel,
     roots: impl Iterator<Item = InstanceId>,
@@ -988,7 +990,9 @@ fn reachable_closure(
                 ..
             } = &bb.terminator.kind
             {
-                if intrinsic_of(model, *callee).is_some() {
+                if intrinsic_of(model, *callee).is_some()
+                    || body::trivial_accessor_tail(model, *callee).is_some()
+                {
                     continue;
                 }
                 if !seen.contains(callee) {
