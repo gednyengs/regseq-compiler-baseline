@@ -1,0 +1,410 @@
+# Zephyr backend — open questions & completeness ledger
+
+Every open decision gathered from the five constructs and the composition,
+plus the honest completeness ledger. The list is partitioned into:
+**(A) policy decisions to ratify** (a clear recommendation exists; none blocks
+specification); **(B) `needs-new-surface` gaps** (blocking model/reference
+extensions — escalate, do not paper over); **(C) version-sensitive pins to
+confirm against the target Zephyr release**. Section **(D)** is the
+completeness ledger, including the explicit unresolved/failed-construct list.
+
+Each item cites the construct it came from (with its per-construct local
+label: register-access `OQ-*`, BRM `O*`, device-lifecycle `Q*`, diag-log
+`LOG-O*`, RegseqError `ZE-OQ*`) and a repo `path:line` or pinned doc.
+
+One decision was **resolved during authoring** rather than left open: the
+Zephyr `enable_device`+`set_bus_master` fusion (backend-[Open] at
+bus-resource-management-surface-convergence.md:135) is ratified as **separable
+`pcie_set_cmd` calls** — one per gated op, single-call fusion permitted as a
+peephole when both gates fire — so the gating matrix stays op-per-op
+([per-construct §B.3.1](./zephyr-lowering-per-construct.md); witness
+eth_e1000.c:220-221).
+
+---
+
+## A. Policy decisions to ratify (recommendation in **bold**; none blocks the spec)
+
+1. **`(base,size)` provenance — the L2 join on Zephyr.** *(register-access
+   OQ-1 ≡ BRM O3.)* generic_c feeds `map_region` the platform.toml-resolved
+   `MmioBinding.base/.size` literals (`device_lifecycle.rs:209-229`;
+   `body_emit.rs:5277-5284`); the idiomatic Zephyr source is the DT `reg`
+   property via `DEVICE_MMIO_ROM_INIT(DT_DRV_INST(n))` (uart_pl011.c:758-759),
+   keyed by the `MatchEntry::Devicetree` compatible. Options: DT-only,
+   literal-only via `device_map`, or DT-with-literal-cross-check. **Recommend
+   DT `reg` as the normative source on Zephyr, with the platform.toml
+   `[mmio.<id>]` literals retained as an advisory cross-check (diagnostic on
+   mismatch), not as the map input.** Note `is_resolved()`
+   (`device_lifecycle.rs:236-239`) gates the whole preamble — the ratified
+   answer determines whether a Zephyr TU needs a platform.toml at all. I04
+   guarantees the choice changes no register-access op (`prelude.rs:158-162`).
+
+2. **Base threading into op sites — TU-static vs `DEVICE_MMIO_GET(dev)`.**
+   *(register-access OQ-3; Codex review issue 2.)* generic_c reads a TU-global
+   base (`prelude.rs:182`), legal under the single-region + single-instance
+   rules — but `DT_INST_FOREACH_STATUS_OKAY` stamps one device per status-okay
+   DT node, so a TU-static base **silently aliases one base across instances**
+   on any multi-instance devicetree. **Recommend the faithful first
+   realization: a TU-static `mm_reg_t` installed immediately after
+   `DEVICE_MMIO_MAP`, PAIRED with the mandatory emitted guard
+   `BUILD_ASSERT(DT_NUM_INST_STATUS_OKAY(DT_DRV_COMPAT) == 1, …)`**
+   (per-construct §A.2.2; scaffold §1 item 9) so multi-instance models are
+   rejected at C compile time — graduating to the idiomatic per-device
+   `DEVICE_MMIO_GET(dev)` (uart_pl011_registers.h:40-43) once the device
+   pointer threads into lowered author bodies; that threading is the
+   device-lifecycle container-morph seam (`body_emit.rs:5301-5306`), not
+   register-access's to decide. The alternative ratification is to skip the
+   faithful step and require the per-device threading up front.
+
+3. **Zephyr-PCIe preamble order — probe→enable→map vs canonical
+   enable→handle.** *(BRM O2.)* The model's canonical order puts
+   `enable_device` before `get_resource_handle` (`body_emit.rs:5219-5243`);
+   the vendored PCIe reference inverts it — `pcie_probe_mbar` (eth_e1000.c:219)
+   *then* `pcie_set_cmd` (:220-221) *then* `device_map` (:223-224), i.e. BAR
+   sizing with memory decode still off. **Recommend adopting the reference
+   order (probe → enable → map) on Zephyr-PCI and recording the permutation
+   as a ratified per-OS deviation from the canonical preamble** — never
+   silently emitting either order. Post-review (Codex issue 3) the sibling
+   docs uniformly present this as **the spec'd PCIe order pending this
+   ratification, and the single recorded deviation**; the platform path stays
+   strictly canonical (preambles → map — per-construct §A.2.2 notes pl011's
+   literal map-first layout as witness-only, not adopted).
+
+4. **Offset-0x00 `read_config` — framework cache vs always-read.** *(BRM
+   O4.)* The host PCI-ID-caching rule (`prelude.rs:260-288`) is structurally
+   satisfied by `struct pcie_dev` carrying DID/VID (eth_e1000_priv.h:92-93).
+   **Recommend serving offset-0x00 reads from `dev->pcie->id` (zero bus
+   traffic — matches the as-built host caching semantics); all other offsets
+   issue a real `pcie_conf_read`.**
+
+5. **Non-static `&str` log arguments under deferred mode.** *(diag-log
+   LOG-O1; composition open list.)* A Rust fat pointer is not NUL-terminated;
+   the deferred-mode packager copies transient strings by NUL-terminated
+   length, so raw `%.*s` risks over-read. **Recommend the call-site bounce
+   buffer: copy `min(len, CAP-1)` bytes to a fixed stack buffer, NUL-
+   terminate, pass via `%s`** (the in-repo snprintk idiom, eth_e1000.c:29-37),
+   with both truncation divergences (cap, interior NUL) documented.
+   Alternatives kept on record: `CONFIG_LOG_MODE_IMMEDIATE` (removes the
+   packaging copy, keeps the NUL gap) or `LOG_HEXDUMP_*` (byte-faithful, not
+   a formatted line).
+
+6. **Static `&str` with interior NUL.** *(diag-log LOG-O2.)* `%s` truncates;
+   byte-faithfulness is lost on any `%s` path. **Recommend fail-loud at emit
+   time** (matches the construct's fail-loud discipline; the literal bytes are
+   known at emission), with `LOG_HEXDUMP_DBG` as the documented opt-in
+   fallback (witness eth_e1000.c:29-37).
+
+7. **Compile-time log level — per-driver Kconfig vs forced `LOG_LEVEL_DBG`.**
+   *(diag-log LOG-O3.)* Zephyr's compile-time filtering can compile a
+   `LOG_DBG` out entirely; generic_c emits every level unconditionally.
+   **Recommend honoring the idiomatic Kconfig-driven module level**
+   (the vendored pattern, `#define LOG_LEVEL CONFIG_…_LOG_LEVEL`,
+   eth_e1000.c:10) and documenting the divergence from generic_c's always-on
+   emission — mirroring the Linux `dev_dbg` dynamic-debug decision
+   (linux-open-questions.md A-5).
+
+8. **Module-name fallback for a TU with no `DriverDescriptor`.** *(diag-log
+   LOG-O4.)* **Recommend the TU's emission name** (sanitized), keeping the
+   `DriverDescriptor.name` seam (Q6) for lifecycle TUs.
+
+9. **Kconfig pins — assert vs document.** *(diag-log LOG-O5.)* The logging
+   baseline (`CONFIG_LOG=y`, deferred mode, `CONFIG_CBPRINTF_COMPLETE`,
+   `CONFIG_CBPRINTF_FULL_INTEGRAL` for `%lld/%llu`). **Recommend documenting
+   the pins in generated collateral now; asserting them belongs to the future
+   build-harness stage** (no Zephyr build harness exists this stage).
+
+10. **`Unsupported` → `-EOPNOTSUPP` vs Zephyr's `-ENOTSUP` idiom.**
+    *(RegseqError ZE-OQ1; composition open list.)* Both symbols are public in
+    Zephyr libc (`uart_pl011.c:264` uses `-ENOTSUP`). **Recommend staying
+    symbol-identical to the C02 table (`-EOPNOTSUPP`, `errno.rs:41`)** — keeps
+    the table per-target-invariant; `-EOPNOTSUPP` is valid and used in Zephyr.
+
+11. **Standalone-entry rc observability.** *(RegseqError ZE-OQ3.)* Zephyr's
+    kernel ignores `main()`'s return value, so the B3 adapter composition
+    executes but the final rc is unobservable. **Recommend composing with
+    diagnostics-logging — `LOG_ERR` the nonzero rc before returning** — until
+    a harness-specific channel exists.
+
+12. **`on_surprise_remove` authored under `TargetOs::Zephyr` — diagnose vs
+    silent omit.** *(device-lifecycle Q2's policy half.)* **Recommend a
+    compile-time diagnostic** (the author wrote a callback that cannot run on
+    this target — silence would violate the no-silent-truncation rule); the
+    representability question itself is B-7.
+
+13. **`MatchEntry::Amba`-only match set — diagnose vs require a companion
+    `Devicetree` entry.** *(device-lifecycle Q4's policy half.)* **Recommend
+    rejecting with a diagnostic that names the fix** (add a
+    `Devicetree { compatible }` entry — the PL011 precedent: AMBA part,
+    compatible-string match, uart_pl011.c:9 + arm_pl011.yaml:3); the model
+    surface question is B-5.
+
+14. **`descriptor.name` carrier.** *(device-lifecycle Q6.)* No single Zephyr
+    slot exists (the runtime device name comes from the DT node).
+    **Recommend spending the logical name on the log module name
+    (= the diag-log seam, eth_e1000.c:9-12) and on emitted symbol prefixes** —
+    the vendored idiom.
+
+15. **Init level/priority knob.** *(device-lifecycle Q7; composition open
+    list.)* No model surface; the vendored values differ and the level is
+    class-coupled (uart_pl011.c:790 vs eth_e1000.c:342); with no
+    `-EPROBE_DEFER` analogue this knob carries the cross-device-ordering
+    burden. **Recommend a `BackendOptions` knob with a documented default
+    (`POST_KERNEL` + the kernel default device priority), revisited when the
+    Device Class construct lands** (the class is what couples the level).
+
+16. **Class-neutral scaffold build-now.** *(device-lifecycle Q8a; composition
+    open list — framework-class wrappers; Codex review issue 6.)* **Recommend
+    yes: class-neutral `DEVICE_DT_INST_DEFINE` + `NULL` api for
+    `ClassTag::Generic` ONLY, with any non-Generic tag an emit-time
+    diagnostic** (per-construct §C.9 — silently passing `NULL` api for a
+    declared class would yield a device invisible to its class-API consumers,
+    i.e. silent truncation), leaving class wrappers
+    (`ETH_NET_DEVICE_DT_INST_DEFINE` + its second-phase iface init,
+    eth_e1000.c:267-285, :337-344) to the Device Class construct — with the
+    scope pin stated explicitly: **`on_init`'s contract spans only the
+    device-init phase**.
+
+17. **Config(ROM)/data(RAM) field split refinement.** *(device-lifecycle
+    Q8b.)* The model's `DriverHandle` doesn't distinguish immutable-per-
+    instance facts from mutable state. **Recommend build-now: whole spec
+    driver into `data`** (with `DEVICE_MMIO_ROM/RAM` carrying the binding per
+    convention); the config-split is a later quality refinement.
+
+18. **`on_system_shutdown` interim emission policy.** *(device-lifecycle Q3's
+    policy half; Codex review issue 4.)* The PM slot mapping is witnessed
+    (uart_pl011.c:106-117), but Zephyr PM is an action-callback contract over
+    `enum pm_device_action` — not a dedicated shutdown hook — and which
+    action (if any) fires at system power-off is Kconfig/version-sensitive
+    (C-4). The spec now emits a generated `pm_device_action` dispatch wrapper
+    (author body on the chosen action(s), `-ENOTSUP` otherwise, per-construct
+    §C.7 / scaffold §4) and the primitive is downgraded to *slot-mapped,
+    trigger-unresolved*. The decision: **emit the wrapper best-effort with
+    the trigger pin documented in generated collateral (recommended — the
+    slot is witnessed and emission is harmless if the action never fires,
+    paralleling the A-9 Kconfig-pin treatment), vs diagnose/reject authored
+    `on_system_shutdown` until C-4 is confirmed** (Codex's suggested
+    downgrade-to-reject).
+
+19. **Citation-shorthand cleanup sweep.** *(Codex review issue 8, residual.)*
+    Mutable `latest` URLs are eliminated and README now carries the global
+    shorthand-path legend, but many normative claims still cite bare
+    basenames (`uart_pl011.c:577`) or sibling sections rather than
+    repo-rooted `path:line`. **Recommend a dedicated mechanical sweep**
+    (expand every shorthand to the legend's full path, verify line anchors
+    still hold) **as its own reviewed change** rather than folding ~3000
+    lines of churn into a content fix.
+
+---
+
+## B. `needs-new-surface` gaps (blocking — escalate against the model, do not invent)
+
+1. **`poll_until` → `WAIT_FOR`.** *(register-access OQ-5; composition open
+   list.)* `recognized_not_lowered` (`domain_attr.rs:94-95`); generic_c emits
+   nothing and the convergence doc §9 forbids claiming it. Candidate
+   (non-normative): `WAIT_FOR(cond, timeout_us, k_busy_wait(delay_us))`
+   (`v3.7-branch include/zephyr/sys/util.h`; untimed degenerate form
+   uart_pl011.c:224-226), with the timeout→`RegseqError::Timeout` edge also
+   undesigned. **Do not lower before generic_c establishes a reference.**
+
+2. **`BarType::Io` port-I/O.** *(BRM O5.)* `recognized_not_lowered`
+   (`device_lifecycle.rs:248-249`). Zephyr's x86 port-I/O surface
+   (`sys_in*/sys_out*` + an io-BAR probe) is uncited in-repo; blocked on the
+   same model-side Mem/Io unification decision Linux records
+   (linux-lowering-per-construct.md:385-390). **Escalate.**
+
+3. **Config-space width-8 and sub-word write RMW.** *(BRM §B.4.)*
+   `config_access_width` admits {1,2,4,8}, but Zephyr's accessor is one
+   32-bit word op: width 8 = two words or reject; widths 1/2 on the write
+   side require a containing-word RMW that is **observable on the bus** —
+   needs an explicit decision before silent emission (parity with the Linux
+   width-8 gap). **Undesigned.**
+
+4. **Non-PCI config access (BRM-001).** The rejection diagnostic is deferred
+   upstream (bus-resource-management-surface-convergence.md:209-211); Zephyr
+   inherits the same unbuilt-diagnostic dependency Linux records.
+
+5. **`MatchEntry::Amba` has no Zephyr match target.** *(device-lifecycle Q4.)*
+   No AMBA/periphid bus exists; matching is DT-compatible-only
+   (uart_pl011.c:9). Whether the model should require a companion
+   `Devicetree` entry for Zephyr targets (A-13 recommends the diagnostic) is
+   a model-surface decision. **Do not invent a periphid table.**
+
+6. **Teardown carrier — `on_deinit` / postamble / orderly teardown.**
+   *(device-lifecycle Q1 ≡ RegseqError ZE-OQ2; composition open list.)* The
+   3.7-LTS baseline has no device-deinit channel; Zephyr added
+   `device_deinit()` in v4.2.0 (absent in v4.1.0 — see C-3 for the pin).
+   The synthesized teardown *body* is specified
+   ([integration §5.2](./zephyr-integration-probe-path.md)); the *slot* is the
+   blocking question, and the answer differs per release (also C-3). Neither
+   vendored reference defines any teardown — no in-repo witness exists. **Do
+   not invent the macro spelling.**
+
+7. **Surprise-removal representability.** *(device-lifecycle Q2; composition
+   open list.)* No hotplug dispatch exists for DT devices; the surprise
+   scenario (`body_emit.rs:5323-5339`) may simply not be representable on
+   Zephyr — i.e. a documented not-applicable like enable_device-on-platform,
+   rather than a lowerable slot. Escalate alongside B-6.
+
+8. **`UserDataField`/`UserDataKind`.** `recognized_not_lowered`
+   (`device_lifecycle.rs:262-279`). The C static-storage zero image inherits
+   generic_c's incidental `{0}` guarantee (`body_emit.rs:5301-5306`);
+   `OptionCopy(None)` rests on the same all-zero-image assumption. **Inherited,
+   not designed — a new backend must not invent the per-kind lowering.**
+
+9. **`ClassTag`/`device_class`.** `recognized_not_lowered`
+   (`device_lifecycle.rs:53-54, :134-150`). On Zephyr the class *visibly*
+   selects the macro family + API vtable (uart_pl011.c:534-542 vs
+   eth_e1000.c:337-344) — exactly the deferred Device Class construct's
+   territory (D06/D09). Build-now disposition is A-16.
+
+10. **>1 resolved region per driver.** Rejected today
+    (`max_resolved_bindings_per_driver`, `body_emit.rs:5240-5243`); aligns
+    with the non-named `DEVICE_MMIO` single-region API. Multi-region needs
+    `DEVICE_MMIO_NAMED_*` **and** a model extension threading per-access
+    region bases ([integration §2](./zephyr-integration-probe-path.md), the
+    per-instance-base note). Model gap first.
+
+---
+
+## C. Version-sensitive pins to confirm (against Zephyr 3.7 LTS / 4.x)
+
+1. **`pcie.h` signature pins: `pcie_conf_read`/`pcie_conf_write` AND
+   `pcie_get_mbar` vs `pcie_probe_mbar`.** *(BRM O1; Codex review issue 1.)*
+   The word-index (`reg` = byte offset ≫ 2), 32-bit-only claim is pinned to
+   `v3.7.0 include/zephyr/drivers/pcie/pcie.h` but was **fetch-unverified in
+   the authoring session** (the header is included at eth_e1000.c:18, but the
+   vendored driver does not call the pair). Confirm signature + semantics
+   before emitting the §B.4 marshalling. Same pin, same header, post-review:
+   the spec now materializes `effective_bar` (a BAR **number**) via
+   `pcie_get_mbar(bdf, effective_bar, &mbar)`, because `pcie_probe_mbar`'s
+   argument is a **memory-BAR ordinal** (the header states the BAR number is
+   not that index) — confirm both prototypes and the get/probe
+   number-vs-ordinal distinction on the pinned release (also
+   fetch-unverified; `pcie_get_mbar` is exercised by no vendored driver —
+   the e1000 calls `pcie_probe_mbar(bdf, 0, …)`, eth_e1000.c:219, where the
+   two coincide because BAR0 is its first memory BAR).
+
+2. **`sys_read64`/`sys_write64` arch-conditionality.** *(register-access
+   OQ-2.)* Width-8 accessors exist in `sys_io.h` but availability is
+   arch-conditional; confirm per supported target arch or reject width-8 at
+   emit time on unsupported arches.
+
+3. **The 4.x `device_deinit()` fork.** *(Q1/ZE-OQ2; pairs with B-6.)* Confirm
+   the API's existence, signature, and Kconfig gating on the chosen 4.x
+   release before specifying the orderly-teardown slot; on 3.7 LTS the answer
+   is definitively "no channel". Release pin (round-2 review-checked, not
+   live-verified in-session): `device_deinit()` / `DEVICE_DT_DEINIT_DEFINE`
+   are present in **v4.2.0** `include/zephyr/device.h` and **absent in
+   v4.1.0** — earlier spec text saying "4.1+" was wrong. Interim behavior
+   until the pin is confirmed on the chosen release: all 4.x deinit lowering
+   stays **fail-loud** (no `on_deinit` emission), identical to the 3.7
+   baseline disposition.
+
+4. **PM-device trigger semantics at power-off.** *(device-lifecycle Q3;
+   composition open list.)* Which action (`PM_DEVICE_ACTION_TURN_OFF` vs
+   `SUSPEND`) fires at system power-off, and under which `CONFIG_PM_DEVICE*`
+   options the poweroff path walks devices at all
+   (<https://docs.zephyrproject.org/3.7.0/services/pm/device.html>, not
+   live-verified). The §C.7 slot mapping stands regardless — but until this
+   pin is confirmed, `on_system_shutdown` is **slot-mapped,
+   trigger-unresolved**, not a claimed materialization (post-review, Codex
+   issue 4; the interim emission policy is A-18).
+
+5. **`device_is_ready()` / `init_res` semantics.** *(device-lifecycle Q9;
+   RegseqError ZE-OQ4.)* The failed-init bookkeeping (clamped positive
+   `uint8_t` `init_res`, `device_is_ready()` false) is pinned to
+   elixir.bootlin.com v3.7.0 `kernel/init.c` + `include/zephyr/device.h` but
+   not live-verified; also verify all nine C02 errno values fit `uint8_t`
+   across Zephyr's libc choices (minimal/newlib/picolibc) so clamping cannot
+   alias variants.
+
+6. **PCIe DT binding spelling + board-DT authoring.** *(device-lifecycle Q5;
+   composition open list.)* The `pcie-device.yaml` include + DT-instance PCIe
+   properties (intel,e1000.yaml:8; eth_e1000.c:313-318) are witnessed, but
+   whether `MatchEntry::Pci { vendor, device }` lowers to a *generated* DT
+   binding/overlay or the board DT node is an L2-style integration input
+   outside the compiler's output is unratified. (The `effective_bar` mapping
+   question formerly here is resolved post-review: `effective_bar` is a BAR
+   number and feeds `pcie_get_mbar`, NOT `pcie_probe_mbar`'s memory-BAR
+   ordinal — the reference's literal `0` coincides on the e1000 only; the
+   remaining signature confirmation lives in C-1.)
+
+7. **Unmap availability.** *(composition open list.)* `DEVICE_MMIO_MAP`/
+   `device_map` have no unmap counterpart in the vendored idiom; confirm
+   whether the pinned release offers one (`k_mem_unmap` exists but no
+   vendored driver uses it) or whether `map_region`'s postamble mirror is
+   permanently a no-op on Zephyr ([integration §5.2](./zephyr-integration-probe-path.md)
+   already specifies the explicit no-op callout, not an invented unmap).
+
+8. **Zephyr-over-PCI residual scope.** *(register-access OQ-4.)* BRM resolves
+   `BusType::Pci` as lowerable (vendored e1000 witness); register-access's
+   PCIe `map_region` leg (`device_map` after the BAR probe) is specified
+   via BRM §B.3.5 but deferred from the register-access construct's own
+   normative scope this stage. Close OQ-4 when the PCIe path is exercised by
+   a fixture.
+
+9. **`BUILD_ASSERT` / `DT_NUM_INST_STATUS_OKAY` availability.** *(register-
+   access OQ-3's guard, per-construct §A.2.2; post-review.)* The mandatory
+   single-instance guard relies on `DT_NUM_INST_STATUS_OKAY` (devicetree API,
+   pinned: <https://docs.zephyrproject.org/3.7.0/build/dts/api/api.html>) and
+   `BUILD_ASSERT` — both core, long-stable macros, but neither is exercised
+   by the vendored drivers and the URLs were not live-fetched. Confirm on the
+   pinned release.
+
+---
+
+## D. Completeness ledger
+
+The ledger is **two-level** (restructured post-review, Codex issue 5 — the
+old single line read as "nothing is unresolved", which overstated the case):
+
+**D.1 Construct level — unresolved-constructs: []**. No construct failed
+specification; all five are specified to the limit of the as-built reference
++ vendored witnesses, with the gaps carried as explicit dispositions rather
+than failures.
+
+**D.2 Input-shape level — the rejection ledger.** The input contract admits
+shapes for which this spec deliberately has **no Zephyr lowering contract**.
+For every such shape the interim normative behavior is **fail-loud rejection
+at emit time — never silent emission, never silent omission** (the
+no-silent-truncation discipline; note this is a deliberate hardening over
+generic_c where generic_c itself carries the shape unvalidated, e.g.
+`ClassTag`):
+
+| legal input shape (contract cite) | gap | interim behavior |
+|---|---|---|
+| `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | reject at emit (bus-observable RMW / two-word split undesigned; width-1/2 **reads** ARE specified, §B.4) |
+| authored `on_deinit` under `TargetOs::Zephyr` | B-6 / C-3 | reject at emit on the 3.7 baseline (no teardown carrier; 4.x fork unconfirmed) |
+| authored `on_surprise_remove` under `TargetOs::Zephyr` | B-7 | reject at emit (A-12 recommends exactly this diagnostic) |
+| non-Generic `ClassTag` | B-9 | reject at emit (A-16; silent `NULL` api would hide the declared class) |
+| `MatchEntry::Amba`-only match set | B-5 | reject at emit naming the fix (A-13: add a companion `Devicetree` entry) |
+| `UserDataField` kinds beyond the zero-image guarantee | B-8 | reject at emit (only the inherited all-zero-image shapes pass through) |
+| >1 resolved region per driver | B-10 | already rejected (`max_resolved_bindings_per_driver`, `body_emit.rs:5240-5243`) — kept |
+| >1 status-okay DT instance while the TU-static base carrier is in effect | A-2 | rejected at **C compile time** via the emitted `BUILD_ASSERT` guard (per-construct §A.2.2) |
+| `BarType::Io` | B-2 | reject at emit (recognized-not-lowered upstream; no invented port-I/O surface) |
+| `poll_until` | B-1 | parity with generic_c's as-built recognized-not-lowered disposition (convergence §9: do not claim it) — not a Zephyr-specific rejection |
+| `on_system_shutdown` trigger contract | C-4 / A-18 | slot emitted (wrapper + `-ENOTSUP` dispatch) but **not claimed as materialized**; interim emit-vs-diagnose = A-18 |
+
+Per-construct status:
+
+| construct | status | residual gaps (all flagged above) |
+|---|---|---|
+| register-access | **fully specified** — five ops, map_region (both paths), offset recovery, descriptors | `poll_until` (B-1, pre-existing recognized-not-lowered); width-8 arch pin (C-2); OQ-4 scope close-out (C-8) |
+| bus-resource-management | **specified for the exercised shapes** — selector, four managed ops (claim = called-out elision), config width-4 + width-1/2 reads, carriers; Zephyr-over-PCI resolved affirmatively; sub-word/64-bit config **writes** are D.2 rejections | `BarType::Io` (B-2); config width-8/sub-word RMW (B-3); BRM-001 diagnostic (B-4); `pcie.h` pins incl. `pcie_get_mbar` (C-1) |
+| device-lifecycle | **bring-up half fully specified** (register/match/create/associate/preamble/on_init/init-fail); shutdown = **PM slot mapped, trigger contract unresolved** (C-4/A-18); **teardown half explicitly not lowered on the 3.7 baseline** (a cited property of the device model, not a spec failure) | teardown carrier (B-6), surprise representability (B-7), `MatchEntry::Amba` (B-5), `UserDataField` (B-8), `ClassTag` (B-9), multi-region (B-10) |
+| diagnostics-logging | **fully specified** — four levels, template reassembly, numeric + `&str` arguments, TU scaffold | non-static `&str` divergences are ratify-able policy (A-5/A-6), not gaps; Kconfig pins (A-9/C) |
+| RegseqError | **fully specified** — marker, carrier, nine-row table (symbol-identical, negated), adapter fusion, two-channel rule | deinit return channel (B-6/C-3); rc observability (A-11); `uint8_t` clamp verification (C-5) |
+
+**Cross-construct invariants re-verified end-to-end** (the seven rules,
+[integration §6](./zephyr-integration-probe-path.md)): canonical preamble
+order across binding times; I04 on both paths; the two-error-channel split;
+the claim elision called out; the enable/master bit-selection fusion; the
+`const struct device *` join point; the scenario collapse.
+
+**Citation discipline note.** Every normative claim above and in the sibling
+documents cites a repo `path:line` or a pinned Zephyr doc/source URL (all
+docs.zephyrproject.org links pinned to `3.7.0` post-review — no `latest`);
+shorthand basenames resolve per the README legend; in-repo vendored-driver
+witnesses corroborate every macro-level usage claim. URLs were not
+live-fetched during authoring **or during the post-review fix pass** — claims
+resting on a URL beyond what the vendored drivers corroborate are in section
+C, not asserted. The residual shorthand-expansion sweep is A-19.
