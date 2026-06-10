@@ -28,8 +28,8 @@ mod mod_tests;
 use std::collections::BTreeMap;
 
 use regseq_model::{
-    AttrData, BusType, EnumShape, FrameworkType, InstanceId, InstanceKind, InstanceRef,
-    LayoutKind, MatchEntry, RegseqModel, TerminatorKind, Ty, TyId,
+    AttrData, BusType, EnumShape, FrameworkType, InstanceId, InstanceKind, InstanceRef, LayoutKind,
+    MatchEntry, RegseqModel, TerminatorKind, Ty, TyId,
 };
 
 use body::LowerCx;
@@ -132,17 +132,16 @@ fn errno_symbol(variant_name: &str) -> Option<&'static str> {
 pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
     // -- the driver (exactly one for a single-module TU) -------------------
     let mut drivers = model.device_lifecycle.drivers.iter();
-    let (driver_item, driver) = drivers
-        .next()
-        .ok_or_else(|| EmitError::Driver(
+    let (driver_item, driver) = drivers.next().ok_or_else(|| {
+        EmitError::Driver(
             "no recognized device-lifecycle driver in the model; a Linux kernel module needs \
              exactly one `#[rseq::driver]`"
                 .into(),
-        ))?;
+        )
+    })?;
     if drivers.next().is_some() {
         return Err(EmitError::Driver(
-            "more than one recognized driver in the model; one Linux module per driver"
-                .into(),
+            "more than one recognized driver in the model; one Linux module per driver".into(),
         ));
     }
 
@@ -313,7 +312,9 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
 
     // -- match table + driver struct + module macros ------------------------
     let tail = match bus {
-        ScaffoldBus::Amba => emit_module_tail(model, &drv, driver, scaffold.shutdown_sym.as_deref())?,
+        ScaffoldBus::Amba => {
+            emit_module_tail(model, &drv, driver, scaffold.shutdown_sym.as_deref())?
+        }
         ScaffoldBus::Pci => {
             emit_module_tail_pci(model, &drv, driver, scaffold.shutdown_sym.as_deref())?
         }
@@ -557,8 +558,12 @@ fn emit_scaffold(
                 cx.fn_symbols[&fid]
             )
         });
-        let adapter =
-            emit_result_adapter(cx, id, &format!("{sym}(&priv->inner)"), failure_hook.as_deref())?;
+        let adapter = emit_result_adapter(
+            cx,
+            id,
+            &format!("{sym}(&priv->inner)"),
+            failure_hook.as_deref(),
+        )?;
         out.push_str(&adapter);
     }
     out.push_str("\treturn 0;\n}\n\n");
@@ -575,7 +580,8 @@ fn emit_scaffold(
             // structurally discarded (CR-4), visibly.
             out.push_str(&format!("\t(void){sym}(&priv->inner);\n"));
         }
-        None => out.push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
+        None => out
+            .push_str("\t/* on_deinit not overridden: default no-op teardown */\n\t(void)priv;\n"),
     }
     out.push_str("\t/* postamble: devm-managed resources release automatically (A-2) */\n}\n\n");
 
@@ -651,7 +657,11 @@ fn emit_scaffold_pci(
             ));
         }
         let fname = resource_names[0].clone();
-        let resolved = cx.driver.resources.iter().any(|(n, r, _)| n == &fname && *r);
+        let resolved = cx
+            .driver
+            .resources
+            .iter()
+            .any(|(n, r, _)| n == &fname && *r);
         if resolved {
             let bar = driver
                 .handle
@@ -716,8 +726,12 @@ fn emit_scaffold_pci(
                 cx.fn_symbols[&fid]
             )
         });
-        let adapter =
-            emit_result_adapter(cx, id, &format!("{sym}(&priv->inner)"), failure_hook.as_deref())?;
+        let adapter = emit_result_adapter(
+            cx,
+            id,
+            &format!("{sym}(&priv->inner)"),
+            failure_hook.as_deref(),
+        )?;
         out.push_str(&adapter);
     }
     out.push_str("\treturn 0;\n}\n\n");
@@ -798,10 +812,7 @@ fn emit_result_adapter(
         facts.result_tag_offset,
         facts.result_tag_size,
     ));
-    out.push_str(&format!(
-        "\t\tif (__tag != {:#x}) {{\n",
-        facts.ok_tag_value
-    ));
+    out.push_str(&format!("\t\tif (__tag != {:#x}) {{\n", facts.ok_tag_value));
     if let Some(hook) = failure_hook {
         out.push_str(hook);
     }
@@ -876,8 +887,7 @@ fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierF
     };
     if !model.items[result_item].is_result {
         return Err(EmitError::Driver(
-            "callback return enum is not the certified core Result (item.is_result unset)"
-                .into(),
+            "callback return enum is not the certified core Result (item.is_result unset)".into(),
         ));
     }
     let mut ok_tag: Option<u64> = None;
@@ -897,16 +907,16 @@ fn result_carrier_facts(model: &RegseqModel, result_ty: TyId) -> Result<CarrierF
                 }
                 let Some(tag) = v.tag_value else {
                     return Err(EmitError::Unsupported(
-                        "Result whose Ok variant is the untagged niche (first-light subset)"
-                            .into(),
+                        "Result whose Ok variant is the untagged niche (first-light subset)".into(),
                     ));
                 };
                 ok_tag = Some(tag as u64);
             }
             "Err" => {
-                let field = v.fields.first().ok_or_else(|| {
-                    EmitError::Driver("Err variant with no payload field".into())
-                })?;
+                let field = v
+                    .fields
+                    .first()
+                    .ok_or_else(|| EmitError::Driver("Err variant with no payload field".into()))?;
                 err_field = Some((field.offset, field.ty));
             }
             other => {
@@ -1001,9 +1011,9 @@ fn emit_type_defs(
         for ty in pending {
             let name_for_err = cx.names.name_of(model, ty)?;
             let with_ctx = |err: EmitError| match err {
-                EmitError::Unsupported(s) => EmitError::Unsupported(format!(
-                    "{s} [while defining `struct {name_for_err}`]"
-                )),
+                EmitError::Unsupported(s) => {
+                    EmitError::Unsupported(format!("{s} [while defining `struct {name_for_err}`]"))
+                }
                 other => other,
             };
             let chunk = if ty == driver_ty {

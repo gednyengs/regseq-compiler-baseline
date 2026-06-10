@@ -245,7 +245,11 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     if !ret_zst {
         out.push_str(&format!(
             "\t{} _0;\n",
-            types::c_type(cx.model, &mut cx.names, body.local_decls[body.return_local()].ty)?
+            types::c_type(
+                cx.model,
+                &mut cx.names,
+                body.local_decls[body.return_local()].ty
+            )?
         ));
     }
     for local in body.inner_locals() {
@@ -505,7 +509,10 @@ fn emit_enum_tag_write(
             ));
         }
         match size {
-            1 => out.push_str(&format!("\t{lv}._raw[{offset}] = {:#x};\n", tag_value as u64)),
+            1 => out.push_str(&format!(
+                "\t{lv}._raw[{offset}] = {:#x};\n",
+                tag_value as u64
+            )),
             2 | 4 | 8 => {
                 let cty = match size {
                     2 => "u16",
@@ -640,8 +647,7 @@ fn emit_call(
             IntrinsicKind::Mmio(op) => cx.emit_mmio(op, *instance, body, args, destination, out),
             IntrinsicKind::Log(level) => cx.emit_diag_log(&level, body, args, out),
             IntrinsicKind::PollUntil => Err(EmitError::Unsupported(
-                "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)"
-                    .into(),
+                "poll::until (recognized_not_lowered, ledger B-1; out of scope this unit)".into(),
             )),
             IntrinsicKind::Config(op) => {
                 // C01 legality (a): config space exists only under the PCI
@@ -669,8 +675,10 @@ fn emit_call(
                     body,
                     args,
                     destination,
-                    "__rseq_priv->pdev",
-                    Some(&recovery),
+                    ConfigDevice {
+                        pdev: "__rseq_priv->pdev",
+                        recovery: Some(&recovery),
+                    },
                     out,
                 )
             }
@@ -693,7 +701,12 @@ fn emit_call(
         if operand_is_zst(cx.model, body, arg) {
             continue;
         }
-        rendered.push(operand_expr_typed(cx, body, arg, param_tys.get(i).copied())?);
+        rendered.push(operand_expr_typed(
+            cx,
+            body,
+            arg,
+            param_tys.get(i).copied(),
+        )?);
     }
     let call = format!("{symbol}({})", rendered.join(", "));
     let dest_ty = place_ty(cx.model, body, destination)?;
@@ -712,10 +725,7 @@ fn emit_call(
 /// rendered `container_of` recovery line over that receiver (well-defined
 /// because the PCI scaffold is the sole driver instantiation site — every
 /// `&<drv>` points at a priv's `inner`, the D04 aliasing premise).
-fn config_recovery(
-    cx: &LowerCx<'_>,
-    body: &regseq_model::Body,
-) -> Result<String, EmitError> {
+fn config_recovery(cx: &LowerCx<'_>, body: &regseq_model::Body) -> Result<String, EmitError> {
     let recv = body
         .arg_locals()
         .next()
@@ -742,9 +752,9 @@ fn config_recovery(
 
 fn operand_is_zst(model: &RegseqModel, body: &regseq_model::Body, op: &Operand) -> bool {
     match op {
-        Operand::Copy(p) | Operand::Move(p) => {
-            place_ty(model, body, p).map(|t| types::is_zst(model, t)).unwrap_or(false)
-        }
+        Operand::Copy(p) | Operand::Move(p) => place_ty(model, body, p)
+            .map(|t| types::is_zst(model, t))
+            .unwrap_or(false),
         Operand::Constant(id) => matches!(&model.consts[*id], Const::ZST),
     }
 }
@@ -894,9 +904,9 @@ fn field_c_name(model: &RegseqModel, ty: TyId, idx: usize) -> Result<String, Emi
             "field projection into a non-struct layout (first-light subset)".into(),
         ));
     };
-    let field = fields.get(idx).ok_or_else(|| {
-        EmitError::Unsupported(format!("field index {idx} out of bounds"))
-    })?;
+    let field = fields
+        .get(idx)
+        .ok_or_else(|| EmitError::Unsupported(format!("field index {idx} out of bounds")))?;
     Ok(super::naming::c_ident(model.strings.resolve(field.name)))
 }
 
@@ -938,6 +948,23 @@ pub(crate) fn place_ty(
 // guard (the caller injects the #error block when `width8_used` is set).
 // ---------------------------------------------------------------------------
 
+/// The device a config op lowers against: the `pci_dev` expression plus the
+/// optional per-site recovery declaration heading the op's braces block.
+pub(crate) struct ConfigDevice<'a> {
+    pub pdev: &'a str,
+    pub recovery: Option<&'a str>,
+}
+
+/// A recovered register address: the resource cookie expression, the static
+/// block-relative byte offset, the runtime array-index terms
+/// (`(index local, element stride)`), and the access width.
+struct RecoveredRegister {
+    base: String,
+    offset: u64,
+    runtime: Vec<(String, u64)>,
+    width: u64,
+}
+
 /// The driver facts the mmio lowering needs, supplied by the TU fold.
 pub(crate) struct DriverFacts {
     /// The driver struct type (the lowered `self` pointee).
@@ -966,16 +993,19 @@ impl LowerCx<'_> {
         out: &mut String,
     ) -> Result<(), EmitError> {
         let desc_ty = match &self.model.instances[callee].kind {
-            InstanceKind::Function(d) => {
-                self.model.sigs.resolve(d.fn_sig).inputs.get(1).copied()
-            }
+            InstanceKind::Function(d) => self.model.sigs.resolve(d.fn_sig).inputs.get(1).copied(),
             _ => None,
         };
         use regseq_model::MmioOp;
         let recv = args
             .first()
             .ok_or_else(|| EmitError::Unsupported("mmio call with no receiver".into()))?;
-        let (base, offset, runtime, width) = self.recover_register(body, recv)?;
+        let RecoveredRegister {
+            base,
+            offset,
+            runtime,
+            width,
+        } = self.recover_register(body, recv)?;
         self.extra_includes.insert("<linux/io.h>");
         let (read_fn, write_fn, cast) = match width {
             1 => ("readb", "writeb", "u8"),
@@ -1030,9 +1060,7 @@ impl LowerCx<'_> {
                     let ty = place_ty(self.model, body, destination)?;
                     types::c_type(self.model, &mut self.names, ty)?
                 };
-                format!(
-                    "\t{dst} = ({dst_cty})(({read_fn}({addr}) & ({mask})) >> ({shift}));\n"
-                )
+                format!("\t{dst} = ({dst_cty})(({read_fn}({addr}) & ({mask})) >> ({shift}));\n")
             }
             MmioOp::Modify => {
                 let fv = self.descriptor(body, &args[1], desc_ty)?;
@@ -1074,7 +1102,7 @@ impl LowerCx<'_> {
         &mut self,
         body: &regseq_model::Body,
         recv: &Operand,
-    ) -> Result<(String, u64, Vec<(String, u64)>, u64), EmitError> {
+    ) -> Result<RecoveredRegister, EmitError> {
         let mut src = self.resolve_receiver_src(body, recv, 0)?;
         // Normalize through intermediate borrow temps: while the root local
         // is not the driver borrow, splice in its unique `Ref` definition
@@ -1301,10 +1329,13 @@ impl LowerCx<'_> {
         }
         let width = types::layout_of(self.model, ty)
             .map(|l| l.size)
-            .ok_or_else(|| {
-                EmitError::Unsupported("mmio register wrapper has no layout".into())
-            })?;
-        Ok((base, offset, runtime, width))
+            .ok_or_else(|| EmitError::Unsupported("mmio register wrapper has no layout".into()))?;
+        Ok(RecoveredRegister {
+            base,
+            offset,
+            runtime,
+            width,
+        })
     }
 
     /// Chase a bare-local receiver to the place it uniquely borrows
@@ -1534,27 +1565,25 @@ impl Descriptor {
 
 impl LowerCx<'_> {
     /// Lower one `IntrinsicKind::Config(op)` call shape against the given
-    /// PCI device expression. Both directions emit a braces block (C01);
-    /// `recovery` is the per-site `container_of` declaration placed first in
-    /// the block when the call comes through the TU interception.
+    /// [`ConfigDevice`]. Both directions emit a braces block (C01); the
+    /// device's `recovery` is the per-site `container_of` declaration placed
+    /// first in the block when the call comes through the TU interception.
     pub(crate) fn emit_config(
         &mut self,
         op: regseq_model::ConfigOp,
         body: &regseq_model::Body,
         args: &[Operand],
         destination: &Place,
-        pdev: &str,
-        recovery: Option<&str>,
+        device: ConfigDevice<'_>,
         out: &mut String,
     ) -> Result<(), EmitError> {
         use regseq_model::ConfigOp;
-        let off_arg = args.first().ok_or_else(|| {
-            EmitError::Unsupported("config call with no offset argument".into())
-        })?;
+        let off_arg = args
+            .first()
+            .ok_or_else(|| EmitError::Unsupported("config call with no offset argument".into()))?;
         let off = operand_expr(self, body, off_arg)?;
-        let rec_line = recovery
-            .map(|r| format!("\t\t{r}\n"))
-            .unwrap_or_default();
+        let ConfigDevice { pdev, recovery } = device;
+        let rec_line = recovery.map(|r| format!("\t\t{r}\n")).unwrap_or_default();
         match op {
             ConfigOp::Read => {
                 let ty = place_ty(self.model, body, destination)?;
@@ -1675,7 +1704,11 @@ fn uint_ty(model: &RegseqModel, size: u8) -> Result<TyId, EmitError> {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Modifier {
     None,
-    Hex { upper: bool, alternate: bool, width: u32 },
+    Hex {
+        upper: bool,
+        alternate: bool,
+        width: u32,
+    },
 }
 
 /// One parsed template segment.
@@ -1700,9 +1733,9 @@ impl LowerCx<'_> {
             LogLevel::Warn => "pr_warn",
             LogLevel::Error => "pr_err",
         };
-        let fmt_op = args.first().ok_or_else(|| {
-            EmitError::Unsupported("diag-log call with no format operand".into())
-        })?;
+        let fmt_op = args
+            .first()
+            .ok_or_else(|| EmitError::Unsupported("diag-log call with no format operand".into()))?;
         let template = self.read_str_carrier_bytes(fmt_op).ok_or_else(|| {
             EmitError::Unsupported("diag-log format operand is not a string literal".into())
         })?;
@@ -1810,11 +1843,7 @@ impl LowerCx<'_> {
 
     /// The numeric type of a diag-log argument (a place's declared type or a
     /// scalar constant's kind).
-    fn diag_numeric_ty(
-        &self,
-        body: &regseq_model::Body,
-        op: &Operand,
-    ) -> Result<Ty, EmitError> {
+    fn diag_numeric_ty(&self, body: &regseq_model::Body, op: &Operand) -> Result<Ty, EmitError> {
         match op {
             Operand::Copy(p) | Operand::Move(p) => {
                 let ty = place_ty(self.model, body, p)?;
@@ -1862,9 +1891,7 @@ fn diag_specifier_and_cast(modifier: Modifier, ty: &Ty) -> Result<(String, Strin
                 Ty::Int(IntKind::I8) => ("(u8)", "(unsigned)", false),
                 Ty::Int(IntKind::I16) => ("(u16)", "(unsigned)", false),
                 Ty::Int(IntKind::I32) => ("(u32)", "(unsigned)", false),
-                Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32) => {
-                    ("", "(unsigned)", false)
-                }
+                Ty::Uint(UintKind::U8 | UintKind::U16 | UintKind::U32) => ("", "(unsigned)", false),
                 Ty::Uint(UintKind::U64) | Ty::Int(IntKind::I64) => {
                     ("", "(unsigned long long)", true)
                 }

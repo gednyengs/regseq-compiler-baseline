@@ -135,10 +135,7 @@ fn amba_match() -> Vec<MatchEntry> {
 /// the niche-encoded `Result<(), RegseqError>` carrier; returns
 /// `(result_ty, regseq_error_ty)`. `err_variant_names` lets the
 /// ErrnoMapping negative test inject an unmapped variant.
-fn result_carrier(
-    m: &mut RegseqModel,
-    err_variant_names: [&str; 2],
-) -> (TyId, TyId) {
+fn result_carrier(m: &mut RegseqModel, err_variant_names: [&str; 2]) -> (TyId, TyId) {
     let u8t = m.types.intern(Ty::Uint(UintKind::U8));
 
     let err_item = item(m, ItemKind::Enum, "RegseqError");
@@ -439,7 +436,10 @@ fn tu_carries_the_d04_ordering_landmarks() {
     assert!(probe < remove);
     assert!(remove < table, "callbacks precede the match table");
     assert!(table < devtable);
-    assert!(devtable < drvstruct, "match table precedes the driver struct");
+    assert!(
+        devtable < drvstruct,
+        "match table precedes the driver struct"
+    );
     assert!(drvstruct < macros, "driver struct precedes module macros");
     assert!(macros < license);
 }
@@ -448,7 +448,9 @@ fn tu_carries_the_d04_ordering_landmarks() {
 fn probe_carries_create_associate_and_the_negated_adapter() {
     let tu = emit_linux_c(&minimal_amba_model()).unwrap().tu;
     // create → associate (canonical order, §C.3).
-    let create = tu.find("devm_kzalloc(&adev->dev, sizeof(*priv), GFP_KERNEL)").unwrap();
+    let create = tu
+        .find("devm_kzalloc(&adev->dev, sizeof(*priv), GFP_KERNEL)")
+        .unwrap();
     let associate = tu.find("amba_set_drvdata(adev, priv);").unwrap();
     let call = tu.find("minimal_on_init(&priv->inner)").unwrap();
     assert!(create < associate && associate < call);
@@ -473,7 +475,9 @@ fn full_match_set_renders_with_zero_sentinel() {
     });
     let tu = emit_linux_c(&m).unwrap().tu;
     let first = tu.find(".id\t= 0x00041011,").expect("first entry");
-    let second = tu.find(".id\t= 0x00042222,").expect("second entry (FULL match_set)");
+    let second = tu
+        .find(".id\t= 0x00042222,")
+        .expect("second entry (FULL match_set)");
     let sentinel = tu.find("{ 0, 0 },").expect("zero sentinel");
     assert!(first < second && second < sentinel);
 }
@@ -513,7 +517,9 @@ fn amba_surprise_remove_fails_loud() {
 
 #[test]
 fn on_init_failure_hook_runs_on_the_authored_err_arm_only() {
-    let tu = emit_linux_c(&model_with_callback("on_init_failure")).unwrap().tu;
+    let tu = emit_linux_c(&model_with_callback("on_init_failure"))
+        .unwrap()
+        .tu;
     let hook = tu
         .find("(void)minimal_on_init_failure(&priv->inner);")
         .expect("the failure hook is emitted");
@@ -527,7 +533,9 @@ fn on_init_failure_hook_runs_on_the_authored_err_arm_only() {
 
 #[test]
 fn shutdown_slot_is_omit_when_absent() {
-    let with = emit_linux_c(&model_with_callback("on_system_shutdown")).unwrap().tu;
+    let with = emit_linux_c(&model_with_callback("on_system_shutdown"))
+        .unwrap()
+        .tu;
     assert!(with.contains("static void minimal_shutdown(struct device *dev)"));
     assert!(with.contains(".shutdown = minimal_shutdown,"));
     assert!(with.contains("(void)minimal_on_system_shutdown(&priv->inner);"));
@@ -635,7 +643,9 @@ fn mmio_write_model_for(
     };
 
     // The intrinsic-anchored `mmio_write` callee (no body; intercepted).
-    let recv_ty = m.types.intern(Ty::Ref(wrapper_ty, Provenance::SharedBorrow));
+    let recv_ty = m
+        .types
+        .intern(Ty::Ref(wrapper_ty, Provenance::SharedBorrow));
     let unit_out = m.types.intern(Ty::Tuple {
         fields: vec![],
         layout: struct_layout(0, 1, vec![]),
@@ -833,7 +843,10 @@ fn width8_injects_the_a12_guard_and_width4_does_not() {
     assert!(with.contains("#ifndef CONFIG_64BIT"));
     assert!(with.contains("#error"));
     let without = emit_linux_c(&mmio_write_model(4, true)).unwrap().tu;
-    assert!(!without.contains("CONFIG_64BIT"), "width-4 TU must carry no guard");
+    assert!(
+        !without.contains("CONFIG_64BIT"),
+        "width-4 TU must carry no guard"
+    );
 }
 
 #[test]
@@ -897,8 +910,10 @@ fn a11_read_config_carries_the_void_discard() {
         &body,
         &[Operand::Constant(off)],
         &Place::from(dst),
-        "pdev",
-        None,
+        super::body::ConfigDevice {
+            pdev: "pdev",
+            recovery: None,
+        },
         &mut out,
     )
     .expect("read_config lowers");
@@ -927,8 +942,10 @@ fn a11_write_config_carries_the_void_discard() {
         &body,
         &[Operand::Constant(off), Operand::Constant(val)],
         &Place::from(dst),
-        "pdev",
-        None,
+        super::body::ConfigDevice {
+            pdev: "pdev",
+            recovery: None,
+        },
         &mut out,
     )
     .expect("write_config lowers");
@@ -956,8 +973,10 @@ fn a11_width8_config_fails_loud() {
             &body,
             &[Operand::Constant(off)],
             &Place::from(dst),
-            "pdev",
-            None,
+            super::body::ConfigDevice {
+                pdev: "pdev",
+                recovery: None,
+            },
             &mut out,
         )
         .unwrap_err();
@@ -976,13 +995,16 @@ fn a11_width8_config_fails_loud() {
 /// Intern a `&str` carrier constant for `text` (Aggregate[Reloc -> CMS
 /// static Bytes, Uint(len)]).
 fn str_carrier(m: &mut RegseqModel, text: &str) -> regseq_model::ConstId {
-    let bytes: Vec<regseq_model::Byte> = text
-        .bytes()
-        .map(regseq_model::Byte::Value)
-        .collect();
+    let bytes: Vec<regseq_model::Byte> = text.bytes().map(regseq_model::Byte::Value).collect();
     let bytes_cid = m.consts.intern(Const::Bytes(bytes));
     let u8t = m.types.intern(Ty::Uint(UintKind::U8));
-    let cms_item = item(m, ItemKind::Static { mutability: Mutability::Not }, "fmt_cms");
+    let cms_item = item(
+        m,
+        ItemKind::Static {
+            mutability: Mutability::Not,
+        },
+        "fmt_cms",
+    );
     let emission = m.strings.intern("fmt_cms");
     let cms_id = m.instances.push(Instance {
         item: cms_item,
@@ -995,7 +1017,9 @@ fn str_carrier(m: &mut RegseqModel, text: &str) -> regseq_model::ConstId {
         },
     });
     let reloc = m.consts.intern(Const::Reloc(m.instance_ref_of(cms_id)));
-    let len = m.consts.intern(Const::Uint(UintKind::Usize, text.len() as u128));
+    let len = m
+        .consts
+        .intern(Const::Uint(UintKind::Usize, text.len() as u128));
     m.consts.intern(Const::Aggregate(vec![reloc, len]))
 }
 
@@ -1198,15 +1222,19 @@ fn returning_an_accessor_result_fails_loud() {
     let mmio_ty = m
         .types
         .iter()
-        .find(|(_, t)| matches!(t, Ty::Struct { item, .. }
-            if m.strings.resolve(m.items[*item].def_path.rendered) == "Mmio"))
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. }
+            if m.strings.resolve(m.items[*item].def_path.rendered) == "Mmio")
+        })
         .map(|(id, _)| id)
         .unwrap();
     let block_ty = m
         .types
         .iter()
-        .find(|(_, t)| matches!(t, Ty::Struct { item, .. }
-            if m.strings.resolve(m.items[*item].def_path.rendered) == "Regs"))
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. }
+            if m.strings.resolve(m.items[*item].def_path.rendered) == "Regs")
+        })
         .map(|(id, _)| id)
         .unwrap();
     let mmio_ref = m.types.intern(Ty::Ref(mmio_ty, Provenance::SharedBorrow));
@@ -1274,8 +1302,10 @@ fn returning_an_accessor_result_fails_loud() {
     let driver_ty = m
         .types
         .iter()
-        .find(|(_, t)| matches!(t, Ty::Struct { item, .. }
-            if m.strings.resolve(m.items[*item].def_path.rendered) == "MmioDrv"))
+        .find(|(_, t)| {
+            matches!(t, Ty::Struct { item, .. }
+            if m.strings.resolve(m.items[*item].def_path.rendered) == "MmioDrv")
+        })
         .map(|(id, _)| id)
         .unwrap();
     let self_ty = m.types.intern(Ty::Ref(driver_ty, Provenance::UniqueBorrow));
@@ -1439,7 +1469,10 @@ fn pci_tu_carries_the_d04_ordering_landmarks() {
     assert!(probe < remove);
     assert!(remove < table, "callbacks precede the match table");
     assert!(table < devtable);
-    assert!(devtable < drvstruct, "match table precedes the driver struct");
+    assert!(
+        devtable < drvstruct,
+        "match table precedes the driver struct"
+    );
     assert!(drvstruct < macros && macros < license);
     // The PCI TU carries no AMBA scaffolding.
     assert!(!tu.contains("amba"), "no AMBA residue in a PCI TU:\n{tu}");
@@ -1467,7 +1500,9 @@ fn pci_probe_carries_create_associate_and_the_negated_adapter() {
 
 #[test]
 fn pci_resolved_region_probe_carries_the_t03_pinned_preamble() {
-    let tu = emit_linux_c(&pci_mmio_write_model(true, Some(0))).unwrap().tu;
+    let tu = emit_linux_c(&pci_mmio_write_model(true, Some(0)))
+        .unwrap()
+        .tu;
     // Canonical order: create -> associate -> enable -> fused request+map ->
     // on_init, with the native status declared up front.
     assert!(tu.contains("\tint ret;\n"), "native status declared:\n{tu}");
@@ -1476,7 +1511,9 @@ fn pci_resolved_region_probe_carries_the_t03_pinned_preamble() {
     let enable = tu
         .find("ret = pcim_enable_device(pdev);")
         .expect("the T03-pinned managed enable");
-    let enable_check = tu.find("if (ret)\n\t\treturn ret;").expect("native ret channel");
+    let enable_check = tu
+        .find("if (ret)\n\t\treturn ret;")
+        .expect("native ret channel");
     let map = tu
         .find("priv->inner.regs = pcim_iomap_region(pdev, 0, \"mmiodrv\");")
         .expect("the T03-pinned fused request+map of BAR0");
@@ -1708,35 +1745,36 @@ fn config_model(
     });
 
     // The intrinsic-anchored config callees.
-    let mut anchor = |m: &mut RegseqModel, name: &str, op: ConfigOp, sig_in: Vec<TyId>, sig_out: TyId| {
-        let sig = m.sigs.intern(FnSig {
-            inputs: sig_in,
-            output: sig_out,
-            abi: FnAbi::Rust,
-            c_variadic: false,
-            safety: Safety::Safe,
-        });
-        let it = item(m, ItemKind::Function, name);
-        while m.domain_attrs.item_attrs.len() <= it.as_u32() as usize {
-            m.domain_attrs.item_attrs.push(Vec::new());
-        }
-        m.domain_attrs.item_attrs[it].push(regseq_model::AttrData::Intrinsic(
-            regseq_model::IntrinsicKind::Config(op),
-        ));
-        let emission = m.strings.intern(name);
-        m.instances.push(Instance {
-            item: it,
-            generic_args: regseq_model::GenericArgs::new(),
-            emission_name: emission,
-            span: span(),
-            kind: InstanceKind::Function(FunctionInstanceData {
-                fn_sig: sig,
-                body: None,
-                flavor: FunctionInstanceFlavor::Item,
-                virtual_idx: None,
-            }),
-        })
-    };
+    let anchor =
+        |m: &mut RegseqModel, name: &str, op: ConfigOp, sig_in: Vec<TyId>, sig_out: TyId| {
+            let sig = m.sigs.intern(FnSig {
+                inputs: sig_in,
+                output: sig_out,
+                abi: FnAbi::Rust,
+                c_variadic: false,
+                safety: Safety::Safe,
+            });
+            let it = item(m, ItemKind::Function, name);
+            while m.domain_attrs.item_attrs.len() <= it.as_u32() as usize {
+                m.domain_attrs.item_attrs.push(Vec::new());
+            }
+            m.domain_attrs.item_attrs[it].push(regseq_model::AttrData::Intrinsic(
+                regseq_model::IntrinsicKind::Config(op),
+            ));
+            let emission = m.strings.intern(name);
+            m.instances.push(Instance {
+                item: it,
+                generic_args: regseq_model::GenericArgs::new(),
+                emission_name: emission,
+                span: span(),
+                kind: InstanceKind::Function(FunctionInstanceData {
+                    fn_sig: sig,
+                    body: None,
+                    flavor: FunctionInstanceFlavor::Item,
+                    virtual_idx: None,
+                }),
+            })
+        };
     let read_id = anchor(&mut m, "read_config", ConfigOp::Read, vec![u32t], u16t);
     let write_id = anchor(
         &mut m,
@@ -1748,8 +1786,14 @@ fn config_model(
 
     // on_init(&mut <recv>) -> Result, performing the ops in sequence.
     let (result_ty, _) = result_carrier(&mut m, ["HardwareError", "DeviceBusy"]);
-    let recv_pointee = if receiver_is_driver { driver_ty } else { other_ty };
-    let self_ty = m.types.intern(Ty::Ref(recv_pointee, Provenance::UniqueBorrow));
+    let recv_pointee = if receiver_is_driver {
+        driver_ty
+    } else {
+        other_ty
+    };
+    let self_ty = m
+        .types
+        .intern(Ty::Ref(recv_pointee, Provenance::UniqueBorrow));
     let sig = m.sigs.intern(FnSig {
         inputs: vec![self_ty],
         output: result_ty,
@@ -1799,7 +1843,10 @@ fn config_model(
         };
         body.basic_blocks.push(BasicBlock {
             statements: Box::new([]),
-            terminator: Terminator { kind: term, span: span() },
+            terminator: Terminator {
+                kind: term,
+                span: span(),
+            },
         });
     }
     body.basic_blocks.push(BasicBlock {
@@ -1905,7 +1952,8 @@ fn sibling_config_ops_each_carry_their_own_recovery_block() {
         "each sibling op carries its own per-site recovery; TU:\n{tu}"
     );
     assert_eq!(
-        tu.matches("\t{\n\t\tstruct cfgdrv_priv *__rseq_priv").count(),
+        tu.matches("\t{\n\t\tstruct cfgdrv_priv *__rseq_priv")
+            .count(),
         2,
         "every recovery lives inside its own braces block (never hoisted); TU:\n{tu}"
     );
@@ -1946,7 +1994,9 @@ fn amba_surprise_remove_rejection_is_unchanged() {
 
 #[test]
 fn pci_on_init_failure_hook_runs_on_the_authored_err_arm_only() {
-    let tu = emit_linux_c(&pci_model_with_callback("on_init_failure")).unwrap().tu;
+    let tu = emit_linux_c(&pci_model_with_callback("on_init_failure"))
+        .unwrap()
+        .tu;
     let hook = tu
         .find("(void)minimal_on_init_failure(&priv->inner);")
         .expect("the failure hook is emitted");
@@ -1960,7 +2010,9 @@ fn pci_on_init_failure_hook_runs_on_the_authored_err_arm_only() {
 
 #[test]
 fn pci_shutdown_slot_is_omit_when_absent() {
-    let with = emit_linux_c(&pci_model_with_callback("on_system_shutdown")).unwrap().tu;
+    let with = emit_linux_c(&pci_model_with_callback("on_system_shutdown"))
+        .unwrap()
+        .tu;
     assert!(with.contains("static void minimal_shutdown(struct pci_dev *pdev)"));
     assert!(with.contains(".shutdown\t= minimal_shutdown,"));
     assert!(with.contains("(void)minimal_on_system_shutdown(&priv->inner);"));
