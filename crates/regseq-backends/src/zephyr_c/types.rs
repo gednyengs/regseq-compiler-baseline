@@ -82,6 +82,51 @@ pub(crate) fn uint_spelling(kind: UintKind) -> Result<&'static str, EmitError> {
     })
 }
 
+/// Whether `ty` lowers to nothing (a ZST: unit, fieldless-zero-size
+/// aggregates, FnDef).
+pub(crate) fn is_zst(model: &RegseqModel, ty: TyId) -> bool {
+    match &model.types[ty] {
+        Ty::FnDef(_, _) => true,
+        Ty::Tuple { layout, .. }
+        | Ty::Struct { layout, .. }
+        | Ty::Enum { layout, .. }
+        | Ty::Union { layout, .. } => layout.size == 0,
+        _ => false,
+    }
+}
+
+/// The enum tag facts the body emitter and the errno adapter need:
+/// `(tag_offset, tag_size_bytes)`.
+pub(crate) fn enum_tag_cell(model: &RegseqModel, ty: TyId) -> Result<(u64, u64), EmitError> {
+    let layout = layout_of(model, ty)
+        .ok_or_else(|| EmitError::Unsupported("enum tag of a non-aggregate".into()))?;
+    let regseq_model::LayoutKind::Enum { shape } = &layout.kind else {
+        return Err(EmitError::Unsupported(
+            "enum tag of a non-enum layout".into(),
+        ));
+    };
+    match shape {
+        regseq_model::EnumShape::Multiple { tag, .. } => {
+            let size = match &model.types[tag.scalar_ty] {
+                Ty::Bool => 1,
+                Ty::Int(IntKind::I8) | Ty::Uint(UintKind::U8) => 1,
+                Ty::Int(IntKind::I16) | Ty::Uint(UintKind::U16) => 2,
+                Ty::Int(IntKind::I32) | Ty::Uint(UintKind::U32) => 4,
+                Ty::Int(IntKind::I64) | Ty::Uint(UintKind::U64) => 8,
+                other => {
+                    return Err(EmitError::Unsupported(format!(
+                        "enum tag scalar {other:?} (first-light subset)"
+                    )))
+                }
+            };
+            Ok((tag.offset, size))
+        }
+        _ => Err(EmitError::Unsupported(
+            "single-variant enum tag (first-light subset)".into(),
+        )),
+    }
+}
+
 /// The embedded `Layout` of an aggregate type (`None` for scalars).
 pub(crate) fn layout_of(model: &RegseqModel, ty: TyId) -> Option<&regseq_model::Layout> {
     match &model.types[ty] {
@@ -104,7 +149,16 @@ pub(crate) fn c_type(
         Ty::Bool => "bool".into(),
         Ty::Int(k) => int_spelling(*k)?.into(),
         Ty::Uint(k) => uint_spelling(*k)?.into(),
-        Ty::Struct { .. } | Ty::Enum { .. } | Ty::Union { .. } => {
+        Ty::Ref(pointee, _) | Ty::Ptr(pointee, _) => {
+            if !is_sized_supported(model, *pointee) {
+                return Err(EmitError::Unsupported(format!(
+                    "pointer to unsized/unsupported pointee {:?} (first-light subset)",
+                    model.types[*pointee]
+                )));
+            }
+            format!("{} *", c_type(model, names, *pointee)?)
+        }
+        Ty::Struct { .. } | Ty::Enum { .. } | Ty::Union { .. } | Ty::Tuple { .. } => {
             format!("struct {}", names.name_of(model, ty)?)
         }
         other => {
@@ -113,4 +167,12 @@ pub(crate) fn c_type(
             )))
         }
     })
+}
+
+/// Whether `ty` is a sized type the subset can point at.
+fn is_sized_supported(model: &RegseqModel, ty: TyId) -> bool {
+    !matches!(
+        &model.types[ty],
+        Ty::Str | Ty::Slice(_) | Ty::Dynamic { .. } | Ty::Never
+    )
 }

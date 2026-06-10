@@ -873,3 +873,488 @@ fn binding_yaml_carries_compatible_description_and_base_include() {
     );
     assert!(yaml.contains("include: base.yaml"), "{yaml}");
 }
+
+// -- T06: register-access lowering + MMIO width family ----------------------
+//
+// Synthetic-model unit tests at the body seam (LowerCx + emit_fn driven
+// directly; the TU fold consumes the bank in T07): accessor selection per
+// width 1/2/4/8, the sys_io VALUE-FIRST write arg order, mask-confinement +
+// RMW shape, descriptor const-folding, and the A-10 unresolved-binding hard
+// error at the op site.
+
+use regseq_model::{Const, Operand, PlaceElem, Rvalue, Statement, StatementKind};
+
+use super::body::{emit_fn, DriverFacts, LowerCx};
+use super::types::TypeNames;
+
+/// A register-block driver model: `Minimal { regs: Mmio<Block> }` where
+/// `Block` has one register wrapper per width at fixed offsets:
+/// w8@0x00, w16@0x04, w32@0x30, w64@0x38. Returns
+/// `(model, driver_ty, self_ty, [w1, w2, w4, w8] wrapper TyIds)`.
+fn mmio_block_model() -> (RegseqModel, TyId, TyId, [TyId; 4]) {
+    let mut m = model();
+
+    // Width-carrier wrapper structs (ReadWrite<W, R> mirrors: layout size =
+    // the access width).
+    let w1 = {
+        let u8t = m.types.intern(Ty::Uint(UintKind::U8));
+        let f = m.strings.intern("_v");
+        push_struct(
+            &mut m,
+            "W8",
+            struct_layout(
+                1,
+                1,
+                vec![FieldLayout {
+                    name: f,
+                    ty: u8t,
+                    offset: 0,
+                }],
+            ),
+        )
+    };
+    let w2 = {
+        let u16t = m.types.intern(Ty::Uint(UintKind::U16));
+        let f = m.strings.intern("_v");
+        push_struct(
+            &mut m,
+            "W16",
+            struct_layout(
+                2,
+                2,
+                vec![FieldLayout {
+                    name: f,
+                    ty: u16t,
+                    offset: 0,
+                }],
+            ),
+        )
+    };
+    let w4 = {
+        let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+        let f = m.strings.intern("_v");
+        push_struct(
+            &mut m,
+            "W32",
+            struct_layout(
+                4,
+                4,
+                vec![FieldLayout {
+                    name: f,
+                    ty: u32t,
+                    offset: 0,
+                }],
+            ),
+        )
+    };
+    let w8 = {
+        let u64t = m.types.intern(Ty::Uint(UintKind::U64));
+        let f = m.strings.intern("_v");
+        push_struct(
+            &mut m,
+            "W64",
+            struct_layout(
+                8,
+                8,
+                vec![FieldLayout {
+                    name: f,
+                    ty: u64t,
+                    offset: 0,
+                }],
+            ),
+        )
+    };
+
+    // The register block: named registers at hardware offsets.
+    let block = {
+        let r8 = m.strings.intern("r8");
+        let r16 = m.strings.intern("r16");
+        let cr = m.strings.intern("cr");
+        let r64 = m.strings.intern("r64");
+        push_struct(
+            &mut m,
+            "Block",
+            struct_layout(
+                0x40,
+                8,
+                vec![
+                    FieldLayout {
+                        name: r8,
+                        ty: w1,
+                        offset: 0x00,
+                    },
+                    FieldLayout {
+                        name: r16,
+                        ty: w2,
+                        offset: 0x04,
+                    },
+                    FieldLayout {
+                        name: cr,
+                        ty: w4,
+                        offset: 0x30,
+                    },
+                    FieldLayout {
+                        name: r64,
+                        ty: w8,
+                        offset: 0x38,
+                    },
+                ],
+            ),
+        )
+    };
+    // Mmio<Block>: one `inner` field.
+    let mmio = {
+        let inner = m.strings.intern("inner");
+        push_struct(
+            &mut m,
+            "Mmio",
+            struct_layout(
+                0x40,
+                8,
+                vec![FieldLayout {
+                    name: inner,
+                    ty: block,
+                    offset: 0,
+                }],
+            ),
+        )
+    };
+    // The driver struct.
+    let regs = m.strings.intern("regs");
+    let driver_ty = push_struct(
+        &mut m,
+        "MmioDriver",
+        struct_layout(
+            0x40,
+            8,
+            vec![FieldLayout {
+                name: regs,
+                ty: mmio,
+                offset: 0,
+            }],
+        ),
+    );
+    let self_ty = m
+        .types
+        .intern(Ty::Ref(driver_ty, regseq_model::Provenance::UniqueBorrow));
+    (m, driver_ty, self_ty, [w1, w2, w4, w8])
+}
+
+/// Push a one-op fn: `_2 = &((*_1).regs.inner.<reg>); <mmio op>(_2, ...);
+/// return;` — the hoisted-borrow receiver shape the recovery chase expects.
+/// `reg_idx` selects the Block field; `extra_args` follow the receiver.
+fn push_mmio_op_fn(
+    m: &mut RegseqModel,
+    self_ty: TyId,
+    op: regseq_model::MmioOp,
+    reg_idx: u32,
+    reg_wrapper: TyId,
+    extra_args: Vec<Operand>,
+    dest_ty: TyId,
+) -> regseq_model::InstanceId {
+    // The intrinsic callee (foreign): receiver + optional value/descriptor.
+    let recv_ref = m
+        .types
+        .intern(Ty::Ref(reg_wrapper, regseq_model::Provenance::SharedBorrow));
+    let intrinsic = push_intrinsic(
+        m,
+        match op {
+            regseq_model::MmioOp::Read => "mmio_read",
+            regseq_model::MmioOp::ReadField => "mmio_read_field",
+            regseq_model::MmioOp::Write => "mmio_write",
+            regseq_model::MmioOp::WriteField => "mmio_write_field",
+            regseq_model::MmioOp::Modify => "mmio_modify",
+        },
+        IntrinsicKind::Mmio(op),
+        vec![recv_ref],
+        dest_ty,
+    );
+
+    let sig = m.sigs.intern(FnSig {
+        inputs: vec![self_ty],
+        output: dest_ty,
+        abi: FnAbi::Rust,
+        c_variadic: false,
+        safety: Safety::Safe,
+    });
+    let mut body = Body::default();
+    // _0: return place, _1: self, _2: receiver borrow temp.
+    body.local_decls.push(LocalDecl {
+        ty: dest_ty,
+        mutability: Mutability::Mut,
+        span: span(),
+        debug_name: None,
+    });
+    body.local_decls.push(LocalDecl {
+        ty: self_ty,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: Some(m.strings.intern("self")),
+    });
+    body.local_decls.push(LocalDecl {
+        ty: recv_ref,
+        mutability: Mutability::Not,
+        span: span(),
+        debug_name: None,
+    });
+    body.arg_count = 1;
+
+    // The driver struct projection: (*_1).regs.inner.<reg>.
+    let driver_ty = match &m.types[self_ty] {
+        Ty::Ref(p, _) => *p,
+        _ => unreachable!(),
+    };
+    let (mmio_ty, block_ty) = {
+        let LayoutKind::Struct { fields } = &super::types::layout_of(m, driver_ty).unwrap().kind
+        else {
+            unreachable!()
+        };
+        let mmio_ty = fields[0].ty;
+        let LayoutKind::Struct { fields } = &super::types::layout_of(m, mmio_ty).unwrap().kind
+        else {
+            unreachable!()
+        };
+        (mmio_ty, fields[0].ty)
+    };
+    let recv_place = Place {
+        local: regseq_model::LocalId::from_u32(1),
+        projection: vec![
+            PlaceElem::Deref,
+            PlaceElem::Field(regseq_model::FieldIdx::from_u32(0), mmio_ty),
+            PlaceElem::Field(regseq_model::FieldIdx::from_u32(0), block_ty),
+            PlaceElem::Field(regseq_model::FieldIdx::from_u32(reg_idx), reg_wrapper),
+        ]
+        .into_boxed_slice(),
+    };
+
+    let mut args: Vec<Operand> = vec![Operand::Move(Place::from(regseq_model::LocalId::from_u32(
+        2,
+    )))];
+    args.extend(extra_args);
+
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([Statement {
+            kind: StatementKind::Assign(
+                Place::from(regseq_model::LocalId::from_u32(2)),
+                Rvalue::Ref(regseq_model::Provenance::SharedBorrow, recv_place),
+            ),
+            span: span(),
+        }]),
+        terminator: Terminator {
+            kind: TerminatorKind::Call {
+                callee: regseq_model::CallCallee::Direct(intrinsic),
+                args: args.into_boxed_slice(),
+                destination: Place::from(regseq_model::LocalId::RETURN_PLACE),
+                target: Some(regseq_model::BlockId::from_u32(1)),
+            },
+            span: span(),
+        },
+    });
+    body.basic_blocks.push(BasicBlock {
+        statements: Box::new([]),
+        terminator: Terminator {
+            kind: TerminatorKind::Return,
+            span: span(),
+        },
+    });
+
+    let fn_item = item(m, ItemKind::Function, "op_fn");
+    let emission = m.strings.intern("op_fn");
+    m.instances.push(Instance {
+        item: fn_item,
+        generic_args: regseq_model::GenericArgs::new(),
+        emission_name: emission,
+        span: span(),
+        kind: InstanceKind::Function(FunctionInstanceData {
+            fn_sig: sig,
+            body: Some(body),
+            flavor: FunctionInstanceFlavor::Item,
+            virtual_idx: None,
+        }),
+    })
+}
+
+fn lower_cx<'m>(m: &'m RegseqModel, driver_ty: TyId, resolved: bool) -> LowerCx<'m> {
+    LowerCx {
+        model: m,
+        names: TypeNames::new(),
+        fn_symbols: std::collections::BTreeMap::new(),
+        extra_includes: std::collections::BTreeSet::new(),
+        driver: DriverFacts {
+            driver_ty,
+            resources: vec![("regs".to_string(), resolved, "regs".to_string())],
+            reg_macros: vec![("MMIODRIVER_CR".to_string(), 0x30)],
+            base_symbol: "mmiodriver_mmio_base".to_string(),
+        },
+        width8_used: false,
+        uses_log: false,
+        elided_locals: std::collections::BTreeSet::new(),
+    }
+}
+
+fn lower_one(
+    m: &mut RegseqModel,
+    driver_ty: TyId,
+    fn_id: regseq_model::InstanceId,
+    resolved: bool,
+) -> Result<(String, bool), EmitError> {
+    let mut cx = lower_cx(m, driver_ty, resolved);
+    cx.fn_symbols.insert(fn_id, "op_fn".to_string());
+    let text = emit_fn(&mut cx, fn_id)?;
+    Ok((text, cx.width8_used))
+}
+
+#[test]
+fn mmio_width_family_selects_sys_io_accessors() {
+    // (reg_idx, wrapper_idx, expected read fn, expected offset token)
+    let cases: [(u32, usize, &str, &str); 4] = [
+        (0, 0, "sys_read8", "mmiodriver_mmio_base"),
+        (1, 1, "sys_read16", "mmiodriver_mmio_base + 0x4"),
+        (2, 2, "sys_read32", "mmiodriver_mmio_base + MMIODRIVER_CR"),
+        (3, 3, "sys_read64", "mmiodriver_mmio_base + 0x38"),
+    ];
+    for (reg_idx, widx, read_fn, addr) in cases {
+        let (mut m, driver_ty, self_ty, widths) = mmio_block_model();
+        let dest_ty = match widx {
+            0 => m.types.intern(Ty::Uint(UintKind::U8)),
+            1 => m.types.intern(Ty::Uint(UintKind::U16)),
+            2 => m.types.intern(Ty::Uint(UintKind::U32)),
+            _ => m.types.intern(Ty::Uint(UintKind::U64)),
+        };
+        let f = push_mmio_op_fn(
+            &mut m,
+            self_ty,
+            regseq_model::MmioOp::Read,
+            reg_idx,
+            widths[widx],
+            vec![],
+            dest_ty,
+        );
+        let (text, width8) = lower_one(&mut m, driver_ty, f, true).expect("lower");
+        assert!(
+            text.contains(&format!("{read_fn}({addr})")),
+            "expected `{read_fn}({addr})` in:\n{text}"
+        );
+        assert_eq!(width8, widx == 3, "width8_used iff the 64-bit register");
+    }
+}
+
+#[test]
+fn mmio_write_is_value_first() {
+    let (mut m, driver_ty, self_ty, widths) = mmio_block_model();
+    let unit = unit_ty(&mut m);
+    let val = m.consts.intern(Const::Uint(UintKind::U32, 0x301));
+    let f = push_mmio_op_fn(
+        &mut m,
+        self_ty,
+        regseq_model::MmioOp::Write,
+        2,
+        widths[2],
+        vec![Operand::Constant(val)],
+        unit,
+    );
+    let (text, _) = lower_one(&mut m, driver_ty, f, true).expect("lower");
+    // sys_io convention: VALUE first, ADDRESS second.
+    assert!(
+        text.contains("sys_write32((uint32_t)(0x301u), mmiodriver_mmio_base + MMIODRIVER_CR);"),
+        "{text}"
+    );
+}
+
+#[test]
+fn mmio_write_field_confines_value_to_mask() {
+    let (mut m, driver_ty, self_ty, widths) = mmio_block_model();
+    let unit = unit_ty(&mut m);
+    // FieldValue { mask: 0x301, value: 0x301 } as a const aggregate.
+    let mask = m.consts.intern(Const::Uint(UintKind::U32, 0x301));
+    let value = m.consts.intern(Const::Uint(UintKind::U32, 0x301));
+    let fv = m.consts.intern(Const::Aggregate(vec![mask, value]));
+    let f = push_mmio_op_fn(
+        &mut m,
+        self_ty,
+        regseq_model::MmioOp::WriteField,
+        2,
+        widths[2],
+        vec![Operand::Constant(fv)],
+        unit,
+    );
+    let (text, _) = lower_one(&mut m, driver_ty, f, true).expect("lower");
+    assert!(
+        text.contains(
+            "sys_write32((uint32_t)((0x301) & (0x301)), mmiodriver_mmio_base + MMIODRIVER_CR);"
+        ),
+        "{text}"
+    );
+}
+
+#[test]
+fn mmio_read_field_masks_then_shifts() {
+    let (mut m, driver_ty, self_ty, widths) = mmio_block_model();
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    // Field { mask: 1<<3, shift: 3 }.
+    let mask = m.consts.intern(Const::Uint(UintKind::U32, 0x8));
+    let shift = m.consts.intern(Const::Uint(UintKind::U32, 3));
+    let fld = m.consts.intern(Const::Aggregate(vec![mask, shift]));
+    let f = push_mmio_op_fn(
+        &mut m,
+        self_ty,
+        regseq_model::MmioOp::ReadField,
+        2,
+        widths[2],
+        vec![Operand::Constant(fld)],
+        u32t,
+    );
+    let (text, _) = lower_one(&mut m, driver_ty, f, true).expect("lower");
+    assert!(
+        text.contains("((sys_read32(mmiodriver_mmio_base + MMIODRIVER_CR) & (0x8)) >> (0x3))"),
+        "{text}"
+    );
+}
+
+#[test]
+fn mmio_modify_preserves_unmentioned_bits() {
+    let (mut m, driver_ty, self_ty, widths) = mmio_block_model();
+    let unit = unit_ty(&mut m);
+    let mask = m.consts.intern(Const::Uint(UintKind::U32, 0x10));
+    let value = m.consts.intern(Const::Uint(UintKind::U32, 0x0));
+    let fv = m.consts.intern(Const::Aggregate(vec![mask, value]));
+    let f = push_mmio_op_fn(
+        &mut m,
+        self_ty,
+        regseq_model::MmioOp::Modify,
+        2,
+        widths[2],
+        vec![Operand::Constant(fv)],
+        unit,
+    );
+    let (text, _) = lower_one(&mut m, driver_ty, f, true).expect("lower");
+    // RMW: read-modify-write preserving bits outside the mask.
+    assert!(text.contains("uint32_t __cur = sys_read32("), "{text}");
+    assert!(
+        text.contains("sys_write32((__cur & ~(uint32_t)(0x10)) | ((uint32_t)((0x0) & (0x10))),"),
+        "{text}"
+    );
+}
+
+#[test]
+fn mmio_against_unresolved_binding_is_the_a10_hard_error() {
+    let (mut m, driver_ty, self_ty, widths) = mmio_block_model();
+    let u32t = m.types.intern(Ty::Uint(UintKind::U32));
+    let f = push_mmio_op_fn(
+        &mut m,
+        self_ty,
+        regseq_model::MmioOp::Read,
+        2,
+        widths[2],
+        vec![],
+        u32t,
+    );
+    let err = lower_one(&mut m, driver_ty, f, false).unwrap_err();
+    let EmitError::UnresolvedBinding(s) = err else {
+        panic!("expected UnresolvedBinding, got {err:?}");
+    };
+    assert!(
+        s.contains("[mmio.regs] base/size") && s.contains("A-10"),
+        "{s}"
+    );
+}

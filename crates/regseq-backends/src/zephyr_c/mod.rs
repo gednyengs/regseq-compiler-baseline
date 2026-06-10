@@ -23,6 +23,7 @@
 //! never silent omission. Structurally there is no emit-what-we-can branch
 //! (I06).
 
+mod body;
 mod naming;
 mod types;
 
@@ -77,6 +78,10 @@ pub enum EmitError {
     /// The model's driver set cannot be lowered as a Zephyr driver TU (no
     /// driver, several drivers, malformed descriptor...).
     Driver(String),
+    /// A TU containing MMIO ops whose binding is not resolved — the ratified
+    /// A-10/D11 hard error naming the missing L2 literals (platform.toml
+    /// stays REQUIRED even though DT `reg` is the normative map source).
+    UnresolvedBinding(String),
 }
 
 impl std::fmt::Display for EmitError {
@@ -91,6 +96,10 @@ impl std::fmt::Display for EmitError {
             }
             EmitError::Rejected(what) => write!(f, "zephyr_c emission: {what}"),
             EmitError::Driver(what) => write!(f, "zephyr_c emission: {what}"),
+            EmitError::UnresolvedBinding(what) => write!(
+                f,
+                "zephyr_c emission: unresolved MMIO binding (ratified A-10/D11): {what}"
+            ),
         }
     }
 }
@@ -478,7 +487,11 @@ fn scan_closure_ops(model: &RegseqModel, closure: &[InstanceId]) -> Result<(), E
 /// shapes still have no carrier here because config space is PCI-only and
 /// the PCIe scaffold is the e1000 successor's (the upstream BRM-001
 /// non-PCI rejection diagnostic is pending, D.2/B-4).
-fn config_rejection(model: &RegseqModel, callee: InstanceId, op: &ConfigOp) -> EmitError {
+pub(crate) fn config_rejection(
+    model: &RegseqModel,
+    callee: InstanceId,
+    op: &ConfigOp,
+) -> EmitError {
     let width = config_width(model, callee, op);
     let is_write = matches!(op, ConfigOp::Write);
     match width {
