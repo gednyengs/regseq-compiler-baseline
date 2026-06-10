@@ -1535,6 +1535,84 @@ fn pci_more_than_one_region_fails_loud_naming_b5() {
     );
 }
 
+// ---------------------------------------------------------------------------
+// backend-linux-c-e1000 T05: pci_device_id[] match-table emission — the FULL
+// match_set (B-6 never-truncate), zero sentinel, MODULE_DEVICE_TABLE, and the
+// polarity pin: the lift covers `Pci` entries under a PCI driver ONLY.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn pci_full_match_set_renders_in_order_with_zero_sentinel() {
+    let mut m = minimal_pci_model();
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.match_set.push(MatchEntry::Pci {
+        vendor: 0x8086,
+        device: 0x100f,
+        subsystem: None,
+        class: None,
+    });
+    let tu = emit_linux_c(&m).unwrap().tu;
+    let first = tu.find(".device\t\t= 0x100e,").expect("first row");
+    let second = tu
+        .find(".device\t\t= 0x100f,")
+        .expect("second row (FULL match_set, B-6)");
+    let sentinel = tu.find("{ 0, },").expect("zero sentinel");
+    let devtable = tu.find("MODULE_DEVICE_TABLE(pci, minimal_ids);").unwrap();
+    assert!(first < second && second < sentinel && sentinel < devtable);
+    assert_eq!(
+        tu.matches(".vendor\t\t= 0x8086,").count(),
+        2,
+        "every row carries its vendor"
+    );
+    assert_eq!(
+        tu.matches(".subvendor\t= PCI_ANY_ID,").count(),
+        2,
+        "vendor/device rows wildcard the subsystem ids"
+    );
+}
+
+#[test]
+fn foreign_transport_match_entry_under_a_pci_driver_stays_loud() {
+    // The T05 polarity pin: the lift's boundary is the driver's own
+    // transport — an AMBA (or any foreign) entry under a PCI driver names
+    // the spec-convergence successor, never silently dropped (I03, B-6).
+    let mut m = minimal_pci_model();
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.match_set.push(MatchEntry::Amba {
+        id: 0x0004_1011,
+        mask: 0x000f_ffff,
+    });
+    let err = emit_linux_c(&m).unwrap_err();
+    let EmitError::UnsupportedInUnit { what, unit } = err else {
+        panic!("expected UnsupportedInUnit, got {err:?}");
+    };
+    assert!(
+        what.contains("foreign-transport") && what.contains("B-6"),
+        "the rejection names the mixed-match-set gap: {what}"
+    );
+    assert!(
+        unit.contains("spec-convergence"),
+        "the rejection names the successor unit: {unit}"
+    );
+}
+
+#[test]
+fn pci_match_entry_with_qualifiers_fails_loud() {
+    let mut m = minimal_pci_model();
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.match_set[0] = MatchEntry::Pci {
+        vendor: 0x8086,
+        device: 0x100e,
+        subsystem: Some(0x1028_0001),
+        class: None,
+    };
+    let err = emit_linux_c(&m).unwrap_err();
+    assert!(
+        matches!(&err, EmitError::Unsupported(s) if s.contains("subsystem/class")),
+        "qualified rows have no witness this unit and must fail loud: {err:?}"
+    );
+}
+
 #[test]
 fn pci_surprise_remove_fails_loud_until_t06() {
     let err = emit_linux_c(&pci_model_with_callback("on_surprise_remove")).unwrap_err();
