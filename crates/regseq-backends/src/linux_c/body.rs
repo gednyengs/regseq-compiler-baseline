@@ -28,6 +28,8 @@ pub(crate) struct LowerCx<'m> {
     pub names: TypeNames,
     /// C symbol per lowered instance.
     pub fn_symbols: BTreeMap<InstanceId, String>,
+    /// Demand-recorded extra includes (e.g. `<linux/bug.h>` for `BUG()`).
+    pub extra_includes: std::collections::BTreeSet<&'static str>,
 }
 
 impl<'m> LowerCx<'m> {
@@ -46,8 +48,10 @@ impl<'m> LowerCx<'m> {
     }
 }
 
-/// Emit one lowered function definition.
-pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<String, EmitError> {
+/// The `static <ret> <name>(<params>)` head shared by the forward
+/// prototype and the definition (P1: callees may be emitted after callers,
+/// so every lowered function gets a prototype before the body bank).
+pub(crate) fn fn_head(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<String, EmitError> {
     let inst = &cx.model.instances[instance];
     let InstanceKind::Function(data) = &inst.kind else {
         return Err(EmitError::Unsupported(format!(
@@ -87,8 +91,20 @@ pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<Stri
     } else {
         params.join(", ")
     };
+    Ok(format!("static {ret} {c_name}({params})"))
+}
 
-    let mut out = format!("static {ret} {c_name}({params})\n{{\n");
+/// Emit one lowered function definition.
+pub(crate) fn emit_fn(cx: &mut LowerCx<'_>, instance: InstanceId) -> Result<String, EmitError> {
+    let head = fn_head(cx, instance)?;
+    let inst = &cx.model.instances[instance];
+    let InstanceKind::Function(data) = &inst.kind else {
+        unreachable!("fn_head certified the function shape");
+    };
+    let body = data.body.as_ref().expect("fn_head certified a body");
+    let sig = cx.model.sigs.resolve(data.fn_sig);
+
+    let mut out = format!("{head}\n{{\n");
 
     // Locals (return place + temporaries); ZSTs are dropped.
     let ret_zst = types::is_zst(cx.model, sig.output);
@@ -392,6 +408,7 @@ fn emit_terminator(
         }
         TerminatorKind::Unreachable => {
             // Defensive trap: unreachable-by-construction control flow.
+            cx.extra_includes.insert("<linux/bug.h>");
             out.push_str("\tBUG();\n");
             Ok(())
         }

@@ -184,6 +184,7 @@ fn result_carrier(
     });
 
     let result_item = item(m, ItemKind::Enum, "Result");
+    m.items[result_item].is_result = true;
     let ok_name = m.strings.intern("Ok");
     let err_name = m.strings.intern("Err");
     let payload_name = m.strings.intern("0");
