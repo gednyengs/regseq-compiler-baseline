@@ -130,4 +130,27 @@ fn linux_irq_pl011_snapshot_and_l0_structure() {
         conf.contains("\"slot\": \"interrupt.register_handler.deregister\""),
         "conformance must report the deregister slot delivered (D09 contrast with C02); got:\n{conf}"
     );
+
+    // The shared-line NEGATIVE (Codex M3 MUST-FIX): the kernel rejects
+    // IRQF_NO_AUTOEN | IRQF_SHARED with -EINVAL, so an L2 `shared = true`
+    // board fact must be EMIT-REJECTED loudly, never lowered into a module
+    // whose probe always fails. Re-bridge the same authored spec (the
+    // snapshot above was this process's FIRST bridge, so the byte-lock is
+    // already done) and join a shared-variant platform binding directly.
+    let mut model = match try_bridge_fixture_path(&fixture.input) {
+        BridgeOutcome::Ok(m) => m,
+        other => panic!("re-bridge failed: {other:?}"),
+    };
+    let shared_toml = "[mmio.regs]\nbase = 0x09000000\nsize = 0x1000\n\
+                       [interrupt.uart_irq]\nirq_number = 37\nshared = true\n";
+    let bindings = regseq_config::parse_platform_bindings_str(shared_toml).expect("parse");
+    regseq_l2::bind_all(&mut model, &bindings).expect("bind_all");
+    regseq_l2::validate_l2_surface(&model).expect("validate");
+    let err = regseq_backends::emit_linux_c(&model)
+        .expect_err("shared=true must be emit-rejected on linux_c");
+    let msg = err.to_string();
+    assert!(
+        msg.contains("IRQF_NO_AUTOEN | IRQF_SHARED") && msg.contains("shared"),
+        "the rejection must name the kernel flag conflict; got: {msg}"
+    );
 }

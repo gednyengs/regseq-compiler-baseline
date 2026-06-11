@@ -562,9 +562,6 @@ struct LinuxIrq {
     /// The lowered handler-body instance (joins the closure; its symbol comes
     /// from the leaf naming loop).
     handler: InstanceId,
-    /// `IRQF_SHARED` iff the L2 board fact (D05/I08) — the ONLY extra flag;
-    /// no `IRQF_TRIGGER_*` is ever emitted (D10/R12: the DT is authoritative).
-    shared: bool,
     /// The `request_irq` name string (the descriptor's logical name).
     dev_name: String,
     /// The `IrqResult` tag cell + the `Handled` tag value, for the wrapper's
@@ -582,14 +579,14 @@ impl LinuxIrq {
         format!("rseq_isr_{drv}")
     }
 
-    /// The request flags expression: registered DISABLED (D02), plus
-    /// `IRQF_SHARED` iff the board fact.
+    /// The request flags: registered DISABLED (D02). A shared line is
+    /// emit-rejected upstream — `IRQF_NO_AUTOEN | IRQF_SHARED` is `-EINVAL`
+    /// in the kernel (`kernel/irq/manage.c` `__setup_irq`), so the PLAN's
+    /// flag formula cannot be lowered as written (Codex M3 MUST-FIX; the
+    /// shared-line registration contract is a recorded design amendment for
+    /// the unit that lands a shared-irq fixture).
     fn flags(&self) -> &'static str {
-        if self.shared {
-            "IRQF_NO_AUTOEN | IRQF_SHARED"
-        } else {
-            "IRQF_NO_AUTOEN"
-        }
+        "IRQF_NO_AUTOEN"
     }
 }
 
@@ -627,6 +624,23 @@ fn linux_irq_facts(
         ));
     }
     let resource = &interrupts.resources[0];
+    if resource.binding.shared {
+        // The kernel REJECTS `IRQF_NO_AUTOEN | IRQF_SHARED` with -EINVAL
+        // (`kernel/irq/manage.c` `__setup_irq`): a shared line cannot be held
+        // request-disabled, so the D02 registered-disabled contract and the
+        // D05 shared flag cannot compose as the PLAN's flag formula wrote
+        // them. Fail loud (I05) rather than emit a module whose probe always
+        // fails; the shared-line registration contract is a recorded design
+        // amendment for the unit that lands a shared-irq fixture (e1000,
+        // whose PCI leg is deferred anyway).
+        return Err(EmitError::Unsupported(
+            "device-interrupt: a shared line (L2 `shared = true`) cannot be lowered with \
+             the registered-disabled contract — the kernel rejects \
+             IRQF_NO_AUTOEN | IRQF_SHARED with -EINVAL; the shared-line registration \
+             form needs a design amendment (deferred to the shared-irq fixture unit)"
+                .into(),
+        ));
+    }
     if !matches!(resource.form, regseq_model::InterruptForm::Single) {
         return Err(EmitError::Unsupported(
             "device-interrupt: Option<Interrupt> / [Interrupt; N] lowering is not \
@@ -703,7 +717,6 @@ fn linux_irq_facts(
     let _ = drv;
     Ok(Some(LinuxIrq {
         handler: handler_id,
-        shared: resource.binding.shared,
         dev_name,
         ret_ty,
         tag_offset,
