@@ -13,10 +13,15 @@ wildcards the queried bus (incl. PCIe-over-DT). Row IDs follow the C02
 grammar `CAP-<OS>-<FORM>-<SLOT>-<N>`, are append-only, and are never renamed;
 a re-ratification that changes substance mints `N+1`.
 
-Dispositions (amendment 1 as amended, D01): `Delivered`, `AbsentDispatch`
-(the ONLY disposition that may non-emit an authored callback),
-`DesignedScheduled` (reject-at-emit with the scheduling diagnostic),
-`NeedsNewSurface`, `RejectedUnsupported`.
+Dispositions (amendment 1 as amended, D01; appended by the device-interrupt
+unit per its GRILL D03/C02): `Delivered`, `AbsentDispatch` (the ONLY
+disposition that may non-emit an authored CALLBACK), `DesignedScheduled`
+(reject-at-emit with the scheduling diagnostic), `NeedsNewSurface`,
+`RejectedUnsupported`, and `StructurallyAbsent` (a compiler-managed
+OPERATION — not an authored callback — structurally absent on the
+registration form; renders its own `RSEQ-ABSENT-OP` audit-block kind, never
+the `RSEQ-ABSENT-SLOT` spelling; first occupant:
+`interrupt.register_handler.deregister` on the static-connect form).
 
 ## Rows (as ratified 2026-06-10; anchors verified per the D05 bar)
 
@@ -39,7 +44,9 @@ and registration are included) — enforced by
 
 `ZEPHYR_PIN` in `capability.rs` is the single authoritative current pin. On
 a re-pin, `absent_dispatch_rows_match_current_os_pin` fails naming each
-Zephyr `AbsentDispatch`/`DesignedScheduled` row still carrying the old pin;
+Zephyr `AbsentDispatch`/`DesignedScheduled`/`StructurallyAbsent` row still
+carrying the old pin (the structurally-absent impossibility claim is just as
+version-bound — device-interrupt unit);
 re-review = re-verify the claim on the new pin, update the row's
 pin+citation in the Rust table, and mirror it here (forced by the sync
 test).

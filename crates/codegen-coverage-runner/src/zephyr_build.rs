@@ -96,6 +96,13 @@ pub struct StagedDriver<'a> {
     pub compatible: &'a str,
     /// The DUT region `(base, size)` for the overlay node's `reg` cells.
     pub region: (u64, u64),
+    /// Optional raw `interrupts` cells for the overlay node (device-interrupt
+    /// construct #6: an interrupt-bearing TU's `DT_INST_IRQN(0)` needs the
+    /// property), e.g. `"<0 8 2 0>"` = `<GIC_SPI 8 IRQ_TYPE_LEVEL 0>` raw.
+    /// The west gate is a COMPILE check — the cells must be well-formed; the
+    /// runtime line number is the eval campaign's to pin. `None` emits no
+    /// property (every pre-construct fixture, byte-identical overlay).
+    pub interrupts: Option<&'a str>,
 }
 
 /// Build the staged app against the workspace named by
@@ -183,12 +190,16 @@ pub fn west_build_with_workspace(
     let (base, size) = driver.region;
     let base_hi = base >> 32;
     let base_lo = base & 0xffff_ffff;
+    let interrupts_prop = driver
+        .interrupts
+        .map(|cells| format!("\t\t\tinterrupts = {cells};\n"))
+        .unwrap_or_default();
     std::fs::write(
         app.join("app.overlay"),
         format!(
             "/* The eval DUT node (GRILL D04): the second PL011, matched ONLY by\n \
              * the generated driver's `{}` compatible. */\n\
-             / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
+             / {{\n\tsoc {{\n\t\tregseq_dut: uart@{base:x} {{\n\t\t\tcompatible = \"{}\";\n\t\t\treg = <{base_hi:#x} {base_lo:#x} 0x00 {size:#x}>;\n{interrupts_prop}\t\t\tstatus = \"okay\";\n\t\t}};\n\t}};\n}};\n",
             driver.compatible, driver.compatible
         ),
     )
@@ -297,6 +308,7 @@ mod tests {
             driver_name: "pl011",
             compatible: "regseq,pl011",
             region: (0x0904_0000, 0x1000),
+            interrupts: None,
         }
     }
 

@@ -482,8 +482,12 @@ mod tests {
         Ok(())
     }
 
-    /// Every Zephyr AbsentDispatch/DesignedScheduled row whose pin is not
-    /// `pin` — the amendment-9 staleness detector, naming each stale row.
+    /// Every Zephyr AbsentDispatch/DesignedScheduled/StructurallyAbsent row
+    /// whose pin is not `pin` — the amendment-9 staleness detector, naming
+    /// each stale row. StructurallyAbsent joined the family with the
+    /// device-interrupt unit (Codex M4 review): its impossibility claim is
+    /// just as version-bound as AbsentDispatch's, so a re-pin must re-verify
+    /// it too.
     fn stale_zephyr_rows<'a>(
         table: impl Iterator<Item = &'a CapabilityRow>,
         pin: &str,
@@ -493,7 +497,9 @@ mod tests {
                 r.target_os == TargetOs::Zephyr
                     && matches!(
                         r.disposition,
-                        Disposition::AbsentDispatch | Disposition::DesignedScheduled
+                        Disposition::AbsentDispatch
+                            | Disposition::DesignedScheduled
+                            | Disposition::StructurallyAbsent
                     )
                     && r.os_version_pin != pin
             })
@@ -703,7 +709,10 @@ mod tests {
     #[test]
     fn absent_dispatch_citations_are_pinned() {
         for row in CAPABILITY_TABLE {
-            if row.disposition == Disposition::AbsentDispatch {
+            if matches!(
+                row.disposition,
+                Disposition::AbsentDispatch | Disposition::StructurallyAbsent
+            ) {
                 assert!(!row.citation.is_empty(), "row `{}`: empty citation", row.id);
                 assert!(
                     row.citation.contains(row.os_version_pin),

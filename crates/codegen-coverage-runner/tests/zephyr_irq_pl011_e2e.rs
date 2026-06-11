@@ -116,6 +116,29 @@ fn zephyr_irq_pl011_snapshot_and_l0_structure() {
         tu.contains("disposition: StructurallyAbsent row: CAP-ZEPHYR-STATICIRQ-DEREGISTER-1"),
         "the audit block must cite the ratified row (C02)"
     );
+    // The audit block sits AT the deregister-slot position: immediately
+    // before the deinit postamble comment (Codex M4: broad ordering is not
+    // position). The audit block's closing line must be adjacent to the
+    // postamble comment up to whitespace.
+    let audit_end_marker = "structurally absent on this registration form. */";
+    let audit_end = pos(audit_end_marker) + audit_end_marker.len();
+    let postamble = pos("postamble (integration \u{a7}5.2)");
+    assert!(audit < postamble, "audit precedes the postamble");
+    let between = &tu[audit_end..postamble];
+    assert!(
+        between.trim_matches(|c: char| c.is_whitespace() || c == '/' || c == '*').is_empty(),
+        "nothing may sit between the audit block and the postamble; got {between:?}"
+    );
+    // The COMPLETE connect shape (Codex M4): build-time param + flags 0 —
+    // and NO trigger/flag lowering anywhere (R12/D10: the platform file's
+    // trigger facts are validation inputs; the DT is authoritative).
+    pos("IRQ_CONNECT(DT_INST_IRQN(0), DT_INST_IRQ(0, priority), rseq_isr_pl011irq,\n\t\t    DEVICE_DT_INST_GET(0), 0);");
+    for forbidden in ["IRQ_TYPE", "trigger", "active_high", "IRQF_", "level"] {
+        assert!(
+            !tu.contains(forbidden),
+            "no trigger/flag spelling may lower into the TU (R12); found `{forbidden}`"
+        );
+    }
     // The result is discarded by the void wrapper; the IrqResult never maps
     // to a return channel on zephyr (R08).
     pos("(void)pl011irq_handle_irq(&data->inner);");
