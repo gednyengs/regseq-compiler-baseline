@@ -1,0 +1,12 @@
+{
+  "target": "linux_c",
+  "os_version_pin": "v6.6",
+  "delivered_slots": [
+    {"slot": "on_init", "row": null},
+    {"slot": "on_deinit", "row": null},
+    {"slot": "on_surprise_remove", "row": "CAP-LINUX-PCI-SURPRISE-1"},
+    {"slot": "on_init_failure", "row": null}
+  ],
+  "absent_dispatch_slots": [],
+  "rejected_slots": []
+}

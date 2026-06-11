@@ -631,6 +631,13 @@ pub fn linux_golden_path(fixture: &Fixture) -> std::path::PathBuf {
     fixture.dir.join("golden.linux.c")
 }
 
+/// The committed per-target conformance report beside a fixture
+/// (`conformance.linux.json`; amendment 6/D16 — every OS-target run
+/// commits one).
+pub fn linux_conformance_path(fixture: &Fixture) -> std::path::PathBuf {
+    fixture.dir.join("conformance.linux.json")
+}
+
 fn run_linux_stages(fixture: &Fixture) -> FixtureVerdict {
     // Stage 1: Acquire (same bridge seam as the generic row).
     let mut model = match fixture.manifest.kind {
@@ -670,20 +677,36 @@ fn run_linux_stages(fixture: &Fixture) -> FixtureVerdict {
         Ok(emit) => emit,
         Err(err) => return fail(Stage::Emit, err.to_string()),
     };
+    // R05: the delivered-vs-absent test-log line, printed from the same
+    // struct the JSON serializes (single source, D08 guardrail 7). The
+    // linux row runs only in the sole-binary OS e2es.
+    println!("{}", emit.conformance.summary_line());
 
-    // Stage 3: byte-exact snapshot vs golden.linux.c.
-    let golden_path = linux_golden_path(fixture);
-    let golden = match std::fs::read_to_string(&golden_path) {
-        Ok(text) => text,
-        Err(err) => {
-            return fail(
-                Stage::Snapshot,
-                format!("cannot read golden {}: {err}", golden_path.display()),
-            );
+    // Stage 3: byte-exact snapshots vs golden.linux.c AND the committed
+    // conformance JSON (unconditional — amendment 6's "every OS-backend
+    // build emits a per-target report"; a file-exists conditional would be
+    // a silent skip).
+    let conformance_json = crate::conformance::render_json(&emit.conformance);
+    for (artifact, text, path) in [
+        ("golden.linux.c", &emit.tu, linux_golden_path(fixture)),
+        (
+            "conformance.linux.json",
+            &conformance_json,
+            linux_conformance_path(fixture),
+        ),
+    ] {
+        let golden = match std::fs::read_to_string(&path) {
+            Ok(text) => text,
+            Err(err) => {
+                return fail(
+                    Stage::Snapshot,
+                    format!("cannot read golden {}: {err}", path.display()),
+                );
+            }
+        };
+        if let Err(mismatch) = oracle::snapshot(text, &golden) {
+            return fail(Stage::Snapshot, format!("{artifact}: {}", mismatch.summary));
         }
-    };
-    if let Err(mismatch) = oracle::snapshot(&emit.tu, &golden) {
-        return fail(Stage::Snapshot, mismatch.summary);
     }
     FixtureVerdict::Pass
 }

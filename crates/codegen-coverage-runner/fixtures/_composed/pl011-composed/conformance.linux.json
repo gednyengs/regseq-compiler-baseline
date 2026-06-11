@@ -1,0 +1,10 @@
+{
+  "target": "linux_c",
+  "os_version_pin": "v6.6",
+  "delivered_slots": [
+    {"slot": "on_init", "row": null},
+    {"slot": "on_deinit", "row": null}
+  ],
+  "absent_dispatch_slots": [],
+  "rejected_slots": []
+}
