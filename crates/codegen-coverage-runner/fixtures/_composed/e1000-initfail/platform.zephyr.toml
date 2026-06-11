@@ -1,0 +1,19 @@
+version = "1"
+
+[platform]
+os = "zephyr"
+board = "qemu_x86"
+arch = "x86"
+
+# L2 MMIO region binding: the section key `regs` joins to the L1 resource
+# declared `#[rseq::mmio(id = "regs", bar = 0)]`. On the Zephyr-PCIe arm the
+# `bar` value is LIVE: it is the BAR NUMBER fed to `pcie_get_mbar` as
+# `effective_bar` (backend-zephyr-c-e1000 D04 — never `pcie_probe_mbar`'s
+# memory-BAR ordinal). Per the ratified A-10(a) policy the base/size literals
+# are REQUIRED as the resolution trigger but semantically DEAD here:
+# probe-time BAR sizing (`pcie_get_mbar`) supplies the real extent, and the
+# PCIe form carries no DT `reg` to cross-check (no A-1 BUILD_ASSERT).
+[mmio.regs]
+bar = 0
+base = 0xf0000000   # dead literal (A-10(a) trigger only)
+size = 0x20000      # dead literal (A-10(a) trigger only)
