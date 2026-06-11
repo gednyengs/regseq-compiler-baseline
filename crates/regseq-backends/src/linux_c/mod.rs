@@ -412,6 +412,7 @@ pub fn emit_linux_c(model: &RegseqModel) -> Result<LinuxEmit, EmitError> {
         delivered_slots,
         absent_dispatch_slots: Vec::new(),
         rejected_slots: Vec::new(),
+        ignored_match_entries: Vec::new(),
     };
 
     Ok(LinuxEmit {

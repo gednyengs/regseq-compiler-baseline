@@ -216,6 +216,12 @@ pub struct ConformanceReport {
     pub delivered_slots: Vec<SlotEntry>, // row: Some(id) iff a ratified row exists
     pub absent_dispatch_slots: Vec<SlotEntry>, // row: always Some; citation carried
     pub rejected_slots: Vec<SlotEntry>,  // structurally empty on successful emit
+    /// Recognized foreign-transport identity entries the backend did not
+    /// consume, per the D03(a) rule (GRILL spec-convergence-pl011 D08, C02).
+    /// Empty when the match set is all-native. NOT a slot section: the
+    /// license cites the GRILL decision const, never a capability row (the
+    /// table's domain stays lifecycle slots only).
+    pub ignored_match_entries: Vec<crate::match_audit::MatchAudit>,
 }
 
 /// One slot row of the conformance report (C05).
@@ -243,13 +249,22 @@ impl ConformanceReport {
                 .collect();
             format!("[{}]", items.join(","))
         }
+        // The ` ignored=[...]` section (spec-convergence-pl011 C02): rendered
+        // entries `;`-separated, `ignored=[]` when empty; the existing
+        // prefix/format stays byte-stable.
+        let ignored: Vec<&str> = self
+            .ignored_match_entries
+            .iter()
+            .map(|a| a.entry.as_str())
+            .collect();
         format!(
-            "RSEQ-CONFORMANCE [{} @ {}] delivered={} absent_dispatch={} rejected={}",
+            "RSEQ-CONFORMANCE [{} @ {}] delivered={} absent_dispatch={} rejected={} ignored=[{}]",
             self.target,
             self.os_version_pin,
             list(&self.delivered_slots),
             list(&self.absent_dispatch_slots),
-            list(&self.rejected_slots)
+            list(&self.rejected_slots),
+            ignored.join(";")
         )
     }
 }
@@ -640,11 +655,46 @@ mod tests {
                 citation: Some(CAP_ZEPHYR_DT_SURPRISE_1.citation.into()),
             }],
             rejected_slots: vec![],
+            ignored_match_entries: vec![],
         };
         assert_eq!(
             report.summary_line(),
             "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[on_init] \
-             absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[]"
+             absent_dispatch=[on_surprise_remove:CAP-ZEPHYR-DT-SURPRISE-1] rejected=[] \
+             ignored=[]"
+        );
+    }
+
+    /// C02 (spec-convergence-pl011): a carried ignored entry renders into the
+    /// line's trailing section, `;`-separated, from the same struct.
+    #[test]
+    fn summary_line_renders_ignored_match_entries() {
+        let report = ConformanceReport {
+            target: "zephyr_c",
+            os_version_pin: ZEPHYR_PIN,
+            delivered_slots: vec![],
+            absent_dispatch_slots: vec![],
+            rejected_slots: vec![],
+            ignored_match_entries: vec![
+                crate::match_audit::MatchAudit {
+                    entry: "amba id=0x00041011 mask=0x000fffff".into(),
+                    reason: crate::match_audit::reason_for("static-devicetree"),
+                    license: crate::match_audit::MATCH_AUDIT_LICENSE,
+                    native_on: &["linux_c"],
+                },
+                crate::match_audit::MatchAudit {
+                    entry: "amba id=0x00abc123 mask=0x00ffffff".into(),
+                    reason: crate::match_audit::reason_for("static-devicetree"),
+                    license: crate::match_audit::MATCH_AUDIT_LICENSE,
+                    native_on: &["linux_c"],
+                },
+            ],
+        };
+        assert_eq!(
+            report.summary_line(),
+            "RSEQ-CONFORMANCE [zephyr_c @ v4.4.0 (684c9e8f32e4)] delivered=[] \
+             absent_dispatch=[] rejected=[] \
+             ignored=[amba id=0x00041011 mask=0x000fffff;amba id=0x00abc123 mask=0x00ffffff]"
         );
     }
 }

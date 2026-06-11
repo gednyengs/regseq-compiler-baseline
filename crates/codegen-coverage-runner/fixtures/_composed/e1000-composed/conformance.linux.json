@@ -8,5 +8,6 @@
     {"slot": "on_init_failure", "row": null}
   ],
   "absent_dispatch_slots": [],
-  "rejected_slots": []
+  "rejected_slots": [],
+  "ignored_match_entries": []
 }

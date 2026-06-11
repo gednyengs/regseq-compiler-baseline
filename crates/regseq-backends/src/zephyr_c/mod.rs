@@ -593,6 +593,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         delivered_slots,
         absent_dispatch_slots: absent_entries,
         rejected_slots: Vec::new(),
+        ignored_match_entries: Vec::new(),
     };
 
     Ok(ZephyrEmit {
