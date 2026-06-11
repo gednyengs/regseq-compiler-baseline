@@ -28,11 +28,13 @@
 
 pub mod capability;
 mod generic_c;
+pub mod interrupt_order;
 mod linux_c;
 pub mod match_audit;
 mod zephyr_c;
 
 pub use capability::{ConformanceReport, SlotEntry};
+pub use interrupt_order::{irq_placement, irq_steps_for, IrqPhase, IrqStep};
 pub use match_audit::MatchAudit;
 
 pub use linux_c::{emit_linux_c, EmitError as LinuxEmitError, LinuxEmit};
