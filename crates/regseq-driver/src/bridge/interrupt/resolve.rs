@@ -423,11 +423,16 @@ impl VariantSet {
 /// proof, not CFG-path existence; Codex M1 review MUST-FIX):
 ///
 ///   * **ProvenReachable** — the return place's may-value set is bounded and
-///     is EXACTLY this arm's variant, and a CFG-live `Return` exists: every
-///     terminating execution returns this arm. A construction that is merely
-///     on a CFG path (whose branch predicates might be runtime-infeasible)
-///     is NOT proof — a conditional arm stays `Unknown`, so the R11 warning
-///     over-warns rather than ever being wrongly suppressed.
+///     is EXACTLY this arm's variant, AND the live CFG provably terminates
+///     via `Return` (acyclic, and every live terminator is total control
+///     flow — no calls or asserts, either of which may diverge): every
+///     execution returns this arm, with NO feasibility assumption anywhere.
+///     A construction that is merely on a CFG path (whose branch predicates
+///     might be runtime-infeasible) is NOT proof — a conditional arm stays
+///     `Unknown`, so the R11 warning over-warns rather than ever being
+///     wrongly suppressed (re-review hardening: CFG-live-Return alone was
+///     not proof — the lone Return could sit behind an infeasible branch
+///     with every feasible path diverging).
 ///   * **ProvenUnreachable** — the return place's may-value set is bounded
 ///     (no unanalyzed source feeds it, transitively) and excludes the
 ///     variant: no execution can return that arm. This direction is
@@ -560,8 +565,12 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
         }
     }
 
-    // A CFG-live `Return` (forward-reachable from entry): the precondition
-    // for the every-terminating-execution proof below.
+    // The termination proof for ProvenReachable: over the CFG-live blocks,
+    // (a) every terminator is TOTAL control flow — Goto/SwitchInt/Return
+    // only (a Call may diverge in its callee; an Assert may abort;
+    // Unreachable is UB) — and (b) the live subgraph is acyclic. Then every
+    // execution walks a finite path of total steps and MUST end at a
+    // `Return`: no feasibility assumption is involved.
     let n_blocks = body.basic_blocks.len();
     let mut fwd = vec![false; n_blocks];
     let mut stack = vec![BlockId::START_BLOCK];
@@ -575,19 +584,59 @@ fn compute_arm_reachability(model: &RegseqModel, body: &Body) -> IrqArmReachabil
             }
         }
     }
-    let live_return_exists = body
-        .basic_blocks
-        .iter()
-        .enumerate()
-        .any(|(idx, b)| fwd[idx] && matches!(b.terminator.kind, TerminatorKind::Return));
+    let total_flow = body.basic_blocks.iter().enumerate().all(|(idx, b)| {
+        !fwd[idx]
+            || matches!(
+                b.terminator.kind,
+                TerminatorKind::Goto(_) | TerminatorKind::SwitchInt { .. } | TerminatorKind::Return
+            )
+    });
+    // Acyclicity of the live subgraph: Kahn peel — acyclic iff every live
+    // node is peeled.
+    let acyclic = {
+        let mut indegree = vec![0usize; n_blocks];
+        let mut live_count = 0usize;
+        for (idx, b) in body.basic_blocks.iter().enumerate() {
+            if !fwd[idx] {
+                continue;
+            }
+            live_count += 1;
+            for succ in b.terminator.successors() {
+                if fwd[succ.index()] {
+                    indegree[succ.index()] += 1;
+                }
+            }
+        }
+        let mut queue: Vec<usize> = (0..n_blocks)
+            .filter(|&i| fwd[i] && indegree[i] == 0)
+            .collect();
+        let mut peeled = 0usize;
+        while let Some(i) = queue.pop() {
+            peeled += 1;
+            for succ in body.basic_blocks[BlockId::from_u32(i as u32)]
+                .terminator
+                .successors()
+            {
+                let s = succ.index();
+                if fwd[s] {
+                    indegree[s] -= 1;
+                    if indegree[s] == 0 {
+                        queue.push(s);
+                    }
+                }
+            }
+        }
+        peeled == live_count
+    };
+    let provably_returns = total_flow && acyclic;
 
     // Per-arm verdicts: ProvenReachable only on actual proof (the return
-    // place can hold NOTHING but this arm and a live Return exists — every
-    // terminating execution returns it); conditional arms stay Unknown so the
-    // R11 consumer over-warns, never under-warns.
+    // place can hold NOTHING but this arm and every execution provably
+    // terminates via Return — so every execution returns it); conditional
+    // arms stay Unknown so the R11 consumer over-warns, never under-warns.
     let ret_set = sets[LocalId::RETURN_PLACE.index()];
     let verdict = |v: u32| -> ArmReachability {
-        if ret_set.exactly(v) && live_return_exists {
+        if ret_set.exactly(v) && provably_returns {
             ArmReachability::ProvenReachable
         } else if !ret_set.top && !ret_set.contains(v) {
             ArmReachability::ProvenUnreachable
