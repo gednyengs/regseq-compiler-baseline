@@ -451,10 +451,13 @@ eval teardown legs rely on:
   exists only under `CONFIG_DEVICE_DEINIT_SUPPORT` (`device.h:504-507`,
   default **off**, `kernel/Kconfig.device:36`), and `Z_DEVICE_OPS` SILENTLY
   drops `deinit_fn` under `IF_ENABLED` when off (`device.h:1175-1180`): the
-  build passes and `device_deinit()` returns `-ENOTSUP` at runtime. Both
-  prj.confs (the compiler-staged L1 gate app and the eval campaign app)
-  therefore pin `CONFIG_DEVICE_DEINIT_SUPPORT=y`, and the generated TU
-  header documents the row (A-9 pattern).
+  build passes and `device_deinit()` returns `-ENOTSUP` at runtime. The
+  compiler-staged L1 gate app prj.conf therefore pins
+  `CONFIG_DEVICE_DEINIT_SUPPORT=y` (`zephyr_build.rs`), and the generated
+  TU header documents the row (A-9 pattern); the eval campaign app prj.conf
+  gains the same pin with the L2 teardown leg (spec-convergence-pl011 R07's
+  eval half — until that lands, a campaign image answers `device_deinit()`
+  with `-ENOTSUP`, the designed loud catch).
 
 ---
 
@@ -468,13 +471,15 @@ specification; all five are specified to the limit of the as-built reference
 + vendored witnesses, with the gaps carried as explicit dispositions rather
 than failures.
 
-**D.2 Input-shape level — the rejection ledger.** The input contract admits
-shapes for which this spec deliberately has **no Zephyr lowering contract**.
-For every such shape the interim normative behavior is **fail-loud rejection
-at emit time — never silent emission, never silent omission** (the
-no-silent-truncation discipline; note this is a deliberate hardening over
-generic_c where generic_c itself carries the shape unvalidated, e.g.
-`ClassTag`):
+**D.2 Input-shape level — the disposition ledger.** The input contract
+admits shapes whose Zephyr disposition this ledger records explicitly. The
+DEFAULT for a shape with **no Zephyr lowering contract** is **fail-loud
+rejection at emit time — never silent emission, never silent omission**
+(the no-silent-truncation discipline; a deliberate hardening over generic_c,
+which carries some shapes unvalidated, e.g. `ClassTag`). Rows marked
+DELIVERED / auditable-non-emission / audited record the ratified departures
+from that default (each citing its licensing unit); fail-loud applies to
+every row that still says reject:
 
 | legal input shape (contract cite) | gap | interim behavior |
 |---|---|---|
