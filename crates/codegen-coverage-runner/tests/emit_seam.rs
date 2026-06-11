@@ -77,6 +77,7 @@ fn pipeline_advances_past_emit_now_that_the_seam_is_live() {
             overflow_checks: None,
             expected: Default::default(),
             lifecycle_scenario: None,
+            irq_fire: None,
         },
         dir: snippet.dir.clone(),
         input: snippet.dir.join("input.rs"),

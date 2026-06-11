@@ -1,0 +1,36 @@
+LC register pl011irq match=amba:0x41011/0xfffff
+BUS register_driver path=amba binding=bound
+LC create
+LC associate
+LC preamble regs
+BUS claim_regions bar=-1
+BUS get_handle
+BUS map base=0x9000000 size=0x1000 bar=-1
+IRQ register line=37
+IRQ binding line=37 trigger_type=level trigger_polarity=active_high shared=0 priority=-1
+IRQ fire line=37 inert
+LC call on_init
+[DEBUG] pl011irq probe start
+W32 @0x9000038 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+W32 @0x9000030 = 0x00000201
+[INFO] pl011irq up
+IRQ enable line=37
+IRQ fire line=37
+R32 @0x9000040 = 0x00000000
+IRQ result=NotHandled
+IRQ poke @0x040 = 0x00000010
+IRQ fire line=37
+R32 @0x9000040 = 0x00000010
+W32 @0x9000044 = 0x00000010
+IRQ result=Handled
+LC teardown present=1
+LC call on_deinit
+[WARN] pl011irq deinit: masking interrupts
+W32 @0x9000038 = 0x00000000
+W32 @0x9000030 = 0x00000000
+W32 @0x9000044 = 0x000007ff
+IRQ disable line=37
+IRQ unregister line=37
+LC postamble regs
+IRQ fire line=37 inert

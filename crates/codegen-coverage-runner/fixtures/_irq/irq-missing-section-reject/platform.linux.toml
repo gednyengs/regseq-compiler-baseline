@@ -1,0 +1,12 @@
+version = "1"
+
+[platform]
+os = "linux"
+board = "qemu-virt"
+arch = "aarch64"
+
+# The MMIO region binds — but the [interrupt.uart_irq] section is ABSENT,
+# which is the IRQ-L2-003 bind rejection this fixture witnesses (C03).
+[mmio.regs]
+base = 0x09000000
+size = 0x1000

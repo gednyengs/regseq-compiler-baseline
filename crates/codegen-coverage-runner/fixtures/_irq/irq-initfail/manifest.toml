@@ -1,0 +1,9 @@
+name   = "irq-initfail"
+kind   = "rust"
+# The device-interrupt on_init-Err branch (PLAN T07 `irq-initfail` variant):
+# the golden asserts NO `IRQ enable` anywhere in the trace (R05/I01) and the
+# reverse unwind including `IRQ unregister` after the rollback callback
+# (R16). Covers aggregation rides `irq_covers`.
+covers = ["IRQ-8"]
+lifecycle_scenario = "init-fail"
+expect = "pass"

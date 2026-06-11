@@ -55,6 +55,13 @@ pub struct Manifest {
     /// `BackendOptions` the CLI `--param backend.lifecycle.scenario` produces.
     #[serde(default)]
     pub lifecycle_scenario: Option<String>,
+    /// Optional device-interrupt harness fire script (construct #6), a CSV of
+    /// fire-step tokens (`pre-init`, `post-init`, `cause:0x<off>=0x<val>`,
+    /// `post-deinit`) passed to the backend as the `backend.irq.fire` param.
+    /// Absent (the default) runs no fires; for an interrupt-less fixture it
+    /// has no effect. Authored order is the script order.
+    #[serde(default)]
+    pub irq_fire: Option<String>,
 }
 
 /// The `[expected]` manifest table: expected-outcome configuration resolved
