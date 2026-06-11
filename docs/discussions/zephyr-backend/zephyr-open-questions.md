@@ -294,7 +294,8 @@ eth_e1000.c:220-221).
    `e1000_write_config` reacts only to PCI_COMMAND, hw/net/e1000.c:1624).
    The RMW's internal read is always the LIVE word, never the A-4 word-0
    cache. **Width-8 (both ops, the two-word split), 64-bit, misaligned
-   sub-word, and non-constant offsets KEEP the D.2 fail-loud rejection.**
+   accesses of ANY width (`off % width != 0` — sub-word AND dword), and
+   non-constant offsets KEEP the D.2 fail-loud rejection.**
 
 4. **Non-PCI config access (BRM-001).** The rejection diagnostic is deferred
    upstream (bus-resource-management-surface-convergence.md:209-211); Zephyr
@@ -572,7 +573,7 @@ every row that still says reject:
 
 | legal input shape (contract cite) | gap | interim behavior |
 |---|---|---|
-| `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | **PARTIALLY LIFTED by backend-zephyr-c-e1000 (2026-06-11, D05/C02):** width-1/2 WRITES are DELIVERED via the audited containing-word RMW (`RSEQ-RMW` block at the emit site, bus-observable: one extra word read, adjacent bytes rewritten with read-back values); width-8 both ops (two-word split), 64-bit, misaligned sub-word, and non-constant offsets KEEP the fail-loud rejection; width-1/2 **reads** were already specified (§B.4) and are delivered with the D06 containing-word-0 cache |
+| `write_config` widths 1/2 (word-RMW) and width 8, both ops (`config_access_width` admits {1,2,4,8}, generic_c `body_emit.rs:2399-2414`) | B-3 | **PARTIALLY LIFTED by backend-zephyr-c-e1000 (2026-06-11, D05/C02):** width-1/2 WRITES are DELIVERED via the audited containing-word RMW (`RSEQ-RMW` block at the emit site, bus-observable: one extra word read, adjacent bytes rewritten with read-back values); width-8 both ops (two-word split), 64-bit, misaligned accesses of ANY width (`off % width != 0`), and non-constant offsets KEEP the fail-loud rejection; width-1/2 **reads** were already specified (§B.4) and are delivered with the D06 containing-word-0 cache |
 | authored `on_deinit` under `TargetOs::Zephyr` | B-6 / C-3 | **DELIVERED by spec-convergence-pl011 (2026-06-10, C04; row CAP-ZEPHYR-DT-DEINIT-1 `Delivered`)**: lowers to the deinit fn + `DEVICE_DT_INST_DEINIT_DEFINE` swap on the v4.4.0 pin; unauthored stays byte-identical |
 | authored `on_surprise_remove` under `TargetOs::Zephyr` | B-7 | **auditable non-emission** per capability row CAP-ZEPHYR-DT-SURPRISE-1 (`AbsentDispatch`, os-capability-disposition rule 2026-06-10): one `RSEQ-ABSENT-SLOT` audit block + conformance-report row + log line, body still fully checked; anything outside the ratified row keeps fail-loud rejection |
 | non-Generic `ClassTag` | B-9 | **AUDITED CLASS-NEUTRAL EMISSION (backend-zephyr-c-e1000 2026-06-11, D14/C06 — the A-16 reject replaced):** the same NULL-api scaffold as `ClassTag::Generic` PLUS the `RSEQ-DEFERRED-CLASS` audit comment above the instantiation define + the optional skip-serialized conformance note; never silent, never rejected; class API DELIVERY stays the Device Class construct's (B-9); the Generic path is byte-frozen |
