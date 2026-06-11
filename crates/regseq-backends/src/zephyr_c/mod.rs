@@ -208,15 +208,19 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
                  compatible-string match)"
             )));
         }
-        // A mixed native+foreign-transport set: the consumption rule is
-        // unratified (GRILL D03 precondition (a)) — defer loudly to the
-        // convergence successor rather than silently ignoring entries.
-        return Err(EmitError::Rejected(format!(
-            "mixed match-set transport ({entry:?} alongside Devicetree entries): the \
-             foreign-transport consumption rule is unratified (GRILL D03a); delivered by \
-             spec-convergence-pl011"
-        )));
     }
+    // A mixed native+foreign set is licensed by the C06 rule
+    // (spec-convergence-pl011 D08: zephyr_c's ratified static-DT registration
+    // form consumes Devicetree entries; recognized foreign entries are
+    // ignorable with a triple-rendered audit once >=1 native entry exists —
+    // the former unratified-rule rejection is lifted by that unit).
+    let ignored_audits: Vec<crate::match_audit::MatchAudit> = driver
+        .descriptor
+        .match_set
+        .iter()
+        .filter(|entry| !matches!(entry, MatchEntry::Devicetree { .. }))
+        .map(|entry| crate::match_audit::MatchAudit::foreign(model, entry, "static-devicetree"))
+        .collect();
     if dt_compatibles.len() > 1 {
         return Err(EmitError::Unsupported(
             "multi-compatible match sets (scaffold §1 repeat-blocks idiom) are not exercised \
@@ -565,6 +569,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         &mut cx,
         &drv,
         compatible,
+        &ignored_audits,
         driver_ty,
         &base_symbol,
         has_region,
@@ -593,7 +598,7 @@ pub fn emit_zephyr_c(model: &RegseqModel) -> Result<ZephyrEmit, EmitError> {
         delivered_slots,
         absent_dispatch_slots: absent_entries,
         rejected_slots: Vec::new(),
-        ignored_match_entries: Vec::new(),
+        ignored_match_entries: ignored_audits,
     };
 
     Ok(ZephyrEmit {
@@ -1285,6 +1290,7 @@ fn emit_tu(
     cx: &mut body::LowerCx<'_>,
     drv: &str,
     compatible: &str,
+    ignored_audits: &[crate::match_audit::MatchAudit],
     driver_ty: TyId,
     base_symbol: &str,
     has_region: bool,
@@ -1316,7 +1322,13 @@ fn emit_tu(
     }
     tu.push_str(" */\n\n");
 
-    // §1 item 1: the compatible pin.
+    // §1 item 1: the compatible pin — with the C03 audit blocks adjacent
+    // (A1: zephyr's consumed match surface is the DT_DRV_COMPAT pin; there
+    // is no match table to anchor on).
+    for audit in ignored_audits {
+        tu.push_str(&audit.c_block());
+        tu.push('\n');
+    }
     tu.push_str(&format!(
         "#define DT_DRV_COMPAT {}\n\n",
         compat_token(compatible)

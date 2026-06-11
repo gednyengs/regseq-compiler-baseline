@@ -450,29 +450,57 @@ fn amba_only_match_set_is_rejected_naming_the_fix() {
 }
 
 #[test]
-fn mixed_match_set_defers_to_the_convergence_unit() {
-    let mut m = model();
-    let mut match_set = dt_match_for(&mut m, "regseq,pl011");
-    match_set.push(MatchEntry::Amba {
-        id: 0x0004_1011,
-        mask: 0x000f_ffff,
-    });
-    driver_into(
-        &mut m,
-        Some(BusType::Amba),
-        match_set,
-        LifecycleOps::default(),
-        Default::default(),
-    );
-    let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::Rejected(s) = err else {
-        panic!("expected Rejected, got {err:?}");
-    };
-    // The consumption rule is unratified (GRILL D03a): defer loudly, do not
-    // decide.
+fn mixed_match_set_is_audited_at_the_dt_compat_surface() {
+    // C06/C03+A1 (spec-convergence-pl011): foreign entries alongside the
+    // native Devicetree entry EMIT — each audited with an
+    // RSEQ-IGNORED-MATCH block adjacent to the consumed match surface
+    // (`#define DT_DRV_COMPAT`; zephyr has no match table), carried in the
+    // report and the summary line, all from one MatchAudit value (D01).
+    // The former unratified-rule rejection is lifted by that unit.
+    let mut m = emitting_model(&["HardwareError", "DeviceBusy"]);
+    {
+        let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+        driver.descriptor.match_set.insert(
+            0,
+            MatchEntry::Amba {
+                id: 0x0004_1011,
+                mask: 0x000f_ffff,
+            },
+        );
+    }
+    let emit = emit_zephyr_c(&m).expect("mixed set must emit (C06)");
+    let tu = &emit.tu;
+    // (i) the C block, adjacent to (immediately preceding) the compat pin.
+    let block = tu
+        .find("/* RSEQ-IGNORED-MATCH: amba id=0x00041011 mask=0x000fffff")
+        .unwrap_or_else(|| panic!("audit block present:\n{tu}"));
+    let pin = tu.find("#define DT_DRV_COMPAT").expect("compat pin");
+    assert!(block < pin, "audit block adjacent to the DT_DRV_COMPAT pin (A1)");
     assert!(
-        s.contains("unratified") && s.contains("spec-convergence-pl011"),
-        "{s}"
+        tu[block..pin].len() < 400,
+        "the block sits AT the pin, not floated to the header"
+    );
+    assert!(tu.contains("not consumed by the ratified static-devicetree registration form"));
+    assert!(tu.contains("consumed natively by linux_c."));
+    // The consumed surface carries no amba rendering (the zephyr analog of
+    // the A2 filtered-table negative: the foreign entry feeds only the audit).
+    assert!(
+        !tu[pin..].contains("0x00041011"),
+        "foreign entry absent from the consumed surface"
+    );
+    // (ii) the report — and the block renders from the SAME value (I03).
+    assert_eq!(emit.conformance.ignored_match_entries.len(), 1);
+    let audit = &emit.conformance.ignored_match_entries[0];
+    assert_eq!(audit.entry, "amba id=0x00041011 mask=0x000fffff");
+    assert_eq!(audit.native_on, &["linux_c"]);
+    assert!(tu.contains(&audit.c_block()), "same-struct render");
+    // (iii) the summary line.
+    assert!(
+        emit.conformance
+            .summary_line()
+            .ends_with("ignored=[amba id=0x00041011 mask=0x000fffff]"),
+        "{}",
+        emit.conformance.summary_line()
     );
 }
 
