@@ -352,10 +352,126 @@ fn two_drivers_is_a_named_driver_error() {
     assert!(matches!(err, EmitError::Driver(ref s) if s.contains("more than one")));
 }
 
-#[test]
-fn pci_bus_names_the_e1000_unit() {
+/// A resolved PCIe MMIO region: dead base/size literals (A-10(a)) + the
+/// LIVE effective BAR number feeding `pcie_get_mbar` (D04).
+fn pcie_mmio(m: &mut RegseqModel, name: &str, bar: Option<u8>) -> ResourceField {
+    ResourceField {
+        name: m.strings.intern(name),
+        kind: ResourceKind::Mmio,
+        binding: MmioBinding {
+            id: None,
+            bar_index: None,
+            bar_type: regseq_model::BarType::Mem,
+            effective_bar: bar,
+            base: Some(0xf000_0000),
+            size: Some(0x2_0000),
+        },
+    }
+}
+
+/// The minimal emitting PCIe model (backend-zephyr-c-e1000 R01): one-region
+/// PCIe driver, devicetree-matched, no callbacks.
+fn pcie_dt_model(bar: Option<u8>) -> RegseqModel {
     let mut m = model();
-    let match_set = dt_match_for(&mut m, "regseq,pl011");
+    let match_set = dt_match_for(&mut m, "regseq,e1000");
+    let region = pcie_mmio(&mut m, "regs", bar);
+    driver_into(
+        &mut m,
+        Some(BusType::Pci),
+        match_set,
+        LifecycleOps::default(),
+        regseq_model::DriverHandle {
+            resource_fields: vec![region],
+            user_data_fields: vec![],
+        },
+    );
+    m
+}
+
+// -- the PCIe scaffold (backend-zephyr-c-e1000 R01/R02, C01): positive
+//    structure tests replacing the lifted UnsupportedInUnit gate ------------
+
+#[test]
+fn pcie_scaffold_emits_complete_tu_with_c01_preamble_order() {
+    let emit = emit_zephyr_c(&pcie_dt_model(Some(0))).expect("PCIe model must emit");
+    let tu = &emit.tu;
+    let pos = |needle: &str| {
+        tu.find(needle)
+            .unwrap_or_else(|| panic!("landmark `{needle}` missing from TU:\n{tu}"))
+    };
+    // Scaffold blocks (R01): include, data field, TU-static carrier,
+    // DECLARE/INIT in the instantiation block.
+    pos("#include <zephyr/drivers/pcie/pcie.h>");
+    let p_pcie_field = pos("struct pcie_dev *pcie;");
+    let p_carrier_decl = pos("static struct pcie_dev *__rseq_pcie;");
+    let p_declare = pos("DEVICE_PCIE_INST_DECLARE(n);");
+    let p_init_macro = pos("DEVICE_PCIE_INST_INIT(n, pcie),");
+    assert!(p_pcie_field < p_carrier_decl, "data field before carrier");
+    assert!(p_carrier_decl < p_declare && p_declare < p_init_macro);
+    // The C01 preamble, in emission order (R02): BDF rung -> carrier
+    // install -> hoisted probe (deviation audit) -> claim elision ->
+    // MEM-only enable -> map into the TU-static base.
+    let p_rung1 = pos("if (data->pcie->bdf == PCIE_BDF_NONE)");
+    let p_carrier = pos("__rseq_pcie = data->pcie;");
+    let p_deviation = pos("RSEQ-DEVIATION: get_resource_handle hoisted before enable_device");
+    let p_probe = pos("if (!pcie_get_mbar(data->pcie->bdf, 0, &mbar))");
+    let p_claim = pos("claim_regions: zero-call elision");
+    let p_enable = pos("pcie_set_cmd(data->pcie->bdf, PCIE_CONF_CMDSTAT_MEM, true);");
+    let p_map = pos("device_map(&minimal_mmio_base, mbar.phys_addr, mbar.size, K_MEM_CACHE_NONE);");
+    assert!(p_rung1 < p_carrier, "BDF rung before the carrier install");
+    assert!(
+        p_carrier < p_deviation && p_deviation < p_probe,
+        "carrier, then hoisted probe"
+    );
+    assert!(
+        p_probe < p_claim && p_claim < p_enable,
+        "probe -> claim elision -> enable"
+    );
+    assert!(p_enable < p_map, "enable before map (D02 order)");
+    // Both rungs return unwrapped -ENODEV (D11/I09).
+    assert_eq!(
+        tu.matches("return -ENODEV; /* native channel, unwrapped (D11) */")
+            .count(),
+        2
+    );
+    // The deviation audit cites its license (never silent, I08).
+    pos("[license: backend-zephyr-c-e1000 GRILL D02]");
+    // The guard wording covers BOTH TU-statics (I07).
+    pos("\"TU-static MMIO base and __rseq_pcie carrier require a single status-okay instance\"");
+    // No DT-reg machinery on the PCIe arm: no DEVICE_MMIO map/capture, no
+    // A-1 cross-check (the C05 binding requires no `reg`; base/size dead).
+    assert!(!tu.contains("DEVICE_MMIO_MAP"), "{tu}");
+    assert!(!tu.contains("DEVICE_MMIO_ROM_INIT"), "{tu}");
+    assert!(!tu.contains("DEVICE_MMIO_ROM;"), "{tu}");
+    assert!(!tu.contains("DEVICE_MMIO_RAM;"), "{tu}");
+    assert!(!tu.contains("DT_REG_ADDR"), "{tu}");
+    // A-15/D07: init placement unchanged.
+    pos("POST_KERNEL, CONFIG_KERNEL_INIT_PRIORITY_DEVICE");
+}
+
+#[test]
+fn pcie_effective_bar_is_the_bar_number_fed_to_get_mbar() {
+    let emit = emit_zephyr_c(&pcie_dt_model(Some(2))).expect("PCIe model must emit");
+    assert!(
+        emit.tu.contains("pcie_get_mbar(data->pcie->bdf, 2, &mbar)"),
+        "{}",
+        emit.tu
+    );
+}
+
+#[test]
+fn pcie_region_without_effective_bar_is_a_named_driver_error() {
+    let err = emit_zephyr_c(&pcie_dt_model(None)).unwrap_err();
+    let EmitError::Driver(s) = err else {
+        panic!("expected Driver, got {err:?}");
+    };
+    assert!(s.contains("no BAR number") && s.contains("regs"), "{s}");
+}
+
+#[test]
+fn pcie_without_region_emits_rung_and_carrier_only() {
+    let mut m = model();
+    let match_set = dt_match_for(&mut m, "regseq,e1000");
     driver_into(
         &mut m,
         Some(BusType::Pci),
@@ -363,12 +479,12 @@ fn pci_bus_names_the_e1000_unit() {
         LifecycleOps::default(),
         Default::default(),
     );
-    let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::UnsupportedInUnit { what, unit } = err else {
-        panic!("expected UnsupportedInUnit, got {err:?}");
-    };
-    assert!(what.contains("PCIe scaffold"));
-    assert_eq!(unit, "backend/zephyr-c-e1000");
+    let emit = emit_zephyr_c(&m).expect("region-less PCIe model must emit");
+    let tu = &emit.tu;
+    assert!(tu.contains("if (data->pcie->bdf == PCIE_BDF_NONE)"), "{tu}");
+    assert!(tu.contains("__rseq_pcie = data->pcie;"), "{tu}");
+    assert!(!tu.contains("pcie_get_mbar"), "{tu}");
+    assert!(!tu.contains("device_map"), "{tu}");
 }
 
 #[test]
@@ -388,24 +504,63 @@ fn deferred_bus_is_unsupported_in_unit() {
     ));
 }
 
+// -- the C06 class disposition (backend-zephyr-c-e1000 R14/D14): audited
+//    class-neutral emission replacing the former A-16 reject -----------------
+
 #[test]
-fn non_generic_class_is_rejected_citing_a16() {
-    let mut m = model();
-    let match_set = dt_match_for(&mut m, "regseq,pl011");
-    driver_into(
-        &mut m,
-        None,
-        match_set,
-        LifecycleOps::default(),
-        Default::default(),
-    );
+fn non_generic_class_emits_class_neutral_with_the_c06_audit_comment() {
+    let mut m = minimal_dt_model();
     let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
     driver.descriptor.device_class = ClassTag::Network;
-    let err = emit_zephyr_c(&m).unwrap_err();
-    let EmitError::Rejected(s) = err else {
-        panic!("expected Rejected, got {err:?}");
+    let emit = emit_zephyr_c(&m).expect("non-Generic class must emit (D14)");
+    let tu = &emit.tu;
+    let pos = |needle: &str| {
+        tu.find(needle)
+            .unwrap_or_else(|| panic!("landmark `{needle}` missing from TU:\n{tu}"))
     };
-    assert!(s.contains("B-9") && s.contains("A-16"), "{s}");
+    // The audit comment names the declared class + the D14 license, and
+    // sits immediately above the instantiation define (C06 item 1).
+    let p_comment = pos("RSEQ-DEFERRED-CLASS: device_class \"network\" declared by the spec");
+    let p_license = pos("[license: backend-zephyr-c-e1000 GRILL D14]");
+    let p_define = pos("DEVICE_DT_INST_DEFINE(n, minimal_init, NULL,");
+    assert!(p_comment < p_license && p_license < p_define);
+    assert!(
+        !tu[p_license..p_define].contains(";\\"),
+        "no macro statement between the audit comment and the define:\n{}",
+        &tu[p_comment..p_define]
+    );
+    // The scaffold itself stays the class-neutral NULL-api form.
+    pos("NULL /* api: ClassTag::Generic only (A-16) */");
+}
+
+#[test]
+fn generic_class_tu_carries_no_deferred_class_comment() {
+    // C06 item 3: the ClassTag::Generic emission is byte-frozen — locally,
+    // no audit comment; globally, the pl011 zephyr snapshots stay green
+    // with zero re-bless.
+    let emit = emit_zephyr_c(&minimal_dt_model()).expect("minimal model must emit");
+    assert!(!emit.tu.contains("RSEQ-DEFERRED-CLASS"), "{}", emit.tu);
+    assert!(!emit.tu.contains("__rseq_pcie"), "{}", emit.tu);
+    assert!(
+        !emit.tu.contains("<zephyr/drivers/pcie/pcie.h>"),
+        "{}",
+        emit.tu
+    );
+}
+
+#[test]
+fn other_class_tag_renders_its_carried_name() {
+    let mut m = minimal_dt_model();
+    let tag = m.strings.intern("quantum");
+    let (_, driver) = m.device_lifecycle.drivers.iter_mut().next().unwrap();
+    driver.descriptor.device_class = ClassTag::Other(tag);
+    let emit = emit_zephyr_c(&m).expect("Other class must emit (D14)");
+    assert!(
+        emit.tu
+            .contains("RSEQ-DEFERRED-CLASS: device_class \"quantum\""),
+        "{}",
+        emit.tu
+    );
 }
 
 #[test]
